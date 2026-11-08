@@ -129,6 +129,12 @@ fn header_label(node: &Node) -> String {
     }
 }
 
+/// True if a `?` in the statement can return from the function. A `?` inside a closure or an
+/// `async` block returns from that closure or block, not from the function.
+fn returns_error(node: &Node) -> bool {
+    node.kind == "try" || node.children.iter().any(|child| !matches!(child.kind, "closure" | "closure_block" | "async") && returns_error(child))
+}
+
 /// A loose end: the node and the label of the edge that leaves it.
 type End = (String, Option<String>);
 
@@ -176,7 +182,7 @@ impl Builder<'_> {
         for statement in &block.children {
             let statement_path = join(path, &statement.role);
             let compound = matches!(statement.kind, "if" | "match" | "for" | "while" | "loop" | "block_expr" | "unsafe");
-            let exits = matches!(statement.kind, "return" | "break" | "continue") || statement.text.contains('?');
+            let exits = matches!(statement.kind, "return" | "break" | "continue") || returns_error(statement);
             let changed = self.has_change(&statement_path);
             if !changed && !exits && (!compound || self.fold_compound) {
                 unchanged_run.push(statement);
@@ -289,7 +295,7 @@ impl Builder<'_> {
                 let label = short(&node.text, 50);
                 let id = self.add(label, FlowKind::Statement, status, anchor);
                 self.connect(ends, &id);
-                if node.text.contains('?') {
+                if returns_error(node) {
                     self.edge(&id, exit, Some("err".into()), Status::Same);
                 }
                 if node.role == "tail" {
@@ -323,6 +329,20 @@ mod tests {
         assert!(graph.nodes.iter().any(|n| n.kind == FlowKind::Stub));
         let mermaid = graph.to_mermaid();
         assert!(mermaid.contains(":::changed"), "{mermaid}");
+    }
+
+    #[test]
+    fn question_mark_in_a_closure_is_not_an_exit() {
+        let src = "pub fn f(v: &[&str]) -> Result<u32, std::num::ParseIntError> {\n    let a: Vec<Option<u32>> = v.iter().map(|s| Some(s.len() as u32)).collect();\n    let b = v.iter().map(|s| -> Option<u32> { s.parse().ok()? .checked_add(1) }).count();\n    let c: u32 = v[0].parse()?;\n    Ok(c + b as u32 + a.len() as u32)\n}\n";
+        let (_dir, ws) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", src)]);
+        let item = &ws.items["demo::f"];
+        let statuses = BTreeMap::from([("S1".to_string(), Status::Changed), ("S2".to_string(), Status::Changed)]);
+        let graph = flow_view(item, &statuses, 0).unwrap();
+        let exit = graph.nodes.iter().find(|n| n.kind == FlowKind::Exit).unwrap().id.clone();
+        let err_sources: Vec<&str> = graph.edges.iter().filter(|e| e.to == exit && e.label.as_deref() == Some("err")).map(|e| e.from.as_str()).collect();
+        let labels: Vec<&str> = err_sources.iter().map(|id| graph.nodes.iter().find(|n| &n.id == id).unwrap().label.as_str()).collect();
+        assert_eq!(labels.len(), 1, "{labels:?}");
+        assert!(labels[0].starts_with("let c"), "{labels:?}");
     }
 
     #[test]
