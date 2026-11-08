@@ -214,13 +214,17 @@ pub fn sources(outcomes: &[StepOutcome], before: &Workspace, after: &Workspace) 
             entry.1 = edit.source_after.clone().or_else(|| edit.text_after.clone());
         }
     }
-    for item in after.items.values().filter(|i| i.kind == semilla_syntax::ItemKind::Fn) {
+    // The full source of each changed function, for the flow views. Unchanged functions are not
+    // in the map.
+    let changed: std::collections::BTreeSet<String> = outcomes.iter().flat_map(|o| o.edits.iter().filter_map(|e| e.item().map(str::to_string))).collect();
+    for item in after.items.values().filter(|i| i.kind == semilla_syntax::ItemKind::Fn && changed.contains(&i.path)) {
         let entry = map.entry(item.path.clone()).or_insert((None, None));
         entry.1 = Some(item.source.clone());
         if entry.0.is_none() {
             entry.0 = before.items.get(&item.path).map(|i| i.source.clone());
         }
     }
+    map.retain(|_, (old, new)| old != new);
     map
 }
 

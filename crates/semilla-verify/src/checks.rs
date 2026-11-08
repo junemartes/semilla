@@ -481,7 +481,12 @@ fn check_across(context: &Context, claim: &Claim) -> Outcome {
         let callee = full_path(&at.item, callee);
         explains.extend(context.edits.iter().position(|edit| edit.kind == EditKind::ItemRemoved && edit.before.as_ref().is_some_and(|a| a.item == callee)));
     }
-    explains.extend(region_edits(context, at, count));
+    let region = region_edits_with(context, at, count, false);
+    if region.is_empty() {
+        // The new item alone is not enough: the claim must also explain a change at its anchor.
+        return Outcome::new(ClaimStatus::Empty);
+    }
+    explains.extend(region);
     let outcome = texts(context, &explains.clone(), Outcome::verified("shape", explains));
     body_proof(context, &at.item, outcome)
 }
@@ -489,6 +494,12 @@ fn check_across(context: &Context, claim: &Claim) -> Outcome {
 /// The edits in a statement region: `count` statements from the anchor, in the same block, on
 /// the "before" side, and the statements next to them on the "after" side.
 fn region_edits(context: &Context, at: &Anchor, count: usize) -> Vec<usize> {
+    region_edits_with(context, at, count, true)
+}
+
+/// The edits in a statement region. With `slack`, the region also has the statement just before
+/// the anchor (`extract-variable` inserts a `let` there).
+fn region_edits_with(context: &Context, at: &Anchor, count: usize, slack: bool) -> Vec<usize> {
     let position = split_statement(at).or_else(|| tail_position(context.before, at));
     let Some((parent, first)) = position else {
         return edits_inside(context, at, false);
@@ -504,7 +515,7 @@ fn region_edits(context: &Context, at: &Anchor, count: usize) -> Vec<usize> {
                         && anchor.path.len() > parent.len()
                         && anchor.path.starts_with(&parent)
                         && match &anchor.path[parent.len()] {
-                            Segment::Stmt(index) => *index + 1 >= first && *index < first + count + extra,
+                            Segment::Stmt(index) => *index + usize::from(slack) >= first && *index < first + count + extra,
                             Segment::Tail => true,
                             Segment::Role(_) => false,
                         }
@@ -821,10 +832,12 @@ fn add_effect(context: &Context, at: &Anchor, outcome: &mut Outcome) {
     if let Some(check) = context.exprs.classify(&before, &after, &types) {
         outcome.effect = Some(check.effect);
         outcome.witness = check.witness;
-        if check.effect == Effect::Equivalent {
-            outcome.class = Some(Class::Neutral);
-        } else {
-            outcome.class = Some(Class::ControlFlow);
+        // `narrow`, `widen`, and `negate` change which branch runs. `unrelated` can be an
+        // equivalence that the solver cannot see (method calls): the MIR decides the class.
+        match check.effect {
+            Effect::Equivalent => outcome.class = Some(Class::Neutral),
+            Effect::Narrow | Effect::Widen | Effect::Negate => outcome.class = Some(Class::ControlFlow),
+            Effect::Unrelated => {}
         }
     }
     outcome.before = Some(before);

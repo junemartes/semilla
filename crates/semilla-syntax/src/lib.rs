@@ -54,11 +54,14 @@ pub fn resolve_node<'a>(workspace: &'a Workspace, anchor: &Anchor) -> Option<&'a
 ///
 /// `column` is optional. Without a column, the anchor is the lowest statement on the line.
 pub fn anchor_at(workspace: &Workspace, file: &str, line: usize, column: Option<usize>) -> Option<Anchor> {
+    let at_line = |item: &&Item| item.file == file && item.line_start <= line && line <= item.line_end;
+    // A function or a type first; a module or an impl only when no smaller item has the line.
     let item = workspace
         .items
         .values()
-        .filter(|item| item.file == file && item.line_start <= line && line <= item.line_end && item.kind != ItemKind::Mod && item.kind != ItemKind::Impl)
-        .min_by_key(|item| item.line_end - item.line_start)?;
+        .filter(|item| at_line(item) && item.kind != ItemKind::Mod && item.kind != ItemKind::Impl)
+        .min_by_key(|item| item.line_end - item.line_start)
+        .or_else(|| workspace.items.values().filter(at_line).min_by_key(|item| item.line_end - item.line_start))?;
     let mut anchor = Anchor::item(&item.path);
     let Some(body) = &item.body else {
         return Some(anchor);
@@ -169,6 +172,26 @@ mod tests {
         assert_eq!(header.to_string(), "demo::total/S1/body/S0", "a header line gives the statement");
         let tail = anchor_at(&ws, "src/lib.rs", 8, None).unwrap();
         assert_eq!(tail.to_string(), "demo::total/tail");
+    }
+
+    #[test]
+    fn a_long_literal_change_is_a_change_not_a_new_statement() {
+        let before = "pub fn f() -> String {\n    let a = 1;\n    let s = \"one two three four five six\";\n    s.to_string()\n}\n";
+        let after = "pub fn f() -> String {\n    let a = 1;\n    let s = \"seven eight nine ten eleven twelve\";\n    s.to_string()\n}\n";
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)]);
+        let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
+        let edits = diff(&old, &new, &Renames::default());
+        assert_eq!(edits.len(), 1, "{edits:#?}");
+        assert_eq!(edits[0].kind, EditKind::Replaced);
+        assert_eq!(edits[0].anchor().unwrap().to_string(), "demo::f/S1/init");
+    }
+
+    #[test]
+    fn anchor_on_a_module_line() {
+        let src = "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n";
+        let (_dir, ws) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", src)]);
+        assert_eq!(anchor_at(&ws, "src/lib.rs", 4, None).unwrap().to_string(), "demo::tests");
+        assert_eq!(anchor_at(&ws, "src/lib.rs", 6, None).unwrap().to_string(), "demo::tests::t");
     }
 
     #[test]

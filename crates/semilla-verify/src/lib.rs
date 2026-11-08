@@ -172,6 +172,24 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
         });
     }
 
+    // An empty claim near an uncovered change: tell the agent where the change is.
+    for result in report.claims.iter_mut().filter(|r| r.status == ClaimStatus::Empty) {
+        let Some(at) = step.claims.iter().find(|c| c.id == result.claim).and_then(|c| c.at.clone()) else { continue };
+        let nearest = edits
+            .iter()
+            .zip(&owners)
+            .filter(|(_, owner)| owner.is_none())
+            .filter_map(|(edit, _)| edit.before.clone().or(edit.after.clone()))
+            .filter(|anchor| anchor.item == at.item)
+            .min_by_key(|anchor| {
+                let common = anchor.path.iter().zip(&at.path).take_while(|(a, b)| a == b).count();
+                (anchor.path.len() + at.path.len()) - 2 * common
+            });
+        if let Some(anchor) = nearest {
+            result.hint = Some(format!("The change is at `{anchor}`: move the claim there."));
+        }
+    }
+
     // 4. Coverage of the syntax edits.
     for (edit, owner) in edits.iter().zip(&owners) {
         if owner.is_none() {

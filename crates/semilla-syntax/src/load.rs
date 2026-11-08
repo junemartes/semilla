@@ -98,7 +98,7 @@ impl Workspace {
                 .unwrap_or_default();
             let rel_dir = relative(root, dir);
             workspace.crates.push(CrateInfo { name: name.clone(), dir: rel_dir, deps });
-            for (file, test) in crate_roots(dir) {
+            for (file, test) in crate_roots(dir, manifest) {
                 let mut loader = Loader { root, workspace: &mut workspace, crate_name: name };
                 loader.load_file(&file, name, test)?;
             }
@@ -159,14 +159,34 @@ fn read_manifest(path: &Path) -> Result<toml::Table> {
     toml::from_str(&text).with_context(|| format!("parse {}", path.display()))
 }
 
-/// The root files of a package: `src/lib.rs`, `src/main.rs`, and `tests/*.rs` (test code).
-fn crate_roots(dir: &Path) -> Vec<(PathBuf, bool)> {
+/// The root files of a package: `src/lib.rs`, `src/main.rs`, and the test targets (test code).
+///
+/// Cargo finds `tests/*.rs` automatically, unless `autotests = false`. Then only the `[[test]]`
+/// targets of the manifest are tests, and the other files in `tests/` do not compile.
+fn crate_roots(dir: &Path, manifest: &toml::Table) -> Vec<(PathBuf, bool)> {
     let mut roots = Vec::new();
     for name in ["src/lib.rs", "src/main.rs"] {
         let path = dir.join(name);
         if path.exists() {
             roots.push((path, false));
         }
+    }
+    let autotests = manifest.get("package").and_then(|p| p.get("autotests")).and_then(|v| v.as_bool()).unwrap_or(true);
+    let listed: Vec<PathBuf> = manifest
+        .get("test")
+        .and_then(|t| t.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|target| {
+            let path = target.get("path").and_then(|p| p.as_str()).map(str::to_string);
+            let name = target.get("name").and_then(|n| n.as_str()).map(|n| format!("tests/{n}.rs"));
+            path.or(name).map(|p| dir.join(p))
+        })
+        .filter(|path| path.exists())
+        .collect();
+    if !autotests {
+        roots.extend(listed.into_iter().map(|path| (path, true)));
+        return roots;
     }
     if let Ok(entries) = std::fs::read_dir(dir.join("tests")) {
         let mut tests: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "rs")).collect();

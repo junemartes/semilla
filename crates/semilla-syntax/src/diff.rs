@@ -390,6 +390,25 @@ impl Context<'_> {
             let mut used_new = vec![false; gap_new.len()];
             let mut unpaired_old = Vec::new();
             let mut next = 0;
+            // The same number of statements, with the same kinds in order: each statement changed in
+            // place, also when its text is very different (for example a long string literal).
+            // A statement with the same text on the other side of the block is a move candidate,
+            // so it does not pair by position.
+            let moved = |a: &Node, b: &Node| {
+                let a_text = self.renames.apply(self.item_before, &a.text);
+                new.iter().any(|n| n.text == a_text) || old.iter().any(|o| self.renames.apply(self.item_before, &o.text) == b.text)
+            };
+            let positional = gap_old.len() == gap_new.len() && gap_old.iter().zip(gap_new).all(|(a, b)| a.kind == b.kind && !moved(a, b));
+            if positional {
+                for (k, (old_node, new_node)) in gap_old.iter().zip(gap_new).enumerate() {
+                    used_new[k] = true;
+                    let (bp, ap) = (child_path(before_path, old_node), child_path(after_path, new_node));
+                    self.node(old_node, new_node, &bp, &ap);
+                }
+                i = pi + 1;
+                j = pj + 1;
+                continue;
+            }
             for old_node in gap_old {
                 // Pair with the most similar new statement of the same kind, in order.
                 let old_text = self.renames.apply(self.item_before, &old_node.text);

@@ -48,6 +48,9 @@ enum Command {
         /// Read the position in the tree before the open step (for claims on existing code).
         #[arg(long)]
         before: bool,
+        /// Go this many levels up from the lowest node (for example from `cond/lhs` to `cond`).
+        #[arg(long, default_value_t = 0)]
+        up: usize,
     },
     /// Verify one step (default: the last or open step). Without `--full`, only phase 1 runs:
     /// the syntax checks; the body proofs are pending and run in the background.
@@ -140,6 +143,16 @@ enum StepAction {
     End,
     /// Open the last step again, to fix its claims.
     Reopen,
+    /// Change the intent or the declared class of the open step.
+    Edit {
+        #[arg(long)]
+        intent: Option<String>,
+        /// A class, or `none` to remove the declared class.
+        #[arg(long)]
+        class: Option<String>,
+    },
+    /// Remove the open step when it has no change, or the last step when it is empty.
+    Drop,
 }
 
 /// Prints the time of a phase to stderr when `SEMILLA_TIMING` is set.
@@ -183,6 +196,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Step { action: StepAction::Begin { intent, class } } => println!("{}", app.step_begin(&intent, class.as_deref().map(parse_class).transpose()?)?),
         Command::Step { action: StepAction::End } => println!("{}", app.step_end()?),
         Command::Step { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
+        Command::Step { action: StepAction::Edit { intent, class } } => {
+            let class = match class.as_deref() {
+                None => None,
+                Some("none") => Some(None),
+                Some(text) => Some(Some(parse_class(text)?)),
+            };
+            println!("{}", app.step_edit(intent.as_deref(), class)?);
+        }
+        Command::Step { action: StepAction::Drop } => println!("{}", app.step_drop()?),
         Command::Claim { op, at, args } => {
             let mut map = serde_json::Map::new();
             for arg in args {
@@ -196,7 +218,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             app.unclaim(&id)?;
             println!("claim {id} removed");
         }
-        Command::Anchor { position, before } => {
+        Command::Anchor { position, before, up } => {
             let mut parts = position.rsplitn(3, ':').collect::<Vec<_>>();
             parts.reverse();
             let (file, line, column) = match parts.as_slice() {
@@ -204,7 +226,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 [file, line] | [_, file, line] => (file.to_string(), line.parse()?, None),
                 _ => anyhow::bail!("use FILE:LINE or FILE:LINE:COLUMN"),
             };
-            println!("{}", app.anchor(&file, line, column, before)?);
+            println!("{}", app.anchor_up(&file, line, column, before, up)?);
         }
         Command::Check { step, full } => {
             let session = app.load_session()?;
@@ -277,7 +299,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     return Ok(ExitCode::from(1));
                 }
             }
-            None => println!("{}", serde_json::to_string_pretty(&app.subgroups_suggest(&group)?)?),
+            None => {
+                let saved = app.subgroups_saved(&group)?;
+                if saved.is_empty() {
+                    println!("the engine suggestion (no saved layout):\n{}", serde_json::to_string_pretty(&app.subgroups_suggest(&group)?)?);
+                } else {
+                    println!("the saved layout:\n{}", serde_json::to_string_pretty(&saved)?);
+                }
+            }
         },
         Command::Index => println!("{}", app.index()?),
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
@@ -303,7 +332,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 op.class.map(|c| serde_json::to_value(c).unwrap().as_str().unwrap().to_string()).unwrap_or("computed from the MIR".into()),
                 serde_json::to_value(op.role).unwrap().as_str().unwrap());
             println!("  needs: {}", if op.args.is_empty() { "an anchor only".to_string() } else { format!("an anchor, and {}", op.args.join(", ")) });
-            let optional: Vec<&str> = app::OPTIONAL_ARGS.iter().copied().filter(|arg| !op.args.contains(arg)).collect();
+            let optional: Vec<&str> = app::optional_args(op.name).into_iter().filter(|arg| !op.args.contains(arg)).collect();
             println!("  optional: {}", optional.join(", "));
             let example_args: Vec<String> = op.args.iter().map(|a| format!("{a}=…")).collect();
             println!("  example: semilla claim {} --at <anchor> {}", op.name, example_args.join(" "));

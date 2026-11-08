@@ -57,6 +57,8 @@ open(path, 'w').write('\n'.join(out) + '\n')
 PY
 name=$(python3 -I -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['name'].replace('-','_'))")
 lines=$(find src -name '*.rs' -exec cat {} + | wc -l)
+# The stripped manifest needs a new lock file; cargo would rewrite it on each build otherwise.
+cargo generate-lockfile --offline -q 2>/dev/null || true
 printf '/target\n/.semilla/\n' > .gitignore
 git init -q -b main
 git -c user.name=s3 -c user.email=s3@s3 add -A

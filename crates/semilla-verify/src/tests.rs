@@ -378,3 +378,24 @@ fn a_formatting_only_head_tree_is_accepted() {
     assert!(report.organization.is_empty(), "{:#?}", report.organization);
     assert!(report.warnings.iter().any(|w| w.contains("only in formatting")));
 }
+
+#[test]
+fn an_empty_claim_points_to_the_change() {
+    let report = run(BEFORE, AFTER, vec![
+        claim("c1", "add-early-exit", Some("demo::total/S0"), serde_json::json!({})),
+        claim("c2", "change-operator", Some("demo::total/S1/body/S0/then"), serde_json::json!({})),
+    ], &[], None);
+    let c2 = report.claims.iter().find(|c| c.claim == "c2").unwrap();
+    assert_eq!(c2.status, ClaimStatus::Empty);
+    assert_eq!(c2.hint.as_deref(), Some("The change is at `demo::total/S1/body/S0/cond`: move the claim there."), "{c2:?}");
+}
+
+#[test]
+fn an_extract_without_a_change_at_its_anchor_is_empty() {
+    let before = "pub fn f(a: u32, b: u32) -> u32 {\n    let x = a + b;\n    x * 2\n}\n";
+    let after = "fn sum(a: u32, b: u32) -> u32 {\n    a + b\n}\npub fn f(a: u32, b: u32) -> u32 {\n    let x = sum(a, b);\n    x * 2\n}\n";
+    let wrong = run(before, after, vec![claim("c1", "extract-function", Some("demo::f/tail"), serde_json::json!({"new": "sum"}))], &[("demo::f", equal("n3"))], None);
+    assert_eq!(status_of(&wrong, "c1"), &ClaimStatus::Empty);
+    let right = run(before, after, vec![claim("c1", "extract-function", Some("demo::f/S0/init"), serde_json::json!({"new": "sum"}))], &[("demo::f", equal("n3"))], None);
+    assert!(status_of(&right, "c1").is_verified(), "{:?}", status_of(&right, "c1"));
+}

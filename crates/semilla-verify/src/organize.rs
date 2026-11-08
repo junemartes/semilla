@@ -131,7 +131,8 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             let info = ops::op(&found.op);
             let problem = match subgroup.role {
                 Role::Mechanical => (!neutral_proved).then(|| "a Mechanical subgroup can contain only proved neutral claims"),
-                Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation)).then(|| "a Propagation subgroup can contain only call site and rewrite claims"),
+                Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation || i.level == OpLevel::Expression))
+                    .then(|| "a Propagation subgroup can contain only call site claims: expression claims and rewrites"),
                 Role::Interface => (!info.is_some_and(|i| i.level == OpLevel::Item)).then(|| "an Interface subgroup can contain only item claims"),
                 Role::Config => (!info.is_some_and(|i| i.level == OpLevel::File)).then(|| "a Config subgroup can contain only file claims"),
                 Role::Tests | Role::Core | Role::Custom => None,

@@ -26,8 +26,20 @@ pub struct OpenStep {
     pub claims: Vec<Claim>,
 }
 
-/// The arguments that any op can have, in addition to its own arguments.
-pub const OPTIONAL_ARGS: &[&str] = &["affects", "count", "cond", "sites", "removes", "with", "method", "name", "to", "new", "keep", "note"];
+/// The optional arguments of an op, in addition to its required arguments. `affects` and `note`
+/// apply to every op.
+pub fn optional_args(op: &str) -> Vec<&'static str> {
+    let mut args = vec!["affects", "note"];
+    args.extend(match op {
+        "extract-function" | "inline-function" => &["count", "removes"][..],
+        "add-if" | "add-early-exit" => &["cond"][..],
+        "rewrite-pattern" => &["sites"][..],
+        "extract-variable" | "inline-variable" | "change-mutability" | "change-type-annotation" | "invert-if" | "swap-branches" | "if-to-match" | "match-to-if"
+        | "guard-clause" | "reorder-statements" | "question-mark" => &["count"][..],
+        _ => &[][..],
+    });
+    args
+}
 
 /// The work in progress.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -124,7 +136,7 @@ impl App {
         };
         // Reject an unknown argument: it is usually a typo, and the verifier would ignore it.
         let mut known: Vec<&str> = info.args.to_vec();
-        known.extend(OPTIONAL_ARGS.iter().copied().filter(|arg| !info.args.contains(arg)));
+        known.extend(optional_args(op).into_iter().filter(|arg| !info.args.contains(arg)));
         if let Some(unknown) = args.keys().find(|key| !known.contains(&key.as_str())) {
             bail!("`{op}` has no argument `{unknown}`; its arguments are: {}", known.join(", "));
         }
@@ -148,6 +160,55 @@ impl App {
             bail!("the open step has no claim {id}");
         }
         self.save_session(&session)
+    }
+
+    /// Changes the intent or the declared class of the open step. `class` is `Some(None)` to
+    /// remove the declared class.
+    pub fn step_edit(&mut self, intent: Option<&str>, class: Option<Option<Class>>) -> Result<String> {
+        let mut session = self.load_session()?;
+        let open = session.open.as_mut().context("no step is open; `semilla step reopen` opens the last step")?;
+        if let Some(intent) = intent {
+            open.intent = intent.to_string();
+        }
+        if let Some(class) = class {
+            open.class = class;
+        }
+        let text = format!("the open step: intent \"{}\", class {}", open.intent, open.class.map(semilla_verify::class_name).unwrap_or("not declared"));
+        self.save_session(&session)?;
+        Ok(text)
+    }
+
+    /// Removes the open step when it has no change, or the last ended step when it has no change
+    /// and no claim.
+    pub fn step_drop(&mut self) -> Result<String> {
+        let mut session = self.load_session()?;
+        let current = self.repo.write_tree()?;
+        if let Some(open) = &session.open {
+            if current != open.tree_before {
+                bail!("the open step has changes; undo them first, or end the step");
+            }
+            session.open = None;
+            self.save_session(&session)?;
+            return Ok("the open step is removed".into());
+        }
+        let step = session.changeset.steps.last().context("no step to remove")?;
+        if step.tree_before != step.tree_after || !step.claims.is_empty() {
+            bail!("step {} has changes or claims; only an empty step can be removed", step.index);
+        }
+        let index = step.index;
+        let before = step.tree_before.clone();
+        session.changeset.steps.pop();
+        session.changeset.head_tree = before;
+        for group in &mut session.changeset.groups {
+            group.steps.retain(|i| *i != index);
+        }
+        self.save_session(&session)?;
+        Ok(format!("step {index} is removed"))
+    }
+
+    /// The saved subgroup layout of a group, if the agent set one.
+    pub fn subgroups_saved(&self, group: &str) -> Result<Vec<Subgroup>> {
+        Ok(self.load_session()?.changeset.subgroups.into_iter().filter(|s| s.group == group).collect())
     }
 
     /// Opens the last step again, so that the agent can fix its claims. The working tree must still
@@ -210,8 +271,8 @@ impl App {
         let jobs = crate::background::jobs(self).len();
         let mut text = format!("{key}: {}; {jobs} job(s) in the queue\n", format!("{state:?}").to_lowercase());
         if let Some(stored) = crate::background::stored(self, &key) {
-            if state == crate::background::State::Stale {
-                text.push_str("the last report is for an older change set:\n");
+            if stored.hash != hash {
+                text.push_str("the report below is for an older change set; a new check is necessary or runs now:\n");
             }
             text.push_str(&stored.text);
         }
@@ -230,7 +291,8 @@ impl App {
 
     /// The anchor at a file position of the working tree, or of the "before" tree of the open
     /// step when `before` is true. Claims on existing code use the "before" anchors.
-    pub fn anchor(&mut self, file: &str, line: usize, column: Option<usize>, before: bool) -> Result<String> {
+    /// Then it goes `up` levels up (for example from `cond/lhs` to `cond`).
+    pub fn anchor_up(&mut self, file: &str, line: usize, column: Option<usize>, before: bool, up: usize) -> Result<String> {
         let ws = if before {
             let session = self.load_session()?;
             let tree = session.open.map(|open| open.tree_before).or(Some(session.changeset.head_tree)).filter(|t| !t.is_empty()).context("no step yet")?;
@@ -239,7 +301,11 @@ impl App {
             Workspace::load(&self.repo.root)?
         };
         let file = file.trim_start_matches("./");
-        semilla_syntax::anchor_at(&ws, file, line, column).map(|anchor| anchor.to_string()).with_context(|| format!("no item at {file}:{line}"))
+        let mut anchor = semilla_syntax::anchor_at(&ws, file, line, column).with_context(|| format!("no item at {file}:{line}"))?;
+        for _ in 0..up {
+            anchor = anchor.parent().context("the anchor has no parent inside its item")?;
+        }
+        Ok(anchor.to_string())
     }
 
     /// Builds the index of the working tree: the workspace graph, the items, and the MIR content

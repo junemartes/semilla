@@ -19,8 +19,10 @@ fn tools() -> Value {
         {"name": "claim", "description": "Add a claim to the open step. `at` is an anchor from the `anchor` tool. Claims on existing code use the anchors of the tree before the step; `add-*` statement claims use the anchor of the new statement.", "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ops}, "at": {"type": "string"}, "args": {"type": "object"}}, "required": ["op"]}},
         {"name": "unclaim", "description": "Remove a claim from the open step.", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
         {"name": "step_end", "description": "End the open step.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "step_edit", "description": "Change the intent or the declared class of the open step (class: neutral, logic, control_flow, other, or none).", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "class": {"type": "string"}}}},
+        {"name": "step_drop", "description": "Remove the open step when it has no change, or the last ended step when it has no change and no claim.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "step_reopen", "description": "Open the last step again, to fix its claims (the working tree must be unchanged since step_end).", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "anchor", "description": "Return the anchor of the lowest node at a file position (the line starts at 1; the column is optional). With `before: true`, the position is in the tree before the open step: use this for claims on existing code.", "inputSchema": {"type": "object", "properties": {"file": {"type": "string"}, "line": {"type": "integer"}, "column": {"type": "integer"}, "before": {"type": "boolean"}}, "required": ["file", "line"]}},
+        {"name": "anchor", "description": "Return the anchor of the lowest node at a file position (the line starts at 1; the column is optional). With `before: true`, the position is in the tree before the open step: use this for claims on existing code. `up: N` goes N levels up.", "inputSchema": {"type": "object", "properties": {"file": {"type": "string"}, "line": {"type": "integer"}, "column": {"type": "integer"}, "before": {"type": "boolean"}, "up": {"type": "integer"}}, "required": ["file", "line"]}},
         {"name": "check_step", "description": "Verify one step (default: the last or open step). Phase 1 only (fast): the syntax checks, with uncovered changes and hints; the body proofs are pending and run in the background. Set `full: true` to wait for the body proofs.", "inputSchema": {"type": "object", "properties": {"step": {"type": "integer"}, "full": {"type": "boolean"}}}},
         {"name": "results", "description": "The result of the background check (phase 2) of the session, or of a tagged commit: ready, queued, or stale, with the full report.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
         {"name": "suggest_claims", "description": "Suggest claims for the uncovered changes of the last step. The suggestions are not trusted: check and send them with `claim`.", "inputSchema": {"type": "object", "properties": {}}},
@@ -49,11 +51,21 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
         "unclaim" => app.unclaim(text("id").context("`id` is required")?).map(|_| format!("claim {} removed", text("id").unwrap_or(""))),
         "step_end" => app.step_end(),
         "step_reopen" => app.step_reopen(),
+        "step_drop" => app.step_drop(),
+        "step_edit" => {
+            let class = match text("class") {
+                None => None,
+                Some("none") => Some(None),
+                Some(value) => Some(Some(serde_json::from_value(json!(value))?)),
+            };
+            app.step_edit(text("intent"), class)
+        }
         "anchor" => {
             let line = args.get("line").and_then(Value::as_u64).context("`line` is required")? as usize;
             let column = args.get("column").and_then(Value::as_u64).map(|c| c as usize);
             let before = args.get("before").and_then(Value::as_bool).unwrap_or(false);
-            app.anchor(text("file").context("`file` is required")?, line, column, before)
+            let up = args.get("up").and_then(Value::as_u64).unwrap_or(0) as usize;
+            app.anchor_up(text("file").context("`file` is required")?, line, column, before, up)
         }
         "check_step" => {
             let session = app.load_session()?;

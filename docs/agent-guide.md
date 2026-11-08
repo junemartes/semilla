@@ -12,12 +12,14 @@ You write code with your own edit tools. Semilla records what you changed as **c
 | CLI | MCP tool |
 |---|---|
 | `semilla step begin "<intent>" [--class <class>]` | `step_begin` |
-| `semilla anchor [--before] FILE:LINE[:COLUMN]` | `anchor` (`before: true`) |
+| `semilla anchor [--before] [--up N] FILE:LINE[:COLUMN]` | `anchor` (`before: true`, `up: N`) |
 | `semilla claim <op> --at <anchor> key=value …` | `claim` |
 | `semilla unclaim <id>` | `unclaim` |
 | `semilla check [--full]` | `check_step` (`full: true`) |
 | `semilla step end` | `step_end` |
 | `semilla step reopen` | `step_reopen` |
+| `semilla step edit [--intent "…"] [--class <class>\|none]` | `step_edit` |
+| `semilla step drop` | `step_drop` |
 | `semilla suggest-claims` | `suggest_claims` |
 | `semilla group <id> --kind <kind> --title "…" --steps 0,1` | `group_set` |
 | `semilla subgroups <group> [--set layout.json]` | `subgroups_suggest`, `subgroups_set` |
@@ -26,7 +28,7 @@ You write code with your own edit tools. Semilla records what you changed as **c
 | `semilla status [commit]` | `results` |
 | `semilla ops [<op>]` | `ops` |
 
-The `--class` values are `neutral`, `logic`, `control_flow`, and `other`.
+The `--class` values are `neutral`, `logic`, `control_flow`, and `other`. A declared class must be the class that the verifier computes, or the step fails. If you are not sure, do not declare a class: the report shows the computed class. `step edit --class none` removes a declared class.
 
 ## The loop
 
@@ -39,7 +41,7 @@ For each small change:
 5. Check the step. Fix each `uncovered`, `empty`, `malformed`, or `refuted` result. The result line says `phase 1 ok, N body proof(s) pending` when only the background proofs remain: that is the normal good result.
 6. End the step. The background check (phase 2: the body proofs) starts.
 
-If you must fix a claim of a step that you ended, run `step reopen` (it works on the last step, when the working tree did not change since the end of the step), fix the claims, and end the step again.
+If you must fix a claim of a step that you ended, run `step reopen` (it works on the last step, when the working tree did not change since the end of the step), fix the claims, and end the step again. `step drop` removes an open step without changes, or an empty last step.
 
 At the end of the task:
 
@@ -62,7 +64,8 @@ shop_core::cart::Cart::total/tail                the tail expression
 - **Claims on existing code use the numbering before the step.** After you edit, use `anchor --before` and the line numbers of the old file.
 - **`add-*` statement claims use the numbering after the step:** the anchor of the new statement. Use `anchor` without `--before`.
 - Do not write anchors by hand. Always use the `anchor` tool.
-- Without a column, `anchor` gives the lowest statement on the line. With a column, it gives the lowest expression at that position.
+- Without a column, `anchor` gives the lowest statement on the line (or the item, on a `fn`, `mod`, or `impl` line). With a column, it gives the lowest expression at that position.
+- To get a whole condition, point the column at its operator (`||`, `&&`, `==`). To get a whole call, point at its closing `)`. Or use `--up N` to go N levels up from the lowest node.
 - An argument that names an item (`to`, `new`) can be a full path, or a last name in the same module as the anchor.
 
 ## Choose the op
@@ -94,7 +97,7 @@ shop_core::cart::Cart::total/tail                the tail expression
 - **Unclaimed means unchanged.** Each change needs a claim, and each claim needs a change.
 - **Free edits exist only for expressions.** `replace-expression` cannot be on a statement, a block, or a function body, and cannot contain an `if`, a `match`, a loop, or a block. Use the structured statement ops for those.
 - **Free edits must be tight.** Put the claim on the lowest expression that contains the change, or one level above it.
-- **Neutral claims need a body proof of the whole function.** Put refactors (`extract-variable`, `extract-function`, `rename-local`, …) in their own step, before the behavior changes of the same function.
+- **Neutral claims need a body proof of the whole function.** Put refactors (`extract-variable`, `extract-function`, `rename-local`, …) in their own step, before the behavior changes of the same function. The proof covers all changes of the function in the step: if one neutral change cannot be proved, every neutral claim of that function in the step is unproved. So put each neutral change that can fail in its own step.
 - **A false claim is the worst result.** A neutral claim with evidence of a behavior change is `refuted`. If a neutral proof fails, the claim is `unproved`: tag the change as logic, at no extra cost.
 - **Indirect changes:** if a change makes the compiled code of another function change (a new trait impl, a changed generic), list that function in `affects`. `module::*` covers a whole module.
 
@@ -106,7 +109,7 @@ Some correct refactors are `unproved`, not `verified`:
 - A refactor inside a function with a loop that changes the branch structure (for example a `||` condition moved into a helper): the strongest proof (N4) works only on functions without loops.
 - A condition change between method calls (`v.len() > 0` against `!v.is_empty()`): the solver does not know what the methods return, so the effect is `unrelated`.
 
-In these cases, use a logic op (`replace-expression`, `add-item`) and say in the intent that the step is a refactor.
+In these cases, use logic ops for the same change: `add-item` for the new function, and `replace-expression` on the changed expression at the call site (or the statement ops, if a statement changed). Then say in the intent that the step is a refactor, and use a `behavior` group, not a `refactor` group.
 
 ## Groups and subgroups
 
@@ -129,7 +132,7 @@ Subgroups split a group by role. The engine suggests them. You can rename, merge
 | `core` | any claim |
 | `tests` | any claim (use it for test code) |
 | `config` | file claims |
-| `propagation` | call site and rewrite claims (`rewrite-pattern`, `add-argument`, `remove-argument`) |
+| `propagation` | call site claims: expression claims and `rewrite-pattern` |
 | `mechanical` | proved neutral claims only |
 | `custom` | any claim |
 
@@ -140,7 +143,7 @@ Each claim must be in exactly one subgroup of its group. A layout that breaks a 
 | Result | What to do |
 |---|---|
 | `uncovered` | Add the claim in the hint, at the anchor in the report. |
-| `empty` | The anchor is wrong, or the change is not there. Use `anchor` again. |
+| `empty` | The anchor is wrong, or the change is not there. The hint names the anchor of the nearest change. |
 | `malformed` | A wrong argument or anchor. Read the reason. |
 | `refuted` | The claim is false. Use the correct op, or a logic op. |
 | `unproved` | The neutral proof failed. Tag the change as logic, or make smaller neutral steps. |
