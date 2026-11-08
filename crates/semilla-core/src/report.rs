@@ -105,6 +105,13 @@ pub struct StepReport {
     /// The change in the number of explicit panic sites (design 5.5).
     #[serde(default)]
     pub panic_delta: i64,
+    /// The estimated semver level of the public API change: `major`, `minor`, or `patch`.
+    /// It comes from the syntax view, not from `cargo-semver-checks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_level: Option<String>,
+    /// The public API changes that give the level.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_changes: Vec<String>,
     /// Changes that always need the reviewer's attention: `unsafe` code, `#[cfg]` attributes,
     /// features, and build scripts (design 5.5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -136,6 +143,9 @@ pub struct Report {
     /// The change in the number of explicit panic sites over all steps.
     #[serde(default)]
     pub panic_delta: i64,
+    /// The highest estimated API level of all steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_level: Option<String>,
     pub accepted: bool,
 }
 
@@ -144,6 +154,12 @@ impl Report {
     pub fn finish(&mut self) {
         self.accepted = self.organization.is_empty() && self.steps.iter().all(StepReport::accepted);
         self.panic_delta = self.steps.iter().map(|step| step.panic_delta).sum();
+        let rank = |level: &str| match level {
+            "major" => 2,
+            "minor" => 1,
+            _ => 0,
+        };
+        self.api_level = self.steps.iter().filter_map(|step| step.api_level.clone()).max_by_key(|level| rank(level));
         let weights: Vec<f64> = self
             .steps
             .iter()

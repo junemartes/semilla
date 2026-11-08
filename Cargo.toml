@@ -6,3 +6,8 @@ members = ["crates/*", "spikes/s1"]
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+# The dependencies (syn, egglog) are much faster with optimization. Our own crates stay easy to
+# debug.
+[profile.dev.package."*"]
+opt-level = 2

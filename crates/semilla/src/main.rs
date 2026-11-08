@@ -114,6 +114,13 @@ enum StepAction {
     End,
 }
 
+/// Prints the time of a phase to stderr when `SEMILLA_TIMING` is set.
+pub fn timing(phase: &str, started: std::time::Instant) {
+    if std::env::var_os("SEMILLA_TIMING").is_some() {
+        eprintln!("[timing] {phase}: {:.2} s", started.elapsed().as_secs_f64());
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {

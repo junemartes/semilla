@@ -76,8 +76,12 @@ impl App {
         if let Some(ws) = self.workspaces.get(tree) {
             return Ok(ws.clone());
         }
+        let started = std::time::Instant::now();
         let dir = self.repo.materialize(tree)?;
+        crate::timing("materialize a tree", started);
+        let started = std::time::Instant::now();
         let ws = Workspace::load(&dir).with_context(|| format!("load the workspace of tree {tree}"))?;
+        crate::timing("load the syntax workspace", started);
         self.workspaces.insert(tree.to_string(), ws.clone());
         Ok(ws)
     }
@@ -215,7 +219,9 @@ impl App {
         }
         let cache = self.workspaces.clone();
         let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
+        let started = std::time::Instant::now();
         let (mut report, outcomes) = semilla_verify::verify_changeset(set, &mut load, bodies.as_ref(), &exprs, Options { require_groups });
+        crate::timing("verify the change set (with the body checks)", started);
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);

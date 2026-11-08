@@ -29,13 +29,18 @@ impl NormalOracle {
                 let _ = std::fs::remove_dir_all(&out);
                 std::fs::create_dir_all(&out)?;
                 let target = self.repo.state_dir().join("cache").join(format!("target-{level}"));
-                // Cargo writes a `Cargo.lock` when the tree has none. Remove it again, so that the
+                // Cargo writes or updates `Cargo.lock`. Restore it after the run, so that the
                 // cached folder stays equal to the git tree.
                 let lock = dir.join("Cargo.lock");
-                let had_lock = lock.exists();
+                let original = std::fs::read(&lock).ok();
+                let started = std::time::Instant::now();
                 let result = semilla_normal::run_cargo_check(&dir, level, &out, &target);
-                if !had_lock {
-                    let _ = std::fs::remove_file(&lock);
+                crate::timing(&format!("cargo check {level} of tree {}", &tree[..8.min(tree.len())]), started);
+                match &original {
+                    Some(bytes) => std::fs::write(&lock, bytes)?,
+                    None => {
+                        let _ = std::fs::remove_file(&lock);
+                    }
                 }
                 result?;
                 std::fs::write(&done, "")?;
@@ -50,7 +55,9 @@ impl BodyOracle for NormalOracle {
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
         let before = self.levels(&step.tree_before)?;
         let after = self.levels(&step.tree_after)?;
+        let started = std::time::Instant::now();
         let comparisons = semilla_normal::compare(&before, &after, renames, added);
+        crate::timing("compare the bodies (N0 to N4)", started);
         // The span of a body: from the "after" records first (the name is the "after" name).
         let span_of = |name: &str| {
             [&after, &before]

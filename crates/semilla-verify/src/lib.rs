@@ -214,6 +214,9 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
 
     report.panic_delta = panic_sites(input.after) - panic_sites(input.before);
     report.spotlight = spotlight(&edits, input.before, input.after);
+    let (level, api_changes) = api_level(&edits, input.before, input.after);
+    report.api_level = Some(level.to_string());
+    report.api_changes = api_changes;
 
     report.computed_class = report.claims.iter().filter_map(|claim| claim.class).max_by_key(|class| class_rank(*class));
     if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
@@ -251,6 +254,64 @@ pub fn panic_sites(workspace: &Workspace) -> i64 {
         });
     }
     count
+}
+
+/// True if an item and all its parent modules are `pub` (the item is in the public API).
+fn is_public(workspace: &Workspace, path: &str) -> bool {
+    let Some(item) = workspace.items.get(path) else { return false };
+    if item.vis != "pub" || item.test {
+        return false;
+    }
+    // Methods: the owner type is public. Items: each parent module is public.
+    let mut current = path;
+    while let Some((parent, _)) = current.rsplit_once("::") {
+        if let Some(owner) = workspace.items.get(parent) {
+            if owner.vis != "pub" && owner.kind != semilla_syntax::ItemKind::Impl {
+                return false;
+            }
+        }
+        current = parent;
+    }
+    true
+}
+
+/// Estimates the semver level of the public API change of a step, from the syntax edits.
+///
+/// - `major`: a public item is removed, or its signature or visibility changes.
+/// - `minor`: a public item is added, or a public struct or enum gets a new member.
+/// - `patch`: no change to the public API.
+pub fn api_level(edits: &[Edit], before: &Workspace, after: &Workspace) -> (&'static str, Vec<String>) {
+    use semilla_syntax::EditKind;
+    let mut major = Vec::new();
+    let mut minor = Vec::new();
+    for edit in edits {
+        let old = edit.before.as_ref().map(|a| a.item.as_str()).filter(|item| is_public(before, item));
+        let new = edit.after.as_ref().map(|a| a.item.as_str()).filter(|item| is_public(after, item));
+        let path_only = edit.anchor().is_some_and(|a| a.path.is_empty());
+        if !path_only {
+            continue;
+        }
+        match edit.kind {
+            EditKind::ItemRemoved if old.is_some() => major.push(format!("removed `{}`", old.unwrap())),
+            EditKind::ItemAdded if new.is_some() => minor.push(format!("added `{}`", new.unwrap())),
+            EditKind::Signature if old.is_some() || new.is_some() => major.push(format!("signature of `{}`", old.or(new).unwrap())),
+            EditKind::Visibility if old.is_some() => major.push(format!("visibility of `{}`", old.unwrap())),
+            EditKind::Visibility if new.is_some() => minor.push(format!("`{}` is now public", new.unwrap())),
+            EditKind::Members if old.is_some() => {
+                let old_members: Vec<&str> = edit.text_before.as_deref().unwrap_or("").lines().collect();
+                let new_members: Vec<&str> = edit.text_after.as_deref().unwrap_or("").lines().collect();
+                if old_members.iter().all(|m| new_members.contains(m)) {
+                    minor.push(format!("new members in `{}`", old.unwrap()));
+                } else {
+                    major.push(format!("changed members of `{}`", old.unwrap()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let level = if !major.is_empty() { "major" } else if !minor.is_empty() { "minor" } else { "patch" };
+    major.extend(minor);
+    (level, major)
 }
 
 /// The edits that always need the reviewer's attention (design 5.5).

@@ -308,3 +308,14 @@ fn unsafe_changes_are_in_the_spotlight() {
     let report = run(before, after, vec![claim("c1", "replace-expression", Some("demo::f/tail/body/tail/operand"), serde_json::json!({}))], &[], None);
     assert!(report.spotlight.iter().any(|s| s.starts_with("unsafe code")), "{:?}", report.spotlight);
 }
+
+#[test]
+fn api_level_estimate() {
+    let before = "pub fn f(x: u32) -> u32 { x }\nfn private() {}\npub mod m { pub fn g() {} }\n";
+    let minor = "pub fn f(x: u32) -> u32 { x }\nfn private() {}\npub fn new_one() {}\npub mod m { pub fn g() {} }\n";
+    let major = "pub fn f(x: u64) -> u32 { x as u32 }\nfn private() {}\npub mod m { pub fn g() {} }\n";
+    let patch = "pub fn f(x: u32) -> u32 { x }\nfn private(_: u8) {}\npub mod m { pub fn g() {} }\n";
+    assert_eq!(run(before, minor, vec![], &[], None).api_level.as_deref(), Some("minor"));
+    assert_eq!(run(before, major, vec![], &[], None).api_level.as_deref(), Some("major"));
+    assert_eq!(run(before, patch, vec![], &[], None).api_level.as_deref(), Some("patch"));
+}
