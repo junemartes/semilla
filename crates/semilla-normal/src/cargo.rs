@@ -82,7 +82,7 @@ pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &P
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
     );
-    run_check(workspace, level, out, target_dir, &nonce, false).map(|_| ())
+    run_check(workspace, level, out, target_dir, &nonce, false, &[]).map(|_| ())
 }
 
 /// Runs `cargo check` for a delta build: `workspace` is a fixed build folder that changes only by
@@ -94,11 +94,23 @@ pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &P
 /// is a fingerprint of the driver binary, so a new driver compiles all crates again. After the
 /// build, the record files of units that are not in this build are removed.
 pub fn run_cargo_check_delta(workspace: &Path, level: &str, out: &Path, target_dir: &Path) -> Result<()> {
+    run_cargo_check_delta_features(workspace, level, out, target_dir, &[])
+}
+
+/// [`run_cargo_check_delta`] with a list of features (`--features`). An empty list builds the
+/// default features. Use one build folder and one records folder for each feature set.
+pub fn run_cargo_check_delta_features(
+    workspace: &Path,
+    level: &str,
+    out: &Path,
+    target_dir: &Path,
+    features: &[String],
+) -> Result<()> {
     let driver = find_driver()?;
     let meta = std::fs::metadata(&driver)?;
     let modified = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
     let fingerprint = format!("driver-{}-{modified}", meta.len());
-    let units = run_check(workspace, level, out, target_dir, &fingerprint, true)?;
+    let units = run_check(workspace, level, out, target_dir, &fingerprint, true, features)?;
     for entry in std::fs::read_dir(out)? {
         let path = entry?.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -138,6 +150,7 @@ fn run_check(
     target_dir: &Path,
     nonce: &str,
     json: bool,
+    features: &[String],
 ) -> Result<std::collections::BTreeSet<String>> {
     if !matches!(level, "n0" | "n2" | "n3") {
         bail!("unknown level {level:?}: use n0, n2, or n3");
@@ -159,6 +172,9 @@ fn run_check(
     command.args(["check", "--workspace", "--all-targets", "--quiet"]);
     if json {
         command.arg("--message-format=json");
+    }
+    if !features.is_empty() {
+        command.arg("--features").arg(features.join(","));
     }
     command
         .arg("--target-dir")

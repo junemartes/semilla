@@ -13,6 +13,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         term: None,
         span: None,
         target: String::new(),
+        externals: Vec::new(),
     }
 }
 

@@ -18,29 +18,69 @@ pub struct NormalOracle {
 }
 
 impl NormalOracle {
-    /// The records of a tree at a level: from the cache, or from a delta build.
+    /// The feature sets to check: the default features first, then the sets that the manifest of
+    /// either tree lists in `[workspace.metadata.semilla]` or `[package.metadata.semilla]`
+    /// `feature-sets` (design 8.12).
+    fn feature_sets(&self, trees: &[&str]) -> Result<Vec<Vec<String>>> {
+        let mut sets: Vec<Vec<String>> = vec![Vec::new()];
+        for tree in trees {
+            let dir = self.repo.materialize(tree)?;
+            let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
+            let Ok(manifest) = text.parse::<toml::Table>() else { continue };
+            let listed = ["workspace", "package"].iter().find_map(|section| {
+                manifest.get(*section)?.get("metadata")?.get("semilla")?.get("feature-sets")?.as_array().cloned()
+            });
+            for set in listed.unwrap_or_default() {
+                let mut features: Vec<String> = set.as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+                features.sort();
+                if !sets.contains(&features) {
+                    sets.push(features);
+                }
+            }
+        }
+        Ok(sets)
+    }
+
+    /// The folder suffix of a feature set: empty for the default features.
+    fn set_suffix(features: &[String]) -> String {
+        if features.is_empty() {
+            return String::new();
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        features.hash(&mut hasher);
+        format!("-f{:012x}", hasher.finish() & 0xffff_ffff_ffff)
+    }
+
+    /// The records of a tree at a level, with the default features.
     pub fn records(&self, tree: &str, level: &str) -> Result<Vec<semilla_normal::BodyRecord>> {
-        let cache = self.repo.state_dir().join("cache/mir").join(tree).join(level);
+        self.records_with(tree, level, &[])
+    }
+
+    /// The records of a tree at a level and a feature set: from the cache, or from a delta build.
+    fn records_with(&self, tree: &str, level: &str, features: &[String]) -> Result<Vec<semilla_normal::BodyRecord>> {
+        let name = format!("{level}{}", Self::set_suffix(features));
+        let cache = self.repo.state_dir().join("cache/mir").join(tree).join(&name);
         if cache.join(".complete").exists() {
             return semilla_normal::read_records(&cache);
         }
         let base = self.repo.state_dir().join("cache/build");
         std::fs::create_dir_all(&base)?;
         // One build folder serves one build at a time, also across processes.
-        let lock = std::fs::File::create(base.join(format!("{level}.lock")))?;
+        let lock = std::fs::File::create(base.join(format!("{name}.lock")))?;
         lock.lock()?;
         // Another process can finish the same build while this one waits for the lock.
         if cache.join(".complete").exists() {
             lock.unlock()?;
             return semilla_normal::read_records(&cache);
         }
-        let build = base.join(level);
-        let records = base.join(format!("{level}-records"));
-        let target = self.repo.state_dir().join("cache").join(format!("target-{level}"));
+        let build = base.join(&name);
+        let records = base.join(format!("{name}-records"));
+        let target = self.repo.state_dir().join("cache").join(format!("target-{name}"));
         let started = std::time::Instant::now();
         self.repo.checkout_build(&build, tree)?;
-        semilla_normal::run_cargo_check_delta(&build, level, &records, &target)?;
-        crate::timing(&format!("cargo check {level} of tree {}", &tree[..8.min(tree.len())]), started);
+        semilla_normal::run_cargo_check_delta_features(&build, level, &records, &target, features)?;
+        crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
         let _ = std::fs::remove_dir_all(&cache);
         std::fs::create_dir_all(&cache)?;
         for entry in std::fs::read_dir(&records)? {
@@ -55,11 +95,11 @@ impl NormalOracle {
     }
 
     /// The records of both trees at some levels. Each level runs in its own thread.
-    fn levels(&self, before: &str, after: &str, levels: &[&str]) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
+    fn levels(&self, before: &str, after: &str, levels: &[&str], features: &[String]) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
         let results: Vec<Result<(String, Vec<_>, Vec<_>)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = levels
                 .iter()
-                .map(|level| scope.spawn(move || Ok((level.to_string(), self.records(before, level)?, self.records(after, level)?))))
+                .map(|level| scope.spawn(move || Ok((level.to_string(), self.records_with(before, level, features)?, self.records_with(after, level, features)?))))
                 .collect();
             handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
         });
@@ -71,42 +111,72 @@ impl NormalOracle {
         }
         Ok((old, new))
     }
-}
 
-impl BodyOracle for NormalOracle {
-    fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
-        // N0 first. N2 and N3 are only necessary when a body is still different at N0.
-        let (mut before, mut after) = self.levels(&step.tree_before, &step.tree_after, &["n0"])?;
+    /// Compares the bodies of one feature set. N0 first; N2 and N3 only when a body is still
+    /// different at N0.
+    fn compare_set(
+        &self,
+        step: &Step,
+        renames: &BTreeMap<String, String>,
+        added: &[String],
+        features: &[String],
+        spans: &mut BTreeMap<String, (String, usize)>,
+    ) -> Result<Vec<semilla_normal::BodyComparison>> {
+        let (mut before, mut after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
         let mut comparisons = semilla_normal::compare(&before, &after, renames, added);
         if comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. })) {
-            let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"])?;
+            let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], features)?;
             before.extend(old);
             after.extend(new);
             let started = std::time::Instant::now();
             comparisons = semilla_normal::compare(&before, &after, renames, added);
             crate::timing("compare the bodies (N0 to N4)", started);
         }
-        // The span of each body: from the "after" records first (the name is the "after" name).
-        let mut spans: BTreeMap<&str, (String, usize)> = BTreeMap::new();
+        // The span of each body: the "after" records win (the name is the "after" name).
         for record in [&before, &after].iter().flat_map(|levels| levels.values().flatten()) {
             if let Some(span) = &record.span {
-                spans.insert(&record.name, (span.file.clone(), span.line_start));
+                spans.insert(record.name.clone(), (span.file.clone(), span.line_start));
             }
         }
-        let span_of = |name: &str| spans.get(name).cloned();
-        Ok(comparisons
-            .into_iter()
-            .map(|comparison| BodyComparison {
-                span: span_of(&comparison.name),
-                status: match comparison.status {
+        Ok(comparisons)
+    }
+}
+
+/// Combines the status of one body over the feature sets: equal only if it is equal in every set.
+fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
+    match (old, new) {
+        (BodyStatus::Equal { level: a, proof: mut p }, BodyStatus::Equal { level: b, proof: q }) => {
+            p.extend(q.into_iter().filter(|rule| !p.contains(rule)).collect::<Vec<_>>());
+            BodyStatus::Equal { level: a.max(b), proof: p }
+        }
+        (BodyStatus::Different { cfg_changed: a }, BodyStatus::Different { cfg_changed: b }) => BodyStatus::Different { cfg_changed: a || b },
+        (BodyStatus::Different { cfg_changed }, _) | (_, BodyStatus::Different { cfg_changed }) => BodyStatus::Different { cfg_changed },
+        (BodyStatus::Equal { .. }, other) | (other, BodyStatus::Equal { .. }) => other,
+        (old, _) => old,
+    }
+}
+
+impl BodyOracle for NormalOracle {
+    fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
+        let sets = self.feature_sets(&[&step.tree_before, &step.tree_after])?;
+        let mut spans = BTreeMap::new();
+        let mut combined: BTreeMap<String, BodyStatus> = BTreeMap::new();
+        for features in &sets {
+            for comparison in self.compare_set(step, renames, added, features, &mut spans)? {
+                let status = match comparison.status {
                     semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
                     semilla_normal::BodyStatus::Different { cfg_changed } => BodyStatus::Different { cfg_changed },
                     semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
                     semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
-                },
-                name: comparison.name,
-            })
-            .collect())
+                };
+                let merged = match combined.remove(&comparison.name) {
+                    Some(old) => combine(old, status),
+                    None => status,
+                };
+                combined.insert(comparison.name, merged);
+            }
+        }
+        Ok(combined.into_iter().map(|(name, status)| BodyComparison { span: spans.get(&name).cloned(), status, name }).collect())
     }
 }
 
@@ -162,5 +232,30 @@ impl ExprOracle for SmtOracle {
             semilla_smt::Equivalence::Refuted { .. } => Some(false),
             semilla_smt::Equivalence::NotProved { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn equal(level: &str) -> BodyStatus {
+        BodyStatus::Equal { level: level.into(), proof: Vec::new() }
+    }
+
+    #[test]
+    fn a_body_is_equal_only_in_every_feature_set() {
+        assert_eq!(combine(equal("n0"), equal("n2")), equal("n2"));
+        assert_eq!(combine(equal("n0"), BodyStatus::Different { cfg_changed: false }), BodyStatus::Different { cfg_changed: false });
+        assert_eq!(combine(BodyStatus::Different { cfg_changed: true }, equal("n0")), BodyStatus::Different { cfg_changed: true });
+        assert_eq!(combine(BodyStatus::Different { cfg_changed: false }, BodyStatus::Different { cfg_changed: true }), BodyStatus::Different { cfg_changed: true });
+        assert_eq!(combine(equal("n0"), BodyStatus::AfterOnly), BodyStatus::AfterOnly);
+    }
+
+    #[test]
+    fn the_default_set_has_no_suffix() {
+        assert_eq!(NormalOracle::set_suffix(&[]), "");
+        let a = NormalOracle::set_suffix(&["serde".to_string()]);
+        assert!(a.starts_with("-f") && a != NormalOracle::set_suffix(&["std".to_string()]));
     }
 }

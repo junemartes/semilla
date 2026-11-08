@@ -237,6 +237,9 @@ fn ui_flow(repo: &Path) {
     assert!(flow.contains("flowchart"), "{flow}");
     let search = get("/api/search?q=total").unwrap();
     assert!(search.contains("Cart::total"), "{search}");
+    // The worker built the N0 records, so the external calls come from the MIR, with full paths.
+    let graph = get("/api/graph").unwrap();
+    assert!(graph.contains("\"external\"") && graph.contains("into_iter"), "{graph}");
     child.kill().unwrap();
     child.wait().unwrap();
 }

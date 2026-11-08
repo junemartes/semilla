@@ -29,7 +29,16 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use cargo::{run_cargo_check, run_cargo_check_delta};
+pub use cargo::{run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_features};
+
+/// A call to a function of another crate (design 10.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalCall {
+    /// The full def path of the callee.
+    pub path: String,
+    /// `err` (returns `Result` or `Option`), `mut` (takes `&mut`), `unsafe`, `never` (returns `!`).
+    pub badges: Vec<String>,
+}
 
 /// One record of the driver: the normalized MIR of one body at one level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +70,9 @@ pub struct BodyRecord {
     /// Empty for the command mode of the driver and for old records.
     #[serde(default)]
     pub target: String,
+    /// The calls to functions of other crates, with badges from their signatures (only at N0).
+    #[serde(default)]
+    pub externals: Vec<ExternalCall>,
 }
 
 /// The source span of a body. The file path is as rustc gives it.

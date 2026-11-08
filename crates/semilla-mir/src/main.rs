@@ -116,6 +116,48 @@ struct BodyRecord {
     /// versions of a workspace), empty in command mode. A body name can exist in more than one
     /// target (a lib and its test build), and each target has its own body.
     target: String,
+    /// The calls to functions of other crates, with a summary of their signatures (design 10.2).
+    externals: Vec<External>,
+}
+
+/// A call to a function of another crate, and the facts from its signature.
+#[derive(serde::Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct External {
+    path: String,
+    /// `err` (returns `Result` or `Option`), `mut` (takes `&mut`), `unsafe`, `never` (returns `!`).
+    badges: Vec<&'static str>,
+}
+
+/// The calls in a body to functions of other crates.
+fn external_calls(body: &Body) -> Vec<External> {
+    use rustc_public::mir::{Mutability, Safety, TerminatorKind};
+    let mut found = std::collections::BTreeSet::new();
+    for block in &body.blocks {
+        let TerminatorKind::Call { func, .. } = &block.terminator.kind else { continue };
+        let Ok(ty) = func.ty(body.locals()) else { continue };
+        let kind = ty.kind();
+        let TyKind::RigidTy(RigidTy::FnDef(def, _)) = &kind else { continue };
+        if def.krate().is_local {
+            continue;
+        }
+        let mut badges = Vec::new();
+        if let Some(signature) = kind.fn_sig() {
+            let signature = signature.skip_binder();
+            match signature.output().kind() {
+                TyKind::RigidTy(RigidTy::Adt(adt, _)) if adt.name().ends_with("::Result") || adt.name().ends_with("::Option") => badges.push("err"),
+                TyKind::RigidTy(RigidTy::Never) => badges.push("never"),
+                _ => {}
+            }
+            if signature.inputs().iter().any(|input| matches!(input.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut)))) {
+                badges.push("mut");
+            }
+            if signature.safety == Safety::Unsafe {
+                badges.push("unsafe");
+            }
+        }
+        found.insert(External { path: def.name(), badges });
+    }
+    found.into_iter().collect()
 }
 
 #[derive(serde::Serialize)]
@@ -373,6 +415,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         term: None,
         span: None,
         target: target.to_string(),
+        externals: Vec::new(),
     }
 }
 
@@ -421,6 +464,7 @@ fn record(name: String, body: &Body, level: Level, target: &str) -> BodyRecord {
         term,
         span,
         target: target.to_string(),
+        externals: if level == Level::N0 { guarded(|| external_calls(&canonical)).unwrap_or_default() } else { Vec::new() },
     }
 }
 

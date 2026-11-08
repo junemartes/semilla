@@ -129,6 +129,35 @@ fn header_label(node: &Node) -> String {
     }
 }
 
+impl Builder<'_> {
+    /// Adds a child node for each closure that the statement passes to a call (design 10.2).
+    /// The callee can call a closure any number of times, so the edge says "called 0..n times".
+    fn closures(&mut self, node: &Node, path: &str, statement: &str) {
+        let mut found: Vec<(String, &Node)> = Vec::new();
+        collect_closure_args(node, path, &mut found);
+        for (closure_path, closure) in found {
+            let status = self.status(&closure_path);
+            let label = format!("|{}| {}", closure.attr.as_deref().unwrap_or(""), short(closure.child("body").map(|b| b.text.as_str()).unwrap_or(""), 40));
+            let id = self.add(label, FlowKind::Statement, status, Some(closure_path));
+            self.edge(statement, &id, Some("called 0..n times".into()), Status::Same);
+            self.edge(&id, statement, Some("returns".into()), Status::Same);
+        }
+    }
+}
+
+/// The closures that are direct arguments of a call or a method call, with their paths.
+fn collect_closure_args<'a>(node: &'a Node, path: &str, out: &mut Vec<(String, &'a Node)>) {
+    for child in &node.children {
+        let child_path = format!("{path}/{}", child.role);
+        let is_arg = matches!(node.kind, "call" | "method_call") && child.role.starts_with("args[");
+        if is_arg && matches!(child.kind, "closure" | "closure_block") {
+            out.push((child_path, child));
+        } else if !matches!(child.kind, "closure" | "closure_block") {
+            collect_closure_args(child, &child_path, out);
+        }
+    }
+}
+
 /// True if a `?` in the statement can return from the function. A `?` inside a closure or an
 /// `async` block returns from that closure or block, not from the function.
 fn returns_error(node: &Node) -> bool {
@@ -295,6 +324,7 @@ impl Builder<'_> {
                 let label = short(&node.text, 50);
                 let id = self.add(label, FlowKind::Statement, status, anchor);
                 self.connect(ends, &id);
+                self.closures(node, path, &id);
                 if returns_error(node) {
                     self.edge(&id, exit, Some("err".into()), Status::Same);
                 }
@@ -343,6 +373,19 @@ mod tests {
         let labels: Vec<&str> = err_sources.iter().map(|id| graph.nodes.iter().find(|n| &n.id == id).unwrap().label.as_str()).collect();
         assert_eq!(labels.len(), 1, "{labels:?}");
         assert!(labels[0].starts_with("let c"), "{labels:?}");
+    }
+
+    #[test]
+    fn closures_passed_to_calls_are_child_nodes() {
+        let src = "pub fn f(v: &[u32]) -> u32 {\n    let total: u32 = v.iter().map(|x| x * 2).filter(|x| *x > 3).sum();\n    total\n}\n";
+        let (_dir, ws) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", src)]);
+        let item = &ws.items["demo::f"];
+        let statuses = BTreeMap::from([("S0/init/recv/args[0]/body".to_string(), Status::Changed)]);
+        let graph = flow_view(item, &statuses, 0).unwrap();
+        let closures: Vec<&FlowNode> = graph.nodes.iter().filter(|n| n.label.starts_with('|')).collect();
+        assert_eq!(closures.len(), 2, "{:#?}", graph.nodes);
+        assert_eq!(closures.iter().filter(|n| n.status == Status::Changed).count(), 1);
+        assert_eq!(graph.edges.iter().filter(|e| e.label.as_deref() == Some("called 0..n times")).count(), 2);
     }
 
     #[test]

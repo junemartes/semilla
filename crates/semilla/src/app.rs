@@ -385,6 +385,59 @@ impl App {
         Ok(format!("loaded {steps} steps from {commit}"))
     }
 
+    /// Replaces the guessed external calls of the graph with the calls from the MIR, when the N0
+    /// records of the tree are in the cache (design 10.2: full paths and signature badges).
+    fn add_external_calls(&self, graph: &mut WorkspaceGraph, workspace: &Workspace, tree: &str) {
+        use semilla_core::view::{GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, Status};
+        let cache = self.repo.state_dir().join("cache/mir").join(tree).join("n0");
+        if !cache.join(".complete").exists() {
+            return;
+        }
+        let Ok(records) = semilla_normal::read_records(&cache) else { return };
+        let mut calls: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
+        for record in &records {
+            let Some(span) = &record.span else { continue };
+            let item = workspace
+                .items
+                .values()
+                .filter(|item| item.kind == semilla_syntax::ItemKind::Fn && span.file.ends_with(&item.file) && item.line_start <= span.line_start && span.line_start <= item.line_end)
+                .min_by_key(|item| item.line_end - item.line_start);
+            let Some(item) = item else { continue };
+            for external in &record.externals {
+                calls.entry(item.path.clone()).or_default().entry(external.path.clone()).or_default().extend(external.badges.iter().cloned());
+            }
+        }
+        if calls.is_empty() {
+            return;
+        }
+        // The MIR knows the real calls of these functions: drop their guessed external edges.
+        graph.edges.retain(|edge| !(edge.kind == GraphEdgeKind::Call && edge.to.starts_with("ext::") && calls.contains_key(&edge.from)));
+        for (from, targets) in calls {
+            for (path, badges) in targets {
+                let id = format!("ext::{path}");
+                match graph.nodes.iter_mut().find(|node| node.id == id) {
+                    Some(node) => node.badges = node.badges.iter().cloned().chain(badges.iter().cloned()).collect::<BTreeSet<_>>().into_iter().collect(),
+                    None => graph.nodes.push(GraphNode {
+                        id: id.clone(),
+                        label: path.clone(),
+                        kind: GraphNodeKind::External,
+                        parent: None,
+                        status: Status::Same,
+                        changes: 0,
+                        badges: badges.into_iter().collect(),
+                        entry: false,
+                        test: false,
+                        file: None,
+                    }),
+                }
+                graph.edges.push(GraphEdge { from: from.clone(), to: id, kind: GraphEdgeKind::Call, status: Status::Same });
+            }
+        }
+        // Remove the external nodes without an edge.
+        let used: BTreeSet<String> = graph.edges.iter().map(|edge| edge.to.clone()).collect();
+        graph.nodes.retain(|node| node.kind != GraphNodeKind::External || used.contains(&node.id));
+    }
+
     /// Builds the data of the review UI for the work in progress.
     pub fn ui_data(&mut self) -> Result<semilla_ui::UiData> {
         let set = self.current_changeset()?;
@@ -416,7 +469,8 @@ impl App {
             }
         }
         let head = self.workspace(&set.head_tree).unwrap_or_default();
-        let graph: WorkspaceGraph = semilla_verify::views::graph(&result.outcomes, &head);
+        let mut graph: WorkspaceGraph = semilla_verify::views::graph(&result.outcomes, &head);
+        self.add_external_calls(&mut graph, &head, &set.head_tree);
         Ok(semilla_ui::UiData { changeset: set, report: result.report, tree: result.tree, flows, graph, sources })
     }
 }
