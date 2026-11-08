@@ -341,3 +341,39 @@ fn macro_input_changes_are_free_and_in_the_spotlight() {
     let wrong = run(PLAIN, EXTRACTED, vec![claim("c1", "replace-macro-input", Some("demo::f/tail"), serde_json::json!({}))], &[], None);
     assert!(matches!(status_of(&wrong, "c1"), ClaimStatus::Malformed { .. }));
 }
+
+#[test]
+fn an_unclaimed_rename_gets_a_rename_hint() {
+    let before = "pub fn helper(x: u32) -> u32 { x + 1 }\n";
+    let after = "pub fn add_one(x: u32) -> u32 { x + 1 }\n";
+    let report = run(before, after, vec![], &[], None);
+    assert!(report.uncovered.iter().all(|u| u.hint.as_deref().is_some_and(|h| h.starts_with("rename"))), "{:#?}", report.uncovered);
+}
+
+#[test]
+fn affects_can_name_a_module() {
+    let src = "pub fn f(x: u32) -> u32 { x + 1 }\npub mod m { pub fn g(x: u32) -> u32 { x * 2 } }\n";
+    let changed = "pub fn f(x: u32) -> u32 { x + 2 }\npub mod m { pub fn g(x: u32) -> u32 { x * 2 } }\n";
+    let mut claims = vec![claim("c1", "change-literal", Some("demo::f/tail/rhs"), serde_json::json!({}))];
+    claims[0].args.insert("affects".into(), serde_json::json!(["demo::m::*"]));
+    let report = run(src, changed, claims, &[("demo::f", different(false)), ("demo::m::g", different(false))], None);
+    assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
+}
+
+#[test]
+fn a_formatting_only_head_tree_is_accepted() {
+    let (_d1, old) = load(PLAIN);
+    let (_d2, new) = load(EXTRACTED);
+    let (_d3, head) = load("pub fn f(a: u32, b: u32, c: u32) -> u32 {\n        let product = a * b;\n    product +\n c\n}\n");
+    let set = ChangeSet {
+        base_tree: "a".into(),
+        head_tree: "c".into(),
+        steps: vec![step(vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))])],
+        ..Default::default()
+    };
+    let bodies = FakeBodies(BTreeMap::from([("demo::f".to_string(), equal("n0"))]));
+    let trees = BTreeMap::from([("a".to_string(), old), ("b".to_string(), new), ("c".to_string(), head)]);
+    let (report, _) = verify_changeset(&set, &mut |tree| Ok(trees.get(tree).cloned().unwrap()), &bodies, &NoOracle, Options::default());
+    assert!(report.organization.is_empty(), "{:#?}", report.organization);
+    assert!(report.warnings.iter().any(|w| w.contains("only in formatting")));
+}

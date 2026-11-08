@@ -288,7 +288,10 @@ impl App {
         self.no_bodies = saved;
         let result = result?;
         let outcome = result.outcomes.first().context("no outcome")?;
-        Ok(semilla_verify::hints::suggest_claims(&outcome.edits, &outcome.owners))
+        let step = set.steps[last].clone();
+        let (before, after) = (self.workspace(&step.tree_before)?, self.workspace(&step.tree_after)?);
+        let renames = semilla_verify::hints::likely_renames(&outcome.edits, &before, &after);
+        Ok(semilla_verify::hints::suggest_claims_with_renames(&outcome.edits, &outcome.owners, &renames))
     }
 
     // ----- groups and subgroups -----
@@ -349,11 +352,17 @@ impl App {
         if session.open.is_some() {
             bail!("a step is still open; end it first");
         }
-        let set = session.changeset;
+        let mut set = session.changeset;
         let commit = self.repo.git(&["rev-parse", commit])?;
         let tree = self.repo.commit_tree(&commit)?;
         if set.head_tree != tree {
-            bail!("the last step ends at tree {}, but commit {commit} has tree {tree}", set.head_tree);
+            // A difference in formatting only is allowed (for example `cargo fmt` before the
+            // commit). A changed comment is not formatting.
+            let (last, head) = (self.workspace(&set.head_tree)?, self.workspace(&tree)?);
+            if !semilla_syntax::diff(&last, &head, &Default::default()).is_empty() {
+                bail!("the last step ends at tree {}, but commit {commit} has tree {tree}; put all changes inside steps", set.head_tree);
+            }
+            set.head_tree = tree.clone();
         }
         self.repo.write_note(&commit, &serde_json::to_string_pretty(&set)?)?;
         self.repo.keep_tree(&format!("refs/semilla/{commit}/base"), &set.base_tree, "semilla base")?;

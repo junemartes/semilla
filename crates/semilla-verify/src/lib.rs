@@ -187,6 +187,17 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
         }
     }
 
+    // An unclaimed rename shows as a removed item and an added item of the same kind, with the
+    // same text after the name change. The hint says so (the claim is still necessary).
+    for (old_name, new_name) in hints::likely_renames(&edits, input.before, input.after) {
+        for uncovered in report.uncovered.iter_mut() {
+            let item = uncovered.at.as_ref().map(|a| a.item.as_str());
+            if item == Some(old_name.as_str()) || item == Some(new_name.as_str()) {
+                uncovered.hint = Some(format!("rename (it looks like a rename of `{old_name}` to `{new_name}`)"));
+            }
+        }
+    }
+
     // 5. Indirect changes: a body that changed without a text change in its item.
     let edited_items: BTreeSet<&str> = edits.iter().filter_map(|edit| edit.item()).collect();
     let affects: BTreeSet<String> = step.claims.iter().flat_map(|claim| claim.arg_list("affects")).collect();
@@ -196,7 +207,10 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
         }
         let item = body_index.item_of(comparison);
         let item_name = item.clone().unwrap_or_else(|| comparison.name.clone());
-        if edited_items.contains(item_name.as_str()) || affects.contains(&item_name) || affects.contains(&comparison.name) {
+        let affected = |name: &str| {
+            affects.iter().any(|entry| entry == name || entry.strip_suffix("::*").is_some_and(|module| name.starts_with(&format!("{module}::"))))
+        };
+        if edited_items.contains(item_name.as_str()) || affected(&item_name) || affected(&comparison.name) {
             continue;
         }
         if item.as_ref().is_some_and(|item| renames.items.values().any(|new| new == item)) {
@@ -419,7 +433,16 @@ pub fn verify_changeset(
         }
     }
     if !set.steps.is_empty() && previous_tree != set.head_tree && !set.head_tree.is_empty() {
-        report.organization.push("the last step does not end at the head tree".to_string());
+        // A difference in formatting only is allowed: the syntax diff ignores whitespace, but not
+        // comments.
+        let same = load(&previous_tree).and_then(|last| Ok((last, load(&set.head_tree)?))).is_ok_and(|(last, head)| {
+            semilla_syntax::diff(&last, &head, &Default::default()).is_empty()
+        });
+        if same {
+            report.warnings.push("the head tree differs from the last step only in formatting".to_string());
+        } else {
+            report.organization.push("the last step does not end at the head tree".to_string());
+        }
     }
     report.steps = outcomes.iter().map(|outcome| outcome.report.clone()).collect();
     for step in &report.steps {

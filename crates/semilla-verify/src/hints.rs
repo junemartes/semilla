@@ -70,9 +70,24 @@ pub fn suggest(edit: &Edit) -> &'static str {
 
 /// Builds claim suggestions for the uncovered edits of a step (the `suggest_claims` helper).
 pub fn suggest_claims(edits: &[Edit], owners: &[Option<usize>]) -> Vec<Claim> {
+    suggest_claims_with_renames(edits, owners, &[])
+}
+
+/// Like [`suggest_claims`], with the likely renames: a rename claim replaces the pair of a
+/// removed and an added item.
+pub fn suggest_claims_with_renames(edits: &[Edit], owners: &[Option<usize>], renames: &[(String, String)]) -> Vec<Claim> {
     let mut claims = Vec::new();
+    for (old, new) in renames {
+        let mut args = serde_json::Map::new();
+        args.insert("to".into(), new.clone().into());
+        claims.push(Claim { id: format!("s{}", claims.len() + 1), op: "rename".into(), at: old.parse().ok(), args });
+    }
+    let in_rename = |edit: &Edit| {
+        let item = edit.anchor().map(|a| a.item.as_str());
+        renames.iter().any(|(old, new)| item == Some(old.as_str()) || item == Some(new.as_str()))
+    };
     for (edit, owner) in edits.iter().zip(owners) {
-        if owner.is_some() {
+        if owner.is_some() || in_rename(edit) {
             continue;
         }
         let op = suggest(edit);
@@ -102,4 +117,28 @@ pub fn suggest_claims(edits: &[Edit], owners: &[Option<usize>]) -> Vec<Claim> {
 fn checks_file_level(op: &str) -> bool {
     let _ = checks::local_types;
     matches!(op, "edit-config" | "bump-dependency")
+}
+
+/// Pairs of a removed item and an added item that look like a rename: the same kind, and the same
+/// text after the old name becomes the new name.
+pub fn likely_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> Vec<(String, String)> {
+    let removed: Vec<&str> = edits.iter().filter(|e| e.kind == EditKind::ItemRemoved).filter_map(|e| e.before.as_ref().map(|a| a.item.as_str())).collect();
+    let added: Vec<&str> = edits.iter().filter(|e| e.kind == EditKind::ItemAdded).filter_map(|e| e.after.as_ref().map(|a| a.item.as_str())).collect();
+    let mut pairs = Vec::new();
+    for old in &removed {
+        let Some(old_item) = before.items.get(*old) else { continue };
+        let old_name = old.rsplit("::").next().unwrap_or(old);
+        for new in &added {
+            let Some(new_item) = after.items.get(*new) else { continue };
+            if old_item.kind != new_item.kind {
+                continue;
+            }
+            let new_name = new.rsplit("::").next().unwrap_or(new);
+            let renamed: String = old_item.text.split(' ').map(|token| if token == old_name { new_name } else { token }).collect::<Vec<_>>().join(" ");
+            if renamed == new_item.text {
+                pairs.push((old.to_string(), new.to_string()));
+            }
+        }
+    }
+    pairs
 }
