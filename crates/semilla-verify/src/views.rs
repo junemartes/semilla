@@ -229,6 +229,7 @@ pub fn text_report(steps: &[StepReport]) -> String {
                 ClaimStatus::Refuted { reason } => ("✗", format!("refuted: {reason}")),
                 ClaimStatus::Empty => ("✗", "empty: the claim explains no change".to_string()),
                 ClaimStatus::Malformed { reason } => ("✗", format!("malformed: {reason}")),
+                ClaimStatus::Pending { reason } => ("…", format!("pending: {reason}")),
             };
             let class = claim.class.map(|c| format!(" [{}]", crate::class_name(c))).unwrap_or_default();
             let effect = claim.effect.map(|e| format!(" effect: {e:?}").to_lowercase()).unwrap_or_default();

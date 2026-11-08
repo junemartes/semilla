@@ -67,7 +67,7 @@
   }
 
   const MARKERS = { same: '≡', added: '+', removed: '−', changed: '~', moved: '→', extracted: '⤴', uncovered: '✗' };
-  const STATUS_ICONS = { verified: '✓', unproved: '?', refuted: '✗', empty: '∅', malformed: '!', no_result: '·' };
+  const STATUS_ICONS = { verified: '✓', unproved: '?', refuted: '✗', empty: '∅', malformed: '!', pending: '…', no_result: '·' };
   const CLASS_LABELS = { neutral: 'neutral', logic: 'logic', control_flow: 'ctrl flow', other: 'other' };
 
   function marker(status) {
@@ -255,6 +255,7 @@
           c.refuted ? ' · ' + c.refuted + ' refuted' : '',
           c.empty ? ' · ' + c.empty + ' empty' : '',
           c.malformed ? ' · ' + c.malformed + ' malformed' : '',
+          c.pending ? ' · ' + c.pending + ' pending' : '',
           c.uncovered ? ' · ' + c.uncovered + ' uncovered' : ''),
         h('span', { class: 'progress' }, c.reviewed + ' / ' + c.claims + ' claims reviewed'),
       ),
@@ -336,6 +337,7 @@
     for (const badge of sub.badges) right.push(h('span', { class: 'chip' }, badge));
     if (sub.folded) right.push(h('span', { class: 'chip ok' }, '✓ proved'));
     if (sub.counts.unproved) right.push(h('span', { class: 'chip warn' }, sub.counts.unproved + ' unproved'));
+    if (sub.counts.pending) right.push(h('span', { class: 'chip' }, sub.counts.pending + ' pending'));
     const bad = sub.counts.refuted + sub.counts.empty + sub.counts.malformed;
     if (bad) right.push(h('span', { class: 'chip bad' }, bad + ' failed'));
     right.push(reviewBox(sub.id, sub.reviewed));

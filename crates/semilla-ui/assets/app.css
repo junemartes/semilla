@@ -363,7 +363,7 @@ details[open] > summary .twisty::before { content: "▾"; }
 .claims .icon.verified { color: var(--added); }
 .claims .icon.unproved { color: var(--changed); }
 .claims .icon.refuted, .claims .icon.empty, .claims .icon.malformed { color: var(--removed); }
-.claims .icon.no_result { color: var(--muted); }
+.claims .icon.no_result, .claims .icon.pending { color: var(--muted); }
 .claims .op { font-family: var(--mono); white-space: nowrap; }
 .claims .anchor { font-family: var(--mono); font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
 .claims .text { color: var(--muted); font-size: 13px; }

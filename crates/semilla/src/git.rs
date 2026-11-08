@@ -49,7 +49,7 @@ impl Repo {
     /// A private index file keeps the user's index unchanged. `.gitignore` applies, so `target`
     /// and `.semilla` are not in the tree.
     pub fn write_tree(&self) -> Result<String> {
-        let index = self.state_dir().join("index");
+        let index = self.private_path("index");
         std::fs::create_dir_all(self.state_dir())?;
         let _ = std::fs::remove_file(&index);
         let env = [("GIT_INDEX_FILE", index.as_path())];
@@ -67,23 +67,37 @@ impl Repo {
         self.git(&["rev-parse", &format!("{commit}^{{tree}}")])
     }
 
+    /// A path in the state folder that only this process uses (for index files).
+    fn private_path(&self, name: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        self.state_dir().join(format!("{name}-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)))
+    }
+
     /// Writes a tree into a cache folder (once), and returns the folder.
+    ///
+    /// The tree goes into a private folder first, then a rename puts it in place. The rename is
+    /// atomic, so a cache folder that exists is complete, also when other processes write the same
+    /// tree at the same time.
     pub fn materialize(&self, tree: &str) -> Result<PathBuf> {
-        let dir = self.state_dir().join("cache/trees").join(tree);
-        // The marker is next to the folder, not inside it, so it is not part of the tree.
-        let marker = self.state_dir().join("cache/trees").join(format!("{tree}.complete"));
-        if marker.exists() {
+        let base = self.state_dir().join("cache/snapshots");
+        let dir = base.join(tree);
+        if dir.exists() {
             return Ok(dir);
         }
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir)?;
-        let index = self.state_dir().join(format!("index-{tree}"));
+        std::fs::create_dir_all(&base)?;
+        let temp = self.private_path("snapshot");
+        let index = self.private_path("index");
         let env = [("GIT_INDEX_FILE", index.as_path())];
         self.git_env(&["read-tree", tree], &env)?;
-        let prefix = format!("{}/", dir.display());
+        let prefix = format!("{}/", temp.display());
         self.git_env(&["checkout-index", "-a", "-f", &format!("--prefix={prefix}")], &env)?;
         let _ = std::fs::remove_file(&index);
-        std::fs::write(marker, tree)?;
+        std::fs::create_dir_all(&temp)?;
+        if std::fs::rename(&temp, &dir).is_err() {
+            // Another process put the same tree in place first.
+            let _ = std::fs::remove_dir_all(&temp);
+        }
         Ok(dir)
     }
 

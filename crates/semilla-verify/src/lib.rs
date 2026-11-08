@@ -214,6 +214,11 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
 
     report.panic_delta = panic_sites(input.after) - panic_sites(input.before);
     report.spotlight = spotlight(&edits, input.before, input.after);
+    for claim in step.claims.iter().filter(|claim| claim.op == "replace-macro-input") {
+        if let Some(at) = &claim.at {
+            report.spotlight.push(format!("macro input: {at}"));
+        }
+    }
     let (level, api_changes) = api_level(&edits, input.before, input.after);
     report.api_level = Some(level.to_string());
     report.api_changes = api_changes;

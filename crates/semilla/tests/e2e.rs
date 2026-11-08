@@ -88,7 +88,10 @@ fn agent_flow_end_to_end() {
     assert_eq!(anchor, "shop_core::cart::Cart::total/S0");
     run(repo, &["claim", "rename-local", "--at", &anchor, "to=sum"], 0);
     run(repo, &["step", "end"], 0);
+    // Phase 1 is fast: the neutral claim is pending. `--full` also runs the body proofs.
     let check = run(repo, &["check"], 0);
+    assert!(check.contains("pending"), "{check}");
+    let check = run(repo, &["check", "--full"], 0);
     assert!(check.contains("verified (N0"), "{check}");
 
     // Step 1: an early exit and a changed operator.
@@ -133,6 +136,18 @@ fn agent_flow_end_to_end() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "fix the cart total"]);
     let tagged = run(repo, &["tag"], 0);
     assert!(tagged.contains("3 steps"), "{tagged}");
+    // The background check of the commit, and the standalone report.
+    let status = run(repo, &["status", "HEAD"], 0);
+    assert!(status.contains("queued") || status.contains("ready"), "{status}");
+    let report_file = repo.join("review.md");
+    let review = run(repo, &["review", "HEAD", "--md", report_file.to_str().unwrap(), "--wait", "600"], 0);
+    assert!(review.contains("wrote"), "{review}");
+    let markdown = std::fs::read_to_string(&report_file).unwrap();
+    assert!(markdown.contains("Fix the cart total") && markdown.contains("Rename the sum"), "{markdown}");
+    let status = run(repo, &["status", "HEAD"], 0);
+    assert!(status.contains("ready"), "{status}");
+    assert!(git(repo, &["notes", "--ref=semilla-report", "show", "HEAD"]).contains("\"accepted\": true"));
+
     let note = git(repo, &["notes", "--ref=semilla", "show", "HEAD"]);
     assert!(note.contains("add-early-exit"));
     assert!(git(repo, &["for-each-ref", "refs/semilla/"]).lines().count() >= 4);

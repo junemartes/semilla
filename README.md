@@ -47,6 +47,8 @@ git commit -am "fix the cart total"
 semilla tag                               # a git note on HEAD, and refs under refs/semilla/
 ```
 
+Agents: read [`docs/agent-guide.md`](docs/agent-guide.md) first.
+
 ### MCP
 
 `semilla mcp` serves the same tools over MCP (stdio). For Claude Code:

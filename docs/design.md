@@ -871,7 +871,7 @@ All milestones M0 to M6 have an implementation. `cargo test --workspace` runs th
 - The API level comes from the claim ops, not from `cargo-semver-checks`.
 - The LLM intent check, the revert check, and the dependency upgrade diff are not implemented.
 
-## 19. Background verification (next)
+## 19. Background verification
 
 Spike S3 showed that a full check of one step can take a minute on a large crate. The agent must not wait for it. So the check has two phases.
 
@@ -913,3 +913,15 @@ The crate hash must include every input that can change the MIR, because a stale
 A crate with a build script or a proc macro can also depend on the environment. Such a crate is rebuilt every time, until the key covers its inputs.
 
 `semilla init` can also install a local `post-commit` hook that queues the phase 2 job of each tagged commit.
+
+### 19.2 Status
+
+Implemented:
+
+- Phase 1: `check` and the MCP tool `check_step`. Neutral claims are `pending`. `check --full` runs both phases.
+- Phase 2: `step end` and `tag` add a job to `.semilla/queue/` and start `semilla worker`. The worker stores each report with the hash of its change set, in `.semilla/reports/` and as a git note under `refs/notes/semilla-report`.
+- `semilla status [commit]` and the MCP tool `results` show `ready`, `queued`, `stale`, or `missing`.
+- `semilla review [commit] [--md FILE] [--html FILE]` waits for phase 2, then opens the UI or writes a standalone report.
+- The delta build folders of 19.1, with lazy N2 and N3 builds. The tree cache and the build folders are safe for concurrent processes.
+
+Not implemented yet: the per-file syntax cache, the crate hash keys for records (cargo's fingerprints decide the reuse now), and the `post-commit` hook of `semilla init`.

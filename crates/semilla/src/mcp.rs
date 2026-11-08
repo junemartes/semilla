@@ -20,7 +20,8 @@ fn tools() -> Value {
         {"name": "unclaim", "description": "Remove a claim from the open step.", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
         {"name": "step_end", "description": "End the open step.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "anchor", "description": "Return the anchor of the lowest node at a file position (the line starts at 1; the column is optional). With `before: true`, the position is in the tree before the open step: use this for claims on existing code.", "inputSchema": {"type": "object", "properties": {"file": {"type": "string"}, "line": {"type": "integer"}, "column": {"type": "integer"}, "before": {"type": "boolean"}}, "required": ["file", "line"]}},
-        {"name": "check_step", "description": "Verify one step (default: the last or open step). Returns the report and the change tree, with uncovered changes and hints.", "inputSchema": {"type": "object", "properties": {"step": {"type": "integer"}}}},
+        {"name": "check_step", "description": "Verify one step (default: the last or open step). Phase 1 only (fast): the syntax checks, with uncovered changes and hints; the body proofs are pending and run in the background. Set `full: true` to wait for the body proofs.", "inputSchema": {"type": "object", "properties": {"step": {"type": "integer"}, "full": {"type": "boolean"}}}},
+        {"name": "results", "description": "The result of the background check (phase 2) of the session, or of a tagged commit: ready, queued, or stale, with the full report.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
         {"name": "suggest_claims", "description": "Suggest claims for the uncovered changes of the last step. The suggestions are not trusted: check and send them with `claim`.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "verify", "description": "Verify the full change set, with the group and subgroup rules.", "inputSchema": {"type": "object", "properties": {"final": {"type": "boolean"}}}},
         {"name": "group_set", "description": "Declare a group: a set of steps with one intent (about one commit).", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "kind": {"type": "string", "enum": ["refactor", "rename", "move", "api", "tests", "deps", "fix", "feature", "behavior"]}, "title": {"type": "string"}, "why": {"type": "string"}, "steps": {"type": "array", "items": {"type": "integer"}}}, "required": ["id", "kind", "title", "steps"]}},
@@ -56,9 +57,15 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             let session = app.load_session()?;
             let last = session.changeset.steps.len() + usize::from(session.open.is_some());
             let step = args.get("step").and_then(Value::as_u64).map(|s| s as usize).unwrap_or(last.saturating_sub(1));
-            let result = app.check(Some(step), false)?;
+            let full = args.get("full").and_then(Value::as_bool).unwrap_or(false);
+            let saved = app.no_bodies;
+            app.no_bodies = saved || !full;
+            let result = app.check(Some(step), false);
+            app.no_bodies = saved;
+            let result = result?;
             Ok(format!("{}\n{}", result.text, result.tree.render()))
         }
+        "results" => app.status(text("commit")),
         "suggest_claims" => Ok(serde_json::to_string_pretty(&app.suggest_claims()?)?),
         "verify" => {
             let result = app.check(None, args.get("final").and_then(Value::as_bool).unwrap_or(false))?;

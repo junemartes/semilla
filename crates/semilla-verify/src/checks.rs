@@ -248,6 +248,7 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
         "add-argument" | "remove-argument" => check_argument(context, claim),
         "rewrite-pattern" => crate::pattern::check(context, claim),
         "replace-expression" | "replace-pattern" | "replace-type" => check_free(context, claim),
+        "replace-macro-input" => check_macro_input(context, claim),
         other => Outcome::malformed(format!("the verifier has no checker for `{other}`")),
     };
 
@@ -295,7 +296,7 @@ fn body_proof(context: &Context, item: &str, mut outcome: Outcome) -> Outcome {
             outcome.hint = Some("Tag the change as logic, or use smaller neutral steps.".into());
         }
         None if !context.bodies.available => {
-            outcome.status = ClaimStatus::Unproved { reason: "the body check is not available".into() };
+            outcome.status = ClaimStatus::Pending { reason: "the body proof runs in the background check (phase 2)".into() };
         }
         None => {
             // No body: a non-function item. The syntax check is the proof.
@@ -951,6 +952,29 @@ fn check_free(context: &Context, claim: &Claim) -> Outcome {
         let mut outcome = Outcome::malformed(format!("the free edit is too wide: the change is only in `{common}`"));
         outcome.hint = Some(format!("Put the claim on `{common}`."));
         return outcome;
+    }
+    let mut outcome = texts(context, &explains.clone(), Outcome::verified("free", explains));
+    outcome.before = Some(node.text.clone());
+    outcome
+}
+
+/// `replace-macro-input`: the edits inside one macro call. The input of a macro is a token tree,
+/// so this is the only free edit that can be on a statement: a macro call statement.
+fn check_macro_input(context: &Context, claim: &Claim) -> Outcome {
+    let at = claim.at.as_ref().unwrap();
+    let Some(node) = semilla_syntax::resolve_node(context.before, at) else {
+        return Outcome::malformed(format!("no node at `{at}` before the step"));
+    };
+    if node.kind != "macro" {
+        return Outcome::malformed(format!("`replace-macro-input` needs a macro call, not a `{}`", node.kind));
+    }
+    let explains = edits_inside(context, at, false);
+    if explains.is_empty() {
+        return Outcome::new(ClaimStatus::Empty);
+    }
+    // The macro must stay the same macro: only its input changes.
+    if explains.iter().any(|&i| context.edits[i].before.as_ref() == Some(at) && context.edits[i].attr_before != context.edits[i].attr_after) {
+        return Outcome::refuted("the macro name changed, not only its input");
     }
     let mut outcome = texts(context, &explains.clone(), Outcome::verified("free", explains));
     outcome.before = Some(node.text.clone());

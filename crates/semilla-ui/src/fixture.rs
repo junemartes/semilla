@@ -330,6 +330,8 @@ pub fn demo_report() -> Report {
         panic_delta: 0,
         api_level: None,
         accepted: false,
+        phase: "full".into(),
+        pending: 0,
     };
     report.finish();
     report

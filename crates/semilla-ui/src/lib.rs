@@ -1,9 +1,10 @@
 //! The local review UI of semilla (design section 11).
 //!
-//! The crate has three parts:
+//! The crate has four parts:
 //! - a JSON API over the change set, the report, and the view data ([`router`]);
 //! - a review state that follows the claims, not the lines ([`review`]);
-//! - one web page with its scripts, embedded in the binary ([`assets`]).
+//! - one web page with its scripts, embedded in the binary ([`assets`]);
+//! - a standalone report in HTML or Markdown ([`export`]).
 //!
 //! The UI is not trusted (design section 3). It only shows the data that the verifier and the
 //! indexer give it.
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 mod api;
 pub mod assets;
 mod ctx;
+pub mod export;
 pub mod fixture;
 pub mod graph;
 pub mod review;

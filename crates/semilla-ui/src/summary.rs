@@ -25,6 +25,8 @@ pub struct Counts {
     pub refuted: usize,
     pub empty: usize,
     pub malformed: usize,
+    /// Claims whose body proof waits for the background check (phase 2).
+    pub pending: usize,
     /// Claims without a result in the report.
     pub no_result: usize,
     pub uncovered: usize,
@@ -120,7 +122,7 @@ pub struct ClaimView {
     pub class: Option<Class>,
     /// The role of the op in the rule table.
     pub op_role: Option<Role>,
-    /// `verified`, `unproved`, `refuted`, `empty`, `malformed`, or `no_result`.
+    /// `verified`, `unproved`, `refuted`, `empty`, `malformed`, `pending`, or `no_result`.
     pub status: &'static str,
     pub result: Option<ClaimResult>,
     pub review: ReviewState,
@@ -215,6 +217,7 @@ fn status_name(result: Option<&ClaimResult>) -> &'static str {
         Some(ClaimStatus::Refuted { .. }) => "refuted",
         Some(ClaimStatus::Empty) => "empty",
         Some(ClaimStatus::Malformed { .. }) => "malformed",
+        Some(ClaimStatus::Pending { .. }) => "pending",
         None => "no_result",
     }
 }
@@ -227,6 +230,7 @@ fn add_status(counts: &mut Counts, view: &ClaimView) {
         "refuted" => counts.refuted += 1,
         "empty" => counts.empty += 1,
         "malformed" => counts.malformed += 1,
+        "pending" => counts.pending += 1,
         _ => counts.no_result += 1,
     }
     if view.review.is_reviewed() {
@@ -241,6 +245,7 @@ fn add_counts(total: &mut Counts, part: &Counts) {
     total.refuted += part.refuted;
     total.empty += part.empty;
     total.malformed += part.malformed;
+    total.pending += part.pending;
     total.no_result += part.no_result;
     total.uncovered += part.uncovered;
     total.reviewed += part.reviewed;
@@ -280,6 +285,11 @@ pub fn fold_state(ctx: &Ctx, claims: &[&Claim]) -> (bool, String) {
     let not_neutral = claims.iter().filter(|claim| ctx.claim_class(claim) != Some(Class::Neutral)).count();
     if not_neutral > 0 {
         return (false, format!("{not_neutral} claim(s) with a class that is not neutral"));
+    }
+    // A pending claim waits for the background check. It keeps its subgroup open.
+    let pending = claims.iter().filter(|claim| ctx.results.get(&claim.id).is_some_and(|result| result.status.is_pending())).count();
+    if pending > 0 {
+        return (false, format!("{pending} claim(s) pending"));
     }
     let not_verified = claims.iter().filter(|claim| !ctx.is_proved_neutral(claim)).count();
     if not_verified > 0 {

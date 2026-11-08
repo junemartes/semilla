@@ -60,6 +60,7 @@ pub fn suggest(edit: &Edit) -> &'static str {
         EditKind::Replaced if edit.node_before == Some("lit") && edit.node_after == Some("lit") => "change-literal",
         EditKind::Replaced if edit.node_before == Some("path") && edit.node_after == Some("path") => "change-path",
         EditKind::Replaced if edit.node_before == Some("pattern") => "replace-pattern",
+        EditKind::Replaced | EditKind::Modified if edit.node_before == Some("macro") && edit.node_after == Some("macro") => "replace-macro-input",
         _ if edit.block_like => "a structured statement op (add-if, add-arm, wrap-statements, …)",
         EditKind::Replaced | EditKind::Modified => "replace-expression",
         EditKind::FileChanged if edit.file.as_deref().is_some_and(|f| f.ends_with("Cargo.toml")) => "bump-dependency or edit-config",

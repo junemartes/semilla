@@ -124,7 +124,8 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
                 report.organization.push(format!("subgroup `{}`: claim {claim} is not in a step of group {}", subgroup.title, group.id));
             }
             let result = results.get(claim.as_str());
-            let neutral_proved = result.is_some_and(|r| r.class == Some(Class::Neutral) && r.status.is_verified());
+            // In phase 1 a neutral claim is still pending; phase 2 decides.
+            let neutral_proved = result.is_some_and(|r| r.class == Some(Class::Neutral) && (r.status.is_verified() || r.status.is_pending()));
             let info = ops::op(&found.op);
             let problem = match subgroup.role {
                 Role::Mechanical => (!neutral_proved).then(|| "a Mechanical subgroup can contain only proved neutral claims"),

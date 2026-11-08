@@ -1,6 +1,7 @@
 //! The semilla command line.
 
 mod app;
+mod background;
 mod git;
 mod mcp;
 mod oracle;
@@ -48,11 +49,36 @@ enum Command {
         #[arg(long)]
         before: bool,
     },
-    /// Verify one step (default: the last or open step).
+    /// Verify one step (default: the last or open step). Without `--full`, only phase 1 runs:
+    /// the syntax checks; the body proofs are pending and run in the background.
     Check {
         #[arg(long)]
         step: Option<usize>,
+        /// Also run phase 2 now (the MIR body proofs).
+        #[arg(long)]
+        full: bool,
     },
+    /// Show the background check of the session, or of a tagged commit.
+    Status { commit: Option<String> },
+    /// Review the session or a tagged commit: the UI, or a standalone report.
+    Review {
+        /// `session` (default) or a commit.
+        target: Option<String>,
+        /// Write a Markdown report to this file.
+        #[arg(long)]
+        md: Option<PathBuf>,
+        /// Write a standalone HTML report to this file.
+        #[arg(long)]
+        html: Option<PathBuf>,
+        /// Wait at most this many seconds for the background check.
+        #[arg(long, default_value_t = 600)]
+        wait: u64,
+        #[arg(long, default_value_t = 7878)]
+        port: u16,
+    },
+    /// Run the background jobs, then stop (normally started by `step end` and `tag`).
+    #[command(hide = true)]
+    Worker,
     /// Verify the full change set.
     Verify {
         /// Require groups (the final check before a review).
@@ -132,6 +158,14 @@ fn main() -> ExitCode {
     }
 }
 
+/// True if a phase 1 report has no problem except the pending body proofs.
+fn phase1_ok(report: &semilla_core::Report) -> bool {
+    report.organization.is_empty()
+        && report.steps.iter().all(|step| {
+            step.errors.is_empty() && step.uncovered.is_empty() && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
+        })
+}
+
 fn parse_class(text: &str) -> Result<Class> {
     serde_json::from_value(serde_json::Value::String(text.to_string())).with_context(|| format!("`{text}` is not a class (neutral, logic, control_flow, other)"))
 }
@@ -166,12 +200,49 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             println!("{}", app.anchor(&file, line, column, before)?);
         }
-        Command::Check { step } => {
+        Command::Check { step, full } => {
             let session = app.load_session()?;
             let last = (session.changeset.steps.len() + usize::from(session.open.is_some())).checked_sub(1).context("no step yet")?;
+            app.no_bodies = app.no_bodies || !full;
             let result = app.check(Some(step.unwrap_or(last)), false)?;
             println!("{}\n{}", result.text, result.tree.render());
-            return Ok(if result.report.accepted { ExitCode::SUCCESS } else { ExitCode::from(1) });
+            // Phase 1 passes when nothing is wrong except the pending body proofs.
+            let ok = if full { result.report.accepted } else { phase1_ok(&result.report) };
+            return Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        }
+        Command::Status { commit } => println!("{}", app.status(commit.as_deref())?),
+        Command::Review { target, md, html, wait, port } => {
+            let target = target.unwrap_or_else(|| "session".into());
+            let (key, set) = app.review_target(&target)?;
+            let hash = background::changeset_hash(&set);
+            if background::state(&app, &key, &hash) == background::State::Missing {
+                background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()) })?;
+            }
+            let state = background::wait(&mut app, &key, &hash, std::time::Duration::from_secs(wait))?;
+            if state != background::State::Ready {
+                println!("the background check of {key} is not ready ({state:?}); see `semilla status`");
+                return Ok(ExitCode::from(1));
+            }
+            let data = app.ui_data_for(&set)?;
+            if let Some(file) = &md {
+                std::fs::write(file, semilla_ui::export::render_markdown(&data))?;
+                println!("wrote {}", file.display());
+            }
+            if let Some(file) = &html {
+                std::fs::write(file, semilla_ui::export::render_html(&data))?;
+                println!("wrote {}", file.display());
+            }
+            if md.is_none() && html.is_none() {
+                let review = app.repo.state_dir().join("review.json");
+                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                println!("semilla review UI: http://{addr}");
+                tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
+            }
+        }
+        Command::Worker => {
+            if !background::run_worker(&mut app)? {
+                eprintln!("[worker] another worker runs");
+            }
         }
         Command::Verify { r#final, json } => {
             let result = app.check(None, r#final)?;

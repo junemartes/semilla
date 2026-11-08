@@ -319,3 +319,25 @@ fn api_level_estimate() {
     assert_eq!(run(before, major, vec![], &[], None).api_level.as_deref(), Some("major"));
     assert_eq!(run(before, patch, vec![], &[], None).api_level.as_deref(), Some("patch"));
 }
+
+#[test]
+fn without_bodies_a_neutral_claim_is_pending() {
+    let report = run(PLAIN, EXTRACTED, vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))], &[], None);
+    assert!(status_of(&report, "c1").is_pending(), "{:?}", status_of(&report, "c1"));
+    assert!(report.uncovered.is_empty());
+    assert!(!report.accepted(), "a pending claim is not accepted yet");
+}
+
+#[test]
+fn macro_input_changes_are_free_and_in_the_spotlight() {
+    let before = "macro_rules! table { ($($x:expr),*) => { [$($x),*] }; }\npub fn f() -> [u32; 2] {\n    table!(1, 2)\n}\n";
+    let after = "macro_rules! table { ($($x:expr),*) => { [$($x),*] }; }\npub fn f() -> [u32; 2] {\n    table!(1, 3)\n}\n";
+    let missing = run(before, after, vec![], &[], None);
+    assert_eq!(missing.uncovered[0].hint.as_deref(), Some("replace-macro-input"));
+    let report = run(before, after, vec![claim("c1", "replace-macro-input", Some("demo::f/tail"), serde_json::json!({}))], &[("demo::f", different(false))], None);
+    assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "free".into() });
+    assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
+    assert!(report.spotlight.iter().any(|s| s.starts_with("macro input")), "{:?}", report.spotlight);
+    let wrong = run(PLAIN, EXTRACTED, vec![claim("c1", "replace-macro-input", Some("demo::f/tail"), serde_json::json!({}))], &[], None);
+    assert!(matches!(status_of(&wrong, "c1"), ClaimStatus::Malformed { .. }));
+}

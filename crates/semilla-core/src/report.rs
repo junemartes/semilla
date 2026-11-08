@@ -29,11 +29,17 @@ pub enum ClaimStatus {
     Empty,
     /// Bad syntax, or the anchor does not resolve.
     Malformed { reason: String },
+    /// The body proof waits for the background check (phase 2, design section 19).
+    Pending { reason: String },
 }
 
 impl ClaimStatus {
     pub fn is_verified(&self) -> bool {
         matches!(self, ClaimStatus::Verified { .. })
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, ClaimStatus::Pending { .. })
     }
 }
 
@@ -140,6 +146,12 @@ pub struct Report {
     pub warnings: Vec<String>,
     /// The score (design section 9.2), from 0 to 1.
     pub score: f64,
+    /// `syntax` for a phase 1 report (no body proofs yet), `full` for a phase 2 report.
+    #[serde(default)]
+    pub phase: String,
+    /// The number of claims that wait for phase 2.
+    #[serde(default)]
+    pub pending: usize,
     /// The change in the number of explicit panic sites over all steps.
     #[serde(default)]
     pub panic_delta: i64,
@@ -154,6 +166,7 @@ impl Report {
     pub fn finish(&mut self) {
         self.accepted = self.organization.is_empty() && self.steps.iter().all(StepReport::accepted);
         self.panic_delta = self.steps.iter().map(|step| step.panic_delta).sum();
+        self.pending = self.steps.iter().flat_map(|step| &step.claims).filter(|claim| claim.status.is_pending()).count();
         let rank = |level: &str| match level {
             "major" => 2,
             "minor" => 1,
@@ -169,6 +182,7 @@ impl Report {
                 (ClaimStatus::Verified { .. }, Some(Class::Neutral)) => 1.0,
                 (ClaimStatus::Verified { .. }, _) => 0.9,
                 (ClaimStatus::Unproved { .. }, _) => 0.2,
+                (ClaimStatus::Pending { .. }, _) => 0.5,
                 _ => 0.0,
             })
             .collect();

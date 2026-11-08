@@ -29,6 +29,11 @@ impl NormalOracle {
         // One build folder serves one build at a time, also across processes.
         let lock = std::fs::File::create(base.join(format!("{level}.lock")))?;
         lock.lock()?;
+        // Another process can finish the same build while this one waits for the lock.
+        if cache.join(".complete").exists() {
+            lock.unlock()?;
+            return semilla_normal::read_records(&cache);
+        }
         let build = base.join(level);
         let records = base.join(format!("{level}-records"));
         let target = self.repo.state_dir().join("cache").join(format!("target-{level}"));

@@ -153,6 +153,7 @@ ops! {
     "replace-expression",     Expression, Free,        COMPUTED, Core, [],                "Replace a block-free expression (free edit).";
     "replace-pattern",        Expression, Free,        COMPUTED, Core, [],                "Replace a pattern (free edit).";
     "replace-type",           Expression, Free,        COMPUTED, Core, [],                "Replace a type (free edit).";
+    "replace-macro-input",    Expression, Free,        COMPUTED, Core, [],                "Replace the input of one macro call (free edit, always in the spotlight).";
 }
 
 /// Finds an operation by name.

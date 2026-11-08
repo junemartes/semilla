@@ -146,7 +146,49 @@ impl App {
         session.changeset.steps.push(Step { index, intent: open.intent, class: open.class, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone() });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
-        Ok(format!("step {index} ended at tree {tree}"))
+        self.queue_session(&session.changeset)?;
+        Ok(format!("step {index} ended at tree {tree}; the background check runs (see `status`)"))
+    }
+
+    /// Adds a background job for the session, and starts the worker.
+    fn queue_session(&self, set: &ChangeSet) -> Result<()> {
+        let job = crate::background::Job { key: "session".into(), hash: crate::background::changeset_hash(set), changeset: Some(set.clone()) };
+        crate::background::enqueue(self, &job)?;
+        crate::background::spawn_worker(self)
+    }
+
+    /// The state of the background check of the session, or of a tagged commit.
+    pub fn status(&mut self, commit: Option<&str>) -> Result<String> {
+        let (key, set) = match commit {
+            Some(commit) => {
+                let commit = self.repo.git(&["rev-parse", commit])?;
+                let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note"))?;
+                let set: ChangeSet = serde_json::from_str(&note)?;
+                (commit, set)
+            }
+            None => ("session".to_string(), self.load_session()?.changeset),
+        };
+        let hash = crate::background::changeset_hash(&set);
+        let state = crate::background::state(self, &key, &hash);
+        let jobs = crate::background::jobs(self).len();
+        let mut text = format!("{key}: {}; {jobs} job(s) in the queue\n", format!("{state:?}").to_lowercase());
+        if let Some(stored) = crate::background::stored(self, &key) {
+            if state == crate::background::State::Stale {
+                text.push_str("the last report is for an older change set:\n");
+            }
+            text.push_str(&stored.text);
+        }
+        Ok(text)
+    }
+
+    /// The change set of a review target: `session`, or a tagged commit.
+    pub fn review_target(&self, target: &str) -> Result<(String, ChangeSet)> {
+        if target == "session" {
+            return Ok(("session".into(), self.load_session()?.changeset));
+        }
+        let commit = self.repo.git(&["rev-parse", target])?;
+        let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note; tag it first"))?;
+        Ok((commit, serde_json::from_str(&note)?))
     }
 
     /// The anchor at a file position of the working tree, or of the "before" tree of the open
@@ -225,6 +267,7 @@ impl App {
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);
+        report.phase = if self.no_bodies { "syntax".into() } else { "full".into() };
         report.finish();
         if !exprs.available() {
             report.warnings.push("Z3 is not available; condition effects are not computed (run scripts/fetch-z3.sh)".into());
@@ -317,7 +360,10 @@ impl App {
         for step in &set.steps {
             self.repo.keep_tree(&format!("refs/semilla/{commit}/step-{}", step.index), &step.tree_after, &format!("semilla step {}", step.index))?;
         }
-        Ok(format!("tagged {commit} with {} steps", set.steps.len()))
+        let job = crate::background::Job { key: commit.clone(), hash: crate::background::changeset_hash(&set), changeset: None };
+        crate::background::enqueue(self, &job)?;
+        crate::background::spawn_worker(self)?;
+        Ok(format!("tagged {commit} with {} steps; the background check runs (see `status {commit}`)", set.steps.len()))
     }
 
     /// Loads the change set of a tagged commit into the session (for a review).
@@ -330,9 +376,16 @@ impl App {
         Ok(format!("loaded {steps} steps from {commit}"))
     }
 
-    /// Builds the data of the review UI.
+    /// Builds the data of the review UI for the work in progress.
     pub fn ui_data(&mut self) -> Result<semilla_ui::UiData> {
         let set = self.current_changeset()?;
+        self.ui_data_for(&set)
+    }
+
+    /// Builds the data of the review UI for a change set. The body checks come from the cache of
+    /// the background worker when it has run.
+    pub fn ui_data_for(&mut self, set: &ChangeSet) -> Result<semilla_ui::UiData> {
+        let set = set.clone();
         let result = self.check_set(&set, false)?;
         let mut flows: Vec<FlowGraph> = Vec::new();
         let mut sources = BTreeMap::new();
