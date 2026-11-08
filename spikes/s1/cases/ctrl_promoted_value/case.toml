@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (promoted constant): change a value in a promoted constant of a generic body (`&[1, 2, 3]` becomes `&[1, 2, 4]`)."

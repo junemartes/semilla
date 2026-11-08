@@ -58,14 +58,14 @@ impl BodyOracle for NormalOracle {
         let started = std::time::Instant::now();
         let comparisons = semilla_normal::compare(&before, &after, renames, added);
         crate::timing("compare the bodies (N0 to N4)", started);
-        // The span of a body: from the "after" records first (the name is the "after" name).
-        let span_of = |name: &str| {
-            [&after, &before]
-                .iter()
-                .flat_map(|levels| levels.values().flatten())
-                .find(|record| record.name == name)
-                .and_then(|record| record.span.as_ref().map(|span| (span.file.clone(), span.line_start)))
-        };
+        // The span of each body: from the "after" records first (the name is the "after" name).
+        let mut spans: BTreeMap<&str, (String, usize)> = BTreeMap::new();
+        for record in [&before, &after].iter().flat_map(|levels| levels.values().flatten()) {
+            if let Some(span) = &record.span {
+                spans.insert(&record.name, (span.file.clone(), span.line_start));
+            }
+        }
+        let span_of = |name: &str| spans.get(name).cloned();
         Ok(comparisons
             .into_iter()
             .map(|comparison| BodyComparison {

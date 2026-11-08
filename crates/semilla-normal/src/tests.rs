@@ -12,7 +12,13 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         loop_free: true,
         term: None,
         span: None,
+        target: String::new(),
     }
+}
+
+fn in_target(mut record: BodyRecord, target: &str) -> BodyRecord {
+    record.target = target.to_string();
+    record
 }
 
 fn levels(records: Vec<BodyRecord>) -> Levels {
@@ -281,5 +287,62 @@ fn swapped_names_are_applied() {
     assert!(
         results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. })),
         "{results:?}"
+    );
+}
+
+#[test]
+fn targets_keep_lib_and_test_apart() {
+    // The lib and the test build of `k::f` swap their bodies: as sets the texts are the same,
+    // but each target changed.
+    let before = levels(vec![
+        in_target(record("k::f", "n0", "a", &[]), "k.lib.1"),
+        in_target(record("k::f", "n0", "b", &[]), "k.test.2"),
+    ]);
+    let after = levels(vec![
+        in_target(record("k::f", "n0", "b", &[]), "k.lib.1"),
+        in_target(record("k::f", "n0", "a", &[]), "k.test.2"),
+    ]);
+    let results = compare(&before, &after, &no_renames(), &[]);
+    assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }), "{results:?}");
+    // The same bodies in the same targets are equal.
+    let results = compare(&before, &before.clone(), &no_renames(), &[]);
+    assert_eq!(
+        status_of(&results, "k::f"),
+        &BodyStatus::Equal { level: "n0".into(), proof: vec![] }
+    );
+}
+
+#[test]
+fn missing_n3_records_use_n2_of_the_same_target() {
+    // `k::f` has no inlined call in the lib build (no N3 record), but one in the test build.
+    let before = levels(vec![
+        in_target(record("k::f", "n0", "a0", &[]), "k.lib.1"),
+        in_target(record("k::f", "n0", "t0", &[]), "k.test.2"),
+        in_target(record("k::f", "n2", "a2", &[]), "k.lib.1"),
+        in_target(record("k::f", "n2", "t2", &[]), "k.test.2"),
+        in_target(record("k::f", "n3", "inlined", &[]), "k.test.2"),
+    ]);
+    // After: the lib build changed (a2 -> x2), the test build inlines to the same text.
+    let after = levels(vec![
+        in_target(record("k::f", "n0", "x0", &[]), "k.lib.1"),
+        in_target(record("k::f", "n0", "u0", &[]), "k.test.2"),
+        in_target(record("k::f", "n2", "x2", &[]), "k.lib.1"),
+        in_target(record("k::f", "n2", "u2", &[]), "k.test.2"),
+        in_target(record("k::f", "n3", "inlined", &[]), "k.test.2"),
+    ]);
+    let results = compare(&before, &after, &no_renames(), &[]);
+    assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }), "{results:?}");
+    // If the lib build is the same, N3 is equal.
+    let after = levels(vec![
+        in_target(record("k::f", "n0", "x0", &[]), "k.lib.1"),
+        in_target(record("k::f", "n0", "u0", &[]), "k.test.2"),
+        in_target(record("k::f", "n2", "a2", &[]), "k.lib.1"),
+        in_target(record("k::f", "n2", "u2", &[]), "k.test.2"),
+        in_target(record("k::f", "n3", "inlined", &[]), "k.test.2"),
+    ]);
+    let results = compare(&before, &after, &no_renames(), &[]);
+    assert_eq!(
+        status_of(&results, "k::f"),
+        &BodyStatus::Equal { level: "n3".into(), proof: vec![] }
     );
 }

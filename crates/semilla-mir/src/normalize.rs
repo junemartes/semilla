@@ -281,13 +281,15 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
             }
         }
         let mut changed = false;
-        'blocks: for block in blocks.iter_mut() {
-            for index in 0..block.statements.len() {
+        for block in blocks.iter_mut() {
+            let mut index = 0;
+            while index < block.statements.len() {
                 let StatementKind::Assign(
                     target,
                     Rvalue::Use(Operand::Copy(source) | Operand::Move(source), _),
                 ) = &block.statements[index].kind
                 else {
+                    index += 1;
                     continue;
                 };
                 let (temp, source) = (target.local, source.clone());
@@ -295,20 +297,22 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
                     matches!(elem, ProjectionElem::Field(..) | ProjectionElem::Downcast(_))
                 });
                 // The temporary has two mentions: this assignment and its only use.
-                if !target.projection.is_empty()
-                    || temp <= arg_count
-                    || temp == source.local
-                    || mentions[temp] != 2
-                    || taken[temp]
-                    || taken[source.local]
-                    || !simple_source
-                {
+                let candidate = target.projection.is_empty()
+                    && temp > arg_count
+                    && temp != source.local
+                    && mentions[temp] == 2
+                    && !taken[temp]
+                    && !taken[source.local]
+                    && simple_source;
+                if candidate && forward_in_block(block, index, temp, &source) {
+                    // The copy is gone, and the use reads `source` now: the mentions of the
+                    // locals of `source` stay the same, and `temp` has no mention left. The
+                    // next statement is at `index` now.
+                    mentions[temp] = 0;
+                    changed = true;
                     continue;
                 }
-                if forward_in_block(block, index, temp, &source) {
-                    changed = true;
-                    break 'blocks;
-                }
+                index += 1;
             }
         }
         if !changed {

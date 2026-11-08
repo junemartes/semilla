@@ -26,7 +26,7 @@ The driver (`crates/semilla-mir`) makes three record levels. `semilla_normal::co
 | `n0` | driver `n0`: `-Zmir-opt-level=0 -Copt-level=0` | The same canonical text (the rules in `crates/semilla-mir/src/normalize.rs`). |
 | `n1` | driver `n0` | The same text after the claimed rename map, or after each call of a local function is replaced by the content hash of the callee (a Merkle tree over the call graph, one hash for each strongly connected component). |
 | `n2` | driver `n2`: `-Zmir-opt-level=2 -Copt-level=2`, overflow checks and debug assertions on | The same text (with the rename map and the content hashes). |
-| `n3` | driver `n3`: `n2`, then bounded inlining of the crate's own functions (`inline.rs`) | The same text (with the rename map and the content hashes). |
+| `n3` | driver `n3`: `n2`, then bounded inlining of the crate's own functions (`inline.rs`). The driver writes an `n3` record only for a body with an inlined call; for the other bodies, `compare` uses the `n2` record of the same target. | The same text (with the rename map and the content hashes). |
 | `n4` | the term of a loop-free `n2` or `n3` body (`term.rs`) | egglog proves the terms equal with the audited rules in `crates/semilla-normal/src/n4.rs`. |
 
 A table cell is `equal` if all bodies of the case are equal at this level or a lower one.
@@ -49,6 +49,7 @@ A table cell is `equal` if all bodies of the case are equal at this level or a l
 | ctrl_guard_off_by_one | changed | diff: get | diff: get | diff: get | diff: get | diff: get | - | - | ok | Control (N4 path facts): the guard becomes `i > len`. For `i == len` the result changes (a panic). |
 | ctrl_inline_mut_arg | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N3): the callee changes its own argument. A wrong inliner would change `a` of the caller. |
 | ctrl_ite_constant | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): change a constant in one branch of an if. |
+| ctrl_promoted_value | changed | diff: pair | diff: pair | diff: pair | diff: pair | diff: pair | - | - | ok | Control (promoted constant): change a value in a promoted constant of a generic body (`&[1, 2, 3]` becomes `&[1, 2, 4]`). |
 | ctrl_rename_changed_body | changed | diff: add_one, f | diff: add_one | diff: add_one | diff: add_one | diff: add_one | - | - | ok | Control (N1): a rename claim, but the body of the renamed function changes. |
 | ctrl_reorder_asserts | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): swap two lets that can panic with different messages (add and multiply overflow). |
 | ctrl_reorder_calls | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): swap two calls with side effects. The output order changes. |
@@ -65,6 +66,7 @@ A table cell is `equal` if all bodies of the case are equal at this level or a l
 | inline_variable | neutral | equal | equal | equal | equal | equal | N0 or N2 | N0 | proved | Inline a variable into its only use. |
 | invert_if | neutral | equal | equal | equal | equal | equal | N4 or SMT | N0 | proved | Invert an if: negate the condition and swap the branches. |
 | lifetime_elision | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Remove explicit lifetimes (elision). |
+| promoted_generic | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Add a new function. An unchanged generic body with a promoted constant (`&[1, 2, 3]`) stays equal. |
 | question_mark | neutral | diff: f | diff: f | diff: f | diff: f | equal | N2 | N4 (aggregate-field, assume-true, reflexive-compare, single-variant-discriminant) | proved | Replace a manual match on Option with `?`. |
 | rename_item | neutral | diff: f | equal | equal | equal | equal | N1 | N1 (rename-map) | proved | Rename a function and its call. The claim gives the rename map. |
 | rename_local | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Rename a local variable. |
@@ -72,7 +74,7 @@ A table cell is `equal` if all bodies of the case are equal at this level or a l
 | type_annotation | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Add a type annotation to a let. |
 | unneeded_mut | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Remove an unneeded `mut`. |
 
-Summary: 17 of 17 neutral cases are proved. All 19 negative controls stay different at every level.
+Summary: 18 of 18 neutral cases are proved. All 20 negative controls stay different at every level.
 
 ## Findings
 
@@ -80,7 +82,7 @@ Summary: 17 of 17 neutral cases are proved. All 19 negative controls stay differ
 2. **`invert_if` is equal at N0.** rustc builds `if !c { b } else { a }` as a switch with swapped targets, so no SMT or N4 is needed for a plain negation.
 3. **Two N0 rules from the first round:** a `move` operand is treated like a copy, and the source location in closure type names is replaced by a number.
 4. **Two new N0 rules make extract variable, inline variable, and `if` to `match` equal at N0** (before, only at N2): merge a block with its only `goto` successor (rule 3b), and forward a copy to its only use in the same block (rule 3c). The N3 inliner needs both rules: it adds a `goto` into the callee entry, and the inlined code copies values in other places than the original code. `ctrl_copy_then_write` checks that a copy does not move past a write of its source.
-5. **The old printer was not exact enough for a proof.** `Body::dump` prints the variant name without the type path (`Some(_5)`), it does not print the cast kind (`x as u32` is the same text for `IntToInt` and `Transmute`), and it prints a constant in memory as an allocation number only. Two different bodies could get the same text. The driver now has its own printer (`print.rs`): full def paths with the crate name first, the cast kind, and the bytes and pointers of each constant. A promoted constant of a generic body has no visible content, so it gets a unique word and its body is never equal to another body.
+5. **The old printer was not exact enough for a proof.** `Body::dump` prints the variant name without the type path (`Some(_5)`), it does not print the cast kind (`x as u32` is the same text for `IntToInt` and `Transmute`), and it prints a constant in memory as an allocation number only. Two different bodies could get the same text. The driver now has its own printer (`print.rs`): full def paths with the crate name first, the cast kind, and the bytes and pointers of each constant. A promoted constant of a generic body (for example `&[1, 2, 3]` in `fn pair<T>`) is not evaluated, so the printer prints the promoted MIR in place, with the same N0 rules (`promoted_generic`, `ctrl_promoted_value`). The first version printed a unique word there: sound, but every generic body with a promoted constant was always different (spike S3 found 19 such bodies in `regex-syntax`). A unique word stays only where nothing else is possible (see the module comment of `print.rs`).
 6. **N1 proves `rename_item` with the real rename map.** The claim maps `s1case::helper` to `s1case::add_one`. The map applies to the names and to each token in the text (`foo` does not match `foo_bar`, and a key also renames its child paths, such as `Cart::total` or `f::{closure#0}`). Without the claim, the content hash still makes the caller equal, and `suggest_renames` finds the rename as a hint. `ctrl_rename_changed_body` checks that a rename claim does not hide a changed body. A rename whose target already exists on the "before" side is not applied, because it would make two different items look the same.
 7. **N2 still proves small extracts by chance.** `extract_function` is equal at N2, because the rustc inliner inlines the small function. `extract_function_mut_arg` has `#[inline(never)]` to force the N3 path. The proof is still sound (the rustc optimizations are trusted at N2), but it depends on rustc heuristics.
 8. **N3 proves `extract_function_large`.** The rustc inliner does not inline `score`. The semilla inliner inlines it (local, no generic parameters, Rust ABI, no `#[track_caller]`, not recursive, at most depth 2 and 64 blocks). After rules 3b and 3c, the two `rank` bodies have the same text. `extract_function_mut_arg` (`#[inline(never)]`, a callee that writes its own argument) shows that the inliner copies such an argument into a new local. `ctrl_inline_mut_arg` and `ctrl_extract_wrong_constant` stay different.
@@ -91,6 +93,8 @@ Summary: 17 of 17 neutral cases are proved. All 19 negative controls stay differ
 13. **Side effects keep their order in N4.** Calls, drops, asserts, and writes through pointers take and return the state term. No rule moves an effect. `ctrl_reorder_calls`, `ctrl_drop_order_branch`, and `ctrl_reorder_raw_writes` stay different.
 14. **The integer rules must stay integer-only.** `ctrl_float_negation` (`!(a < b)` against `a >= b`) and `ctrl_float_reflexive` (`x == x` against `true`) stay different, because the term builder makes `ICmp` only for integer operands.
 15. **egglog gives the proof chain.** With `EGraph::new_with_proofs`, the `prove` command gives a proof tree with the rule names. Each N4 proof lists the term build rules first, then the egglog rules. A run stops at 30 iterations, 100 000 tuples, or 3 seconds, and a stop gives "not proved".
+
+16. **Cost (spike S3, `regex-syntax`, release build).** `compare` takes 0.12 to 0.17 s for about 2100 bodies (2.2 s before). Most of the old time was the egglog proof mode on bodies that stay different; N4 now runs egglog in the plain mode first, and the proof mode only after a success. The driver writes N3 records only for bodies with an inlined call, inlines in place (the old inliner copied the whole body for each call), and prints the text of a large constant table once, as its SHA-256 hash.
 
 ## Limits
 

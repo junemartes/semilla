@@ -7,9 +7,18 @@
 //!
 //! - Full def paths, with the crate name first (for example `mycrate::cart::Cart`).
 //! - The cast kind of each cast.
-//! - The bytes and the pointers of each constant in memory, recursively.
-//! - A unique word for a constant that it cannot see (a promoted constant of a generic body).
-//!   So such a body is never equal to another body.
+//! - The bytes and the pointers of each constant in memory, recursively. The text of a large
+//!   allocation (a table) is its SHA-256 hash.
+//! - The MIR of a promoted constant of a generic body, in place (a non-generic body has its
+//!   constants evaluated already, so it prints the value).
+//! - A unique word (`unique`) for a part that it cannot see. Then the body is never equal to
+//!   another body. The remaining cases:
+//!   - a promoted constant whose MIR rustc does not have (`is_mir_available` is false), or that
+//!     nests deeper than `MAX_PROMOTED_DEPTH`;
+//!   - a constant with a pointer chain deeper than `MAX_ALLOC_DEPTH`;
+//!   - a bound constant (`TyConstKind::Bound`), which does not occur in a body;
+//!   - a statement kind that the N0 rules remove (it does not occur after the rules);
+//!   - a body that the driver cannot read (a panic in rustc_public, see `failed_record`).
 //!
 //! The printer also collects the def paths of the local functions that the body refers to.
 
@@ -17,7 +26,8 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rustc_public::CrateDef;
+use sha2::{Digest, Sha256};
+
 use rustc_public::mir::alloc::{AllocId, GlobalAlloc};
 use rustc_public::mir::{
     AggregateKind, AssertMessage, BasicBlock, Body, BorrowKind, CastKind, InlineAsmOperand,
@@ -28,7 +38,22 @@ use rustc_public::ty::{
     Allocation, ConstantKind, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, TyConst,
     TyConstKind, TyKind,
 };
+use rustc_public::ty::{ConstDef, Promoted};
+use rustc_public::{CrateDef, rustc_internal};
 use rustc_public_bridge::IndexedVal;
+
+/// The longest text of an allocation that the printer prints in full. A longer text becomes
+/// its hash.
+const MAX_ALLOC_TEXT: usize = 1024;
+
+thread_local! {
+    /// The printed text of each allocation of this compile, with the local functions in it.
+    static ALLOC_TEXT: std::cell::RefCell<std::collections::HashMap<usize, (String, Vec<String>)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The deepest nesting of promoted constants that the printer prints.
+const MAX_PROMOTED_DEPTH: usize = 4;
 
 /// The deepest chain of pointers in a constant that the printer follows.
 const MAX_ALLOC_DEPTH: usize = 8;
@@ -38,6 +63,8 @@ const MAX_ALLOC_DEPTH: usize = 8;
 pub struct Printer {
     /// The def paths of the local functions in the printed text.
     pub callees: BTreeSet<String>,
+    /// The depth of the promoted bodies that the printer prints now.
+    promoted_depth: usize,
 }
 
 impl Printer {
@@ -345,20 +372,45 @@ impl Printer {
             }
             ConstantKind::Ty(ty_const) => format!("const {ty} = {}", self.ty_const(ty_const)),
             ConstantKind::Unevaluated(unevaluated) => {
-                if unevaluated.promoted.is_some() {
-                    // The body of a promoted constant is not available here.
-                    return unique("promoted");
+                let args = self.generic_args(&unevaluated.args);
+                let Some(index) = unevaluated.promoted else {
+                    return format!("const {ty} = unevaluated {}{args}", unevaluated.def.name());
+                };
+                // A promoted constant of a generic body: print its MIR in place, with the
+                // same N0 rules. Its value depends only on this MIR and the generic arguments.
+                match self.promoted_body(&unevaluated.def, index) {
+                    Some(text) => format!("const {ty} = promoted{args} {{\n{text}}}"),
+                    // The MIR is not available (for example a body of another crate without
+                    // MIR in its metadata), or the promoted constants nest too deep.
+                    None => unique("promoted"),
                 }
-                format!(
-                    "const {ty} = unevaluated {}{}",
-                    unevaluated.def.name(),
-                    self.generic_args(&unevaluated.args)
-                )
             }
             ConstantKind::Param(param) => {
                 format!("const {ty} = param {}#{}", param.name, param.index)
             }
         }
+    }
+
+    /// Returns the canonical text of a promoted constant body: promoted `index` of the body of
+    /// `def`. It reads the MIR from rustc, and uses the same N0 rules as for a normal body.
+    fn promoted_body(&mut self, def: &ConstDef, index: Promoted) -> Option<String> {
+        if self.promoted_depth >= MAX_PROMOTED_DEPTH {
+            return None;
+        }
+        let body = rustc_middle::ty::tls::with(|tcx| {
+            let def_id = rustc_internal::internal(tcx, def.def_id());
+            if !tcx.is_mir_available(def_id) {
+                return None;
+            }
+            let promoted = tcx.promoted_mir(def_id);
+            let body = promoted.get(rustc_middle::mir::Promoted::from_u32(index))?;
+            Some(rustc_internal::stable(body))
+        })?;
+        let canonical = crate::normalize::canonical_body(&body);
+        self.promoted_depth += 1;
+        let text = self.body(&canonical);
+        self.promoted_depth -= 1;
+        Some(text)
     }
 
     pub fn ty_const(&mut self, constant: &TyConst) -> String {
@@ -415,10 +467,34 @@ impl Printer {
         text
     }
 
+    /// Prints the target of a pointer in a constant. The text of each allocation is computed
+    /// once in a compile (a cache by allocation id), because many bodies refer to the same large
+    /// tables.
     fn global_alloc(&mut self, id: AllocId, depth: usize) -> String {
         if depth > MAX_ALLOC_DEPTH {
             return unique("deep_alloc");
         }
+        let key = id.to_index();
+        if let Some((text, callees)) = ALLOC_TEXT.with(|cache| cache.borrow().get(&key).cloned()) {
+            self.callees.extend(callees);
+            return text;
+        }
+        let mut inner = Printer { promoted_depth: self.promoted_depth, ..Printer::default() };
+        let mut text = inner.global_alloc_text(id, depth);
+        if text.len() > MAX_ALLOC_TEXT {
+            // A long text becomes its SHA-256 hash. Two allocations with the same hash have the
+            // same text (the hash is collision resistant), so the compare stays exact.
+            let digest = Sha256::digest(text.as_bytes());
+            let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+            text = format!("sha256:{hex} ({} characters)", text.len());
+        }
+        let callees: Vec<String> = inner.callees.into_iter().collect();
+        self.callees.extend(callees.iter().cloned());
+        ALLOC_TEXT.with(|cache| cache.borrow_mut().insert(key, (text.clone(), callees)));
+        text
+    }
+
+    fn global_alloc_text(&mut self, id: AllocId, depth: usize) -> String {
         match GlobalAlloc::from(id) {
             GlobalAlloc::Function(instance) => {
                 if instance.def.krate().is_local {

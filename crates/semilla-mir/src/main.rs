@@ -108,10 +108,14 @@ struct BodyRecord {
     callees: Vec<String>,
     /// True if the control flow graph has no cycle.
     loop_free: bool,
-    /// The N4 term of a loop-free body (see `term.rs`). The first line lists the build rules
-    /// that changed the term.
+    /// The N4 term of a loop-free body (see `term.rs`), at the levels n2 and n3 only. The first
+    /// line lists the build rules that changed the term.
     term: Option<String>,
     span: Option<SpanInfo>,
+    /// The compiled target: `<crate>.<kind>.<metadata hash>` in wrapper mode (the same for both
+    /// versions of a workspace), empty in command mode. A body name can exist in more than one
+    /// target (a lib and its test build), and each target has its own body.
+    target: String,
 }
 
 #[derive(serde::Serialize)]
@@ -266,7 +270,13 @@ impl rustc_driver::Callbacks for Callbacks {
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
         let level = self.level;
-        let records = match rustc_public::rustc_internal::run(tcx, || collect(level)) {
+        let target = match &self.output {
+            Output::Stdout => String::new(),
+            Output::File(path) => {
+                path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
+            }
+        };
+        let records = match rustc_public::rustc_internal::run(tcx, || collect(level, &target)) {
             Ok(records) => records,
             Err(error) => {
                 self.error = Some(format!("rustc_public failed: {error:?}"));
@@ -308,13 +318,15 @@ fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
 }
 
 /// Returns the records of all local bodies. Paths print in full, with the crate name first.
-fn collect(level: Level) -> Vec<BodyRecord> {
+fn collect(level: Level, target: &str) -> Vec<BodyRecord> {
     rustc_middle::ty::print::with_resolve_crate_name!(
-        rustc_middle::ty::print::with_no_trimmed_paths!(collect_bodies(level))
+        rustc_middle::ty::print::with_no_trimmed_paths!(collect_bodies(level, target))
     )
 }
 
-fn collect_bodies(level: Level) -> Vec<BodyRecord> {
+/// At N3, a body without an inlined call gets no record: its N3 body is its N2 body, and the
+/// compare uses the N2 record of the same target and name.
+fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
     let bodies: Vec<(CrateItem, Body)> = rustc_public::all_local_items()
         .into_iter()
         .filter_map(|item| guarded(|| item_body(item)).flatten().map(|body| (item, body)))
@@ -323,16 +335,17 @@ fn collect_bodies(level: Level) -> Vec<BodyRecord> {
 
     bodies
         .iter()
-        .map(|(item, body)| {
+        .filter_map(|(item, body)| {
             let name = item.name();
             guarded(|| {
                 let body = match &callees {
-                    Some(callees) => inline::inline_calls(body, callees),
+                    Some(callees) => inline::inline_calls(body, callees)?,
+                    None if level == Level::N3 => return None,
                     None => body.clone(),
                 };
-                record(name.clone(), &body, level)
+                Some(record(name.clone(), &body, level, target))
             })
-            .unwrap_or_else(|| failed_record(name, level))
+            .unwrap_or_else(|| Some(failed_record(name, level, target)))
         })
         .collect()
 }
@@ -345,7 +358,7 @@ fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
 
 /// A record for a body that the driver could not read. Its text is unique, so it is never equal
 /// to another body.
-fn failed_record(name: String, level: Level) -> BodyRecord {
+fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
     BodyRecord {
         name,
         level: level.name(),
@@ -355,6 +368,7 @@ fn failed_record(name: String, level: Level) -> BodyRecord {
         loop_free: false,
         term: None,
         span: None,
+        target: target.to_string(),
     }
 }
 
@@ -372,11 +386,12 @@ fn item_body(item: CrateItem) -> Option<Body> {
     item.body()
 }
 
-fn record(name: String, body: &Body, level: Level) -> BodyRecord {
+fn record(name: String, body: &Body, level: Level, target: &str) -> BodyRecord {
     let canonical = normalize::canonical_body(body);
     let printed = normalize::canonical_text(&canonical);
     let loop_free = normalize::is_loop_free(&canonical);
-    let term = if loop_free {
+    // No level uses an N0 term, so the driver does not build it.
+    let term = if loop_free && level != Level::N0 {
         term::body_term(&canonical).map(|term| {
             let text = normalize::stable_closure_names(&term.text);
             format!(";rules {}\n{text}", term.rules.join(" "))
@@ -401,6 +416,7 @@ fn record(name: String, body: &Body, level: Level) -> BodyRecord {
         loop_free,
         term,
         span,
+        target: target.to_string(),
     }
 }
 

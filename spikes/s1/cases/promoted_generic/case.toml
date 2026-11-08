@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N0"
+note = "Add a new function. An unchanged generic body with a promoted constant (`&[1, 2, 3]`) stays equal."
+added = ["s1case::probe"]

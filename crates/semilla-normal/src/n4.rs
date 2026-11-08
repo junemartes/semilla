@@ -184,11 +184,15 @@ pub fn prove(before: &str, after: &str, limits: &Limits) -> Outcome {
     program.push_str(&after_lets);
     let goal = format!("(= {before_root} {after_root})");
 
-    // First try with proofs, to get the rule chain. If the proof mode fails, use the plain
-    // mode and report the rules that fired.
-    match run(&program, &goal, limits, true) {
-        Some(outcome) => outcome,
-        None => run(&program, &goal, limits, false).unwrap_or(Outcome::NotProved),
+    // First run in the plain mode: it is much faster than the proof mode, and most runs end
+    // with "not proved". Only after a success, run again in the proof mode to get the rule
+    // chain. If the proof mode fails, report the rules that fired in the plain mode.
+    match run(&program, &goal, limits, false) {
+        Some(Outcome::Proved(fired)) => match run(&program, &goal, limits, true) {
+            Some(Outcome::Proved(chain)) => Outcome::Proved(chain),
+            _ => Outcome::Proved(fired),
+        },
+        _ => Outcome::NotProved,
     }
 }
 

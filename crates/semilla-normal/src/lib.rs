@@ -22,6 +22,7 @@ pub mod hash;
 pub mod n4;
 pub mod paths;
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -55,6 +56,11 @@ pub struct BodyRecord {
     /// The source span of the body.
     #[serde(default)]
     pub span: Option<SpanInfo>,
+    /// The compiled target, `<crate>.<kind>.<metadata hash>` (the same for both versions of a
+    /// workspace). A body name can exist in more than one target (a lib and its test build).
+    /// Empty for the command mode of the driver and for old records.
+    #[serde(default)]
+    pub target: String,
 }
 
 /// The source span of a body. The file path is as rustc gives it.
@@ -132,7 +138,7 @@ pub fn group_levels(records: impl IntoIterator<Item = BodyRecord>) -> Levels {
 /// and no text change is an indirect change). A name with more than one distinct text (for
 /// example a lib target and a test target with different `cfg`) gets no hash.
 pub fn body_hashes(records: &[BodyRecord]) -> BTreeMap<String, String> {
-    let groups = group_by_name(records.iter(), &[]);
+    let groups = group_by_name(records.iter(), &[], false);
     hash::content_hashes(&hash_input(&groups))
 }
 
@@ -142,6 +148,9 @@ pub fn body_hashes(records: &[BodyRecord]) -> BTreeMap<String, String> {
 ///   also renames the child paths (methods of a renamed type, closures of a renamed function).
 /// - `added` lists new bodies that the claims declare. Such a body (and its child bodies) can
 ///   exist only after. It is not in the result, because the claim explains it.
+///
+/// The work is lazy: a level is only computed for the bodies that are not equal at a lower
+/// level, and the content hashes of a level are only computed when a body needs them.
 pub fn compare(
     before: &Levels,
     after: &Levels,
@@ -149,8 +158,13 @@ pub fn compare(
     added: &[String],
 ) -> Vec<BodyComparison> {
     let rename_pairs = usable_renames(before, renames);
-    let before = Side::new(before, &rename_pairs);
-    let after = Side::new(after, &[]);
+    // The records of the driver in wrapper mode name their target. Old records (and the command
+    // mode) do not, and then all records of a name form one set.
+    let use_targets = [before, after]
+        .iter()
+        .all(|levels| levels.values().flatten().all(|record| !record.target.is_empty()));
+    let before = Side::new(before, &rename_pairs, use_targets);
+    let after = Side::new(after, &[], use_targets);
 
     let mut results = Vec::new();
     let mut matched = BTreeSet::new();
@@ -184,10 +198,13 @@ fn usable_renames(before: &Levels, renames: &BTreeMap<String, String>) -> Vec<(S
                 return true;
             }
             let marker = [((*to).clone(), "\u{0}".to_string())];
-            let exists = before.values().flatten().any(|record| {
-                paths::rename(&record.name, &marker) != record.name
-                    || paths::rename(&record.text, &marker) != record.text
-            });
+            // `contains` is a fast first test. The token test is exact.
+            let mentions =
+                |text: &String| text.contains(to.as_str()) && paths::rename(text, &marker) != *text;
+            let exists = before
+                .values()
+                .flatten()
+                .any(|record| mentions(&record.name) || mentions(&record.text));
             !exists
         })
         .map(|(from, to)| (from.clone(), to.clone()))
@@ -204,19 +221,23 @@ pub fn suggest_renames(before: &Levels, after: &Levels) -> Vec<(String, String)>
     let Some(level) = level else {
         return Vec::new();
     };
-    let before_groups = group_by_name(before[level].iter(), &[]);
-    let after_groups = group_by_name(after[level].iter(), &[]);
+    let before_groups = group_by_name(before[level].iter(), &[], false);
+    let after_groups = group_by_name(after[level].iter(), &[], false);
     let before_hashes = hash::content_hashes(&hash_input(&before_groups));
     let after_hashes = hash::content_hashes(&hash_input(&after_groups));
+    let mut by_hash: BTreeMap<&String, Vec<&String>> = BTreeMap::new();
+    for (new, hash) in &after_hashes {
+        if !before_groups.contains_key(new) {
+            by_hash.entry(hash).or_default().push(new);
+        }
+    }
     let mut pairs = Vec::new();
     for (old, hash) in &before_hashes {
         if after_groups.contains_key(old) {
             continue;
         }
-        for (new, other) in &after_hashes {
-            if hash == other && !before_groups.contains_key(new) {
-                pairs.push((old.clone(), new.clone()));
-            }
+        for new in by_hash.get(hash).into_iter().flatten() {
+            pairs.push((old.clone(), (*new).clone()));
         }
     }
     pairs
@@ -227,32 +248,66 @@ fn is_child(name: &str, parent: &str) -> bool {
     name.strip_prefix(parent).is_some_and(|rest| rest.starts_with("::"))
 }
 
-/// The distinct records of one name at one level. The rename map is applied already.
+/// The distinct records of one name at one level. The rename map is applied already. Each map
+/// has one entry for each target (or one entry `""` without targets).
 #[derive(Clone, Default)]
 struct Group {
-    /// The raw texts (no rename), for N0.
-    raw: BTreeSet<String>,
+    /// The raw texts (no rename), for N0. `None` when the rename map is empty: then the raw
+    /// texts are `texts`.
+    raw: Option<BTreeMap<String, BTreeSet<String>>>,
     /// The texts after the rename map.
-    texts: BTreeSet<String>,
+    texts: BTreeMap<String, BTreeSet<String>>,
     /// The callees after the rename map.
     callees: BTreeSet<String>,
     shapes: BTreeSet<String>,
     /// The terms after the rename map (`None` for a body without a term).
-    terms: BTreeSet<Option<String>>,
+    terms: BTreeMap<String, BTreeSet<Option<String>>>,
+    /// True for an N3 group that has only N2 records (no call was inlined).
+    from_n2: bool,
+}
+
+impl Group {
+    fn add(&mut self, record: &BodyRecord, renames: &[(String, String)], use_targets: bool) {
+        let target = if use_targets { record.target.clone() } else { String::new() };
+        if !renames.is_empty() {
+            self.raw
+                .get_or_insert_default()
+                .entry(target.clone())
+                .or_default()
+                .insert(record.text.clone());
+        }
+        self.texts.entry(target.clone()).or_default().insert(paths::rename(&record.text, renames));
+        self.callees.extend(record.callees.iter().map(|callee| paths::rename(callee, renames)));
+        self.shapes.insert(record.shape.clone());
+        self.terms
+            .entry(target)
+            .or_default()
+            .insert(record.term.as_ref().map(|term| paths::rename(term, renames)));
+    }
+
+    /// The raw texts of each target.
+    fn raw(&self) -> &BTreeMap<String, BTreeSet<String>> {
+        self.raw.as_ref().unwrap_or(&self.texts)
+    }
+
+    /// All distinct texts of all targets.
+    fn all_texts(&self) -> BTreeSet<&String> {
+        self.texts.values().flatten().collect()
+    }
 }
 
 fn group_by_name<'a>(
     records: impl Iterator<Item = &'a BodyRecord>,
     renames: &[(String, String)],
+    use_targets: bool,
 ) -> BTreeMap<String, Group> {
     let mut groups: BTreeMap<String, Group> = BTreeMap::new();
     for record in records {
-        let group = groups.entry(paths::rename(&record.name, renames)).or_default();
-        group.raw.insert(record.text.clone());
-        group.texts.insert(paths::rename(&record.text, renames));
-        group.callees.extend(record.callees.iter().map(|callee| paths::rename(callee, renames)));
-        group.shapes.insert(record.shape.clone());
-        group.terms.insert(record.term.as_ref().map(|term| paths::rename(term, renames)));
+        groups.entry(paths::rename(&record.name, renames)).or_default().add(
+            record,
+            renames,
+            use_targets,
+        );
     }
     groups
 }
@@ -261,10 +316,12 @@ fn group_by_name<'a>(
 fn hash_input(groups: &BTreeMap<String, Group>) -> hash::HashInput {
     groups
         .iter()
-        .filter(|(_, group)| group.texts.len() == 1)
-        .map(|(name, group)| {
-            let text = group.texts.iter().next().expect("one text").clone();
-            (name.clone(), (text, group.callees.iter().cloned().collect()))
+        .filter_map(|(name, group)| {
+            let texts = group.all_texts();
+            let [text] = texts.into_iter().collect::<Vec<_>>()[..] else {
+                return None;
+            };
+            Some((name.clone(), (text.clone(), group.callees.iter().cloned().collect())))
         })
         .collect()
 }
@@ -275,24 +332,33 @@ struct Side {
     names: BTreeMap<String, String>,
     /// The groups of each level.
     levels: BTreeMap<String, BTreeMap<String, Group>>,
-    /// The content hash replacements of each level: (def path, hash).
-    hashes: BTreeMap<String, Vec<(String, String)>>,
+    /// The content hash replacements of each level, computed when a body first needs them.
+    hashes: BTreeMap<String, OnceCell<paths::Replacer>>,
 }
 
 impl Side {
-    fn new(levels: &Levels, renames: &[(String, String)]) -> Side {
+    fn new(levels: &Levels, renames: &[(String, String)], use_targets: bool) -> Side {
         let mut names = BTreeMap::new();
         let mut grouped = BTreeMap::new();
-        let mut hashes = BTreeMap::new();
         for (level, records) in levels {
             for record in records {
                 names.insert(paths::rename(&record.name, renames), record.name.clone());
             }
-            let groups = group_by_name(records.iter(), renames);
-            let level_hashes = hash::content_hashes(&hash_input(&groups));
-            hashes.insert(level.clone(), level_hashes.into_iter().collect());
-            grouped.insert(level.clone(), groups);
+            grouped.insert(level.clone(), group_by_name(records.iter(), renames, use_targets));
         }
+        // The driver writes an N3 record only for a body with an inlined call. For the other
+        // bodies, the N3 body is the N2 body of the same target, so the N2 record stands in.
+        if let (Some(n2), Some(n3)) = (levels.get("n2"), grouped.get_mut("n3")) {
+            let key = |record: &BodyRecord| (record.target.clone(), record.name.clone());
+            let present: BTreeSet<(String, String)> = levels["n3"].iter().map(key).collect();
+            for record in n2.iter().filter(|record| !present.contains(&key(record))) {
+                let name = paths::rename(&record.name, renames);
+                let group =
+                    n3.entry(name).or_insert_with(|| Group { from_n2: true, ..Group::default() });
+                group.add(record, renames, use_targets);
+            }
+        }
+        let hashes = grouped.keys().map(|level| (level.clone(), OnceCell::new())).collect();
         Side { names, levels: grouped, hashes }
     }
 
@@ -300,25 +366,43 @@ impl Side {
         self.levels.get(level)?.get(name)
     }
 
+    fn replacer(&self, level: &str) -> Option<&paths::Replacer> {
+        let cell = self.hashes.get(level)?;
+        Some(cell.get_or_init(|| {
+            let hashes = hash::content_hashes(&hash_input(&self.levels[level]));
+            paths::Replacer::functions(&hashes.into_iter().collect::<Vec<_>>())
+        }))
+    }
+
     /// The texts of a group with each local call replaced by its content hash.
-    fn hashed_texts(&self, level: &str, group: &Group) -> BTreeSet<String> {
-        let hashes = self.hashes.get(level).map(Vec::as_slice).unwrap_or_default();
-        group.texts.iter().map(|text| paths::replace_functions(text, hashes)).collect()
+    fn hashed_texts(&self, level: &str, group: &Group) -> BTreeMap<String, BTreeSet<String>> {
+        let Some(replacer) = self.replacer(level) else {
+            return group.texts.clone();
+        };
+        group
+            .texts
+            .iter()
+            .map(|(target, texts)| {
+                (target.clone(), texts.iter().map(|text| replacer.apply(text)).collect())
+            })
+            .collect()
     }
 
     fn hashed_term(&self, level: &str, term: &str) -> String {
-        let hashes = self.hashes.get(level).map(Vec::as_slice).unwrap_or_default();
-        paths::replace_functions(term, hashes)
+        match self.replacer(level) {
+            Some(replacer) => replacer.apply(term),
+            None => term.to_string(),
+        }
     }
 }
 
-/// Tries the levels in order for one body.
+/// Tries the levels in order for one body, and stops at the first equal level.
 fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
     let equal =
         |level: &str, proof: Vec<String>| BodyStatus::Equal { level: level.to_string(), proof };
 
     if let (Some(b), Some(a)) = (before.group("n0", name), after.group("n0", name)) {
-        if b.raw == a.raw {
+        if b.raw() == a.raw() {
             return equal("n0", Vec::new());
         }
         if b.texts == a.texts {
@@ -330,6 +414,10 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
     }
     for level in ["n2", "n3"] {
         if let (Some(b), Some(a)) = (before.group(level, name), after.group(level, name)) {
+            // An N3 pair of N2 records is the N2 compare again.
+            if level == "n3" && b.from_n2 && a.from_n2 {
+                continue;
+            }
             if b.texts == a.texts || before.hashed_texts(level, b) == after.hashed_texts(level, a) {
                 return equal(level, Vec::new());
             }
@@ -353,35 +441,42 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
 /// N4 on the terms of one level. Returns the proof (the build rules and the egglog rules).
 fn n4_equal(before: &Side, after: &Side, level: &str, name: &str) -> Option<Vec<String>> {
     let (b, a) = (before.group(level, name)?, after.group(level, name)?);
-    // A name with more than one distinct body has no single term to compare.
-    let ([Some(b_term)], [Some(a_term)]) = (
-        b.terms.iter().collect::<Vec<_>>().as_slice(),
-        a.terms.iter().collect::<Vec<_>>().as_slice(),
-    ) else {
+    if level == "n3" && b.from_n2 && a.from_n2 {
         return None;
+    }
+    // Both sides must have the same targets, and one distinct term for all of them.
+    if !b.terms.keys().eq(a.terms.keys()) {
+        return None;
+    }
+    let single = |group: &Group| {
+        let terms: BTreeSet<&Option<String>> = group.terms.values().flatten().collect();
+        match terms.into_iter().collect::<Vec<_>>()[..] {
+            [Some(term)] => Some(term.clone()),
+            _ => None,
+        }
     };
-    let (b_rules, b_body) = split_term(b_term);
-    let (a_rules, a_body) = split_term(a_term);
+    let (b_term, a_term) = (single(b)?, single(a)?);
+    let (b_rules, b_body) = split_term(&b_term);
+    let (a_rules, a_body) = split_term(&a_term);
     let mut proof: Vec<String> = Vec::new();
     for rule in b_rules.into_iter().chain(a_rules) {
         if !proof.contains(&rule) {
             proof.push(rule);
         }
     }
-    let attempts = [
-        (b_body.to_string(), a_body.to_string()),
-        (before.hashed_term(level, b_body), after.hashed_term(level, a_body)),
-    ];
-    for (index, (b_text, a_text)) in attempts.iter().enumerate() {
-        if index == 1 && (b_text == &attempts[0].0 && a_text == &attempts[0].1) {
-            continue;
-        }
+    let plain = (b_body.to_string(), a_body.to_string());
+    let hashed = (before.hashed_term(level, b_body), after.hashed_term(level, a_body));
+    let attempts = if hashed == plain { vec![plain] } else { vec![plain, hashed] };
+    for (b_text, a_text) in &attempts {
         if b_text == a_text {
             return Some(proof);
         }
         if let n4::Outcome::Proved(rules) = n4::prove(b_text, a_text, &n4::Limits::default()) {
-            proof
-                .extend(rules.into_iter().filter(|rule| !proof.contains(rule)).collect::<Vec<_>>());
+            for rule in rules {
+                if !proof.contains(&rule) {
+                    proof.push(rule);
+                }
+            }
             return Some(proof);
         }
     }

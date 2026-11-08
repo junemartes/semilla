@@ -72,12 +72,19 @@ pub fn direct_local_callee(kind: &TerminatorKind) -> Option<String> {
     (def.krate().is_local && args.0.is_empty()).then(|| def.name())
 }
 
-/// Inlines the calls of a body. Returns the new body.
-pub fn inline_calls(body: &Body, callees: &Callees) -> Body {
+/// Inlines the calls of a body. Returns the new body, or `None` if no call qualifies (then the
+/// N3 body is the N2 body).
+pub fn inline_calls(body: &Body, callees: &Callees) -> Option<Body> {
     let mut blocks = body.blocks.clone();
     let mut locals = body.locals().to_vec();
     let arg_count = body.arg_locals().len();
     let mut depth = vec![0usize; blocks.len()];
+    let mut inlined = false;
+    // The locals whose address the body takes. `inline_one` keeps this up to date.
+    let mut taken = vec![false; locals.len()];
+    for local in address_taken_locals(body) {
+        taken[local] = true;
+    }
 
     let mut index = 0;
     while index < blocks.len() {
@@ -85,51 +92,44 @@ pub fn inline_calls(body: &Body, callees: &Callees) -> Body {
             let callee = direct_local_callee(&blocks[index].terminator.kind)
                 .and_then(|name| callees.bodies.get(&name));
             if let Some(callee) = callee {
-                let current = Body::new(
-                    blocks.clone(),
-                    locals.clone(),
-                    arg_count,
-                    Vec::new(),
-                    body.spread_arg(),
-                    body.span,
-                );
-                if let Some((new_blocks, new_locals)) = inline_one(&current, index, callee) {
-                    let added = new_blocks.len() - blocks.len();
-                    blocks = new_blocks;
-                    locals = new_locals;
+                let before = blocks.len();
+                if inline_one(&mut blocks, &mut locals, &mut taken, index, callee) {
+                    let added = blocks.len() - before;
                     depth.extend(std::iter::repeat_n(depth[index] + 1, added));
+                    inlined = true;
                 }
             }
         }
         index += 1;
     }
-    Body::new(blocks, locals, arg_count, Vec::new(), body.spread_arg(), body.span)
+    inlined.then(|| Body::new(blocks, locals, arg_count, Vec::new(), body.spread_arg(), body.span))
 }
 
-/// Inlines the call at the end of block `at`. Returns `None` if the call does not qualify.
+/// Inlines the call at the end of block `at`, in place. Returns false (and changes nothing) if
+/// the call does not qualify. `taken` holds the locals whose address the body takes.
 fn inline_one(
-    caller: &Body,
+    blocks: &mut Vec<BasicBlock>,
+    locals: &mut Vec<LocalDecl>,
+    taken: &mut Vec<bool>,
     at: usize,
     callee: &Body,
-) -> Option<(Vec<BasicBlock>, Vec<LocalDecl>)> {
-    let call = &caller.blocks[at].terminator;
+) -> bool {
+    let call = blocks[at].terminator.clone();
     let TerminatorKind::Call { args, destination, target: Some(return_block), unwind, .. } =
         &call.kind
     else {
-        return None;
+        return false;
     };
     // Only these two unwind actions have a simple meaning for the callee's unwind edges.
     if !matches!(unwind, UnwindAction::Continue | UnwindAction::Cleanup(_)) {
-        return None;
+        return false;
     }
     let callee_args = callee.arg_locals().len();
     if callee.spread_arg().is_some() || callee_args != args.len() {
-        return None;
+        return false;
     }
 
-    let taken: HashSet<Local> = address_taken_locals(caller).into_iter().collect();
-    let mut blocks = caller.blocks.clone();
-    let mut locals = caller.locals().to_vec();
+    let old_local_count = locals.len();
     let base_block = blocks.len();
 
     // The caller local or the constant that each callee local maps to.
@@ -139,12 +139,12 @@ fn inline_one(
 
     // The return place.
     let cleanup_uses = match unwind {
-        UnwindAction::Cleanup(start) => locals_used_from(caller, *start),
+        UnwindAction::Cleanup(start) => locals_used_from(blocks, *start),
         _ => HashSet::new(),
     };
     let args_use = |local: Local| args.iter().any(|arg| operand_local(arg) == Some(local));
     let direct_return = destination.projection.is_empty()
-        && !taken.contains(&destination.local)
+        && !taken[destination.local]
         && !args_use(destination.local)
         && !cleanup_uses.contains(&destination.local);
     if direct_return {
@@ -158,7 +158,7 @@ fn inline_one(
         match arg {
             Operand::Copy(place) | Operand::Move(place)
                 if place.projection.is_empty()
-                    && !taken.contains(&place.local)
+                    && !taken[place.local]
                     && place.local != destination.local
                     && is_read_only(callee, callee_local, moved) =>
             {
@@ -176,12 +176,13 @@ fn inline_one(
         if map[callee_local].is_none() && constants[callee_local].is_none() {
             map[callee_local] = Some(locals.len());
             locals.push(LocalDecl { ty: decl.ty, span: decl.span, mutability: Mutability::Mut });
+            taken.push(false);
         }
     }
     for (position, arg) in args.iter().enumerate() {
         let callee_local = position + 1;
         let caller_local = map[callee_local];
-        let is_new = caller_local.is_some_and(|local| local >= caller.locals().len());
+        let is_new = caller_local.is_some_and(|local| local >= old_local_count);
         if is_new {
             arg_statements.push(Statement {
                 kind: StatementKind::Assign(
@@ -190,6 +191,13 @@ fn inline_one(
                 ),
                 source_info: call.source_info.clone(),
             });
+        }
+    }
+
+    // A local whose address the callee takes is now a caller local whose address the body takes.
+    for local in address_taken_locals(callee) {
+        if let Some(mapped) = map[local] {
+            taken[mapped] = true;
         }
     }
 
@@ -239,7 +247,7 @@ fn inline_one(
         kind: TerminatorKind::Goto { target: base_block },
         source_info: call.source_info.clone(),
     };
-    Some((blocks, locals))
+    true
 }
 
 fn unwind_mut(kind: &mut TerminatorKind) -> Option<&mut UnwindAction> {
@@ -333,7 +341,7 @@ fn only_plain_reads(body: &Body, local: Local) -> bool {
 }
 
 /// Returns the locals that the blocks reachable from `start` use.
-fn locals_used_from(body: &Body, start: usize) -> HashSet<Local> {
+fn locals_used_from(blocks: &[BasicBlock], start: usize) -> HashSet<Local> {
     struct Used(HashSet<Local>);
     impl MirVisitor for Used {
         fn visit_local(&mut self, local: &Local, _ptx: PlaceContext, _location: Location) {
@@ -341,14 +349,14 @@ fn locals_used_from(body: &Body, start: usize) -> HashSet<Local> {
         }
     }
     let mut used = Used(HashSet::new());
-    let mut seen = vec![false; body.blocks.len()];
+    let mut seen = vec![false; blocks.len()];
     let mut stack = vec![start];
     while let Some(block) = stack.pop() {
         if std::mem::replace(&mut seen[block], true) {
             continue;
         }
-        used.visit_basic_block(&body.blocks[block]);
-        stack.extend(body.blocks[block].terminator.successors());
+        used.visit_basic_block(&blocks[block]);
+        stack.extend(blocks[block].terminator.successors());
     }
     used.0
 }

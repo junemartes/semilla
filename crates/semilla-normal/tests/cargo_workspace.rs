@@ -204,7 +204,14 @@ fn two_versions_of_a_two_crate_workspace() {
     let span = first.span.as_ref().expect("a span");
     assert!(span.file.ends_with("app_b/src/lib.rs"), "{span:?}");
     assert!(span.line_start < span.line_end);
-    assert!(first.loop_free && first.term.is_some());
+    assert!(first.loop_free && first.term.is_none(), "N0 records have no term");
+    assert!(first.target.starts_with("app_b.lib."), "{}", first.target);
+    let n2 =
+        before["n2"].iter().find(|record| record.name == "app_b::get").expect("app_b::get at n2");
+    assert!(n2.term.is_some());
+    // N3 records exist only for bodies with an inlined call (`Cart::total` calls `helper`).
+    assert!(before["n3"].iter().any(|record| record.name == "core_a::Cart::total"));
+    assert!(!before["n3"].iter().any(|record| record.name == "app_b::get"));
 
     // A second run of the same version gives the same records (cargo compiles the crates again).
     let again = check_all_levels(&v1, &scratch.join("out-v1-again"), &target);
