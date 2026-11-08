@@ -1,0 +1,19 @@
+[package]
+name = "semilla-ui"
+description = "The local review UI of semilla: an HTTP server, a JSON API, and an embedded web page."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+semilla-core = { path = "../semilla-core" }
+anyhow = "1"
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

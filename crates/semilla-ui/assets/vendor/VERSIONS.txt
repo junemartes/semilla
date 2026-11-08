@@ -1,0 +1,10 @@
+Vendored JavaScript libraries of the semilla review UI.
+Source: the npm registry (https://registry.npmjs.org/). The SHA-512 values are the npm "integrity" values of the tarballs.
+
+mermaid        11.16.1  MIT      dist/mermaid.min.js         sha512-TQsq6u22fAn3rek5VOubrhKPo1g5hwC3FXUN9hiyupTckcYiGuuKGkNQrKYwGJkXUxZdojwRG46gsSCFZMDp4g==
+cytoscape      3.34.1   MIT      dist/cytoscape.min.js       sha512-Lr0RvH9H75y9ar8h9Toy6u4lxRSCcxUq+hHcQ26sVWo6BnaQp1gwEZOYqwuYTZhyW7npyKnNLP8oJ2p1/3OZ7g==
+elkjs          0.9.3    EPL-2.0  lib/elk.bundled.js          sha512-f/ZeWvW/BCXbhGEf1Ujp29EASo/lk1FDnETgNKwJrsVvGZhUWCZyg3xLJjAsxfOmt8KjswHmI5EwCQcPMpOYhQ==
+cytoscape-elk  2.3.0    MIT      dist/cytoscape-elk.js       sha512-1h2ZmPOy5HD2+mrfF3P2ICxfnDyPCWg/xLVs7fIjTOzdQu51ydrMtm6Sb7KnhFwLBzhGIVYI2Gbns0njggBarQ==
+
+cytoscape-elk 2.3.0 needs elkjs ^0.9.3. That is the reason for the elkjs version.
+Load order in the page: cytoscape, elk.bundled.js (global ELK), cytoscape-elk (it registers itself on the global cytoscape), mermaid.

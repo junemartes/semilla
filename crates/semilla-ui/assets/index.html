@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>semilla review</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">semilla <span>review</span></div>
+  <nav class="tabs" aria-label="Views">
+    <a href="#/changeset" data-view="changeset">Change set</a>
+    <a href="#/tree" data-view="tree">Change tree</a>
+    <a href="#/flow" data-view="flow">Flow view</a>
+    <a href="#/map" data-view="map">Workspace map</a>
+  </nav>
+  <div class="search">
+    <input id="search" type="search" autocomplete="off" spellcheck="false"
+           placeholder="Search ( / )  total · &quot;qty &gt;= max&quot; · kind:panic · callers:Cart::total · path:main -> Cart::total"
+           aria-label="Search">
+    <div id="search-results" class="search-results" hidden></div>
+  </div>
+  <button id="theme" class="icon-button" type="button" title="Change the theme">◐</button>
+</header>
+
+<main id="main">
+  <section id="view-changeset" class="view" aria-label="Change set"></section>
+
+  <section id="view-tree" class="view" aria-label="Change tree" hidden>
+    <div class="toolbar">
+      <button type="button" id="tree-expand">Expand all</button>
+      <button type="button" id="tree-changed">Show only changes</button>
+      <span class="legend">
+        <span class="m added">+</span> added <span class="m removed">−</span> removed <span class="m changed">~</span> changed
+        <span class="m moved">→</span> moved or renamed <span class="m extracted">⤴</span> extracted or inlined
+        <span class="m same">≡</span> unchanged <span class="m uncovered">✗</span> uncovered
+      </span>
+    </div>
+    <div id="tree"></div>
+  </section>
+
+  <section id="view-flow" class="view" aria-label="Flow view" hidden>
+    <div class="toolbar">
+      <button type="button" id="flow-back" title="Back">◀</button>
+      <button type="button" id="flow-forward" title="Forward">▶</button>
+      <nav id="flow-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <span id="flow-note" class="note"></span>
+    </div>
+    <div id="flow-graph" class="flow-graph"><p class="empty">Select a function to see its flow view.</p></div>
+    <details id="flow-text" class="mermaid-text">
+      <summary>Mermaid text (export)</summary>
+      <button type="button" id="flow-copy">Copy</button>
+      <pre id="flow-mermaid"></pre>
+    </details>
+  </section>
+
+  <section id="view-map" class="view" aria-label="Workspace map" hidden>
+    <div class="toolbar">
+      <label>Level
+        <select id="map-level">
+          <option value="0">0 · crates</option>
+          <option value="1">1 · modules</option>
+          <option value="2" selected>2 · functions</option>
+        </select>
+      </label>
+      <label>Version
+        <select id="map-version">
+          <option value="merged" selected>merged</option>
+          <option value="before">before</option>
+          <option value="after">after</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="map-tests"> Test layer</label>
+      <label title="Click a node to mark all the callers that can reach it"><input type="checkbox" id="map-impact"> Impact</label>
+      <button type="button" id="map-fit">Fit</button>
+      <span class="legend heat">
+        changes: <span class="h h0">0</span><span class="h h1">1</span><span class="h h2">2–3</span><span class="h h3">4–8</span><span class="h h4">9+</span>
+      </span>
+      <span id="map-note" class="note"></span>
+    </div>
+    <div id="map" class="map"></div>
+  </section>
+
+  <aside id="panel" class="panel" hidden aria-label="Details">
+    <button type="button" id="panel-close" class="icon-button close" title="Close">×</button>
+    <div id="panel-body"></div>
+  </aside>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/vendor/cytoscape/cytoscape.min.js"></script>
+<script src="/vendor/elkjs/elk.bundled.js"></script>
+<script src="/vendor/cytoscape-elk/cytoscape-elk.js"></script>
+<script src="/vendor/mermaid/mermaid.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
