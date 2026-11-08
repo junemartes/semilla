@@ -94,6 +94,7 @@ ops! {
     "add-enum-variant",       Item,       OwnContent,  L, Interface,   ["variant"],       "Add a variant to an enum.";
     "add-trait-impl",         Item,       Identity,    L, Interface,   ["affects"],       "Add a trait impl. `affects` lists the bodies that it changes.";
     "edit-doc",               Item,       OwnContent,  O, Mechanical,  [],                "Change doc comments or comments.";
+    "change-attribute",       Item,       OwnContent,  COMPUTED, Interface, [],           "Change the attributes of an item (for example `#[derive]`).";
     "extract-function",       Item,       AcrossNodes, N, Mechanical,  ["new"],           "Move statements or an expression into a new function.";
     "inline-function",        Item,       AcrossNodes, N, Mechanical,  [],                "Replace a call with the body of the function.";
     // ----- files -----

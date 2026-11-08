@@ -1,0 +1,18 @@
+[package]
+name = "semilla-verify"
+description = "The semilla verifier: checks the claims of each step and the coverage of the change set."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+quote = "1"
+semilla-core = { path = "../semilla-core" }
+semilla-syntax = { path = "../semilla-syntax" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+
+[dev-dependencies]
+tempfile = "3"
