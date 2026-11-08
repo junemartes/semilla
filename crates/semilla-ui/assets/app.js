@@ -346,6 +346,9 @@
         h('span', { class: 'stitle' }, sub.title),
         sub.edited ? h('span', { class: 'chip edited', title: 'The agent changed the engine suggestion.' }, 'edited by agent') : null,
         sub.synthetic ? h('span', { class: 'chip warn' }, 'made by the UI') : null,
+        sub.new_claims.length
+          ? h('span', { class: 'chip new', title: 'The engine added these claims after the agent edited the subgroup: ' + sub.new_claims.join(', ') }, sub.new_claims.length + ' new')
+          : null,
         sub.folded ? h('span', { class: 'note' }, '(folded) ' + sub.claims.length + ' claim' + (sub.claims.length === 1 ? '' : 's')) : null,
         h('span', { class: 'right' }, right),
       ),
@@ -380,6 +383,7 @@
       h('td', { class: 'icon ' + claim.status, title: claim.status }, STATUS_ICONS[claim.status] || '·'),
       h('td', null,
         h('span', { class: 'op' }, claim.op), ' ', anchor, ' ', classChip(claim.class),
+        claim.new_in_subgroup ? [' ', h('span', { class: 'chip new', title: 'The engine added this claim after the agent edited the subgroup.' }, 'new')] : null,
         h('div', { class: 'text' }, claim.summary),
         ba, details),
       h('td', { class: 'actions' },
@@ -946,7 +950,7 @@
     body.appendChild(h('h2', null, marker(info.status), ' ', info.label));
     body.appendChild(h('div', { class: 'mono note' }, info.id));
     body.appendChild(
-      h('div', { class: 'note' }, info.kind, info.status ? ' · ' + info.status : '', ' · module ', info.module, ' ', classChip(info.class)),
+      h('div', { class: 'note' }, info.kind, info.status ? ' · ' + info.status : '', ' · module ', info.module, info.file ? ' · file ' + info.file : '', ' ', classChip(info.class)),
     );
     const actions = [];
     if (info.flow) actions.push(h('button', { type: 'button', onclick: () => navigateFlow(id) }, 'Open flow view'));

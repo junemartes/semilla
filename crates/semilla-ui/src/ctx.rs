@@ -1,6 +1,6 @@
 //! The UI data with derived lookups. The router builds it one time.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use semilla_core::view::{FlowGraph, FlowKind, GraphEdgeKind, GraphNode, TreeNode};
 use semilla_core::{Claim, ClaimResult, Class, Group, Role, Step, Subgroup, ops};
@@ -10,8 +10,9 @@ use crate::{SourcePair, UiData, review};
 /// The ID of a group for steps that no group contains.
 pub const UNGROUPED: &str = "ungrouped";
 
-/// A subgroup with its ID. The ID is `<group>:<n>`, where `n` is the position of the subgroup
-/// in the group, in the order of the change set.
+/// A subgroup with its ID. The ID is `Subgroup.id` when it is not empty. Else it is
+/// `<group>:<n>`, where `n` is the position of the subgroup in the group, in the order of the
+/// change set.
 #[derive(Clone, Debug)]
 pub struct SubgroupRef {
     pub id: String,
@@ -87,10 +88,18 @@ impl Ctx {
         let mut subgroups = Vec::new();
         let mut claim_subgroup = HashMap::new();
         let mut counters: HashMap<String, usize> = HashMap::new();
+        let mut used: HashSet<String> = HashSet::new();
         for subgroup in &data.changeset.subgroups {
             let counter = counters.entry(subgroup.group.clone()).or_insert(0);
-            let id = format!("{}:{}", subgroup.group, counter);
+            let fallback = format!("{}:{}", subgroup.group, counter);
             *counter += 1;
+            // The ID of the data, if it has one. Old data has no ID: then `<group>:<n>`.
+            // A second subgroup with the same ID also gets the fallback.
+            let mut id = if subgroup.id.is_empty() || used.contains(&subgroup.id) { fallback } else { subgroup.id.clone() };
+            while used.contains(&id) {
+                id.push('~');
+            }
+            used.insert(id.clone());
             for claim in &subgroup.claims {
                 claim_subgroup.entry(claim.clone()).or_insert_with(|| id.clone());
             }
@@ -108,19 +117,25 @@ impl Ctx {
             if loose.is_empty() {
                 continue;
             }
-            let id = format!("{}:loose", group.id);
+            let mut id = format!("{}:loose", group.id);
+            while used.contains(&id) {
+                id.push('~');
+            }
+            used.insert(id.clone());
             for claim in &loose {
                 claim_subgroup.insert(claim.clone(), id.clone());
             }
             subgroups.push(SubgroupRef {
-                id,
+                id: id.clone(),
                 subgroup: Subgroup {
+                    id,
                     group: group.id.clone(),
                     role: Role::Custom,
                     title: "Claims without a subgroup".to_string(),
                     why: String::new(),
                     claims: loose,
                     edited: false,
+                    new_claims: Vec::new(),
                 },
                 synthetic: true,
             });
@@ -255,6 +270,19 @@ impl Ctx {
     /// The function that has a flow view for this node, if one exists.
     pub fn flow_function(&self, id: &str) -> Option<String> {
         self.flow_for(id).map(|flow| flow.function.clone())
+    }
+
+    /// The file of an item: the file of its graph node, or of the nearest ancestor with a file.
+    /// An item that is not in the graph (for example the old name of a rename) uses the nearest
+    /// prefix of its path that is in the graph.
+    pub fn item_file(&self, item: &str) -> Option<String> {
+        let mut path = item_of(item);
+        loop {
+            if self.graph_node(path).is_some() {
+                return self.graph_ancestors(path).iter().rev().find_map(|id| self.graph_node(id).and_then(|node| node.file.clone()));
+            }
+            path = path.rsplit_once("::")?.0;
+        }
     }
 
     /// The breadcrumb of graph node IDs, from the crate to the node.

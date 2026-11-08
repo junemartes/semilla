@@ -272,6 +272,7 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 .chip.bad { color: var(--removed); border-color: var(--removed); background: var(--removed-bg); }
 .chip.warn { color: var(--changed); border-color: var(--changed); background: var(--changed-bg); }
 .chip.edited { color: var(--extracted); border-color: var(--extracted); background: var(--extracted-bg); }
+.chip.new { color: var(--moved); border-color: var(--moved); background: var(--moved-bg); font-weight: 600; }
 .chip.cls-neutral { color: var(--added); }
 .chip.cls-logic { color: var(--changed); }
 .chip.cls-control_flow { color: var(--removed); }

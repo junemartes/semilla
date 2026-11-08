@@ -40,8 +40,8 @@ pub struct ChangeSetSummary {
     pub coverage: f64,
     /// `major`, `minor`, `patch`, or `none`. A hint only: the UI is not trusted.
     pub api_level: &'static str,
-    /// The change in explicit panic sites (after minus before), if the sources allow it.
-    pub panic_delta: Option<i64>,
+    /// The change in explicit panic sites from the verifier (`Report.panic_delta`).
+    pub panic_delta: i64,
     pub group_count: usize,
     pub step_count: usize,
     pub counts: Counts,
@@ -65,7 +65,8 @@ pub struct GroupSummary {
     pub depends_on: Vec<String>,
     /// True if all claims are proved neutral and nothing is uncovered.
     pub all_neutral: bool,
-    pub panic_delta: Option<i64>,
+    /// The sum of `StepReport.panic_delta` over the steps of the group.
+    pub panic_delta: i64,
     /// A warning if the group has parts with no link (design section 6.2).
     pub split_hint: Option<String>,
     pub synthetic: bool,
@@ -91,6 +92,8 @@ pub struct SubgroupSummary {
     pub fold_reason: String,
     /// The locations of the claims: files, or modules when no file is known.
     pub locations: Vec<String>,
+    /// The claims that the engine added after the agent's edit (design section 6.3, rule 5).
+    pub new_claims: Vec<String>,
     /// The computed role badges of a custom subgroup, for example `2 ctrl flow`.
     pub badges: Vec<String>,
     /// The number of claims for each class label.
@@ -123,6 +126,10 @@ pub struct ClaimView {
     pub review: ReviewState,
     /// The function of the flow view that shows this claim.
     pub flow: Option<String>,
+    /// True if the engine added the claim to its subgroup after the agent's edit.
+    pub new_in_subgroup: bool,
+    /// The file of the anchor item, if the graph knows it.
+    pub file: Option<String>,
 }
 
 /// Builds the change-set summary.
@@ -139,7 +146,7 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         accepted: report.accepted,
         coverage: report.score,
         api_level: api_level(ctx),
-        panic_delta: source_panic_delta(ctx),
+        panic_delta: report.panic_delta,
         group_count: ctx.groups.len(),
         step_count: ctx.data.changeset.steps.len(),
         counts,
@@ -180,7 +187,10 @@ pub fn group_detail(ctx: &Ctx, review: &ReviewFile, id: &str) -> Option<Value> {
 pub fn claim_view(ctx: &Ctx, review: &ReviewFile, claim: &Claim) -> ClaimView {
     let result = ctx.results.get(&claim.id).cloned();
     let at = claim.at.as_ref().map(|at| at.to_string());
+    let subgroup = ctx.claim_subgroup.get(&claim.id).and_then(|id| ctx.subgroup(id));
     ClaimView {
+        new_in_subgroup: subgroup.is_some_and(|subgroup| subgroup.subgroup.new_claims.contains(&claim.id)),
+        file: claim.at.as_ref().and_then(|at| ctx.item_file(&at.item)),
         id: claim.id.clone(),
         op: claim.op.clone(),
         args: claim.args.clone(),
@@ -309,11 +319,10 @@ fn subgroup_summary(ctx: &Ctx, review: &ReviewFile, subgroup: &SubgroupRef) -> S
     };
     let mut locations = Vec::new();
     for claim in &claims {
-        let location = claim_location(ctx, claim);
-        if let Some(location) = location
-            && !locations.contains(&location)
-        {
-            locations.push(location);
+        for location in claim_locations(ctx, claim) {
+            if !locations.contains(&location) {
+                locations.push(location);
+            }
         }
     }
     SubgroupSummary {
@@ -328,6 +337,7 @@ fn subgroup_summary(ctx: &Ctx, review: &ReviewFile, subgroup: &SubgroupRef) -> S
         folded,
         fold_reason,
         locations,
+        new_claims: subgroup.subgroup.new_claims.iter().filter(|id| subgroup.subgroup.claims.contains(id)).cloned().collect(),
         badges,
         class_counts,
         label_mismatch,
@@ -344,17 +354,30 @@ fn is_test_item(ctx: &Ctx, item: &str) -> bool {
     }
 }
 
-/// The location of a claim: the `file` argument, `Cargo.toml` for a dependency, or the module
-/// of the anchor item.
-fn claim_location(ctx: &Ctx, claim: &Claim) -> Option<String> {
+/// The locations of a claim: the `file` argument, `Cargo.toml` for a dependency, or else the
+/// file of the anchor item and of the item that the claim creates (the target of a rename, a
+/// move, or an extract). Without a file in the graph, the module of the item.
+fn claim_locations(ctx: &Ctx, claim: &Claim) -> Vec<String> {
     if let Some(file) = claim.arg_str("file") {
-        return Some(file.to_string());
+        return vec![file.to_string()];
     }
     if claim.op == "bump-dependency" {
-        return Some("Cargo.toml".to_string());
+        return vec!["Cargo.toml".to_string()];
     }
-    let item = &claim.at.as_ref()?.item;
-    Some(module_of(ctx, item))
+    let mut items: Vec<String> = claim.at.as_ref().map(|at| at.item.clone()).into_iter().collect();
+    for item in provided_items(claim) {
+        if !items.contains(&item) {
+            items.push(item);
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let location = ctx.item_file(&item).unwrap_or_else(|| module_of(ctx, &item));
+        if !out.contains(&location) {
+            out.push(location);
+        }
+    }
+    out
 }
 
 /// The nearest module or crate of an item in the graph. Without a graph node, the item path
@@ -425,7 +448,7 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
         add_status(&mut counts, view);
     }
     counts.uncovered = uncovered.len();
-    let panic_delta = claims_panic_delta(ctx, &claims);
+    let panic_delta: i64 = ctx.data.report.steps.iter().filter(|step| group.steps.contains(&step.step)).map(|step| step.panic_delta).sum();
     let (risk_score, risk_reasons) = risk(ctx, group, &claims, &subgroups, &counts, panic_delta);
     let risk = match risk_score {
         0 => 0,
@@ -462,7 +485,7 @@ fn risk(
     claims: &[&Claim],
     subgroups: &[SubgroupSummary],
     counts: &Counts,
-    panic_delta: Option<i64>,
+    panic_delta: i64,
 ) -> (u32, Vec<String>) {
     let mut score = 0;
     let mut reasons = Vec::new();
@@ -484,9 +507,9 @@ fn risk(
         score += 2;
         reasons.push("public API".to_string());
     }
-    if let Some(delta) = panic_delta.filter(|delta| *delta > 0) {
+    if panic_delta > 0 {
         score += 1;
-        reasons.push(format!("panics +{delta}"));
+        reasons.push(format!("panics +{panic_delta}"));
     }
     let failed = counts.claims - counts.verified;
     if failed > 0 {
@@ -513,45 +536,6 @@ fn claim_texts<'a>(ctx: &'a Ctx, claim: &'a Claim) -> Vec<&'a str> {
         texts.extend(result.after.as_deref());
     }
     texts
-}
-
-/// Counts the explicit panic sites in a text (design section 5.5).
-pub fn panic_sites(text: &str) -> usize {
-    ["unwrap(", "expect(", "panic!", "unreachable!", "todo!", "unimplemented!"].iter().map(|pattern| text.matches(pattern).count()).sum()
-}
-
-fn claims_panic_delta(ctx: &Ctx, claims: &[&Claim]) -> Option<i64> {
-    let mut any = false;
-    let mut delta = 0i64;
-    for claim in claims {
-        if let Some(result) = ctx.results.get(&claim.id)
-            && (result.before.is_some() || result.after.is_some())
-        {
-            any = true;
-            delta += panic_sites(result.after.as_deref().unwrap_or("")) as i64;
-            delta -= panic_sites(result.before.as_deref().unwrap_or("")) as i64;
-        }
-    }
-    any.then_some(delta)
-}
-
-/// The panic delta of the full change set, from the top-most source entries.
-fn source_panic_delta(ctx: &Ctx) -> Option<i64> {
-    let sources = &ctx.data.sources;
-    if sources.is_empty() {
-        return None;
-    }
-    let mut kept: Vec<&str> = Vec::new();
-    let mut delta = 0i64;
-    for (key, pair) in sources {
-        if kept.iter().any(|outer| key.starts_with(&format!("{outer}/"))) {
-            continue;
-        }
-        kept.push(key);
-        delta += panic_sites(pair.after.as_deref().unwrap_or("")) as i64;
-        delta -= panic_sites(pair.before.as_deref().unwrap_or("")) as i64;
-    }
-    Some(delta)
 }
 
 /// The API level: `major` for a changed or removed public item, `minor` for a new public

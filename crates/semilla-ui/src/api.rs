@@ -161,6 +161,7 @@ fn node_info(ctx: &Ctx, review: &ReviewFile, id: &str) -> ApiResult {
         "parent": parent,
         "breadcrumb": ctx.graph_ancestors(item_of(id)),
         "module": summary::module_of(ctx, item_of(id)),
+        "file": ctx.item_file(item_of(id)),
     })))
 }
 

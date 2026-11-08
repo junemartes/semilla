@@ -163,7 +163,13 @@ async fn fold_state_follows_contents() {
     assert_eq!(subgroup(g1, "Renames")["badges"], serde_json::json!([]));
     assert_eq!(group(&cs, "G3")["all_neutral"], false);
     // The location strip.
-    assert_eq!(subgroup(g2, "Call sites")["locations"], serde_json::json!(["shop_cli"]));
+    assert_eq!(subgroup(g2, "Call sites")["locations"], serde_json::json!(["shop_cli/src/main.rs"]));
+    assert_eq!(subgroup(g1, "Renames")["locations"], serde_json::json!(["shop_core/src/cart.rs"]));
+    // A move shows the old and the new file.
+    assert_eq!(
+        subgroup(g3, "Extract and move line_total")["locations"],
+        serde_json::json!(["shop_core/src/cart.rs", "shop_core/src/billing.rs"])
+    );
     assert_eq!(subgroup(g2, "Dependency for the error type")["locations"], serde_json::json!(["shop_core/Cargo.toml"]));
 }
 
@@ -240,6 +246,7 @@ async fn node_endpoints_accept_encoded_ids() {
     assert_eq!(encoded["id"], statement);
     assert_eq!(encoded, plain);
     assert_eq!(encoded["kind"], "statement");
+    assert_eq!(encoded["file"], "shop_core/src/cart.rs");
     assert_eq!(ids(&encoded["claims"]), ["c4"]);
     assert_eq!(encoded["parent"], format!("{TOTAL}/S2/body/S0"));
 
@@ -667,7 +674,84 @@ async fn empty_data_works() {
     let cs = get(&app, "/api/changeset").await;
     assert_eq!(cs["groups"], serde_json::json!([]));
     assert_eq!(cs["api_level"], "none");
-    assert!(cs["panic_delta"].is_null());
+    assert_eq!(cs["panic_delta"], 0);
     assert!(search(&app, "total").await["results"].as_array().unwrap().is_empty());
     assert_eq!(get(&app, "/api/graph").await["nodes"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn locations_fall_back_to_modules() {
+    let mut data = demo_data();
+    for node in &mut data.graph.nodes {
+        node.file = None;
+    }
+    let app = router(data, review_path());
+    let cs = get(&app, "/api/changeset").await;
+    assert_eq!(subgroup(group(&cs, "G2"), "Call sites")["locations"], serde_json::json!(["shop_cli"]));
+    assert_eq!(
+        subgroup(group(&cs, "G3"), "Extract and move line_total")["locations"],
+        serde_json::json!(["shop_core::cart", "shop_core::billing"])
+    );
+}
+
+#[tokio::test]
+async fn subgroup_ids_and_new_claims() {
+    let app = app();
+    let cs = get(&app, "/api/changeset").await;
+    let g1 = group(&cs, "G1");
+    // The ID of the data.
+    assert_eq!(subgroup(g1, "Renames")["id"], "G1:mechanical");
+    // No ID in the data: the fallback `<group>:<n>` (the third subgroup of G1 in the change set).
+    assert_eq!(subgroup(g1, "Quantity limit")["id"], "G1:2");
+    let reply = call(&app, "POST", "/api/review/G1:core").await.json();
+    assert_eq!(reply["kind"], "subgroup");
+    assert_eq!(reply["claims"], serde_json::json!(["c3"]));
+    assert_eq!(call(&app, "POST", "/api/review/G1%3A2").await.json()["claims"], serde_json::json!(["c4"]));
+
+    // The engine added c18 after the agent's edit.
+    let core = subgroup(group(&cs, "G2"), "Return errors for bad quantities");
+    assert_eq!(core["edited"], true);
+    assert_eq!(core["new_claims"], serde_json::json!(["c18"]));
+    let claims = core["claims"].as_array().unwrap();
+    let flag = |id: &str| claims.iter().find(|claim| claim["id"] == id).unwrap()["new_in_subgroup"].clone();
+    assert_eq!(flag("c18"), true);
+    assert_eq!(flag("c11"), false);
+    assert_eq!(subgroup(g1, "Renames")["new_claims"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn duplicate_subgroup_ids_stay_unique() {
+    let mut data = demo_data();
+    for sub in &mut data.changeset.subgroups {
+        if sub.group == "G3" {
+            sub.id = "G3:same".into();
+        }
+    }
+    let app = router(data, review_path());
+    let cs = get(&app, "/api/changeset").await;
+    let mut found: Vec<String> = ids(&group(&cs, "G3")["subgroups"]);
+    found.sort();
+    assert_eq!(found, ["G3:1", "G3:same"]);
+}
+
+#[tokio::test]
+async fn panic_delta_comes_from_the_report() {
+    let mut data = demo_data();
+    // The sources do not change. Only the verifier values change.
+    for step in &mut data.report.steps {
+        step.panic_delta = match step.step {
+            2 => 3,
+            7 => -1,
+            _ => 0,
+        };
+    }
+    data.report.finish();
+    let app = router(data, review_path());
+    let cs = get(&app, "/api/changeset").await;
+    assert_eq!(cs["panic_delta"], 2);
+    let g1 = group(&cs, "G1");
+    assert_eq!(g1["panic_delta"], 3);
+    assert!(g1["risk_reasons"].as_array().unwrap().iter().any(|reason| reason == "panics +3"));
+    assert_eq!(group(&cs, "G2")["panic_delta"], -1);
+    assert_eq!(group(&cs, "G3")["panic_delta"], 0);
 }

@@ -61,13 +61,17 @@ fn step(index: usize, intent: &str, class: Option<Class>, claims: Vec<Claim>) ->
 }
 
 fn subgroup(group: &str, role: Role, title: &str, claims: &[&str], edited: bool, why: &str) -> Subgroup {
+    // The engine gives each subgroup the ID `<group>:<role>`.
+    let role_name = serde_json::to_value(role).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
     Subgroup {
+        id: format!("{group}:{role_name}"),
         group: group.to_string(),
         role,
         title: title.to_string(),
         why: why.to_string(),
         claims: claims.iter().map(|claim| claim.to_string()).collect(),
         edited,
+        new_claims: Vec::new(),
     }
 }
 
@@ -191,6 +195,18 @@ pub fn demo_changeset() -> ChangeSet {
         subgroup("G3", Role::Mechanical, "Extract and move line_total", &["c6", "c7"], false, ""),
         subgroup("G3", Role::Custom, "Discount check", &["c8"], true, "The agent says that the inverted check is neutral."),
     ];
+    let mut subgroups = subgroups;
+    for sub in &mut subgroups {
+        // Old data: a subgroup without an ID. The UI gives it the ID `G1:2`.
+        if sub.title == "Quantity limit" {
+            sub.id.clear();
+        }
+        // The agent edited this subgroup. Then the engine added c18 (step 7) to it.
+        if sub.title == "Return errors for bad quantities" {
+            sub.edited = true;
+            sub.new_claims = vec!["c18".into()];
+        }
+    }
     ChangeSet {
         base_tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
         head_tree: "9c1f0e2d3b4a5968778695a4b3c2d1e0f9a8b7c6".into(),
@@ -281,6 +297,8 @@ pub fn demo_report() -> Report {
         },
         StepReport {
             step: 7,
+            // Removed: the unwrap in shop_cli::run and the expect in legacy_total.
+            panic_delta: -2,
             intent: "Update the callers of Cart::total".into(),
             declared_class: Some(Class::Logic),
             computed_class: Some(Class::Logic),
@@ -309,6 +327,7 @@ pub fn demo_report() -> Report {
         organization: Vec::new(),
         warnings: vec!["G3 is a refactor group, but claim c8 is not proved neutral.".into()],
         score: 0.0,
+        panic_delta: 0,
         accepted: false,
     };
     report.finish();
@@ -536,6 +555,7 @@ fn graph_node(
     test: bool,
 ) -> GraphNode {
     GraphNode {
+        file: file_of(id),
         id: id.to_string(),
         label: label.to_string(),
         kind,
@@ -546,6 +566,24 @@ fn graph_node(
         entry,
         test,
     }
+}
+
+/// The file of a workspace item, relative to the workspace root.
+fn file_of(id: &str) -> Option<String> {
+    let file = if id.starts_with("shop_core::cart") {
+        "shop_core/src/cart.rs"
+    } else if id.starts_with("shop_core::billing") {
+        "shop_core/src/billing.rs"
+    } else if id.starts_with("shop_core::report") {
+        "shop_core/src/report.rs"
+    } else if id == "shop_core" {
+        "shop_core/src/lib.rs"
+    } else if id.starts_with("shop_cli") {
+        "shop_cli/src/main.rs"
+    } else {
+        return None;
+    };
+    Some(file.to_string())
 }
 
 fn external(id: &str, badges: &[&str]) -> GraphNode {
