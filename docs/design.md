@@ -890,3 +890,26 @@ The flow:
 5. The reviewer runs `semilla review <commit>` when the status is "ready". It opens the local UI, or writes a standalone report for humans: one HTML file with all assets inline, or Markdown.
 
 The cost work (B3: rebuild only the changed crates, compare only the changed bodies) stays. It now shortens the wait of the reviewer, not of the agent.
+
+### 19.1 Baseline and deltas
+
+`semilla init` builds a baseline for `HEAD`, and stores it in a content-addressed cache. After that, each step builds only a delta.
+
+| Layer | Baseline | Delta |
+|---|---|---|
+| Files | The blob hash of each file | The files with a new blob |
+| Syntax index | The parsed items of each file, keyed by the blob hash | Parse only the changed files |
+| Build folder | One fixed folder for each level, with the incremental state of cargo | Write only the changed files; cargo rebuilds only the changed crates and their dependents |
+| MIR records | The records of each crate, keyed by the crate hash | Reuse the records of an unchanged crate |
+| Body compare | The content hash of each body | Compare only the bodies with a new hash |
+
+The crate hash must include every input that can change the MIR, because a stale cache gives a false proof:
+
+- the files of the crate, including `build.rs`;
+- its `Cargo.toml`, and the locked versions of its dependencies;
+- the hashes of the workspace crates that it depends on;
+- the toolchain, the level flags, the features, and the driver version.
+
+A crate with a build script or a proc macro can also depend on the environment. Such a crate is rebuilt every time, until the key covers its inputs.
+
+`semilla init` can also install a local `post-commit` hook that queues the phase 2 job of each tagged commit.
