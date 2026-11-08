@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3"
+note = "semver `comparator`: extract `patch.is_some() && text.starts_with('-')` into a fn that returns bool."
+added = ["s1case::has_pre"]

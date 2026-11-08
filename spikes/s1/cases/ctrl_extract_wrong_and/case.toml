@@ -1,0 +1,3 @@
+expect = "changed"
+note = "Control (N4 constant-switch): the extracted bool fn uses `||` where the original uses `&&`."
+added = ["s1case::has_pre"]

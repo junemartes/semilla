@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3 or N4"
+note = "semver `comparator`, closer to the real code: the caller borrows `patch` again after the extracted `&&` test."
+added = ["s1case::has_pre"]

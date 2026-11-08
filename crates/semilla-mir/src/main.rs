@@ -108,7 +108,8 @@ struct BodyRecord {
     callees: Vec<String>,
     /// True if the control flow graph has no cycle.
     loop_free: bool,
-    /// The N4 term of a loop-free body (see `term.rs`), at the levels n2 and n3 only. The first
+    /// The N4 term of a loop-free body (see `term.rs`), at the levels n2 and n3 only. At n3, the
+    /// term can come from a body with only the loop-free callees inlined. The first
     /// line lists the build rules that changed the term.
     term: Option<String>,
     span: Option<SpanInfo>,
@@ -144,11 +145,17 @@ fn external_calls(body: &Body) -> Vec<External> {
         if let Some(signature) = kind.fn_sig() {
             let signature = signature.skip_binder();
             match signature.output().kind() {
-                TyKind::RigidTy(RigidTy::Adt(adt, _)) if adt.name().ends_with("::Result") || adt.name().ends_with("::Option") => badges.push("err"),
+                TyKind::RigidTy(RigidTy::Adt(adt, _))
+                    if adt.name().ends_with("::Result") || adt.name().ends_with("::Option") =>
+                {
+                    badges.push("err")
+                }
                 TyKind::RigidTy(RigidTy::Never) => badges.push("never"),
                 _ => {}
             }
-            if signature.inputs().iter().any(|input| matches!(input.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut)))) {
+            if signature.inputs().iter().any(|input| {
+                matches!(input.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut)))
+            }) {
                 badges.push("mut");
             }
             if signature.safety == Safety::Unsafe {
@@ -384,12 +391,32 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
         .filter_map(|(item, body)| {
             let name = item.name();
             guarded(|| {
-                let body = match &callees {
-                    Some(callees) => inline::inline_calls(body, callees)?,
-                    None if level == Level::N3 => return None,
-                    None => body.clone(),
+                let Some(callees) = &callees else {
+                    if level == Level::N3 {
+                        return None;
+                    }
+                    return Some(record(name.clone(), body, level, target, &[]));
                 };
-                Some(record(name.clone(), &body, level, target))
+                let full = inline::inline_calls(body, callees, inline::Scope::All)?;
+                // The N3 term comes from a body with only the loop-free callees inlined: a body
+                // with all callees inlined often has a loop (from one callee) and then no term.
+                // If that body has too many paths for a term, the next tries inline only the
+                // small, then the tiny loop-free callees. The text and the term are two separate normal forms
+                // of the same behavior.
+                let mut tries = Vec::new();
+                if normalize::is_loop_free(&full) {
+                    tries.push(full.clone());
+                }
+                for scope in [
+                    inline::Scope::LoopFree,
+                    inline::Scope::SmallLoopFree,
+                    inline::Scope::TinyLoopFree,
+                ] {
+                    tries.push(
+                        inline::inline_calls(body, callees, scope).unwrap_or_else(|| body.clone()),
+                    );
+                }
+                Some(record(name.clone(), &full, level, target, &tries))
             })
             .unwrap_or_else(|| Some(failed_record(name, level, target)))
         })
@@ -433,18 +460,44 @@ fn item_body(item: CrateItem) -> Option<Body> {
     item.body()
 }
 
-fn record(name: String, body: &Body, level: Level, target: &str) -> BodyRecord {
+/// Builds the record of a body. The term comes from the first body of `term_tries` that is
+/// loop-free and gives a term (each one has the same behavior as `body`). Without tries, the
+/// term comes from `body`.
+fn record(
+    name: String,
+    body: &Body,
+    level: Level,
+    target: &str,
+    term_tries: &[Body],
+) -> BodyRecord {
     let canonical = normalize::canonical_body(body);
     let printed = normalize::canonical_text(&canonical);
     let loop_free = normalize::is_loop_free(&canonical);
     // No level uses an N0 term, so the driver does not build it.
-    let term = if loop_free && level != Level::N0 {
-        term::body_term(&canonical).map(|term| {
-            let text = normalize::stable_closure_names(&term.text);
-            format!(";rules {}\n{text}", term.rules.join(" "))
-        })
-    } else {
+    let term = if level == Level::N0 {
         None
+    } else if term_tries.is_empty() {
+        loop_free.then(|| body_term(&canonical)).flatten()
+    } else {
+        let mut found = None;
+        let mut previous: Option<String> = None;
+        for candidate in term_tries {
+            let canonical = normalize::canonical_body(candidate);
+            if !normalize::is_loop_free(&canonical) {
+                continue;
+            }
+            // The same body as the try before has the same (missing) term.
+            let text = normalize::canonical_text(&canonical).text;
+            if previous.as_ref() == Some(&text) {
+                continue;
+            }
+            previous = Some(text);
+            found = body_term(&canonical);
+            if found.is_some() {
+                break;
+            }
+        }
+        found
     };
     let span = guarded(|| {
         let lines = body.span.get_lines();
@@ -464,8 +517,20 @@ fn record(name: String, body: &Body, level: Level, target: &str) -> BodyRecord {
         term,
         span,
         target: target.to_string(),
-        externals: if level == Level::N0 { guarded(|| external_calls(&canonical)).unwrap_or_default() } else { Vec::new() },
+        externals: if level == Level::N0 {
+            guarded(|| external_calls(&canonical)).unwrap_or_default()
+        } else {
+            Vec::new()
+        },
     }
+}
+
+/// Returns the term text of a canonical loop-free body, with the line of the build rules first.
+fn body_term(canonical: &Body) -> Option<String> {
+    term::body_term(canonical).map(|term| {
+        let text = normalize::stable_closure_names(&term.text);
+        format!(";rules {}\n{text}", term.rules.join(" "))
+    })
 }
 
 /// Returns the functions that N3 can inline: local, without generic parameters, with the Rust
@@ -487,6 +552,7 @@ fn inline_candidates(bodies: &[(CrateItem, Body)]) -> inline::Callees {
     let recursive = in_cycles(&edges);
 
     let mut callees = HashMap::new();
+    let mut loop_free = HashSet::new();
     for (position, (item, body)) in bodies.iter().enumerate() {
         if recursive.contains(&position) || item.requires_monomorphization() {
             continue;
@@ -509,9 +575,12 @@ fn inline_candidates(bodies: &[(CrateItem, Body)]) -> inline::Callees {
         {
             continue;
         }
+        if normalize::is_loop_free(body) {
+            loop_free.insert(names[position].clone());
+        }
         callees.insert(names[position].clone(), body.clone());
     }
-    inline::Callees { bodies: callees }
+    inline::Callees { bodies: callees, loop_free }
 }
 
 /// Returns the nodes that are in a cycle of a graph: in a strongly connected component with more

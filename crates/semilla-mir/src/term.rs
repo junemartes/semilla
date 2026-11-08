@@ -17,7 +17,8 @@
 //!   side effects keep their order. A read through a pointer (`Load`) takes the state too, so a
 //!   read cannot move across a write.
 //! - A local whose address the body takes lives in memory: each read is a `Load` and each write
-//!   is a `store` effect. The other locals are plain values.
+//!   is a `store` effect. The other locals are plain values. A local in memory has the address
+//!   `local(slot n)`, where `n` counts the locals in memory in the order of their first use.
 //! - An unwind edge to a cleanup block becomes an `uw-cleanup` term that holds the outcome of the
 //!   cleanup path. The cleanup path starts from the state `hole`: the state at the panic point.
 //!   `hole` refers to the nearest enclosing unwind node.
@@ -31,8 +32,9 @@
 //!    fail, so it is removed. The facts compare integer comparisons in a canonical form:
 //!    `a >= b` is `not (a < b)`, `a > b` is `b < a`, `a <= b` is `not (b < a)`, `a != b` is
 //!    `not (a == b)`. These identities hold for integers (a total order) only, so only integer
-//!    comparisons get this form. When this rule removes an assert, the record says so
-//!    (`path-fact`).
+//!    comparisons get this form. When this rule removes an assert, or follows a bool switch
+//!    whose condition is known on the path to the known target, the record says so
+//!    (`path-fact`). The same pure term has the same value everywhere on one path.
 //! 2. **Read after write.** A read of a part of a local that the body just wrote gives the written
 //!    value. A read of another field of a struct or a tuple gives the old value: two different
 //!    fields do not overlap. A union field never gets this rule, because union fields overlap
@@ -48,6 +50,10 @@
 //!    result: `a == a`, `a <= a`, `a >= a` are true, and `a != a`, `a < a`, `a > a` are false
 //!    (`reflexive-compare`).
 //! 7. **True assumption.** `assume(true)` has no effect, so it is removed (`assume-true`).
+//! 8. **Constant switch.** A `switchInt` on a constant (a bool, or an integer that is not
+//!    negative) always jumps to the target of that value, so the path goes there directly
+//!    (`constant-switch`). A short circuit (`a && b`) that a function returns as a bool and the
+//!    caller tests again gives such a switch after inlining.
 //!
 //! The term text has one node for each line: `#<n> (<constructor> <arguments>)`. An argument is a
 //! reference `#<m>` to an earlier line, or a string. The last line is the root.
@@ -127,8 +133,14 @@ impl Nodes {
     }
 
     /// Prints the nodes that the root can reach, in a fixed order (children first).
+    ///
+    /// The slots of the locals in memory get new numbers here, in the order of their first
+    /// appearance in the printed term. The numbers of the build depend on the order in which the
+    /// builder explores the paths, which depends on the shape of the graph. The new numbers are a
+    /// one-to-one renaming inside one term, so the meaning stays the same.
     fn render(&self, root: Id) -> String {
         let mut number: HashMap<Id, usize> = HashMap::new();
+        let mut slots: HashMap<String, usize> = HashMap::new();
         let mut lines = Vec::new();
         let mut stack = vec![(root, false)];
         while let Some((id, expanded)) = stack.pop() {
@@ -147,6 +159,11 @@ impl Nodes {
             }
             let reference = |child: &Id| format!("#{}", number[child]);
             let text = match self.get(id) {
+                Node::Leaf(text) if text.starts_with("slot ") => {
+                    let next = slots.len();
+                    let slot = *slots.entry(text.clone()).or_insert(next);
+                    format!("(L {})", quote(&format!("slot {slot}")))
+                }
                 Node::Leaf(text) => format!("(L {})", quote(text)),
                 Node::App(name, args) => {
                     let mut list = "(Nil)".to_string();
@@ -255,6 +272,8 @@ struct Builder<'a> {
     /// The projection terms that are downcasts, with their variant index.
     downcasts: HashMap<Id, usize>,
     steps: usize,
+    /// The number of each local in memory (see `local_address`).
+    slots: HashMap<Local, usize>,
     /// The build rules that changed the term.
     rules: std::collections::BTreeSet<&'static str>,
 }
@@ -275,6 +294,7 @@ impl<'a> Builder<'a> {
             struct_fields: HashMap::new(),
             downcasts: HashMap::new(),
             steps: 0,
+            slots: HashMap::new(),
             rules: std::collections::BTreeSet::new(),
         }
     }
@@ -328,8 +348,13 @@ impl<'a> Builder<'a> {
         Ok(self.app("body", vec![signature, outcome]))
     }
 
+    /// The address of a local in memory. The locals get numbers in the order of their first use
+    /// on the paths, not their MIR numbers: two equal bodies can number their locals in another
+    /// order. Each local gets its own number, so two locals never share an address.
     fn local_address(&mut self, local: Local) -> Id {
-        let name = self.leaf(format!("_{local}"));
+        let next = self.slots.len();
+        let slot = *self.slots.entry(local).or_insert(next);
+        let name = self.leaf(format!("slot {slot}"));
         self.app("local", vec![name])
     }
 
@@ -349,8 +374,23 @@ impl<'a> Builder<'a> {
                 let value = self.operand(discr, &mut env)?;
                 let ty = discr.ty(self.body.locals()).map_err(|_| Unsupported)?;
                 let branches: Vec<(u128, usize)> = targets.branches().collect();
+                if let Some(number) = self.constant_value(value, ty) {
+                    // Rule 8.
+                    self.rules.insert("constant-switch");
+                    let target = branches
+                        .iter()
+                        .find(|(branch, _)| *branch == number)
+                        .map_or(targets.otherwise(), |(_, target)| *target);
+                    return self.block(target, env);
+                }
                 if ty.kind().is_bool() && branches.len() == 1 && branches[0].0 == 0 {
                     // `switchInt(c) -> [0: else, otherwise: then]`.
+                    if let Some(known) = self.known(&env, value) {
+                        // Rule 1: the condition has a known value on this path.
+                        self.rules.insert("path-fact");
+                        let target = if known { targets.otherwise() } else { branches[0].1 };
+                        return self.block(target, env);
+                    }
                     let then_env = self.with_fact(&env, value, true);
                     let else_env = self.with_fact(&env, value, false);
                     let then_outcome = self.block(targets.otherwise(), then_env)?;
@@ -647,6 +687,25 @@ impl<'a> Builder<'a> {
                 self.leaf(format!("thread local {}", item.name()))
             }
         })
+    }
+
+    /// Returns the value of a constant leaf of a bool or an integer type, as `switchInt` sees it.
+    /// A negative number gets `None` (its bit pattern depends on the width).
+    fn constant_value(&mut self, value: Id, ty: Ty) -> Option<u128> {
+        let Node::Leaf(text) = self.nodes.get(value) else {
+            return None;
+        };
+        let text = text.clone();
+        if !(ty.kind().is_bool() || is_integer(ty)) {
+            return None;
+        }
+        let ty_text = self.printer.ty(ty);
+        let number = text.strip_prefix(&format!("const {ty_text} = "))?;
+        match number {
+            "true" => Some(1),
+            "false" => Some(0),
+            _ => number.parse::<u128>().ok(),
+        }
     }
 
     /// Returns the constant discriminant of an enum type whose layout has one variant.

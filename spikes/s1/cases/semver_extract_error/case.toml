@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3"
+note = "semver `comparator`: extract `Error::new(ErrorKind::EmptySegment(pos))` into `fn empty_segment(pos) -> Error`."
+added = ["s1case::empty_segment"]

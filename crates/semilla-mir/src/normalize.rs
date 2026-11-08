@@ -9,7 +9,7 @@
 //! 2. Remove the debug information (the names of user variables).
 //! 3. Jump over empty blocks that contain only a `goto`.
 //! 3b. Merge a block that ends with a `goto` with its target, if the target has no other
-//!    predecessor (the unwind edges count). The code runs in the same order, so the behavior is
+//!    reachable predecessor (the unwind edges count). The code runs in the same order, so the behavior is
 //!    the same. The N3 inliner needs this rule: it adds a `goto` into the callee entry.
 //! 3c. Forward a copy: replace `_t = copy p; ...; use(copy _t)` with `...; use(copy p)` when the
 //!    copy and the only use of `_t` are in the same block, `p` is a local or a field of a local,
@@ -17,6 +17,15 @@
 //!    neither local. Then `p` has the same value at the use, so the use reads the same value.
 //!    `_t` has no other use, so the copy has no other effect. The N3 inliner needs this rule,
 //!    because the inlined code and the original code copy values in different places.
+//! 3d. Forward a reference: replace each `(*r)...` with `P...` when the only assignments to the
+//!    local `r` are `r = &P` (shared or mutable) with the same place `P`, `P` is a local or
+//!    fields of a local (no deref and no index, so it names one fixed place), and each other use
+//!    of `r` is a deref. Then `(*r)` and `P` name the same memory, so each read and each write
+//!    is the same, and the assignments to `r` have no use left. A use of `r` that is not a deref
+//!    (a copy, a move into a call, a borrow of `r`) stops the rule. The N3 inliner needs this
+//!    rule for a callee with a `&mut` parameter: the inlined code writes through the reference,
+//!    and the original code writes the local. The aliasing model (retags, stacked borrows) is not
+//!    behavior here, as in the rest of the normalization.
 //! 4. Remove the blocks that the entry cannot reach.
 //! 5. Order the blocks by a depth-first walk from the entry.
 //! 6. Number the locals in the order of their first use. The return local and the arguments keep
@@ -184,6 +193,7 @@ pub fn canonical_body(body: &Body) -> Body {
     for block in &mut blocks {
         block.statements.retain(|statement| has_runtime_effect(&statement.kind));
     }
+    forward_references(&mut blocks, arg_count, body.locals().len());
     skip_empty_gotos(&mut blocks);
     merge_straight_blocks(&mut blocks);
     forward_copies(&mut blocks, arg_count, body.locals().len());
@@ -228,34 +238,159 @@ fn skip_empty_gotos(blocks: &mut [BasicBlock]) {
 }
 
 /// Merges each block that ends with a `goto` with its target, if the target has no other
-/// predecessor and is not the entry. The merged target becomes unreachable, and
-/// `order_blocks` removes it.
+/// predecessor and is not the entry. Only the blocks that the entry can reach count as
+/// predecessors: rule 3 leaves empty `goto` blocks that nothing reaches. The merged target
+/// becomes unreachable, and `order_blocks` removes it.
 fn merge_straight_blocks(blocks: &mut [BasicBlock]) {
-    loop {
-        let mut predecessors = vec![0usize; blocks.len()];
-        predecessors[0] = 1;
-        for block in blocks.iter() {
+    let reachable = reachable_blocks(blocks);
+    let mut predecessors = vec![0usize; blocks.len()];
+    predecessors[0] = 1;
+    for (index, block) in blocks.iter().enumerate() {
+        if reachable[index] {
             for successor in block.terminator.successors() {
                 predecessors[successor] += 1;
             }
         }
-        let candidate = (0..blocks.len()).find_map(|from| match blocks[from].terminator.kind {
-            TerminatorKind::Goto { target }
-                if target != from && target != 0 && predecessors[target] == 1 =>
-            {
-                Some((from, target))
+    }
+    // A merge moves the edges of the target to `from`, so the counts stay right.
+    for from in 0..blocks.len() {
+        if !reachable[from] {
+            continue;
+        }
+        while let TerminatorKind::Goto { target } = blocks[from].terminator.kind {
+            if target == from || target == 0 || predecessors[target] != 1 {
+                break;
             }
-            _ => None,
+            let statements = std::mem::take(&mut blocks[target].statements);
+            let terminator = blocks[target].terminator.clone();
+            blocks[target].terminator.kind = TerminatorKind::Unreachable;
+            blocks[from].statements.extend(statements);
+            blocks[from].terminator = terminator;
+        }
+    }
+}
+
+/// Returns the blocks that the entry can reach (the unwind edges count).
+fn reachable_blocks(blocks: &[BasicBlock]) -> Vec<bool> {
+    let mut seen = vec![false; blocks.len()];
+    let mut stack = vec![0];
+    while let Some(block) = stack.pop() {
+        if std::mem::replace(&mut seen[block], true) {
+            continue;
+        }
+        stack.extend(blocks[block].terminator.successors());
+    }
+    seen
+}
+
+/// Applies rule 3d: replaces each `(*r)...` with `P...` for a reference local `r` whose only
+/// assignments are `r = &P` (or `&mut P`) with the same `P`, and whose only other uses are
+/// derefs. `P` is a local or fields of a local (no deref, no index), so it names one fixed
+/// place, and `(*r)` names the same place. Then the assignments to `r` have no use, and the
+/// rule removes them.
+fn forward_references(blocks: &mut [BasicBlock], arg_count: usize, local_count: usize) {
+    #[derive(Clone, Default)]
+    struct Uses {
+        /// The borrowed place of the assignments `r = &P`.
+        source: Option<Place>,
+        /// A use that is not a deref, or two different borrowed places.
+        bad: bool,
+    }
+    struct Scan<'a>(&'a mut [Uses]);
+    impl MirVisitor for Scan<'_> {
+        fn visit_place(&mut self, place: &Place, _ptx: PlaceContext, _location: Location) {
+            if place.projection.first() != Some(&ProjectionElem::Deref) {
+                self.0[place.local].bad = true;
+            }
+            for elem in &place.projection {
+                if let ProjectionElem::Index(local) = elem {
+                    self.0[*local].bad = true;
+                }
+            }
+        }
+        fn visit_local(&mut self, local: &Local, _ptx: PlaceContext, _location: Location) {
+            // A use outside a place (the return of `_0`).
+            self.0[*local].bad = true;
+        }
+    }
+    let simple = |place: &Place| {
+        place
+            .projection
+            .iter()
+            .all(|elem| matches!(elem, ProjectionElem::Field(..) | ProjectionElem::Downcast(_)))
+    };
+
+    let mut uses = vec![Uses::default(); local_count];
+    for block in blocks.iter() {
+        for statement in &block.statements {
+            if let StatementKind::Assign(target, Rvalue::Ref(_, _, source)) = &statement.kind {
+                if target.projection.is_empty()
+                    && target.local > arg_count
+                    && simple(source)
+                    && source.local != target.local
+                {
+                    let entry = &mut uses[target.local];
+                    match &entry.source {
+                        Some(old) if old != source => entry.bad = true,
+                        _ => entry.source = Some(source.clone()),
+                    }
+                    // The borrowed place is a use of its own local (not a deref).
+                    uses[source.local].bad = true;
+                    continue;
+                }
+            }
+            let single = BasicBlock {
+                statements: vec![statement.clone()],
+                terminator: Terminator {
+                    kind: TerminatorKind::Unreachable,
+                    source_info: statement.source_info.clone(),
+                },
+            };
+            Scan(&mut uses).visit_basic_block(&single);
+        }
+        let single = BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+        Scan(&mut uses).visit_basic_block(&single);
+    }
+    let forward: Vec<Option<Place>> =
+        uses.into_iter().map(|entry| if entry.bad { None } else { entry.source }).collect();
+    if forward.iter().all(Option::is_none) {
+        return;
+    }
+
+    struct Rewrite<'a>(&'a [Option<Place>]);
+    impl MutMirVisitor for Rewrite<'_> {
+        fn visit_place(&mut self, place: &mut Place, ptx: PlaceContext, location: Location) {
+            if let Some(source) = &self.0[place.local] {
+                if place.projection.first() == Some(&ProjectionElem::Deref) {
+                    let mut projection = source.projection.clone();
+                    projection.extend(place.projection.drain(1..));
+                    *place = Place { local: source.local, projection };
+                }
+            }
+            self.super_place(place, ptx, location);
+        }
+    }
+    for block in blocks.iter_mut() {
+        block.statements.retain(|statement| {
+            !matches!(&statement.kind, StatementKind::Assign(target, Rvalue::Ref(..))
+                if target.projection.is_empty() && forward[target.local].is_some())
         });
-        let Some((from, target)) = candidate else {
-            return;
-        };
-        let statements = std::mem::take(&mut blocks[target].statements);
-        let terminator = blocks[target].terminator.clone();
-        // The old target keeps no successor, so it does not count as a predecessor.
-        blocks[target].terminator.kind = TerminatorKind::Unreachable;
-        blocks[from].statements.extend(statements);
-        blocks[from].terminator = terminator;
+        let mut rewrite = Rewrite(&forward);
+        for statement in &mut block.statements {
+            let mut single = BasicBlock {
+                statements: vec![statement.clone()],
+                terminator: Terminator {
+                    kind: TerminatorKind::Unreachable,
+                    source_info: statement.source_info.clone(),
+                },
+            };
+            rewrite.visit_basic_block(&mut single);
+            *statement = single.statements.pop().expect("one statement");
+        }
+        let mut single =
+            BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+        rewrite.visit_basic_block(&mut single);
+        block.terminator = single.terminator;
     }
 }
 

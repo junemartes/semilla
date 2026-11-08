@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3"
+note = "semver `version_req`: extract `rest.is_empty() || rest.starts_with(',')` into a fn that returns bool."
+added = ["s1case::ends_comparator"]

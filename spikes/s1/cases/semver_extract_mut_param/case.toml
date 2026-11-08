@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3"
+note = "semver `version_req`: extract a whole `if let` statement into a fn with a `&mut Error` parameter."
+added = ["s1case::mark_lone_wildcard"]

@@ -43,13 +43,19 @@ A table cell is `equal` if all bodies of the case are equal at this level or a l
 | ctrl_copy_then_write | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N0 copy forwarding): the copy moves after a write of its source. |
 | ctrl_drop_order | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control: swap two lets with Drop types. The drop order changes. |
 | ctrl_drop_order_branch | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): swap two lets with Drop types inside a branch. The drop order changes. |
+| ctrl_extract_borrowed_arg | changed | diff: parts | diff: parts | diff: parts | diff: parts | diff: parts | - | - | ok | Control (N3 argument substitution): the caller changes `patch` before the extracted test, not after it. |
+| ctrl_extract_mut_param_wrong | changed | diff: fix_up | diff: fix_up | diff: fix_up | diff: fix_up | diff: fix_up | - | - | ok | Control (N3 and rule 3d): the extracted fn with a `&mut Error` parameter writes the error without the condition. |
+| ctrl_extract_wrong_and | changed | diff: pre | diff: pre | diff: pre | diff: pre | diff: pre | - | - | ok | Control (N4 constant-switch): the extracted bool fn uses `||` where the original uses `&&`. |
 | ctrl_extract_wrong_constant | changed | diff: rank | diff: rank | diff: rank | diff: rank | diff: rank | - | - | ok | Control (N3): extract a block into a new function, but change a constant in it. |
+| ctrl_fact_after_write | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4 path facts on a switch): the second test reads `*p` after a write, so the first test says nothing about it. |
 | ctrl_float_negation | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): `!(a < b)` becomes `a >= b` on floats. The result changes for NaN. |
 | ctrl_float_reflexive | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): `x == x` becomes `true` on a float. The result changes for NaN. |
 | ctrl_guard_off_by_one | changed | diff: get | diff: get | diff: get | diff: get | diff: get | - | - | ok | Control (N4 path facts): the guard becomes `i > len`. For `i == len` the result changes (a panic). |
 | ctrl_inline_mut_arg | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N3): the callee changes its own argument. A wrong inliner would change `a` of the caller. |
 | ctrl_ite_constant | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): change a constant in one branch of an if. |
+| ctrl_memory_slots | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4 slot numbers): two locals in memory; the result reads the other one. |
 | ctrl_promoted_value | changed | diff: pair | diff: pair | diff: pair | diff: pair | diff: pair | - | - | ok | Control (promoted constant): change a value in a promoted constant of a generic body (`&[1, 2, 3]` becomes `&[1, 2, 4]`). |
+| ctrl_ref_two_places | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N0 rule 3d): a reference points to one of two places, so a write through it is not a write of `a`. |
 | ctrl_rename_changed_body | changed | diff: add_one, f | diff: add_one | diff: add_one | diff: add_one | diff: add_one | - | - | ok | Control (N1): a rename claim, but the body of the renamed function changes. |
 | ctrl_reorder_asserts | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): swap two lets that can panic with different messages (add and multiply overflow). |
 | ctrl_reorder_calls | changed | diff: f | diff: f | diff: f | diff: f | diff: f | - | - | ok | Control (N4): swap two calls with side effects. The output order changes. |
@@ -71,10 +77,15 @@ A table cell is `equal` if all bodies of the case are equal at this level or a l
 | rename_item | neutral | diff: f | equal | equal | equal | equal | N1 | N1 (rename-map) | proved | Rename a function and its call. The claim gives the rename map. |
 | rename_local | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Rename a local variable. |
 | reorder_independent_lets | neutral | diff: f | diff: f | diff: f | diff: f | equal | N4 | N4 (checked-mul-commute, assert-commute) | proved | Swap two independent lets. Both can panic on overflow, with the same message (only the location differs). |
+| semver_extract_and | neutral | diff: pre | diff: pre | diff: pre | diff: pre | equal | N3 | N4 (constant-switch) | proved | semver `comparator`: extract `patch.is_some() && text.starts_with('-')` into a fn that returns bool. |
+| semver_extract_and_twice | neutral | diff: parts | diff: parts | diff: parts | diff: parts | equal | N3 or N4 | N4 (constant-switch, path-fact) | proved | semver `comparator`, closer to the real code: the caller borrows `patch` again after the extracted `&&` test. |
+| semver_extract_error | neutral | diff: check | diff: check | equal | equal | equal | N3 | N2 | proved | semver `comparator`: extract `Error::new(ErrorKind::EmptySegment(pos))` into `fn empty_segment(pos) -> Error`. |
+| semver_extract_mut_param | neutral | diff: fix_up | diff: fix_up | diff: fix_up | equal | equal | N3 | N3 | proved | semver `version_req`: extract a whole `if let` statement into a fn with a `&mut Error` parameter. |
+| semver_extract_or | neutral | diff: fix_up | diff: fix_up | diff: fix_up | diff: fix_up | equal | N3 | N4 (aggregate-field, constant-switch) | proved | semver `version_req`: extract `rest.is_empty() || rest.starts_with(',')` into a fn that returns bool. |
 | type_annotation | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Add a type annotation to a let. |
 | unneeded_mut | neutral | equal | equal | equal | equal | equal | N0 | N0 | proved | Remove an unneeded `mut`. |
 
-Summary: 18 of 18 neutral cases are proved. All 20 negative controls stay different at every level.
+Summary: 23 of 23 neutral cases are proved. All 26 negative controls stay different at every level.
 
 ## Findings
 
@@ -96,9 +107,21 @@ Summary: 18 of 18 neutral cases are proved. All 20 negative controls stay differ
 
 16. **Cost (spike S3, `regex-syntax`, release build).** `compare` takes 0.12 to 0.17 s for about 2100 bodies (2.2 s before). Most of the old time was the egglog proof mode on bodies that stay different; N4 now runs egglog in the plain mode first, and the proof mode only after a success. The driver writes N3 records only for bodies with an inlined call, inlines in place (the old inliner copied the whole body for each call), and prints the text of a large constant table once, as its SHA-256 hash.
 
+17. **Extract function on real code (semver 1.0.28, from an agent trial).** Four correct extractions were "unproved". The `semver_*` cases reduce them. All four prove now, also on the real `parse.rs` (with `run_cargo_check` and `compare`):
+
+    | extraction | level now | why it failed | fix |
+    |---|---|---|---|
+    | `rest.is_empty() \|\| rest.starts_with(',')` into a bool fn (`version_req`) | N4 | The inlined fn returns a bool through a join, and the caller switches on it again (`_t = false; goto J; J: switchInt(_t)`). The original code jumps directly. | N4 build rule `constant-switch` (a switch on a constant follows its target). Memory locals get canonical slot numbers (the MIR local numbers differ). |
+    | `patch.is_some() && text.starts_with('-')` into a bool fn (`comparator`) | N4 | As above, and more: (a) N3 inlines all local callees, `numeric_identifier` has a loop, so the N3 body has no term; (b) the term of the large body has too many paths; (c) the inlined callee calls `is_some(&copy)` on a copy of its argument, the original calls `is_some(&patch)`; (d) rustc jump threading in the original skips the second `patch.is_some()` test when the first is false. | (a, b) The N3 term comes from a body with only the loop-free callees inlined, then only the small (at most 16 blocks), then only the tiny (at most 6 blocks) ones. (c) The inliner lets the callee read the caller local when both only have shared borrows of a `Freeze` type. (d) Path facts also decide a bool switch. |
+    | `Error::new(ErrorKind::EmptySegment(pos))` into `fn empty_segment` | N3 (N2 in the small case) | Not reproduced with the current code: the real case proves at N3. The trial failure came from older problems (promoted constants, or closures of the extracted fn). | - |
+    | a whole `if let` into `fn mark_lone_wildcard(input, error: &mut Error)` | N4 (N3 in the small case) | The inlined code writes `(*r).kind` through `r = &mut error`; the original writes `error.kind`. Also, rule 3b did not merge a block, because an unreachable empty `goto` block counted as a predecessor. | N0 rule 3d (forward a reference with one fixed target). Rule 3b counts reachable predecessors only. |
+
+    Controls for the new rules: `ctrl_extract_wrong_and` (`||` instead of `&&`), `ctrl_memory_slots` (another local in memory), `ctrl_ref_two_places` (a reference to one of two places), `ctrl_extract_mut_param_wrong` (the `&mut` helper writes without the condition), `ctrl_extract_borrowed_arg` (the caller changes the argument before the call), `ctrl_fact_after_write` (a second test after a write through the pointer).
+
 ## Limits
 
-- N4 only handles loop-free bodies (no `theta` nodes yet). The term is a tree of paths, so a body with many sequential branches stops at 4000 block visits and gets no term.
+- N4 only handles loop-free bodies (no `theta` nodes yet). The term is a tree of paths (no merge at join points), so a body with many sequential branches stops at 4000 block visits and gets no term. An inlined callee with several returns multiplies the paths after the call. So an extract-function from a large caller proves at N4 only if the extracted fn is small enough (the third try inlines callees of at most 6 blocks), or if N3 makes the text equal. For a larger extracted fn in a large caller, the exact reason is: "the N4 term has too many paths". A fix needs gated values at join points (an `ite` of the values, as in gated SSA) and N4 rules that move `ite` through effects.
+- The N3 text and the N3 term can come from different inlined bodies (all callees for the text, only loop-free callees for the term). Each is a normal form of the same behavior, so each compare is sound on its own.
 - N4 does not model inline assembly. A body with inline assembly gets no term.
 - A local whose address the body takes lives in memory in the N4 term. N4 never reorders its reads and writes.
 - N3 does not inline trait methods, closures, generic functions, or functions of other crates (for example `std`).

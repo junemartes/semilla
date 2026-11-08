@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4 path facts on a switch): the second test reads `*p` after a write, so the first test says nothing about it."

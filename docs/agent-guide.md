@@ -106,7 +106,7 @@ shop_core::cart::Cart::total/tail                the tail expression
 Some correct refactors are `unproved`, not `verified`:
 
 - An extracted expression with a closure that borrows a local: after the extraction, the closure borrows the new parameter, not the old local.
-- A refactor inside a function with a loop that changes the branch structure (for example a `||` condition moved into a helper): the strongest proof (N4) works only on functions without loops.
+- A refactor that changes the branch structure (for example a `||` condition moved into a helper) needs the strongest proof (N4). N4 works only on functions without loops, and only when the extracted function is small (a few blocks) or the function is not too large: the reason is then "the N4 term has too many paths".
 - A condition change between method calls (`v.len() > 0` against `!v.is_empty()`): the solver does not know what the methods return, so the effect is `unrelated`.
 
 In these cases, use logic ops for the same change: `add-item` for the new function, and `replace-expression` on the changed expression at the call site (or the statement ops, if a statement changed). Then say in the intent that the step is a refactor, and use a `behavior` group, not a `refactor` group.

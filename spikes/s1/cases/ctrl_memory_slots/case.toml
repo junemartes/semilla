@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4 slot numbers): two locals in memory; the result reads the other one."

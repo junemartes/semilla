@@ -19,9 +19,12 @@
 //! - The callee locals become new locals of the caller.
 //! - Each argument becomes a new local, with an assignment of the argument operand before the
 //!   jump to the callee entry. One exception: if the argument operand is a plain local of the
-//!   caller whose address the caller never takes, and the callee never writes or borrows the
-//!   argument local, the callee reads the caller local directly. The callee cannot change that
-//!   caller local (it has no pointer to it), so it has the same value for the whole callee body.
+//!   caller, and the callee never writes the argument local and borrows it only with shared
+//!   borrows of a `Freeze` type (see `is_read_only`), the callee reads the caller local
+//!   directly. The caller local must have no borrow at all, or only shared borrows of a
+//!   `Freeze` type: then no pointer can change it, the callee cannot name it, and the caller
+//!   code does not run while the callee runs. So it has the same value for the whole callee
+//!   body.
 //!   A constant argument can replace the argument local in the same way, if each use of the
 //!   argument local is a plain read.
 //! - The return place of the callee is a new local, and each `return` becomes an assignment to
@@ -38,8 +41,8 @@ use std::collections::{HashMap, HashSet};
 use rustc_public::CrateDef;
 use rustc_public::mir::visit::{Location, MirVisitor, MutMirVisitor, PlaceContext};
 use rustc_public::mir::{
-    BasicBlock, Body, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem, Rvalue,
-    Statement, StatementKind, Terminator, TerminatorKind, UnwindAction, WithRetag,
+    BasicBlock, Body, BorrowKind, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind, UnwindAction, WithRetag,
 };
 use rustc_public::ty::{RigidTy, TyKind};
 
@@ -58,7 +61,29 @@ const MAX_BODY_BLOCKS: usize = 2000;
 /// The callees that the inliner can inline, by def path. The bodies are the N2 bodies.
 pub struct Callees {
     pub bodies: HashMap<String, Body>,
+    /// The callees whose N2 body has no cycle in its control flow graph.
+    pub loop_free: std::collections::HashSet<String>,
 }
+
+/// Which callees an inlining run inlines.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// All callees (the N3 text).
+    All,
+    /// Only the loop-free callees, so a loop-free caller stays loop-free (the N3 term).
+    LoopFree,
+    /// Only the loop-free callees with at most `MAX_SMALL_CALLEE_BLOCKS` blocks (the second
+    /// try for the N3 term, when the paths of a large callee are too many).
+    SmallLoopFree,
+    /// Only the loop-free callees with at most `MAX_TINY_CALLEE_BLOCKS` blocks (the third try).
+    TinyLoopFree,
+}
+
+/// The largest callee (blocks) of `Scope::SmallLoopFree`.
+pub const MAX_SMALL_CALLEE_BLOCKS: usize = 16;
+/// The largest callee (blocks) of `Scope::TinyLoopFree`. A helper that returns a bool from a
+/// short circuit (`a && b`) has about 5 blocks.
+pub const MAX_TINY_CALLEE_BLOCKS: usize = 6;
 
 /// Returns the def path of the local function that a call calls directly, if the call is a
 /// direct call of a local function item without generic arguments.
@@ -74,7 +99,7 @@ pub fn direct_local_callee(kind: &TerminatorKind) -> Option<String> {
 
 /// Inlines the calls of a body. Returns the new body, or `None` if no call qualifies (then the
 /// N3 body is the N2 body).
-pub fn inline_calls(body: &Body, callees: &Callees) -> Option<Body> {
+pub fn inline_calls(body: &Body, callees: &Callees, scope: Scope) -> Option<Body> {
     let mut blocks = body.blocks.clone();
     let mut locals = body.locals().to_vec();
     let arg_count = body.arg_locals().len();
@@ -85,15 +110,27 @@ pub fn inline_calls(body: &Body, callees: &Callees) -> Option<Body> {
     for local in address_taken_locals(body) {
         taken[local] = true;
     }
+    // The locals with a borrow that is not a shared borrow.
+    let mut mut_taken = vec![false; locals.len()];
+    for local in mutably_borrowed_locals(body) {
+        mut_taken[local] = true;
+    }
 
     let mut index = 0;
     while index < blocks.len() {
         if depth[index] < MAX_DEPTH && blocks.len() < MAX_BODY_BLOCKS {
             let callee = direct_local_callee(&blocks[index].terminator.kind)
-                .and_then(|name| callees.bodies.get(&name));
+                .filter(|name| scope == Scope::All || callees.loop_free.contains(name))
+                .and_then(|name| callees.bodies.get(&name))
+                .filter(|callee| match scope {
+                    Scope::SmallLoopFree => callee.blocks.len() <= MAX_SMALL_CALLEE_BLOCKS,
+                    Scope::TinyLoopFree => callee.blocks.len() <= MAX_TINY_CALLEE_BLOCKS,
+                    Scope::All | Scope::LoopFree => true,
+                });
             if let Some(callee) = callee {
                 let before = blocks.len();
-                if inline_one(&mut blocks, &mut locals, &mut taken, index, callee) {
+                let borrows = Borrows { taken: &mut taken, mut_taken: &mut mut_taken };
+                if inline_one(&mut blocks, &mut locals, borrows, index, callee) {
                     let added = blocks.len() - before;
                     depth.extend(std::iter::repeat_n(depth[index] + 1, added));
                     inlined = true;
@@ -106,11 +143,11 @@ pub fn inline_calls(body: &Body, callees: &Callees) -> Option<Body> {
 }
 
 /// Inlines the call at the end of block `at`, in place. Returns false (and changes nothing) if
-/// the call does not qualify. `taken` holds the locals whose address the body takes.
+/// the call does not qualify. `borrows` holds the locals whose address the body takes.
 fn inline_one(
     blocks: &mut Vec<BasicBlock>,
     locals: &mut Vec<LocalDecl>,
-    taken: &mut Vec<bool>,
+    borrows: Borrows<'_>,
     at: usize,
     callee: &Body,
 ) -> bool {
@@ -144,7 +181,7 @@ fn inline_one(
     };
     let args_use = |local: Local| args.iter().any(|arg| operand_local(arg) == Some(local));
     let direct_return = destination.projection.is_empty()
-        && !taken[destination.local]
+        && !borrows.taken[destination.local]
         && !args_use(destination.local)
         && !cleanup_uses.contains(&destination.local);
     if direct_return {
@@ -158,7 +195,9 @@ fn inline_one(
         match arg {
             Operand::Copy(place) | Operand::Move(place)
                 if place.projection.is_empty()
-                    && !taken[place.local]
+                    && (!borrows.taken[place.local]
+                        || (!borrows.mut_taken[place.local]
+                            && is_freeze(locals[place.local].ty)))
                     && place.local != destination.local
                     && is_read_only(callee, callee_local, moved) =>
             {
@@ -176,7 +215,8 @@ fn inline_one(
         if map[callee_local].is_none() && constants[callee_local].is_none() {
             map[callee_local] = Some(locals.len());
             locals.push(LocalDecl { ty: decl.ty, span: decl.span, mutability: Mutability::Mut });
-            taken.push(false);
+            borrows.taken.push(false);
+            borrows.mut_taken.push(false);
         }
     }
     for (position, arg) in args.iter().enumerate() {
@@ -197,7 +237,12 @@ fn inline_one(
     // A local whose address the callee takes is now a caller local whose address the body takes.
     for local in address_taken_locals(callee) {
         if let Some(mapped) = map[local] {
-            taken[mapped] = true;
+            borrows.taken[mapped] = true;
+        }
+    }
+    for local in mutably_borrowed_locals(callee) {
+        if let Some(mapped) = map[local] {
+            borrows.mut_taken[mapped] = true;
         }
     }
 
@@ -271,12 +316,20 @@ fn has_deref(place: &Place) -> bool {
     place.projection.iter().any(|elem| matches!(elem, ProjectionElem::Deref))
 }
 
-/// Returns true if the callee never writes or borrows the storage of a local. A write or a
-/// borrow through a pointer that the local holds is allowed: it does not change the local. A
-/// drop is allowed if the argument was moved: the callee owns the value, and the caller does not
-/// use a moved value again.
+/// Returns true if the callee never writes the storage of a local, and never borrows it except
+/// with a shared borrow of a `Freeze` type. A write or a borrow through a pointer that the local
+/// holds is allowed: it does not change the local. A drop is allowed if the argument was moved:
+/// the callee owns the value, and the caller does not use a moved value again.
+///
+/// A shared borrow of a `Freeze` value (no `UnsafeCell` inside) cannot change the value, and the
+/// reference cannot live longer than the callee (the argument local dies at the return). The
+/// caller code does not run while the callee runs. So the borrowed caller local and a copy of it
+/// hold the same value for the whole life of the reference. Only the address differs, and the
+/// address of a stack local is not known before the run, so no program can depend on which one
+/// it is. The argument type of a shared borrow must be `Freeze`.
 fn is_read_only(body: &Body, local: Local, moved: bool) -> bool {
     let own = |place: &Place| place.local == local && !has_deref(place);
+    let freeze = is_freeze(body.locals()[local].ty);
     for block in &body.blocks {
         for statement in &block.statements {
             match &statement.kind {
@@ -284,7 +337,11 @@ fn is_read_only(body: &Body, local: Local, moved: bool) -> bool {
                     if own(place) {
                         return false;
                     }
-                    if let Rvalue::Ref(_, _, place)
+                    if let Rvalue::Ref(_, BorrowKind::Shared, place) = rvalue {
+                        if own(place) && !freeze {
+                            return false;
+                        }
+                    } else if let Rvalue::Ref(_, _, place)
                     | Rvalue::AddressOf(_, place)
                     | Rvalue::Reborrow(_, _, place) = rvalue
                     {
@@ -309,6 +366,45 @@ fn is_read_only(body: &Body, local: Local, moved: bool) -> bool {
         }
     }
     true
+}
+
+/// The borrowed locals of the body that the inliner changes.
+struct Borrows<'a> {
+    /// The locals with any borrow (shared, mutable, raw).
+    taken: &'a mut Vec<bool>,
+    /// The locals with a borrow that is not shared (mutable, raw, fake).
+    mut_taken: &'a mut Vec<bool>,
+}
+
+/// Returns the locals with a borrow of their storage that is not a shared borrow.
+fn mutably_borrowed_locals(body: &Body) -> Vec<Local> {
+    let mut found = Vec::new();
+    for block in &body.blocks {
+        for statement in &block.statements {
+            let StatementKind::Assign(_, rvalue) = &statement.kind else { continue };
+            let place = match rvalue {
+                Rvalue::Ref(_, BorrowKind::Shared, _) => continue,
+                Rvalue::Ref(_, _, place)
+                | Rvalue::AddressOf(_, place)
+                | Rvalue::Reborrow(_, _, place) => place,
+                _ => continue,
+            };
+            if !has_deref(place) {
+                found.push(place.local);
+            }
+        }
+    }
+    found
+}
+
+/// Returns true if a type has no interior mutability (`UnsafeCell`), so a shared reference
+/// cannot change a value of it. A generic or unknown type gives false.
+fn is_freeze(ty: rustc_public::ty::Ty) -> bool {
+    rustc_middle::ty::tls::with(|tcx| {
+        let ty = rustc_public::rustc_internal::internal(tcx, ty);
+        use rustc_middle::ty::TypeVisitableExt;
+        !ty.has_param() && ty.is_freeze(tcx, rustc_middle::ty::TypingEnv::fully_monomorphized())
+    })
 }
 
 /// Returns true if each use of a local is a plain read of the whole local (`copy _n` or

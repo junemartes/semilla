@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N0 rule 3d): a reference points to one of two places, so a write through it is not a write of `a`."

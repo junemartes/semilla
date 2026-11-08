@@ -1,0 +1,3 @@
+expect = "changed"
+note = "Control (N3 argument substitution): the caller changes `patch` before the extracted test, not after it."
+added = ["s1case::has_pre"]

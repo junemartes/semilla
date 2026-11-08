@@ -1,0 +1,3 @@
+expect = "changed"
+note = "Control (N3 and rule 3d): the extracted fn with a `&mut Error` parameter writes the error without the condition."
+added = ["s1case::mark_lone_wildcard"]
