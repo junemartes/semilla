@@ -538,7 +538,7 @@ The tree (section 4) continues below level 3 to statements and expressions. The 
 
 - Each node and edge has a status: `same`, `added`, `removed`, `changed`, `moved`.
 - Edge kinds: `call`, `flow`, `return`, `err`, `panic`, `dispatch`.
-- The region tree comes from structured MIR. Charon LLBC is a candidate (see spike S2).
+- The region tree comes from the source-level structure (`semilla-syntax/src/flow.rs`). Spike S2 measured Charon LLBC and rejected it for now: no `async` support, loops and matches lose their source shape, and it needs a second nightly. The MIR driver will add the facts that the source does not show (exact `?` edges, panic sites, drops), mapped to statements by their spans.
 - For `async fn`, the graph comes from the source-level regions. `.await` is a node. The MIR state machine is used only for the equality check.
 
 ### 10.2 Dependencies (option B)
@@ -845,7 +845,7 @@ All milestones M0 to M6 have an implementation. `cargo test --workspace` runs th
 
 | Milestone | Status | Notes |
 |---|---|---|
-| M0 Spikes | S1 done; S4 and S6 done inside the crates | S1 proves 17 of 17 neutral cases; 19 negative controls stay different (`spikes/s1/README.md`). S2 (Charon) and S3 (compile cost) are not done: the flow views use source-level regions. |
+| M0 Spikes | S1, S2, S3 done; S4 and S6 done inside the crates | S1 proves 17 of 17 neutral cases; 19 negative controls stay different (`spikes/s1/README.md`). S2: keep the source-level regions, not Charon (`spikes/s2/README.md`). S3: the compile cost is too high for a synchronous check on large crates (`spikes/s3/`), see section 19. |
 | M1 Index | Done | `semilla-syntax` (entity tree, anchors, three views), `semilla index` (graph, items, N0/N1 body hashes). |
 | M2 Verifier core | Done | `semilla-verify`: predict / match / mask, coverage, indirect changes, class checks, score. |
 | M3 Ops and SMT | Done | All ops of section 5 have a checker. Free edits are block-free and tight. `semilla-smt` computes effects with Z3 4.15.4. |
@@ -860,7 +860,7 @@ All milestones M0 to M6 have an implementation. `cargo test --workspace` runs th
 3. **A final block-like expression** (`if`, `match`, a loop) is a statement (`S<i>`), not the `tail`.
 4. **Panic locations are not behavior** (section 8.2). N4 has rules that commute asserts with the same message.
 5. **The MIR printer** of the driver replaces `Body::dump`, because `dump` can print two different bodies as the same text (cast kinds, constants).
-6. **Flow views** come from source-level regions, not from Charon (spike S2 is not done).
+6. **Flow views** come from source-level regions, not from Charon (spike S2).
 7. **Subgroups** have IDs, and the engine marks the claims that it adds after the agent's edit (`new_claims`).
 
 ### Limits
@@ -870,3 +870,23 @@ All milestones M0 to M6 have an implementation. `cargo test --workspace` runs th
 - The external leaves of the workspace graph get their badges from the call sites, not from the callee signatures.
 - The API level comes from the claim ops, not from `cargo-semver-checks`.
 - The LLM intent check, the revert check, and the dependency upgrade diff are not implemented.
+
+## 19. Background verification (next)
+
+Spike S3 showed that a full check of one step can take a minute on a large crate. The agent must not wait for it. So the check has two phases.
+
+| | Phase 1: at `step_end` and `tag` (synchronous) | Phase 2: in the background |
+|---|---|---|
+| Contents | The syntax view: anchors, shapes, coverage, the block-free and tightness rules, groups, subgroups | The MIR builds, N1 to N4, SMT effects, indirect changes, the final verdict |
+| Time | Under 1 s for most crates | Seconds to minutes |
+| Neutral claims | `pending` | `verified`, `unproved`, or `refuted` |
+
+The flow:
+
+1. `step_end` and `tag` run phase 1, and add a phase 2 job to a local queue (`.semilla/queue/`).
+2. A worker (`semilla worker`) runs the jobs. `tag` starts it in the background when it does not run, and it stops when the queue is empty. It checks steps in parallel, and caches the trees and the MIR records.
+3. The worker stores the report as a git note on the commit (`refs/notes/semilla-report`), with the hashes of the trees and of the claims. A changed claim gives a new job; the old report becomes stale.
+4. The agent reads the results with `semilla status` or the MCP tool `results`, and fixes a refuted claim in a new step.
+5. The reviewer runs `semilla review <commit>` when the status is "ready". It opens the local UI, or writes a standalone report for humans: one HTML file with all assets inline, or Markdown.
+
+The cost work (B3: rebuild only the changed crates, compare only the changed bodies) stays. It now shortens the wait of the reviewer, not of the agent.
