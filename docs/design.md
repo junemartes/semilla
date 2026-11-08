@@ -865,11 +865,14 @@ All milestones M0 to M6 have an implementation. `cargo test --workspace` runs th
 
 ### Limits
 
-- The body check covers the default features only (B11).
 - N3 does not inline trait methods, closures, generic functions, or functions of other crates. N4 handles loop-free bodies only.
-- The external leaves of the workspace graph get their badges from the call sites, not from the callee signatures.
-- The API level comes from the claim ops, not from `cargo-semver-checks`.
+- An extracted expression with a closure that borrows a local is not proved neutral: after the extraction, the closure borrows the new parameter (a different place in memory).
+- The API level is an estimate from the syntax view, not from `cargo-semver-checks`.
 - The LLM intent check, the revert check, and the dependency upgrade diff are not implemented.
+
+### Real agent trials
+
+A fresh agent with only `docs/agent-guide.md` made three changes (a refactor, a fix with a test, a new API) on `semver` 1.0.28. The first trial found these defects, and they are fixed: a changed control flow graph gave `refuted` for a correct extraction; `rename-local` missed uses next to delimiters; the test harness `main` showed as an indirect change; a closed step could not be fixed (`step reopen`); unknown arguments were accepted; a rejected subgroup layout was saved; claim diffs showed token text; and several hints and guide sections were wrong.
 
 ## 19. Background verification
 

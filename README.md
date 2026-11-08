@@ -35,6 +35,8 @@ Rules:
 - Free edits exist only at the expression level (`replace-expression`, `replace-pattern`, `replace-type`). Above the expression level, use structured ops (`add-if`, `add-arm`, `wrap-statements`, …). `semilla ops` lists all operations.
 - Put neutral refactors in their own steps. A neutral claim needs a body proof of its whole function.
 - `semilla suggest-claims` proposes claims for the uncovered changes. The suggestions are not trusted: check them and add them with `semilla claim`.
+- `semilla ops <op>` shows the arguments of an op. `semilla step reopen` opens the last step again to fix its claims.
+- `semilla check` is fast (phase 1, the syntax checks). The body proofs run in a background worker after `step end` and `tag`; `semilla status` shows their result.
 
 Then organize the steps and store the result on the commit:
 
@@ -59,13 +61,25 @@ claude mcp add semilla -- /path/to/semilla/target/debug/semilla mcp
 
 The tools are `ops`, `step_begin`, `claim`, `unclaim`, `step_end`, `anchor`, `check_step`, `suggest_claims`, `verify`, `group_set`, `subgroups_suggest`, `subgroups_set`, and `tag`.
 
+### Feature sets
+
+The body checks use the default features. To check more feature sets, list them in the root manifest:
+
+```toml
+[workspace.metadata.semilla]   # or [package.metadata.semilla]
+feature-sets = [["serde"], ["std", "unicode"]]
+```
+
+A body is equal only if it is equal in every set.
+
 ## The review
 
 ```sh
-semilla load HEAD        # load the claims of a tagged commit
-semilla verify --final   # verify them again
-semilla show             # the change tree in the terminal
-semilla ui               # the review UI on http://127.0.0.1:7878
+semilla status HEAD                    # the state of the background check of a tagged commit
+semilla review HEAD                    # the review UI on http://127.0.0.1:7878
+semilla review HEAD --md review.md     # a Markdown report
+semilla review HEAD --html review.html # a self-contained HTML report (works offline)
+semilla load HEAD && semilla show      # the change tree in the terminal
 ```
 
 The UI shows the change set by group and subgroup, the change tree, flow views (Mermaid), the workspace map (Cytoscape), and search. The review state is in `.semilla/review.json`, and it follows the claims, not the lines.
