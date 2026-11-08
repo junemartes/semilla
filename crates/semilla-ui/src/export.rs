@@ -19,9 +19,9 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use semilla_core::view::FlowGraph;
-use semilla_core::{Report, Uncovered};
+use semilla_core::{Class, Report, Uncovered};
 
-use crate::ctx::{Ctx, class_label};
+use crate::ctx::{Ctx, class_label, contains, item_of};
 use crate::review::ReviewFile;
 use crate::summary::{self, ChangeSetSummary, ClaimView, Counts, GroupSummary, SubgroupSummary};
 use crate::{SourcePair, UiData};
@@ -111,6 +111,9 @@ li.claim.refuted, li.claim.empty, li.claim.malformed { border-color: var(--remov
 .unproved .icon, .pending .icon { color: var(--changed); }
 .refuted .icon, .empty .icon, .malformed .icon { color: var(--removed); }
 .hint { font-size: 0.88rem; }
+ul.steps { margin: 0.35rem 0; padding-left: 1.2rem; font-size: 0.9rem; }
+ul.steps li { margin: 0.15rem 0; }
+.new-code > p { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--muted); }
 pre.diff span { display: block; }
 pre.diff .add { background: var(--added-bg); }
 pre.diff .del { background: var(--removed-bg); }
@@ -191,7 +194,8 @@ struct Model<'a> {
     summary: ChangeSetSummary,
     /// The indexes into `data.flows`, in the review order.
     flows: Vec<usize>,
-    /// The anchors in `data.sources` with a changed text, in the review order.
+    /// The anchors in `data.sources` with a changed text, in the review order. A source that
+    /// contains a smaller changed part of the same item is not in the list.
     sources: Vec<String>,
 }
 
@@ -226,6 +230,10 @@ impl<'a> Model<'a> {
                 sources.push(key);
             }
         }
+        // Only the smallest changed parts: a source goes out when a changed part of the same
+        // item is inside it (for example `f/S0/cond` is inside `f`).
+        let changed = sources.clone();
+        sources.retain(|key| !changed.iter().any(|other| other != key && item_of(other) == item_of(key) && contains(key, other)));
         Model { data, ctx, summary, flows, sources }
     }
 
@@ -311,9 +319,65 @@ impl<'a> Model<'a> {
         self.flows.iter().position(|index| self.data.flows[*index].function == function)
     }
 
+    /// The source of a claim anchor: the same anchor, else the first changed part inside it,
+    /// else the source of its item.
     fn source_index(&self, at: &str) -> Option<usize> {
-        let (key, _) = self.ctx.source(at)?;
-        self.sources.iter().position(|source| source == key)
+        self.sources.iter().position(|source| source == at).or_else(|| self.sources.iter().position(|source| contains(at, source))).or_else(
+            || {
+                let (key, _) = self.ctx.source(at)?;
+                self.sources.iter().position(|source| source == key)
+            },
+        )
+    }
+
+    /// The steps of a group, with their intents and claims.
+    fn steps(&self, group: &GroupSummary) -> Vec<StepLine> {
+        group
+            .steps
+            .iter()
+            .map(|index| {
+                let step = self.data.changeset.steps.iter().find(|step| step.index == *index);
+                let report = self.data.report.steps.iter().find(|report| report.step == *index);
+                StepLine {
+                    index: *index,
+                    intent: step
+                        .map(|step| step.intent.clone())
+                        .filter(|intent| !intent.is_empty())
+                        .or_else(|| report.map(|report| report.intent.clone()))
+                        .unwrap_or_default(),
+                    declared: step.and_then(|step| step.class).or_else(|| report.and_then(|report| report.declared_class)),
+                    computed: report.and_then(|report| report.computed_class),
+                    claims: step.map(|step| step.claims.iter().map(|claim| claim.id.clone()).collect()).unwrap_or_default(),
+                    errors: report.map(|report| report.errors.clone()).unwrap_or_default(),
+                }
+            })
+            .collect()
+    }
+
+    /// The code that a claim adds: the source of a new item (`add-item`, `extract-function`),
+    /// or the code at the anchor after an `inline-function`.
+    fn new_code(&self, view: &ClaimView) -> Option<NewCode> {
+        let at = view.at.as_deref()?;
+        let item = item_of(at);
+        let (label, key) = match view.op.as_str() {
+            "add-item" => ("new item", item.to_string()),
+            "extract-function" => ("new function", full_path(item, view.args.get("new")?.as_str()?)),
+            "inline-function" => ("code after the inline", at.to_string()),
+            _ => return None,
+        };
+        // A later `move-item` can move the new item. Then its source is at the new place.
+        let moved = self.ctx.all_claims().find_map(|(_, claim)| {
+            (claim.op == "move-item" && claim.at.as_ref().is_some_and(|at| at.path.is_empty() && at.item == key))
+                .then(|| claim.arg_str("to").map(|to| full_path(&key, to)))
+                .flatten()
+        });
+        let found = |key: &str| match self.data.sources.get_key_value(key) {
+            Some((key, pair)) => Some((key.as_str(), pair)),
+            None => self.ctx.source(key),
+        };
+        let (key, pair) = found(&key).or_else(|| moved.as_deref().and_then(found))?;
+        let text = pair.after.as_deref().filter(|text| !text.trim().is_empty())?;
+        Some(NewCode { label, key: key.to_string(), text: text.to_string() })
     }
 
     fn flow(&self, position: usize) -> &FlowGraph {
@@ -384,6 +448,78 @@ impl StatusText {
             (Some(detail), _) => format!("{}: {detail}", self.name),
         }
     }
+}
+
+/// One step of a group.
+struct StepLine {
+    index: usize,
+    intent: String,
+    declared: Option<Class>,
+    computed: Option<Class>,
+    claims: Vec<String>,
+    errors: Vec<String>,
+}
+
+impl StepLine {
+    /// The classes, for example `declared logic · computed ctrl flow (mismatch)`.
+    fn classes(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if let Some(declared) = self.declared {
+            parts.push(format!("declared {}", class_label(Some(declared))));
+        }
+        if let Some(computed) = self.computed {
+            let mismatch = if self.declared.is_some_and(|declared| declared != computed) { " (mismatch)" } else { "" };
+            parts.push(format!("computed {}{mismatch}", class_label(Some(computed))));
+        }
+        parts
+    }
+}
+
+/// The code that a claim adds, with its source key.
+struct NewCode {
+    label: &'static str,
+    key: String,
+    text: String,
+}
+
+impl NewCode {
+    /// False if the claim diff already shows the same text.
+    fn adds_to(&self, view: &ClaimView) -> bool {
+        view.result.as_ref().and_then(|result| result.after.as_deref()).is_none_or(|after| after.trim() != self.text.trim())
+    }
+}
+
+/// The most lines of a new-code block.
+const NEW_CODE_LINES: usize = 40;
+
+/// The text with at most `NEW_CODE_LINES` lines.
+fn short_block(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= NEW_CODE_LINES {
+        return text.trim_end().to_string();
+    }
+    format!("{}\n… {} more lines", lines[..NEW_CODE_LINES].join("\n"), lines.len() - NEW_CODE_LINES)
+}
+
+/// The full path of a name next to an item, as the verifier resolves it.
+fn full_path(item: &str, name: &str) -> String {
+    if name.contains("::") {
+        return name.to_string();
+    }
+    match item.rsplit_once("::") {
+        Some((parent, _)) => format!("{parent}::{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// `old → new` for a rename, from the texts of the claim result. Only single-line texts.
+fn rename_text(view: &ClaimView) -> Option<(String, String)> {
+    if !matches!(view.op.as_str(), "rename" | "rename-local") {
+        return None;
+    }
+    let result = view.result.as_ref()?;
+    let (before, after) = (result.before.as_deref()?.trim(), result.after.as_deref()?.trim());
+    (!before.contains('\n') && !after.contains('\n')).then(|| (before.to_string(), after.to_string()))
 }
 
 /// The counts as text, for example `3 claims: 2 verified, 1 unproved`.
@@ -692,6 +828,7 @@ fn html_groups(out: &mut String, model: &Model) {
             let _ = writeln!(out, "<p>{}</p>", esc(&group.why));
         }
         let _ = writeln!(out, "<p class=\"muted\">{} · {}</p>", esc(&risk_text(group)), esc(&group_meta(group).join(" · ")));
+        html_steps(out, model, group);
         if let Some(hint) = &group.split_hint {
             let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(hint));
         }
@@ -707,6 +844,30 @@ fn html_groups(out: &mut String, model: &Model) {
         }
         out.push_str("</section>\n");
     }
+}
+
+fn html_steps(out: &mut String, model: &Model, group: &GroupSummary) {
+    let steps = model.steps(group);
+    if steps.is_empty() {
+        return;
+    }
+    out.push_str("<ul class=\"steps\">\n");
+    for step in &steps {
+        let _ = write!(out, "<li data-step=\"{}\">step {}: {}", step.index, step.index, esc(&step.intent));
+        let classes = step.classes();
+        if !classes.is_empty() {
+            let _ = write!(out, " <span class=\"muted\">· {}</span>", esc(&classes.join(" · ")));
+        }
+        if !step.claims.is_empty() {
+            let links: Vec<String> = step.claims.iter().map(|id| format!("<a href=\"#claim-{0}\"><code>{0}</code></a>", esc(id))).collect();
+            let _ = write!(out, " — {}", links.join(", "));
+        }
+        for error in &step.errors {
+            let _ = write!(out, "<div class=\"notice bad\">error: {}</div>", esc(error));
+        }
+        out.push_str("</li>\n");
+    }
+    out.push_str("</ul>\n");
 }
 
 fn html_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
@@ -773,10 +934,21 @@ fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
     if let Some(hint) = view.result.as_ref().and_then(|result| result.hint.as_ref()) {
         let _ = writeln!(out, "<p class=\"hint\">Hint: {}</p>", esc(hint));
     }
-    if let Some(result) = &view.result
+    if let Some((before, after)) = rename_text(view) {
+        let _ = writeln!(out, "<div class=\"rename\"><code>{}</code> → <code>{}</code></div>", esc(&before), esc(&after));
+    } else if let Some(result) = &view.result
         && (result.before.is_some() || result.after.is_some())
     {
         html_diff(out, result.before.as_deref().unwrap_or(""), result.after.as_deref().unwrap_or(""), None);
+    }
+    if let Some(new) = model.new_code(view).filter(|new| new.adds_to(view)) {
+        let _ = writeln!(
+            out,
+            "<div class=\"new-code\"><p>{} <code>{}</code></p><pre><code>{}</code></pre></div>",
+            esc(new.label),
+            esc(&new.key),
+            esc(&short_block(&new.text))
+        );
     }
     out.push_str("</li>\n");
 }
@@ -857,7 +1029,6 @@ fn html_sources(out: &mut String, model: &Model) {
 // ---------------------------------------------------------------------------------------------
 // Markdown.
 
-/// Escapes inline Markdown text. A line break becomes a space.
 /// Like [`md`], but text between backticks becomes a code span. The verifier messages use
 /// backticks for code.
 fn md_with_code(text: &str) -> String {
@@ -866,13 +1037,10 @@ fn md_with_code(text: &str) -> String {
         // The backticks are not in pairs: escape all of them.
         return md(text);
     }
-    parts
-        .iter()
-        .enumerate()
-        .map(|(index, part)| if index % 2 == 1 { format!("`{}`", part.replace('\n', " ")) } else { md(part) })
-        .collect()
+    parts.iter().enumerate().map(|(index, part)| if index % 2 == 1 { format!("`{}`", part.replace('\n', " ")) } else { md(part) }).collect()
 }
 
+/// Escapes inline Markdown text. A line break becomes a space.
 fn md(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -964,6 +1132,7 @@ fn md_groups(out: &mut String, model: &Model) {
             let _ = writeln!(out, "{}\n", md(&group.why));
         }
         let _ = writeln!(out, "{} · {}\n", md(&risk_text(group)), md(&group_meta(group).join(" · ")));
+        md_steps(out, model, group);
         if let Some(hint) = &group.split_hint {
             let _ = writeln!(out, "> {}\n", md(hint));
         }
@@ -975,12 +1144,42 @@ fn md_groups(out: &mut String, model: &Model) {
             );
         }
         for sub in &group.subgroups {
-            md_subgroup(out, sub);
+            md_subgroup(out, model, sub);
         }
     }
 }
 
-fn md_subgroup(out: &mut String, sub: &SubgroupSummary) {
+fn md_steps(out: &mut String, model: &Model, group: &GroupSummary) {
+    let steps = model.steps(group);
+    if steps.is_empty() {
+        return;
+    }
+    out.push_str("Steps:\n\n");
+    for step in &steps {
+        let mut line = format!("- step {}: {}", step.index, md(&step.intent));
+        if !step.claims.is_empty() {
+            let ids: Vec<String> = step.claims.iter().map(|id| code(id)).collect();
+            let _ = write!(line, " — {}", ids.join(", "));
+        }
+        let classes = step.classes();
+        if !classes.is_empty() {
+            let _ = write!(line, " · {}", md(&classes.join(" · ")));
+        }
+        let _ = writeln!(out, "{line}");
+        for error in &step.errors {
+            let _ = writeln!(out, "  - error: {}", md_with_code(error));
+        }
+    }
+    out.push('\n');
+}
+
+/// The code that a claim adds, as a list line and an indented code block.
+fn md_new_code(out: &mut String, new: &NewCode, indent: &str) {
+    let _ = writeln!(out, "{indent}- {}: {}\n", md(new.label), code(&new.key));
+    out.push_str(&fence("rust", &short_block(&new.text), &format!("{indent}  ")));
+}
+
+fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
     let marks = subgroup_marks(sub);
     let marks = if marks.is_empty() { String::new() } else { format!(" · _{}_", md(&marks.join(" · "))) };
     if sub.folded {
@@ -989,12 +1188,23 @@ fn md_subgroup(out: &mut String, sub: &SubgroupSummary) {
         let ids = if ids.is_empty() { String::new() } else { format!(" — {}", ids.join(", ")) };
         let _ = writeln!(
             out,
-            "- ▸ **{}** · {}{marks} · folded: {} ({}){ids}\n",
+            "- ▸ **{}** · {}{marks} · folded: {} ({}){ids}",
             md(sub.role_label),
             md(&sub.title),
             md(&counts_text(&sub.counts)),
             md(&sub.fold_reason)
         );
+        // The renames and the new code stay visible in a folded subgroup.
+        for view in &sub.claims {
+            if let Some((before, after)) = rename_text(view) {
+                let _ = writeln!(out, "  - {} {}: {} → {}", code(&view.id), code(&view.op), code(&before), code(&after));
+            }
+            if let Some(new) = model.new_code(view) {
+                let _ = writeln!(out, "  - {} {}", code(&view.id), code(&view.op));
+                md_new_code(out, &new, "    ");
+            }
+        }
+        out.push('\n');
         return;
     }
     let _ = writeln!(out, "#### ▾ {} · {}{marks}\n", md(sub.role_label), md(&sub.title));
@@ -1012,12 +1222,12 @@ fn md_subgroup(out: &mut String, sub: &SubgroupSummary) {
         let _ = writeln!(out, "> {}\n", md(mismatch));
     }
     for view in &sub.claims {
-        md_claim(out, view);
+        md_claim(out, model, view);
     }
     out.push('\n');
 }
 
-fn md_claim(out: &mut String, view: &ClaimView) {
+fn md_claim(out: &mut String, model: &Model, view: &ClaimView) {
     let status = StatusText::of(view);
     let mut head = format!("- {} **{}** {}", status.icon(), md(&view.id), code(&view.op));
     if let Some(at) = &view.at {
@@ -1045,12 +1255,18 @@ fn md_claim(out: &mut String, view: &ClaimView) {
     if let Some(hint) = view.result.as_ref().and_then(|result| result.hint.as_ref()) {
         let _ = writeln!(out, "  - Hint: {}", md(hint));
     }
-    if let Some(result) = &view.result
+    if let Some((before, after)) = rename_text(view) {
+        let _ = writeln!(out, "  - rename: {} → {}", code(&before), code(&after));
+    } else if let Some(result) = &view.result
         && (result.before.is_some() || result.after.is_some())
     {
         let diff = diff_text(result.before.as_deref().unwrap_or(""), result.after.as_deref().unwrap_or(""));
         out.push('\n');
         out.push_str(&fence("diff", &diff, "  "));
+    }
+    if let Some(new) = model.new_code(view).filter(|new| new.adds_to(view)) {
+        out.push('\n');
+        md_new_code(out, &new, "  ");
     }
 }
 

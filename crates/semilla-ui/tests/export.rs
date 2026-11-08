@@ -139,12 +139,98 @@ fn both_formats_show_all_parts() {
     }
     assert!(html.contains(&html_text(&data.report.warnings[0])));
 
-    // The source diffs.
-    assert!(markdown.contains("+ pub fn total(&self) -> Result<u32, CartError> {"));
-    assert!(markdown.contains("- pub fn sum(&self) -> u32 {"));
-    assert!(html.contains("<span class=\"add\">+ pub fn total(&amp;self) -&gt; Result&lt;u32, CartError&gt; {\n</span>"));
-    // An unchanged source does not appear in the sources section.
-    assert!(!markdown.contains("### `shop_cli::load_cart`"));
+    // The source diffs: only the smallest changed parts, and no unchanged source.
+    let md_sources = &markdown[markdown.find("## Sources").unwrap()..];
+    let html_sources = &html[html.find("<h2 id=\"sources\">").unwrap()..];
+    assert!(md_sources.contains("### `shop_core::cart::Cart::total/S2/body/S0/cond`"));
+    assert!(md_sources.contains("- item.qty > MAX_QTY\n+ item.qty >= MAX_QTY"));
+    assert!(html_sources.contains("<span class=\"add\">+ item.qty &gt;= MAX_QTY\n</span>"));
+    // `Cart::total` contains the changed part `Cart::total/S2/body/S0/cond`, so it does not appear.
+    assert!(!md_sources.contains("### `shop_core::cart::Cart::total`\n"));
+    assert!(!html_sources.contains("data-source=\"shop_core::cart::Cart::total\""));
+    assert!(md_sources.contains("+     let total = cart.total().unwrap_or(0);"));
+    assert!(!md_sources.contains("### `shop_cli::load_cart`"));
+    assert!(!html_sources.contains("data-source=\"shop_cli::load_cart\""));
+}
+
+#[test]
+fn steps_show_their_intents_and_claims() {
+    let data = demo_data();
+    let html = render_html(&data);
+    let markdown = render_markdown(&data);
+    for step in &data.changeset.steps {
+        let ids: Vec<String> = step.claims.iter().map(|claim| format!("`{}`", claim.id)).collect();
+        let line = format!("- step {}: {} — {}", step.index, md_text(&step.intent), ids.join(", "));
+        assert!(markdown.contains(&line), "Markdown: no step line {line}");
+        let item = format!("<li data-step=\"{}\">step {}: {}", step.index, step.index, html_text(&step.intent));
+        assert!(html.contains(&item), "HTML: no step {item}");
+        for claim in &step.claims {
+            assert!(html.contains(&format!("<a href=\"#claim-{0}\"><code>{0}</code></a>", claim.id)));
+        }
+    }
+    // A step error appears under its step.
+    let mut data = demo_data();
+    data.report.steps[0].errors.push("the build fails".into());
+    assert!(render_markdown(&data).contains("  - error: the build fails"));
+    assert!(render_html(&data).contains("<div class=\"notice bad\">error: the build fails</div>"));
+}
+
+#[test]
+fn folded_subgroups_show_renames_and_new_code() {
+    let data = demo_data();
+    let html = render_html(&data);
+    let markdown = render_markdown(&data);
+    // G1 Mechanical (folded): the renames, with the texts of the claim results.
+    assert!(markdown.contains("  - `c1` `rename`: `fn sum(&self)` → `fn total(&self)`"), "{markdown}");
+    let renames = subgroup_element(&html, "G1:mechanical");
+    assert!(!renames[..renames.find('>').unwrap()].contains(" open"));
+    assert!(renames.contains("<code>fn sum(&amp;self)</code> → <code>fn total(&amp;self)</code>"));
+    // G3 Mechanical (folded): the extracted function. A later move-item moved it to billing.
+    let line_total = data.sources["shop_core::billing::line_total"].after.clone().unwrap();
+    let first = line_total.lines().next().unwrap();
+    assert!(markdown.contains("  - `c6` `extract-function`\n    - new function: `shop_core::billing::line_total`\n"), "{markdown}");
+    assert!(markdown.contains(&format!("      ```rust\n      {first}\n")));
+    let extract = subgroup_element(&html, "G3:mechanical");
+    assert!(!extract[..extract.find('>').unwrap()].contains(" open"));
+    assert!(extract.contains("new function <code>shop_core::billing::line_total</code>"));
+    assert!(extract.contains(&html_text(first)));
+    // An added item in an open subgroup shows its source too, unless the claim diff shows it.
+    let mut data = demo_data();
+    data.sources.get_mut("shop_core::cart::CartError").unwrap().after =
+        Some("pub enum CartError {\n    TooMany(u32),\n    Empty,\n}".into());
+    let markdown = render_markdown(&data);
+    assert!(markdown.contains("  - new item: `shop_core::cart::CartError`"), "{markdown}");
+    assert!(markdown.contains("    ```rust\n    pub enum CartError {\n"));
+}
+
+#[test]
+fn neutral_rewrites_have_low_risk() {
+    // G2 is an api group. Make all its claims proved neutral, and remove its uncovered change.
+    let mut data = demo_data();
+    for step in data.report.steps.iter_mut().filter(|step| step.step == 6 || step.step == 7) {
+        step.uncovered.clear();
+        for claim in &mut step.claims {
+            claim.class = Some(semilla_core::Class::Neutral);
+        }
+    }
+    let ctx = Ctx::new(data.clone());
+    let summary = changeset(&ctx, &ReviewFile::default());
+    let g2 = summary.groups.iter().find(|group| group.id == "G2").unwrap();
+    assert_eq!(g2.risk, 1, "the public API alone gives one dot: {:?}", g2.risk_reasons);
+    assert_eq!(g2.risk_reasons, ["public API"]);
+    let g1 = summary.groups.iter().find(|group| group.id == "G1").unwrap();
+    assert!(g1.risk > g2.risk, "a real control flow change ranks above neutral rewrites");
+    assert_eq!(summary.groups[0].id, "G1");
+
+    // Pending claims give a reason, but no points.
+    for claim in data.report.steps.iter_mut().filter(|step| step.step == 6).flat_map(|step| step.claims.iter_mut()) {
+        claim.status = ClaimStatus::Pending { reason: "phase 2".into() };
+    }
+    let ctx = Ctx::new(data);
+    let summary = changeset(&ctx, &ReviewFile::default());
+    let g2 = summary.groups.iter().find(|group| group.id == "G2").unwrap();
+    assert_eq!(g2.risk, 1, "{:?}", g2.risk_reasons);
+    assert!(g2.risk_reasons.contains(&"7 pending".to_string()), "{:?}", g2.risk_reasons);
 }
 
 #[test]

@@ -489,6 +489,12 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
 
 /// The risk of a group (design section 11.2): control flow, `unsafe`, public API, panic delta,
 /// and the claims that the verifier did not accept.
+///
+/// - Only the computed class counts. A claim with the computed class `neutral` (for example an
+///   equivalent rewrite of a call site) adds no control-flow or logic risk.
+/// - The public API gives one point, so the API level alone gives at most one dot.
+/// - A pending claim is not a failure: it waits for the background check. It gives a reason,
+///   but no points.
 fn risk(
     ctx: &Ctx,
     group: &Group,
@@ -513,18 +519,27 @@ fn risk(
     let interface = subgroups
         .iter()
         .any(|subgroup| subgroup.role == Role::Interface && subgroup.claims.iter().any(|claim| claim.class != Some(Class::Neutral)));
-    if group.kind == GroupKind::Api || interface {
-        score += 2;
+    let api_steps = ctx
+        .data
+        .report
+        .steps
+        .iter()
+        .any(|step| group.steps.contains(&step.step) && matches!(step.api_level.as_deref(), Some("major" | "minor")));
+    if group.kind == GroupKind::Api || interface || api_steps {
+        score += 1;
         reasons.push("public API".to_string());
     }
     if panic_delta > 0 {
         score += 1;
         reasons.push(format!("panics +{panic_delta}"));
     }
-    let failed = counts.claims - counts.verified;
+    let failed = counts.claims.saturating_sub(counts.verified + counts.pending);
     if failed > 0 {
         score += 2;
         reasons.push(format!("{failed} not verified"));
+    }
+    if counts.pending > 0 {
+        reasons.push(format!("{} pending", counts.pending));
     }
     if counts.uncovered > 0 {
         score += 2;
