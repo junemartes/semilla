@@ -247,7 +247,7 @@ fn group_and_subgroup_rules() {
         head_tree: "b".into(),
         steps: vec![step(claims)],
         groups: vec![Group { id: "G1".into(), title: "t".into(), kind: GroupKind::Refactor, why: String::new(), steps: vec![0] }],
-        subgroups: vec![Subgroup { group: "G1".into(), role: Role::Mechanical, title: "m".into(), why: String::new(), claims: vec!["c1".into(), "c2".into()], edited: true }],
+        subgroups: vec![Subgroup { id: "G1:m".into(), new_claims: Vec::new(), group: "G1".into(), role: Role::Mechanical, title: "m".into(), why: String::new(), claims: vec!["c1".into(), "c2".into()], edited: true }],
     };
     let bodies = FakeBodies(BTreeMap::from([("demo::total".to_string(), different(true))]));
     let mut trees = BTreeMap::from([("a".to_string(), old), ("b".to_string(), new)]);
@@ -276,4 +276,27 @@ fn subgroup_suggestions_follow_the_roles() {
     assert_eq!(suggestion.len(), 1);
     assert_eq!(suggestion[0].role, Role::Mechanical);
     assert!(!organize::is_open(&suggestion[0], &report.steps));
+}
+
+#[test]
+fn panic_delta_counts_explicit_sites() {
+    let before = "pub fn f(v: &[u32], o: Option<u32>) -> u32 { o.unwrap() + v[0] }\n";
+    let after = "pub fn f(v: &[u32], o: Option<u32>) -> u32 { o.unwrap_or(0) + v.first().copied().unwrap_or(0) }\n";
+    let report = run(before, after, vec![claim("c1", "replace-expression", Some("demo::f/tail"), serde_json::json!({}))], &[], None);
+    assert_eq!(report.panic_delta, -2);
+}
+
+#[test]
+fn new_claims_go_to_their_suggested_subgroup() {
+    let mut set = ChangeSet {
+        steps: vec![step(vec![claim("c1", "add-if", Some("demo::f/S0"), serde_json::json!({})), claim("c2", "rename", Some("demo::g"), serde_json::json!({"to": "h"}))])],
+        groups: vec![Group { id: "G1".into(), title: "t".into(), kind: GroupKind::Fix, why: String::new(), steps: vec![0] }],
+        subgroups: vec![Subgroup { id: "G1:x".into(), group: "G1".into(), role: Role::Custom, title: "Mine".into(), why: String::new(), claims: vec!["c1".into()], edited: true, new_claims: Vec::new() }],
+        ..Default::default()
+    };
+    organize::place_new_claims(&mut set, "G1", &Default::default());
+    assert_eq!(set.subgroups.len(), 2);
+    assert_eq!(set.subgroups[0].claims, ["c1"], "the agent's subgroup stays the same");
+    assert_eq!(set.subgroups[1].role, Role::Mechanical);
+    assert_eq!(set.subgroups[1].new_claims, ["c2"]);
 }

@@ -47,7 +47,16 @@ pub fn suggest(set: &ChangeSet, group_id: &str, steps: &[StepReport], test_items
     }
     let mut subgroups: Vec<Subgroup> = by_role
         .into_iter()
-        .map(|(role, claims)| Subgroup { group: group_id.to_string(), role, title: role_title(role).to_string(), why: String::new(), claims, edited: false })
+        .map(|(role, claims)| Subgroup {
+            id: format!("{group_id}:{}", serde_json::to_value(role).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
+            group: group_id.to_string(),
+            role,
+            title: role_title(role).to_string(),
+            why: String::new(),
+            claims,
+            edited: false,
+            new_claims: Vec::new(),
+        })
         .collect();
     subgroups.sort_by_key(|subgroup| subgroup.role.order());
     subgroups
@@ -163,5 +172,43 @@ pub fn check_test_groups(set: &ChangeSet, test_items: &BTreeSet<String>, report:
                 }
             }
         }
+    }
+}
+
+/// Keeps the agent's subgroups of a group, and puts each claim that no subgroup has into the
+/// subgroup of its suggested role. The engine marks these claims as new (design 6.3, rule 5).
+pub fn place_new_claims(set: &mut ChangeSet, group_id: &str, test_items: &BTreeSet<String>) {
+    if !set.subgroups.iter().any(|s| s.group == group_id) {
+        return;
+    }
+    let Some(group) = set.groups.iter().find(|g| g.id == group_id).cloned() else { return };
+    let loose: Vec<String> = set
+        .steps
+        .iter()
+        .filter(|step| group.steps.contains(&step.index))
+        .flat_map(|step| step.claims.iter().map(|claim| claim.id.clone()))
+        .filter(|id| !set.subgroups.iter().any(|s| s.group == group_id && s.claims.contains(id)))
+        .collect();
+    for id in loose {
+        let role = suggested_role(set, &id, None, test_items);
+        let position = set.subgroups.iter().position(|s| s.group == group_id && s.role == role);
+        let subgroup = match position {
+            Some(position) => &mut set.subgroups[position],
+            None => {
+                set.subgroups.push(Subgroup {
+                    id: format!("{group_id}:{}", serde_json::to_value(role).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
+                    group: group_id.to_string(),
+                    role,
+                    title: role_title(role).to_string(),
+                    why: String::new(),
+                    claims: Vec::new(),
+                    edited: false,
+                    new_claims: Vec::new(),
+                });
+                set.subgroups.last_mut().unwrap()
+            }
+        };
+        subgroup.claims.push(id.clone());
+        subgroup.new_claims.push(id);
     }
 }

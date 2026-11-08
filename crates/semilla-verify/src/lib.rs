@@ -212,6 +212,8 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
         });
     }
 
+    report.panic_delta = panic_sites(input.after) - panic_sites(input.before);
+
     report.computed_class = report.claims.iter().filter_map(|claim| claim.class).max_by_key(|class| class_rank(*class));
     if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
         if declared != computed {
@@ -224,6 +226,30 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
     }
 
     StepOutcome { report, edits, owners, renames, bodies }
+}
+
+/// Counts the explicit panic sites in the non-test functions of a workspace (design 5.5):
+/// `unwrap` and `expect` calls, `panic!`, `unreachable!`, `todo!`, `unimplemented!`, and
+/// indexing. The implicit checks (arithmetic overflow) do not count.
+pub fn panic_sites(workspace: &Workspace) -> i64 {
+    let mut count = 0;
+    for item in workspace.items.values().filter(|item| !item.test) {
+        let Some(body) = &item.body else { continue };
+        let mut path = Vec::new();
+        body.walk(&mut path, &mut |_, node| {
+            let attr = node.attr.as_deref().unwrap_or("");
+            let site = match node.kind {
+                "method_call" => matches!(attr, "unwrap" | "expect"),
+                "macro" => matches!(attr, "panic" | "unreachable" | "todo" | "unimplemented"),
+                "index" => true,
+                _ => false,
+            };
+            if site {
+                count += 1;
+            }
+        });
+    }
+    count
 }
 
 /// The rank of a class: a step has the highest class of its claims.

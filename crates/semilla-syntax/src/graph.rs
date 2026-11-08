@@ -28,6 +28,7 @@ pub fn workspace_graph(workspace: &Workspace, statuses: &BTreeMap<String, Status
             badges: Vec::new(),
             entry: false,
             test: false,
+            file: None,
         });
         modules.insert(krate.name.clone());
         for dep in &krate.deps {
@@ -48,6 +49,7 @@ pub fn workspace_graph(workspace: &Workspace, statuses: &BTreeMap<String, Status
             badges: Vec::new(),
             entry: false,
             test: item.test,
+            file: Some(item.file.clone()),
         });
     }
 
@@ -73,6 +75,7 @@ pub fn workspace_graph(workspace: &Workspace, statuses: &BTreeMap<String, Status
             badges: Vec::new(),
             entry,
             test: item.test,
+            file: Some(item.file.clone()),
         });
     }
 
@@ -116,6 +119,7 @@ pub fn workspace_graph(workspace: &Workspace, statuses: &BTreeMap<String, Status
             badges: badges.into_iter().collect(),
             entry: false,
             test: false,
+            file: None,
         });
     }
     for (from, to) in edges {

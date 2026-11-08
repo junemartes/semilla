@@ -111,6 +111,9 @@ impl Role {
 /// A slice of the claims in a group.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Subgroup {
+    /// A stable ID, for example `G1:core`.
+    #[serde(default)]
+    pub id: String,
     pub group: String,
     pub role: Role,
     pub title: String,
@@ -121,6 +124,9 @@ pub struct Subgroup {
     /// True if the agent changed the engine suggestion.
     #[serde(default)]
     pub edited: bool,
+    /// The claims that the engine added after the agent's edit (design 6.3, rule 5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_claims: Vec<String>,
 }
 
 /// All the claims for a range of commits.

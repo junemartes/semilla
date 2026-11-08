@@ -102,6 +102,9 @@ pub struct StepReport {
     pub uncovered: Vec<Uncovered>,
     /// Errors that stop the check of the step, for example a build failure.
     pub errors: Vec<String>,
+    /// The change in the number of explicit panic sites (design 5.5).
+    #[serde(default)]
+    pub panic_delta: i64,
 }
 
 impl StepReport {
@@ -126,6 +129,9 @@ pub struct Report {
     pub warnings: Vec<String>,
     /// The score (design section 9.2), from 0 to 1.
     pub score: f64,
+    /// The change in the number of explicit panic sites over all steps.
+    #[serde(default)]
+    pub panic_delta: i64,
     pub accepted: bool,
 }
 
@@ -133,6 +139,7 @@ impl Report {
     /// Sets `accepted` and `score` from the step reports.
     pub fn finish(&mut self) {
         self.accepted = self.organization.is_empty() && self.steps.iter().all(StepReport::accepted);
+        self.panic_delta = self.steps.iter().map(|step| step.panic_delta).sum();
         let weights: Vec<f64> = self
             .steps
             .iter()

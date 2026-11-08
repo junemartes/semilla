@@ -210,6 +210,9 @@ pub struct GraphNode {
     /// True for test functions.
     #[serde(default)]
     pub test: bool,
+    /// The file of the item, relative to the workspace root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
