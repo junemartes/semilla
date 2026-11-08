@@ -87,6 +87,17 @@ impl Repo {
         Ok(dir)
     }
 
+    /// Updates a fixed build folder to a tree. Git writes only the files that differ from the
+    /// last tree of the folder, and removes the files that the new tree does not have. So the
+    /// unchanged files keep their times, and cargo can reuse its work for them.
+    pub fn checkout_build(&self, dir: &Path, tree: &str) -> Result<()> {
+        std::fs::create_dir_all(dir)?;
+        let index = dir.with_extension("index");
+        let work_tree = format!("--work-tree={}", dir.display());
+        self.git_env(&[&work_tree, "read-tree", "--reset", "-u", tree], &[("GIT_INDEX_FILE", index.as_path())])?;
+        Ok(())
+    }
+
     /// Stores a note on a commit, under `refs/notes/semilla`.
     pub fn write_note(&self, commit: &str, text: &str) -> Result<()> {
         let file = self.state_dir().join("note.json");

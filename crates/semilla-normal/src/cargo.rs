@@ -77,6 +77,68 @@ pub fn sysroot_lib(toolchain: &str) -> Result<PathBuf> {
 /// value), so `out` gets a full set of records. The dependencies outside the workspace stay in
 /// the cache of `target_dir`.
 pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &Path) -> Result<()> {
+    let nonce = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
+    );
+    run_check(workspace, level, out, target_dir, &nonce, false).map(|_| ())
+}
+
+/// Runs `cargo check` for a delta build: `workspace` is a fixed build folder that changes only by
+/// the files of each new tree, and `out` is the fixed records folder of that build folder.
+///
+/// Cargo compiles only the crates that changed (and the crates that depend on them). The other
+/// crates are fresh, and their record files from an earlier build stay valid: a fresh unit has
+/// the same sources, flags, dependencies, toolchain, and tracked environment. `SEMILLA_MIR_RUN`
+/// is a fingerprint of the driver binary, so a new driver compiles all crates again. After the
+/// build, the record files of units that are not in this build are removed.
+pub fn run_cargo_check_delta(workspace: &Path, level: &str, out: &Path, target_dir: &Path) -> Result<()> {
+    let driver = find_driver()?;
+    let meta = std::fs::metadata(&driver)?;
+    let modified = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    let fingerprint = format!("driver-{}-{modified}", meta.len());
+    let units = run_check(workspace, level, out, target_dir, &fingerprint, true)?;
+    for entry in std::fs::read_dir(out)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let Some(stem) = name.strip_suffix(".jsonl") else { continue };
+        let hash = stem.rsplit('.').next().unwrap_or("");
+        if !units.contains(hash) {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// The hash of each unit in the JSON messages of cargo: the part after the last `-` of each
+/// artifact file name (`libname-<hash>.rmeta`).
+fn unit_hashes(stdout: &str) -> std::collections::BTreeSet<String> {
+    let mut hashes = std::collections::BTreeSet::new();
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if message.get("reason").and_then(|r| r.as_str()) != Some("compiler-artifact") {
+            continue;
+        }
+        for file in message.get("filenames").and_then(|f| f.as_array()).into_iter().flatten() {
+            let Some(file) = file.as_str() else { continue };
+            let name = Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if let Some((_, hash)) = name.rsplit_once('-') {
+                hashes.insert(hash.to_string());
+            }
+        }
+    }
+    hashes
+}
+
+fn run_check(
+    workspace: &Path,
+    level: &str,
+    out: &Path,
+    target_dir: &Path,
+    nonce: &str,
+    json: bool,
+) -> Result<std::collections::BTreeSet<String>> {
     if !matches!(level, "n0" | "n2" | "n3") {
         bail!("unknown level {level:?}: use n0, n2, or n3");
     }
@@ -93,15 +155,13 @@ pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &P
         }
         _ => lib.into_os_string(),
     };
-    let nonce = format!(
-        "{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
-    );
-
     let mut command = Command::new("cargo");
+    command.args(["check", "--workspace", "--all-targets", "--quiet"]);
+    if json {
+        command.arg("--message-format=json");
+    }
     command
-        .args(["check", "--workspace", "--all-targets", "--quiet", "--target-dir"])
+        .arg("--target-dir")
         .arg(target_dir)
         .current_dir(workspace)
         .env("RUSTUP_TOOLCHAIN", &toolchain)
@@ -128,5 +188,5 @@ pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &P
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(())
+    Ok(unit_hashes(&String::from_utf8_lossy(&output.stdout)))
 }

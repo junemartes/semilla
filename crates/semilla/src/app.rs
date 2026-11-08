@@ -172,8 +172,8 @@ impl App {
         let hashes = if self.no_bodies {
             BTreeMap::new()
         } else {
-            let levels = NormalOracle { repo: self.repo.clone() }.levels(&tree)?;
-            semilla_normal::body_hashes(levels.get("n0").map(Vec::as_slice).unwrap_or(&[]))
+            let records = NormalOracle { repo: self.repo.clone() }.records(&tree, "n0")?;
+            semilla_normal::body_hashes(&records)
         };
         let items: Vec<serde_json::Value> = ws
             .items

@@ -29,7 +29,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use cargo::run_cargo_check;
+pub use cargo::{run_cargo_check, run_cargo_check_delta};
 
 /// One record of the driver: the normalized MIR of one body at one level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

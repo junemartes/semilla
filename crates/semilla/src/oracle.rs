@@ -9,55 +9,78 @@ use semilla_verify::{BodyComparison, BodyOracle, BodyStatus, EffectCheck, ExprOr
 
 use crate::git::Repo;
 
-/// The MIR levels that the oracle builds for each tree.
-const LEVELS: [&str; 3] = ["n0", "n2", "n3"];
-
 /// Runs the MIR driver on the snapshots, and compares the bodies with the normal forms.
+///
+/// Each level has one fixed build folder. Git updates it to each tree by delta, so cargo compiles
+/// only the changed crates and their dependents. The records of each tree and level are cached.
 pub struct NormalOracle {
     pub repo: Repo,
 }
 
 impl NormalOracle {
-    /// Builds (once) the MIR records of a tree at all levels.
-    pub fn levels(&self, tree: &str) -> Result<semilla_normal::Levels> {
-        let dir = self.repo.materialize(tree)?;
-        let mut levels = semilla_normal::Levels::default();
-        for level in LEVELS {
-            let out = self.repo.state_dir().join("cache/mir").join(tree).join(level);
-            let done = out.join(".complete");
-            if !done.exists() {
-                let _ = std::fs::remove_dir_all(&out);
-                std::fs::create_dir_all(&out)?;
-                let target = self.repo.state_dir().join("cache").join(format!("target-{level}"));
-                // Cargo writes or updates `Cargo.lock`. Restore it after the run, so that the
-                // cached folder stays equal to the git tree.
-                let lock = dir.join("Cargo.lock");
-                let original = std::fs::read(&lock).ok();
-                let started = std::time::Instant::now();
-                let result = semilla_normal::run_cargo_check(&dir, level, &out, &target);
-                crate::timing(&format!("cargo check {level} of tree {}", &tree[..8.min(tree.len())]), started);
-                match &original {
-                    Some(bytes) => std::fs::write(&lock, bytes)?,
-                    None => {
-                        let _ = std::fs::remove_file(&lock);
-                    }
-                }
-                result?;
-                std::fs::write(&done, "")?;
-            }
-            levels.insert(level.to_string(), semilla_normal::read_records(&out)?);
+    /// The records of a tree at a level: from the cache, or from a delta build.
+    pub fn records(&self, tree: &str, level: &str) -> Result<Vec<semilla_normal::BodyRecord>> {
+        let cache = self.repo.state_dir().join("cache/mir").join(tree).join(level);
+        if cache.join(".complete").exists() {
+            return semilla_normal::read_records(&cache);
         }
-        Ok(levels)
+        let base = self.repo.state_dir().join("cache/build");
+        std::fs::create_dir_all(&base)?;
+        // One build folder serves one build at a time, also across processes.
+        let lock = std::fs::File::create(base.join(format!("{level}.lock")))?;
+        lock.lock()?;
+        let build = base.join(level);
+        let records = base.join(format!("{level}-records"));
+        let target = self.repo.state_dir().join("cache").join(format!("target-{level}"));
+        let started = std::time::Instant::now();
+        self.repo.checkout_build(&build, tree)?;
+        semilla_normal::run_cargo_check_delta(&build, level, &records, &target)?;
+        crate::timing(&format!("cargo check {level} of tree {}", &tree[..8.min(tree.len())]), started);
+        let _ = std::fs::remove_dir_all(&cache);
+        std::fs::create_dir_all(&cache)?;
+        for entry in std::fs::read_dir(&records)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|e| e == "jsonl") {
+                std::fs::copy(&path, cache.join(path.file_name().unwrap()))?;
+            }
+        }
+        std::fs::write(cache.join(".complete"), "")?;
+        lock.unlock()?;
+        semilla_normal::read_records(&cache)
+    }
+
+    /// The records of both trees at some levels. Each level runs in its own thread.
+    fn levels(&self, before: &str, after: &str, levels: &[&str]) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
+        let results: Vec<Result<(String, Vec<_>, Vec<_>)>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = levels
+                .iter()
+                .map(|level| scope.spawn(move || Ok((level.to_string(), self.records(before, level)?, self.records(after, level)?))))
+                .collect();
+            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
+        });
+        let (mut old, mut new) = (semilla_normal::Levels::default(), semilla_normal::Levels::default());
+        for result in results {
+            let (level, b, a) = result?;
+            old.insert(level.clone(), b);
+            new.insert(level, a);
+        }
+        Ok((old, new))
     }
 }
 
 impl BodyOracle for NormalOracle {
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
-        let before = self.levels(&step.tree_before)?;
-        let after = self.levels(&step.tree_after)?;
-        let started = std::time::Instant::now();
-        let comparisons = semilla_normal::compare(&before, &after, renames, added);
-        crate::timing("compare the bodies (N0 to N4)", started);
+        // N0 first. N2 and N3 are only necessary when a body is still different at N0.
+        let (mut before, mut after) = self.levels(&step.tree_before, &step.tree_after, &["n0"])?;
+        let mut comparisons = semilla_normal::compare(&before, &after, renames, added);
+        if comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. })) {
+            let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"])?;
+            before.extend(old);
+            after.extend(new);
+            let started = std::time::Instant::now();
+            comparisons = semilla_normal::compare(&before, &after, renames, added);
+            crate::timing("compare the bodies (N0 to N4)", started);
+        }
         // The span of each body: from the "after" records first (the name is the "after" name).
         let mut spans: BTreeMap<&str, (String, usize)> = BTreeMap::new();
         for record in [&before, &after].iter().flat_map(|levels| levels.values().flatten()) {

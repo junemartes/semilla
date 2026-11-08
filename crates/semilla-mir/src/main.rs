@@ -208,13 +208,17 @@ fn output_file_name(args: &[String]) -> String {
             .collect();
         if kinds.is_empty() { "bin".to_string() } else { kinds.join("+") }
     };
-    let metadata = args
-        .iter()
-        .enumerate()
-        .find_map(|(index, arg)| {
+    // The `extra-filename` hash is also in the artifact names that cargo reports, so a caller can
+    // match the record files to the units of a build. `metadata` is the fallback.
+    let codegen_value = |key: &str| {
+        args.iter().enumerate().find_map(|(index, arg)| {
             let value = if arg == "-C" { args.get(index + 1)? } else { arg.strip_prefix("-C")? };
-            value.strip_prefix("metadata=").map(str::to_string)
+            value.strip_prefix(key).map(|v| v.trim_start_matches('-').to_string())
         })
+    };
+    let metadata = codegen_value("extra-filename=")
+        .filter(|value| !value.is_empty())
+        .or_else(|| codegen_value("metadata="))
         .unwrap_or_else(|| {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
