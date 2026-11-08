@@ -1,0 +1,3 @@
+expect = "neutral"
+needs = "N2"
+note = "Replace a manual match on Option with `?`."

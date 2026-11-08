@@ -1,0 +1,3 @@
+expect = "neutral"
+needs = "N4"
+note = "Swap two independent lets. Both can panic on overflow, with the same message (only the location differs)."

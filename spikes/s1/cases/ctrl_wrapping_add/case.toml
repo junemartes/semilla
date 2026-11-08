@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control: `x + 1` (panics on overflow) becomes `x.wrapping_add(1)`."

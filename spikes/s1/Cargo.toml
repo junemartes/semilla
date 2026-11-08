@@ -1,0 +1,11 @@
+[package]
+name = "semilla-s1"
+description = "Spike S1: does N0 or N2 normalization make neutral refactors equal?"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

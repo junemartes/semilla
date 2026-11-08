@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control: swap the branches without a negated condition."

@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control: change the body of a closure (`x + 1` becomes `x + 2`)."

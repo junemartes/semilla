@@ -1,0 +1,3 @@
+expect = "neutral"
+needs = "N0 or N2"
+note = "Inline a variable into its only use."

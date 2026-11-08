@@ -1,0 +1,5 @@
+expect = "neutral"
+needs = "N1"
+note = "Rename a function and its call. The harness maps the body name; the call inside `f` still differs."
+[rename]
+helper = "add_one"

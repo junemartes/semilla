@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control: `+ 1` becomes `+ 2`."

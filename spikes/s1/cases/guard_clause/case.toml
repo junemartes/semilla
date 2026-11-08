@@ -1,0 +1,3 @@
+expect = "neutral"
+needs = "N4 or SMT"
+note = "Replace if/else with an early return (`!(i < n)` becomes `i >= n`)."

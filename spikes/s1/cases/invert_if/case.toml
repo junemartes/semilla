@@ -1,0 +1,3 @@
+expect = "neutral"
+needs = "N4 or SMT"
+note = "Invert an if: negate the condition and swap the branches."

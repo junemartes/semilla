@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control: swap two lets with Drop types. The drop order changes."

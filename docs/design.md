@@ -316,11 +316,15 @@ Each normalization step must keep the behavior the same. Then "equal after norma
 
 | Level | Form | Absorbs | MVP |
 |---|---|---|---|
-| N0 | MIR after borrow check, without names, spans, and `StorageLive` / `StorageDead`, with a canonical block order | formatting, comments, imports, local renames, type annotations, lifetimes, visibility | yes |
+| N0 | MIR with only the required passes (`-Zmir-opt-level=0`), without names, spans, storage markers, and borrow-check-only statements; a canonical block and local order; `move` treated as a copy; stable closure names | formatting, comments, imports, local renames, type annotations, lifetimes, visibility, `mut` removal, plain `if` inversion | yes |
 | N1 | N0 + call targets addressed by content hash (a Merkle tree over the call graph; one hash for each strongly connected component) | item renames and moves | yes |
 | N2 | rustc optimized MIR, with the same flags on both sides | extract and inline variable, temporaries, constant folding | yes |
 | N3 | N2 + bounded inlining of the workspace's own functions | extract and inline function | yes |
 | N4 | e-graphs over a dataflow graph (`egglog`) | reordered independent statements, inverted `if`, conversions, algebra | yes |
+
+**Panic locations are not behavior.** Two panics with the same message are the same, also at different source locations. The order of panics with different messages is behavior.
+
+**The rustc inliner is not a proof method.** At N2, rustc inlines some small functions, so some extracts and renames become equal. This depends on heuristics. N1 and N3 must prove these changes (spike S1, finding 5).
 
 The verifier tries the levels in order and stops at the first equal level. It stores the level as the proof type, for example `neutral (N1)`. If no level is equal, it uses N0 to find the changed nodes, because N0 is the closest to the source.
 

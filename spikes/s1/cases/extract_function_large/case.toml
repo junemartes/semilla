@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3"
+note = "Extract a larger block into a new function. Tests the limit of the rustc inliner at N2."
+added = ["score"]
