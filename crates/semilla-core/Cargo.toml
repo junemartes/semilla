@@ -1,0 +1,10 @@
+[package]
+name = "semilla-core"
+description = "The semilla data model: anchors, claims, steps, groups, reports, and view types."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
