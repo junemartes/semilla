@@ -98,7 +98,9 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             let problem = match group.kind {
                 GroupKind::Refactor => (!result.is_some_and(|r| r.class == Some(Class::Neutral))).then(|| "a refactor group can contain only neutral claims"),
                 GroupKind::Rename | GroupKind::Move => (!matches!(*op, "rename" | "move-item" | "rename-local")).then(|| "a rename or move group can contain only identity claims"),
-                GroupKind::Api => (!info.is_some_and(|i| i.level == OpLevel::Item || i.role == Role::Propagation)).then(|| "an api group can contain only signature, type, and call site claims"),
+                // A call site update can be any expression op; statement ops add new control flow.
+                GroupKind::Api => (!info.is_some_and(|i| matches!(i.level, OpLevel::Item | OpLevel::Expression) || i.role == Role::Propagation))
+                    .then(|| "an api group can contain only item claims (signatures, types, new items) and expression claims at call sites"),
                 GroupKind::Deps => (!info.is_some_and(|i| i.level == OpLevel::File || i.role == Role::Propagation)).then(|| "a deps group can contain only dependency and call site claims"),
                 GroupKind::Tests => None, // Checked below with the test items.
                 GroupKind::Fix | GroupKind::Feature | GroupKind::Behavior => None,

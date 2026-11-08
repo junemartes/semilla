@@ -52,14 +52,17 @@ impl Solver {
     /// 1. The `SEMILLA_Z3` environment variable.
     /// 2. `.semilla/tools/z3` under the current directory or an ancestor.
     /// 3. `z3` on `PATH`.
+    /// 4. `.semilla/tools/z3` of the semilla workspace that built this crate (where
+    ///    `scripts/fetch-z3.sh` installs it), so that other repositories find it too.
     pub fn find() -> Result<Solver> {
         let cwd = std::env::current_dir().ok();
-        let path = locate(
-            std::env::var_os(SOLVER_ENV),
-            cwd.as_deref(),
-            std::env::var_os("PATH"),
-        )?;
-        Solver::at(path)
+        match locate(std::env::var_os(SOLVER_ENV), cwd.as_deref(), std::env::var_os("PATH")) {
+            Ok(path) => Solver::at(path),
+            Err(error) => {
+                let own = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(TOOLS_PATH);
+                if own.is_file() { Solver::at(own) } else { Err(error) }
+            }
+        }
     }
 
     /// Returns true if [`Solver::find`] finds a solver that runs.

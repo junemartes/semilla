@@ -288,8 +288,12 @@ fn body_proof(context: &Context, item: &str, mut outcome: Outcome) -> Outcome {
             }
             outcome.status = ClaimStatus::Verified { proof: text };
         }
-        Some(BodyStatus::Different { cfg_changed: true }) => {
-            outcome.status = ClaimStatus::Refuted { reason: "the control flow graph changed".into() };
+        // A changed control flow graph is not evidence of a behavior change (an extracted call
+        // adds a block), so it gives "unproved", not "refuted".
+        Some(BodyStatus::Different { cfg_changed }) => {
+            let reason = if cfg_changed { "no normal form makes the bodies equal (the control flow graph differs)" } else { "no normal form makes the bodies equal" };
+            outcome.status = ClaimStatus::Unproved { reason: reason.into() };
+            outcome.hint = Some("Tag the change as logic, or use smaller neutral steps.".into());
         }
         Some(_) => {
             outcome.status = ClaimStatus::Unproved { reason: "no normal form makes the bodies equal".into() };
@@ -308,8 +312,9 @@ fn body_proof(context: &Context, item: &str, mut outcome: Outcome) -> Outcome {
 fn texts(context: &Context, indexes: &[usize], mut outcome: Outcome) -> Outcome {
     if let Some(&first) = indexes.first() {
         let edit = &context.edits[first];
-        outcome.before = edit.text_before.clone();
-        outcome.after = edit.text_after.clone();
+        // The source text is for the reviewer; the token text is the fallback.
+        outcome.before = edit.source_before.clone().or_else(|| edit.text_before.clone());
+        outcome.after = edit.source_after.clone().or_else(|| edit.text_after.clone());
     }
     outcome
 }
@@ -397,8 +402,11 @@ fn check_item_edit(context: &Context, claim: &Claim, kind: EditKind, added: bool
     if explains.is_empty() {
         return Outcome::new(ClaimStatus::Empty);
     }
-    let outcome = Outcome::verified("shape", explains.clone());
-    let mut outcome = texts(context, &explains, outcome);
+    // The text of the item itself comes first, before the member list of its impl.
+    let mut ordered = explains.clone();
+    ordered.sort_by_key(|&i| context.edits[i].kind != kind);
+    let outcome = Outcome::verified("shape", explains);
+    let mut outcome = texts(context, &ordered, outcome);
     outcome.class = Some(Class::Logic);
     outcome
 }

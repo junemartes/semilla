@@ -30,7 +30,13 @@ pub fn change_tree(outcomes: &[StepOutcome], after: &Workspace, before: &Workspa
             let owner = outcome.owners[index].map(|claim| outcome_claim_id(outcome, claim));
             let status = edit_status(edit.kind, owner.is_some());
             let class = owner.as_ref().and_then(|id| classes.get(id).copied().flatten());
-            let diff = match (edit.kind, &edit.text_before, &edit.text_after) {
+            // The source text reads better; one line only, else the token text.
+            let one_line = |source: &Option<String>, tokens: &Option<String>| match source {
+                Some(text) if !text.contains('\n') => Some(text.clone()),
+                _ => tokens.clone(),
+            };
+            let (shown_before, shown_after) = (one_line(&edit.source_before, &edit.text_before), one_line(&edit.source_after, &edit.text_after));
+            let diff = match (edit.kind, &shown_before, &shown_after) {
                 // An operator change marks only the operator: `a ⟦<⟧→⟦<=⟧ b`.
                 (EditKind::Modified, Some(_), Some(new)) if edit.attr_before != edit.attr_after && edit.attr_after.as_ref().is_some_and(|a| new.contains(&format!(" {a} "))) => {
                     let (old_attr, new_attr) = (edit.attr_before.clone().unwrap_or_default(), edit.attr_after.clone().unwrap_or_default());
@@ -82,6 +88,7 @@ fn outcome_claim_id(outcome: &StepOutcome, index: usize) -> String {
 fn item_label(path: &str, after: &Workspace, before: &Workspace) -> String {
     let name = path.rsplit("::").next().unwrap_or(path);
     match after.items.get(path).or_else(|| before.items.get(path)) {
+        Some(_) if name.starts_with("impl ") => name.to_string(),
         Some(item) => format!("{} {name}", semilla_syntax::diff::kind_name(item.kind)),
         None => name.to_string(),
     }
@@ -202,9 +209,9 @@ pub fn sources(outcomes: &[StepOutcome], before: &Workspace, after: &Workspace) 
             let key = edit.anchor().map(|a| a.to_string()).or_else(|| edit.file.clone()).unwrap_or_default();
             let entry = map.entry(key).or_insert((None, None));
             if entry.0.is_none() {
-                entry.0 = edit.text_before.clone();
+                entry.0 = edit.source_before.clone().or_else(|| edit.text_before.clone());
             }
-            entry.1 = edit.text_after.clone();
+            entry.1 = edit.source_after.clone().or_else(|| edit.text_after.clone());
         }
     }
     for item in after.items.values().filter(|i| i.kind == semilla_syntax::ItemKind::Fn) {

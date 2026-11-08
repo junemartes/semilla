@@ -123,6 +123,7 @@ impl NormalOracle {
         spans: &mut BTreeMap<String, (String, usize)>,
     ) -> Result<Vec<semilla_normal::BodyComparison>> {
         let (mut before, mut after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
+        let renames = &with_moved_closures(renames, added, &before, &after);
         let mut comparisons = semilla_normal::compare(&before, &after, renames, added);
         if comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. })) {
             let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], features)?;
@@ -140,6 +141,40 @@ impl NormalOracle {
         }
         Ok(comparisons)
     }
+}
+
+/// Adds a rename for each closure that moved into a new function (for example with
+/// `extract-function`): a closure that exists only before, and a closure of a declared new function
+/// that exists only after, with the same N0 text and the same target. The same text means the
+/// same body, with the same captured types, so the rename is sound.
+fn with_moved_closures(
+    renames: &BTreeMap<String, String>,
+    added: &[String],
+    before: &semilla_normal::Levels,
+    after: &semilla_normal::Levels,
+) -> BTreeMap<String, String> {
+    let original = renames;
+    let mut renames = original.clone();
+    let (Some(old), Some(new)) = (before.get("n0"), after.get("n0")) else { return renames };
+    let is_closure = |name: &str| name.contains("::{closure#");
+    let old_names: std::collections::BTreeSet<&str> = old.iter().map(|r| r.name.as_str()).collect();
+    let new_names: std::collections::BTreeSet<&str> = new.iter().map(|r| r.name.as_str()).collect();
+    let mut taken = std::collections::BTreeSet::new();
+    for record in old.iter().filter(|r| is_closure(&r.name) && !new_names.contains(r.name.as_str()) && !original.contains_key(&r.name)) {
+        let moved = new.iter().find(|candidate| {
+            is_closure(&candidate.name)
+                && !old_names.contains(candidate.name.as_str())
+                && !taken.contains(&candidate.name)
+                && added.iter().any(|item| candidate.name.starts_with(&format!("{item}::{{closure")))
+                && candidate.target == record.target
+                && candidate.text == record.text
+        });
+        if let Some(moved) = moved {
+            taken.insert(moved.name.clone());
+            renames.insert(record.name.clone(), moved.name.clone());
+        }
+    }
+    renames
 }
 
 /// Combines the status of one body over the feature sets: equal only if it is equal in every set.

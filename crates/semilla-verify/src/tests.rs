@@ -134,8 +134,9 @@ fn neutral_claims_need_a_body_proof() {
     let unproved = run(PLAIN, EXTRACTED, extract(), &[("demo::f", different(false))], None);
     assert!(matches!(status_of(&unproved, "c1"), ClaimStatus::Unproved { .. }));
 
-    let refuted = run(PLAIN, EXTRACTED, extract(), &[("demo::f", different(true))], None);
-    assert!(matches!(status_of(&refuted, "c1"), ClaimStatus::Refuted { .. }));
+    // A changed graph is not evidence of a behavior change: the claim is unproved, not refuted.
+    let changed_graph = run(PLAIN, EXTRACTED, extract(), &[("demo::f", different(true))], None);
+    assert!(matches!(status_of(&changed_graph, "c1"), ClaimStatus::Unproved { .. }));
 }
 
 #[test]

@@ -715,6 +715,8 @@ fn split_hint(ctx: &Ctx, claims: &[&Claim]) -> Option<String> {
         let root = find(&mut parent, index);
         parts.entry(root).or_default().push(items[index].clone());
     }
+    // A part with only test code belongs to the change that it tests, so it does not count.
+    parts.retain(|_, part| !part.iter().all(|item| is_test_item(ctx, item)));
     (parts.len() > 1).then(|| {
         let text: Vec<String> = parts.values().map(|part| part.join(", ")).collect();
         format!("This group has {} parts with no link in the call graph: {}. Think about a split.", parts.len(), text.join(" | "))

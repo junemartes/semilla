@@ -187,7 +187,10 @@ mod tests {
             ["Inserted demo::f/S0", "Replaced demo::f/S1/init/rhs", "Modified demo::f/tail"],
             "{edits:#?}"
         );
+        assert_eq!(edits[1].source_before.as_deref(), Some("1"));
+        assert_eq!(edits[0].source_after.as_deref(), Some("if i == 0 {\n    return false;\n}"), "{:?}", edits[0].source_after);
         let modified = edits.iter().find(|e| e.kind == EditKind::Modified).unwrap();
+        assert_eq!(modified.source_after.as_deref(), Some("a <= n"));
         assert_eq!((modified.attr_before.as_deref(), modified.attr_after.as_deref()), (Some("<"), Some("<=")));
         assert!(edits[0].block_like);
         assert!(!edits[1].block_like);
@@ -206,6 +209,13 @@ mod tests {
         renames.idents.push((Some("demo::f".into()), "total".into(), "sum".into()));
         let edits = diff(&old, &new, &renames);
         assert!(edits.is_empty(), "{edits:#?}");
+    }
+
+    #[test]
+    fn renames_reach_inside_groups() {
+        let mut renames = Renames::default();
+        renames.idents.push((None, "len".into(), "count".into()));
+        assert_eq!(renames.apply("x", "input [len ..] . get (len) + lens + len_2"), "input [count ..] . get (count) + lens + len_2");
     }
 
     #[test]

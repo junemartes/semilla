@@ -39,6 +39,7 @@ pub fn suggest(edit: &Edit) -> &'static str {
         EditKind::Signature => "change-signature",
         EditKind::Docs => "edit-doc",
         EditKind::Attrs => "change-attribute",
+        EditKind::Members if edit.anchor().is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) => "add-item (for the new or removed method)",
         EditKind::Members => "add-struct-field",
         EditKind::Inserted => match edit.node_after.unwrap_or("") {
             "let" => "add-let",

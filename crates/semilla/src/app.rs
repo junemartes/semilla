@@ -26,11 +26,17 @@ pub struct OpenStep {
     pub claims: Vec<Claim>,
 }
 
+/// The arguments that any op can have, in addition to its own arguments.
+pub const OPTIONAL_ARGS: &[&str] = &["affects", "count", "cond", "sites", "removes", "with", "method", "name", "to", "new", "keep", "note"];
+
 /// The work in progress.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Session {
     pub changeset: ChangeSet,
     pub open: Option<OpenStep>,
+    /// The highest claim number so far, so that a removed claim ID is not used again.
+    #[serde(default)]
+    pub last_claim: usize,
 }
 
 /// The semilla application on one repository.
@@ -92,7 +98,7 @@ impl App {
     pub fn step_begin(&mut self, intent: &str, class: Option<Class>) -> Result<String> {
         let mut session = self.load_session()?;
         if session.open.is_some() {
-            bail!("a step is already open; end it with `step_end` first");
+            bail!("a step is already open; end it with `semilla step end` (MCP: `step_end`) first");
         }
         let tree = self.repo.write_tree()?;
         if session.changeset.steps.is_empty() {
@@ -108,19 +114,26 @@ impl App {
     /// Adds a claim to the open step. Returns the claim ID.
     pub fn claim(&mut self, op: &str, at: Option<&str>, args: serde_json::Map<String, serde_json::Value>) -> Result<String> {
         let mut session = self.load_session()?;
-        let id = {
-            let mut set = session.changeset.clone();
-            if let Some(open) = &session.open {
-                set.steps.push(Step { index: usize::MAX, intent: String::new(), class: None, claims: open.claims.clone(), tree_before: String::new(), tree_after: String::new() });
-            }
-            set.next_claim_id()
+        let used = session.changeset.steps.iter().flat_map(|s| &s.claims).chain(session.open.iter().flat_map(|o| &o.claims));
+        let highest = used.filter_map(|c| c.id.strip_prefix('c').and_then(|n| n.parse::<usize>().ok())).max().unwrap_or(0);
+        let number = highest.max(session.last_claim) + 1;
+        let id = format!("c{number}");
+        let open = session.open.as_mut().context("no step is open; start one with `semilla step begin` (MCP: `step_begin`), or reopen the last step with `semilla step reopen`")?;
+        let Some(info) = semilla_core::ops::op(op) else {
+            bail!("unknown operation `{op}`; `semilla ops` lists all operations");
         };
-        let open = session.open.as_mut().context("no step is open; start one with `step_begin`")?;
-        if semilla_core::ops::op(op).is_none() {
-            bail!("unknown operation `{op}`; see the `ops` tool for the list");
+        // Reject an unknown argument: it is usually a typo, and the verifier would ignore it.
+        let mut known: Vec<&str> = info.args.to_vec();
+        known.extend(OPTIONAL_ARGS.iter().copied().filter(|arg| !info.args.contains(arg)));
+        if let Some(unknown) = args.keys().find(|key| !known.contains(&key.as_str())) {
+            bail!("`{op}` has no argument `{unknown}`; its arguments are: {}", known.join(", "));
+        }
+        if let Some(missing) = info.args.iter().find(|arg| !args.contains_key(**arg)) {
+            bail!("`{op}` needs the argument `{missing}`; `semilla ops {op}` shows an example");
         }
         let at: Option<Anchor> = at.map(|text| text.parse()).transpose().map_err(|e| anyhow::anyhow!("{e}"))?;
         open.claims.push(Claim { id: id.clone(), op: op.to_string(), at, args });
+        session.last_claim = number;
         self.save_session(&session)?;
         Ok(id)
     }
@@ -128,13 +141,37 @@ impl App {
     /// Removes a claim from the open step.
     pub fn unclaim(&mut self, id: &str) -> Result<()> {
         let mut session = self.load_session()?;
-        let open = session.open.as_mut().context("no step is open")?;
+        let open = session.open.as_mut().context("no step is open; reopen the last step with `semilla step reopen`")?;
         let count = open.claims.len();
         open.claims.retain(|claim| claim.id != id);
         if open.claims.len() == count {
             bail!("the open step has no claim {id}");
         }
         self.save_session(&session)
+    }
+
+    /// Opens the last step again, so that the agent can fix its claims. The working tree must still
+    /// be the tree at the end of that step.
+    pub fn step_reopen(&mut self) -> Result<String> {
+        let mut session = self.load_session()?;
+        if session.open.is_some() {
+            bail!("a step is already open");
+        }
+        let step = session.changeset.steps.pop().context("no step to reopen")?;
+        if self.repo.write_tree()? != step.tree_after {
+            bail!("the working tree changed after step {} ended; reopen works only on an unchanged tree", step.index);
+        }
+        if session.changeset.steps.is_empty() {
+            session.changeset.base_tree = step.tree_before.clone();
+        }
+        session.changeset.head_tree = step.tree_before.clone();
+        for group in &mut session.changeset.groups {
+            group.steps.retain(|index| *index != step.index);
+        }
+        let claims = step.claims.len();
+        session.open = Some(OpenStep { intent: step.intent, class: step.class, tree_before: step.tree_before, claims: step.claims });
+        self.save_session(&session)?;
+        Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla step end`", step.index))
     }
 
     /// Ends the open step. The current working tree is the "after" tree.
@@ -336,12 +373,20 @@ impl App {
             subgroup.new_claims.clear();
             subgroup.edited = !suggestion.iter().any(|s| s.role == subgroup.role && s.claims == subgroup.claims && s.title == subgroup.title);
         }
-        session.changeset.subgroups.retain(|s| s.group != group);
-        session.changeset.subgroups.extend(layout);
-        self.save_session(&session)?;
-        let set = session.changeset;
-        let result = self.check_set(&set, false)?;
-        Ok(result.report.organization.into_iter().filter(|e| e.contains("subgroup")).collect())
+        let mut candidate = session.changeset.clone();
+        candidate.subgroups.retain(|s| s.group != group);
+        candidate.subgroups.extend(layout);
+        let saved = self.no_bodies;
+        self.no_bodies = true;
+        let result = self.check_set(&candidate, false);
+        self.no_bodies = saved;
+        let errors: Vec<String> = result?.report.organization.into_iter().filter(|e| e.contains("subgroup") || e.contains(&format!("group {group}"))).collect();
+        // A rejected layout is not saved.
+        if errors.is_empty() {
+            session.changeset = candidate;
+            self.save_session(&session)?;
+        }
+        Ok(errors)
     }
 
     // ----- storage -----
@@ -381,7 +426,7 @@ impl App {
         let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note"))?;
         let set: ChangeSet = serde_json::from_str(&note)?;
         let steps = set.steps.len();
-        self.save_session(&Session { changeset: set, open: None })?;
+        self.save_session(&Session { changeset: set, open: None, last_claim: 0 })?;
         Ok(format!("loaded {steps} steps from {commit}"))
     }
 
@@ -447,8 +492,16 @@ impl App {
     /// Builds the data of the review UI for a change set. The body checks come from the cache of
     /// the background worker when it has run.
     pub fn ui_data_for(&mut self, set: &ChangeSet) -> Result<semilla_ui::UiData> {
-        let set = set.clone();
+        let mut set = set.clone();
         let result = self.check_set(&set, false)?;
+        // A group without subgroups of the agent shows the engine suggestion.
+        let test_items = self.test_items(&set)?;
+        for group in set.groups.clone() {
+            if !set.subgroups.iter().any(|s| s.group == group.id) {
+                let suggestion = semilla_verify::organize::suggest(&set, &group.id, &result.report.steps, &test_items);
+                set.subgroups.extend(suggestion);
+            }
+        }
         let mut flows: Vec<FlowGraph> = Vec::new();
         let mut sources = BTreeMap::new();
         for (step, outcome) in set.steps.iter().zip(&result.outcomes) {
@@ -478,9 +531,20 @@ impl App {
 fn summary_line(report: &Report) -> String {
     let claims: usize = report.steps.iter().map(|s| s.claims.len()).sum();
     let uncovered: usize = report.steps.iter().map(|s| s.uncovered.len()).sum();
+    let phase1_ok = report.phase == "syntax"
+        && report.organization.is_empty()
+        && report.steps.iter().all(|s| s.errors.is_empty() && s.uncovered.is_empty() && s.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending()));
+    let verdict = if report.accepted {
+        "accepted".to_string()
+    } else if phase1_ok && report.pending > 0 {
+        format!("phase 1 ok, {} body proof(s) pending", report.pending)
+    } else if phase1_ok {
+        "phase 1 ok".to_string()
+    } else {
+        "rejected".to_string()
+    };
     let mut text = format!(
-        "result: {} · {} steps · {claims} claims · {uncovered} uncovered · score {:.2}\n",
-        if report.accepted { "accepted" } else { "rejected" },
+        "result: {verdict} · {} steps · {claims} claims · {uncovered} uncovered · score {:.2}\n",
         report.steps.len(),
         report.score
     );

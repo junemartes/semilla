@@ -206,6 +206,10 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
             continue;
         }
         let item = body_index.item_of(comparison);
+        // rustc generates a `main` for a test build. No source item has it.
+        if item.is_none() && is_test_harness_main(&comparison.name, input.after) {
+            continue;
+        }
         let item_name = item.clone().unwrap_or_else(|| comparison.name.clone());
         let affected = |name: &str| {
             affects.iter().any(|entry| entry == name || entry.strip_suffix("::*").is_some_and(|module| name.starts_with(&format!("{module}::"))))
@@ -222,7 +226,7 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
             at: Some(Anchor::item(&item_name)),
             file: comparison.span.as_ref().map(|(file, _)| file.clone()),
             description: format!("the MIR of `{item_name}` changed, but its text did not (an indirect change)"),
-            hint: Some(format!("Add `{item_name}` to the `affects` list of the claim that causes the change.")),
+            hint: Some(format!("`{item_name}` to the `affects` list of the claim that causes the change")),
         });
     }
 
@@ -249,6 +253,13 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
     }
 
     StepOutcome { report, edits, owners, renames, bodies }
+}
+
+/// True for `<crate>::main` when the crate has no `main` function in the source: the `main` that
+/// rustc generates for a test build.
+fn is_test_harness_main(name: &str, workspace: &Workspace) -> bool {
+    let Some((krate, "main")) = name.split_once("::") else { return false };
+    !workspace.items.contains_key(&format!("{krate}::main"))
 }
 
 /// Counts the explicit panic sites in the non-test functions of a workspace (design 5.5):
@@ -342,7 +353,9 @@ pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<S
         if texts.iter().flatten().any(|text| text.split(' ').any(|token| token == "unsafe")) || in_unsafe(edit, before, after) {
             found.insert(format!("unsafe code: {place}"));
         }
-        if texts.iter().flatten().any(|text| text.contains("cfg")) && matches!(edit.kind, semilla_syntax::EditKind::Attrs | semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
+        // `#[cfg(test)]` only selects test code, so it is not in the spotlight.
+        let cfg = |text: &str| text.contains("cfg") && text.replace(' ', "").replace("#[cfg(test)]", "").contains("cfg");
+        if texts.iter().flatten().any(|text| cfg(text)) && matches!(edit.kind, semilla_syntax::EditKind::Attrs | semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
             found.insert(format!("cfg attribute: {place}"));
         }
         if let Some(file) = &edit.file {

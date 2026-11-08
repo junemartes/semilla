@@ -287,3 +287,11 @@ fn md_text(text: &str) -> String {
     }
     out
 }
+
+#[test]
+fn markdown_lists_keep_code_spans() {
+    let mut data = semilla_ui::fixture::demo_data();
+    data.report.warnings.push("the item `a::b_c` changed".into());
+    let text = semilla_ui::export::render_markdown(&data);
+    assert!(text.contains("the item `a::b_c` changed"), "the code span stays");
+}

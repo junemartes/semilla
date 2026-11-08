@@ -124,8 +124,8 @@ enum Command {
     },
     /// Serve the agent tools over MCP (stdio).
     Mcp,
-    /// Print all claim operations.
-    Ops,
+    /// Print all claim operations, or the details of one.
+    Ops { name: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -138,6 +138,8 @@ enum StepAction {
     },
     /// End the open step.
     End,
+    /// Open the last step again, to fix its claims.
+    Reopen,
 }
 
 /// Prints the time of a phase to stderr when `SEMILLA_TIMING` is set.
@@ -180,6 +182,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Step { action: StepAction::Begin { intent, class } } => println!("{}", app.step_begin(&intent, class.as_deref().map(parse_class).transpose()?)?),
         Command::Step { action: StepAction::End } => println!("{}", app.step_end()?),
+        Command::Step { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
         Command::Claim { op, at, args } => {
             let mut map = serde_json::Map::new();
             for arg in args {
@@ -189,7 +192,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             println!("claim {} added", app.claim(&op, at.as_deref(), map)?);
         }
-        Command::Unclaim { id } => app.unclaim(&id)?,
+        Command::Unclaim { id } => {
+            app.unclaim(&id)?;
+            println!("claim {id} removed");
+        }
         Command::Anchor { position, before } => {
             let mut parts = position.rsplitn(3, ':').collect::<Vec<_>>();
             parts.reverse();
@@ -284,10 +290,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
             println!("semilla review UI: http://{addr}");
             tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
         }
-        Command::Ops => {
+        Command::Ops { name: None } => {
             for op in semilla_core::ops::OPS {
-                println!("{:<26} {:<10} {}", op.name, format!("{:?}", op.level).to_lowercase(), op.summary);
+                let args = if op.args.is_empty() { String::new() } else { format!(" ({})", op.args.join(", ")) };
+                println!("{:<26} {:<10} {}{args}", op.name, format!("{:?}", op.level).to_lowercase(), op.summary);
             }
+        }
+        Command::Ops { name: Some(name) } => {
+            let op = semilla_core::ops::op(&name).with_context(|| format!("unknown operation `{name}`"))?;
+            println!("{}: {}", op.name, op.summary);
+            println!("  level: {}   kind: {}   class: {}   role: {}", format!("{:?}", op.level).to_lowercase(), format!("{:?}", op.kind).to_lowercase(),
+                op.class.map(|c| serde_json::to_value(c).unwrap().as_str().unwrap().to_string()).unwrap_or("computed from the MIR".into()),
+                serde_json::to_value(op.role).unwrap().as_str().unwrap());
+            println!("  needs: {}", if op.args.is_empty() { "an anchor only".to_string() } else { format!("an anchor, and {}", op.args.join(", ")) });
+            let optional: Vec<&str> = app::OPTIONAL_ARGS.iter().copied().filter(|arg| !op.args.contains(arg)).collect();
+            println!("  optional: {}", optional.join(", "));
+            let example_args: Vec<String> = op.args.iter().map(|a| format!("{a}=…")).collect();
+            println!("  example: semilla claim {} --at <anchor> {}", op.name, example_args.join(" "));
         }
         Command::Mcp => unreachable!(),
     }

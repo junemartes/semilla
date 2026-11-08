@@ -290,7 +290,7 @@ impl<'a> Model<'a> {
         let api = if report.api_level.is_some() { summary.api_level.to_string() } else { format!("{} (estimate)", summary.api_level) };
         let mut facts = vec![
             ("Verdict", if summary.accepted { "accepted".to_string() } else { "rejected".to_string() }),
-            ("Score", format!("{:.2}", summary.coverage)),
+            ("Score", format!("{:.2} (1.00: all claims proved; a free edit counts 0.5, an uncovered change 0)", summary.coverage)),
             ("Phase", self.phase_label()),
             ("Groups", summary.groups.len().to_string()),
             ("Steps", summary.step_count.to_string()),
@@ -858,6 +858,21 @@ fn html_sources(out: &mut String, model: &Model) {
 // Markdown.
 
 /// Escapes inline Markdown text. A line break becomes a space.
+/// Like [`md`], but text between backticks becomes a code span. The verifier messages use
+/// backticks for code.
+fn md_with_code(text: &str) -> String {
+    let parts: Vec<&str> = text.split('`').collect();
+    if parts.len() % 2 == 0 {
+        // The backticks are not in pairs: escape all of them.
+        return md(text);
+    }
+    parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| if index % 2 == 1 { format!("`{}`", part.replace('\n', " ")) } else { md(part) })
+        .collect()
+}
+
 fn md(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -932,7 +947,7 @@ fn md_summary(out: &mut String, model: &Model) {
         }
         let _ = writeln!(out, "### {title}\n");
         for item in items {
-            let _ = writeln!(out, "- {}", md(&item));
+            let _ = writeln!(out, "- {}", md_with_code(&item));
         }
         out.push('\n');
     }

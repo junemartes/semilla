@@ -65,6 +65,11 @@ pub struct Edit {
     pub attr_before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attr_after: Option<String>,
+    /// The source text of the old and the new node, for views (the token text is for compares).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_after: Option<String>,
     /// True if the old or the new subtree contains statements.
     pub block_like: bool,
     /// The file and the line, for views and hints.
@@ -85,6 +90,8 @@ impl Edit {
             text_after: None,
             attr_before: None,
             attr_after: None,
+            source_before: None,
+            source_after: None,
             block_like: false,
             file: Some(file.to_string()),
             line: 0,
@@ -122,10 +129,27 @@ impl Renames {
         if renames.is_empty() {
             return text.to_string();
         }
-        text.split(' ')
-            .map(|token| renames.iter().find(|(_, old, _)| old == token).map(|(_, _, new)| new.as_str()).unwrap_or(token))
-            .collect::<Vec<_>>()
-            .join(" ")
+        // Replace whole identifiers only. Token text can put a delimiter next to a word
+        // (`[len ..]`, `(len)`), so the scan looks at character classes, not at spaces.
+        let mut out = String::with_capacity(text.len());
+        let mut word = String::new();
+        let flush = |word: &mut String, out: &mut String| {
+            if !word.is_empty() {
+                let replaced = renames.iter().find(|(_, old, _)| old == word).map(|(_, _, new)| new.as_str());
+                out.push_str(replaced.unwrap_or(word));
+                word.clear();
+            }
+        };
+        for c in text.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+            } else {
+                flush(&mut word, &mut out);
+                out.push(c);
+            }
+        }
+        flush(&mut word, &mut out);
+        out
     }
 }
 
@@ -201,6 +225,8 @@ fn item_edit(kind: EditKind, before: Option<&Item>, after: Option<&Item>) -> Edi
         text_after: after.map(|item| item.source.clone()),
         attr_before: before.map(|item| kind_name(item.kind).to_string()),
         attr_after: after.map(|item| kind_name(item.kind).to_string()),
+        source_before: before.map(|item| item.source.clone()),
+        source_after: after.map(|item| item.source.clone()),
         block_like: true,
         file: Some(any.file.clone()),
         line: any.line_start,
@@ -237,6 +263,8 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         text_after: Some(new),
         attr_before: None,
         attr_after: None,
+        source_before: None,
+        source_after: None,
         block_like: false,
         file: Some(after.file.clone()),
         line: after.line_start,
@@ -260,7 +288,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         edits.push(attribute_edit(EditKind::Members, View::Signature, before.members.join("\n"), after.members.join("\n")));
     }
     if let (Some(old), Some(new)) = (&before.body, &after.body) {
-        let mut context = Context { renames, item_before: &before.path, item_after: &after.path, file: &after.file, edits: Vec::new() };
+        let mut context = Context { renames, item_before: &before.path, item_after: &after.path, file: &after.file, source_before: before, source_after: after, edits: Vec::new() };
         context.block(old, new, &[], &[]);
         detect_moves(&mut context.edits);
         context.edits.sort_by_key(|edit| edit.line);
@@ -273,7 +301,43 @@ struct Context<'a> {
     item_before: &'a str,
     item_after: &'a str,
     file: &'a str,
+    source_before: &'a Item,
+    source_after: &'a Item,
     edits: Vec<Edit>,
+}
+
+/// The source text of a node, cut from the source of its item.
+fn node_source(item: &Item, node: &Node) -> Option<String> {
+    let lines: Vec<&str> = item.source.lines().collect();
+    let (start, end) = (node.start, node.end);
+    let first = start.0.checked_sub(item.line_start)?;
+    let last = end.0.checked_sub(item.line_start)?;
+    if last >= lines.len() || first > last {
+        return None;
+    }
+    let mut text = String::new();
+    for (index, line) in lines[first..=last].iter().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        let from = if index == 0 { start.1.min(chars.len()) } else { 0 };
+        let to = if first + index == last { end.1.min(chars.len()) } else { chars.len() };
+        if index > 0 {
+            text.push('\n');
+        }
+        text.extend(&chars[from.min(to)..to]);
+    }
+    Some(dedent(&text, start.1))
+}
+
+/// Removes `column` spaces from the lines after the first, so that the text reads as if the node
+/// started at column 0. A line with less indentation loses only its spaces.
+fn dedent(text: &str, column: usize) -> String {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return String::new() };
+    let rest = lines.map(|line| {
+        let spaces = line.len() - line.trim_start_matches(' ').len();
+        line[spaces.min(column)..].to_string()
+    });
+    std::iter::once(first.to_string()).chain(rest).collect::<Vec<_>>().join("\n")
 }
 
 impl Context<'_> {
@@ -299,6 +363,8 @@ impl Context<'_> {
             text_after: after.map(|(node, _)| node.text.clone()),
             attr_before: before.and_then(|(node, _)| node.attr.clone()),
             attr_after: after.and_then(|(node, _)| node.attr.clone()),
+            source_before: before.and_then(|(node, _)| node_source(self.source_before, node)),
+            source_after: after.and_then(|(node, _)| node_source(self.source_after, node)),
             block_like: before.is_some_and(|(node, _)| node.has_block()) || after.is_some_and(|(node, _)| node.has_block()),
             file: Some(self.file.to_string()),
             line,
@@ -419,6 +485,7 @@ fn detect_moves(edits: &mut Vec<Edit>) {
                 edit.after = inserted.after;
                 edit.node_after = inserted.node_after;
                 edit.text_after = inserted.text_after;
+                edit.source_after = inserted.source_after;
                 edit.line = inserted.line;
             }
         }
