@@ -4,6 +4,7 @@ description = "The semilla verifier: checks the claims of each step and the cove
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 anyhow = "1"

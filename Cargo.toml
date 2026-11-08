@@ -6,6 +6,7 @@ members = ["crates/*", "spikes/s1"]
 version = "0.1.0"
 edition = "2024"
 publish = false
+license = "MIT"
 
 # The dependencies (syn, egglog) are much faster with optimization. Our own crates stay easy to
 # debug.

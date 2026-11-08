@@ -4,6 +4,7 @@ description = "The local review UI of semilla: an HTTP server, a JSON API, and a
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 semilla-core = { path = "../semilla-core" }

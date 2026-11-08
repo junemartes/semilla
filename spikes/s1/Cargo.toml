@@ -4,6 +4,7 @@ description = "Spike S1: does the normal form ladder (N0 to N4) make neutral ref
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

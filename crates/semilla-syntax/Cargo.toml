@@ -4,6 +4,7 @@ description = "The syntax view of semilla: the entity tree, anchors, the syntax 
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 anyhow = "1"
