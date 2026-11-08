@@ -1,0 +1,19 @@
+[package]
+name = "semilla-syntax"
+description = "The syntax view of semilla: the entity tree, anchors, the syntax diff, flow views, and the workspace graph."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+semilla-core = { path = "../semilla-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
