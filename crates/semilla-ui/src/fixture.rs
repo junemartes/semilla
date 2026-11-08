@@ -328,6 +328,7 @@ pub fn demo_report() -> Report {
         warnings: vec!["G3 is a refactor group, but claim c8 is not proved neutral.".into()],
         score: 0.0,
         panic_delta: 0,
+        api_level: None,
         accepted: false,
     };
     report.finish();

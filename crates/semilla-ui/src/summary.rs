@@ -538,9 +538,16 @@ fn claim_texts<'a>(ctx: &'a Ctx, claim: &'a Claim) -> Vec<&'a str> {
     texts
 }
 
-/// The API level: `major` for a changed or removed public item, `minor` for a new public
-/// item, `patch` for other changes, `none` without claims.
+/// The API level. The verifier's estimate comes first. Without it, the UI guesses from the
+/// claims: `major` for a changed or removed public item, `minor` for a new public item, `patch`
+/// for other changes, `none` without claims.
 fn api_level(ctx: &Ctx) -> &'static str {
+    match ctx.data.report.api_level.as_deref() {
+        Some("major") => return "major",
+        Some("minor") => return "minor",
+        Some("patch") => return "patch",
+        _ => {}
+    }
     let mut level = 0;
     for (_, claim) in ctx.all_claims() {
         level = level.max(1);
