@@ -245,6 +245,9 @@ pub fn text_report(steps: &[StepReport]) -> String {
                 out.push_str(&format!("       hint: add {hint}\n"));
             }
         }
+        for item in &step.spotlight {
+            out.push_str(&format!("  ! spotlight: {item}\n"));
+        }
         for error in &step.errors {
             out.push_str(&format!("  ✗ error: {error}\n"));
         }

@@ -23,7 +23,7 @@ The agent keeps its own edit tools. It records each change as a step with claims
 ```sh
 semilla step begin "return 0 for an empty cart"
 # ... edit the code ...
-semilla anchor crates/shop-core/src/cart.rs:7          # → shop_core::cart::Cart::total/S0
+semilla anchor --before crates/shop-core/src/cart.rs:7 # → shop_core::cart::Cart::total/S0
 semilla claim add-early-exit --at shop_core::cart::Cart::total/S0 cond="self.items.is_empty()"
 semilla check                                           # verifies the open step
 semilla step end
@@ -31,7 +31,7 @@ semilla step end
 
 Rules:
 
-- Claims on existing code use the anchors of the tree **before** the step. `add-*` statement claims use the anchor of the **new** statement.
+- Claims on existing code use the anchors of the tree **before** the step: get them with `semilla anchor --before FILE:LINE[:COLUMN]`, with the line numbers of the old file. `add-*` statement claims use the anchor of the **new** statement: get them with `semilla anchor FILE:LINE`.
 - Free edits exist only at the expression level (`replace-expression`, `replace-pattern`, `replace-type`). Above the expression level, use structured ops (`add-if`, `add-arm`, `wrap-statements`, …). `semilla ops` lists all operations.
 - Put neutral refactors in their own steps. A neutral claim needs a body proof of its whole function.
 - `semilla suggest-claims` proposes claims for the uncovered changes. The suggestions are not trusted: check them and add them with `semilla claim`.
@@ -76,6 +76,9 @@ For each step, the verifier:
 2. Checks each claim: the shape of its edit, or a body proof with the MIR normal forms (N0 to N4), or an SMT check of a condition.
 3. Rejects each edit without a claim (**uncovered**), each claim without an edit (**empty**), and each body whose MIR changed when its text did not (an **indirect change** without `affects`).
 4. Compares the declared class of the step with the computed class.
+5. Reports the change in explicit panic sites, and puts `unsafe` code, `#[cfg]` attributes, features, and build scripts in the **spotlight**.
+
+`semilla index` writes the index of the working tree to `.semilla/index.json`: the workspace graph, the items, and the MIR content hash of each body.
 
 For the change set, it also checks the group and subgroup rules. The result has a score from 0 to 1.
 

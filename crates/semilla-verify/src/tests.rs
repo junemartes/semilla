@@ -300,3 +300,11 @@ fn new_claims_go_to_their_suggested_subgroup() {
     assert_eq!(set.subgroups[1].role, Role::Mechanical);
     assert_eq!(set.subgroups[1].new_claims, ["c2"]);
 }
+
+#[test]
+fn unsafe_changes_are_in_the_spotlight() {
+    let before = "pub fn f(p: *const u32) -> u32 {\n    unsafe { *p }\n}\n";
+    let after = "pub fn f(p: *const u32) -> u32 {\n    unsafe { *p.add(1) }\n}\n";
+    let report = run(before, after, vec![claim("c1", "replace-expression", Some("demo::f/tail/body/tail/operand"), serde_json::json!({}))], &[], None);
+    assert!(report.spotlight.iter().any(|s| s.starts_with("unsafe code")), "{:?}", report.spotlight);
+}

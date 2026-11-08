@@ -213,6 +213,7 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
     }
 
     report.panic_delta = panic_sites(input.after) - panic_sites(input.before);
+    report.spotlight = spotlight(&edits, input.before, input.after);
 
     report.computed_class = report.claims.iter().filter_map(|claim| claim.class).max_by_key(|class| class_rank(*class));
     if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
@@ -250,6 +251,51 @@ pub fn panic_sites(workspace: &Workspace) -> i64 {
         });
     }
     count
+}
+
+/// The edits that always need the reviewer's attention (design 5.5).
+pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<String> {
+    let mut found = BTreeSet::new();
+    for edit in edits {
+        let place = edit.anchor().map(|a| a.to_string()).or_else(|| edit.file.clone()).unwrap_or_default();
+        let texts = [edit.text_before.as_deref(), edit.text_after.as_deref()];
+        if texts.iter().flatten().any(|text| text.split(' ').any(|token| token == "unsafe")) || in_unsafe(edit, before, after) {
+            found.insert(format!("unsafe code: {place}"));
+        }
+        if texts.iter().flatten().any(|text| text.contains("cfg")) && matches!(edit.kind, semilla_syntax::EditKind::Attrs | semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
+            found.insert(format!("cfg attribute: {place}"));
+        }
+        if let Some(file) = &edit.file {
+            if file.ends_with("build.rs") {
+                found.insert(format!("build script: {file}"));
+            }
+            if file.ends_with("Cargo.toml") {
+                let old = before.other_files.get(file).map(String::as_str).unwrap_or("");
+                let new = after.other_files.get(file).map(String::as_str).unwrap_or("");
+                let features = |text: &str| text.split("[features]").nth(1).map(|rest| rest.split("\n[").next().unwrap_or("").to_string());
+                if features(old) != features(new) {
+                    found.insert(format!("features: {file}"));
+                }
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// True if the edit is inside an `unsafe` block of a function body.
+fn in_unsafe(edit: &Edit, before: &Workspace, after: &Workspace) -> bool {
+    let check = |anchor: Option<&Anchor>, workspace: &Workspace| {
+        let Some(anchor) = anchor else { return false };
+        let mut current = anchor.clone();
+        while let Some(parent) = current.parent() {
+            if semilla_syntax::resolve_node(workspace, &parent).is_some_and(|node| node.kind == "unsafe") {
+                return true;
+            }
+            current = parent;
+        }
+        false
+    };
+    check(edit.before.as_ref(), before) || check(edit.after.as_ref(), after)
 }
 
 /// The rank of a class: a step has the highest class of its claims.
@@ -310,6 +356,11 @@ pub fn verify_changeset(
         report.organization.push("the last step does not end at the head tree".to_string());
     }
     report.steps = outcomes.iter().map(|outcome| outcome.report.clone()).collect();
+    for step in &report.steps {
+        for item in &step.spotlight {
+            report.warnings.push(format!("spotlight (step {}): {item}", step.step));
+        }
+    }
     organize::check(set, &report.steps.clone(), &mut report, options);
     report.finish();
     (report, outcomes)

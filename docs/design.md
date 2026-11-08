@@ -1,6 +1,6 @@
 # Semilla design (draft 2)
 
-Status: draft. Date: 2026-11-08.
+Status: draft, with an MVP implementation (section 18). Date: 2026-11-08.
 
 ## 1. Goal and scope
 
@@ -838,3 +838,35 @@ Not in the MVP: dependency expansion and upgrade diffs, Kani and fuzzing, the LL
 - **Version control:** Jujutsu, Darcs, Pijul, Unison.
 
 No known project combines verified semantic claims, MIR classes, and a crate flow explorer.
+
+## 18. Implementation status (MVP)
+
+All milestones M0 to M6 have an implementation. `cargo test --workspace` runs the tests; `crates/semilla/tests/e2e.rs` runs the real binary on a two-crate git repository.
+
+| Milestone | Status | Notes |
+|---|---|---|
+| M0 Spikes | S1 done; S4 and S6 done inside the crates | S1 proves 17 of 17 neutral cases; 19 negative controls stay different (`spikes/s1/README.md`). S2 (Charon) and S3 (compile cost) are not done: the flow views use source-level regions. |
+| M1 Index | Done | `semilla-syntax` (entity tree, anchors, three views), `semilla index` (graph, items, N0/N1 body hashes). |
+| M2 Verifier core | Done | `semilla-verify`: predict / match / mask, coverage, indirect changes, class checks, score. |
+| M3 Ops and SMT | Done | All ops of section 5 have a checker. Free edits are block-free and tight. `semilla-smt` computes effects with Z3 4.15.4. |
+| M4 Strong normal forms | Done | `semilla-normal`: N1 (rename maps, content hashes), N3 (bounded inlining), N4 (loop-free terms in egglog, audited rules). |
+| M5 Agent tools | Done | CLI and MCP server: steps, claims, `anchor --before`, `check_step`, `suggest_claims`, groups, subgroups, `tag`. |
+| M6 UI | Done | `semilla-ui`: change set, change tree, flow views, workspace map, search, review state. |
+
+### Changes to the design from the implementation
+
+1. **`anchor --before`.** Claims on existing code use the "before" numbering, so the anchor tool can read the tree before the open step.
+2. **Known `std` macros** (`println!`, `format!`, `assert!`, `vec!`, …) have their arguments as children (`args[i]`). Other macros stay opaque.
+3. **A final block-like expression** (`if`, `match`, a loop) is a statement (`S<i>`), not the `tail`.
+4. **Panic locations are not behavior** (section 8.2). N4 has rules that commute asserts with the same message.
+5. **The MIR printer** of the driver replaces `Body::dump`, because `dump` can print two different bodies as the same text (cast kinds, constants).
+6. **Flow views** come from source-level regions, not from Charon (spike S2 is not done).
+7. **Subgroups** have IDs, and the engine marks the claims that it adds after the agent's edit (`new_claims`).
+
+### Limits
+
+- The body check covers the default features only (B11).
+- N3 does not inline trait methods, closures, generic functions, or functions of other crates. N4 handles loop-free bodies only.
+- The external leaves of the workspace graph get their badges from the call sites, not from the callee signatures.
+- The API level comes from the claim ops, not from `cargo-semver-checks`.
+- The LLM intent check, the revert check, and the dependency upgrade diff are not implemented.

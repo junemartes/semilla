@@ -83,6 +83,8 @@ enum Command {
         #[arg(long)]
         set: Option<PathBuf>,
     },
+    /// Build the index of the working tree in `.semilla/index.json`.
+    Index,
     /// Print the change tree.
     Show,
     /// Store the change set on a commit (default HEAD) as a git note.
@@ -193,6 +195,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             None => println!("{}", serde_json::to_string_pretty(&app.subgroups_suggest(&group)?)?),
         },
+        Command::Index => println!("{}", app.index()?),
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),
         Command::Load { commit } => println!("{}", app.load(&commit)?),

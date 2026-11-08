@@ -159,6 +159,28 @@ impl App {
         semilla_syntax::anchor_at(&ws, file, line, column).map(|anchor| anchor.to_string()).with_context(|| format!("no item at {file}:{line}"))
     }
 
+    /// Builds the index of the working tree: the workspace graph, the items, and the MIR content
+    /// hash of each body. Writes `.semilla/index.json` and returns a summary.
+    pub fn index(&mut self) -> Result<String> {
+        let tree = self.repo.write_tree()?;
+        let ws = self.workspace(&tree)?;
+        let graph = semilla_syntax::graph::workspace_graph(&ws, &BTreeMap::new(), &BTreeMap::new());
+        let hashes = if self.no_bodies {
+            BTreeMap::new()
+        } else {
+            let levels = NormalOracle { repo: self.repo.clone() }.levels(&tree)?;
+            semilla_normal::body_hashes(levels.get("n0").map(Vec::as_slice).unwrap_or(&[]))
+        };
+        let items: Vec<serde_json::Value> = ws
+            .items
+            .values()
+            .map(|item| serde_json::json!({"path": item.path, "kind": semilla_syntax::diff::kind_name(item.kind), "file": item.file, "lines": [item.line_start, item.line_end], "test": item.test}))
+            .collect();
+        let index = serde_json::json!({"tree": tree, "crates": ws.crates, "items": items, "graph": graph, "body_hashes": hashes});
+        std::fs::write(self.repo.state_dir().join("index.json"), serde_json::to_string_pretty(&index)?)?;
+        Ok(format!("indexed tree {tree}: {} crates, {} items, {} bodies", ws.crates.len(), ws.items.len(), hashes.len()))
+    }
+
     // ----- checks -----
 
     /// The change set with the open step as a last step (its "after" tree is the working tree).

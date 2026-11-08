@@ -105,6 +105,10 @@ pub struct StepReport {
     /// The change in the number of explicit panic sites (design 5.5).
     #[serde(default)]
     pub panic_delta: i64,
+    /// Changes that always need the reviewer's attention: `unsafe` code, `#[cfg]` attributes,
+    /// features, and build scripts (design 5.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spotlight: Vec<String>,
 }
 
 impl StepReport {

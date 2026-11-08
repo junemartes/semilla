@@ -75,6 +75,12 @@ fn agent_flow_end_to_end() {
     let dir = setup();
     let repo = dir.path();
 
+    // The index of the base tree: the graph and the MIR content hash of each body.
+    let indexed = run(repo, &["index"], 0);
+    assert!(indexed.contains("2 crates"), "{indexed}");
+    let index: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/index.json")).unwrap()).unwrap();
+    assert!(index["body_hashes"].as_object().unwrap().keys().any(|k| k.contains("Cart::total")), "{}", index["body_hashes"]);
+
     // Step 0: a neutral rename of a local variable. The MIR proves it.
     run(repo, &["step", "begin", "rename s to sum", "--class", "neutral"], 0);
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);

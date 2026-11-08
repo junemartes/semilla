@@ -19,7 +19,7 @@ pub struct NormalOracle {
 
 impl NormalOracle {
     /// Builds (once) the MIR records of a tree at all levels.
-    fn levels(&self, tree: &str) -> Result<semilla_normal::Levels> {
+    pub fn levels(&self, tree: &str) -> Result<semilla_normal::Levels> {
         let dir = self.repo.materialize(tree)?;
         let mut levels = semilla_normal::Levels::default();
         for level in LEVELS {
