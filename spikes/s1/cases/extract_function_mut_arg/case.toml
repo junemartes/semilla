@@ -1,0 +1,4 @@
+expect = "neutral"
+needs = "N3"
+note = "Extract a function (`#[inline(never)]`) that changes its own argument (a copy). The caller value stays."
+added = ["s1case::bump"]

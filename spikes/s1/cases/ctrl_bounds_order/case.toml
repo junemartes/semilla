@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4): swap two bounds checks. The panic message prints the index, so the message can change."

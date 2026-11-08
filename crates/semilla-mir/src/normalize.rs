@@ -8,6 +8,15 @@
 //! 1. Remove the statements that have no runtime effect (storage markers, borrow check marks).
 //! 2. Remove the debug information (the names of user variables).
 //! 3. Jump over empty blocks that contain only a `goto`.
+//! 3b. Merge a block that ends with a `goto` with its target, if the target has no other
+//!    predecessor (the unwind edges count). The code runs in the same order, so the behavior is
+//!    the same. The N3 inliner needs this rule: it adds a `goto` into the callee entry.
+//! 3c. Forward a copy: replace `_t = copy p; ...; use(copy _t)` with `...; use(copy p)` when the
+//!    copy and the only use of `_t` are in the same block, `p` is a local or a field of a local,
+//!    no statement between them writes the local of `p`, and the body takes the address of
+//!    neither local. Then `p` has the same value at the use, so the use reads the same value.
+//!    `_t` has no other use, so the copy has no other effect. The N3 inliner needs this rule,
+//!    because the inlined code and the original code copy values in different places.
 //! 4. Remove the blocks that the entry cannot reach.
 //! 5. Order the blocks by a depth-first walk from the entry.
 //! 6. Number the locals in the order of their first use. The return local and the arguments keep
@@ -24,24 +33,119 @@ use std::collections::HashMap;
 
 use rustc_public::mir::visit::{Location, MirVisitor, MutMirVisitor, PlaceContext};
 use rustc_public::mir::{
-    BasicBlock, BasicBlockIdx, Body, Local, LocalDecl, Mutability, Operand, StatementKind,
-    SwitchTargets, TerminatorKind, UnwindAction,
+    BasicBlock, BasicBlockIdx, Body, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem,
+    Rvalue, StatementKind, SwitchTargets, Terminator, TerminatorKind, UnwindAction,
 };
 
-/// Returns the canonical text of a body. Two bodies with the same text have the same behavior.
-pub fn canonical_text(body: &Body) -> String {
-    let body = canonical_body(body);
-    let mut text = Vec::new();
-    // The name is not part of the body, so all bodies get the same placeholder name.
-    body.dump(&mut text, "_").expect("a write to a Vec does not fail");
-    stable_closure_names(&String::from_utf8(text).expect("MIR text is UTF-8"))
+use crate::print::Printer;
+
+/// The canonical form of a body: its text and the local functions that it refers to.
+pub struct Canonical {
+    pub text: String,
+    pub callees: Vec<String>,
+}
+
+/// Returns the canonical text of a body that `canonical_body` made. Two bodies with the same
+/// text have the same behavior.
+pub fn canonical_text(body: &Body) -> Canonical {
+    let mut printer = Printer::default();
+    let text = printer.body(body);
+    Canonical { text: stable_closure_names(&text), callees: printer.callees.into_iter().collect() }
+}
+
+/// Returns the shape of the control flow graph: the kind of each terminator and its successors,
+/// without the statements and without the operands. Two bodies with the same shape can still
+/// have a different logic, but a different shape always means a change in the control flow.
+pub fn shape(body: &Body) -> String {
+    let mut out = String::new();
+    for (index, block) in body.blocks.iter().enumerate() {
+        let kind = &block.terminator.kind;
+        let head = match kind {
+            TerminatorKind::Goto { .. } => "goto".to_string(),
+            TerminatorKind::SwitchInt { targets, .. } => {
+                let values: Vec<String> =
+                    targets.branches().map(|(value, _)| value.to_string()).collect();
+                format!("switch[{}]", values.join(","))
+            }
+            TerminatorKind::Resume => "resume".to_string(),
+            TerminatorKind::Abort => "abort".to_string(),
+            TerminatorKind::Return => "return".to_string(),
+            TerminatorKind::Unreachable => "unreachable".to_string(),
+            TerminatorKind::Drop { .. } => "drop".to_string(),
+            TerminatorKind::Call { target, .. } => {
+                if target.is_some() {
+                    "call".to_string()
+                } else {
+                    "call!".to_string()
+                }
+            }
+            TerminatorKind::Assert { .. } => "assert".to_string(),
+            TerminatorKind::InlineAsm { .. } => "asm".to_string(),
+        };
+        let unwind = match kind.unwind() {
+            Some(UnwindAction::Cleanup(target)) => format!(" u{target}"),
+            Some(UnwindAction::Continue) | None => String::new(),
+            Some(UnwindAction::Terminate) => " ut".to_string(),
+            Some(UnwindAction::Unreachable) => " uu".to_string(),
+        };
+        let normal: Vec<String> =
+            normal_successors(kind).iter().map(|target| target.to_string()).collect();
+        if index > 0 {
+            out.push(';');
+        }
+        out.push_str(&format!("{index}:{head}->{}{unwind}", normal.join(",")));
+    }
+    out
+}
+
+/// Returns the successors of a terminator without the unwind target.
+fn normal_successors(kind: &TerminatorKind) -> Vec<BasicBlockIdx> {
+    match kind {
+        TerminatorKind::Goto { target } => vec![*target],
+        TerminatorKind::SwitchInt { targets, .. } => targets.all_targets(),
+        TerminatorKind::Drop { target, .. } | TerminatorKind::Assert { target, .. } => {
+            vec![*target]
+        }
+        TerminatorKind::Call { target, .. } => target.iter().copied().collect(),
+        TerminatorKind::InlineAsm { destination, .. } => destination.iter().copied().collect(),
+        TerminatorKind::Resume
+        | TerminatorKind::Abort
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable => Vec::new(),
+    }
+}
+
+/// Returns true if the control flow graph has no cycle. The unwind edges count.
+pub fn is_loop_free(body: &Body) -> bool {
+    // 0: not visited, 1: on the current path, 2: done.
+    let mut state = vec![0u8; body.blocks.len()];
+    let mut stack: Vec<(BasicBlockIdx, usize)> = vec![(0, 0)];
+    state[0] = 1;
+    while let Some((block, next)) = stack.pop() {
+        let successors = body.blocks[block].terminator.successors();
+        if next < successors.len() {
+            stack.push((block, next + 1));
+            let successor = successors[next];
+            match state[successor] {
+                0 => {
+                    state[successor] = 1;
+                    stack.push((successor, 0));
+                }
+                1 => return false,
+                _ => {}
+            }
+        } else {
+            state[block] = 2;
+        }
+    }
+    true
 }
 
 /// Replaces names such as `{closure@src/lib.rs:2:18: 2:21}` with `{closure#0}`.
 ///
 /// The same original name always gets the same number, so two different closures in one body
 /// stay different.
-fn stable_closure_names(text: &str) -> String {
+pub fn stable_closure_names(text: &str) -> String {
     let mut numbers: HashMap<String, usize> = HashMap::new();
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -53,7 +157,9 @@ fn stable_closure_names(text: &str) -> String {
             .find(|c: char| !(c.is_ascii_alphabetic() || c == ' ' || c == '-'))
             .map(|end| end + 1);
         match (kind_end, candidate.find('}')) {
-            (Some(kind_end), Some(close)) if kind_end > 1 && candidate[kind_end..].starts_with('@') => {
+            (Some(kind_end), Some(close))
+                if kind_end > 1 && candidate[kind_end..].starts_with('@') =>
+            {
                 let original = &candidate[..=close];
                 let next = numbers.len();
                 let number = *numbers.entry(original.to_string()).or_insert(next);
@@ -79,6 +185,8 @@ pub fn canonical_body(body: &Body) -> Body {
         block.statements.retain(|statement| has_runtime_effect(&statement.kind));
     }
     skip_empty_gotos(&mut blocks);
+    merge_straight_blocks(&mut blocks);
+    forward_copies(&mut blocks, arg_count, body.locals().len());
     let blocks = order_blocks(blocks);
 
     // The visitors need a body, so build one with the original locals first.
@@ -111,11 +219,171 @@ fn has_runtime_effect(kind: &StatementKind) -> bool {
 
 /// Changes each jump to an empty `goto` block into a jump to the end of the `goto` chain.
 fn skip_empty_gotos(blocks: &mut [BasicBlock]) {
-    let resolved: Vec<BasicBlockIdx> = (0..blocks.len()).map(|index| goto_chain_end(blocks, index)).collect();
+    let resolved: Vec<BasicBlockIdx> =
+        (0..blocks.len()).map(|index| goto_chain_end(blocks, index)).collect();
     // The entry block stays the entry block, so it is not resolved.
     for block in blocks.iter_mut() {
         remap_targets(&mut block.terminator.kind, |target| resolved[target]);
     }
+}
+
+/// Merges each block that ends with a `goto` with its target, if the target has no other
+/// predecessor and is not the entry. The merged target becomes unreachable, and
+/// `order_blocks` removes it.
+fn merge_straight_blocks(blocks: &mut [BasicBlock]) {
+    loop {
+        let mut predecessors = vec![0usize; blocks.len()];
+        predecessors[0] = 1;
+        for block in blocks.iter() {
+            for successor in block.terminator.successors() {
+                predecessors[successor] += 1;
+            }
+        }
+        let candidate = (0..blocks.len()).find_map(|from| match blocks[from].terminator.kind {
+            TerminatorKind::Goto { target }
+                if target != from && target != 0 && predecessors[target] == 1 =>
+            {
+                Some((from, target))
+            }
+            _ => None,
+        });
+        let Some((from, target)) = candidate else {
+            return;
+        };
+        let statements = std::mem::take(&mut blocks[target].statements);
+        let terminator = blocks[target].terminator.clone();
+        // The old target keeps no successor, so it does not count as a predecessor.
+        blocks[target].terminator.kind = TerminatorKind::Unreachable;
+        blocks[from].statements.extend(statements);
+        blocks[from].terminator = terminator;
+    }
+}
+
+/// Applies rule 3c until no copy qualifies.
+fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usize) {
+    loop {
+        let mut mentions = vec![0usize; local_count];
+        let mut taken = vec![false; local_count];
+        for block in blocks.iter() {
+            count_mentions(block, &mut mentions);
+            for statement in &block.statements {
+                if let StatementKind::Assign(
+                    _,
+                    Rvalue::Ref(_, _, place)
+                    | Rvalue::AddressOf(_, place)
+                    | Rvalue::Reborrow(_, _, place),
+                ) = &statement.kind
+                {
+                    if !place.projection.iter().any(|elem| matches!(elem, ProjectionElem::Deref)) {
+                        taken[place.local] = true;
+                    }
+                }
+            }
+        }
+        let mut changed = false;
+        'blocks: for block in blocks.iter_mut() {
+            for index in 0..block.statements.len() {
+                let StatementKind::Assign(
+                    target,
+                    Rvalue::Use(Operand::Copy(source) | Operand::Move(source), _),
+                ) = &block.statements[index].kind
+                else {
+                    continue;
+                };
+                let (temp, source) = (target.local, source.clone());
+                let simple_source = source.projection.iter().all(|elem| {
+                    matches!(elem, ProjectionElem::Field(..) | ProjectionElem::Downcast(_))
+                });
+                // The temporary has two mentions: this assignment and its only use.
+                if !target.projection.is_empty()
+                    || temp <= arg_count
+                    || temp == source.local
+                    || mentions[temp] != 2
+                    || taken[temp]
+                    || taken[source.local]
+                    || !simple_source
+                {
+                    continue;
+                }
+                if forward_in_block(block, index, temp, &source) {
+                    changed = true;
+                    break 'blocks;
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
+/// Replaces the use of `temp` after statement `index` with `source`, and removes the copy.
+/// Returns false (and changes nothing) if the use is not in this block or if a statement between
+/// writes the local of `source`.
+fn forward_in_block(block: &mut BasicBlock, index: usize, temp: Local, source: &Place) -> bool {
+    struct Replace<'a> {
+        temp: Local,
+        source: &'a Place,
+        done: bool,
+    }
+    impl MutMirVisitor for Replace<'_> {
+        fn visit_operand(&mut self, operand: &mut Operand, location: Location) {
+            if let Operand::Copy(place) | Operand::Move(place) = operand {
+                if !self.done && place.local == self.temp && place.projection.is_empty() {
+                    *operand = Operand::Copy(self.source.clone());
+                    self.done = true;
+                    return;
+                }
+            }
+            self.super_operand(operand, location);
+        }
+    }
+    let writes_source = |kind: &StatementKind| match kind {
+        StatementKind::Assign(place, _) | StatementKind::SetDiscriminant { place, .. } => {
+            place.local == source.local
+        }
+        _ => false,
+    };
+    // A visitor needs a block, so each statement goes into a block of its own.
+    let mut replace = Replace { temp, source, done: false };
+    for later in index + 1..block.statements.len() {
+        let statement = block.statements[later].clone();
+        let mut single = BasicBlock {
+            statements: vec![statement.clone()],
+            terminator: Terminator {
+                kind: TerminatorKind::Unreachable,
+                source_info: statement.source_info,
+            },
+        };
+        replace.visit_basic_block(&mut single);
+        if replace.done {
+            block.statements[later] = single.statements.pop().expect("the block has one statement");
+            block.statements.remove(index);
+            return true;
+        }
+        if writes_source(&block.statements[later].kind) {
+            return false;
+        }
+    }
+    let mut single = BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+    replace.visit_basic_block(&mut single);
+    if replace.done {
+        block.terminator = single.terminator;
+        block.statements.remove(index);
+        return true;
+    }
+    false
+}
+
+/// Counts the mentions of each local in a block.
+fn count_mentions(block: &BasicBlock, mentions: &mut [usize]) {
+    struct Count<'a>(&'a mut [usize]);
+    impl MirVisitor for Count<'_> {
+        fn visit_local(&mut self, local: &Local, _ptx: PlaceContext, _location: Location) {
+            self.0[*local] += 1;
+        }
+    }
+    Count(mentions).visit_basic_block(block);
 }
 
 /// Follows a chain of empty `goto` blocks. A cycle of empty blocks stops at its first repeat.
@@ -166,7 +434,7 @@ fn order_blocks(blocks: Vec<BasicBlock>) -> Vec<BasicBlock> {
 }
 
 /// Applies `map` to each block target of a terminator, the unwind targets included.
-fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> BasicBlockIdx) {
+pub fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> BasicBlockIdx) {
     let remap_unwind = |unwind: &mut UnwindAction| {
         if let UnwindAction::Cleanup(target) = unwind {
             *target = map(*target);
@@ -178,7 +446,8 @@ fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> Basic
             let branches = targets.branches().map(|(value, target)| (value, map(target))).collect();
             *targets = SwitchTargets::new(branches, map(targets.otherwise()));
         }
-        TerminatorKind::Drop { target, unwind, .. } | TerminatorKind::Assert { target, unwind, .. } => {
+        TerminatorKind::Drop { target, unwind, .. }
+        | TerminatorKind::Assert { target, unwind, .. } => {
             *target = map(*target);
             remap_unwind(unwind);
         }

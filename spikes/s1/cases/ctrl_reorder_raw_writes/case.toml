@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4): swap two writes through raw pointers. The pointers can alias."

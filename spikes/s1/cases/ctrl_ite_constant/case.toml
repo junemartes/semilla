@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4): change a constant in one branch of an if."

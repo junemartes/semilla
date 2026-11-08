@@ -66,30 +66,69 @@ pub fn anchor_at(workspace: &Workspace, file: &str, line: usize, column: Option<
     if !(body.start.0 <= line && line <= body.end.0) {
         return Some(anchor);
     }
-    let mut node = body;
-    loop {
-        let next = node.children.iter().find(|child| match column {
-            Some(column) => child.contains_pos((line, column)),
-            None => child.start.0 <= line && line <= child.end.0,
-        });
-        let Some(child) = next else { break };
-        // Without a column, stop at the lowest statement that covers the line.
-        if column.is_none() && !child.stmt && child.kind != "block" && node.stmt && child.start.0 == node.start.0 && child.end.0 == node.end.0 {
-            break;
+    let roles = match column {
+        Some(column) => column_path(body, (line, column)),
+        None => {
+            let covers = |n: &Node| n.start.0 <= line && line <= n.end.0;
+            match body.children.iter().find(|s| s.stmt && covers(s)) {
+                Some(statement) => {
+                    let mut roles = vec![statement.role.clone()];
+                    roles.extend(line_path(statement, line));
+                    roles
+                }
+                None => Vec::new(),
+            }
         }
-        anchor = anchor.child(match child.role.as_str() {
-            "tail" => Segment::Tail,
-            role => match role.strip_prefix('S').and_then(|n| n.parse().ok()) {
-                Some(index) => Segment::Stmt(index),
-                None => Segment::Role(role.to_string()),
-            },
-        });
-        node = child;
-        if column.is_none() && node.stmt && !node.children.iter().any(|c| c.kind == "block" && c.start.0 <= line && line <= c.end.0) {
-            break;
-        }
+    };
+    for role in roles {
+        anchor = anchor.child(role_segment(&role));
     }
     Some(anchor)
+}
+
+fn role_segment(role: &str) -> Segment {
+    match role {
+        "tail" => Segment::Tail,
+        role => match role.strip_prefix('S').and_then(|n| n.parse().ok()) {
+            Some(index) => Segment::Stmt(index),
+            None => Segment::Role(role.to_string()),
+        },
+    }
+}
+
+/// With a column: the roles down to the lowest node that contains the position.
+fn column_path(node: &Node, pos: tree::Pos) -> Vec<String> {
+    match node.children.iter().find(|child| child.contains_pos(pos)) {
+        Some(child) => {
+            let mut roles = vec![child.role.clone()];
+            roles.extend(column_path(child, pos));
+            roles
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Without a column: the roles down to the lowest statement that covers the line. The path goes
+/// only into blocks whose statements cover the line, so a statement header stays the statement.
+fn line_path(node: &Node, line: usize) -> Vec<String> {
+    let covers = |n: &Node| n.start.0 <= line && line <= n.end.0;
+    for child in &node.children {
+        if child.kind == "block" {
+            if let Some(statement) = child.children.iter().find(|s| s.stmt && covers(s)) {
+                let mut roles = vec![child.role.clone(), statement.role.clone()];
+                roles.extend(line_path(statement, line));
+                return roles;
+            }
+        } else if covers(child) && child.has_block() {
+            let deeper = line_path(child, line);
+            if !deeper.is_empty() {
+                let mut roles = vec![child.role.clone()];
+                roles.extend(deeper);
+                return roles;
+            }
+        }
+    }
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -126,6 +165,8 @@ mod tests {
         assert_eq!(at_line.to_string(), "demo::total/S1/body/S0/then/S0");
         let at_column = anchor_at(&ws, "src/lib.rs", 4, Some(19)).unwrap();
         assert_eq!(at_column.to_string(), "demo::total/S1/body/S0/cond/rhs");
+        let header = anchor_at(&ws, "src/lib.rs", 4, None).unwrap();
+        assert_eq!(header.to_string(), "demo::total/S1/body/S0", "a header line gives the statement");
         let tail = anchor_at(&ws, "src/lib.rs", 8, None).unwrap();
         assert_eq!(tail.to_string(), "demo::total/tail");
     }

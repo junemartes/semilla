@@ -1,0 +1,3 @@
+expect = "changed"
+note = "Control (N3): the callee changes its own argument. A wrong inliner would change `a` of the caller."
+added = ["s1case::bump"]

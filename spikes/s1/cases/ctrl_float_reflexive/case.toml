@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4): `x == x` becomes `true` on a float. The result changes for NaN."

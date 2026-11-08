@@ -1,0 +1,3 @@
+expect = "changed"
+note = "Control (N3): extract a block into a new function, but change a constant in it."
+added = ["s1case::score"]

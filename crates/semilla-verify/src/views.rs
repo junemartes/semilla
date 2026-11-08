@@ -31,6 +31,11 @@ pub fn change_tree(outcomes: &[StepOutcome], after: &Workspace, before: &Workspa
             let status = edit_status(edit.kind, owner.is_some());
             let class = owner.as_ref().and_then(|id| classes.get(id).copied().flatten());
             let diff = match (edit.kind, &edit.text_before, &edit.text_after) {
+                // An operator change marks only the operator: `a ⟦<⟧→⟦<=⟧ b`.
+                (EditKind::Modified, Some(_), Some(new)) if edit.attr_before != edit.attr_after && edit.attr_after.as_ref().is_some_and(|a| new.contains(&format!(" {a} "))) => {
+                    let (old_attr, new_attr) = (edit.attr_before.clone().unwrap_or_default(), edit.attr_after.clone().unwrap_or_default());
+                    Some(short(&new.replacen(&format!(" {new_attr} "), &format!(" ⟦{old_attr}⟧→⟦{new_attr}⟧ "), 1)))
+                }
                 (EditKind::Modified | EditKind::Replaced, Some(old), Some(new)) => Some(format!("⟦{}⟧→⟦{}⟧", short(old), short(new))),
                 _ => None,
             };

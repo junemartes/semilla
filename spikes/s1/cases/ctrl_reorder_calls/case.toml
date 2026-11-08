@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4): swap two calls with side effects. The output order changes."

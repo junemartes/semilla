@@ -1,0 +1,15 @@
+[package]
+name = "semilla-normal"
+description = "Reads the normalized MIR records of the semilla driver and compares bodies by the normal form ladder."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+egglog = "3"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]

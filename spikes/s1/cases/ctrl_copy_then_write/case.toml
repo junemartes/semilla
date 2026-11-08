@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N0 copy forwarding): the copy moves after a write of its source."

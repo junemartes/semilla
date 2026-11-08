@@ -1,0 +1,5 @@
+expect = "changed"
+note = "Control (N1): a rename claim, but the body of the renamed function changes."
+
+[rename]
+"s1case::helper" = "s1case::add_one"

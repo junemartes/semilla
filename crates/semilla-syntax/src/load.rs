@@ -187,6 +187,9 @@ fn collect_files(root: &Path, dir: &Path, workspace: &mut Workspace) -> Result<(
     entries.sort();
     for path in entries {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.starts_with(".semilla") {
+            continue;
+        }
         if path.is_dir() {
             if !matches!(name.as_ref(), "target" | ".git" | ".semilla") {
                 collect_files(root, &path, workspace)?;

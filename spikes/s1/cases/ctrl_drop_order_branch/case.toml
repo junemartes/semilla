@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4): swap two lets with Drop types inside a branch. The drop order changes."

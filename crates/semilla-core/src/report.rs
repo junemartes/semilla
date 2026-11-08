@@ -154,6 +154,7 @@ impl Report {
             .collect();
         let uncovered: usize = self.steps.iter().map(|step| step.uncovered.len()).sum();
         let total = weights.len() + uncovered;
-        self.score = if total == 0 { 1.0 } else { weights.iter().sum::<f64>() / total as f64 };
+        // An empty `f64` sum is -0.0, so the sum starts at 0.0.
+        self.score = if total == 0 { 1.0 } else { weights.iter().fold(0.0, |sum, weight| sum + weight) / total as f64 };
     }
 }

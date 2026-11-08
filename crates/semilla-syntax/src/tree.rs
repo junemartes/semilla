@@ -150,7 +150,7 @@ fn stmt_node(role: String, stmt: &syn::Stmt) -> Node {
             result.text = tokens(stmt);
             result
         }
-        syn::Stmt::Macro(mac) => with_attr(node("macro", role, mac, Vec::new()), tokens(&mac.mac.path)),
+        syn::Stmt::Macro(mac) => macro_node(role, mac, &mac.mac),
     };
     result.stmt = true;
     result
@@ -281,9 +281,31 @@ pub fn expr_node(role: impl Into<String>, expr: &syn::Expr) -> Node {
             with_attr(node("range", role, range, children), tokens(&range.limits))
         }
         Expr::Await(await_expr) => node("await", role, await_expr, vec![expr_node("operand", &await_expr.base)]),
-        Expr::Macro(mac) => with_attr(node("macro", role, mac, Vec::new()), tokens(&mac.mac.path)),
+        Expr::Macro(mac) => macro_node(role, mac, &mac.mac),
         other => node("other", role, other, Vec::new()),
     }
+}
+
+/// The `std` macros whose input is a list of expressions (design 4.1).
+const EXPRESSION_MACROS: &[&str] = &[
+    "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "panic", "assert", "assert_eq",
+    "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "vec", "dbg", "todo", "unimplemented", "unreachable",
+];
+
+/// A macro call. The arguments of a known `std` macro become children (`args[0]`, …). Other
+/// macros are opaque leaves: their input is a token tree, not an expression.
+fn macro_node(role: impl Into<String>, value: &(impl ToTokens + Spanned), mac: &syn::Macro) -> Node {
+    use syn::parse::Parser;
+    let name = tokens(&mac.path).replace(' ', "");
+    let short_name = name.rsplit("::").next().unwrap_or(&name);
+    let mut children = Vec::new();
+    if EXPRESSION_MACROS.contains(&short_name) {
+        let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(args) = parser.parse2(mac.tokens.clone()) {
+            children = args.iter().enumerate().map(|(index, arg)| expr_node(format!("args[{index}]"), arg)).collect();
+        }
+    }
+    with_attr(node("macro", role, value, children), name)
 }
 
 #[cfg(test)]
@@ -323,6 +345,15 @@ mod tests {
         assert!(body.children[1].has_block());
         let closure = body_of("fn f(v: Vec<u32>) -> Vec<u32> { v.into_iter().map(|x| x + 1).collect() }");
         assert!(!closure.children[0].has_block(), "an expression closure is block-free");
+    }
+
+    #[test]
+    fn known_macros_have_argument_children() {
+        let body = body_of("fn f(x: u32) { println!(\"{}\", x + 1); my_macro!(a b c); }");
+        let print = &body.children[0];
+        assert_eq!(print.attr.as_deref(), Some("println"));
+        assert_eq!(print.child("args[1]").unwrap().attr.as_deref(), Some("+"));
+        assert!(body.children[1].children.is_empty(), "an unknown macro stays opaque");
     }
 
     #[test]

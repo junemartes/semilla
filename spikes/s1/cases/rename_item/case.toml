@@ -1,5 +1,6 @@
 expect = "neutral"
 needs = "N1"
-note = "Rename a function and its call. The harness maps the body name; the call inside `f` still differs."
+note = "Rename a function and its call. The claim gives the rename map."
+
 [rename]
-helper = "add_one"
+"s1case::helper" = "s1case::add_one"

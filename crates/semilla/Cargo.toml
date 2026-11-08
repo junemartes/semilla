@@ -1,0 +1,26 @@
+[package]
+name = "semilla"
+description = "The semilla command line: tag tools, the verifier, the MCP server, and the local review UI."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "semilla"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+semilla-core = { path = "../semilla-core" }
+semilla-normal = { path = "../semilla-normal" }
+semilla-smt = { path = "../semilla-smt" }
+semilla-syntax = { path = "../semilla-syntax" }
+semilla-ui = { path = "../semilla-ui" }
+semilla-verify = { path = "../semilla-verify" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+
+[dev-dependencies]
+tempfile = "3"

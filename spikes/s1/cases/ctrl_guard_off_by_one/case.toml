@@ -1,0 +1,2 @@
+expect = "changed"
+note = "Control (N4 path facts): the guard becomes `i > len`. For `i == len` the result changes (a panic)."
