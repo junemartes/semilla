@@ -30,8 +30,11 @@ You write code with your own edit tools. Semilla records what you changed as **c
 | `semilla replay begin [--commit <rev>]` | `replay_begin` |
 | `semilla replay status` | `replay_status` |
 | `semilla replay take <spec>` | `replay_take` (`spec`) |
+| `semilla replay plan [--out FILE]` | `replay_plan` |
+| `semilla replay apply [FILE] [--full]` | `replay_apply` (`plan`, `full`) |
 | `semilla replay end` | `replay_end` |
 | `semilla replay abort` | `replay_abort` |
+| `semilla pair refuse OLD NEW --reason "…"` | `pair_refuse` |
 
 The `--class` values are `neutral`, `logic`, `control_flow`, and `other`. A declared class must be the class that the verifier computes, or the step fails. If you are not sure, do not declare a class: the report shows the computed class. `step edit --class none` removes a declared class.
 
@@ -57,22 +60,61 @@ At the end of the task:
 9. Run `verify --final`. Commit with git, then `tag`.
 10. `status HEAD` shows the result of phase 2. Fix a refuted or unproved claim in a new step.
 
-## The replay: claims after the work
+## The replay: plan the steps after the work
 
-Use the replay when you made the changes before you started steps, or to describe a commit that has no change set.
+Use the replay when you made the changes before you started steps, or to describe a commit that has no change set. You plan all steps first, and you submit the whole plan at once.
 
 1. Run `replay begin`. Semilla saves your work as the target, and puts `HEAD` in the working tree. For a commit, run `replay begin --commit <rev>`: the base is the parent of that commit.
-2. Run `replay status`. It lists the hunks that remain, with the target lines, the semantic changes, and the suggested ops.
-3. Plan the order of the steps. Put the refactors first, and each behavior change in its own step.
-4. For each step: `step begin`, then bring a part of the target back, then add the claims, `check`, and `step end`.
-   - `replay take FILE:START-END` copies the hunks at these lines of the target. `replay status` prints the exact `take` text of each hunk.
-   - `replay take <item path>` copies all hunks of one item.
-   - `replay take FILE` copies a whole file.
-   - If one hunk contains two changes for different steps, edit the file by hand. For example, write the extracted function with the old code in step 1, and change it in step 2.
-5. `step end` tells you how many hunks remain. When the working tree is the target, run `replay end`.
-6. Declare the groups and run `verify --final`, as in the normal loop. Commit, then `tag` (for `--commit`, `tag <rev>`).
+2. Run `replay plan`. It writes a draft plan to `.semilla/plan.json`. The draft has:
+   - the steps in a safe order: new items, then renames and signature changes with their call sites, then the other changes, then the removed items and the other files;
+   - a rename as its own step, with a whole-word edit, before the changes of the renamed item;
+   - the takes and the draft claims of each step, from a simulation of the steps;
+   - `todo` notes: changes without a draft claim, and new functions that can get property claims.
+3. Edit the plan. Check each intent and each claim. Split a step that mixes a refactor and a behavior change in one function. Add the groups, the property claims, and the refusals.
+4. Run `replay apply` (MCP: `replay_apply` with the plan object). It starts again from the base, runs every step, and checks the whole change set. It lists all problems at once. Fix the plan and apply it again until it passes. `--full` also runs the body proofs and waits for them.
+5. Run `replay end`. Then run `verify --final`, commit, and `tag` (for `--commit`, `tag <rev>`).
 
-Do not commit while a replay is in progress. `replay abort` removes the replay steps and restores your work.
+Keep the plan file in `.semilla/`. `replay apply` refuses to start when the working tree has a file that the target does not have, because the reset to the base would delete it. Do not commit while a replay is in progress. `replay abort` removes the replay steps and restores your work.
+
+### The plan format
+
+```json
+{
+  "steps": [
+    {
+      "intent": "rename `scale` to `multiply`",
+      "edits": [{"file": "*", "find": "scale", "replace": "multiply", "word": true}],
+      "claims": [{"op": "rename", "at": "demo::scale", "args": {"to": "multiply"}}]
+    },
+    {
+      "intent": "add `sum_wide` and its test",
+      "take": ["src/lib.rs:17-18", "src/lib.rs:32-35"],
+      "claims": [
+        {"op": "add-item", "at": "demo::sum_wide"},
+        {"op": "no-panic", "at": "demo::sum_wide"},
+        {"op": "tested-by", "at": "demo::sum_wide", "args": {"test": "t_wide"}}
+      ]
+    },
+    {
+      "intent": "return 0 for an empty list",
+      "take": ["src/lib.rs:2-4"],
+      "claims": [{"op": "add-early-exit", "at": "target:src/lib.rs:2"}]
+    }
+  ],
+  "groups": [{"id": "G1", "kind": "rename", "title": "Rename scale", "steps": [0]}],
+  "refusals": [{"old": "demo::first", "new": "demo::head", "reason": "head returns an Option: a new contract"}]
+}
+```
+
+- `take`: the same specs as `replay take`: `FILE:START-END` (target lines), `FILE:LINE`, an item path, or `FILE`. `replay status` prints the hunks.
+- `edits`: hand edits after the takes. Without `word`, `find` must occur exactly once in `file`. With `"word": true`, every whole-word occurrence changes, and `file` can be `*` (all Rust files). Use a hand edit to write the old version of code that a later step changes.
+- A claim `at` is an anchor, or a position that the apply resolves in the trees of the step:
+  - `base:FILE:LINE[:COLUMN]`: old code, at its line in the base tree;
+  - `target:FILE:LINE[:COLUMN]`: new code, at its line in the target tree;
+  - `before:…` and `after:…`: a line in the tree before or after the step;
+  - `up: N` goes N levels up from the node at the position.
+
+You can also run the steps one by one: `step begin`, `replay take <spec>` (or edit by hand), the claims, `check`, `step end`. `replay status` lists the hunks that remain.
 
 ## Anchors
 
@@ -103,6 +145,8 @@ shop_core::cart::Cart::total/tail                the tail expression
 | Move an item | `move-item` (`to`) |
 | Rename a local variable (all its uses) | `rename-local` (`to`) |
 | New or removed function, struct, impl, method, module | `add-item`, `remove-item` |
+| A whole item rewritten on purpose (optional new path) | `rewrite-item` (`note`, optional `new`) |
+| A fact about a function after the step | `no-panic`, `no-unsafe`, `no-io`, `calls-only` (`calls`), `tested-by` (`test`) |
 | Move code into a new function | `extract-function` (`new`) |
 | New statement | `add-let`, `add-if`, `add-early-exit`, `add-match`, `add-loop`, `add-return`, `add-expression-statement`, … |
 | Removed or moved statement | `delete-statement`, `move-statement` (`to`) |
@@ -136,6 +180,37 @@ Some correct refactors are `unproved`, not `verified`:
 - A condition change between method calls (`v.len() > 0` against `!v.is_empty()`): the solver does not know what the methods return, so the effect is `unrelated`.
 
 In these cases, use logic ops for the same change: `add-item` for the new function, and `replace-expression` on the changed expression at the call site (or the statement ops, if a statement changed). Then say in the intent that the step is a refactor, and use a `behavior` group, not a `refactor` group.
+
+## Changed items, not removed and added items
+
+If an item changes, claim it as one changed item. Do not claim `remove-item` for the old item and `add-item` for the new item:
+
+- A renamed item: `rename` in one step, then the body changes in a later step.
+- A moved item: `move-item`, then the changes in a later step.
+- An item that you rewrote as a whole on purpose: `rewrite-item`, with a `note` that says why (at least 10 characters), and `new` for a new path. It is accepted, but it is always in the spotlight and gives the highest risk in the review.
+
+When a verified `remove-item` and a verified `add-item` have similar text (70% or more, without the names), the report shows a **pair warning**. The agent and the reviewer both see it.
+
+- If the two items are really different, refuse the warning: `semilla pair refuse OLD NEW --reason "…"` (or `refusals` in a plan). The reviewer sees the reason.
+- The reviewer can still accept the warning in the review UI. Then the change set is rejected until you claim the pair as one changed item.
+
+Each report also has a precision line: `lines: N fine-grained (P%), N new, N removed, N rewritten`. Fine-grained claims give a higher precision.
+
+## Property claims on new code
+
+New code has no "before", so a diff claim says little about it. A property claim states a fact about a function in the tree after the step. Semilla checks the function and the local functions that it calls:
+
+| Op | The check |
+|---|---|
+| `no-panic` | No explicit panic site: `unwrap`, `expect`, the panic and assert macros, indexing. Arithmetic overflow does not count. |
+| `no-unsafe` | No `unsafe` code. |
+| `no-io` | No call to file, network, process, environment, or thread APIs (from the MIR, in phase 2). |
+| `calls-only` | Each external call starts with a path in `calls`, for example `["std::iter::", "core::"]` (from the MIR, in phase 2). |
+| `tested-by` | The test `test` calls the function, directly or through local calls. |
+
+- Put the claim on the item anchor of the function, in the step that adds or changes the function.
+- A false property claim is `refuted`.
+- A property claim has no class, so it fits in every group and subgroup.
 
 ## Groups and subgroups
 

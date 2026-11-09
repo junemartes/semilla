@@ -213,6 +213,7 @@ pub fn demo_changeset() -> ChangeSet {
         steps,
         groups,
         subgroups,
+        pair_refusals: Vec::new(),
     }
 }
 
@@ -332,6 +333,7 @@ pub fn demo_report() -> Report {
         accepted: false,
         phase: "full".into(),
         pending: 0,
+        ..Default::default()
     };
     report.finish();
     report

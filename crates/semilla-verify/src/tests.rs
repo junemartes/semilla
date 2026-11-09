@@ -249,6 +249,7 @@ fn group_and_subgroup_rules() {
         steps: vec![step(claims)],
         groups: vec![Group { id: "G1".into(), title: "t".into(), kind: GroupKind::Refactor, why: String::new(), steps: vec![0] }],
         subgroups: vec![Subgroup { id: "G1:m".into(), new_claims: Vec::new(), group: "G1".into(), role: Role::Mechanical, title: "m".into(), why: String::new(), claims: vec!["c1".into(), "c2".into()], edited: true }],
+        ..Default::default()
     };
     let bodies = FakeBodies(BTreeMap::from([("demo::total".to_string(), different(true))]));
     let mut trees = BTreeMap::from([("a".to_string(), old), ("b".to_string(), new)]);
@@ -417,4 +418,108 @@ fn a_reexported_method_is_public_api() {
     let before = "mod inner {\n    pub struct T;\n    impl T {\n        pub fn a(&self) {}\n    }\n}\npub use inner::T;\n";
     let after = "mod inner {\n    pub struct T;\n    impl T {\n        pub fn a(&self) {}\n        pub fn b(&self) {}\n    }\n}\npub use inner::T;\n";
     assert_eq!(run(before, after, vec![], &[], None).api_level.as_deref(), Some("minor"));
+}
+
+/// A body oracle with MIR facts: each body name gets its external calls.
+struct FactBodies(Vec<(&'static str, Vec<&'static str>)>);
+
+impl BodyOracle for FactBodies {
+    fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
+        Ok(Vec::new())
+    }
+    fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
+        Ok(Some(self.0.iter().map(|(name, calls)| BodyFacts { name: name.to_string(), span: None, callees: Vec::new(), externals: calls.iter().map(|c| c.to_string()).collect() }).collect()))
+    }
+}
+
+const PROPS_BEFORE: &str = "pub fn a() -> u32 { 1 }\n";
+const PROPS_AFTER: &str = "pub fn a() -> u32 { 1 }\n\npub fn wide(v: &[u32]) -> u64 {\n    helper(v)\n}\n\nfn helper(v: &[u32]) -> u64 {\n    v.iter().map(|x| *x as u64).sum()\n}\n\npub fn risky(v: &[u32]) -> u32 {\n    v[0]\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t_wide() {\n        assert_eq!(super::wide(&[1]), 1);\n    }\n}\n";
+
+#[test]
+fn property_claims_check_the_code_after_the_step() {
+    let claims = vec![
+        claim("c1", "add-item", Some("demo::wide"), serde_json::json!({})),
+        claim("c2", "add-item", Some("demo::helper"), serde_json::json!({})),
+        claim("c3", "add-item", Some("demo::risky"), serde_json::json!({})),
+        claim("c4", "add-item", Some("demo::tests"), serde_json::json!({})),
+        claim("c5", "no-panic", Some("demo::wide"), serde_json::json!({})),
+        claim("c6", "no-panic", Some("demo::risky"), serde_json::json!({})),
+        claim("c7", "tested-by", Some("demo::wide"), serde_json::json!({"test": "t_wide"})),
+        claim("c8", "tested-by", Some("demo::risky"), serde_json::json!({"test": "t_wide"})),
+        claim("c9", "no-unsafe", Some("demo::wide"), serde_json::json!({})),
+        claim("c10", "no-io", Some("demo::wide"), serde_json::json!({})),
+    ];
+    // Phase 1: the MIR facts are not there, so `no-io` waits.
+    let report = run(PROPS_BEFORE, PROPS_AFTER, claims.clone(), &[], None);
+    assert!(status_of(&report, "c5").is_verified(), "{:?}", status_of(&report, "c5"));
+    assert!(matches!(status_of(&report, "c6"), ClaimStatus::Refuted { reason } if reason.contains("panic")));
+    assert!(status_of(&report, "c7").is_verified(), "the test calls `wide`");
+    assert!(matches!(status_of(&report, "c8"), ClaimStatus::Refuted { .. }), "the test does not call `risky`");
+    assert!(status_of(&report, "c9").is_verified());
+    assert!(status_of(&report, "c10").is_pending());
+    assert!(report.uncovered.is_empty(), "{:?}", report.uncovered);
+    assert_eq!(report.claims.iter().find(|c| c.claim == "c5").unwrap().class, None, "a property has no class");
+
+    // Phase 2: the facts of the local callee count too.
+    let (_d1, old) = load(PROPS_BEFORE);
+    let (_d2, new) = load(PROPS_AFTER);
+    let step = step(claims);
+    let clean = FactBodies(vec![("demo::wide", vec![]), ("demo::helper", vec!["std::iter::Iterator::sum"])]);
+    let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &clean, &NoOracle).report;
+    assert!(status_of(&report, "c10").is_verified(), "{:?}", status_of(&report, "c10"));
+    let io = FactBodies(vec![("demo::wide", vec![]), ("demo::helper", vec!["std::fs::read"])]);
+    let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &io, &NoOracle).report;
+    assert!(matches!(status_of(&report, "c10"), ClaimStatus::Refuted { reason } if reason.contains("std::fs::read")));
+}
+
+const PAIR_BEFORE: &str = "pub fn scale(v: &[u32], k: u32) -> Vec<u32> {\n    let out: Vec<u32> = v.iter().map(|x| x * k).collect();\n    out\n}\n\npub fn twice(v: &[u32]) -> Vec<u32> {\n    scale(v, 2)\n}\n";
+const PAIR_AFTER: &str = "pub fn multiply(v: &[u32], k: u32) -> Vec<u32> {\n    let out: Vec<u32> = v.iter().map(|x| x * k + 1).collect();\n    out\n}\n\npub fn twice(v: &[u32]) -> Vec<u32> {\n    multiply(v, 2)\n}\n";
+
+#[test]
+fn rewrite_item_covers_the_whole_item_and_its_references() {
+    let claims = vec![claim("c1", "rewrite-item", Some("demo::scale"), serde_json::json!({"new": "multiply", "note": "the factor adds one now"}))];
+    let report = run(PAIR_BEFORE, PAIR_AFTER, claims, &[], None);
+    assert!(status_of(&report, "c1").is_verified(), "{:?}", status_of(&report, "c1"));
+    assert!(report.uncovered.is_empty(), "the call site follows the new name: {:?}", report.uncovered);
+    assert!(report.spotlight.iter().any(|s| s.contains("rewritten item")), "{:?}", report.spotlight);
+    assert!(report.lines.rewritten > 0 && report.lines.fine == 0, "{:?}", report.lines);
+    // A short note is not enough.
+    let claims = vec![claim("c1", "rewrite-item", Some("demo::scale"), serde_json::json!({"new": "multiply", "note": "x"}))];
+    assert!(matches!(status_of(&run(PAIR_BEFORE, PAIR_AFTER, claims, &[], None), "c1"), ClaimStatus::Malformed { .. }));
+}
+
+#[test]
+fn a_similar_removed_and_added_item_gives_a_pair_warning() {
+    let (_d1, old) = load(PAIR_BEFORE);
+    let (_d2, new) = load(PAIR_AFTER);
+    let mut set = ChangeSet {
+        base_tree: "a".into(),
+        head_tree: "b".into(),
+        steps: vec![step(vec![
+            claim("c1", "remove-item", Some("demo::scale"), serde_json::json!({})),
+            claim("c2", "add-item", Some("demo::multiply"), serde_json::json!({})),
+            claim("c3", "change-path", Some("demo::twice/tail/callee"), serde_json::json!({})),
+        ])],
+        ..Default::default()
+    };
+    let mut loader = |tree: &str| Ok(if tree == "a" { old.clone() } else { new.clone() });
+    let (report, _) = verify_changeset(&set, &mut loader, &NoOracle, &NoOracle, Options::default());
+    assert!(report.accepted, "a pair warning does not reject: {:?}", report.organization);
+    assert_eq!(report.pairs.len(), 1, "{:?}", report.pairs);
+    assert_eq!((report.pairs[0].old.as_str(), report.pairs[0].new.as_str()), ("demo::scale", "demo::multiply"));
+    assert!(report.pairs[0].similarity > 0.9);
+    // The refusal goes with the warning.
+    set.pair_refusals.push(semilla_core::PairRefusal { old: "demo::scale".into(), new: "demo::multiply".into(), reason: "a new contract".into() });
+    let (report, _) = verify_changeset(&set, &mut loader, &NoOracle, &NoOracle, Options::default());
+    assert_eq!(report.pairs[0].refusal.as_deref(), Some("a new contract"));
+}
+
+#[test]
+fn similarity_ignores_the_item_name() {
+    let (_d1, old) = load(PAIR_BEFORE);
+    let (_d2, new) = load("pub fn multiply(v: &[u32], k: u32) -> Vec<u32> {\n    let out: Vec<u32> = v.iter().map(|x| x * k).collect();\n    out\n}\n");
+    let score = hints::similarity(&old.items["demo::scale"], &new.items["demo::multiply"]);
+    assert!((score - 1.0).abs() < 1e-9, "{score}");
+    let (_d3, other) = load("pub fn unrelated(a: &str) -> bool {\n    a.is_empty() || a.starts_with('#')\n}\n");
+    assert!(hints::similarity(&old.items["demo::scale"], &other.items["demo::unrelated"]) < PAIR_THRESHOLD);
 }

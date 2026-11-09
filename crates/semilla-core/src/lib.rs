@@ -14,6 +14,6 @@ pub mod report;
 pub mod view;
 
 pub use anchor::{Anchor, Segment};
-pub use claim::{ChangeSet, Claim, Group, GroupKind, Role, Step, Subgroup};
+pub use claim::{ChangeSet, Claim, Group, GroupKind, PairRefusal, Role, Step, Subgroup};
 pub use ops::{Class, OpInfo, OpKind, OpLevel};
-pub use report::{ClaimResult, ClaimStatus, Report, StepReport, Uncovered, View};
+pub use report::{ClaimResult, ClaimStatus, LineCounts, PairWarning, Report, StepReport, Uncovered, View};

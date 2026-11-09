@@ -755,3 +755,35 @@ async fn panic_delta_comes_from_the_report() {
     assert_eq!(group(&cs, "G2")["panic_delta"], -1);
     assert_eq!(group(&cs, "G3")["panic_delta"], 0);
 }
+
+// ------------------------------------------------------------------ pair warnings
+
+#[tokio::test]
+async fn the_reviewer_decides_on_a_pair_warning() {
+    let file = review_path();
+    let mut data = demo_data();
+    data.report.pairs.push(semilla_core::PairWarning {
+        old: "shop_core::cart::old_total".into(),
+        new: "shop_core::cart::new_total".into(),
+        similarity: 0.9,
+        claims: vec!["c1".into(), "c2".into()],
+        refusal: Some("the contract is new".into()),
+        reviewer: None,
+    });
+    let app = router(data, file.clone());
+    let summary = get(&app, "/api/changeset").await;
+    assert_eq!(summary["pairs"][0]["refusal"], "the contract is new");
+    assert!(summary["lines_text"].as_str().unwrap().starts_with("lines: "));
+
+    let pair = "old=shop_core%3A%3Acart%3A%3Aold_total&new=shop_core%3A%3Acart%3A%3Anew_total";
+    assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=accepted")).await.status, StatusCode::OK);
+    assert_eq!(get(&app, "/api/changeset").await["pairs"][0]["reviewer"], "accepted");
+    // The CLI reads the same file.
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(saved["pairs"]["shop_core::cart::old_total -> shop_core::cart::new_total"]["decision"], "accepted");
+
+    assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=clear")).await.status, StatusCode::OK);
+    assert!(get(&app, "/api/changeset").await["pairs"][0]["reviewer"].is_null());
+    assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=maybe")).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, "POST", "/api/pair?old=a&new=b&decision=accepted").await.status, StatusCode::NOT_FOUND);
+}

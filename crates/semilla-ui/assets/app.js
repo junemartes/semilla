@@ -264,6 +264,22 @@
     for (const text of cs.organization) messages.push(h('li', { class: 'error' }, '✗ ', text));
     for (const text of cs.warnings) messages.push(h('li', { class: 'warning' }, '⚠ ', text));
     if (messages.length) root.appendChild(h('ul', { class: 'messages' }, messages));
+    if (cs.lines_text) root.appendChild(h('p', { class: 'facts lines' }, cs.lines_text));
+    if (cs.pairs && cs.pairs.length) {
+      const items = cs.pairs.map((pair) => {
+        const decide = (decision) => async (event) => {
+          event.stopPropagation();
+          await api('/api/pair?old=' + enc(pair.old) + '&new=' + enc(pair.new) + '&decision=' + decision, { method: 'POST' });
+          await loadChangeset();
+        };
+        const buttons = pair.reviewer
+          ? [h('span', { class: 'chip ' + (pair.reviewer === 'accepted' ? 'bad' : 'ok') }, pair.reviewer), ' ', h('button', { onclick: decide('clear') }, 'undo')]
+          : [h('button', { onclick: decide('accepted'), title: 'The agent must claim the pair as one changed item' }, 'accept warning'), ' ',
+             h('button', { onclick: decide('dismissed'), title: 'Keep the removed item and the added item' }, 'dismiss')];
+        return h('li', { class: 'warning pair' }, '⚠ pair: ', pair.text, ' ', ...buttons);
+      });
+      root.appendChild(h('ul', { class: 'messages pairs' }, items));
+    }
 
     if (state.openGroups === null) {
       // At the start, open the first group that is not reviewed.

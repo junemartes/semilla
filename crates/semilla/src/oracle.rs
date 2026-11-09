@@ -213,6 +213,21 @@ impl BodyOracle for NormalOracle {
         }
         Ok(combined.into_iter().map(|(name, status)| BodyComparison { span: spans.get(&name).cloned(), status, name }).collect())
     }
+
+    fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
+        let records = self.records(&step.tree_after, "n0")?;
+        Ok(Some(
+            records
+                .into_iter()
+                .map(|record| semilla_verify::BodyFacts {
+                    span: record.span.as_ref().map(|span| (span.file.clone(), span.line_start)),
+                    callees: record.callees,
+                    externals: record.externals.into_iter().map(|call| call.path).collect(),
+                    name: record.name,
+                })
+                .collect(),
+        ))
+    }
 }
 
 /// The SMT checks with Z3. Without a solver, every check gives "not proved".

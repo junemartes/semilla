@@ -34,6 +34,7 @@ pub fn optional_args(op: &str) -> Vec<&'static str> {
         "extract-function" | "inline-function" => &["count", "removes"][..],
         "add-if" | "add-early-exit" => &["cond"][..],
         "rewrite-pattern" => &["sites"][..],
+        "rewrite-item" => &["new"][..],
         "extract-variable" | "inline-variable" | "change-mutability" | "change-type-annotation" | "invert-if" | "swap-branches" | "if-to-match" | "match-to-if"
         | "guard-clause" | "reorder-statements" | "question-mark" => &["count"][..],
         _ => &[][..],
@@ -79,7 +80,14 @@ pub struct CheckResult {
 
 impl App {
     pub fn open(dir: &Path) -> Result<App> {
-        Ok(App { repo: Repo::discover(dir)?, workspaces: BTreeMap::new(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some() })
+        let repo = Repo::discover(dir)?;
+        // The state folder never goes into a tree, also when the repository does not ignore it.
+        let ignore = repo.state_dir().join(".gitignore");
+        if !ignore.exists() {
+            std::fs::create_dir_all(repo.state_dir())?;
+            std::fs::write(&ignore, "*\n")?;
+        }
+        Ok(App { repo, workspaces: BTreeMap::new(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some() })
     }
 
     fn session_file(&self) -> std::path::PathBuf {
@@ -259,6 +267,11 @@ impl App {
 
     /// Ends the open step. The current working tree is the "after" tree.
     pub fn step_end(&mut self) -> Result<String> {
+        self.step_end_with(true)
+    }
+
+    /// Ends the open step. `queue` starts the background check (a plan queues it once, at the end).
+    pub(crate) fn step_end_with(&mut self, queue: bool) -> Result<String> {
         let mut session = self.load_session()?;
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
@@ -266,7 +279,9 @@ impl App {
         session.changeset.steps.push(Step { index, intent: open.intent, class: open.class, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone() });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
-        self.queue_session(&session.changeset)?;
+        if queue {
+            self.queue_session(&session.changeset)?;
+        }
         let mut text = format!("step {index} ended at tree {tree}; the background check runs (see `status`)");
         if let Some(remaining) = self.replay_remaining(&session)? {
             text.push_str(&format!("\nreplay: {remaining}"));
@@ -275,7 +290,7 @@ impl App {
     }
 
     /// Adds a background job for the session, and starts the worker.
-    fn queue_session(&self, set: &ChangeSet) -> Result<()> {
+    pub(crate) fn queue_session(&self, set: &ChangeSet) -> Result<()> {
         let job = crate::background::Job { key: "session".into(), hash: crate::background::changeset_hash(set), changeset: Some(set.clone()) };
         crate::background::enqueue(self, &job)?;
         crate::background::spawn_worker(self)
@@ -361,7 +376,7 @@ impl App {
     // ----- checks -----
 
     /// The change set with the open step as a last step (its "after" tree is the working tree).
-    fn current_changeset(&self) -> Result<ChangeSet> {
+    pub(crate) fn current_changeset(&self) -> Result<ChangeSet> {
         let session = self.load_session()?;
         let mut set = session.changeset;
         if let Some(open) = session.open {
@@ -395,7 +410,7 @@ impl App {
         }
         if let Some(index) = only_step {
             let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
-            set = ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], groups: Vec::new(), subgroups: Vec::new() };
+            set = ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), ..Default::default() };
         }
         let mut result = self.check_set(&set, require_groups)?;
         if let Some(problem) = base_problem {
@@ -421,6 +436,17 @@ impl App {
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);
+        // The reviewer's decisions on the pair warnings (from the review UI).
+        let review = semilla_ui::review::ReviewFile::load(&self.repo.state_dir().join("review.json"));
+        for pair in &mut report.pairs {
+            pair.reviewer = review.pair(&pair.key()).map(str::to_string);
+            if pair.reviewer.as_deref() == Some("accepted") {
+                report.organization.push(format!(
+                    "the reviewer accepted the pair warning `{}`: claim it as one changed item (`rename` or `move-item`, then the body changes; or `rewrite-item`), not as `remove-item` and `add-item`",
+                    pair.key()
+                ));
+            }
+        }
         report.phase = if self.no_bodies { "syntax".into() } else { "full".into() };
         report.finish();
         if !exprs.available() {
@@ -446,6 +472,25 @@ impl App {
         let (before, after) = (self.workspace(&step.tree_before)?, self.workspace(&step.tree_after)?);
         let renames = semilla_verify::hints::likely_renames(&outcome.edits, &before, &after);
         Ok(semilla_verify::hints::suggest_claims_with_renames(&outcome.edits, &outcome.owners, &renames))
+    }
+
+    // ----- pair warnings -----
+
+    /// Refuses a pair warning: the removed item and the added item are really two items. The
+    /// reviewer sees the reason. `reason` `None` removes the refusal.
+    pub fn pair_refuse(&mut self, old: &str, new: &str, reason: Option<&str>) -> Result<String> {
+        let mut session = self.load_session()?;
+        session.changeset.pair_refusals.retain(|r| !(r.old == old && r.new == new));
+        let text = match reason {
+            Some(reason) if reason.trim().len() < 10 => bail!("give a reason of at least 10 characters: the reviewer reads it"),
+            Some(reason) => {
+                session.changeset.pair_refusals.push(semilla_core::PairRefusal { old: old.to_string(), new: new.to_string(), reason: reason.trim().to_string() });
+                format!("refused the pair warning `{old} -> {new}`; the reviewer sees the reason and can still accept the warning")
+            }
+            None => format!("removed the refusal of `{old} -> {new}`"),
+        };
+        self.save_session(&session)?;
+        Ok(text)
     }
 
     // ----- groups and subgroups -----
@@ -698,6 +743,15 @@ fn summary_line(report: &Report) -> String {
     }
     for warning in &report.warnings {
         text.push_str(&format!("  ! {warning}\n"));
+    }
+    for pair in &report.pairs {
+        text.push_str(&format!("  ! pair: {}\n", pair.text()));
+        if pair.refusal.is_none() && pair.reviewer.is_none() {
+            text.push_str(&format!("      if the two items are really different, run `semilla pair refuse '{}' '{}' --reason \"…\"`\n", pair.old, pair.new));
+        }
+    }
+    if report.lines.total() > 0 {
+        text.push_str(&format!("  {}\n", report.lines.summary()));
     }
     text
 }

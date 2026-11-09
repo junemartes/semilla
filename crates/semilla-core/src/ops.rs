@@ -42,6 +42,9 @@ pub enum OpKind {
     AcrossNodes,
     /// A free edit at the expression level. It masks its subtree.
     Free,
+    /// A fact about the code after the step (for example `no-panic`). It changes no code, and it
+    /// has no class.
+    Property,
 }
 
 /// One row of the rule table.
@@ -97,6 +100,7 @@ ops! {
     "change-attribute",       Item,       OwnContent,  COMPUTED, Interface, [],           "Change the attributes of an item (for example `#[derive]`).";
     "extract-function",       Item,       AcrossNodes, N, Mechanical,  ["new"],           "Move statements or an expression into a new function.";
     "inline-function",        Item,       AcrossNodes, N, Mechanical,  [],                "Replace a call with the body of the function.";
+    "rewrite-item",           Item,       Free,        COMPUTED, Core, ["note"],          "Rewrite an item as a whole (optional `new`: its new path). Always in the spotlight.";
     // ----- files -----
     "bump-dependency",        File,       OwnContent,  O, Config,      ["crate", "to"],   "Change the version of a dependency in Cargo.toml.";
     "edit-config",            File,       OwnContent,  O, Config,      ["file"],          "Change a file that has no Rust code.";
@@ -156,6 +160,12 @@ ops! {
     "remove-alternative",     Expression, OwnContent,  COMPUTED, Core, [],                "Remove alternatives from an or-pattern.";
     "replace-type",           Expression, Free,        COMPUTED, Core, [],                "Replace a type (free edit).";
     "replace-macro-input",    Expression, Free,        COMPUTED, Core, [],                "Replace the input of one macro call (free edit, always in the spotlight).";
+    // ----- properties of the code after the step -----
+    "no-panic",               Item,       Property,    None, Core,     [],                "The function and its local callees have no explicit panic site.";
+    "no-unsafe",              Item,       Property,    None, Core,     [],                "The function and its local callees have no unsafe code.";
+    "no-io",                  Item,       Property,    None, Core,     [],                "The function and its local callees call no file, network, process, or environment API.";
+    "calls-only",             Item,       Property,    None, Core,     ["calls"],         "Each external call of the function and its local callees starts with a path in `calls`.";
+    "tested-by",              Item,       Property,    None, Core,     ["test"],          "The test `test` calls the function (directly or through local calls).";
 }
 
 /// Finds an operation by name.
@@ -178,7 +188,8 @@ mod tests {
 
     #[test]
     fn free_ops_are_expression_level() {
-        for info in OPS.iter().filter(|info| info.kind == OpKind::Free) {
+        // `rewrite-item` is the one free op at the item level: it is always in the spotlight.
+        for info in OPS.iter().filter(|info| info.kind == OpKind::Free && info.name != "rewrite-item") {
             assert_eq!(info.level, OpLevel::Expression, "{} is free above the expression level", info.name);
         }
     }

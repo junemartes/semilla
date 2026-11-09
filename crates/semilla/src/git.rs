@@ -138,6 +138,33 @@ impl Repo {
         Ok(parse_hunks(&self.git(&args)?))
     }
 
+    /// A new tree: `base` with some files replaced (`Some`) or removed (`None`). The working tree
+    /// and the user's index do not change.
+    pub fn tree_with(&self, base: &str, files: &std::collections::BTreeMap<String, Option<String>>) -> Result<String> {
+        let index = self.private_path("index");
+        let blob = self.private_path("blob");
+        let env = [("GIT_INDEX_FILE", index.as_path())];
+        let result = (|| -> Result<String> {
+            self.git_env(&["read-tree", base], &env)?;
+            for (path, content) in files {
+                match content {
+                    Some(text) => {
+                        std::fs::write(&blob, text)?;
+                        let hash = self.git(&["hash-object", "-w", &blob.to_string_lossy()])?;
+                        self.git_env(&["update-index", "--add", "--cacheinfo", &format!("100644,{hash},{path}")], &env)?;
+                    }
+                    None => {
+                        self.git_env(&["update-index", "--force-remove", path], &env)?;
+                    }
+                }
+            }
+            self.git_env(&["write-tree"], &env)
+        })();
+        let _ = std::fs::remove_file(&index);
+        let _ = std::fs::remove_file(&blob);
+        result
+    }
+
     /// The files that differ between two trees.
     pub fn changed_files(&self, from: &str, to: &str) -> Result<Vec<String>> {
         Ok(self.git(&["diff", "--name-only", "--no-renames", from, to])?.lines().map(str::to_string).collect())

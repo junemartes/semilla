@@ -44,6 +44,25 @@ pub struct BodyComparison {
     pub status: BodyStatus,
 }
 
+/// The MIR facts of one body after a step, for the property claims.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BodyFacts {
+    pub name: String,
+    pub span: Option<(String, usize)>,
+    /// The def paths of the local functions that the body calls.
+    pub callees: Vec<String>,
+    /// The def paths of the functions of other crates that the body calls.
+    pub externals: Vec<String>,
+}
+
+/// The MIR facts of one item (all its bodies, with its closures).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ItemFacts {
+    /// The items that the bodies call.
+    pub callees: Vec<String>,
+    pub externals: Vec<String>,
+}
+
 /// The access to the normal forms. The real one runs the MIR driver on both snapshots.
 pub trait BodyOracle {
     /// Compares all bodies of the two snapshots of a step.
@@ -51,6 +70,11 @@ pub trait BodyOracle {
     /// `renames` maps item paths (before to after) from the identity claims. `added` lists the
     /// new bodies that claims declare, for example the new function of `extract-function`.
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> anyhow::Result<Vec<BodyComparison>>;
+
+    /// The MIR facts of the bodies after a step. `None` when the MIR is not available (phase 1).
+    fn facts(&self, _step: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
+        Ok(None)
+    }
 }
 
 /// The result of an SMT check on a condition.
@@ -106,6 +130,7 @@ pub struct StepOutcome {
 /// Checks one step.
 pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle) -> StepOutcome {
     let step = input.step;
+    let oracle = bodies;
     let mut report = StepReport { step: step.index, intent: step.intent.clone(), declared_class: step.class, ..Default::default() };
 
     // 1. The renames from the identity claims, then the syntax edits.
@@ -123,8 +148,26 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
     };
     let body_index = checks::BodyIndex::new(&bodies, input.after, input.before);
 
+    // The data of the property claims: the local calls (syntax), and the MIR facts (phase 2).
+    let properties: Vec<&semilla_core::Claim> = step.claims.iter().filter(|c| semilla_core::ops::op(&c.op).is_some_and(|i| i.kind == semilla_core::OpKind::Property)).collect();
+    let mut calls: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if !properties.is_empty() {
+        let graph = semilla_syntax::graph::workspace_graph(input.after, &BTreeMap::new(), &BTreeMap::new());
+        for edge in graph.edges.iter().filter(|e| e.kind == semilla_core::view::GraphEdgeKind::Call) {
+            calls.entry(edge.from.clone()).or_default().insert(edge.to.clone());
+        }
+    }
+    let mut facts: Option<BTreeMap<String, ItemFacts>> = None;
+    if properties.iter().any(|c| matches!(c.op.as_str(), "no-io" | "calls-only")) {
+        match oracle.facts(step) {
+            Ok(Some(found)) => facts = Some(item_facts(&found, input.after)),
+            Ok(None) => {}
+            Err(error) => report.errors.push(format!("the MIR facts failed: {error:#}")),
+        }
+    }
+
     // 3. Each claim.
-    let context = checks::Context { step, before: input.before, after: input.after, edits: &edits, bodies: &body_index, exprs, renames: &renames };
+    let context = checks::Context { step, before: input.before, after: input.after, edits: &edits, bodies: &body_index, exprs, renames: &renames, calls: &calls, facts: facts.as_ref() };
     let mut owners: Vec<Option<usize>> = vec![None; edits.len()];
     let mut results = Vec::new();
     for (index, claim) in step.claims.iter().enumerate() {
@@ -255,6 +298,12 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
             report.spotlight.push(format!("macro input: {at}"));
         }
     }
+    for claim in step.claims.iter().filter(|claim| claim.op == "rewrite-item") {
+        if let Some(at) = &claim.at {
+            report.spotlight.push(format!("rewritten item: {at} ({})", claim.arg_str("note").unwrap_or("")));
+        }
+    }
+    report.lines = line_counts(step, &edits, &owners);
     let (level, api_changes) = api_level(&edits, input.before, input.after);
     report.api_level = Some(level.to_string());
     report.api_changes = api_changes;
@@ -271,6 +320,86 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
     }
 
     StepOutcome { report, edits, owners, renames, bodies }
+}
+
+/// Maps the MIR facts of the bodies to the items (a closure belongs to its function).
+fn item_facts(found: &[BodyFacts], after: &Workspace) -> BTreeMap<String, ItemFacts> {
+    let names: BTreeMap<&str, String> = found.iter().filter_map(|f| Some((f.name.as_str(), checks::find_item_by(&f.name, f.span.as_ref(), after)?))).collect();
+    let mut facts: BTreeMap<String, ItemFacts> = BTreeMap::new();
+    for body in found {
+        let Some(item) = names.get(body.name.as_str()) else { continue };
+        let entry = facts.entry(item.clone()).or_default();
+        entry.externals.extend(body.externals.iter().cloned());
+        for callee in &body.callees {
+            let target = names.get(callee.as_str()).cloned().or_else(|| after.items.contains_key(callee.as_str()).then(|| callee.clone()));
+            if let Some(target) = target.filter(|t| t != item) {
+                entry.callees.push(target);
+            }
+        }
+    }
+    facts
+}
+
+/// The changed lines of a step, by the kind of claim that explains them.
+pub fn line_counts(step: &Step, edits: &[Edit], owners: &[Option<usize>]) -> semilla_core::LineCounts {
+    let mut counts = semilla_core::LineCounts::default();
+    for (edit, owner) in edits.iter().zip(owners) {
+        let Some(claim) = owner.and_then(|index| step.claims.get(index)) else { continue };
+        // The member list of an impl repeats a new or removed method: count the method only.
+        if edit.kind == semilla_syntax::EditKind::Members && matches!(claim.op.as_str(), "add-item" | "remove-item" | "rewrite-item") {
+            continue;
+        }
+        let lines = |text: &Option<String>| text.as_deref().map(|t| t.lines().filter(|l| !l.trim().is_empty()).count()).unwrap_or(0);
+        let count = lines(&edit.source_before).max(lines(&edit.source_after)).max(1);
+        match claim.op.as_str() {
+            "add-item" => counts.new += count,
+            "remove-item" => counts.removed += count,
+            "rewrite-item" => counts.rewritten += count,
+            _ => counts.fine += count,
+        }
+    }
+    counts
+}
+
+/// The pair threshold: a removed item and an added item with this similarity or more look like
+/// one changed item.
+pub const PAIR_THRESHOLD: f64 = 0.7;
+
+/// Finds the pair warnings of a change set: a verified `remove-item` and a verified `add-item` of
+/// the same kind, with similar text. `items` gives the removed item (in the tree before its step)
+/// and the added item (in the tree after its step) of each claim.
+pub fn pair_warnings(set: &ChangeSet, report: &Report, items: &BTreeMap<String, semilla_syntax::Item>) -> Vec<semilla_core::PairWarning> {
+    let verified = |id: &str| report.steps.iter().flat_map(|s| &s.claims).any(|c| c.claim == id && c.status.is_verified());
+    let claims: Vec<&semilla_core::Claim> = set.steps.iter().flat_map(|s| &s.claims).filter(|c| verified(&c.id)).collect();
+    // All candidates, then a greedy match: each item is in at most one pair, the most similar first.
+    let mut candidates = Vec::new();
+    for removed in claims.iter().filter(|c| c.op == "remove-item") {
+        let Some(old) = items.get(&removed.id) else { continue };
+        for added in claims.iter().filter(|c| c.op == "add-item") {
+            let Some(new) = items.get(&added.id) else { continue };
+            if old.kind != new.kind || old.path == new.path {
+                continue;
+            }
+            let similarity = hints::similarity(old, new);
+            if similarity >= PAIR_THRESHOLD {
+                candidates.push((similarity, old, new, removed.id.clone(), added.id.clone()));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut used = BTreeSet::new();
+    let mut warnings = Vec::new();
+    for (similarity, old, new, removed, added) in candidates {
+        if used.contains(&old.path) || used.contains(&new.path) {
+            continue;
+        }
+        used.insert(old.path.clone());
+        used.insert(new.path.clone());
+        let refusal = set.pair_refusals.iter().find(|r| r.old == old.path && r.new == new.path).map(|r| r.reason.clone());
+        warnings.push(semilla_core::PairWarning { old: old.path.clone(), new: new.path.clone(), similarity, claims: vec![removed, added], refusal, reviewer: None });
+    }
+    warnings.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
+    warnings
 }
 
 /// True for `<crate>::main` when the crate has no `main` function in the source: the `main` that
@@ -455,6 +584,7 @@ pub fn verify_changeset(
 ) -> (Report, Vec<StepOutcome>) {
     let mut report = Report::default();
     let mut outcomes = Vec::new();
+    let mut pair_items: BTreeMap<String, semilla_syntax::Item> = BTreeMap::new();
     let mut previous_tree = set.base_tree.clone();
     for step in &set.steps {
         if step.tree_before != previous_tree {
@@ -464,6 +594,16 @@ pub fn verify_changeset(
         let loaded = load(&step.tree_before).and_then(|before| Ok((before, load(&step.tree_after)?)));
         match loaded {
             Ok((before, after)) => {
+                for claim in &step.claims {
+                    let found = match (claim.op.as_str(), &claim.at) {
+                        ("remove-item", Some(at)) => before.items.get(&at.item),
+                        ("add-item", Some(at)) => after.items.get(&at.item),
+                        _ => None,
+                    };
+                    if let Some(item) = found {
+                        pair_items.insert(claim.id.clone(), item.clone());
+                    }
+                }
                 let outcome = verify_step(&StepInput { step, before: &before, after: &after }, bodies, exprs);
                 outcomes.push(outcome);
             }
@@ -493,6 +633,7 @@ pub fn verify_changeset(
     }
     organize::check(set, &report.steps.clone(), &mut report, options);
     report.finish();
+    report.pairs = pair_warnings(set, &report, &pair_items);
     (report, outcomes)
 }
 

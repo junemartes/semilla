@@ -60,6 +60,7 @@ pub fn router(ctx: Ctx, review_file: PathBuf) -> Router {
         .route("/api/graph", get(workspace_graph))
         .route("/api/review", get(review_state))
         .route("/api/review/{*target}", post(review_mark).delete(review_unmark))
+        .route("/api/pair", post(pair_decision))
         .fallback(static_file)
         .with_state(state)
 }
@@ -409,6 +410,34 @@ fn review_change(state: &AppState, target: &str, mark: bool) -> ApiResult {
         .save(&state.review_file)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("cannot write {}: {error}", state.review_file.display())))?;
     Ok(Json(json!({ "target": target, "kind": kind, "claims": claims, "reviewed": mark })))
+}
+
+#[derive(Deserialize)]
+struct PairParams {
+    old: String,
+    new: String,
+    /// `accepted`, `dismissed`, or `clear`.
+    decision: String,
+}
+
+/// Stores the reviewer's decision on a pair warning. `accepted` means that the agent must rewrite
+/// the pair as one changed item.
+async fn pair_decision(State(state): State<Shared>, Query(params): Query<PairParams>) -> ApiResult {
+    let key = format!("{} -> {}", params.old, params.new);
+    if !state.ctx.data.report.pairs.iter().any(|pair| pair.key() == key) {
+        return Err(not_found(format!("pair warning {key}")));
+    }
+    let decision = match params.decision.as_str() {
+        "accepted" | "dismissed" => Some(params.decision.as_str()),
+        "clear" => None,
+        other => return Err(ApiError(StatusCode::BAD_REQUEST, format!("unknown decision `{other}`; use accepted, dismissed, or clear"))),
+    };
+    let mut review = review_of(&state);
+    review.set_pair(&key, decision, review::now());
+    review
+        .save(&state.review_file)
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("cannot write {}: {error}", state.review_file.display())))?;
+    Ok(Json(json!({ "pair": key, "decision": decision })))
 }
 
 async fn static_file(uri: Uri) -> Response {

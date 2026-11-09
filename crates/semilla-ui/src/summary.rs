@@ -49,7 +49,39 @@ pub struct ChangeSetSummary {
     pub counts: Counts,
     pub organization: Vec<String>,
     pub warnings: Vec<String>,
+    /// The changed lines by claim kind, and the same as one line of text.
+    pub lines: semilla_core::LineCounts,
+    pub lines_text: String,
+    /// The pair warnings, with the reviewer's current decision.
+    pub pairs: Vec<PairView>,
     pub groups: Vec<GroupSummary>,
+}
+
+/// One pair warning for the review UI.
+#[derive(Clone, Debug, Serialize)]
+pub struct PairView {
+    pub key: String,
+    pub old: String,
+    pub new: String,
+    pub similarity: f64,
+    pub claims: Vec<String>,
+    pub refusal: Option<String>,
+    /// `accepted`, `dismissed`, or `None`.
+    pub reviewer: Option<String>,
+    pub text: String,
+}
+
+/// The pair warnings of a report, with the decisions of the review file.
+pub fn pair_views(report: &semilla_core::Report, review: &ReviewFile) -> Vec<PairView> {
+    report
+        .pairs
+        .iter()
+        .map(|pair| {
+            let mut pair = pair.clone();
+            pair.reviewer = review.pair(&pair.key()).map(str::to_string).or(pair.reviewer);
+            PairView { key: pair.key(), text: pair.text(), old: pair.old, new: pair.new, similarity: pair.similarity, claims: pair.claims, refusal: pair.refusal, reviewer: pair.reviewer }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -154,6 +186,9 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         counts,
         organization: report.organization.clone(),
         warnings: report.warnings.clone(),
+        lines: report.lines,
+        lines_text: report.lines.summary(),
+        pairs: pair_views(report, review),
         groups,
     }
 }
@@ -549,6 +584,17 @@ fn risk(
     if logic > 0 {
         score += 1;
         reasons.push(format!("{logic} logic"));
+    }
+    // A whole rewrite gives the highest risk: the reviewer must read the whole item.
+    let rewritten = claims.iter().filter(|claim| claim.op == "rewrite-item").count();
+    if rewritten > 0 {
+        score += 5;
+        reasons.push(format!("{rewritten} rewritten"));
+    }
+    let pairs = ctx.data.report.pairs.iter().filter(|pair| pair.claims.iter().any(|id| claims.iter().any(|claim| claim.id == *id))).count();
+    if pairs > 0 {
+        score += 2;
+        reasons.push(format!("{pairs} pair warning(s)"));
     }
     (score, reasons)
 }

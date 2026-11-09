@@ -104,6 +104,10 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             .collect();
         for (id, op) in &claims {
             let info = ops::op(op);
+            // A property claim changes no code, so it fits in every group.
+            if info.is_some_and(|i| i.kind == semilla_core::OpKind::Property) {
+                continue;
+            }
             let result = results.get(id);
             let problem = match group.kind {
                 GroupKind::Refactor => (!result.is_some_and(|r| r.class == Some(Class::Neutral))).then(|| "a refactor group can contain only neutral claims"),
@@ -139,6 +143,9 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             // In phase 1 a neutral claim is still pending; phase 2 decides.
             let neutral_proved = result.is_some_and(|r| r.class == Some(Class::Neutral) && (r.status.is_verified() || r.status.is_pending()));
             let info = ops::op(&found.op);
+            if info.is_some_and(|i| i.kind == semilla_core::OpKind::Property) {
+                continue;
+            }
             let problem = match subgroup.role {
                 // Doc changes (class `other`, no behavior) are mechanical too.
                 Role::Mechanical => (!(neutral_proved || found.op == "edit-doc")).then(|| "a Mechanical subgroup can contain only proved neutral claims and doc changes"),

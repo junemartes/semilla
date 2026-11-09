@@ -965,3 +965,49 @@ The steps are ordinary steps, so the verifier, the reports, the UI, and `tag` do
 
 - A hunk is a unit of lines. Two changes on one line need a hand edit.
 - The semantic list of `replay status` compares the whole remaining difference. In a large difference, the statement pairing is less reliable (a changed statement can show as a removed and an added statement). In a step, the difference is small.
+
+## 21. Plans, pair warnings, and property claims
+
+### 21.1 The plan
+
+A large replay needs many steps, and each step needs about five tool calls. So the agent plans all steps first and submits the whole plan at once.
+
+- `replay plan` writes a draft. The engine builds the units of the remaining diff: each hunk links the innermost item that it touches on each side (a hunk can replace one item with another). Then it joins these units:
+  - a removed item and a similar added item (a pair), with the units that use the old name;
+  - an item with a changed signature, with the units that use its name;
+  - a new item, with the units that use it, so that each step compiles.
+- Each set of joined units is one step. The order is: new items, renames, signature changes, other changes, removed items, other files.
+- A pair under the same parent becomes two steps: a rename with a whole-word edit (proved by the rename map), then the other changes. This is the honest split, made by the engine.
+- The draft simulates each step in memory (`tree_with`), so the draft claims have the anchors of that step. The claims of a step come after the rename map, and expression claims under one parent merge into one `replace-expression`.
+- `replay apply` starts again from the base, runs every step (the takes, the hand edits, the claims), and checks the whole change set. It reports all problems at once. Before the reset, it refuses a working tree with files that the target does not have.
+
+The plan positions (`base:`, `target:`, `before:`, `after:`) let the agent point at code without the anchor numbering of the intermediate trees. The apply maps the line through the line hunks between the trees.
+
+### 21.2 Pair warnings
+
+`add-item` has no content check, so `remove-item` plus `add-item` is a free edit at the item level. The pair warning makes this visible:
+
+- The verifier pairs each verified `remove-item` with a verified `add-item` of the same kind. The similarity is the longest common token sequence of the item texts, with the item names replaced by one token. The match is greedy and one-to-one, from the most similar pair. The threshold is 0.7.
+- The warning does not reject the change set. The agent can refuse it with a reason (`pair refuse`, or `refusals` in a plan).
+- The reviewer decides in the UI (`/api/pair`). The decision goes into the review file. If the reviewer accepts the warning, the change set is rejected until the agent claims the pair as one changed item.
+
+`rewrite-item` is the honest way to claim a whole rewrite. It needs a `note`, it can give a new path (the references follow it, like a rename), it is always in the spotlight, it counts 0.5 in the score, and it gives the highest group risk.
+
+### 21.3 The precision line
+
+Each step report counts the changed lines by the kind of claim that explains them: fine-grained, new (`add-item`), removed (`remove-item`), and rewritten (`rewrite-item`). The report shows the sum and the part of fine-grained lines.
+
+### 21.4 Property claims
+
+New code has no "before". A property claim states a fact about a function after the step, and the verifier checks it on the function and its local callees:
+
+- `no-panic`, `no-unsafe`, `tested-by`: from the syntax and the syntax call graph, in phase 1.
+- `no-io`, `calls-only`: from the external calls in the MIR records (`BodyOracle::facts`), in phase 2. The MIR callees extend the set of local callees.
+
+A property claim has no class and explains no edit. It is valid without an edit, and it fits in every group and subgroup. A false property claim is `refuted`.
+
+### 21.5 Limits
+
+- `no-panic` counts the explicit panic sites only. A panic inside a callee of another crate does not count.
+- The syntax call graph guesses method calls by name.
+- The draft plan cannot split one hunk. A refactor and a behavior change on the same lines need a hand edit in the plan.

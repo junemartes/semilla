@@ -9,7 +9,7 @@
 //! The class of a claim comes from the rule table, or from the MIR when the table says
 //! "computed". A neutral claim needs a body proof.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::ops::{self, OpKind, OpLevel};
 use semilla_core::report::Effect;
@@ -27,6 +27,10 @@ pub struct Context<'a> {
     pub bodies: &'a BodyIndex,
     pub exprs: &'a dyn ExprOracle,
     pub renames: &'a Renames,
+    /// The local calls of each item after the step (from the syntax), for the property claims.
+    pub calls: &'a BTreeMap<String, BTreeSet<String>>,
+    /// The MIR facts of each item after the step, or `None` before phase 2.
+    pub facts: Option<&'a BTreeMap<String, crate::ItemFacts>>,
 }
 
 /// The result of one checker.
@@ -121,7 +125,12 @@ impl BodyIndex {
 
 /// Finds the syntax item of a MIR body: by the span first, then by the name.
 fn find_item(body: &BodyComparison, workspace: &Workspace) -> Option<String> {
-    if let Some((file, line)) = &body.span {
+    find_item_by(&body.name, body.span.as_ref(), workspace)
+}
+
+/// Finds the syntax item of a MIR body name and span.
+pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Workspace) -> Option<String> {
+    if let Some((file, line)) = span {
         let found = workspace
             .items
             .values()
@@ -131,7 +140,7 @@ fn find_item(body: &BodyComparison, workspace: &Workspace) -> Option<String> {
             return Some(item.path.clone());
         }
     }
-    let name = body.name.split("::{").next().unwrap_or(&body.name);
+    let name = name.split("::{").next().unwrap_or(name);
     workspace.items.contains_key(name).then(|| name.to_string())
 }
 
@@ -154,6 +163,17 @@ pub fn renames(step: &Step, before: &Workspace) -> Renames {
                 }
                 if old_name != new_name {
                     renames.idents.push((None, old_name.to_string(), new_name.to_string()));
+                }
+            }
+            // A rewrite under a new path: the references follow the new path, like a rename.
+            "rewrite-item" if claim.arg_str("new").is_some() => {
+                let new_path = full_path(&at.item, claim.arg_str("new").unwrap());
+                if new_path != at.item {
+                    renames.items.insert(at.item.clone(), new_path.clone());
+                    let (old_name, new_name) = (last_segment(&at.item), last_segment(&new_path));
+                    if old_name != new_name {
+                        renames.idents.push((None, old_name.to_string(), new_name.to_string()));
+                    }
                 }
             }
             "rename-local" => {
@@ -213,7 +233,15 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
         return Outcome::malformed(format!("`{}` needs an anchor (`at`)", claim.op));
     }
 
+    if info.kind == OpKind::Property {
+        let mut outcome = check_property(context, claim);
+        outcome.self_evident = true;
+        outcome.class = None;
+        return outcome;
+    }
+
     let mut outcome = match claim.op.as_str() {
+        "rewrite-item" => check_rewrite(context, claim),
         "rename" | "move-item" => check_rename(context, claim),
         "add-item" => check_item_edit(context, claim, EditKind::ItemAdded, true),
         "remove-item" => check_item_edit(context, claim, EditKind::ItemRemoved, false),
@@ -260,7 +288,7 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
     if info.class == Some(Class::Neutral) {
         outcome.needs_body_proof = true;
     }
-    if info.kind == OpKind::Free && outcome.status.is_verified() && outcome.class == Some(Class::Neutral) {
+    if info.kind == OpKind::Free && outcome.status.is_verified() && outcome.class == Some(Class::Neutral) && claim.op != "rewrite-item" {
         outcome.hint = Some("This free edit is neutral. An exact neutral op gives a stronger claim.".into());
     }
     outcome
@@ -1044,4 +1072,178 @@ fn strip_paren(text: &str) -> &str {
 /// Parses an expression and returns its token text, so that the spacing is the same.
 fn normalize_expr(text: &str) -> Option<String> {
     syn::parse_str::<syn::Expr>(text).ok().map(|expr| quote::ToTokens::to_token_stream(&expr).to_string())
+}
+
+
+/// True if an anchor is in an item or in one of its members.
+fn in_item(anchor: Option<&Anchor>, item: &str) -> bool {
+    anchor.is_some_and(|anchor| anchor.item == item || anchor.item.starts_with(&format!("{item}::")))
+}
+
+/// True if an edit is the member list of the impl that owns `item` (a new or removed method).
+fn is_owner_members(edit: &Edit, item: &str) -> bool {
+    edit.kind == EditKind::Members && item.contains("::") && {
+        let owner = item.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
+        edit.anchor().is_some_and(|anchor| anchor.item.ends_with(&format!("impl {}", last_segment(owner))) || anchor.item.contains(&format!("impl {owner}")))
+    }
+}
+
+/// `rewrite-item`: a free edit of a whole item, with an optional new path. It explains every edit
+/// of the item. The reviewer sees the old and the new item side by side.
+fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
+    let at = claim.at.as_ref().unwrap();
+    let new = claim.arg_str("new").map(|new| full_path(&at.item, new)).unwrap_or_else(|| at.item.clone());
+    let Some(old_item) = context.before.items.get(&at.item) else {
+        return Outcome::malformed(format!("no item `{}` before the step", at.item));
+    };
+    let Some(new_item) = context.after.items.get(&new) else {
+        return Outcome::malformed(format!("no item `{new}` after the step; `new` names the path after the rewrite"));
+    };
+    if claim.arg_str("note").is_none_or(|note| note.trim().len() < 10) {
+        return Outcome::malformed("`rewrite-item` needs a `note` that says why the item is rewritten as a whole");
+    }
+    let explains: Vec<usize> = context
+        .edits
+        .iter()
+        .enumerate()
+        .filter(|(_, edit)| in_item(edit.before.as_ref(), &at.item) || in_item(edit.after.as_ref(), &new) || is_owner_members(edit, &at.item) || is_owner_members(edit, &new))
+        .map(|(index, _)| index)
+        .collect();
+    if explains.is_empty() {
+        return Outcome::new(ClaimStatus::Empty);
+    }
+    let mut outcome = Outcome::verified("rewrite", explains);
+    outcome.before = Some(old_item.source.clone());
+    outcome.after = Some(new_item.source.clone());
+    outcome.class = match context.bodies.status(&new).or_else(|| context.bodies.status(&at.item)) {
+        Some(BodyStatus::Equal { .. }) => Some(Class::Neutral),
+        Some(BodyStatus::Different { cfg_changed: true }) => Some(Class::ControlFlow),
+        Some(_) => Some(Class::Logic),
+        None => None,
+    };
+    outcome
+}
+
+/// The prefixes of the external APIs that `no-io` forbids.
+pub const IO_PREFIXES: &[&str] = &["std::fs::", "std::io::", "std::net::", "std::process::", "std::env::", "std::os::", "std::thread::", "tokio::", "async_std::", "reqwest::", "hyper::"];
+
+/// An item and the local items that it calls, directly or indirectly (from the syntax calls).
+pub fn reach(calls: &BTreeMap<String, BTreeSet<String>>, item: &str) -> BTreeSet<String> {
+    let mut seen = BTreeSet::from([item.to_string()]);
+    let mut todo = vec![item.to_string()];
+    while let Some(current) = todo.pop() {
+        for next in calls.get(&current).into_iter().flatten() {
+            if !next.starts_with("ext::") && seen.insert(next.clone()) {
+                todo.push(next.clone());
+            }
+        }
+    }
+    seen
+}
+
+/// The explicit panic sites of one item: `unwrap`, `expect`, the panic macros, and indexing.
+pub fn item_panic_sites(item: &semilla_syntax::Item) -> Vec<String> {
+    let mut sites = Vec::new();
+    let Some(body) = &item.body else { return sites };
+    let mut path = Vec::new();
+    body.walk(&mut path, &mut |roles, node| {
+        let attr = node.attr.as_deref().unwrap_or("");
+        let site = match node.kind {
+            "method_call" => matches!(attr, "unwrap" | "expect"),
+            "macro" => matches!(attr, "panic" | "unreachable" | "todo" | "unimplemented" | "assert" | "assert_eq" | "assert_ne"),
+            "index" => true,
+            _ => false,
+        };
+        if site {
+            sites.push(format!("{}/{}", item.path, roles.join("/")));
+        }
+    });
+    sites
+}
+
+/// The property claims (design section 21.4): facts about the code after the step.
+fn check_property(context: &Context, claim: &Claim) -> Outcome {
+    let at = claim.at.as_ref().unwrap();
+    if !at.path.is_empty() {
+        return Outcome::malformed(format!("`{}` is a claim on an item; use the item anchor `{}`", claim.op, at.item));
+    }
+    let Some(item) = context.after.items.get(&at.item) else {
+        return Outcome::malformed(format!("no item `{}` after the step", at.item));
+    };
+    if item.body.is_none() {
+        return Outcome::malformed(format!("`{}` is not a function", at.item));
+    }
+    let reached = reach(context.calls, &at.item);
+    let list = |found: &[String]| {
+        let mut text = found.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        if found.len() > 5 {
+            text.push_str(&format!(", and {} more", found.len() - 5));
+        }
+        text
+    };
+    let mut outcome = match claim.op.as_str() {
+        "no-unsafe" => {
+            let found: Vec<String> = reached
+                .iter()
+                .filter_map(|path| context.after.items.get(path))
+                .filter(|item| item.text.split(' ').any(|token| token == "unsafe"))
+                .map(|item| item.path.clone())
+                .collect();
+            if found.is_empty() { Outcome::verified("syntax", Vec::new()) } else { Outcome::refuted(format!("unsafe code in {}", list(&found))) }
+        }
+        "no-panic" => {
+            let found: Vec<String> = reached.iter().filter_map(|path| context.after.items.get(path)).flat_map(item_panic_sites).collect();
+            if found.is_empty() { Outcome::verified("syntax", Vec::new()) } else { Outcome::refuted(format!("explicit panic sites: {}", list(&found))) }
+        }
+        "tested-by" => {
+            let test = claim.arg_str("test").unwrap();
+            let path = if context.after.items.contains_key(test) { test.to_string() } else {
+                // A last name: the test items of the same crate with that name.
+                let krate = at.item.split("::").next().unwrap_or("");
+                match context.after.items.values().filter(|i| i.test && i.path.starts_with(&format!("{krate}::")) && last_segment(&i.path) == test).map(|i| i.path.clone()).collect::<Vec<_>>().as_slice() {
+                    [one] => one.clone(),
+                    [] => return Outcome::malformed(format!("no test `{test}` after the step")),
+                    _ => return Outcome::malformed(format!("more than one test is named `{test}`; use the full path")),
+                }
+            };
+            if !context.after.items.get(&path).is_some_and(|i| i.test) {
+                return Outcome::malformed(format!("`{path}` is not a test"));
+            }
+            if reach(context.calls, &path).contains(&at.item) {
+                Outcome::verified("graph", Vec::new())
+            } else {
+                Outcome::refuted(format!("the test `{path}` does not call `{}`", at.item))
+            }
+        }
+        "no-io" | "calls-only" => {
+            let Some(facts) = context.facts else {
+                return Outcome::new(ClaimStatus::Pending { reason: "the external calls come from the MIR in the background check (phase 2)".into() });
+            };
+            // The MIR knows the real local calls: follow them too.
+            let mut items = reached.clone();
+            let mut todo: Vec<String> = items.iter().cloned().collect();
+            while let Some(current) = todo.pop() {
+                for callee in facts.get(&current).map(|f| f.callees.clone()).unwrap_or_default() {
+                    if items.insert(callee.clone()) {
+                        todo.push(callee);
+                    }
+                }
+            }
+            let externals: BTreeSet<String> = items.iter().filter_map(|item| facts.get(item)).flat_map(|f| f.externals.iter().cloned()).collect();
+            let allowed = claim.arg_list("calls");
+            let bad: Vec<String> = externals
+                .into_iter()
+                .filter(|path| {
+                    let plain = path.trim_start_matches('<');
+                    if claim.op == "no-io" { IO_PREFIXES.iter().any(|prefix| plain.starts_with(prefix)) } else { !allowed.iter().any(|prefix| plain.starts_with(prefix.as_str())) }
+                })
+                .collect();
+            if bad.is_empty() { Outcome::verified("mir", Vec::new()) } else { Outcome::refuted(format!("external calls: {}", list(&bad))) }
+        }
+        other => Outcome::malformed(format!("the verifier has no checker for `{other}`")),
+    };
+    if outcome.status.is_verified() {
+        outcome.after = Some(format!("{} ({} item(s) checked)", claim.op, reached.len()));
+    }
+    outcome
 }

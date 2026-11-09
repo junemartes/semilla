@@ -310,6 +310,7 @@ impl<'a> Model<'a> {
         if report.pending > 0 {
             facts.push(("Pending claims", report.pending.to_string()));
         }
+        facts.push(("Changed lines", report.lines.summary().trim_start_matches("lines: ").to_string()));
         facts.push(("Base tree", short_hash(&summary.base_tree)));
         facts.push(("Head tree", short_hash(&summary.head_tree)));
         facts
@@ -794,6 +795,11 @@ fn html_summary(out: &mut String, model: &Model) {
         out.push_str("<h3>Warnings</h3>\n");
         html_list(out, "warnings", &report.warnings);
     }
+    if !report.pairs.is_empty() {
+        out.push_str("<h3>Pair warnings</h3>\n");
+        let items: Vec<String> = report.pairs.iter().map(|pair| pair.text()).collect();
+        html_list(out, "pairs", &items);
+    }
     let spotlight = model.spotlight();
     if !spotlight.is_empty() {
         out.push_str("<h3>Spotlight</h3>\n");
@@ -1103,9 +1109,10 @@ fn md_summary(out: &mut String, model: &Model) {
         let _ = writeln!(out, "| {} | {} |", md(label), md(&value));
     }
     out.push('\n');
-    let lists: [(&str, Vec<String>); 4] = [
+    let lists: [(&str, Vec<String>); 5] = [
         ("Organization errors", report.organization.clone()),
         ("Warnings", report.warnings.clone()),
+        ("Pair warnings", report.pairs.iter().map(|pair| pair.text()).collect()),
         ("Spotlight", model.spotlight().iter().map(|(step, text)| format!("step {step}: {text}")).collect()),
         ("Public API changes", model.api_changes().iter().map(|(step, text)| format!("step {step}: {text}")).collect()),
     ];

@@ -122,6 +122,94 @@ pub struct StepReport {
     /// features, and build scripts (design 5.5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spotlight: Vec<String>,
+    /// The changed lines by the kind of claim that explains them.
+    #[serde(default)]
+    pub lines: LineCounts,
+}
+
+/// The changed lines of a step or a change set, by the kind of claim that explains them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineCounts {
+    /// Lines that fine-grained claims explain (everything except the four kinds below).
+    pub fine: usize,
+    /// Lines of new items (`add-item`).
+    pub new: usize,
+    /// Lines of removed items (`remove-item`).
+    pub removed: usize,
+    /// Lines of rewritten items (`rewrite-item`).
+    pub rewritten: usize,
+}
+
+impl LineCounts {
+    pub fn total(&self) -> usize {
+        self.fine + self.new + self.removed + self.rewritten
+    }
+
+    pub fn add(&mut self, other: &LineCounts) {
+        self.fine += other.fine;
+        self.new += other.new;
+        self.removed += other.removed;
+        self.rewritten += other.rewritten;
+    }
+
+    /// The precision: the part of the lines that fine-grained claims explain.
+    pub fn precision(&self) -> f64 {
+        if self.total() == 0 { 1.0 } else { self.fine as f64 / self.total() as f64 }
+    }
+
+    /// One line of text for the agent and the reviewer.
+    pub fn summary(&self) -> String {
+        format!(
+            "lines: {} fine-grained ({:.0}%), {} new, {} removed, {} rewritten",
+            self.fine,
+            self.precision() * 100.0,
+            self.new,
+            self.removed,
+            self.rewritten
+        )
+    }
+}
+
+/// A removed item and an added item that look like one item that changed (design 21.2).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PairWarning {
+    pub old: String,
+    pub new: String,
+    /// The similarity of the two items, from 0 to 1.
+    pub similarity: f64,
+    /// The `remove-item` and `add-item` claims.
+    pub claims: Vec<String>,
+    /// The reason of the agent, if the agent refused the warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    /// The decision of the reviewer: `accepted` (the agent must rewrite the pair) or `dismissed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
+}
+
+impl PairWarning {
+    /// The key of the pair in the review file and in the refusals.
+    pub fn key(&self) -> String {
+        format!("{} -> {}", self.old, self.new)
+    }
+
+    pub fn text(&self) -> String {
+        let mut text = format!(
+            "`{}` (removed) and `{}` (added) are {:.0}% similar: claim a rename or a move and then the body changes, or use `rewrite-item`",
+            self.old,
+            self.new,
+            self.similarity * 100.0
+        );
+        if let Some(reason) = &self.refusal {
+            text.push_str(&format!("; the agent refused: {reason}"));
+        }
+        match self.reviewer.as_deref() {
+            Some("accepted") => text.push_str("; the reviewer accepted the warning: rewrite the pair"),
+            Some("dismissed") => text.push_str("; the reviewer dismissed the warning"),
+            _ => {}
+        }
+        text
+    }
 }
 
 impl StepReport {
@@ -158,6 +246,12 @@ pub struct Report {
     /// The highest estimated API level of all steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_level: Option<String>,
+    /// The changed lines of all steps, by claim kind.
+    #[serde(default)]
+    pub lines: LineCounts,
+    /// The removed and added items that look like one changed item.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pairs: Vec<PairWarning>,
     pub accepted: bool,
 }
 
@@ -166,6 +260,10 @@ impl Report {
     pub fn finish(&mut self) {
         self.accepted = self.organization.is_empty() && self.steps.iter().all(StepReport::accepted);
         self.panic_delta = self.steps.iter().map(|step| step.panic_delta).sum();
+        self.lines = LineCounts::default();
+        for step in &self.steps {
+            self.lines.add(&step.lines);
+        }
         self.pending = self.steps.iter().flat_map(|step| &step.claims).filter(|claim| claim.status.is_pending()).count();
         let rank = |level: &str| match level {
             "major" => 2,
@@ -178,7 +276,7 @@ impl Report {
             .iter()
             .flat_map(|step| step.claims.iter())
             .map(|claim| match (&claim.status, claim.class) {
-                (ClaimStatus::Verified { proof }, _) if proof == "free" => 0.5,
+                (ClaimStatus::Verified { proof }, _) if proof == "free" || proof == "rewrite" => 0.5,
                 (ClaimStatus::Verified { .. }, Some(Class::Neutral)) => 1.0,
                 (ClaimStatus::Verified { .. }, _) => 0.9,
                 (ClaimStatus::Unproved { .. }, _) => 0.2,

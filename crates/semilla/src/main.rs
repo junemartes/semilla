@@ -5,6 +5,7 @@ mod background;
 mod git;
 mod mcp;
 mod oracle;
+mod plan;
 mod replay;
 
 use std::path::PathBuf;
@@ -32,6 +33,11 @@ enum Command {
     Replay {
         #[command(subcommand)]
         action: ReplayAction,
+    },
+    /// Refuse a pair warning (a removed and an added item that look like one changed item).
+    Pair {
+        #[command(subcommand)]
+        action: PairAction,
     },
     /// Manage steps.
     Step {
@@ -138,6 +144,19 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum PairAction {
+    /// Say why the removed item and the added item are really two items.
+    Refuse {
+        old: String,
+        new: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Remove a refusal.
+    Unrefuse { old: String, new: String },
+}
+
+#[derive(Subcommand)]
 enum ReplayAction {
     /// Save the work (or a commit) as the target, and put the base tree in the working tree.
     Begin {
@@ -147,6 +166,20 @@ enum ReplayAction {
     },
     /// List the hunks that remain between the working tree and the target.
     Status,
+    /// Write a draft plan of all steps (JSON), from the base to the target.
+    Plan {
+        /// The plan file (default `.semilla/plan.json`). `-` prints the plan.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Apply a whole plan: start again from the base, run each step, and check the change set.
+    Apply {
+        /// The plan file (default `.semilla/plan.json`).
+        plan: Option<PathBuf>,
+        /// Also run phase 2 now (the MIR body proofs), and wait for it.
+        #[arg(long)]
+        full: bool,
+    },
     /// Copy a part of the target into the working tree: `FILE`, `FILE:LINE`, `FILE:START-END`
     /// (target lines), or an item path.
     Take { spec: Vec<String> },
@@ -218,8 +251,28 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
     let mut app = App::open(&dir)?;
     match cli.command {
+        Command::Pair { action: PairAction::Refuse { old, new, reason } } => println!("{}", app.pair_refuse(&old, &new, Some(&reason))?),
+        Command::Pair { action: PairAction::Unrefuse { old, new } } => println!("{}", app.pair_refuse(&old, &new, None)?),
         Command::Replay { action: ReplayAction::Begin { commit } } => println!("{}", app.replay_begin(commit.as_deref())?),
         Command::Replay { action: ReplayAction::Status } => println!("{}", app.replay_status()?),
+        Command::Replay { action: ReplayAction::Plan { out } } => {
+            let text = serde_json::to_string_pretty(&app.replay_plan()?)?;
+            let file = out.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
+            if file.as_os_str() == "-" {
+                println!("{text}");
+            } else {
+                std::fs::write(&file, text + "\n")?;
+                println!("wrote the draft plan to {}; check each step and claim, then run `semilla replay apply`", file.display());
+            }
+        }
+        Command::Replay { action: ReplayAction::Apply { plan, full } } => {
+            let plan = plan.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
+            let text = std::fs::read_to_string(&plan).with_context(|| format!("read {}", plan.display()))?;
+            let plan: plan::Plan = serde_json::from_str(&text).with_context(|| format!("{} is not a valid plan", plan.display()))?;
+            let applied = app.replay_apply(&plan, full)?;
+            print!("{}", applied.text);
+            return Ok(if applied.ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        }
         Command::Replay { action: ReplayAction::Take { spec } } => {
             anyhow::ensure!(!spec.is_empty(), "name what to take: FILE, FILE:LINE, FILE:START-END, or an item path");
             for one in spec {

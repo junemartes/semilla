@@ -142,6 +142,18 @@ pub struct ChangeSet {
     pub groups: Vec<Group>,
     #[serde(default)]
     pub subgroups: Vec<Subgroup>,
+    /// The pair warnings that the agent refused, with a reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pair_refusals: Vec<PairRefusal>,
+}
+
+/// The agent's refusal of a pair warning: the removed item and the added item are really two
+/// different items.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PairRefusal {
+    pub old: String,
+    pub new: String,
+    pub reason: String,
 }
 
 impl ChangeSet {

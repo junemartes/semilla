@@ -17,9 +17,12 @@ fn tools() -> Value {
         {"name": "ops", "description": "List all claim operations with their level, class, role, and required arguments.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "replay_begin", "description": "Start a replay: semilla saves your finished work (or `commit`) as the target and puts the base tree in the working tree. Then rebuild the target in small steps, with replay_take or your own edits.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
         {"name": "replay_status", "description": "List the hunks that remain between the working tree and the replay target, with the semantic changes and the suggested ops.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_plan", "description": "Return a draft plan (JSON) of all replay steps: the takes and the draft claims of each step. Check and edit it, then send it with replay_apply.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_apply", "description": "Apply a whole replay plan: start again from the base, run each step, and check the change set. It reports all problems at once; fix the plan and apply it again. `full: true` also runs the body proofs.", "inputSchema": {"type": "object", "properties": {"plan": {"type": "object"}, "full": {"type": "boolean"}}, "required": ["plan"]}},
         {"name": "replay_take", "description": "Inside an open step: copy a part of the replay target into the working tree. `spec` is FILE, FILE:LINE, FILE:START-END (target lines), or an item path.", "inputSchema": {"type": "object", "properties": {"spec": {"type": "string"}}, "required": ["spec"]}},
         {"name": "replay_end", "description": "End the replay. The working tree must be the target, and no step may be open.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "replay_abort", "description": "Stop the replay, remove its steps, and restore the working tree.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "pair_refuse", "description": "Refuse a pair warning: say why a removed item and an added item are really two items. The reviewer sees the reason and can still accept the warning. Without `reason`, remove the refusal.", "inputSchema": {"type": "object", "properties": {"old": {"type": "string"}, "new": {"type": "string"}, "reason": {"type": "string"}}, "required": ["old", "new"]}},
         {"name": "step_begin", "description": "Start a step. Make the changes of the step with your own edit tools, then add claims, then call step_end.", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "class": class}, "required": ["intent"]}},
         {"name": "claim", "description": "Add a claim to the open step. `at` is an anchor from the `anchor` tool. Claims on existing code use the anchors of the tree before the step; `add-*` statement claims use the anchor of the new statement.", "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ops}, "at": {"type": "string"}, "args": {"type": "object"}}, "required": ["op"]}},
         {"name": "unclaim", "description": "Remove a claim from the open step.", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
@@ -54,8 +57,15 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             Ok(format!("claim {id} added"))
         }
         "unclaim" => app.unclaim(text("id").context("`id` is required")?).map(|_| format!("claim {} removed", text("id").unwrap_or(""))),
+        "pair_refuse" => app.pair_refuse(text("old").context("`old` is required")?, text("new").context("`new` is required")?, text("reason")),
         "replay_begin" => app.replay_begin(text("commit")),
         "replay_status" => app.replay_status(),
+        "replay_plan" => Ok(serde_json::to_string_pretty(&app.replay_plan()?)?),
+        "replay_apply" => {
+            let plan: crate::plan::Plan = serde_json::from_value(args.get("plan").cloned().context("`plan` is required")?)?;
+            let applied = app.replay_apply(&plan, args.get("full").and_then(Value::as_bool).unwrap_or(false))?;
+            Ok(applied.text)
+        }
         "replay_take" => app.replay_take(text("spec").context("`spec` is required")?),
         "replay_end" => app.replay_end(),
         "replay_abort" => app.replay_abort(),

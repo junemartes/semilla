@@ -334,3 +334,77 @@ fn replay_flow() {
     let tagged = run(repo, &["tag"], 0);
     assert!(tagged.contains("1 steps"), "{tagged}");
 }
+
+const PLAN_BASE: &str = "pub fn total(v: &[u32]) -> u32 {\n    let mut s = 0;\n    for x in v {\n        s += x;\n    }\n    s\n}\n\npub fn scale(v: &[u32], k: u32) -> Vec<u32> {\n    let out: Vec<u32> = v.iter().map(|x| x * k).collect();\n    out\n}\n\npub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n\npub fn twice(v: &[u32]) -> Vec<u32> {\n    scale(v, 2)\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t_total() {\n        assert_eq!(total(&[1, 2]), 3);\n    }\n}\n";
+const PLAN_TARGET: &str = "pub fn total(v: &[u32]) -> u32 {\n    if v.is_empty() {\n        return 0;\n    }\n    let mut s = 0;\n    for x in v {\n        s += x;\n    }\n    s\n}\n\npub fn multiply(v: &[u32], k: u32) -> Vec<u32> {\n    let out: Vec<u32> = v.iter().map(|x| x * k + 1).collect();\n    out\n}\n\npub fn sum_wide(v: &[u32]) -> u64 {\n    v.iter().map(|x| *x as u64).sum()\n}\n\npub fn twice(v: &[u32]) -> Vec<u32> {\n    multiply(v, 2)\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t_total() {\n        assert_eq!(total(&[1, 2]), 3);\n    }\n    #[test]\n    fn t_wide() {\n        assert_eq!(sum_wide(&[1, 2]), 3);\n    }\n}\n";
+
+/// The plan: the agent drafts all steps at once, edits the draft, and applies the whole plan.
+#[test]
+fn plan_flow() {
+    let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
+    assert!(status.success(), "build the MIR driver");
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    // No `.semilla/` line in `.gitignore`: semilla keeps its state out of the trees by itself.
+    write(repo, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    write(repo, ".gitignore", "/target\n");
+    write(repo, "src/lib.rs", PLAN_BASE);
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"]);
+    write(repo, "src/lib.rs", PLAN_TARGET);
+    run(repo, &["replay", "begin"], 0);
+
+    // The draft: the rename is its own step (a whole-word edit), and its body change comes later.
+    run(repo, &["replay", "plan"], 0);
+    let plan_file = repo.join(".semilla/plan.json");
+    let mut plan: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&plan_file).unwrap()).unwrap();
+    let steps = plan["steps"].as_array().unwrap().clone();
+    let intents: Vec<&str> = steps.iter().map(|s| s["intent"].as_str().unwrap()).collect();
+    assert!(intents[0].starts_with("rename `scale` to `multiply`"), "{intents:?}");
+    assert_eq!(steps[0]["claims"][0]["op"], "rename", "{}", steps[0]);
+    assert!(steps[0]["edits"][0]["word"].as_bool().unwrap());
+    assert!(intents.iter().any(|i| i.contains("`sum_wide`") && i.contains("`t_wide`")), "the test goes with the item that it uses: {intents:?}");
+    let add_step = intents.iter().position(|i| i.contains("`sum_wide`")).unwrap();
+
+    // The agent adds the property claims of the new function, and the groups.
+    for claim in [
+        serde_json::json!({"op": "no-panic", "at": "demo::sum_wide"}),
+        serde_json::json!({"op": "no-io", "at": "demo::sum_wide"}),
+        serde_json::json!({"op": "tested-by", "at": "demo::sum_wide", "args": {"test": "t_wide"}}),
+    ] {
+        plan["steps"][add_step]["claims"].as_array_mut().unwrap().push(claim);
+    }
+    let all: Vec<usize> = (1..steps.len()).collect();
+    plan["groups"] = serde_json::json!([
+        {"id": "G1", "kind": "rename", "title": "Rename scale", "steps": [0]},
+        {"id": "G2", "kind": "behavior", "title": "The other changes", "steps": all},
+    ]);
+    std::fs::write(&plan_file, serde_json::to_string_pretty(&plan).unwrap()).unwrap();
+    let applied = run(repo, &["replay", "apply", "--full"], 0);
+    assert!(applied.contains("verified (N1: rename-map)"), "{applied}");
+    assert!(applied.contains("verified (mir)"), "no-io uses the MIR: {applied}");
+    assert!(applied.contains("verified (graph)"), "{applied}");
+    assert!(applied.contains("the plan is accepted"), "{applied}");
+    assert!(applied.contains("lines: "), "{applied}");
+    assert!(!applied.contains("pair:"), "an honest plan gives no pair warning: {applied}");
+
+    // A second apply starts again from the base: the same plan gives the same result.
+    let again = run(repo, &["replay", "apply", "--full"], 0);
+    assert!(again.contains("the plan is accepted"), "{again}");
+
+    // A file outside the target stops the apply, so that the reset does not delete it.
+    write(repo, "notes.txt", "mine\n");
+    let refused = semilla(repo, &["replay", "apply"]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("notes.txt"));
+    std::fs::remove_file(repo.join("notes.txt")).unwrap();
+
+    run(repo, &["replay", "end"], 0);
+    let verified = run(repo, &["verify", "--final"], 0);
+    assert!(verified.contains("accepted"), "{verified}");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "work"]);
+    run(repo, &["tag"], 0);
+    // The state folder is not in the commit.
+    assert!(!git(repo, &["ls-tree", "-r", "--name-only", "HEAD"]).contains(".semilla"));
+}

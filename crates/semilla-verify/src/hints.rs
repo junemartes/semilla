@@ -146,3 +146,30 @@ pub fn likely_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after:
     }
     pairs
 }
+
+/// The similarity of two items, from 0 to 1: the longest common token sequence of their texts,
+/// with the item names replaced by one token. Large items use the token sets.
+pub fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
+    let name = |item: &semilla_syntax::Item| item.path.rsplit("::").next().unwrap_or("").to_string();
+    let tokens = |item: &semilla_syntax::Item| -> Vec<String> {
+        let own = name(item);
+        item.text.split(' ').filter(|t| !t.is_empty()).map(|t| if t == own { "$name".to_string() } else { t.to_string() }).collect()
+    };
+    let (x, y) = (tokens(a), tokens(b));
+    if x.is_empty() || y.is_empty() {
+        return 0.0;
+    }
+    if x.len() * y.len() > 4_000_000 {
+        let (sx, sy): (std::collections::BTreeSet<&String>, std::collections::BTreeSet<&String>) = (x.iter().collect(), y.iter().collect());
+        return sx.intersection(&sy).count() as f64 / sx.union(&sy).count() as f64;
+    }
+    let mut previous = vec![0usize; y.len() + 1];
+    for token in &x {
+        let mut current = vec![0usize; y.len() + 1];
+        for (j, other) in y.iter().enumerate() {
+            current[j + 1] = if token == other { previous[j] + 1 } else { current[j].max(previous[j + 1]) };
+        }
+        previous = current;
+    }
+    2.0 * previous[y.len()] as f64 / (x.len() + y.len()) as f64
+}

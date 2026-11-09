@@ -24,6 +24,18 @@ pub struct ReviewFile {
     /// The reviewed claims, by claim ID.
     #[serde(default)]
     pub claims: BTreeMap<String, ReviewEntry>,
+    /// The reviewer's decisions on the pair warnings, by the pair key (`old -> new`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pairs: BTreeMap<String, PairDecision>,
+}
+
+/// The reviewer's decision on one pair warning.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairDecision {
+    /// `accepted`: the agent must rewrite the pair. `dismissed`: the pair stays as it is.
+    pub decision: String,
+    #[serde(default)]
+    pub marked_at: u64,
 }
 
 fn version() -> u32 {
@@ -98,6 +110,23 @@ impl ReviewFile {
 
     pub fn unmark(&mut self, claim: &str) {
         self.claims.remove(claim);
+    }
+
+    /// The reviewer's decision on a pair, if any.
+    pub fn pair(&self, key: &str) -> Option<&str> {
+        self.pairs.get(key).map(|d| d.decision.as_str())
+    }
+
+    /// Sets (`accepted`, `dismissed`) or removes (`None`) the decision on a pair.
+    pub fn set_pair(&mut self, key: &str, decision: Option<&str>, now: u64) {
+        match decision {
+            Some(decision) => {
+                self.pairs.insert(key.to_string(), PairDecision { decision: decision.to_string(), marked_at: now });
+            }
+            None => {
+                self.pairs.remove(key);
+            }
+        }
     }
 }
 

@@ -38,19 +38,22 @@ Rules:
 - `semilla ops <op>` shows the arguments of an op. `semilla step reopen` opens the last step again to fix its claims.
 - `semilla check` is fast (phase 1, the syntax checks). The body proofs run in a background worker after `step end` and `tag`; `semilla status` shows their result.
 
-The agent can also make all its changes first, then rebuild them as steps (the replay):
+The agent can also make all its changes first, then plan the steps and submit them at once (the replay):
 
 ```sh
 semilla replay begin                      # the work is the target; the working tree is HEAD again
-semilla replay status                     # the remaining hunks, and the suggested ops
-semilla step begin "rename s to sum" --class neutral
-semilla replay take shop_core::cart::Cart::total   # or FILE, FILE:LINE, FILE:START-END, or edit by hand
-semilla claim rename-local --at shop_core::cart::Cart::total/S0 to=sum
-semilla step end                          # prints the hunks that remain
-semilla replay end                        # the working tree must be the target
+semilla replay plan                       # a draft plan in .semilla/plan.json: steps, takes, claims
+# ... edit the plan: intents, claims, property claims, groups ...
+semilla replay apply --full               # start from the base, run all steps, check everything
+semilla replay end                        # the working tree is the target again
 ```
 
-`semilla replay begin --commit <rev>` replays a commit that has no change set (its parent is the base).
+`semilla replay begin --commit <rev>` replays a commit that has no change set (its parent is the base). `semilla replay take` and normal steps also work inside a replay.
+
+Other claims for honest reviews:
+
+- `rewrite-item` claims a whole rewrite on purpose (always in the spotlight). A similar `remove-item` and `add-item` pair gives a pair warning; the agent can refuse it with a reason, and the reviewer can accept it in the UI.
+- Property claims state facts about new code: `no-panic`, `no-unsafe`, `no-io`, `calls-only`, `tested-by`.
 
 Then organize the steps and store the result on the commit:
 
