@@ -49,6 +49,16 @@ pub struct Session {
     /// The highest claim number so far, so that a removed claim ID is not used again.
     #[serde(default)]
     pub last_claim: usize,
+    /// The replay in progress (`replay begin`), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<crate::replay::Replay>,
+    /// The commit that the change set describes, when it is not the next commit
+    /// (`replay begin --commit`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// The commit that `tag` stored this change set on. A new replay can then replace the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagged: Option<String>,
 }
 
 /// The semilla application on one repository.
@@ -113,7 +123,12 @@ impl App {
             bail!("a step is already open; end it with `semilla step end` (MCP: `step_end`) first");
         }
         let tree = self.repo.write_tree()?;
-        if session.changeset.steps.is_empty() {
+        if session.changeset.steps.is_empty() && session.replay.is_some() {
+            // In a replay, the first step starts at the base of the replay.
+            if tree != session.changeset.base_tree {
+                bail!("the working tree differs from the base of the replay; only `replay take` and your edits inside steps may change it");
+            }
+        } else if session.changeset.steps.is_empty() {
             // The base must be the last commit. A change in the working tree before the first step
             // would be in the base, and no claim would cover it.
             if let Ok(head) = self.repo.commit_tree("HEAD") {
@@ -252,7 +267,11 @@ impl App {
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         self.queue_session(&session.changeset)?;
-        Ok(format!("step {index} ended at tree {tree}; the background check runs (see `status`)"))
+        let mut text = format!("step {index} ended at tree {tree}; the background check runs (see `status`)");
+        if let Some(remaining) = self.replay_remaining(&session)? {
+            text.push_str(&format!("\nreplay: {remaining}"));
+        }
+        Ok(text)
     }
 
     /// Adds a background job for the session, and starts the worker.
@@ -356,16 +375,24 @@ impl App {
 
     /// The base check of the final verification: the change set starts at the last commit (before
     /// the commit of the work), or at the parent of `HEAD` (after it).
-    fn base_problem(&self, set: &ChangeSet) -> Option<String> {
+    fn base_problem(&self, set: &ChangeSet, commit: Option<&str>) -> Option<String> {
         let head = self.repo.commit_tree("HEAD").ok()?;
-        let expected = if head == set.head_tree && !set.steps.is_empty() { self.repo.commit_tree("HEAD^").ok()? } else { head };
+        let expected = match commit {
+            Some(commit) => self.repo.commit_tree(&format!("{commit}^")).ok()?,
+            None if head == set.head_tree && !set.steps.is_empty() => self.repo.commit_tree("HEAD^").ok()?,
+            None => head,
+        };
         (expected != set.base_tree).then(|| format!("the change set starts at tree {}, but the commit before the work has tree {expected}; the changes between them have no claim", set.base_tree))
     }
 
     /// Checks the change set. `only_step` limits the report to one step.
     pub fn check(&mut self, only_step: Option<usize>, require_groups: bool) -> Result<CheckResult> {
         let mut set = self.current_changeset()?;
-        let base_problem = if require_groups { self.base_problem(&set) } else { None };
+        let session = self.load_session()?;
+        let mut base_problem = if require_groups { self.base_problem(&set, session.commit.as_deref()) } else { None };
+        if require_groups && session.replay.is_some() {
+            base_problem = Some("a replay is in progress; end it with `semilla replay end` first".into());
+        }
         if let Some(index) = only_step {
             let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
             set = ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], groups: Vec::new(), subgroups: Vec::new() };
@@ -506,7 +533,13 @@ impl App {
             }
             set.head_tree = tree.clone();
         }
+        if session.replay.is_some() {
+            bail!("a replay is in progress; end it with `semilla replay end` first");
+        }
         self.repo.write_note(&commit, &serde_json::to_string_pretty(&set)?)?;
+        let mut session = self.load_session()?;
+        session.tagged = Some(commit.clone());
+        self.save_session(&session)?;
         self.repo.keep_tree(&format!("refs/semilla/{commit}/base"), &set.base_tree, "semilla base")?;
         for step in &set.steps {
             self.repo.keep_tree(&format!("refs/semilla/{commit}/step-{}", step.index), &step.tree_after, &format!("semilla step {}", step.index))?;
@@ -523,7 +556,7 @@ impl App {
         let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note"))?;
         let set: ChangeSet = serde_json::from_str(&note)?;
         let steps = set.steps.len();
-        self.save_session(&Session { changeset: set, open: None, last_claim: 0 })?;
+        self.save_session(&Session { changeset: set, tagged: Some(commit.clone()), ..Default::default() })?;
         Ok(format!("loaded {steps} steps from {commit}"))
     }
 

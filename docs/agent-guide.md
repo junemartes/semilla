@@ -27,12 +27,17 @@ You write code with your own edit tools. Semilla records what you changed as **c
 | `semilla tag` | `tag` |
 | `semilla status [commit]` | `results` |
 | `semilla ops [<op>]` | `ops` |
+| `semilla replay begin [--commit <rev>]` | `replay_begin` |
+| `semilla replay status` | `replay_status` |
+| `semilla replay take <spec>` | `replay_take` (`spec`) |
+| `semilla replay end` | `replay_end` |
+| `semilla replay abort` | `replay_abort` |
 
 The `--class` values are `neutral`, `logic`, `control_flow`, and `other`. A declared class must be the class that the verifier computes, or the step fails. If you are not sure, do not declare a class: the report shows the computed class. `step edit --class none` removes a declared class.
 
 ## The loop
 
-Start from a clean working tree: commit or stash all changes first. The first step starts at `HEAD`, and `step begin` refuses a working tree with changes, because those changes would have no claim.
+Start from a clean working tree: commit or stash all changes first. The first step starts at `HEAD`, and `step begin` refuses a working tree with changes, because those changes would have no claim. If you already made the changes, use the replay (see below).
 
 For each small change:
 
@@ -51,6 +56,23 @@ At the end of the task:
 8. Look at the subgroup suggestion of each group. Change the layout only if you need a custom subgroup. A group without your layout uses the suggestion.
 9. Run `verify --final`. Commit with git, then `tag`.
 10. `status HEAD` shows the result of phase 2. Fix a refuted or unproved claim in a new step.
+
+## The replay: claims after the work
+
+Use the replay when you made the changes before you started steps, or to describe a commit that has no change set.
+
+1. Run `replay begin`. Semilla saves your work as the target, and puts `HEAD` in the working tree. For a commit, run `replay begin --commit <rev>`: the base is the parent of that commit.
+2. Run `replay status`. It lists the hunks that remain, with the target lines, the semantic changes, and the suggested ops.
+3. Plan the order of the steps. Put the refactors first, and each behavior change in its own step.
+4. For each step: `step begin`, then bring a part of the target back, then add the claims, `check`, and `step end`.
+   - `replay take FILE:START-END` copies the hunks at these lines of the target. `replay status` prints the exact `take` text of each hunk.
+   - `replay take <item path>` copies all hunks of one item.
+   - `replay take FILE` copies a whole file.
+   - If one hunk contains two changes for different steps, edit the file by hand. For example, write the extracted function with the old code in step 1, and change it in step 2.
+5. `step end` tells you how many hunks remain. When the working tree is the target, run `replay end`.
+6. Declare the groups and run `verify --final`, as in the normal loop. Commit, then `tag` (for `--commit`, `tag <rev>`).
+
+Do not commit while a replay is in progress. `replay abort` removes the replay steps and restores your work.
 
 ## Anchors
 

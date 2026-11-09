@@ -5,6 +5,7 @@ mod background;
 mod git;
 mod mcp;
 mod oracle;
+mod replay;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,6 +28,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Rebuild finished work as a series of checked steps.
+    Replay {
+        #[command(subcommand)]
+        action: ReplayAction,
+    },
     /// Manage steps.
     Step {
         #[command(subcommand)]
@@ -132,6 +138,25 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum ReplayAction {
+    /// Save the work (or a commit) as the target, and put the base tree in the working tree.
+    Begin {
+        /// Replay this commit. The base is its parent.
+        #[arg(long)]
+        commit: Option<String>,
+    },
+    /// List the hunks that remain between the working tree and the target.
+    Status,
+    /// Copy a part of the target into the working tree: `FILE`, `FILE:LINE`, `FILE:START-END`
+    /// (target lines), or an item path.
+    Take { spec: Vec<String> },
+    /// End the replay. The working tree must be the target.
+    End,
+    /// Stop the replay, remove its steps, and restore the working tree.
+    Abort,
+}
+
+#[derive(Subcommand)]
 enum StepAction {
     /// Start a step.
     Begin {
@@ -193,6 +218,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
     let mut app = App::open(&dir)?;
     match cli.command {
+        Command::Replay { action: ReplayAction::Begin { commit } } => println!("{}", app.replay_begin(commit.as_deref())?),
+        Command::Replay { action: ReplayAction::Status } => println!("{}", app.replay_status()?),
+        Command::Replay { action: ReplayAction::Take { spec } } => {
+            anyhow::ensure!(!spec.is_empty(), "name what to take: FILE, FILE:LINE, FILE:START-END, or an item path");
+            for one in spec {
+                println!("{}", app.replay_take(&one)?);
+            }
+        }
+        Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
+        Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
         Command::Step { action: StepAction::Begin { intent, class } } => println!("{}", app.step_begin(&intent, class.as_deref().map(parse_class).transpose()?)?),
         Command::Step { action: StepAction::End } => println!("{}", app.step_end()?),
         Command::Step { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),

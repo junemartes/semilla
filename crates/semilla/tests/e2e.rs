@@ -251,3 +251,86 @@ fn ui_flow(repo: &Path) {
     child.kill().unwrap();
     child.wait().unwrap();
 }
+
+/// The replay: the agent makes all changes first, then rebuilds them as checked steps.
+#[test]
+fn replay_flow() {
+    let dir = setup();
+    let repo = dir.path();
+    let cart = "crates/shop-core/src/cart.rs";
+    let main = "crates/shop-app/src/main.rs";
+
+    // The finished work, without steps: a rename, an early exit, a changed operator, a literal.
+    write(repo, cart, CART_V2);
+    write(repo, main, MAIN_V1);
+    let begun = run(repo, &["replay", "begin"], 0);
+    assert!(begun.contains("hunk(s) in 2 file(s)"), "{begun}");
+    assert_eq!(std::fs::read_to_string(repo.join(cart)).unwrap(), CART_V0, "the working tree is the base");
+    let status = run(repo, &["replay", "status"], 0);
+    assert!(status.contains("take crates/shop-app/src/main.rs:3-3"), "{status}");
+    assert!(status.contains("change-literal") || status.contains("replace-macro-input"), "{status}");
+
+    // A take needs an open step.
+    assert_eq!(semilla(repo, &["replay", "take", main]).status.code(), Some(2));
+
+    // Step 0: the rename. Its line is in the same hunk as the early exit, so the agent edits by hand.
+    run(repo, &["step", "begin", "rename s to sum", "--class", "neutral"], 0);
+    write(repo, cart, CART_V1);
+    run(repo, &["claim", "rename-local", "--at", "shop_core::cart::Cart::total/S0", "to=sum"], 0);
+    let ended = run(repo, &["step", "end"], 0);
+    assert!(ended.contains("hunk(s) remain to the target"), "{ended}");
+
+    // Step 1: take the rest of the function from the target by its item path.
+    run(repo, &["step", "begin", "return 0 for an empty cart, include the max"], 0);
+    let took = run(repo, &["replay", "take", "shop_core::cart::Cart::total"], 0);
+    assert!(took.contains("took 2 hunk(s)"), "{took}");
+    assert_eq!(std::fs::read_to_string(repo.join(cart)).unwrap(), CART_V2);
+    run(repo, &["claim", "add-early-exit", "--at", "shop_core::cart::Cart::total/S0", "cond=self.items.is_empty()"], 0);
+    let cond = run(repo, &["anchor", "--before", "crates/shop-core/src/cart.rs:9:19"], 0).trim().to_string();
+    run(repo, &["claim", "change-operator", "--at", &cond], 0);
+    run(repo, &["check"], 0);
+    run(repo, &["step", "end"], 0);
+
+    // The end is refused while hunks remain.
+    assert_eq!(semilla(repo, &["replay", "end"]).status.code(), Some(2));
+
+    // Step 2: one hunk by its target line.
+    run(repo, &["step", "begin", "a larger max in the app"], 0);
+    run(repo, &["replay", "take", &format!("{main}:3")], 0);
+    let literal = run(repo, &["anchor", "--before", &format!("{main}:3:31")], 0).trim().to_string();
+    run(repo, &["claim", "change-literal", "--at", &literal], 0);
+    run(repo, &["check"], 0);
+    let ended = run(repo, &["step", "end"], 0);
+    assert!(ended.contains("the working tree is the target"), "{ended}");
+    let done = run(repo, &["replay", "end"], 0);
+    assert!(done.contains("3 step(s)"), "{done}");
+    assert_eq!(std::fs::read_to_string(repo.join(main)).unwrap(), MAIN_V1);
+
+    run(repo, &["group", "A", "--kind", "refactor", "--title", "Rename the sum", "--steps", "0"], 0);
+    run(repo, &["group", "B", "--kind", "behavior", "--title", "New total rules", "--steps", "1,2"], 0);
+    let verified = run(repo, &["verify", "--final"], 0);
+    assert!(verified.contains("accepted"), "{verified}");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "work"]);
+    run(repo, &["tag"], 0);
+
+    // A commit made without semilla: replay it after the fact. The working tree comes back at the end.
+    let main_v2 = MAIN_V1.replace("20", "30");
+    write(repo, main, &main_v2);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "untagged work"]);
+    write(repo, "notes.txt", "not part of the commit\n");
+    run(repo, &["replay", "begin", "--commit", "HEAD"], 0);
+    assert_eq!(std::fs::read_to_string(repo.join(main)).unwrap(), MAIN_V1, "the working tree is the parent commit");
+    assert!(!repo.join("notes.txt").exists());
+    run(repo, &["step", "begin", "an even larger max"], 0);
+    run(repo, &["replay", "take", main], 0);
+    let literal = run(repo, &["anchor", "--before", &format!("{main}:3:31")], 0).trim().to_string();
+    run(repo, &["claim", "change-literal", "--at", &literal], 0);
+    run(repo, &["step", "end"], 0);
+    run(repo, &["replay", "end"], 0);
+    assert_eq!(std::fs::read_to_string(repo.join("notes.txt")).unwrap(), "not part of the commit\n", "the working tree is restored");
+    run(repo, &["group", "C", "--kind", "behavior", "--title", "Larger max", "--steps", "0"], 0);
+    let verified = run(repo, &["verify", "--final"], 0);
+    assert!(verified.contains("accepted"), "{verified}");
+    let tagged = run(repo, &["tag"], 0);
+    assert!(tagged.contains("1 steps"), "{tagged}");
+}

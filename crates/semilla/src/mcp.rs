@@ -15,6 +15,11 @@ fn tools() -> Value {
     let class = json!({"type": "string", "enum": ["neutral", "logic", "control_flow", "other"]});
     json!([
         {"name": "ops", "description": "List all claim operations with their level, class, role, and required arguments.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_begin", "description": "Start a replay: semilla saves your finished work (or `commit`) as the target and puts the base tree in the working tree. Then rebuild the target in small steps, with replay_take or your own edits.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
+        {"name": "replay_status", "description": "List the hunks that remain between the working tree and the replay target, with the semantic changes and the suggested ops.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_take", "description": "Inside an open step: copy a part of the replay target into the working tree. `spec` is FILE, FILE:LINE, FILE:START-END (target lines), or an item path.", "inputSchema": {"type": "object", "properties": {"spec": {"type": "string"}}, "required": ["spec"]}},
+        {"name": "replay_end", "description": "End the replay. The working tree must be the target, and no step may be open.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_abort", "description": "Stop the replay, remove its steps, and restore the working tree.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "step_begin", "description": "Start a step. Make the changes of the step with your own edit tools, then add claims, then call step_end.", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "class": class}, "required": ["intent"]}},
         {"name": "claim", "description": "Add a claim to the open step. `at` is an anchor from the `anchor` tool. Claims on existing code use the anchors of the tree before the step; `add-*` statement claims use the anchor of the new statement.", "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ops}, "at": {"type": "string"}, "args": {"type": "object"}}, "required": ["op"]}},
         {"name": "unclaim", "description": "Remove a claim from the open step.", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
@@ -49,6 +54,11 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             Ok(format!("claim {id} added"))
         }
         "unclaim" => app.unclaim(text("id").context("`id` is required")?).map(|_| format!("claim {} removed", text("id").unwrap_or(""))),
+        "replay_begin" => app.replay_begin(text("commit")),
+        "replay_status" => app.replay_status(),
+        "replay_take" => app.replay_take(text("spec").context("`spec` is required")?),
+        "replay_end" => app.replay_end(),
+        "replay_abort" => app.replay_abort(),
         "step_end" => app.step_end(),
         "step_reopen" => app.step_reopen(),
         "step_drop" => app.step_drop(),

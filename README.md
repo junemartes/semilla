@@ -38,6 +38,20 @@ Rules:
 - `semilla ops <op>` shows the arguments of an op. `semilla step reopen` opens the last step again to fix its claims.
 - `semilla check` is fast (phase 1, the syntax checks). The body proofs run in a background worker after `step end` and `tag`; `semilla status` shows their result.
 
+The agent can also make all its changes first, then rebuild them as steps (the replay):
+
+```sh
+semilla replay begin                      # the work is the target; the working tree is HEAD again
+semilla replay status                     # the remaining hunks, and the suggested ops
+semilla step begin "rename s to sum" --class neutral
+semilla replay take shop_core::cart::Cart::total   # or FILE, FILE:LINE, FILE:START-END, or edit by hand
+semilla claim rename-local --at shop_core::cart::Cart::total/S0 to=sum
+semilla step end                          # prints the hunks that remain
+semilla replay end                        # the working tree must be the target
+```
+
+`semilla replay begin --commit <rev>` replays a commit that has no change set (its parent is the base).
+
 Then organize the steps and store the result on the commit:
 
 ```sh

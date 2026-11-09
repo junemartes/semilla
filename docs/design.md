@@ -928,3 +928,40 @@ Implemented:
 - The delta build folders of 19.1, with lazy N2 and N3 builds. The tree cache and the build folders are safe for concurrent processes.
 
 Not implemented yet: the per-file syntax cache, the crate hash keys for records (cargo's fingerprints decide the reuse now), and the `post-commit` hook of `semilla init`.
+
+## 20. The replay: claims after the work
+
+### 20.1 The problem
+
+A step must start before its edits. An agent that forgets `step begin` cannot claim the change: the edit is in the base (the gap of trial 3), or `step begin` refuses the tree. The agent also must know the step order before it writes the code.
+
+A single claim set for the whole commit diff is not a solution. A neutral claim needs a body proof of its whole function. If the same function also has a behavior change in the commit, the bodies differ, and the neutral claim is unproved.
+
+### 20.2 The design
+
+The agent makes all its changes first. Then it rebuilds the same changes as a series of consecutive steps, and semilla checks each step as before:
+
+1. `replay begin` saves the working tree as the **target** tree, and keeps it with a ref. Then it puts the **base** tree (`HEAD`) in the working tree. With `--commit <rev>`, the target is the commit and the base is its parent.
+2. In each step, the agent brings a part of the target back:
+   - `replay take FILE:START-END` copies the line hunks at these target lines;
+   - `replay take <item path>` copies the hunks of one item;
+   - `replay take FILE` copies a whole file;
+   - the agent can also edit by hand, for example to write the old version of code that a later step changes.
+3. The claims, the checks, and the background proofs are the same as in a normal step. The free edits stay at the expression level, so the agent must split a method refactor into a series of structured steps.
+4. `step end` and `replay status` show the hunks that remain.
+5. `replay end` requires that the last step ends at the target. A difference in formatting only is allowed. Then it restores the working tree of `replay begin`.
+
+The steps are ordinary steps, so the verifier, the reports, the UI, and `tag` do not change. The intermediate trees are real trees that the agent made, and the body proof of each step compares two of them.
+
+### 20.3 Rules
+
+- `replay take` needs an open step, so each taken hunk is inside a step.
+- The first step must start at the base of the replay.
+- `tag` and `verify --final` refuse a session with a replay in progress.
+- With `--commit`, the final check compares the base with the parent of that commit, not with `HEAD`.
+- `replay abort` removes the steps and restores the working tree of `replay begin`.
+
+### 20.4 Limits
+
+- A hunk is a unit of lines. Two changes on one line need a hand edit.
+- The semantic list of `replay status` compares the whole remaining difference. In a large difference, the statement pairing is less reliable (a changed statement can show as a removed and an added statement). In a step, the difference is small.
