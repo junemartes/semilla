@@ -32,6 +32,8 @@ The `--class` values are `neutral`, `logic`, `control_flow`, and `other`. A decl
 
 ## The loop
 
+Start from a clean working tree: commit or stash all changes first. The first step starts at `HEAD`, and `step begin` refuses a working tree with changes, because those changes would have no claim.
+
 For each small change:
 
 1. Start a step with an intent, for example "return 0 for an empty cart".
@@ -64,6 +66,7 @@ shop_core::cart::Cart::total/tail                the tail expression
 - **Claims on existing code use the numbering before the step.** After you edit, use `anchor --before` and the line numbers of the old file.
 - **`add-*` statement claims use the numbering after the step:** the anchor of the new statement. Use `anchor` without `--before`.
 - Do not write anchors by hand. Always use the `anchor` tool.
+- Lines and columns start at 1, as in editors.
 - Without a column, `anchor` gives the lowest statement on the line (or the item, on a `fn`, `mod`, or `impl` line). With a column, it gives the lowest expression at that position.
 - To get a whole condition, point the column at its operator (`||`, `&&`, `==`). To get a whole call, point at its closing `)`. Or use `--up N` to go N levels up from the lowest node.
 - An argument that names an item (`to`, `new`) can be a full path, or a last name in the same module as the anchor.
@@ -84,6 +87,7 @@ shop_core::cart::Cart::total/tail                the tail expression
 | Statements into a new `if` or loop | `wrap-statements` (`count`, `with`) |
 | Changed condition | `change-condition` (on the `cond` anchor) |
 | Changed operator or literal | `change-operator`, `change-literal` |
+| New or removed alternative in an or-pattern (`'a' \| 'b'`) | `add-alternative`, `remove-alternative` |
 | `x` becomes `Ok(x)`, `x?`, `x.clone()` | `wrap-expression` (`with`), `add-clone` |
 | Same rewrite at many sites | `rewrite-pattern` (`from`, `to`, with `$x` metavariables) |
 | Other expression change | `replace-expression` (the smallest expression that contains the change) |
@@ -124,6 +128,8 @@ A group is one intent, about one commit. Each step is in exactly one group.
 | `deps` | file claims and call site claims |
 | `fix`, `feature`, `behavior` | any claim |
 
+The report orders the groups by risk (the highest risk first), then by dependency: a group that creates an item comes before the groups that use it.
+
 Subgroups split a group by role. The engine suggests them. You can rename, merge, or split them, and add `custom` subgroups.
 
 | Role | Accepts |
@@ -133,7 +139,7 @@ Subgroups split a group by role. The engine suggests them. You can rename, merge
 | `tests` | any claim (use it for test code) |
 | `config` | file claims |
 | `propagation` | call site claims: expression claims and `rewrite-pattern` |
-| `mechanical` | proved neutral claims only |
+| `mechanical` | proved neutral claims, and doc changes |
 | `custom` | any claim |
 
 Each claim must be in exactly one subgroup of its group. A layout that breaks a rule is rejected and not saved.

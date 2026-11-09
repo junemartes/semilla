@@ -349,7 +349,15 @@ impl Loader<'_> {
         let span = value.span();
         let (line_start, line_end) = (span.start().line, span.end().line);
         let text_source = source_lines(source, line_start, line_end);
-        let mut docs: Vec<String> = attrs.iter().filter(|attr| attr.path().is_ident("doc")).map(tokens).collect();
+        // Doc comments are stored as `///` lines, as in the source.
+        let doc_line = |attr: &syn::Attribute| match &attr.meta {
+            syn::Meta::NameValue(value) => match &value.value {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }) => format!("///{}", text.value()),
+                _ => tokens(attr),
+            },
+            _ => tokens(attr),
+        };
+        let mut docs: Vec<String> = attrs.iter().filter(|attr| attr.path().is_ident("doc")).map(doc_line).collect();
         docs.extend(plain_comments(&text_source));
         let attrs = attrs.iter().filter(|attr| !attr.path().is_ident("doc")).map(tokens).collect();
         let item = Item {

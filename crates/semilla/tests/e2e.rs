@@ -81,6 +81,13 @@ fn agent_flow_end_to_end() {
     let index: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/index.json")).unwrap()).unwrap();
     assert!(index["body_hashes"].as_object().unwrap().keys().any(|k| k.contains("Cart::total")), "{}", index["body_hashes"]);
 
+    // A change before the first step would be in the base without a claim, so step begin refuses it.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let refused = semilla(repo, &["step", "begin", "too late"]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("differs from HEAD"));
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V0);
+
     // Step 0: a neutral rename of a local variable. The MIR proves it.
     run(repo, &["step", "begin", "rename s to sum", "--class", "neutral"], 0);
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
@@ -99,7 +106,8 @@ fn agent_flow_end_to_end() {
     write(repo, "crates/shop-core/src/cart.rs", CART_V2);
     run(repo, &["claim", "add-early-exit", "--at", "shop_core::cart::Cart::total/S0", "cond=self.items.is_empty()"], 0);
     // The operator is on line 9 of the "before" file. The current file has it on line 12.
-    let cond = run(repo, &["anchor", "--before", "crates/shop-core/src/cart.rs:9:18"], 0).trim().to_string();
+    // Columns start at 1: column 19 is the `<` of `if *x < max`.
+    let cond = run(repo, &["anchor", "--before", "crates/shop-core/src/cart.rs:9:19"], 0).trim().to_string();
     assert_eq!(cond, "shop_core::cart::Cart::total/S1/body/S0/cond");
     run(repo, &["claim", "change-operator", "--at", &cond], 0);
     run(repo, &["step", "end"], 0);

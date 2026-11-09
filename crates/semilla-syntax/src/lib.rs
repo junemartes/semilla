@@ -18,6 +18,31 @@ pub use tree::Node;
 
 use semilla_core::{Anchor, Segment};
 
+/// Splits an item path at `::`, but not inside `<…>`: `a::<T as fmt::Display>::fmt` gives
+/// `a`, `<T as fmt::Display>`, `fmt`.
+pub fn split_path(path: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    let bytes = path.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'<' => depth += 1,
+            b'>' => depth -= 1,
+            b':' if depth == 0 && bytes.get(index + 1) == Some(&b':') => {
+                parts.push(&path[start..index]);
+                index += 2;
+                start = index;
+                continue;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    parts.push(&path[start..]);
+    parts
+}
+
 /// The role name of an anchor segment.
 pub fn segment_role(segment: &Segment) -> String {
     segment.to_string()
@@ -232,6 +257,12 @@ mod tests {
         renames.idents.push((Some("demo::f".into()), "total".into(), "sum".into()));
         let edits = diff(&old, &new, &renames);
         assert!(edits.is_empty(), "{edits:#?}");
+    }
+
+    #[test]
+    fn split_path_keeps_trait_impls_together() {
+        assert_eq!(split_path("a::date::<T as fmt::Display>::fmt"), ["a", "date", "<T as fmt::Display>", "fmt"]);
+        assert_eq!(split_path("a"), ["a"]);
     }
 
     #[test]

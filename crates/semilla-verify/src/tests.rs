@@ -399,3 +399,22 @@ fn an_extract_without_a_change_at_its_anchor_is_empty() {
     let right = run(before, after, vec![claim("c1", "extract-function", Some("demo::f/S0/init"), serde_json::json!({"new": "sum"}))], &[("demo::f", equal("n3"))], None);
     assert!(status_of(&right, "c1").is_verified(), "{:?}", status_of(&right, "c1"));
 }
+
+#[test]
+fn or_pattern_alternatives() {
+    let before = "pub fn unit(c: char) -> u32 {\n    match c {\n        'a' | 'b' => 1,\n        _ => 0,\n    }\n}\n";
+    let after = "pub fn unit(c: char) -> u32 {\n    match c {\n        'a' | 'b' | 'c' => 1,\n        _ => 0,\n    }\n}\n";
+    let missing = run(before, after, vec![], &[], None);
+    assert_eq!(missing.uncovered[0].hint.as_deref(), Some("add-alternative"));
+    let report = run(before, after, vec![claim("c1", "add-alternative", Some("demo::unit/S0/arm[0].pat"), serde_json::json!({}))], &[("demo::unit", different(true))], None);
+    assert!(status_of(&report, "c1").is_verified(), "{:?}", status_of(&report, "c1"));
+    let wrong = run(before, after, vec![claim("c1", "remove-alternative", Some("demo::unit/S0/arm[0].pat"), serde_json::json!({}))], &[], None);
+    assert!(matches!(status_of(&wrong, "c1"), ClaimStatus::Refuted { .. }));
+}
+
+#[test]
+fn a_reexported_method_is_public_api() {
+    let before = "mod inner {\n    pub struct T;\n    impl T {\n        pub fn a(&self) {}\n    }\n}\npub use inner::T;\n";
+    let after = "mod inner {\n    pub struct T;\n    impl T {\n        pub fn a(&self) {}\n        pub fn b(&self) {}\n    }\n}\npub use inner::T;\n";
+    assert_eq!(run(before, after, vec![], &[], None).api_level.as_deref(), Some("minor"));
+}

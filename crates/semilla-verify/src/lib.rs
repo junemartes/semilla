@@ -310,6 +310,16 @@ fn is_public(workspace: &Workspace, path: &str) -> bool {
     if item.vis != "pub" || item.test {
         return false;
     }
+    // A `pub use` can re-export an item (or the owner type of a method) from a private module.
+    let reexported = |name: &str| {
+        workspace.items.values().any(|use_item| {
+            use_item.kind == semilla_syntax::ItemKind::Use && use_item.vis == "pub" && use_item.signature.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name)
+        })
+    };
+    let segments: Vec<&str> = path.split("::").collect();
+    if segments.len() >= 2 && (reexported(segments[segments.len() - 1]) || reexported(segments[segments.len() - 2])) {
+        return true;
+    }
     // Methods: the owner type is public. Items: each parent module is public.
     let mut current = path;
     while let Some((parent, _)) = current.rsplit_once("::") {

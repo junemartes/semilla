@@ -732,8 +732,38 @@ fn split_hint(ctx: &Ctx, claims: &[&Claim]) -> Option<String> {
     }
     // A part with only test code belongs to the change that it tests, so it does not count.
     parts.retain(|_, part| !part.iter().all(|item| is_test_item(ctx, item)));
-    (parts.len() > 1).then(|| {
+    // The call graph does not follow trait calls (for example `.parse()` to `from_str`), so parts
+    // in one module can be linked. Only parts in different modules give the hint.
+    let module = |item: &String| {
+        let segments = semilla_syntax_free_split(item);
+        segments[..segments.len().saturating_sub(1).max(1)].iter().take(2).cloned().collect::<Vec<_>>().join("::")
+    };
+    let modules: Vec<BTreeSet<String>> = parts.values().map(|part| part.iter().map(module).collect()).collect();
+    let separate = modules.iter().enumerate().any(|(a, left)| modules.iter().skip(a + 1).any(|right| left.is_disjoint(right)));
+    (parts.len() > 1 && separate).then(|| {
         let text: Vec<String> = parts.values().map(|part| part.join(", ")).collect();
         format!("This group has {} parts with no link in the call graph: {}. Think about a split.", parts.len(), text.join(" | "))
     })
+}
+
+/// Splits an item path at `::`, but not inside `<…>`.
+fn semilla_syntax_free_split(path: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let (mut depth, mut current) = (0i32, String::new());
+    let mut chars = path.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ':' if depth == 0 && chars.peek() == Some(&':') => {
+                chars.next();
+                parts.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    parts.push(current);
+    parts
 }

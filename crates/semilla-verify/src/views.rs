@@ -27,6 +27,10 @@ pub fn change_tree(outcomes: &[StepOutcome], after: &Workspace, before: &Workspa
     for outcome in outcomes {
         let classes: BTreeMap<String, Option<Class>> = outcome.report.claims.iter().map(|c| (c.claim.clone(), c.class)).collect();
         for (index, edit) in outcome.edits.iter().enumerate() {
+            // The member list of an impl is bookkeeping: the new or removed method has its own node.
+            if edit.kind == EditKind::Members && edit.anchor().is_some_and(|a| semilla_syntax::split_path(&a.item).last().is_some_and(|l| l.starts_with("impl "))) {
+                continue;
+            }
             let owner = outcome.owners[index].map(|claim| outcome_claim_id(outcome, claim));
             let status = edit_status(edit.kind, owner.is_some());
             let class = owner.as_ref().and_then(|id| classes.get(id).copied().flatten());
@@ -51,7 +55,7 @@ pub fn change_tree(outcomes: &[StepOutcome], after: &Workspace, before: &Workspa
                 continue;
             };
             let mut path: Vec<(String, String)> = Vec::new();
-            let parts: Vec<&str> = anchor.item.split("::").collect();
+            let parts: Vec<&str> = semilla_syntax::split_path(&anchor.item);
             for depth in 1..=parts.len() {
                 let id = parts[..depth].join("::");
                 let label = if depth == 1 { format!("crate {}", parts[0]) } else { item_label(&id, after, before) };
@@ -75,6 +79,32 @@ pub fn change_tree(outcomes: &[StepOutcome], after: &Workspace, before: &Workspa
                 }
             }
             insert(&mut root, &path, status, class, owner, diff);
+        }
+        // Renames give no edit (the diff applies them first), so they get their own nodes.
+        let item_path = |item: &str| {
+            let parts = semilla_syntax::split_path(item);
+            (1..=parts.len()).map(|depth| {
+                let id = parts[..depth].join("::");
+                let label = if depth == 1 { format!("crate {}", parts[0]) } else { item_label(&id, after, before) };
+                (id, label)
+            }).collect::<Vec<_>>()
+        };
+        for (old, new) in &outcome.renames.items {
+            if outcome.renames.items.contains_key(&old.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default()) {
+                continue; // A method of a renamed type: the type node shows the rename.
+            }
+            let mut path = item_path(new);
+            if let Some(last) = path.last_mut() {
+                last.1 = format!("{} → {}", old.rsplit("::").next().unwrap_or(old), last.1);
+            }
+            insert(&mut root, &path, Status::Moved, Some(Class::Neutral), None, None);
+        }
+        for (scope, old, new) in &outcome.renames.idents {
+            if let Some(item) = scope {
+                let mut path = item_path(item);
+                path.push((format!("{item}/rename:{old}"), format!("local {old} → {new}")));
+                insert(&mut root, &path, Status::Moved, Some(Class::Neutral), None, None);
+            }
         }
     }
     summarize(&mut root);
@@ -158,6 +188,15 @@ fn summarize(node: &mut TreeNode) -> BTreeMap<&'static str, usize> {
 
 /// Builds a flow view for each changed function.
 pub fn flows(outcomes: &[StepOutcome], after: &Workspace) -> Vec<FlowGraph> {
+    flow_inputs(outcomes)
+        .into_iter()
+        .filter_map(|(item, (statuses, removed))| after.items.get(&item).and_then(|item| semilla_syntax::flow::flow_view(item, &statuses, removed)))
+        .collect()
+}
+
+/// The inputs of the flow views: for each changed function, the status of each changed path and
+/// the number of removed statements.
+pub fn flow_inputs(outcomes: &[StepOutcome]) -> BTreeMap<String, (BTreeMap<String, Status>, usize)> {
     let mut per_item: BTreeMap<String, (BTreeMap<String, Status>, usize)> = BTreeMap::new();
     for outcome in outcomes {
         for (index, edit) in outcome.edits.iter().enumerate() {
@@ -177,9 +216,6 @@ pub fn flows(outcomes: &[StepOutcome], after: &Workspace) -> Vec<FlowGraph> {
         }
     }
     per_item
-        .into_iter()
-        .filter_map(|(item, (statuses, removed))| after.items.get(&item).and_then(|item| semilla_syntax::flow::flow_view(item, &statuses, removed)))
-        .collect()
 }
 
 /// Builds the workspace graph of the "after" side, with the statuses of the change set.
@@ -207,6 +243,14 @@ pub fn sources(outcomes: &[StepOutcome], before: &Workspace, after: &Workspace) 
     for outcome in outcomes {
         for edit in &outcome.edits {
             let key = edit.anchor().map(|a| a.to_string()).or_else(|| edit.file.clone()).unwrap_or_default();
+            // An item-level change (docs, signature, members): the whole item on both sides, so that
+            // both sides have the same form.
+            if let Some(anchor) = edit.anchor().filter(|a| a.path.is_empty()) {
+                let old = edit.before.as_ref().and_then(|a| before.items.get(&a.item)).map(|i| i.source.clone());
+                let new = edit.after.as_ref().and_then(|a| after.items.get(&a.item)).map(|i| i.source.clone());
+                map.insert(anchor.to_string(), (old, new));
+                continue;
+            }
             let entry = map.entry(key).or_insert((None, None));
             if entry.0.is_none() {
                 entry.0 = edit.source_before.clone().or_else(|| edit.text_before.clone());

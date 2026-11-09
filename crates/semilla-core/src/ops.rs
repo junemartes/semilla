@@ -152,6 +152,8 @@ ops! {
     "rewrite-pattern",        Expression, OwnContent,  L, Propagation, ["from", "to"],    "Apply one rewrite rule at many sites.";
     "replace-expression",     Expression, Free,        COMPUTED, Core, [],                "Replace a block-free expression (free edit).";
     "replace-pattern",        Expression, Free,        COMPUTED, Core, [],                "Replace a pattern (free edit).";
+    "add-alternative",        Expression, OwnContent,  COMPUTED, Core, [],                "Add alternatives to an or-pattern (`a | b` becomes `a | b | c`).";
+    "remove-alternative",     Expression, OwnContent,  COMPUTED, Core, [],                "Remove alternatives from an or-pattern.";
     "replace-type",           Expression, Free,        COMPUTED, Core, [],                "Replace a type (free edit).";
     "replace-macro-input",    Expression, Free,        COMPUTED, Core, [],                "Replace the input of one macro call (free edit, always in the spotlight).";
 }

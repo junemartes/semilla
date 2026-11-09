@@ -123,6 +123,26 @@ pub fn run_cargo_check_delta_features(
     Ok(())
 }
 
+/// The `error` lines of a cargo output, each with a few lines of context, so that the real cause
+/// is not lost under the warnings. Without an `error` line, the last lines.
+fn first_errors(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut out = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.starts_with("error") {
+            out.extend(lines[index..lines.len().min(index + 8)].iter().copied());
+            out.push("");
+            if out.len() > 48 {
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        out = lines[lines.len().saturating_sub(30)..].to_vec();
+    }
+    out.join("\n")
+}
+
 /// The hash of each unit in the JSON messages of cargo: the part after the last `-` of each
 /// artifact file name (`libname-<hash>.rmeta`).
 fn unit_hashes(stdout: &str) -> std::collections::BTreeSet<String> {
@@ -199,9 +219,9 @@ fn run_check(
     let output = command.output().context("cannot run cargo")?;
     if !output.status.success() {
         bail!(
-            "cargo check failed in {} (level {level}):\n{}",
+            "cargo check failed in {} (level {level}); the body check builds all targets, so the test code must compile too:\n{}",
             workspace.display(),
-            String::from_utf8_lossy(&output.stderr)
+            first_errors(&String::from_utf8_lossy(&output.stderr))
         );
     }
     Ok(unit_hashes(&String::from_utf8_lossy(&output.stdout)))

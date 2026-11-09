@@ -19,6 +19,16 @@ pub fn suggested_role(set: &ChangeSet, claim_id: &str, result: Option<&ClaimResu
     }
     let role = info.map(|info| info.role).unwrap_or(Role::Core);
     let neutral = result.is_some_and(|result| result.class == Some(Class::Neutral) && result.status.is_verified());
+    // In an api group, a new public item is the interface, and an expression change is a call site.
+    let in_api = set.steps.iter().find(|s| s.claims.iter().any(|c| c.id == claim_id)).is_some_and(|step| {
+        set.groups.iter().any(|g| g.kind == GroupKind::Api && g.steps.contains(&step.index))
+    });
+    if in_api && claim.op == "add-item" {
+        return Role::Interface;
+    }
+    if in_api && info.is_some_and(|info| info.level == OpLevel::Expression) && !neutral {
+        return Role::Propagation;
+    }
     if role == Role::Core && neutral { Role::Mechanical } else { role }
 }
 
@@ -130,7 +140,8 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             let neutral_proved = result.is_some_and(|r| r.class == Some(Class::Neutral) && (r.status.is_verified() || r.status.is_pending()));
             let info = ops::op(&found.op);
             let problem = match subgroup.role {
-                Role::Mechanical => (!neutral_proved).then(|| "a Mechanical subgroup can contain only proved neutral claims"),
+                // Doc changes (class `other`, no behavior) are mechanical too.
+                Role::Mechanical => (!(neutral_proved || found.op == "edit-doc")).then(|| "a Mechanical subgroup can contain only proved neutral claims and doc changes"),
                 Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation || i.level == OpLevel::Expression))
                     .then(|| "a Propagation subgroup can contain only call site claims: expression claims and rewrites"),
                 Role::Interface => (!info.is_some_and(|i| i.level == OpLevel::Item)).then(|| "an Interface subgroup can contain only item claims"),

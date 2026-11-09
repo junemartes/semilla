@@ -55,7 +55,7 @@ pub fn flow_view(item: &Item, statuses: &BTreeMap<String, Status>, removed: usiz
         builder = folded;
     }
 
-    let mut breadcrumb: Vec<String> = item.path.split("::").map(str::to_string).collect();
+    let mut breadcrumb: Vec<String> = crate::split_path(&item.path).into_iter().map(str::to_string).collect();
     let mut node = body;
     for role in &frame_path {
         if let Some(child) = node.child(role) {

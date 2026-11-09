@@ -114,6 +114,13 @@ impl App {
         }
         let tree = self.repo.write_tree()?;
         if session.changeset.steps.is_empty() {
+            // The base must be the last commit. A change in the working tree before the first step
+            // would be in the base, and no claim would cover it.
+            if let Ok(head) = self.repo.commit_tree("HEAD") {
+                if head != tree {
+                    bail!("the working tree differs from HEAD; commit or stash these changes before the first step, or they would be in the base without a claim");
+                }
+            }
             session.changeset.base_tree = tree.clone();
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
@@ -292,7 +299,9 @@ impl App {
     /// The anchor at a file position of the working tree, or of the "before" tree of the open
     /// step when `before` is true. Claims on existing code use the "before" anchors.
     /// Then it goes `up` levels up (for example from `cond/lhs` to `cond`).
+    /// The column starts at 1, as in editors.
     pub fn anchor_up(&mut self, file: &str, line: usize, column: Option<usize>, before: bool, up: usize) -> Result<String> {
+        let column = column.map(|c| c.saturating_sub(1));
         let ws = if before {
             let session = self.load_session()?;
             let tree = session.open.map(|open| open.tree_before).or(Some(session.changeset.head_tree)).filter(|t| !t.is_empty()).context("no step yet")?;
@@ -345,14 +354,29 @@ impl App {
         Ok(set)
     }
 
+    /// The base check of the final verification: the change set starts at the last commit (before
+    /// the commit of the work), or at the parent of `HEAD` (after it).
+    fn base_problem(&self, set: &ChangeSet) -> Option<String> {
+        let head = self.repo.commit_tree("HEAD").ok()?;
+        let expected = if head == set.head_tree && !set.steps.is_empty() { self.repo.commit_tree("HEAD^").ok()? } else { head };
+        (expected != set.base_tree).then(|| format!("the change set starts at tree {}, but the commit before the work has tree {expected}; the changes between them have no claim", set.base_tree))
+    }
+
     /// Checks the change set. `only_step` limits the report to one step.
     pub fn check(&mut self, only_step: Option<usize>, require_groups: bool) -> Result<CheckResult> {
         let mut set = self.current_changeset()?;
+        let base_problem = if require_groups { self.base_problem(&set) } else { None };
         if let Some(index) = only_step {
             let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
             set = ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], groups: Vec::new(), subgroups: Vec::new() };
         }
-        self.check_set(&set, require_groups)
+        let mut result = self.check_set(&set, require_groups)?;
+        if let Some(problem) = base_problem {
+            result.report.organization.push(problem.clone());
+            result.report.accepted = false;
+            result.text.push_str(&format!("  ✗ {problem}\n"));
+        }
+        Ok(result)
     }
 
     pub fn check_set(&mut self, set: &ChangeSet, require_groups: bool) -> Result<CheckResult> {
@@ -466,6 +490,13 @@ impl App {
         let mut set = session.changeset;
         let commit = self.repo.git(&["rev-parse", commit])?;
         let tree = self.repo.commit_tree(&commit)?;
+        // The change set must start at the parent commit, so that every change of the commit is
+        // inside a step.
+        if let Ok(parent) = self.repo.commit_tree(&format!("{commit}^")) {
+            if parent != set.base_tree {
+                bail!("the change set starts at tree {}, but the parent of {commit} has tree {parent}; the changes between them have no claim", set.base_tree);
+            }
+        }
         if set.head_tree != tree {
             // A difference in formatting only is allowed (for example `cargo fmt` before the
             // commit). A changed comment is not formatting.
@@ -570,13 +601,28 @@ impl App {
         }
         let mut flows: Vec<FlowGraph> = Vec::new();
         let mut sources = BTreeMap::new();
+        // The flow view of a function uses the head tree, so it shows the final names. The statuses
+        // come from the last step that changed the function: no later step changed its structure.
+        let head_ws = self.workspace(&set.head_tree).unwrap_or_default();
+        let mut last_inputs: BTreeMap<String, (String, BTreeMap<String, semilla_core::view::Status>, usize)> = BTreeMap::new();
+        for (step, outcome) in set.steps.iter().zip(&result.outcomes) {
+            for (item, (statuses, removed)) in semilla_verify::views::flow_inputs(std::slice::from_ref(outcome)) {
+                last_inputs.insert(item, (step.tree_after.clone(), statuses, removed));
+            }
+        }
+        let later_renames: Vec<BTreeMap<String, String>> = result.outcomes.iter().map(|o| o.renames.items.clone()).collect();
+        for (item, (tree, statuses, removed)) in &last_inputs {
+            // A later rename of the function itself gives its head path.
+            let head_path = later_renames.iter().fold(item.clone(), |path, map| map.get(&path).cloned().unwrap_or(path));
+            let step_ws = self.workspace(tree)?;
+            let source = head_ws.items.get(&head_path).or_else(|| step_ws.items.get(item));
+            if let Some(flow) = source.and_then(|it| semilla_syntax::flow::flow_view(it, statuses, *removed)) {
+                flows.push(flow);
+            }
+        }
         for (step, outcome) in set.steps.iter().zip(&result.outcomes) {
             let before = self.workspace(&step.tree_before)?;
             let after = self.workspace(&step.tree_after)?;
-            for flow in semilla_verify::views::flows(std::slice::from_ref(outcome), &after) {
-                flows.retain(|f| f.function != flow.function);
-                flows.push(flow);
-            }
             for (key, (old, new)) in semilla_verify::views::sources(std::slice::from_ref(outcome), &before, &after) {
                 let entry: &mut semilla_ui::SourcePair = sources.entry(key).or_insert(semilla_ui::SourcePair { before: None, after: None });
                 if entry.before.is_none() {

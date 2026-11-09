@@ -249,6 +249,8 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
         "rewrite-pattern" => crate::pattern::check(context, claim),
         "replace-expression" | "replace-pattern" | "replace-type" => check_free(context, claim),
         "replace-macro-input" => check_macro_input(context, claim),
+        "add-alternative" => check_expression(context, claim, |edit, _| edit.node_before == Some("pattern") && alternatives_added(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""))),
+        "remove-alternative" => check_expression(context, claim, |edit, _| edit.node_before == Some("pattern") && alternatives_added(edit.text_after.as_deref().unwrap_or(""), edit.text_before.as_deref().unwrap_or(""))),
         other => Outcome::malformed(format!("the verifier has no checker for `{other}`")),
     };
 
@@ -1000,6 +1002,38 @@ fn check_macro_input(context: &Context, claim: &Claim) -> Outcome {
     let mut outcome = texts(context, &explains.clone(), Outcome::verified("free", explains));
     outcome.before = Some(node.text.clone());
     outcome
+}
+
+/// The top-level alternatives of an or-pattern: `a | (b | c) | d` gives `a`, `(b | c)`, `d`.
+fn alternatives(pattern: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    let mut quote = false;
+    for c in pattern.chars() {
+        match c {
+            '\'' | '"' => quote = !quote,
+            '(' | '[' | '{' if !quote => depth += 1,
+            ')' | ']' | '}' if !quote => depth -= 1,
+            '|' if depth == 0 && !quote => {
+                parts.push(current.trim().to_string());
+                current.clear();
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    parts.push(current.trim().to_string());
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
+/// True if `after` keeps all alternatives of `before`, in order, and adds at least one.
+pub fn alternatives_added(before: &str, after: &str) -> bool {
+    let (old, new) = (alternatives(before), alternatives(after));
+    let mut rest = new.iter();
+    new.len() > old.len() && old.iter().all(|alt| rest.any(|n| n == alt))
 }
 
 fn strip_paren(text: &str) -> &str {
