@@ -523,3 +523,31 @@ fn similarity_ignores_the_item_name() {
     let (_d3, other) = load("pub fn unrelated(a: &str) -> bool {\n    a.is_empty() || a.starts_with('#')\n}\n");
     assert!(hints::similarity(&old.items["demo::scale"], &other.items["demo::unrelated"]) < PAIR_THRESHOLD);
 }
+
+#[test]
+fn parameter_renames_are_claimed_with_from() {
+    let before = "pub fn f(c: u64) -> u64 {\n    let whole = c / 100;\n    whole + c\n}\n";
+    let after = "pub fn f(cents: u64) -> u64 {\n    let whole = cents / 100;\n    whole + cents\n}\n";
+    // The draft finds the rename of the parameter.
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let edits = semilla_syntax::diff(&old, &new, &Default::default());
+    assert_eq!(crate::hints::likely_local_renames(&edits, &old, &new), vec![("demo::f".to_string(), "c".to_string(), "cents".to_string())]);
+    // The claim on the function, with `from`, explains all changes.
+    let report = run(before, after, vec![claim("c1", "rename-local", Some("demo::f"), serde_json::json!({"from": "c", "to": "cents"}))], &[("demo::f", equal("n0"))], None);
+    assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
+    assert!(status_of(&report, "c1").is_verified(), "{:?}", status_of(&report, "c1"));
+    // `from` must be a parameter or a local variable of the function.
+    let wrong = run(before, after, vec![claim("c1", "rename-local", Some("demo::f"), serde_json::json!({"from": "u64", "to": "cents"}))], &[("demo::f", equal("n0"))], None);
+    assert!(matches!(status_of(&wrong, "c1"), ClaimStatus::Malformed { reason } if reason.contains("not a parameter")), "{:?}", status_of(&wrong, "c1"));
+}
+
+#[test]
+fn a_changed_callee_is_not_a_local_rename() {
+    let before = "fn g() -> u64 { 1 }\nfn h() -> u64 { 2 }\npub fn f(x: u64) -> u64 {\n    x + g()\n}\n";
+    let after = "fn g() -> u64 { 1 }\nfn h() -> u64 { 2 }\npub fn f(x: u64) -> u64 {\n    x + h()\n}\n";
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let edits = semilla_syntax::diff(&old, &new, &Default::default());
+    assert!(crate::hints::likely_local_renames(&edits, &old, &new).is_empty());
+}

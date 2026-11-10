@@ -106,6 +106,7 @@ Keep the plan file in `.semilla/`. `replay apply` refuses to start when the work
 }
 ```
 
+- The apply refuses a field that the format does not have. For example, a claim `note` goes in `args`.
 - `take`: the same specs as `replay take`: `FILE:START-END` (target lines), `FILE:LINE`, an item path, or `FILE`. `replay status` prints the hunks.
 - `edits`: hand edits after the takes. Without `word`, `find` must occur exactly once in `file`. With `"word": true`, every whole-word occurrence changes, and `file` can be `*` (all Rust files). Use a hand edit to write the old version of code that a later step changes.
 - A claim `at` is an anchor, or a position that the apply resolves in the trees of the step:
@@ -143,7 +144,8 @@ shop_core::cart::Cart::total/tail                the tail expression
 |---|---|
 | Rename a function, type, or module | `rename` (`to`) |
 | Move an item | `move-item` (`to`) |
-| Rename a local variable (all its uses) | `rename-local` (`to`) |
+| Rename a local variable (all its uses) | `rename-local` (`to`) at the `let` |
+| Rename a parameter (all its uses) | `rename-local` (`from`, `to`) at the function |
 | New or removed function, struct, impl, method, module | `add-item`, `remove-item` |
 | A whole item rewritten on purpose (optional new path) | `rewrite-item` (`note`, optional `new`) |
 | A fact about a function after the step | `no-panic`, `no-unsafe`, `no-io`, `calls-only` (`calls`), `tested-by` (`test`) |
@@ -191,7 +193,7 @@ If an item changes, claim it as one changed item. Do not claim `remove-item` for
 
 When a verified `remove-item` and a verified `add-item` have similar text (70% or more, without the names), the report shows a **pair warning**. The agent and the reviewer both see it.
 
-- If the two items are really different, refuse the warning: `semilla pair refuse OLD NEW --reason "…"` (or `refusals` in a plan). The reviewer sees the reason.
+- If the two items are really different, refuse the warning: `semilla pair refuse OLD NEW --reason "…"` (or `refusals` in a plan). The reviewer sees the reason. In a replay, a refusal from `pair refuse` stays when you apply the plan again.
 - The reviewer can still accept the warning in the review UI. Then the change set is rejected until you claim the pair as one changed item.
 
 Each report also has a precision line: `lines: N fine-grained (P%), N new, N removed, N rewritten`. Fine-grained claims give a higher precision.

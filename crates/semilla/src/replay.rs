@@ -224,9 +224,10 @@ impl App {
         self.repo.switch_worktree(&replay.target, &replay.original)?;
         session.replay = None;
         let steps = session.changeset.steps.len();
+        let groups = if session.changeset.groups.is_empty() { "declare the groups, " } else { "" };
         let next = match &session.commit {
-            Some(commit) => format!("declare the groups, run `semilla verify --final`, then `semilla tag {commit}`"),
-            None => "declare the groups, run `semilla verify --final`, commit, then `semilla tag`".to_string(),
+            Some(commit) => format!("{groups}run `semilla verify --final`, then `semilla tag {commit}`"),
+            None => format!("{groups}run `semilla verify --final`, commit, then `semilla tag`"),
         };
         self.save_session(&session)?;
         let _ = self.repo.git(&["update-ref", "-d", "refs/semilla/replay/target"]);

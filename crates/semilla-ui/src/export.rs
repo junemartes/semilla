@@ -619,7 +619,8 @@ fn subgroup_marks(sub: &SubgroupSummary) -> Vec<String> {
 
 /// The claim details as `(label, value)`: the class, the step, the effect, the witness, the file.
 fn claim_meta(view: &ClaimView) -> Vec<(&'static str, String)> {
-    let mut meta = vec![("class", class_label(view.class).to_string())];
+    let class = if view.property { "property".to_string() } else { class_label(view.class).to_string() };
+    let mut meta = vec![("class", class)];
     if let Some(step) = view.step {
         meta.push(("step", step.to_string()));
     }
@@ -940,7 +941,9 @@ fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
     if let Some(hint) = view.result.as_ref().and_then(|result| result.hint.as_ref()) {
         let _ = writeln!(out, "<p class=\"hint\">Hint: {}</p>", esc(hint));
     }
-    if let Some((before, after)) = rename_text(view) {
+    if let Some(checked) = view.result.as_ref().and_then(|result| result.after.as_deref()).filter(|_| view.property) {
+        let _ = writeln!(out, "<p class=\"checked\">Checked: {}</p>", esc(checked));
+    } else if let Some((before, after)) = rename_text(view) {
         let _ = writeln!(out, "<div class=\"rename\"><code>{}</code> → <code>{}</code></div>", esc(&before), esc(&after));
     } else if let Some(result) = &view.result
         && (result.before.is_some() || result.after.is_some())
@@ -1262,7 +1265,9 @@ fn md_claim(out: &mut String, model: &Model, view: &ClaimView) {
     if let Some(hint) = view.result.as_ref().and_then(|result| result.hint.as_ref()) {
         let _ = writeln!(out, "  - Hint: {}", md(hint));
     }
-    if let Some((before, after)) = rename_text(view) {
+    if let Some(checked) = view.result.as_ref().and_then(|result| result.after.as_deref()).filter(|_| view.property) {
+        let _ = writeln!(out, "  - checked: {}", md(checked));
+    } else if let Some((before, after)) = rename_text(view) {
         let _ = writeln!(out, "  - rename: {} → {}", code(&before), code(&after));
     } else if let Some(result) = &view.result
         && (result.before.is_some() || result.after.is_some())

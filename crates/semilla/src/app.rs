@@ -35,6 +35,7 @@ pub fn optional_args(op: &str) -> Vec<&'static str> {
         "add-if" | "add-early-exit" => &["cond"][..],
         "rewrite-pattern" => &["sites"][..],
         "rewrite-item" => &["new"][..],
+        "rename-local" => &["from"][..],
         "extract-variable" | "inline-variable" | "change-mutability" | "change-type-annotation" | "invert-if" | "swap-branches" | "if-to-match" | "match-to-if"
         | "guard-clause" | "reorder-statements" | "question-mark" => &["count"][..],
         _ => &[][..],
@@ -471,7 +472,21 @@ impl App {
         let step = set.steps[last].clone();
         let (before, after) = (self.workspace(&step.tree_before)?, self.workspace(&step.tree_after)?);
         let renames = semilla_verify::hints::likely_renames(&outcome.edits, &before, &after);
-        Ok(semilla_verify::hints::suggest_claims_with_renames(&outcome.edits, &outcome.owners, &renames))
+        // A local rename explains all uncovered edits of its function.
+        let uncovered: Vec<semilla_syntax::Edit> = outcome.edits.iter().zip(&outcome.owners).filter(|(_, owner)| owner.is_none()).map(|(edit, _)| edit.clone()).collect();
+        let local = semilla_verify::hints::likely_local_renames(&uncovered, &before, &after);
+        let (edits, owners): (Vec<semilla_syntax::Edit>, Vec<Option<usize>>) = outcome
+            .edits
+            .iter()
+            .zip(&outcome.owners)
+            .map(|(edit, owner)| {
+                let renamed = edit.anchor().is_some_and(|a| local.iter().any(|(item, _, _)| *item == a.item));
+                (edit.clone(), if renamed { Some(usize::MAX) } else { *owner })
+            })
+            .unzip();
+        let mut claims = semilla_verify::hints::local_rename_claims(&local);
+        claims.extend(semilla_verify::hints::suggest_claims_with_renames(&edits, &owners, &renames));
+        Ok(claims)
     }
 
     // ----- pair warnings -----
@@ -747,7 +762,7 @@ fn summary_line(report: &Report) -> String {
     for pair in &report.pairs {
         text.push_str(&format!("  ! pair: {}\n", pair.text()));
         if pair.refusal.is_none() && pair.reviewer.is_none() {
-            text.push_str(&format!("      if the two items are really different, run `semilla pair refuse '{}' '{}' --reason \"…\"`\n", pair.old, pair.new));
+            text.push_str(&format!("      if the two items are really different, run `semilla pair refuse '{}' '{}' --reason \"…\"` (in a replay plan: add it to `refusals`)\n", pair.old, pair.new));
         }
     }
     if report.lines.total() > 0 {

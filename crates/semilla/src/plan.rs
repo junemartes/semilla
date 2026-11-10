@@ -21,6 +21,7 @@ use crate::git::{Hunk, apply_hunks};
 
 /// A whole replay plan.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Plan {
     pub steps: Vec<PlanStep>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -32,6 +33,7 @@ pub struct Plan {
 
 /// One step of a plan.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanStep {
     pub intent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +55,7 @@ pub struct PlanStep {
 /// every whole-word occurrence changes, and `file` can be `*` (all `.rs` files): use it for a
 /// rename.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanEdit {
     pub file: String,
     pub find: String,
@@ -90,6 +93,7 @@ pub fn replace_word(text: &str, word: &str, replace: &str) -> (String, usize) {
 /// - `target:FILE:LINE[:COLUMN]`: new code, at its line in the target tree;
 /// - `before:…` and `after:…`: a line in the tree before or after the step itself.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanClaim {
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,6 +139,31 @@ fn collapse_expression_claims(claims: &mut Vec<semilla_core::Claim>, after: &Wor
     }
 }
 
+/// The intent of a draft step from its claims: "add `a`; change `b`; remove `c`". A new item
+/// inside a new item (a test in a new test module) is not named.
+fn draft_intent(claims: &[semilla_core::Claim]) -> Option<String> {
+    let item = |claim: &semilla_core::Claim| claim.at.as_ref().map(|a| a.item.clone());
+    let short = |path: &str| path.rsplit("::").next().unwrap_or(path).to_string();
+    let added: Vec<String> = claims.iter().filter(|c| c.op == "add-item").filter_map(item).filter(|p| !p.contains("use#")).collect();
+    let added: Vec<String> = added.iter().filter(|p| !added.iter().any(|q| p.starts_with(&format!("{q}::")))).cloned().collect();
+    let removed: Vec<String> = claims.iter().filter(|c| c.op == "remove-item").filter_map(item).collect();
+    let mut changed: Vec<String> = Vec::new();
+    for path in claims.iter().filter(|c| c.op != "add-item" && c.op != "remove-item").filter_map(item) {
+        if !added.contains(&path) && !changed.contains(&path) {
+            changed.push(path);
+        }
+    }
+    let files: Vec<String> = claims.iter().filter(|c| c.at.is_none()).filter_map(|c| c.arg_str("file").map(str::to_string)).collect();
+    let list = |items: &[String]| items.iter().map(|i| format!("`{}`", short(i))).collect::<Vec<_>>().join(", ");
+    let mut parts = Vec::new();
+    for (verb, items) in [("add", &added), ("change", &changed), ("remove", &removed), ("change", &files)] {
+        if !items.is_empty() {
+            parts.push(format!("{verb} {}", list(items)));
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 fn overlaps(a: (usize, usize), b: (usize, usize)) -> bool {
     a.0 <= b.1 && b.0 <= a.1
 }
@@ -144,6 +173,7 @@ fn is_zero(value: &usize) -> bool {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanGroup {
     pub id: String,
     pub kind: GroupKind,
@@ -304,10 +334,18 @@ impl App {
         }
         let hunk_words: BTreeMap<String, BTreeSet<String>> = unit_hunks.iter().map(|(key, hunks)| (key.clone(), words(hunks))).collect();
         let users = |word: &str| -> Vec<String> { hunk_words.iter().filter(|(_, w)| w.contains(word)).map(|(key, _)| key.clone()).collect() };
+        let owner = |path: &str| path.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default();
+        // A pair with one parent is a rename: its own step renames the item and all its users,
+        // so the users do not join the pair, and the pair is one changed item (not new, not removed).
+        let renamed: Vec<(String, String)> = pairs.iter().filter(|(old, new, _)| owner(old) == owner(new)).map(|(old, new, _)| (old.clone(), new.clone())).collect();
+        let is_pair_old = |u: &String| renamed.iter().any(|(old, _)| old == u);
+        let is_pair_new = |u: &String| renamed.iter().any(|(_, new)| new == u);
         for (old, new, _) in &pairs {
             join(&mut parent, old, new);
-            for user in users(&name(old)) {
-                join(&mut parent, old, &user);
+            if owner(old) != owner(new) {
+                for user in users(&name(old)) {
+                    join(&mut parent, old, &user);
+                }
             }
         }
         let signature_changes: Vec<String> = keys.iter().filter(|u| base_ws.items.get(*u).zip(target_ws.items.get(*u)).is_some_and(|(a, b)| a.signature != b.signature)).cloned().collect();
@@ -317,7 +355,7 @@ impl App {
             }
         }
         // A unit that uses a new item goes in the step that adds it, so that each step compiles.
-        for item in &added {
+        for item in added.iter().filter(|item| !is_pair_new(item)) {
             for user in users(&name(item)) {
                 join(&mut parent, item, &user);
             }
@@ -337,21 +375,17 @@ impl App {
         let mut drafts: Vec<(u8, String, Vec<String>, Vec<PlanEdit>)> = Vec::new();
         let mut new_by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let list = |items: &[String]| items.iter().map(|i| format!("`{}`", name(i))).collect::<Vec<_>>().join(", ");
+        // The honest split of a pair: a rename (a neutral claim), then the other changes. The
+        // components below take the hunks that remain after the renames.
+        for (old, new) in &renamed {
+            let rename = PlanEdit { file: "*".into(), find: name(old), replace: name(new), word: true };
+            drafts.push((1, format!("rename `{}` to `{}`", name(old), name(new)), Vec::new(), vec![rename]));
+        }
         for members in components.into_values() {
-            let is_new = |u: &String| target_ws.items.contains_key(u) && !base_ws.items.contains_key(u);
-            let is_removed = |u: &String| base_ws.items.contains_key(u) && !target_ws.items.contains_key(u);
-            if let Some((old, new, score)) = pairs.iter().find(|(old, _, _)| members.contains(old)) {
-                let parent = |path: &str| path.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default();
-                if parent(old) == parent(new) {
-                    // The honest split: a rename (a neutral claim), then the other changes.
-                    let rename = PlanEdit { file: "*".into(), find: name(old), replace: name(new), word: true };
-                    drafts.push((1, format!("rename `{}` to `{}`", name(old), name(new)), Vec::new(), vec![rename]));
-                    if *score < 0.999 {
-                        drafts.push((3, format!("change `{}` after the rename", name(new)), members, Vec::new()));
-                    }
-                } else {
-                    drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: claim `move-item`, then the changes in a later step; or `rewrite-item`)", score * 100.0), members, Vec::new()));
-                }
+            let is_new = |u: &String| target_ws.items.contains_key(u) && !base_ws.items.contains_key(u) && !is_pair_new(u);
+            let is_removed = |u: &String| base_ws.items.contains_key(u) && !target_ws.items.contains_key(u) && !is_pair_old(u);
+            if let Some((old, new, score)) = pairs.iter().find(|(old, new, _)| members.contains(old) && owner(old) != owner(new)) {
+                drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: claim `move-item`, then the changes in a later step; or `rewrite-item`)", score * 100.0), members, Vec::new()));
             } else if let Some(item) = members.iter().find(|m| signature_changes.contains(m)) {
                 drafts.push((2, format!("change the signature of `{}` and its call sites", name(item)), members, Vec::new()));
             } else if members.iter().all(is_new) {
@@ -363,7 +397,8 @@ impl App {
                 drafts.push((5, format!("change {}", members.iter().map(|m| format!("`{}`", &m[5..])).collect::<Vec<_>>().join(", ")), members, Vec::new()));
             } else {
                 let (new, gone): (Vec<String>, Vec<String>) = (members.iter().filter(|m| is_new(m)).cloned().collect(), members.iter().filter(|m| is_removed(m)).cloned().collect());
-                let changed: Vec<String> = members.iter().filter(|m| !is_new(m) && !is_removed(m)).cloned().collect();
+                // The old item of a renamed pair is the new item, under its old name.
+                let changed: Vec<String> = members.iter().filter(|m| !is_new(m) && !is_removed(m) && !is_pair_old(m)).cloned().collect();
                 let mut parts = Vec::new();
                 if !new.is_empty() {
                     parts.push(format!("add {}", list(&new)));
@@ -412,6 +447,7 @@ impl App {
             let plain = semilla_syntax::diff(&before_ws, &after_ws, &Default::default());
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
+            claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
             let rename_step = semilla_core::Step { index: 0, intent: String::new(), class: None, claims: claims.clone(), tree_before: String::new(), tree_after: String::new() };
             let map = semilla_verify::checks::renames(&rename_step, &before_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
@@ -430,7 +466,10 @@ impl App {
                     todo.push(format!("new function `{}`: add the property claims that are true (no-panic, no-unsafe, no-io, calls-only, tested-by)", item.path));
                 }
             }
+            // The intent names the items of the claims: the units name only the innermost items.
+            let intent = if step.edits.is_empty() { draft_intent(&claims).unwrap_or(step.intent.clone()) } else { step.intent.clone() };
             plan.steps.push(PlanStep {
+                intent,
                 claims: claims.into_iter().map(|c| PlanClaim { op: c.op, at: c.at.map(|a| a.to_string()), up: 0, args: c.args }).collect(),
                 todo,
                 ..step
@@ -585,7 +624,14 @@ impl App {
         session.changeset.groups.clear();
         session.changeset.subgroups.clear();
         session.changeset.head_tree = base.clone();
-        session.changeset.pair_refusals = plan.refusals.clone();
+        // The refusals of the plan, then the refusals from `pair refuse` (they stay across applies).
+        let mut refusals = plan.refusals.clone();
+        for refusal in &session.changeset.pair_refusals {
+            if !refusals.iter().any(|r| r.old == refusal.old && r.new == refusal.new) {
+                refusals.push(refusal.clone());
+            }
+        }
+        session.changeset.pair_refusals = refusals;
         session.last_claim = 0;
         self.save_session(&session)?;
 

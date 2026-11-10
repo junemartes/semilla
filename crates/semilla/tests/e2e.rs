@@ -408,3 +408,79 @@ fn plan_flow() {
     // The state folder is not in the commit.
     assert!(!git(repo, &["ls-tree", "-r", "--name-only", "HEAD"]).contains(".semilla"));
 }
+
+const LEDGER_BASE: &str = "pub mod money;\n\npub struct Entry {\n    pub amount: u64,\n    pub fee_free: bool,\n}\n\npub fn total(entries: &[Entry]) -> u64 {\n    let mut s = 0;\n    for e in entries {\n        s += e.amount;\n    }\n    s\n}\n\npub fn charge(entries: &[Entry]) -> u64 {\n    let mut s = 0;\n    for e in entries {\n        if e.fee_free {\n            s += e.amount;\n        } else {\n            s += e.amount + e.amount / 100 + 1;\n        }\n    }\n    s\n}\n\npub fn report(entries: &[Entry]) -> String {\n    let t = total(entries);\n    money::fmt_cents(t)\n}\n\npub fn is_large(entries: &[Entry]) -> bool {\n    total(entries) > 10_000\n}\n\npub fn legacy_round(x: u64) -> u64 {\n    (x + 50) / 100 * 100\n}\n";
+const LEDGER_TARGET: &str = "pub mod money;\n\npub struct Entry {\n    pub amount: u64,\n    pub fee_free: bool,\n}\n\npub fn sum_amounts(entries: &[Entry]) -> u64 {\n    let mut s = 0;\n    for e in entries {\n        s += e.amount;\n    }\n    s\n}\n\nfn fee(amount: u64) -> u64 {\n    amount / 100 + 1\n}\n\npub fn charge(entries: &[Entry]) -> u64 {\n    let mut s = 0;\n    for e in entries {\n        if e.fee_free {\n            s += e.amount;\n        } else {\n            s += e.amount + fee(e.amount);\n        }\n    }\n    s\n}\n\npub fn report(entries: &[Entry]) -> String {\n    let t = sum_amounts(entries);\n    money::format_cents(t)\n}\n\npub fn is_large(entries: &[Entry]) -> bool {\n    sum_amounts(entries) > 50_000\n}\n\npub fn average(entries: &[Entry]) -> u64 {\n    if entries.is_empty() {\n        return 0;\n    }\n    sum_amounts(entries) / entries.len() as u64\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn average_of_two() {\n        let v = vec![Entry { amount: 2, fee_free: true }, Entry { amount: 4, fee_free: true }];\n        assert_eq!(average(&v), 3);\n    }\n}\n";
+const MONEY_BASE: &str = "pub fn fmt_cents(c: u64) -> String {\n    let whole = c / 100;\n    let part = c % 100;\n    if part < 10 {\n        format!(\"{}.0{}\", whole, part)\n    } else {\n        format!(\"{}.{}\", whole, part)\n    }\n}\n";
+const MONEY_TARGET: &str = "pub fn format_cents(cents: u64) -> String {\n    let whole = cents / 100;\n    let part = cents % 100;\n    if part < 10 {\n        format!(\"{}.0{}\", whole, part)\n    } else {\n        format!(\"{}.{}\", whole, part)\n    }\n}\n";
+
+/// A commit with two renames that share a call site, a parameter rename, an extraction, a
+/// literal change, a new function with a test, and a removed function. The draft must keep every
+/// change, and a refusal from `pair refuse` must stay across applies.
+#[test]
+fn plan_draft_covers_every_change() {
+    let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
+    assert!(status.success(), "build the MIR driver");
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    write(repo, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    write(repo, ".gitignore", "/target\n");
+    write(repo, "src/lib.rs", LEDGER_BASE);
+    write(repo, "src/money.rs", MONEY_BASE);
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"]);
+    write(repo, "src/lib.rs", LEDGER_TARGET);
+    write(repo, "src/money.rs", MONEY_TARGET);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "rework"]);
+    run(repo, &["replay", "begin", "--commit", "HEAD"], 0);
+
+    run(repo, &["replay", "plan"], 0);
+    let plan_file = repo.join(".semilla/plan.json");
+    let plan: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&plan_file).unwrap()).unwrap();
+    let steps = plan["steps"].as_array().unwrap();
+    let intents: Vec<&str> = steps.iter().map(|s| s["intent"].as_str().unwrap()).collect();
+    let claims: Vec<String> = steps.iter().flat_map(|s| s["claims"].as_array().unwrap().iter().map(|c| format!("{} {} {}", c["op"].as_str().unwrap(), c["at"].as_str().unwrap_or(""), c["args"]))).collect();
+    let has = |op: &str, at: &str| claims.iter().any(|c| c.starts_with(&format!("{op} {at}")));
+    // Both renames are their own steps, and no change is lost.
+    assert!(intents.contains(&"rename `total` to `sum_amounts`") && intents.contains(&"rename `fmt_cents` to `format_cents`"), "{intents:?}");
+    assert!(has("change-literal", "ledger::is_large/tail/rhs"), "{claims:#?}");
+    assert!(has("remove-item", "ledger::legacy_round") && has("add-item", "ledger::average"), "{claims:#?}");
+    assert!(intents.iter().any(|i| i.contains("`average`") && i.contains("`legacy_round`")), "the intent names the new function: {intents:?}");
+    // The parameter rename is one neutral claim.
+    assert!(claims.iter().any(|c| c.starts_with("rename-local ledger::money::format_cents") && c.contains("\"from\":\"c\"")), "{claims:#?}");
+    assert!(!has("change-signature", "ledger::money::format_cents"), "{claims:#?}");
+    // The raw draft is accepted.
+    let out = run(repo, &["replay", "apply"], 0);
+    assert!(out.contains("0 uncovered"), "{out}");
+
+    // An unknown field is an error, not a silent loss.
+    let mut bad = plan.clone();
+    bad["steps"][0]["claims"][0]["note"] = serde_json::json!("x");
+    std::fs::write(&plan_file, serde_json::to_string_pretty(&bad).unwrap()).unwrap();
+    let output = semilla(repo, &["replay", "apply"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown field `note`"));
+
+    // A plan without the second rename gives a pair warning. A refusal stays across applies.
+    let mut pair = plan.clone();
+    let index = intents.iter().position(|i| *i == "rename `fmt_cents` to `format_cents`").unwrap();
+    pair["steps"][index] = serde_json::json!({
+        "intent": "replace `fmt_cents` with `format_cents`",
+        "take": ["src/money.rs", "src/lib.rs:34"],
+        "claims": [
+            {"op": "remove-item", "at": "ledger::money::fmt_cents"},
+            {"op": "add-item", "at": "ledger::money::format_cents"},
+            {"op": "change-path", "at": "ledger::report/tail/callee"}
+        ]
+    });
+    let rename_local = intents.iter().position(|i| i.contains("`format_cents`") && !i.starts_with("rename")).unwrap();
+    pair["steps"].as_array_mut().unwrap().remove(rename_local);
+    std::fs::write(&plan_file, serde_json::to_string_pretty(&pair).unwrap()).unwrap();
+    let out = run(repo, &["replay", "apply"], 0);
+    assert!(out.contains("! pair: `ledger::money::fmt_cents` (removed)") && out.contains("add it to `refusals`"), "{out}");
+    run(repo, &["pair", "refuse", "ledger::money::fmt_cents", "ledger::money::format_cents", "--reason", "a new output contract"], 0);
+    let out = run(repo, &["replay", "apply"], 0);
+    assert!(out.contains("the agent refused: a new output contract"), "{out}");
+    run(repo, &["replay", "abort"], 0);
+}

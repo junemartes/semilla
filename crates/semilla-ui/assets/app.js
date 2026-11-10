@@ -388,7 +388,10 @@
     if (result.hint) details.push(h('div', { class: 'detail hint' }, 'hint: ', result.hint));
     if (claim.review === 'changed') details.push(h('div', { class: 'detail hint' }, 'The claim changed after the review.'));
     let ba = null;
-    if (result.before || result.after) {
+    if (claim.property) {
+      // A property claim states a checked fact; it changes no code.
+      if (result.after) details.push(h('div', { class: 'detail' }, 'checked: ', result.after));
+    } else if (result.before || result.after) {
       ba = h('div', { class: 'ba' },
         result.before ? h('del', { class: 'd' }, result.before) : null,
         result.before && result.after ? ' → ' : null,

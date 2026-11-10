@@ -122,7 +122,7 @@ ops! {
     "unwrap-statements",      Statement,  OwnContent,  C, Core,        [],                "Remove a construct and keep its body.";
     "extract-variable",       Statement,  OwnContent,  N, Mechanical,  ["name"],          "Move an expression into a new let.";
     "inline-variable",        Statement,  OwnContent,  N, Mechanical,  [],                "Replace a variable with its value.";
-    "rename-local",           Statement,  Identity,    N, Mechanical,  ["to"],            "Rename a local variable.";
+    "rename-local",           Statement,  Identity,    N, Mechanical,  ["to"],            "Rename a local variable, or a parameter (optional `from`: the old name; the anchor is then the function).";
     "change-mutability",      Statement,  OwnContent,  N, Mechanical,  [],                "Add or remove `mut`.";
     "change-type-annotation", Statement,  OwnContent,  N, Mechanical,  [],                "Add, remove, or change a type annotation on a let.";
     "add-else",               Statement,  OwnContent,  C, Core,        [],                "Add an else branch.";

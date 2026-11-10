@@ -787,3 +787,35 @@ async fn the_reviewer_decides_on_a_pair_warning() {
     assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=maybe")).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(call(&app, "POST", "/api/pair?old=a&new=b&decision=accepted").await.status, StatusCode::NOT_FOUND);
 }
+
+// ------------------------------------------------------------------ property claims
+
+#[tokio::test]
+async fn a_property_claim_is_a_checked_fact() {
+    let plain = get(&app(), "/api/changeset").await;
+    let mut data = demo_data();
+    let group_id = data.changeset.groups[0].id.clone();
+    let step = data.changeset.groups[0].steps[0];
+    let at = "shop_core::cart::Cart::total";
+    data.changeset.steps[step].claims.push(semilla_core::Claim { id: "c99".into(), op: "no-unsafe".into(), at: at.parse().ok(), args: Default::default() });
+    let report = data.report.steps.iter_mut().find(|s| s.step == step).unwrap();
+    report.claims.push(semilla_core::ClaimResult {
+        claim: "c99".into(),
+        step,
+        status: semilla_core::ClaimStatus::Verified { proof: "syntax".into() },
+        class: None,
+        effect: None,
+        witness: None,
+        hint: None,
+        before: None,
+        after: Some(format!("no unsafe code in `{at}`")),
+    });
+    data.report.finish();
+    let app = router(data, review_path());
+    let cs = get(&app, "/api/changeset").await;
+    // The word `unsafe` in the op and in its result is not unsafe code.
+    assert_eq!(group(&cs, &group_id)["risk_reasons"], group(&plain, &group_id)["risk_reasons"]);
+    let g = get(&app, &format!("/api/group/{group_id}")).await;
+    let text = g.to_string();
+    assert!(text.contains("\"property\":true"), "{text}");
+}

@@ -164,6 +164,8 @@ pub struct ClaimView {
     pub new_in_subgroup: bool,
     /// The file of the anchor item, if the graph knows it.
     pub file: Option<String>,
+    /// True for a property claim (`no-panic`, `tested-by`, …): a checked fact, not a code change.
+    pub property: bool,
 }
 
 /// Builds the change-set summary.
@@ -237,12 +239,18 @@ pub fn claim_view(ctx: &Ctx, review: &ReviewFile, claim: &Claim) -> ClaimView {
         summary: claim_summary(claim),
         class: ctx.claim_class(claim),
         op_role: ops::op(&claim.op).map(|info| info.role),
+        property: is_property(&claim.op),
         status: status_name(result.as_ref()),
         review: review.state(&claim.id, ctx.claim_hashes.get(&claim.id).map(String::as_str)),
         flow: at.as_deref().and_then(|at| ctx.flow_function(at)),
         at,
         result,
     }
+}
+
+/// True for a property op: the claim states a fact about the code, and changes no code.
+pub fn is_property(op: &str) -> bool {
+    ops::op(op).is_some_and(|info| info.kind == ops::OpKind::Property)
 }
 
 fn status_name(result: Option<&ClaimResult>) -> &'static str {
@@ -546,7 +554,8 @@ fn risk(
         score += 2;
         reasons.push(format!("{control} ctrl flow"));
     }
-    let has_unsafe = claims.iter().any(|claim| claim_texts(ctx, claim).iter().any(|text| text.contains("unsafe")));
+    // A property claim (`no-unsafe`) has the word in its result text, not in the code.
+    let has_unsafe = claims.iter().filter(|claim| !is_property(&claim.op)).any(|claim| claim_texts(ctx, claim).iter().any(|text| text.contains("unsafe")));
     if has_unsafe {
         score += 2;
         reasons.push("unsafe".to_string());

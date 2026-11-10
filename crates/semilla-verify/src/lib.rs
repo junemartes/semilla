@@ -259,6 +259,12 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
         }
     }
 
+    for (item, old, new) in hints::likely_local_renames(&edits, input.before, input.after) {
+        for uncovered in report.uncovered.iter_mut().filter(|u| u.at.as_ref().is_some_and(|a| a.item == item)) {
+            uncovered.hint = Some(format!("rename-local (it looks like a rename of `{old}` to `{new}`: anchor `{item}`, from={old}, to={new})"));
+        }
+    }
+
     // 5. Indirect changes: a body that changed without a text change in its item.
     let edited_items: BTreeSet<&str> = edits.iter().filter_map(|edit| edit.item()).collect();
     let affects: BTreeSet<String> = step.claims.iter().flat_map(|claim| claim.arg_list("affects")).collect();

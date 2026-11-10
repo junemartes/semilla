@@ -147,6 +147,69 @@ pub fn likely_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after:
     pairs
 }
 
+/// The likely renames of parameters and local variables: (item, old name, new name). The item
+/// text changes only by one consistent change of identifiers, and each old name is a parameter
+/// or a `let` or `for` variable. The new name does not occur in the old text.
+pub fn likely_local_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> Vec<(String, String, String)> {
+    let items: std::collections::BTreeSet<&str> = edits.iter().filter_map(|e| e.before.as_ref().or(e.after.as_ref())).map(|a| a.item.as_str()).collect();
+    let is_ident = |t: &str| t.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && t.chars().all(|c| c.is_alphanumeric() || c == '_');
+    let mut found = Vec::new();
+    for path in items {
+        let (Some(old_item), Some(new_item)) = (before.items.get(path), after.items.get(path)) else { continue };
+        let (old_tokens, new_tokens) = (words(&old_item.text), words(&new_item.text));
+        if old_tokens.len() != new_tokens.len() || old_tokens == new_tokens {
+            continue;
+        }
+        let mut map: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+        let consistent = old_tokens.iter().zip(&new_tokens).filter(|(a, b)| a != b).all(|(a, b)| is_ident(a) && is_ident(b) && *map.entry(*a).or_insert(*b) == *b);
+        let olds: std::collections::BTreeSet<&str> = old_tokens.iter().copied().collect();
+        let injective = map.values().collect::<std::collections::BTreeSet<_>>().len() == map.len();
+        let bindings = map.iter().all(|(old, new)| !olds.contains(new) && crate::checks::is_binding(old_item, old));
+        if consistent && injective && bindings {
+            found.extend(map.into_iter().map(|(old, new)| (path.to_string(), old.to_string(), new.to_string())));
+        }
+    }
+    found
+}
+
+/// The words and the other characters of a token text (a delimiter can touch a word: `(len)`).
+pub(crate) fn words(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (index, c) in text.char_indices() {
+        let word = c.is_alphanumeric() || c == '_';
+        match (word, start) {
+            (true, None) => start = Some(index),
+            (false, Some(from)) => {
+                out.push(&text[from..index]);
+                start = None;
+            }
+            _ => {}
+        }
+        if !word && !c.is_whitespace() {
+            out.push(&text[index..index + c.len_utf8()]);
+        }
+    }
+    if let Some(from) = start {
+        out.push(&text[from..]);
+    }
+    out
+}
+
+/// The `rename-local` claims of [`likely_local_renames`]: the function is the anchor, `from` is the old name.
+pub fn local_rename_claims(renames: &[(String, String, String)]) -> Vec<Claim> {
+    renames
+        .iter()
+        .enumerate()
+        .map(|(index, (item, old, new))| {
+            let mut args = serde_json::Map::new();
+            args.insert("from".into(), old.clone().into());
+            args.insert("to".into(), new.clone().into());
+            Claim { id: format!("l{}", index + 1), op: "rename-local".into(), at: item.parse().ok(), args }
+        })
+        .collect()
+}
+
 /// The similarity of two items, from 0 to 1: the longest common token sequence of their texts,
 /// with the item names replaced by one token. Large items use the token sets.
 pub fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {

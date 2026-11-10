@@ -973,13 +973,17 @@ The steps are ordinary steps, so the verifier, the reports, the UI, and `tag` do
 A large replay needs many steps, and each step needs about five tool calls. So the agent plans all steps first and submits the whole plan at once.
 
 - `replay plan` writes a draft. The engine builds the units of the remaining diff: each hunk links the innermost item that it touches on each side (a hunk can replace one item with another). Then it joins these units:
-  - a removed item and a similar added item (a pair), with the units that use the old name;
+  - a removed item and a similar added item (a pair). For a pair under one parent, the users of the old name do not join: the rename step changes them all. For a move, the units that use the old name join the pair;
   - an item with a changed signature, with the units that use its name;
   - a new item, with the units that use it, so that each step compiles.
 - Each set of joined units is one step. The order is: new items, renames, signature changes, other changes, removed items, other files.
-- A pair under the same parent becomes two steps: a rename with a whole-word edit (proved by the rename map), then the other changes. This is the honest split, made by the engine.
+- Each pair under the same parent gives a rename step with a whole-word edit (proved by the rename map). Its set of units is then one changed item, not a removed item and an added item, and it gives a later step for the hunks that remain. This is the honest split, made by the engine.
+- A parameter or a local variable with a new name gives a `rename-local` claim (`from`, `to`, the function as the anchor), when the item text changes only by one consistent change of names.
+- The intent of a draft step names the items of its claims.
 - The draft simulates each step in memory (`tree_with`), so the draft claims have the anchors of that step. The claims of a step come after the rename map, and expression claims under one parent merge into one `replace-expression`.
 - `replay apply` starts again from the base, runs every step (the takes, the hand edits, the claims), and checks the whole change set. It reports all problems at once. Before the reset, it refuses a working tree with files that the target does not have.
+
+The plan format refuses unknown fields, so a field in the wrong place (a claim `note` outside `args`) is an error, not a silent loss. A refusal from `pair refuse` stays when the agent applies the plan again.
 
 The plan positions (`base:`, `target:`, `before:`, `after:`) let the agent point at code without the anchor numbering of the intermediate trees. The apply maps the line through the line hunks between the trees.
 
@@ -1011,3 +1015,5 @@ A property claim has no class and explains no edit. It is valid without an edit,
 - `no-panic` counts the explicit panic sites only. A panic inside a callee of another crate does not count.
 - The syntax call graph guesses method calls by name.
 - The draft plan cannot split one hunk. A refactor and a behavior change on the same lines need a hand edit in the plan.
+- An extraction that changes the grouping of an expression (`(a + b) + 1` to `a + fee(b)`) is not a pure extraction: the overflow checks move, and the control flow graphs differ. The agent first regroups with a hand edit (a free edit), then extracts.
+- The review UI shows the data from its start. After a new `tag`, restart `semilla ui`.

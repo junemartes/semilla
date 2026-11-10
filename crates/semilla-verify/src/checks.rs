@@ -178,7 +178,7 @@ pub fn renames(step: &Step, before: &Workspace) -> Renames {
             }
             "rename-local" => {
                 let Some(to) = claim.arg_str("to") else { continue };
-                if let Some(old) = local_name(before, at) {
+                if let Some(old) = rename_local_from(before, claim, at) {
                     renames.idents.push((Some(at.item.clone()), old, to.to_string()));
                 }
             }
@@ -218,6 +218,25 @@ fn local_name(workspace: &Workspace, at: &Anchor) -> Option<String> {
     let node = semilla_syntax::resolve_node(workspace, at)?;
     let pattern = if node.kind == "let" { node.child("pat")? } else { node };
     pattern.text.split(' ').find(|token| *token != "mut" && *token != "ref" && token.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')).map(str::to_string)
+}
+
+/// The old name of a `rename-local` claim: the variable of the `let` at the anchor, or `from`
+/// (a parameter, or a `let` or `for` variable of the item at the anchor).
+fn rename_local_from(workspace: &Workspace, claim: &Claim, at: &Anchor) -> Option<String> {
+    let Some(from) = claim.arg_str("from") else {
+        return local_name(workspace, at);
+    };
+    let item = workspace.items.get(&at.item)?;
+    is_binding(item, from).then(|| from.to_string())
+}
+
+/// True if `name` is a parameter, or a `let` or `for` variable, of the item.
+pub fn is_binding(item: &semilla_syntax::Item, name: &str) -> bool {
+    let signature = crate::hints::words(&item.signature);
+    let parameter = signature.windows(2).any(|pair| pair[0] == name && pair[1] == ":") || signature.windows(3).any(|t| t[0] == "mut" && t[1] == name && t[2] == ":");
+    let tokens = crate::hints::words(&item.text);
+    let local = tokens.windows(3).any(|t| (t[0] == "let" || t[0] == "for") && (t[1] == name || (t[1] == "mut" && t[2] == name)));
+    parameter || local
 }
 
 /// Checks one claim.
@@ -396,8 +415,11 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
 
 fn check_rename_local(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
-    let Some(old) = local_name(context.before, at) else {
-        return Outcome::malformed("the anchor is not a `let` statement");
+    let Some(old) = rename_local_from(context.before, claim, at) else {
+        if let Some(from) = claim.arg_str("from") {
+            return Outcome::malformed(format!("`{from}` is not a parameter or a `let` or `for` variable of `{}`", at.item));
+        }
+        return Outcome::malformed("the anchor is not a `let` statement (use `from` with the function as the anchor for a parameter)");
     };
     let to = claim.arg_str("to").unwrap();
     let before = context.before.items.get(&at.item).map(|item| item.text.clone()).unwrap_or_default();
@@ -1186,7 +1208,7 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
             let found: Vec<String> = reached
                 .iter()
                 .filter_map(|path| context.after.items.get(path))
-                .filter(|item| item.text.split(' ').any(|token| token == "unsafe"))
+                .filter(|item| crate::hints::words(&item.text).contains(&"unsafe"))
                 .map(|item| item.path.clone())
                 .collect();
             if found.is_empty() { Outcome::verified("syntax", Vec::new()) } else { Outcome::refuted(format!("unsafe code in {}", list(&found))) }
@@ -1210,7 +1232,9 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                 return Outcome::malformed(format!("`{path}` is not a test"));
             }
             if reach(context.calls, &path).contains(&at.item) {
-                Outcome::verified("graph", Vec::new())
+                let mut outcome = Outcome::verified("graph", Vec::new());
+                outcome.after = Some(format!("the test `{path}` calls `{}`", at.item));
+                return outcome;
             } else {
                 Outcome::refuted(format!("the test `{path}` does not call `{}`", at.item))
             }
@@ -1243,7 +1267,9 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
         other => Outcome::malformed(format!("the verifier has no checker for `{other}`")),
     };
     if outcome.status.is_verified() {
-        outcome.after = Some(format!("{} ({} item(s) checked)", claim.op, reached.len()));
+        let checked: Vec<String> = reached.iter().map(|path| format!("`{path}`")).collect();
+        let what = if checked.len() == 1 { "the function" } else { "the function and its local callees" };
+        outcome.after = Some(format!("{what}: {}", list(&checked)));
     }
     outcome
 }
