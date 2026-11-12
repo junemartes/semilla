@@ -204,6 +204,11 @@ pub struct Fact {
     /// `affected`. So each body of a site is in one of the two lists (trial 4, D14).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub equal_sites: Vec<String>,
+    /// A note for the reader (batch 5u, part A): the checked configurations with a proof of
+    /// the changed bodies, and those with no proof. A fact with this note is not neutral. The
+    /// note asks for no reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl Fact {
@@ -408,6 +413,20 @@ pub struct ConfigNote {
     /// The `cfg` conditions of the source text that the checked configurations do not cover.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_covered: Vec<String>,
+    /// The checked configurations that Semilla added for a proof (batch 5u, part C).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<ConfigAdded>,
+}
+
+/// A checked configuration that Semilla added for a proof: a proof of a step needs a feature
+/// state that no configuration of the default list has.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConfigAdded {
+    /// The name of the configuration.
+    pub name: String,
+    /// The steps with this configuration. Empty: each compared step has it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<usize>,
 }
 
 /// A configuration of the default list that Semilla did not check.
@@ -444,7 +463,15 @@ impl ConfigNote {
             Some(short) => format!("`{short}` (libraries and binaries only: the other targets do not build)"),
             None => format!("`{name}`"),
         };
-        let list: Vec<String> = self.checked.iter().map(show).collect();
+        // An added configuration has a mark (batch 5u, part C). A configuration that only
+        // some steps have is not in `checked`: the mark names the steps.
+        let mark = |added: &ConfigAdded| match added.steps.len() {
+            0 => " (added for a proof)".to_string(),
+            1 => format!(" (added for a proof in step {})", added.steps[0]),
+            _ => format!(" (added for a proof in steps {})", added.steps.iter().map(|step| step.to_string()).collect::<Vec<_>>().join(", ")),
+        };
+        let mut list: Vec<String> = self.checked.iter().map(|name| format!("{}{}", show(name), self.added.iter().find(|added| added.name == *name).map(mark).unwrap_or_default())).collect();
+        list.extend(self.added.iter().filter(|added| !self.checked.contains(&added.name)).map(|added| format!("{}{}", show(&added.name), mark(added))));
         let list = if list.is_empty() { "none".to_string() } else { list.join(", ") };
         format!("checked configurations (target `{}`): {list}", self.target)
     }
@@ -476,6 +503,17 @@ impl ConfigNote {
                 format!("! {noun} {} {verb} not checked{place}: {}", list.join(", "), gap.cause)
             })
             .collect()
+    }
+
+    /// The line of the configurations that Semilla added for a proof, if one exists: the line
+    /// of `step`.
+    pub fn added_line(&self) -> Option<String> {
+        if self.added.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = self.added.iter().map(|added| format!("`{}`", added.name)).collect();
+        let noun = if list.len() == 1 { "configuration" } else { "configurations" };
+        Some(format!("Semilla added the {noun} {} for a proof", list.join(", ")))
     }
 
     /// The line of the conditions that the checked configurations do not cover, if one exists.
@@ -749,6 +787,7 @@ mod config_note_tests {
             checked: vec!["dev".into(), "release".into()],
             not_checked: vec![gap("dev, all features", &[0, 1]), gap("release, all features", &[0, 1]), gap("dev, no default features", &[1])],
             not_covered: (0..10).map(|index| format!("c{index}")).collect(),
+            added: Vec::new(),
         };
         let lines = note.lines(2);
         assert_eq!(lines[0], "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `release`");
@@ -765,8 +804,19 @@ mod config_note_tests {
         // A smaller build (batch 5t, part C): the note is not a part of the name.
         let note = ConfigNote { checked: vec!["dev".into(), "dev, no default features (libraries and binaries only)".into()], ..note };
         assert_eq!(note.checked_line(), "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, no default features` (libraries and binaries only: the other targets do not build)");
+        // An added configuration (batch 5u, part C) has a mark. A configuration that only some
+        // steps have is not in `checked`: the mark names the steps.
+        assert_eq!(note.added_line(), None);
+        let added = |name: &str, steps: &[usize]| ConfigAdded { name: name.into(), steps: steps.to_vec() };
+        let note = ConfigNote { checked: vec!["dev".into(), "dev, features fa".into()], added: vec![added("dev, features fa", &[]), added("dev, features fb", &[1]), added("dev, features fc", &[0, 2])], ..note };
+        assert_eq!(note.checked_line(), "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, features fa` (added for a proof), `dev, features fb` (added for a proof in step 1), `dev, features fc` (added for a proof in steps 0, 2)");
+        assert_eq!(note.added_line().unwrap(), "Semilla added the configurations `dev, features fa`, `dev, features fb`, `dev, features fc` for a proof");
+        let note = ConfigNote { added: vec![added("dev, features fa", &[])], ..note };
+        assert_eq!(note.added_line().unwrap(), "Semilla added the configuration `dev, features fa` for a proof");
         // A report of an older version has no data.
         let report: Report = serde_json::from_str(r#"{"steps":[],"organization":[],"warnings":[],"accepted":true}"#).unwrap();
         assert!(report.configs.is_none());
+        let note: ConfigNote = serde_json::from_str(r#"{"target":"t","checked":["dev"],"not_checked":[],"not_covered":[]}"#).unwrap();
+        assert!(note.added.is_empty());
     }
 }

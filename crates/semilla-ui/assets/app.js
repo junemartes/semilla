@@ -308,6 +308,7 @@
         const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']: ' + fact.description];
         for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ')) parts.push(group.sites.length + ' site(s): ' + group.edit);
         if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
+        if (fact.note) parts.push('note: ' + fact.note);
         if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
         return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
       });
@@ -382,6 +383,7 @@
         const parts = [fact.id + ' derived [' + factClass(fact) + ']: ' + fact.description];
         for (const site of fact.sites || []) if (!fact.description.startsWith(site.edit + ' in ')) parts.push(site.sites.length + ' site(s): ' + site.edit);
         if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
+        if (fact.note) parts.push('note: ' + fact.note);
         if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
         return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
       })));

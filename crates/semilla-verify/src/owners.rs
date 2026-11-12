@@ -247,6 +247,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             sites: Vec::new(),
             content: None,
             equal_sites: Vec::new(),
+            note: None,
         });
     }
 }
@@ -288,6 +289,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
             sites: Vec::new(),
             content: None,
             equal_sites: Vec::new(),
+            note: None,
         });
     }
 }

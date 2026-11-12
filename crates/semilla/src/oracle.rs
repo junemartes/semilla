@@ -28,6 +28,55 @@ pub struct NormalOracle {
     pub mode: crate::buildcode::Mode,
     /// The configurations of each step that this oracle compared (batch 5s).
     pub log: ConfigLog,
+    /// The configurations that Semilla adds for a proof (batch 5u, part C).
+    pub added: std::sync::Mutex<Added>,
+}
+
+/// The added feature selections of the steps of one oracle (batch 5u, part C).
+#[derive(Debug, Default)]
+pub struct Added {
+    /// The feature selections that the verifier set for a step, by the two trees of the step.
+    selections: BTreeMap<(String, String), Vec<Features>>,
+    /// The result of `checked` for the two trees of a step and a list of added selections. The
+    /// records of a tree do not change in the time of one process.
+    memo: Vec<((String, String), Vec<Features>, Vec<Configuration>, StepConfigs)>,
+    /// The steps that have the builds of the hint.
+    hinted: std::collections::BTreeSet<(String, String)>,
+}
+
+/// The name of the hint file in the cache folder (batch 5u, part C): the feature selections
+/// that the last step with an added configuration needed. Semilla builds them with the default
+/// list, so the builds are ready if the step needs them. The hint has no part in a decision.
+pub const HINT_FILE: &str = "added-configurations.json";
+
+/// The feature selections of a hint text. A text with a bad form gives no selection.
+fn parse_hint(text: &str) -> Vec<Features> {
+    let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(text) else { return Vec::new() };
+    let name = |value: &serde_json::Value| value.as_str().filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "_-+.".contains(c))).map(str::to_string);
+    let entry = |value: &serde_json::Value| -> Option<Features> {
+        let features: Vec<String> = value.get("features")?.as_array()?.iter().map(name).collect::<Option<_>>()?;
+        if features.is_empty() || features.len() > 8 || !features.is_sorted() {
+            return None;
+        }
+        Some(if value.get("no_default")?.as_bool()? { Features::NoDefaultListed(features) } else { Features::Listed(features) })
+    };
+    if list.len() > semilla_verify::MOST_SELECTIONS {
+        return Vec::new();
+    }
+    list.iter().map(entry).collect::<Option<Vec<Features>>>().unwrap_or_default()
+}
+
+/// The hint text of a list of added feature selections.
+fn hint_text(list: &[Features]) -> String {
+    let entries: Vec<serde_json::Value> = list
+        .iter()
+        .filter_map(|features| match features {
+            Features::Listed(list) => Some(serde_json::json!({ "no_default": false, "features": list })),
+            Features::NoDefaultListed(list) => Some(serde_json::json!({ "no_default": true, "features": list })),
+            _ => None,
+        })
+        .collect();
+    serde_json::Value::Array(entries).to_string()
 }
 
 /// The configurations of one compared step (batch 5s, B1): the data of the output.
@@ -42,6 +91,9 @@ pub struct StepConfigs {
     pub truth: [Vec<semilla_verify::ConfigTruth>; 2],
     /// The target triple of the check build.
     pub target: String,
+    /// The names of the checked configurations that Semilla added for a proof (batch 5u,
+    /// part C).
+    pub added: Vec<String>,
 }
 
 /// The configurations of each compared step, by the two trees of the step.
@@ -138,22 +190,28 @@ impl NormalOracle {
     /// with the default features, no default features, all features, and each listed feature
     /// set. A feature selection with the same feature state as an earlier one, in the two
     /// trees, is not in the list. The list comes only from the manifests of the two trees.
-    pub fn configurations(&self, before: &str, after: &str) -> Result<Vec<Configuration>> {
-        let mut selections = vec![Features::Default, Features::NoDefault, Features::All];
-        selections.extend(self.feature_sets(&[before, after])?.into_iter().filter(|set| !set.is_empty()).map(Features::Listed));
+    ///
+    /// Then the configurations of the feature selections `extra` that Semilla adds for a
+    /// proof (batch 5u, part C). The second part of an entry is true for an added
+    /// configuration. The default list is the same for each `extra`: an added selection is
+    /// after each selection of the default list.
+    fn configurations_with(&self, before: &str, after: &str, extra: &[Features]) -> Result<Vec<(Configuration, bool)>> {
+        let mut selections = vec![(Features::Default, false), (Features::NoDefault, false), (Features::All, false)];
+        selections.extend(self.feature_sets(&[before, after])?.into_iter().filter(|set| !set.is_empty()).map(|set| (Features::Listed(set), false)));
+        selections.extend(extra.iter().map(|features| (features.clone(), true)));
         let metadata = [self.metadata(before), self.metadata(after)];
         let mut seen = Vec::new();
         let mut kept = Vec::new();
-        for selection in selections {
+        for (selection, added) in selections {
             // A tree with manifests that cargo cannot read has no state: the selection stays.
             let state: Vec<_> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::feature_state(data, &selection))).collect();
             if state.iter().all(Option::is_some) && seen.contains(&state) {
                 continue;
             }
             seen.push(state);
-            kept.push(selection);
+            kept.push((selection, added));
         }
-        Ok(kept.into_iter().flat_map(|features| [false, true].map(|release| Configuration::new(release, features.clone()))).collect())
+        Ok(kept.into_iter().flat_map(|(features, added)| [false, true].map(|release| (Configuration::new(release, features.clone()), added))).collect())
     }
 
     /// The cache folder of the records of a tree at a level and a configuration.
@@ -306,7 +364,13 @@ impl NormalOracle {
     /// in this step). A configuration that builds before the step and not after it is a compile
     /// error of the step (batch 5s, A4).
     fn build_all(&self, step: &Step, configs: &[Configuration]) -> Result<Vec<Option<String>>> {
-        let results: Vec<Result<Option<String>>> = std::thread::scope(|scope| {
+        // The first error in the order of the list, so that the output is stable.
+        self.build_each(step, configs).into_iter().collect()
+    }
+
+    /// The build of `build_all`, with the result of each configuration.
+    fn build_each(&self, step: &Step, configs: &[Configuration]) -> Vec<Result<Option<String>>> {
+        std::thread::scope(|scope| {
             let handles: Vec<_> = configs
                 .iter()
                 .map(|config| {
@@ -326,9 +390,7 @@ impl NormalOracle {
                 })
                 .collect();
             handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
-        });
-        // The first error in the order of the list, so that the output is stable.
-        results.into_iter().collect()
+        })
     }
 
     /// Compares the bodies of one configuration at N0.
@@ -545,9 +607,8 @@ impl BodyOracle for NormalOracle {
         let mut spans = BTreeMap::new();
         let mut combined: BTreeMap<String, BodyStatus> = BTreeMap::new();
         // The configurations of each body: those that compile it, and those where it is not equal.
-        let mut compiled: BTreeMap<String, usize> = BTreeMap::new();
+        let mut compiled: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut differs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut first: BTreeMap<String, String> = BTreeMap::new();
         let mut config: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
         for mut state in states {
             if state.needs_deep() {
@@ -565,8 +626,7 @@ impl BodyOracle for NormalOracle {
                     semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
                     semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
                 };
-                *compiled.entry(comparison.name.clone()).or_default() += 1;
-                first.entry(comparison.name.clone()).or_insert_with(|| name.clone());
+                compiled.entry(comparison.name.clone()).or_default().push(name.clone());
                 if !matches!(status, BodyStatus::Equal { .. }) {
                     differs.entry(comparison.name.clone()).or_default().push(name.clone());
                 }
@@ -580,12 +640,13 @@ impl BodyOracle for NormalOracle {
         Ok(combined
             .into_iter()
             .map(|(name, status)| {
-                // The output names the configurations only if the body is equal in the first
-                // configuration that compiles it (usually `dev`). A body that is not equal in
-                // that configuration is a usual change: its facts are not neutral, and they
-                // need no spotlight.
-                let differs_in = differs.remove(&name).filter(|list| list.len() < compiled.get(&name).copied().unwrap_or(0) && first.get(&name) != list.first()).unwrap_or_default();
-                BodyComparison { span: spans.get(&name).cloned(), status, config: config.remove(&name).into_iter().flatten().collect(), differs_in, name }
+                // The output names the configurations if the body is equal in one or more of
+                // them, and not equal in one or more (batch 5u, part A). The combined status is
+                // not `Equal`, so the note cannot make a fact neutral.
+                let all = compiled.remove(&name).unwrap_or_default();
+                let differs_in = differs.remove(&name).filter(|list| list.len() < all.len()).unwrap_or_default();
+                let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
+                BodyComparison { span: spans.get(&name).cloned(), status, config: config.remove(&name).into_iter().flatten().collect(), differs_in, equal_in, stopped: Vec::new(), name }
             })
             .collect())
     }
@@ -604,6 +665,40 @@ impl BodyOracle for NormalOracle {
         }
         Ok(Some(facts))
     }
+
+    fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
+        let list: Vec<Features> = selections
+            .iter()
+            .map(|selection| {
+                let mut features = selection.features.clone();
+                features.sort();
+                features.dedup();
+                if selection.no_default { Features::NoDefaultListed(features) } else { Features::Listed(features) }
+            })
+            .collect();
+        let key = (step.tree_before.clone(), step.tree_after.clone());
+        let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
+        // The log has the data of this list, if this process has it: the output shows the
+        // configurations of the last list.
+        if let Some((_, _, _, log)) = state.memo.iter().find(|(step, extra, _, _)| *step == key && *extra == list)
+            && let Ok(mut all) = self.log.lock()
+        {
+            all.insert(key.clone(), log.clone());
+        }
+        if list.is_empty() {
+            state.selections.remove(&key);
+            return Ok(true);
+        }
+        state.selections.insert(key, list.clone());
+        drop(state);
+        // The hint for the next step. An error is not important: the hint has no part in a
+        // decision.
+        let (path, text) = (self.repo.cache_dir().join(HINT_FILE), hint_text(&list));
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            let _ = std::fs::write(&path, text);
+        }
+        Ok(true)
+    }
 }
 
 impl NormalOracle {
@@ -611,8 +706,33 @@ impl NormalOracle {
     /// that builds before the step. The call builds the N0 records, and keeps the list for the
     /// output.
     fn checked(&self, step: &Step) -> Result<Vec<Configuration>> {
-        let configs = self.configurations(&step.tree_before, &step.tree_after)?;
-        let built = self.build_all(step, &configs)?;
+        let key = (step.tree_before.clone(), step.tree_after.clone());
+        // The feature selections that the verifier added for a proof in this step (batch 5u,
+        // part C). An added configuration is a configuration of the list as each other one.
+        let (extra, hint) = {
+            let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
+            let extra = state.selections.get(&key).cloned().unwrap_or_default();
+            if let Some((_, _, checked, log)) = state.memo.iter().find(|(step, list, _, _)| *step == key && *list == extra) {
+                if let Ok(mut all) = self.log.lock() {
+                    all.insert(key, log.clone());
+                }
+                return Ok(checked.clone());
+            }
+            // The hint: only with the first builds of a step.
+            let hint = if state.hinted.insert(key.clone()) { std::fs::read_to_string(self.repo.cache_dir().join(HINT_FILE)).map(|text| parse_hint(&text)).unwrap_or_default() } else { Vec::new() };
+            (extra, hint)
+        };
+        let listed = self.configurations_with(&step.tree_before, &step.tree_after, &extra)?;
+        let configs: Vec<Configuration> = listed.iter().map(|(config, _)| config.clone()).collect();
+        // The builds of the hint run with the builds of the list. Their results, and their
+        // errors, have no use: only the list decides the checked configurations.
+        let mut all = configs.clone();
+        for features in hint {
+            all.extend([false, true].map(|release| Configuration::new(release, features.clone())).into_iter().filter(|config| !configs.contains(config)));
+        }
+        let mut built = self.build_each(step, &all);
+        built.truncate(configs.len());
+        let built: Vec<Option<String>> = built.into_iter().collect::<Result<_>>()?;
         // Batch 5t, part C. A configuration that does not build with each target before the
         // step: Semilla tries the libraries and the binaries only. If this smaller build is
         // good before the step, Semilla checks it. A step that breaks it is a compile error.
@@ -620,7 +740,7 @@ impl NormalOracle {
         let mut smaller = self.build_all(step, &narrow)?.into_iter();
         let mut log = StepConfigs::default();
         let mut checked = Vec::new();
-        for (config, error) in configs.into_iter().zip(built) {
+        for ((config, added), error) in listed.into_iter().zip(built) {
             // The error of the smaller build is not in the output: the error of the build of
             // each target is the cause that the reader can repair.
             let (config, error) = match error {
@@ -633,6 +753,9 @@ impl NormalOracle {
             match error {
                 None => {
                     log.checked.push(config.name());
+                    if added {
+                        log.added.push(config.name());
+                    }
                     log.truth[0].push(self.truth(&step.tree_before, &config));
                     log.truth[1].push(self.truth(&step.tree_after, &config));
                     if log.target.is_empty() {
@@ -650,8 +773,9 @@ impl NormalOracle {
             anyhow::bail!("no configuration of the default list builds before the step");
         }
         if let Ok(mut all) = self.log.lock() {
-            all.insert((step.tree_before.clone(), step.tree_after.clone()), log);
+            all.insert(key.clone(), log.clone());
         }
+        self.added.lock().unwrap_or_else(|error| error.into_inner()).memo.push((key, extra, checked.clone(), log));
         Ok(checked)
     }
 
@@ -845,5 +969,46 @@ mod tests {
         assert_eq!(state(Features::Listed(vec!["extra".into()]))["rich"], set(&["default", "std", "extra"]));
         // `std` is a default feature: the listed set is the default set.
         assert_eq!(state(Features::Listed(vec!["std".into()])), state(Features::Default));
+        // Batch 5u, part C: a listed set with no default features.
+        assert_eq!(state(Features::NoDefaultListed(vec!["extra".into()]))["rich"], set(&["std", "extra"]));
+        assert_eq!(state(Features::NoDefaultListed(vec!["extra".into()]))["plain"], set(&[]));
+    }
+
+    // Batch 5u, part C.
+    #[test]
+    fn a_selection_with_no_default_features_has_its_own_name_and_folder() {
+        let config = Configuration::new(false, Features::NoDefaultListed(vec!["a".into(), "b".into()]));
+        assert_eq!(config.name(), "dev, no default features, features a,b");
+        assert_eq!(Configuration::new(true, Features::NoDefaultListed(vec!["a".into()])).name(), "release, no default features, features a");
+        let suffixes: std::collections::BTreeSet<String> = [Features::NoDefault, Features::Listed(vec!["a".into(), "b".into()]), Features::NoDefaultListed(vec!["a".into(), "b".into()]), Features::NoDefaultListed(vec!["a".into()])].into_iter().map(|features| Configuration::new(false, features).suffix()).collect();
+        assert_eq!(suffixes.len(), 4, "{suffixes:?}");
+    }
+
+    // Batch 5u, part C: the hint is data from a file that a different program can change.
+    #[test]
+    fn a_hint_with_a_bad_form_gives_no_selection() {
+        let list = vec![Features::Listed(vec!["fast".into()]), Features::NoDefaultListed(vec!["a".into(), "b".into()])];
+        let text = hint_text(&list);
+        assert_eq!(text, r#"[{"no_default":false,"features":["fast"]},{"no_default":true,"features":["a","b"]}]"#);
+        assert_eq!(parse_hint(&text), list);
+        // A selection of the default list is not a part of the hint.
+        assert_eq!(hint_text(&[Features::All, Features::Default]), "[]");
+        for bad in [
+            "",
+            "{}",
+            "[1]",
+            r#"[{"features":["fast"]}]"#,
+            r#"[{"no_default":0,"features":["fast"]}]"#,
+            r#"[{"no_default":false,"features":[]}]"#,
+            r#"[{"no_default":false,"features":["b","a"]}]"#,
+            r#"[{"no_default":false,"features":["a --release"]}]"#,
+            r#"[{"no_default":false,"features":["a,b"]}]"#,
+            r#"[{"no_default":false,"features":[""]}]"#,
+            r#"[{"no_default":false,"features":["a","b","c","d","e","f","g","h","i"]}]"#,
+            r#"[{"no_default":false,"features":["a"]},{"no_default":false,"features":["b"]},{"no_default":false,"features":["c"]},{"no_default":false,"features":["d"]},{"no_default":false,"features":["e"]}]"#,
+            r#"[{"no_default":false,"features":["a"]},{"no_default":false,"features":"b"}]"#,
+        ] {
+            assert_eq!(parse_hint(bad), Vec::new(), "{bad}");
+        }
     }
 }

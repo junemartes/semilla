@@ -367,6 +367,13 @@ thread_local! {
 /// The time in which `covered` uses a `Cover`. The end of the scope removes it.
 pub(crate) struct Scope;
 
+impl Scope {
+    /// Makes a different `Cover` the answer of `covered` for the rest of the scope.
+    pub(crate) fn set(&self, cover: Cover) {
+        COVER.with(|slot| *slot.borrow_mut() = Some(Rc::new(cover)));
+    }
+}
+
 impl Drop for Scope {
     fn drop(&mut self) {
         COVER.with(|cover| *cover.borrow_mut() = None);

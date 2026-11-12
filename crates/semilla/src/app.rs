@@ -104,6 +104,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     fn build_code_files(&self, step: &Step) -> Vec<(String, String)> {
         self.code.host_files(step)
     }
+
+    fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
+        if self.skip.contains(&step.index) { Ok(false) } else { self.inner.set_selections(step, selections) }
+    }
 }
 
 /// Makes the report of a step a report with no check (design 28): each fact has the class
@@ -950,7 +954,7 @@ impl App {
             // uses the separate folders (design 28).
             let head = self.repo.commit_tree("HEAD").or_else(|_| self.repo.git(&["hash-object", "-t", "tree", "/dev/null"]).map(|empty| empty.trim().to_string()))?;
             let code = self.build_code(&ChangeSet { base_tree: head, head_tree: tree.clone(), ..Default::default() })?;
-            let records = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: Default::default() }.records(&tree, "n0")?;
+            let records = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: Default::default(), added: Default::default() }.records(&tree, "n0")?;
             semilla_normal::body_hashes(&records)
         };
         let items: Vec<serde_json::Value> = ws
@@ -1074,7 +1078,7 @@ impl App {
         let note = code.note(self.mode.runs_build_code());
         let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().collect();
         let log = crate::oracle::ConfigLog::default();
-        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone() }) };
+        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
         let exprs = SmtOracle::for_repo(&self.repo);
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
@@ -1314,7 +1318,7 @@ impl App {
         use semilla_core::view::{GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, Status};
         // The folder set of the tree. A command with no permission reads no record of a tree
         // with changed build code (I6).
-        let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default() }).root(tree) else { return };
+        let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default() }).root(tree) else { return };
         let settings = semilla_normal::cargo::settings_key(&root.join("build"), semilla_normal::cargo::find_driver().ok().as_deref());
         let cache = root.join("mir").join(tree).join(format!("n0-s{settings}"));
         if !cache.join(".complete").exists() || (!marked && cache.join(crate::oracle::BUILD_CODE_FILE).exists()) {
@@ -1456,6 +1460,13 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
                 order.push(name.clone());
             }
             *count.entry(name.clone()).or_default() += 1;
+            // A configuration that Semilla added for a proof of this step (batch 5u, part C).
+            if configs.added.contains(name) {
+                match note.added.iter_mut().find(|added| added.name == *name) {
+                    Some(added) => added.steps.push(step.index),
+                    None => note.added.push(semilla_core::report::ConfigAdded { name: name.clone(), steps: vec![step.index] }),
+                }
+            }
         }
         for (name, cause) in &configs.not_checked {
             // One entry for a name and a kind of cause: it keeps the error text of the first step.
@@ -1471,6 +1482,10 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
         }
     }
     note.checked = order.into_iter().filter(|name| count.get(name) == Some(&compared)).collect();
+    // An added configuration of each compared step needs no step list.
+    for added in note.added.iter_mut().filter(|added| added.steps.len() == compared) {
+        added.steps.clear();
+    }
     note.not_covered = conditions.into_iter().collect();
     found.then_some(note)
 }

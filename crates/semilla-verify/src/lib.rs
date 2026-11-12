@@ -59,6 +59,14 @@ pub struct BodyComparison {
     /// The checked configurations in which the body is not equal, if the body is equal in a
     /// different checked configuration (batch 5s, A5). The list is empty in each other case.
     pub differs_in: Vec<String>,
+    /// The checked configurations in which the body is equal, if `differs_in` is not empty
+    /// (batch 5u, part A).
+    pub equal_in: Vec<String>,
+    /// The causes of a proof that Semilla removed (batch 5u): the body is equal in the MIR of
+    /// each checked configuration, its text has an edit, and the body depends on a build
+    /// condition that Semilla did not check. An entry has the form of an entry of `config`.
+    /// The list is the data of a note. It has no part in a decision.
+    pub stopped: Vec<String>,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
@@ -275,7 +283,28 @@ pub trait BodyOracle {
     fn facts(&self, _step: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(None)
     }
+
+    /// Sets the feature selections that the oracle adds to the checked configurations of a
+    /// step (batch 5u, part C). The list replaces the list of an earlier call. Each later
+    /// call for the step uses the configurations of the list also. False: the oracle adds no
+    /// configuration.
+    fn set_selections(&self, _step: &Step, _selections: &[Selection]) -> anyhow::Result<bool> {
+        Ok(false)
+    }
 }
+
+/// A feature selection that Semilla adds for a proof (batch 5u, part C): a build with these
+/// features is a checked configuration of the step, in the two profiles.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Selection {
+    /// True: the default features are off (`--no-default-features`).
+    pub no_default: bool,
+    /// The features of the list (`--features a,b`), in order.
+    pub features: Vec<String>,
+}
+
+/// The highest number of feature selections that Semilla adds for the proofs of one step.
+pub const MOST_SELECTIONS: usize = 4;
 
 /// One name of the expanded code of a body, by the compiler (batch 5p): an identifier after the
 /// macro expansion, with its form.
@@ -381,6 +410,8 @@ pub struct StepOutcome {
     /// For a derived identity: the derived bodies of other traits than `Debug` (serde and others).
     /// They put the identity fact in the spotlight.
     pub identity_reason: Option<String>,
+    /// The feature selections that the check added for a proof (batch 5u, part C).
+    pub selections: Vec<Selection>,
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is
@@ -400,7 +431,11 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     if !derive_edits || input.step.claims.iter().any(is_identity) {
         return plain;
     }
-    identity::derive(input, bodies, exprs, plain)
+    let outcome = identity::derive(input, bodies, exprs, plain);
+    // The search for an identity does more checks, and each check sets its own list of added
+    // configurations. The oracle must have the list of this result: the output shows it.
+    let _ = bodies.set_selections(input.step, &outcome.selections);
+    outcome
 }
 
 /// The check of one step. `derived_identity` is true when the identity claims of the step come
@@ -422,34 +457,66 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // The conditions that the checked configurations cover (batch 5s, part C). The rule of
     // the build configuration does not apply to them: the proof in each configuration is the
     // check. An error here comes again from the compare.
-    let truths = bodies.truths(step).unwrap_or_default();
-    let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
-    let atoms = cover.atoms();
-    let _cover = cfgcond::enter(cover);
-    // One run of the body check with a part of the rule on again (`cfgcond::Mode`).
-    let run = |mode: &cfgcond::Mode| -> anyhow::Result<(Vec<BodyComparison>, joint::Bodies)> {
-        cfgcond::with_mode(mode, || {
-            let opaque = joint::Recorder::new(opaque::Opaque::new(input.before, input.after));
-            let mut bodies = bodies.compare_with(step, &renames.items, &added, &opaque)?;
-            // A call `cfg!(P)` with a covered condition: its value is opaque in each proof, and
-            // each checked configuration has a proof.
-            for body in bodies.iter_mut() {
-                // A `cfg!` call has the value of the unit that expands it: the file of the body.
-                let _at = body.span.as_ref().map(|(file, _)| cfgcond::at(file));
-                body.config.retain(|text| !cfgcond::covered_call(text));
-            }
-            // The code that a `cfg` attribute selects is not in the MIR (batch 5k, A1).
-            srcconfig::apply(&mut bodies, input.before, input.after, &renames.items);
-            opaque.opaque.apply(&mut bodies, &renames.items);
-            Ok((bodies, opaque.bodies()))
-        })
+    //
+    // Batch 5u, part C. A proof can need a feature state that no checked unit has. Then the
+    // verifier asks the oracle for a configuration with this state, and it does each check
+    // again. Soundness: an added configuration is a checked configuration as each other one.
+    // Each proof must hold in it, and the joint check reads the true values of its units
+    // from the compiler. The selection is only the way to get the units: a selection that
+    // gives a different state adds a check, and the gap stays. The list starts empty in each
+    // check, so the result is a function of the two trees and the claims only.
+    let mut selections: Vec<Selection> = Vec::new();
+    let can_add = bodies.set_selections(step, &[]).unwrap_or(false);
+    let mut scope: Option<cfgcond::Scope> = None;
+    let settled = loop {
+        let truths = bodies.truths(step).unwrap_or_default();
+        let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
+        let atoms = cover.atoms();
+        match &scope {
+            Some(scope) => scope.set(cover),
+            None => scope = Some(cfgcond::enter(cover)),
+        }
+        // One run of the body check with a part of the rule on again (`cfgcond::Mode`).
+        let run = |mode: &cfgcond::Mode| -> anyhow::Result<(Vec<BodyComparison>, joint::Bodies)> {
+            cfgcond::with_mode(mode, || {
+                let opaque = joint::Recorder::new(opaque::Opaque::new(input.before, input.after));
+                let mut bodies = bodies.compare_with(step, &renames.items, &added, &opaque)?;
+                // A call `cfg!(P)` with a covered condition: its value is opaque in each proof, and
+                // each checked configuration has a proof.
+                for body in bodies.iter_mut() {
+                    // A `cfg!` call has the value of the unit that expands it: the file of the body.
+                    let _at = body.span.as_ref().map(|(file, _)| cfgcond::at(file));
+                    body.config.retain(|text| !cfgcond::covered_call(text));
+                }
+                // The code that a `cfg` attribute selects is not in the MIR (batch 5k, A1).
+                srcconfig::apply(&mut bodies, input.before, input.after, &renames.items);
+                opaque.opaque.apply(&mut bodies, &renames.items);
+                Ok((bodies, opaque.bodies()))
+            })
+        };
+        // The rule goes off for a proof only if the checked units have each valuation of the
+        // atoms of the proof (batch 5t, part B).
+        let settled = run(&cfgcond::Mode::Plain).and_then(|(plain, seen)| {
+            let joint = joint::Joint { sides: [input.before, input.after], truths: &truths, bodies: &seen, renames: &renames.items };
+            let property = step.claims.iter().any(|claim| semilla_core::ops::op(&claim.op).is_some_and(|info| info.kind == semilla_core::OpKind::Property));
+            joint.settle(plain, &atoms, property, &selections, &|mode| run(mode).map(|(bodies, _)| bodies))
+        });
+        let (bodies_now, wanted) = match settled {
+            Ok(result) => result,
+            Err(error) => break Err(error),
+        };
+        // The new selections, in the order of the bodies and of their states, to the limit.
+        let mut next = selections.clone();
+        next.extend(wanted.into_iter().take(MOST_SELECTIONS.saturating_sub(selections.len())));
+        if !can_add || next.len() == selections.len() {
+            break Ok(bodies_now);
+        }
+        match bodies.set_selections(step, &next) {
+            Ok(true) => selections = next,
+            Ok(false) => break Ok(bodies_now),
+            Err(error) => break Err(error),
+        }
     };
-    // The rule goes off for a proof only if the checked units have each valuation of the
-    // atoms of the proof (batch 5t, part B).
-    let settled = run(&cfgcond::Mode::Plain).and_then(|(plain, seen)| {
-        let joint = joint::Joint { sides: [input.before, input.after], truths: &truths, bodies: &seen, renames: &renames.items };
-        joint.settle(plain, &atoms, &|mode| run(mode).map(|(bodies, _)| bodies))
-    });
     let bodies = match settled {
         Ok(bodies) => bodies,
         Err(error) => {
@@ -845,6 +912,34 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         }
     }
 
+    // A fact whose changed bodies have a proof in only some of the checked configurations
+    // (batch 5u, part A). The fact gets a note, and it needs no reason. Soundness: the combined
+    // status of such a body is not `Equal`, so no rule makes the fact neutral from the body.
+    // The guard below keeps this true for a fact that is neutral from a different cause.
+    for fact in report.facts.iter_mut() {
+        let own = fact.at.as_ref().map(|at| at.item.clone());
+        let Some(note) = facts::config_note(fact.affected.iter().chain(own.iter()), &body_index) else { continue };
+        fact.note = Some(note);
+        if fact.class == Some(Class::Neutral) {
+            fact.class = Some(Class::Logic);
+        }
+    }
+
+    // A fact with a body whose proof Semilla removed because of a build condition, and with no
+    // spotlight for it (batch 5u): the edit does not touch the code that reads the condition.
+    // The fact gets a note with the cause. The note changes no class and no decision.
+    for fact in report.facts.iter_mut() {
+        let own = fact.at.as_ref().map(|at| at.item.clone());
+        if facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index).is_some() {
+            continue;
+        }
+        let Some(note) = facts::stop_note(fact.affected.iter().chain(own.iter()), &body_index) else { continue };
+        fact.note = Some(match fact.note.take() {
+            Some(old) => format!("{old}; {note}"),
+            None => note,
+        });
+    }
+
     // A fact with a name that has characters outside ASCII (batch 5k, D7). The name can look
     // the same as a different name, so the fact shows the escape form and needs a reason.
     for fact in report.facts.iter_mut() {
@@ -988,7 +1083,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, selections }
 }
 
 /// A derived body of a claimed type: the MIR name is `<TYPE as TRAIT>::method`, the type derives
@@ -1636,7 +1731,7 @@ pub fn verify_changeset(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), identity_reason: None });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None });
             }
         }
     }

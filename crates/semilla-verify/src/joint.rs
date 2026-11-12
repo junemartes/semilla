@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use semilla_syntax::Workspace;
 
 use crate::cfgcond::{self, Mode, Pred};
-use crate::{BodyComparison, BodyStatus, ConfigTruth, Unit};
+use crate::{BodyComparison, BodyStatus, ConfigTruth, Selection, Unit};
 
 /// The start of the gap text in the `config` list of a body.
 pub(crate) const GAP: &str = "not checked together: ";
@@ -158,6 +158,11 @@ fn show(atom: &str) -> String {
     format!("`{}`", cfgcond::show(atom))
 }
 
+/// The name of the `dev` configuration of an added selection, as `Configuration::name` gives it.
+fn selection_name(selection: &Selection) -> String {
+    format!("dev{}, features {}", if selection.no_default { ", no default features" } else { "" }, selection.features.join(","))
+}
+
 /// The name of a feature atom.
 fn feature(atom: &str) -> Option<&str> {
     atom.strip_prefix("feature=\"")?.strip_suffix('"')
@@ -263,17 +268,30 @@ impl Joint<'_> {
     /// Checks the proof of one body with the atoms `atoms`. `only`: the result of the body
     /// with the rule on for each condition that is not a condition of these atoms in these
     /// files; true if it is the plain result.
-    fn check(&self, name: &str, atoms: &BTreeSet<String>, only: &mut dyn FnMut(&BTreeSet<String>, &BTreeSet<String>) -> bool) -> Result<(), Gap> {
+    ///
+    /// `trees`: the trees with the body. A body of one tree only (an added or a deleted item)
+    /// has no second body to compare (batch 5u, part B). Then each valuation must be the
+    /// valuation of a checked unit that compiles the body in this tree: the result is a
+    /// statement about the body of this tree only.
+    ///
+    /// `missing` gets each valuation that can occur and that no checked unit has. The gap of
+    /// the result is the first of them.
+    fn check(&self, name: &str, trees: [bool; 2], atoms: &BTreeSet<String>, missing: &mut Vec<Vec<(String, bool)>>, only: &mut dyn FnMut(&BTreeSet<String>, &BTreeSet<String>) -> bool) -> Result<(), Gap> {
         if atoms.is_empty() {
             return Err(Gap::NoAtom);
         }
         if atoms.len() > LIMIT {
             return Err(Gap::Many(atoms.len()));
         }
-        let mut places = [self.places(0, &self.name_before(name)).ok_or(Gap::NoUnit)?, self.places(1, name).ok_or(Gap::NoUnit)?];
+        if trees == [false, false] {
+            return Err(Gap::NoUnit);
+        }
+        let side_places = |side: usize, name: &str| if trees[side] { self.places(side, name).ok_or(Gap::NoUnit) } else { Ok(Vec::new()) };
+        let mut places = [side_places(0, &self.name_before(name))?, side_places(1, name)?];
         let units: [Vec<&Unit>; 2] = [0, 1].map(|side| places[side].iter().flat_map(|place| place.units.iter().map(|(_, unit)| *unit)).collect());
         // One crate: each unit has the same root file.
-        let root = units[1][0].root.clone();
+        let first = if trees[1] { 1 } else { 0 };
+        let root = units[first][0].root.clone();
         if root.is_empty() || units.iter().flatten().any(|unit| unit.root != root) {
             return Err(Gap::NoUnit);
         }
@@ -288,7 +306,7 @@ impl Joint<'_> {
             all.retain(|atom| !atoms.contains(atom));
             all
         };
-        let one_place = places.iter().all(|side| side.len() == 1);
+        let one_place = (0..2).all(|side| places[side].len() == usize::from(trees[side]));
         let mut extra = outside(&places);
         if atoms.len() + extra.len() > LIMIT {
             if !one_place {
@@ -306,7 +324,7 @@ impl Joint<'_> {
         }
         let atoms: Vec<&String> = atoms.iter().collect();
         let extra: Vec<&String> = extra.iter().collect();
-        let tables = [0, 1].map(|side| feature_table(self.manifest(side, &units[side][0].package)));
+        let tables = [0, 1].map(|side| feature_table(units[side].first().and_then(|unit| self.manifest(side, &unit.package))));
         for bits in 0..(1usize << atoms.len()) {
             let values: Vec<bool> = (0..atoms.len()).map(|at| bits >> at & 1 == 1).collect();
             // The checked configurations with a unit that has these values and the body at a place.
@@ -324,56 +342,72 @@ impl Joint<'_> {
                 // The places of the body in a build with these values: no attribute is false.
                 let found = [0, 1].map(|side| places[side].iter().filter(|place| !place.own.iter().any(|pred| cfgcond::eval(pred, &cfg) == Some(false))).collect::<Vec<_>>());
                 // No tree has the body in this build, or the build cannot occur.
-                if (0..2).all(|side| table(side) || found[side].is_empty()) {
+                if (0..2).all(|side| !trees[side] || table(side) || found[side].is_empty()) {
                     continue;
                 }
                 // One checked configuration has the body at these places with these values.
-                let checked = found.iter().all(|side| !side.is_empty()) && found[0].iter().all(|before| found[1].iter().all(|after| !configs(before).is_disjoint(&configs(after))));
+                let checked = if trees == [true, true] {
+                    found.iter().all(|side| !side.is_empty()) && found[0].iter().all(|before| found[1].iter().all(|after| !configs(before).is_disjoint(&configs(after))))
+                } else {
+                    // One tree: a checked unit has the body at each place with these values.
+                    found[first].iter().all(|place| !configs(place).is_empty())
+                };
                 if !checked {
                     // One place in each tree: the atoms of `A` are the gap.
                     valuation.retain(|(atom, _)| !one_place || atoms.contains(&atom));
-                    return Err(Gap::Valuation(valuation));
+                    if !missing.contains(&valuation) {
+                        missing.push(valuation);
+                    }
                 }
             }
         }
-        Ok(())
+        match missing.first() {
+            Some(first) => Err(Gap::Valuation(first.clone())),
+            None => Ok(()),
+        }
     }
 
-    /// The text of a gap: the state that no checked unit has, and the fix.
-    fn text(&self, name: &str, gap: &Gap) -> String {
+    /// The text of a gap: the state that no checked unit has, and the fix. `added`: the
+    /// feature selections that Semilla added for this step.
+    fn text(&self, name: &str, gap: &Gap, added: &[Selection]) -> String {
         match gap {
             Gap::NoAtom | Gap::NoUnit => format!("{GAP}Semilla cannot find the build conditions of this proof"),
             Gap::Many(count) => format!("{GAP}this proof uses {count} build conditions (the limit is {LIMIT})"),
             Gap::Outside => format!("{GAP}this proof uses a build condition of a different crate, or of a file that a different crate also reads"),
             Gap::Valuation(valuation) => {
                 let state: Vec<String> = valuation.iter().map(|(atom, value)| format!("{} {}", show(atom), if *value { "on" } else { "off" })).collect();
-                let fix = self.fix(name, valuation).map(|set| format!(". Add `feature-sets = [[{set}]]` to `[workspace.metadata.semilla]`")).unwrap_or_default();
+                let selection = self.selection(name, valuation);
+                let fix = match &selection {
+                    // The added configuration is in the list, and the gap stays.
+                    Some(selection) if added.contains(selection) => format!(". Semilla added the configuration `{}` for this state. The configuration does not build before the step, or it does not give this state", selection_name(selection)),
+                    // An entry of `feature-sets` adds its features to the default features.
+                    Some(selection) if !selection.no_default => {
+                        let set: Vec<String> = selection.features.iter().map(|name| format!("\"{name}\"")).collect();
+                        format!(". Add `feature-sets = [[{}]]` to `[workspace.metadata.semilla]`", set.join(", "))
+                    }
+                    _ => String::new(),
+                };
                 format!("{GAP}{}{fix}", state.join(" with "))
             }
         }
     }
 
-    /// The `feature-sets` entry that gives a valuation: the features that are on. `None`: no
-    /// entry gives the valuation.
-    fn fix(&self, name: &str, valuation: &[(String, bool)]) -> Option<String> {
+    /// The feature selection that gives a valuation (batch 5u, part C): the features that are
+    /// on, with the default features if they set no feature that is off. `None`: no selection
+    /// of this form gives the valuation.
+    ///
+    /// The result has no part in a proof. It is the configuration that Semilla tries: the
+    /// joint check reads the true values of the units of the configuration from the compiler.
+    fn selection(&self, name: &str, valuation: &[(String, bool)]) -> Option<Selection> {
         let units = self.units(1, name)?;
         let on: Vec<&str> = valuation.iter().filter(|(_, value)| *value).filter_map(|(atom, _)| feature(atom)).collect();
         let off: Vec<&str> = valuation.iter().filter(|(_, value)| !*value).filter_map(|(atom, _)| feature(atom)).collect();
         if on.is_empty() {
             return None;
         }
-        // A checked unit of the body has this feature state: an entry does not help.
+        // A checked unit of the body has this feature state: a selection does not help.
         let features: Vec<&(String, bool)> = valuation.iter().filter(|(atom, _)| feature(atom).is_some()).collect();
         if units.iter().any(|unit| features.iter().all(|(atom, value)| unit.cfg.contains(atom) == *value)) {
-            return None;
-        }
-        // An entry adds its features to the default features.
-        let table = feature_table(self.manifest(1, &units[0].package));
-        let set = |name: &str| -> BTreeSet<String> { table.get(name).into_iter().flatten().cloned().chain([name.to_string()]).collect() };
-        let mut all = set("default");
-        all.remove("default");
-        on.iter().for_each(|name| all.extend(set(name)));
-        if off.iter().any(|name| all.contains(*name)) {
             return None;
         }
         // The other atoms: a checked unit of the body must have their values.
@@ -381,21 +415,45 @@ impl Joint<'_> {
         if !units.iter().any(|unit| other.iter().all(|(atom, value)| unit.cfg.contains(atom) == *value)) {
             return None;
         }
-        Some(on.iter().map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", "))
+        let table = feature_table(self.manifest(1, &units[0].package));
+        let set = |name: &str| -> BTreeSet<String> { table.get(name).into_iter().flatten().cloned().chain([name.to_string()]).collect() };
+        let mut listed = BTreeSet::new();
+        on.iter().for_each(|name| listed.extend(set(name)));
+        if off.iter().any(|name| listed.contains(*name)) {
+            return None;
+        }
+        // The default features stay on if they set no feature that is off.
+        let mut default = set("default");
+        default.remove("default");
+        let no_default = off.iter().any(|name| default.contains(*name));
+        Some(Selection { no_default, features: on.iter().map(|name| name.to_string()).collect() })
     }
 
     /// The result of the step. `plain`: the result with the rule off for each covered
     /// condition. `atoms`: each atom of a covered condition. `run`: the result with a part of
     /// the rule on again.
-    pub(crate) fn settle(&self, plain: Vec<BodyComparison>, atoms: &BTreeSet<String>, run: &dyn Fn(&Mode) -> anyhow::Result<Vec<BodyComparison>>) -> anyhow::Result<Vec<BodyComparison>> {
+    ///
+    /// `property`: the step has a property claim. A body that is not equal in the plain run
+    /// has no proof: each fact of the body has a class that is not `neutral`, and the reviewer
+    /// reads it. So the plain result stands for it, as in batch 5s (batch 5u, part B): a
+    /// condition that the checked units cover alone asks for no reason. This cannot make a
+    /// result "proved": the status of the body stays not equal. A property claim is a result
+    /// "proved" that does not come from an equal body, so a step with a property claim keeps
+    /// the joint check for each body.
+    ///
+    /// `added`: the feature selections that Semilla added for this step. The second part of
+    /// the result is each other selection that gives a state of a gap (batch 5u, part C), in
+    /// the order of the bodies and of their states.
+    pub(crate) fn settle(&self, plain: Vec<BodyComparison>, atoms: &BTreeSet<String>, property: bool, added: &[Selection], run: &dyn Fn(&Mode) -> anyhow::Result<Vec<BodyComparison>>) -> anyhow::Result<(Vec<BodyComparison>, Vec<Selection>)> {
         if atoms.is_empty() {
-            return Ok(plain);
+            return Ok((plain, Vec::new()));
         }
         let by_name = |bodies: Vec<BodyComparison>| -> BTreeMap<String, BodyComparison> { bodies.into_iter().map(|body| (body.name.clone(), body)).collect() };
         let strict = by_name(run(&Mode::Strict)?);
-        let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| strict.get(&body.name) != Some(body)).map(|(at, _)| at).collect();
+        let proved = |body: &BodyComparison| property || matches!(body.status, BodyStatus::Equal { .. });
+        let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| proved(body) && strict.get(&body.name) != Some(body)).map(|(at, _)| at).collect();
         if open.is_empty() {
-            return Ok(plain);
+            return Ok((plain, Vec::new()));
         }
         let mut single: Vec<(&String, BTreeMap<String, BodyComparison>)> = Vec::new();
         for atom in atoms {
@@ -403,6 +461,7 @@ impl Joint<'_> {
         }
         let mut groups: BTreeMap<(BTreeSet<String>, BTreeSet<String>), Option<BTreeMap<String, BodyComparison>>> = BTreeMap::new();
         let mut out = plain;
+        let mut wanted: Vec<Selection> = Vec::new();
         for at in open {
             let body = &out[at];
             let used: BTreeSet<String> = single.iter().filter(|(_, result)| result.get(&body.name) != Some(body)).map(|(atom, _)| (*atom).clone()).collect();
@@ -410,8 +469,15 @@ impl Joint<'_> {
                 let result = groups.entry((atoms.clone(), files.clone())).or_insert_with(|| run(&Mode::Only(atoms.clone(), files.clone())).ok().map(by_name));
                 result.as_ref().is_some_and(|result| result.get(&body.name) == Some(body))
             };
-            let Err(gap) = self.check(&body.name, &used, &mut only) else { continue };
-            let text = self.text(&body.name, &gap);
+            let trees = [body.status != BodyStatus::AfterOnly, body.status != BodyStatus::BeforeOnly];
+            let mut missing = Vec::new();
+            let Err(gap) = self.check(&body.name, trees, &used, &mut missing, &mut only) else { continue };
+            for selection in missing.iter().filter_map(|valuation| self.selection(&body.name, valuation)) {
+                if !added.contains(&selection) && !wanted.contains(&selection) {
+                    wanted.push(selection);
+                }
+            }
+            let text = self.text(&body.name, &gap, added);
             let mut body = match strict.get(&body.name) {
                 Some(body) => body.clone(),
                 None => BodyComparison { status: BodyStatus::Different { cfg_changed: true }, ..body.clone() },
@@ -419,7 +485,7 @@ impl Joint<'_> {
             body.config.push(text);
             out[at] = body;
         }
-        Ok(out)
+        Ok((out, wanted))
     }
 }
 
@@ -470,7 +536,7 @@ mod tests {
         let truths = [truths(list), truths(list)];
         let bodies = bodies(list.len());
         let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
-        joint.check(BODY, &set(atoms), &mut |_, files| files.contains(LIB))
+        joint.check(BODY, [true, true], &set(atoms), &mut Vec::new(), &mut |_, files| files.contains(LIB))
     }
 
     fn gap(valuation: &[(&str, bool)]) -> Result<(), Gap> {
@@ -532,7 +598,7 @@ mod tests {
             seen.places.insert(Some((LIB.to_string(), line)), units);
         }
         let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
-        joint.check(BODY, &set(&["fa", "fc"]), &mut |_, files| files.contains(LIB))
+        joint.check(BODY, [true, true], &set(&["fa", "fc"]), &mut Vec::new(), &mut |_, files| files.contains(LIB))
     }
 
     #[test]
@@ -577,7 +643,7 @@ mod tests {
         }
         let bodies = [BTreeMap::from([(BODY.to_string(), seen.clone())]), BTreeMap::from([(BODY.to_string(), seen)])];
         let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
-        joint.check(BODY, &set(atoms), &mut |_, files| files.contains(LIB))
+        joint.check(BODY, [true, true], &set(atoms), &mut Vec::new(), &mut |_, files| files.contains(LIB))
     }
 
     #[test]
@@ -605,11 +671,11 @@ mod tests {
         let bodies = bodies(2);
         let same = [truths(&[&[], &["fa"]]), truths(&[&[], &["fa"]])];
         let joint = Joint { sides: [&ws, &ws], truths: &same, bodies: &bodies, renames: &BTreeMap::new() };
-        assert_eq!(joint.check(BODY, &set(&["fa"]), &mut |_, _| true), Ok(()));
+        assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Ok(()));
         // The step changes the features of each configuration: no configuration has `fa` off in the two trees.
         let moved = [truths(&[&[], &["fa"]]), truths(&[&["fa"], &[]])];
         let joint = Joint { truths: &moved, ..joint };
-        assert_eq!(joint.check(BODY, &set(&["fa"]), &mut |_, _| true), gap(&[("fa", false)]));
+        assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), gap(&[("fa", false)]));
     }
 
     #[test]
@@ -623,26 +689,26 @@ mod tests {
         let seen = bodies(2);
         let joint = Joint { sides: [&ws, &ws], truths: &sides, bodies: &seen, renames: &BTreeMap::new() };
         // The proof uses a condition that the unit of the body does not evaluate.
-        assert_eq!(joint.check(BODY, &set(&["fa"]), &mut |_, _| false), Err(Gap::Outside));
+        assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| false), Err(Gap::Outside));
         // A body with no record of its units.
-        assert_eq!(joint.check("demo::none", &set(&["fa"]), &mut |_, _| true), Err(Gap::NoUnit));
+        assert_eq!(joint.check("demo::none", [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Err(Gap::NoUnit));
         // The units of the body are units of two crates.
         let mut two = sides.clone();
         two[1][1].units[0].root = "tests/it.rs".to_string();
         let joint = Joint { truths: &two, ..joint };
-        assert_eq!(joint.check(BODY, &set(&["fa"]), &mut |_, _| true), Err(Gap::NoUnit));
+        assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Err(Gap::NoUnit));
         // A unit of a different crate reads the file: the file is not a file of one crate.
         let mut shared = sides.clone();
         let other = Unit { target: "it.test".to_string(), root: "tests/it.rs".to_string(), ..shared[0][0].units[0].clone() };
         shared[0][0].units.push(other);
         let joint = Joint { truths: &shared, ..joint };
-        assert_eq!(joint.check(BODY, &set(&["fa"]), &mut |_, files| files.contains(LIB)), Err(Gap::Outside));
+        assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, files| files.contains(LIB)), Err(Gap::Outside));
     }
 
     #[test]
     fn a_proof_with_a_gap_gets_the_strict_result_and_the_gap_text() {
         let (_dir, ws) = load("fa = []\nfb = []\n");
-        let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), span: None };
+        let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None };
         let equal = |level: &str| BodyStatus::Equal { level: level.to_string(), proof: Vec::new() };
         let plain = vec![body(BODY, equal("n3")), body("demo::top", equal("n0"))];
         let stopped = vec![body(BODY, BodyStatus::Different { cfg_changed: false }), body("demo::top", equal("n0"))];
@@ -658,7 +724,7 @@ mod tests {
             let truths = [truths(list), truths(list)];
             let bodies = bodies(list.len());
             let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
-            joint.settle(plain.clone(), &set(&["fa", "fb"]), &run).unwrap()
+            joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[], &run).unwrap().0
         };
         let out = settle(&[&[], &["fa", "fb"]]);
         assert_eq!(out[0].status, BodyStatus::Different { cfg_changed: false });
@@ -672,9 +738,126 @@ mod tests {
         let bodies = bodies(1);
         let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
         runs.borrow_mut().clear();
-        assert_eq!(joint.settle(plain.clone(), &BTreeSet::new(), &run).unwrap(), plain);
+        assert_eq!(joint.settle(plain.clone(), &BTreeSet::new(), false, &[], &run).unwrap().0, plain);
         assert!(runs.borrow().is_empty());
-        assert_eq!(joint.settle(stopped.clone(), &set(&["fa"]), &run).unwrap(), stopped);
+        assert_eq!(joint.settle(stopped.clone(), &set(&["fa"]), false, &[], &run).unwrap().0, stopped);
         assert_eq!(*runs.borrow(), [Mode::Strict]);
+    }
+
+    #[test]
+    fn a_body_of_one_tree_needs_each_valuation_in_this_tree() {
+        // Batch 5u, part B: an added item has no body before the step.
+        let (_dir, ws) = load("fa = []\nfc = []\n");
+        let seen = bodies(2);
+        let after_only = [BTreeMap::new(), seen[1].clone()];
+        let full = truths(&[&["fc"], &["fa", "fc"]]);
+        let part = truths(&[&["fa", "fc"], &["fa", "fc"]]);
+        let sides = [part.clone(), full.clone()];
+        let joint = Joint { sides: [&ws, &ws], truths: &sides, bodies: &after_only, renames: &BTreeMap::new() };
+        // The tree after the step has each state. The tree before the step has no part.
+        assert_eq!(joint.check(BODY, [false, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Ok(()));
+        // The state is only in the tree with no body: the gap stays.
+        let sides = [full, part];
+        let joint = Joint { truths: &sides, ..joint };
+        let mut missing = Vec::new();
+        assert_eq!(joint.check(BODY, [false, true], &set(&["fa"]), &mut missing, &mut |_, _| true), gap(&[("fa", false)]));
+        assert_eq!(missing.len(), 1);
+        // No tree has the body: no answer.
+        assert_eq!(joint.check(BODY, [false, false], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Err(Gap::NoUnit));
+        // The check of two trees needs the record of the body in each tree.
+        assert_eq!(joint.check(BODY, [true, true], &set(&["fa"]), &mut Vec::new(), &mut |_, _| true), Err(Gap::NoUnit));
+    }
+
+    #[test]
+    fn a_body_with_no_proof_keeps_the_plain_result() {
+        // Batch 5u, part B: the body is not equal in the plain run. The rule changes only the
+        // flag of the status. The list has a gap for the two atoms.
+        let (_dir, ws) = load("fa = []\nfb = []\n");
+        let body = |status: BodyStatus| BodyComparison { name: BODY.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None };
+        let list: &[&[&str]] = &[&[], &["fa", "fb"]];
+        let truths = [truths(list), truths(list)];
+        let bodies = bodies(list.len());
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        for status in [BodyStatus::Different { cfg_changed: false }, BodyStatus::AfterOnly, BodyStatus::BeforeOnly] {
+            let plain = vec![body(status.clone())];
+            let strict = vec![body(BodyStatus::Different { cfg_changed: true })];
+            let runs = RefCell::new(Vec::new());
+            let run = |mode: &Mode| -> anyhow::Result<Vec<BodyComparison>> {
+                runs.borrow_mut().push(mode.clone());
+                Ok(if matches!(mode, Mode::Plain | Mode::Only(..)) { plain.clone() } else { strict.clone() })
+            };
+            // No property claim: the plain result stands, with no gap and no selection.
+            let (out, wanted) = joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[], &run).unwrap();
+            assert_eq!((out, wanted), (plain.clone(), Vec::new()), "{status:?}");
+            assert_eq!(*runs.borrow(), [Mode::Strict]);
+            // A property claim can make the body "proved": the joint check stays.
+            let (out, wanted) = joint.settle(plain.clone(), &set(&["fa", "fb"]), true, &[], &run).unwrap();
+            assert_eq!(out[0].status, BodyStatus::Different { cfg_changed: true }, "{status:?}");
+            assert!(out[0].config[0].starts_with(GAP), "{:?}", out[0].config);
+            assert!(!wanted.is_empty(), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn a_selection_is_the_features_that_are_on() {
+        // Batch 5u, part C.
+        let pick = |features: &str, list: &[&[&str]], valuation: &[(&str, bool)]| {
+            let (_dir, ws) = load(features);
+            let truths = [truths(list), truths(list)];
+            let bodies = bodies(list.len());
+            let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+            let valuation: Vec<(String, bool)> = valuation.iter().map(|(name, value)| (atom(name), *value)).collect();
+            joint.selection(BODY, &valuation)
+        };
+        let some = |no_default: bool, features: &[&str]| Some(Selection { no_default, features: features.iter().map(|name| name.to_string()).collect() });
+        let table = "fa = []\nfb = []\nfc = []\n";
+        let list: &[&[&str]] = &[&[], &["fa", "fb", "fc"]];
+        assert_eq!(pick(table, list, &[("fa", true), ("fb", false)]), some(false, &["fa"]));
+        assert_eq!(pick(table, list, &[("fa", true), ("fb", false), ("fc", true)]), some(false, &["fa", "fc"]));
+        // No feature is on: the build with no default features is a part of the default list.
+        assert_eq!(pick(table, list, &[("fa", false), ("fb", false)]), None);
+        // A checked unit has the state: a selection does not help.
+        assert_eq!(pick(table, &[&[], &["fa"]], &[("fa", true), ("fb", false)]), None);
+        // A feature that is on sets a feature that is off: no build has the state.
+        assert_eq!(pick("fa = [\"fb\"]\nfb = []\n", list, &[("fa", true), ("fb", false)]), None);
+        // A default feature is off: the selection has no default features.
+        assert_eq!(pick("default = [\"fb\"]\nfa = []\nfb = []\n", list, &[("fa", true), ("fb", false)]), some(true, &["fa"]));
+        assert_eq!(pick("default = [\"fc\"]\nfa = []\nfb = []\nfc = []\n", list, &[("fa", true), ("fb", false)]), some(false, &["fa"]));
+        // An atom that is not a feature: a selection cannot set it. A checked unit must have it.
+        assert_eq!(pick(table, list, &[("fa", true), ("fb", false), ("unix", true)]), None);
+        assert_eq!(pick(table, &[&["unix"], &["fa", "fb", "unix"]], &[("fa", true), ("fb", false), ("unix", true)]), some(false, &["fa"]));
+        assert_eq!(selection_name(&some(true, &["fa", "fc"]).unwrap()), "dev, no default features, features fa,fc");
+        assert_eq!(selection_name(&some(false, &["fa"]).unwrap()), "dev, features fa");
+    }
+
+    #[test]
+    fn a_gap_asks_for_each_selection_one_time() {
+        // Batch 5u, part C: the list of the selections for the caller, and the text of a gap
+        // that stays with the added configuration.
+        let (_dir, ws) = load("fa = []\nfb = []\n");
+        let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None };
+        let equal = BodyStatus::Equal { level: "n3".to_string(), proof: Vec::new() };
+        let plain = vec![body(BODY, equal)];
+        let stopped = vec![body(BODY, BodyStatus::Different { cfg_changed: false })];
+        let run = |mode: &Mode| -> anyhow::Result<Vec<BodyComparison>> {
+            Ok(match mode {
+                Mode::Plain | Mode::Only(..) => plain.clone(),
+                Mode::Strict | Mode::Without(_) => stopped.clone(),
+            })
+        };
+        let list: &[&[&str]] = &[&[], &["fa", "fb"]];
+        let truths = [truths(list), truths(list)];
+        let bodies = bodies(list.len());
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let pick = |name: &str| Selection { no_default: false, features: vec![name.to_string()] };
+        let (out, wanted) = joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[], &run).unwrap();
+        assert_eq!(wanted, [pick("fa"), pick("fb")]);
+        assert!(out[0].config[0].contains("Add `feature-sets = [[\"fa\"]]`"), "{:?}", out[0].config);
+        // The caller added the first selection, and the units did not change: the selection
+        // is not in the list again, and the text gives the cause. The body has no proof.
+        let (out, wanted) = joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[pick("fa")], &run).unwrap();
+        assert_eq!(wanted, [pick("fb")]);
+        assert_eq!(out[0].status, BodyStatus::Different { cfg_changed: false });
+        assert_eq!(out[0].config, ["not checked together: `feature = \"fa\"` on with `feature = \"fb\"` off. Semilla added the configuration `dev, features fa` for this state. The configuration does not build before the step, or it does not give this state"]);
     }
 }

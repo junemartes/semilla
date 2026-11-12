@@ -87,12 +87,18 @@ pub struct BodyIndex {
     /// The item path and the MIR name → the configurations in which a body is not equal, if
     /// the body is equal in a different checked configuration (batch 5s, A5).
     differs_in: BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// The item path and the MIR name → the configurations in which each body that is not
+    /// equal has a proof (batch 5u, part A). The set is empty if one body has no proof in each
+    /// configuration.
+    equal_in: BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// The item path and the MIR name → the causes of a removed proof (batch 5u).
+    stopped: BTreeMap<String, Vec<String>>,
     pub available: bool,
 }
 
 impl BodyIndex {
     pub fn new(bodies: &[BodyComparison], after: &Workspace, before: &Workspace) -> BodyIndex {
-        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), differs_in: BTreeMap::new(), available: !bodies.is_empty() };
+        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), differs_in: BTreeMap::new(), equal_in: BTreeMap::new(), stopped: BTreeMap::new(), available: !bodies.is_empty() };
         for body in bodies {
             index.statuses.insert(body.name.clone(), body.status.clone());
             // A body that exists only before has its span in the "before" tree.
@@ -100,6 +106,24 @@ impl BodyIndex {
             let uses_config = !body.config.is_empty() && !matches!(body.status, BodyStatus::Equal { .. });
             if uses_config {
                 index.config.entry(body.name.clone()).or_default().extend(body.config.iter().cloned());
+            }
+            if !matches!(body.status, BodyStatus::Equal { .. }) {
+                // The intersection: a configuration has a proof only if each body has one.
+                let equal: std::collections::BTreeSet<String> = body.equal_in.iter().cloned().collect();
+                for key in std::iter::once(&body.name).chain(item.iter()) {
+                    match index.equal_in.get_mut(key) {
+                        Some(old) => old.retain(|config| equal.contains(config)),
+                        None => {
+                            index.equal_in.insert(key.clone(), equal.clone());
+                        }
+                    }
+                }
+            }
+            if !body.stopped.is_empty() && !matches!(body.status, BodyStatus::Equal { .. }) {
+                for key in std::iter::once(&body.name).chain(item.iter()) {
+                    let list = index.stopped.entry(key.clone()).or_default();
+                    list.extend(body.stopped.iter().filter(|text| !list.contains(text)).cloned().collect::<Vec<_>>());
+                }
             }
             if !body.differs_in.is_empty() {
                 index.differs_in.entry(body.name.clone()).or_default().extend(body.differs_in.iter().cloned());
@@ -128,6 +152,17 @@ impl BodyIndex {
     /// is equal in a different checked configuration.
     pub fn differs_in(&self, name: &str) -> Vec<String> {
         self.differs_in.get(name).into_iter().flatten().cloned().collect()
+    }
+
+    /// The configurations in which each body of an item (or a MIR name) that is not equal has
+    /// a proof. `None`: the item has no body that is not equal.
+    pub fn equal_in(&self, name: &str) -> Option<&std::collections::BTreeSet<String>> {
+        self.equal_in.get(name)
+    }
+
+    /// The causes of a removed proof of a body of an item (or a MIR name) (batch 5u).
+    pub fn stopped(&self, name: &str) -> &[String] {
+        self.stopped.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Each changed body that reads the build configuration (the item path and the MIR name

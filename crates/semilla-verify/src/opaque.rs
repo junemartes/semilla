@@ -2765,6 +2765,20 @@ impl<'a> Opaque<'a> {
             let stop = layout || self.blocked(1, new) || old.is_some_and(|old| self.blocked(0, old));
             if stop && matches!(body.status, BodyStatus::Equal { .. }) {
                 body.status = BodyStatus::Different { cfg_changed: true };
+                // The cause, for the note of a fact with no spotlight (batch 5u): each hard
+                // name of the two texts. A stop with no hard name has a general cause.
+                let mut causes: Vec<String> = Vec::new();
+                for (side, item, names) in [(1, Some(new), &new_names), (0, old, &old_names)] {
+                    let Some(item) = item else { continue };
+                    for name in names.text.keys().chain(names.expanded.keys()) {
+                        let text = self.cause_text(side, item, name).map(|text| format!("`{name}` ({text})"));
+                        causes.extend(text.filter(|text| !causes.contains(text)));
+                    }
+                }
+                if causes.is_empty() {
+                    causes.push("code that a `cfg` attribute can change".to_string());
+                }
+                body.stopped = causes;
             }
             if matches!(body.status, BodyStatus::Equal { .. }) {
                 continue;

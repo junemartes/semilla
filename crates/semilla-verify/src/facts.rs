@@ -270,6 +270,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             sites: groups,
             content: None,
             equal_sites,
+            note: None,
         });
     }
     let mut fact_of: Vec<Option<usize>> = fact_key.into_iter().map(|key| key.and_then(|key| index_of.get(&key).copied())).collect();
@@ -1008,9 +1009,64 @@ pub(crate) const CONFIG_SPOTLIGHT: &str = "build configuration: this code depend
 /// into: the proof of the body holds only for the check configuration.
 pub(crate) const CONFIG_UNSEEN: &str = "build configuration: Semilla cannot see if this code depends on a build condition that it did not check. A proof holds only in the checked configurations.";
 
-/// The start of the spotlight text of a body that is not equal in only some of the checked
-/// configurations (batch 5s, A5).
-pub(crate) const NOT_NEUTRAL_IN: &str = "build configuration: not neutral in";
+/// The note of a fact whose changed bodies have a proof in only some of the checked
+/// configurations (batch 5u, part A), or `None`. The note is not a spotlight: the fact needs no
+/// reason. It cannot make a fact neutral: the status of such a body is not `Equal`.
+///
+/// "Proved" is the intersection: a configuration is in the list only if each body of the fact
+/// that is not equal has a proof in it. "Not proved" is the union.
+pub(crate) fn config_note<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
+    let mut proved: Option<std::collections::BTreeSet<String>> = None;
+    let mut not_proved: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for item in items {
+        let Some(equal) = body_index.equal_in(item) else { continue };
+        proved = Some(match proved {
+            Some(old) => old.intersection(equal).cloned().collect(),
+            None => equal.clone(),
+        });
+        not_proved.extend(body_index.differs_in(item));
+    }
+    let proved = proved.filter(|proved| !proved.is_empty())?;
+    if not_proved.is_empty() {
+        return None;
+    }
+    let list = |names: &std::collections::BTreeSet<String>| names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+    Some(format!("{PROVED_IN} {}; not proved in {}", list(&proved), list(&not_proved)))
+}
+
+/// The note of a fact with a body whose proof Semilla removed because of a build condition
+/// (batch 5u), or `None`. The caller gives the note only to a fact with no spotlight of the
+/// build configuration: the reader sees why an honest rewrite has no proof. The note changes
+/// no class and no decision.
+pub(crate) fn stop_note<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for item in items {
+        let causes = body_index.stopped(item);
+        if causes.is_empty() {
+            continue;
+        }
+        // The forms of the entries are the forms of `config_spotlight`.
+        let show = |text: &String| match text.strip_suffix(crate::srcconfig::UNSEEN) {
+            Some(call) => format!("`{call}` (Semilla cannot see into it)"),
+            None if text.starts_with('`') || text.starts_with("static `") || text.starts_with("code that") => text.clone(),
+            None => format!("`{text}`"),
+        };
+        let uses: Vec<String> = causes.iter().take(3).map(show).collect();
+        let more = if causes.len() > 3 { format!(" and {} more", causes.len() - 3) } else { String::new() };
+        let noun = if causes.len() == 1 { "that condition" } else { "these conditions" };
+        let part = format!("{NO_PROOF} `{item}` uses {}{more}, and Semilla did not check {noun}", uses.join(", "));
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    }
+    if parts.is_empty() { None } else { Some(parts.join("; ")) }
+}
+
+/// The start of the note of [`stop_note`].
+pub(crate) const NO_PROOF: &str = "no proof:";
+
+/// The start of the note of [`config_note`].
+pub(crate) const PROVED_IN: &str = "proved neutral in";
 
 /// The spotlight text of a name with characters outside ASCII (batch 5k, D7).
 pub(crate) const NON_ASCII: &str = "an identifier with characters outside ASCII";
@@ -1072,16 +1128,8 @@ pub(crate) fn with_ascii_forms(text: &str) -> String {
 pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
     let mut uses: Vec<String> = Vec::new();
     let mut seen = false;
-    // The configurations in which a body is not equal, if it is equal in a different one.
-    let mut partial: Vec<String> = Vec::new();
     let mut gaps: Vec<String> = Vec::new();
     for item in items {
-        for name in body_index.differs_in(item) {
-            let text = format!("`{name}`");
-            if !partial.contains(&text) {
-                partial.push(text);
-            }
-        }
         for call in body_index.config(item) {
             // The state that no checked unit has (batch 5t, part B).
             if call.starts_with(crate::joint::GAP) {
@@ -1105,9 +1153,8 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
             }
         }
     }
-    let partial = (!partial.is_empty()).then(|| format!("{NOT_NEUTRAL_IN} {} (the bodies are equal in each other checked configuration)", partial.join(", ")));
     if uses.is_empty() && gaps.is_empty() {
-        return partial;
+        return None;
     }
     let more = if uses.len() > 3 { format!(" and {} more", uses.len() - 3) } else { String::new() };
     uses.truncate(3);
@@ -1119,11 +1166,7 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
         Some(gap) => format!("; {gap}"),
         None => String::new(),
     };
-    let text = format!("{start}{uses}{gap}");
-    Some(match partial {
-        Some(partial) => format!("{partial}; {text}"),
-        None => text,
-    })
+    Some(format!("{start}{uses}{gap}"))
 }
 
 /// Why a fact needs the reviewer's attention (design 22.5, rule 4), or `None`.

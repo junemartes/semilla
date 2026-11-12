@@ -17,6 +17,17 @@
 //!    neither local. Then `p` has the same value at the use, so the use reads the same value.
 //!    `_t` has no other use, so the copy has no other effect. The N3 inliner needs this rule,
 //!    because the inlined code and the original code copy values in different places.
+//! 3c2. Forward a copy across a call (batch 5u): the same change as rule 3c when the copy is in
+//!    a block that ends with a call, and the only use of `_t` is in the return block of the
+//!    call. The conditions: `p` is a local or a field of a local, the body takes the address of
+//!    neither local, no statement between the copy and the use writes the local of `p`, the
+//!    call does not name the local of `p` or `_t` (not in the callee, not in an argument, not in
+//!    the destination), and the return block has no other predecessor (the unwind edges
+//!    count). Then each path to the use runs the copy, the call, and the start of the return
+//!    block, in this order. The callee cannot write `p`: no pointer to the local of `p` exists,
+//!    because the body does not take its address and does not move it into the call. So `p` has
+//!    the same value at the use. The source text `i < v.len()` and `v.len() > i` differ only in
+//!    the place of this copy.
 //! 3d. Forward a reference: replace each `(*r)...` with `P...` when the only assignments to the
 //!    local `r` are `r = &P` (shared or mutable) with the same place `P`, `P` is a local or
 //!    fields of a local (no deref and no index, so it names one fixed place), and each other use
@@ -26,6 +37,16 @@
 //!    rule for a callee with a `&mut` parameter: the inlined code writes through the reference,
 //!    and the original code writes the local. The aliasing model (retags, stacked borrows) is not
 //!    behavior here, as in the rest of the normalization.
+//! 3e. Use `Eq` for a branch on `Ne` (batch 5u): replace `_t = Ne(a, b); switchInt(_t) -> [0: X,
+//!    otherwise: Y]` with `_t = Eq(a, b); switchInt(_t) -> [0: Y, otherwise: X]` when the
+//!    assignment is the last statement of the block and `_t` has no other mention in the body.
+//!    The MIR operators `Eq` and `Ne` are only for the primitive types (integers, `bool`, `char`,
+//!    floats, pointers), and for each of them `Ne(a, b)` is `!Eq(a, b)`, also for a NaN. A
+//!    comparison with a `PartialEq` impl is a call, and the rule does not change a call. `_t`
+//!    is a `bool`: the switch goes to the block of 0 for `false`, and to the other block for
+//!    `true`. So the new switch goes to the same block as the old switch for each `a` and `b`,
+//!    and no other code reads `_t`. The source text `a == b` and `!(a != b)` in a condition
+//!    differ only in this operator and in the order of the two blocks.
 //! 4. Remove the blocks that the entry cannot reach.
 //! 5. Order the blocks by a depth-first walk from the entry.
 //! 6. Number the locals in the order of their first use. The return local and the arguments keep
@@ -42,8 +63,9 @@ use std::collections::HashMap;
 
 use rustc_public::mir::visit::{Location, MirVisitor, MutMirVisitor, PlaceContext};
 use rustc_public::mir::{
-    BasicBlock, BasicBlockIdx, Body, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem,
-    Rvalue, StatementKind, SwitchTargets, Terminator, TerminatorKind, UnwindAction,
+    BasicBlock, BasicBlockIdx, BinOp, Body, Local, LocalDecl, Mutability, Operand, Place,
+    ProjectionElem, Rvalue, Statement, StatementKind, SwitchTargets, Terminator, TerminatorKind,
+    UnwindAction,
 };
 
 use crate::print::Printer;
@@ -201,6 +223,7 @@ pub fn canonical_body(body: &Body) -> Body {
     skip_empty_gotos(&mut blocks);
     merge_straight_blocks(&mut blocks);
     forward_copies(&mut blocks, arg_count, body.locals().len());
+    branch_on_eq(&mut blocks, arg_count, body.locals().len());
     let blocks = order_blocks(blocks);
 
     // The visitors need a body, so build one with the original locals first.
@@ -420,9 +443,10 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
             }
         }
         let mut changed = false;
-        for block in blocks.iter_mut() {
+        for at in 0..blocks.len() {
             let mut index = 0;
-            while index < block.statements.len() {
+            while index < blocks[at].statements.len() {
+                let block = &mut blocks[at];
                 let StatementKind::Assign(
                     target,
                     Rvalue::Use(Operand::Copy(source) | Operand::Move(source), _),
@@ -443,7 +467,10 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
                     && !taken[temp]
                     && !taken[source.local]
                     && simple_source;
-                if candidate && forward_in_block(block, index, temp, &source) {
+                if candidate
+                    && (forward_in_block(block, index, temp, &source)
+                        || forward_across_call(blocks, at, index, temp, &source, local_count))
+                {
                     // The copy is gone, and the use reads `source` now: the mentions of the
                     // locals of `source` stay the same, and `temp` has no mention left. The
                     // next statement is at `index` now.
@@ -464,6 +491,80 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
 /// Returns false (and changes nothing) if the use is not in this block or if a statement between
 /// writes the local of `source`.
 fn forward_in_block(block: &mut BasicBlock, index: usize, temp: Local, source: &Place) -> bool {
+    if replace_use(block, index + 1, temp, source) {
+        block.statements.remove(index);
+        return true;
+    }
+    false
+}
+
+/// Rule 3c2: the copy at statement `index` of block `at`, with its only use in the return block
+/// of the call that ends the block. Returns false (and changes nothing) if a condition of the
+/// rule is false.
+fn forward_across_call(
+    blocks: &mut [BasicBlock],
+    at: usize,
+    index: usize,
+    temp: Local,
+    source: &Place,
+    local_count: usize,
+) -> bool {
+    let block = &blocks[at];
+    // No statement after the copy writes the local of `source`.
+    if block.statements[index + 1..].iter().any(|later| writes_local(&later.kind, source.local)) {
+        return false;
+    }
+    let TerminatorKind::Call { target: Some(target), .. } = &block.terminator.kind else {
+        return false;
+    };
+    let target = *target;
+    if target == at {
+        return false;
+    }
+    // The call names neither local: the callee gets no pointer to them, and the result goes
+    // to a different local.
+    let mut mentions = vec![0usize; local_count];
+    let call = BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+    count_mentions(&call, &mut mentions);
+    if mentions[temp] != 0 || mentions[source.local] != 0 {
+        return false;
+    }
+    // The return block has this call as its only predecessor. The unwind edges count.
+    let edges = blocks
+        .iter()
+        .flat_map(|block| {
+            let mut all = normal_successors(&block.terminator.kind);
+            if let Some(UnwindAction::Cleanup(cleanup)) = block.terminator.kind.unwind() {
+                all.push(*cleanup);
+            }
+            all
+        })
+        .filter(|successor| *successor == target)
+        .count();
+    if edges != 1 {
+        return false;
+    }
+    if replace_use(&mut blocks[target], 0, temp, source) {
+        blocks[at].statements.remove(index);
+        return true;
+    }
+    false
+}
+
+/// True if the statement writes a place of the local.
+fn writes_local(kind: &StatementKind, local: Local) -> bool {
+    match kind {
+        StatementKind::Assign(place, _) | StatementKind::SetDiscriminant { place, .. } => {
+            place.local == local
+        }
+        _ => false,
+    }
+}
+
+/// Replaces the first use of `temp` in the statements from `from`, or in the terminator, with
+/// `source`. Returns false (and changes nothing) if the use is not in this block or if a
+/// statement before the use writes the local of `source`.
+fn replace_use(block: &mut BasicBlock, from: usize, temp: Local, source: &Place) -> bool {
     struct Replace<'a> {
         temp: Local,
         source: &'a Place,
@@ -481,15 +582,9 @@ fn forward_in_block(block: &mut BasicBlock, index: usize, temp: Local, source: &
             self.super_operand(operand, location);
         }
     }
-    let writes_source = |kind: &StatementKind| match kind {
-        StatementKind::Assign(place, _) | StatementKind::SetDiscriminant { place, .. } => {
-            place.local == source.local
-        }
-        _ => false,
-    };
     // A visitor needs a block, so each statement goes into a block of its own.
     let mut replace = Replace { temp, source, done: false };
-    for later in index + 1..block.statements.len() {
+    for later in from..block.statements.len() {
         let statement = block.statements[later].clone();
         let mut single = BasicBlock {
             statements: vec![statement.clone()],
@@ -501,10 +596,9 @@ fn forward_in_block(block: &mut BasicBlock, index: usize, temp: Local, source: &
         replace.visit_basic_block(&mut single);
         if replace.done {
             block.statements[later] = single.statements.pop().expect("the block has one statement");
-            block.statements.remove(index);
             return true;
         }
-        if writes_source(&block.statements[later].kind) {
+        if writes_local(&block.statements[later].kind, source.local) {
             return false;
         }
     }
@@ -512,10 +606,47 @@ fn forward_in_block(block: &mut BasicBlock, index: usize, temp: Local, source: &
     replace.visit_basic_block(&mut single);
     if replace.done {
         block.terminator = single.terminator;
-        block.statements.remove(index);
         return true;
     }
     false
+}
+
+/// Applies rule 3e: a branch on `Ne` becomes a branch on `Eq` with the two blocks exchanged.
+fn branch_on_eq(blocks: &mut [BasicBlock], arg_count: usize, local_count: usize) {
+    let mut mentions = vec![0usize; local_count];
+    for block in blocks.iter() {
+        count_mentions(block, &mut mentions);
+    }
+    for block in blocks.iter_mut() {
+        let TerminatorKind::SwitchInt { discr: Operand::Copy(discr) | Operand::Move(discr), targets } =
+            &block.terminator.kind
+        else {
+            continue;
+        };
+        let Some(Statement { kind: StatementKind::Assign(target, Rvalue::BinaryOp(BinOp::Ne, left, right)), .. }) =
+            block.statements.last()
+        else {
+            continue;
+        };
+        // The temporary has two mentions: this assignment and the switch.
+        let temp = target.local;
+        let plain = target.projection.is_empty() && discr.projection.is_empty() && discr.local == temp;
+        if !plain || temp <= arg_count || mentions[temp] != 2 {
+            continue;
+        }
+        // The form of a branch on a `bool`: one block for 0, and one other block.
+        let branches: Vec<(u128, BasicBlockIdx)> = targets.branches().collect();
+        let [(0, on_false)] = branches[..] else { continue };
+        let on_true = targets.otherwise();
+        let (left, right, target) = (left.clone(), right.clone(), target.clone());
+        let discr = block.terminator.kind.clone();
+        let TerminatorKind::SwitchInt { discr, .. } = discr else { continue };
+        if let Some(last) = block.statements.last_mut() {
+            last.kind = StatementKind::Assign(target, Rvalue::BinaryOp(BinOp::Eq, left, right));
+        }
+        block.terminator.kind =
+            TerminatorKind::SwitchInt { discr, targets: SwitchTargets::new(vec![(0, on_true)], on_false) };
+    }
 }
 
 /// Counts the mentions of each local in a block.

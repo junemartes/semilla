@@ -609,7 +609,9 @@ pub fn fold(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>]) {
         if fact.spotlight || fact.reason.is_some() || !fact.sites.is_empty() {
             return None;
         }
-        let class = format!("{:?}", fact.class);
+        // Facts with different notes stay apart: the note of one fact is not true for the
+        // bodies of a different fact (batch 5u, part A).
+        let class = format!("{:?} {:?}", fact.class, fact.note);
         if let Some((old, new, _)) = type_change(fact) {
             let text = format!("type `{old}` → `{new}`");
             return Some((format!("type {class} {text}"), text));

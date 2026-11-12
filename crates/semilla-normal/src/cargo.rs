@@ -132,6 +132,10 @@ pub enum Features {
     All,
     /// The default features and a list (`--features a,b`). The list is sorted.
     Listed(Vec<String>),
+    /// A list with no default features (`--no-default-features --features a,b`; batch 5u,
+    /// part C). The list is sorted. Semilla adds this form for a proof that needs a state with
+    /// a default feature off.
+    NoDefaultListed(Vec<String>),
 }
 
 /// One build configuration of a check build (batch 5s, A1): a cargo profile and a feature
@@ -174,6 +178,7 @@ impl Configuration {
             Features::NoDefault => format!("{profile}, no default features"),
             Features::All => format!("{profile}, all features"),
             Features::Listed(list) => format!("{profile}, features {}", list.join(",")),
+            Features::NoDefaultListed(list) => format!("{profile}, no default features, features {}", list.join(",")),
         };
         if self.narrow { format!("{name}{}", Configuration::NARROW) } else { name }
     }
@@ -185,11 +190,12 @@ impl Configuration {
             Features::Default => String::new(),
             Features::NoDefault => "-nd".to_string(),
             Features::All => "-all".to_string(),
-            Features::Listed(list) => {
+            Features::Listed(list) | Features::NoDefaultListed(list) => {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 list.hash(&mut hasher);
-                format!("-f{:012x}", hasher.finish() & 0xffff_ffff_ffff)
+                let start = if matches!(self.features, Features::Listed(_)) { "" } else { "-nd" };
+                format!("{start}-f{:012x}", hasher.finish() & 0xffff_ffff_ffff)
             }
         };
         format!("{profile}{features}{}", if self.narrow { "-lb" } else { "" })
@@ -211,6 +217,11 @@ impl Configuration {
             Features::NoDefault => args.push("--no-default-features".to_string()),
             Features::All => args.push("--all-features".to_string()),
             Features::Listed(list) => {
+                args.push("--features".to_string());
+                args.push(list.join(","));
+            }
+            Features::NoDefaultListed(list) => {
+                args.push("--no-default-features".to_string());
                 args.push("--features".to_string());
                 args.push(list.join(","));
             }
@@ -251,8 +262,10 @@ pub fn feature_state(metadata: &serde_json::Value, features: &Features) -> std::
                     }
                 }
             }
-            Features::Listed(list) => {
-                todo.extend(default);
+            Features::Listed(list) | Features::NoDefaultListed(list) => {
+                if matches!(features, Features::Listed(_)) {
+                    todo.extend(default);
+                }
                 for feature in list {
                     // `package/feature` selects a feature of one package.
                     match feature.split_once('/') {

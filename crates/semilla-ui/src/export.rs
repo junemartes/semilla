@@ -1311,6 +1311,9 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool) -> Vec<(String
             if !fact.equal_sites.is_empty() {
                 text.push_str(&format!("; {}: {}", semilla_core::report::EQUAL_SITES, list(&fact.equal_sites)));
             }
+            if let Some(note) = &fact.note {
+                text.push_str(&format!("; note: {note}"));
+            }
             if let Some(why) = &fact.spotlight_why {
                 text.push_str(&format!("; spotlight: {why}; reason: {}", fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
             }

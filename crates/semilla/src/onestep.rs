@@ -320,6 +320,8 @@ impl App {
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
         let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("  {line}\n")).collect::<String>());
+        // A configuration that Semilla added for a proof of this step (batch 5u, part C): one line.
+        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("  {line}\n")).collect::<String>());
         if !accepted {
             // Nothing is stored. The reasons first, then the command to run again.
             let mut restore = saved;

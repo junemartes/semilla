@@ -716,6 +716,10 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
             if !fact.equal_sites.is_empty() {
                 put(&mut out, &format!("      {EQUAL_SITES}: {}", short_list(&fact.equal_sites)));
             }
+            // The note asks for no reason (batch 5u, part A).
+            if let Some(note) = &fact.note {
+                put(&mut out, &format!("      note: {note}"));
+            }
             if let Some(why) = &fact.spotlight_why {
                 match &fact.reason {
                     Some(reason) => put(&mut out, &format!("      spotlight: {why}; reason: {}", text::quoted(reason))),

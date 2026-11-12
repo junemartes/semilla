@@ -15,7 +15,7 @@ struct FakeBodies(BTreeMap<String, BodyStatus>);
 
 impl BodyOracle for FakeBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
     }
 }
 
@@ -1266,7 +1266,7 @@ struct CallBodies(Vec<(&'static str, BodyStatus, Vec<&'static str>)>);
 
 impl BodyOracle for CallBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.0.iter().map(|(name, _, callees)| BodyFacts { name: name.to_string(), callees: callees.iter().map(|c| c.to_string()).collect(), ..Default::default() }).collect()))
@@ -1528,7 +1528,7 @@ struct ExternalCalls(Vec<(&'static str, BodyStatus, Vec<&'static str>)>);
 
 impl BodyOracle for ExternalCalls {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.0.iter().map(|(name, _, calls)| BodyFacts { name: name.to_string(), externals: calls.iter().map(|c| c.to_string()).collect(), ..Default::default() }).collect()))
@@ -1814,7 +1814,7 @@ fn a_hand_written_impl_that_replaces_a_derive_is_not_neutral() {
     let (_d1, old) = load(before);
     let (_d2, new) = load(after);
     let step = step(vec![]);
-    let oracle = SpanBodies(vec![BodyComparison { name: "<demo::E as std::cmp::PartialEq>::eq".into(), span: Some(("src/lib.rs".into(), 8)), status: different(true), config: Vec::new(), differs_in: Vec::new() }]);
+    let oracle = SpanBodies(vec![BodyComparison { name: "<demo::E as std::cmp::PartialEq>::eq".into(), span: Some(("src/lib.rs".into(), 8)), status: different(true), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]);
     let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report;
     let imp = report.facts.iter().find(|f| f.part == "trait impl added").expect("an impl fact");
     assert_ne!(imp.class, Some(Class::Neutral), "{imp:#?}");
@@ -1834,7 +1834,7 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     // Invariant I1, checked on a result that a defect in the verifier could make.
     let (_d, ws) = load("pub fn g() -> u32 {\n    1\n}\n");
     let step = step(vec![]);
-    let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new() }];
+    let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }];
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
     let input = owners::Input { step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, callees: None };
@@ -1907,7 +1907,7 @@ fn run_spans(before: &[(&str, &str)], after: &[(&str, &str)], claims: Vec<Claim>
 }
 
 fn body(name: &str, file: &str, line: usize, status: BodyStatus) -> BodyComparison {
-    BodyComparison { name: name.into(), span: Some((file.into(), line)), status, config: Vec::new(), differs_in: Vec::new() }
+    BodyComparison { name: name.into(), span: Some((file.into(), line)), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }
 }
 
 #[test]
@@ -2392,7 +2392,7 @@ struct MemberBodies(Vec<(&'static str, BodyStatus, BodyFacts)>);
 
 impl BodyOracle for MemberBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.0.iter().map(|(name, _, facts)| BodyFacts { name: name.to_string(), ..facts.clone() }).collect()))
@@ -2854,7 +2854,7 @@ fn the_items_of_the_build_configuration_are_opaque_inputs() {
     assert!(!opaque.callee(true, "demo::plain", None, &["demo::Pad".to_string()]));
 
     // A body with a text edit: a hard name stops the proof. Each new use is in the list.
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
     // The call of `strict` is a node (batch 5o, A3): the driver gives the item under `cfg`,
     // and the new call makes the MIR different.
     opaque.note(true, "demo::user", None, &["cfg demo::strict".to_string()]);
@@ -3000,7 +3000,7 @@ fn the_exact_rule_uses_the_kind_and_the_scope_of_a_name() {
     // and no spotlight. A new use, or an edit in the tokens of the use, gets the spotlight.
     let (_d1, after) = load(&EXACT_SRC.replace("pub fn outside() -> u64 { Default::default() }", "pub fn outside() -> u64 { let v = Default::default(); v }").replace("pub fn pick() -> u64 { default::make() }", "pub fn pick() -> u64 { let _v = 1; default::make() }").replace("pub fn no_heap() -> usize { serialize() }", "pub fn no_heap() -> usize { default::make(); serialize() }"));
     let opaque = crate::opaque::Opaque::new(&before, &after);
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
     let mut bodies = vec![body("demo::outside", equal("n2")), body("demo::block::pick", equal("n2")), body("demo::no_heap", equal("n2"))];
     opaque.apply(&mut bodies, &BTreeMap::new());
     assert_eq!(bodies[0].status, equal("n2"));
@@ -3211,7 +3211,7 @@ fn a_name_from_a_macro_expansion_is_a_use() {
 #[test]
 fn a_name_from_an_expansion_belongs_to_its_macro_call() {
     let (_d0, before) = load(EXPANDED_SRC);
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
     let lim = |mac: &str, count: usize| [expanded("lim", Some(mac), count)];
     let edits = EXPANDED_SRC
         .replace("{ if call!() != 1 { return 0; } a }", "{ a }")
@@ -3289,7 +3289,7 @@ fn the_spotlight_rule_uses_the_token_diff() {
         .replace("{ let v = lim(); let w = a + a + a + a; v + w }", "{ let w = a + a + a + a; let v = lim(); v + w }");
     let (_d1, after) = load(&edits);
     let opaque = crate::opaque::Opaque::new(&before, &after);
-    let body = |name: &str| BodyComparison { name: name.to_string(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new() };
+    let body = |name: &str| BodyComparison { name: name.to_string(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
     let mut bodies = vec![body("demo::between"), body("demo::moved")];
     opaque.apply(&mut bodies, &BTreeMap::new());
     // The stop rule has no change: the body has a hard name, so the proof stops.
@@ -3511,7 +3511,7 @@ impl BodyOracle for StatusFacts {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
         // The span of a body is the span of its MIR facts.
         let span = |name: &str| self.1.iter().find(|facts| facts.name == name).and_then(|facts| facts.span.clone());
-        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.to_string(), span: span(name), status: status.clone(), config: Vec::new(), differs_in: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.to_string(), span: span(name), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.1.clone()))
@@ -3697,4 +3697,71 @@ fn an_effect_label_is_a_marked_hint_of_a_definite_answer() {
     // No definite answer: no label.
     let texts = facts(Effect::Equivalent);
     assert!(texts.iter().filter(|t| t.contains("effect")).count() == 1, "{texts:#?}");
+}
+
+/// A body oracle that gives each comparison as it is.
+struct Comparisons(Vec<BodyComparison>);
+
+impl BodyOracle for Comparisons {
+    fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn a_proof_in_only_some_configurations_is_a_note() {
+    // Batch 5u, part A. The body of `f` has a proof in `dev` and no proof in `release`. The
+    // fact gets a note. It has no spotlight, it needs no reason, and it is not neutral.
+    let before = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\npub fn g(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
+    let after = before.replace("let b = a;\n    b\n}\npub fn g", "a\n}\npub fn g");
+    let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    let partial = |name: &str| BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: names(&["release"]), equal_in: names(&["dev", "dev, all features"]), stopped: Vec::new() };
+    let report = run_derived_with(before, &after, &Comparisons(vec![partial("demo::f")]));
+    let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(fact.note.as_deref(), Some("proved neutral in `dev`, `dev, all features`; not proved in `release`"), "{fact:#?}");
+    assert!(report.accepted() && !fact.spotlight && fact.spotlight_why.is_none() && fact.class.is_some_and(|class| class != Class::Neutral), "{report:#?}");
+    let text = crate::views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("      note: proved neutral in `dev`") && !text.contains("neutral (proved)") && !text.contains("neutral rewrite"), "{text}");
+
+    // Negative: a fact with a second body that has no proof in each configuration gets no
+    // note. "Proved" is the intersection of the bodies of the fact.
+    let all = before.replace("    let b = a;\n    b\n", "    a\n");
+    let none = BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let report = run_derived_with(before, &all, &Comparisons(vec![partial("demo::f"), none]));
+    for fact in &report.facts {
+        let both = fact.affected.contains(&"demo::f".to_string()) && fact.affected.contains(&"demo::g".to_string());
+        let only_g = fact.affected == ["demo::g".to_string()];
+        assert!(!(both || only_g) || fact.note.is_none(), "{fact:#?}");
+        assert!(fact.class != Some(Class::Neutral), "{fact:#?}");
+    }
+    // Negative: a body with a proof in each configuration gets no note.
+    let report = run_derived_with(before, &after, &Comparisons(vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]));
+    assert!(report.facts.iter().all(|fact| fact.note.is_none()), "{report:#?}");
+}
+
+#[test]
+fn a_removed_proof_with_no_spotlight_is_a_note() {
+    // Batch 5u (an addition to part A). Semilla removed the proof of `f` because of a build
+    // condition, and the edit does not touch the code that reads the condition. The fact gets
+    // a note. It has no spotlight, it needs no reason, and it is not neutral.
+    let before = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
+    let after = before.replace("let b = a;\n    b\n", "a\n");
+    let body = |status: BodyStatus, config: &[&str], stopped: &[&str]| BodyComparison { name: "demo::f".into(), span: None, status, config: config.iter().map(|text| text.to_string()).collect(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: stopped.iter().map(|text| text.to_string()).collect() };
+    let cause = "`l0` (under `#[cfg(feature=\"fa\")]`)";
+    let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &[], &[cause, "cfg!(unix)"])]));
+    let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(fact.note.as_deref(), Some("no proof: `demo::f` uses `l0` (under `#[cfg(feature=\"fa\")]`), `cfg!(unix)`, and Semilla did not check these conditions"), "{fact:#?}");
+    assert!(report.accepted() && !fact.spotlight && fact.class.is_some_and(|class| class != Class::Neutral), "{report:#?}");
+    let text = crate::views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("      note: no proof: `demo::f` uses") && !text.contains("neutral"), "{text}");
+    // Negative: a body with a spotlight of the build configuration has the spotlight only.
+    let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &["cfg!(unix)"], &[cause])]));
+    let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(fact.spotlight && fact.note.is_none() && !report.accepted(), "{fact:#?}");
+    // Negative: the data of the note has no part in a decision. A body that is equal keeps
+    // its proof and gets no note.
+    let report = run_derived_with(before, &after, &Comparisons(vec![body(equal("n2"), &[], &[cause])]));
+    assert!(report.facts.iter().all(|fact| fact.note.is_none()) && report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{report:#?}");
+    let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &[], &[])]));
+    assert!(report.facts.iter().all(|fact| fact.note.is_none() && fact.class != Some(Class::Neutral)), "{report:#?}");
 }

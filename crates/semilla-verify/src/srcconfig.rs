@@ -394,6 +394,13 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
         // configuration is not a proof for each build.
         if equal {
             body.status = BodyStatus::Different { cfg_changed: true };
+            // The cause, for the note of a fact with no spotlight (batch 5u).
+            let causes = found.config.iter().cloned().chain(found.unseen.iter().map(|text| format!("{text}{UNSEEN}")));
+            for text in causes {
+                if !body.stopped.contains(&text) {
+                    body.stopped.push(text);
+                }
+            }
         }
         // The spotlight is only for a use in the changed statements. A body that is different
         // in the MIR: the reader reads the edit. Only the uses that Semilla sees get the
