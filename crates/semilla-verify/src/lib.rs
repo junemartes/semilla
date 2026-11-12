@@ -11,6 +11,7 @@
 //!
 //! The change set check adds the group and subgroup rules, and the score.
 
+pub mod cfgcond;
 pub mod checks;
 pub mod edits;
 pub mod facts;
@@ -20,6 +21,7 @@ pub mod identity;
 pub mod organize;
 pub mod owners;
 pub mod scope;
+mod joint;
 mod opaque;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
@@ -54,6 +56,37 @@ pub struct BodyComparison {
     /// The uses of the build configuration in the body, on the two sides: the text of each
     /// macro call that reads it (`cfg!(debug_assertions)`).
     pub config: Vec<String>,
+    /// The checked configurations in which the body is not equal, if the body is equal in a
+    /// different checked configuration (batch 5s, A5). The list is empty in each other case.
+    pub differs_in: Vec<String>,
+}
+
+/// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Unit {
+    /// The name of the unit. Each body record of the unit has it as its target.
+    pub target: String,
+    /// The folder of the package (relative to the workspace root).
+    pub package: String,
+    /// Each true `cfg` name (`unix`) and each true pair (`feature="std"`).
+    pub cfg: BTreeSet<String>,
+    /// Each source file that the unit reads (relative to the workspace root).
+    pub files: BTreeSet<String>,
+    /// The root file of the crate of the unit. Two units with one root are one crate in two
+    /// builds, for example a library and its test build.
+    pub root: String,
+}
+
+/// The true settings of one checked build configuration, by the compiler (batch 5s, B2;
+/// batch 5t, part A).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConfigTruth {
+    /// The name of the configuration, for example `release, all features`.
+    pub name: String,
+    /// Each compile unit of the build.
+    pub units: Vec<Unit>,
+    /// False if a record file of the build has no unit record. Then no condition is covered.
+    pub known: bool,
 }
 
 /// The MIR facts of one body after a step, for the property claims.
@@ -232,6 +265,12 @@ pub trait BodyOracle {
         Vec::new()
     }
 
+    /// The checked configurations of the tree before the step and of the tree after it (batch
+    /// 5s), with the features and the profile of each package. Empty: no body check.
+    fn truths(&self, _step: &Step) -> anyhow::Result<[Vec<ConfigTruth>; 2]> {
+        Ok(Default::default())
+    }
+
     /// The MIR facts of the bodies after a step. `None` when the MIR is not available (phase 1).
     fn facts(&self, _step: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(None)
@@ -281,6 +320,11 @@ pub trait OpaqueInputs {
     /// a field set, or an `impl` that the build configuration selects, or an item under
     /// `cfg`.
     fn layout(&self, after: bool, name: &str, span: Option<&(String, usize)>, types: &[String]) -> bool;
+
+    /// Keeps the unit of one body record (batch 5t, part B): the checked configuration `config`
+    /// (its index in the list of `BodyOracle::truths`) has a record of the body `name` in the
+    /// unit `target`. The caller gives each N0 record of the two trees.
+    fn body(&self, _after: bool, _name: &str, _span: Option<&(String, usize)>, _config: usize, _target: &str) {}
 }
 
 /// The result of an SMT check on a condition.
@@ -375,17 +419,44 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // The MIR names the members of a type by their paths (`k::Pair.a`, `k::Kind::Small`), so the
     // rename map of the items also maps the renamed fields and variants (batch 5e).
     // The inputs of a proof that the build configuration selects (batch 5l).
-    let opaque = opaque::Opaque::new(input.before, input.after);
-    let mut bodies = match bodies.compare_with(step, &renames.items, &added, &opaque) {
+    // The conditions that the checked configurations cover (batch 5s, part C). The rule of
+    // the build configuration does not apply to them: the proof in each configuration is the
+    // check. An error here comes again from the compare.
+    let truths = bodies.truths(step).unwrap_or_default();
+    let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
+    let atoms = cover.atoms();
+    let _cover = cfgcond::enter(cover);
+    // One run of the body check with a part of the rule on again (`cfgcond::Mode`).
+    let run = |mode: &cfgcond::Mode| -> anyhow::Result<(Vec<BodyComparison>, joint::Bodies)> {
+        cfgcond::with_mode(mode, || {
+            let opaque = joint::Recorder::new(opaque::Opaque::new(input.before, input.after));
+            let mut bodies = bodies.compare_with(step, &renames.items, &added, &opaque)?;
+            // A call `cfg!(P)` with a covered condition: its value is opaque in each proof, and
+            // each checked configuration has a proof.
+            for body in bodies.iter_mut() {
+                // A `cfg!` call has the value of the unit that expands it: the file of the body.
+                let _at = body.span.as_ref().map(|(file, _)| cfgcond::at(file));
+                body.config.retain(|text| !cfgcond::covered_call(text));
+            }
+            // The code that a `cfg` attribute selects is not in the MIR (batch 5k, A1).
+            srcconfig::apply(&mut bodies, input.before, input.after, &renames.items);
+            opaque.opaque.apply(&mut bodies, &renames.items);
+            Ok((bodies, opaque.bodies()))
+        })
+    };
+    // The rule goes off for a proof only if the checked units have each valuation of the
+    // atoms of the proof (batch 5t, part B).
+    let settled = run(&cfgcond::Mode::Plain).and_then(|(plain, seen)| {
+        let joint = joint::Joint { sides: [input.before, input.after], truths: &truths, bodies: &seen, renames: &renames.items };
+        joint.settle(plain, &atoms, &|mode| run(mode).map(|(bodies, _)| bodies))
+    });
+    let bodies = match settled {
         Ok(bodies) => bodies,
         Err(error) => {
             report.errors.push(format!("the body check failed: {error:#}"));
             Vec::new()
         }
     };
-    // The code that a `cfg` attribute selects is not in the MIR (batch 5k, A1).
-    srcconfig::apply(&mut bodies, input.before, input.after, &renames.items);
-    opaque.apply(&mut bodies, &renames.items);
     let body_index = checks::BodyIndex::new(&bodies, input.after, input.before);
 
     // The data of the property claims: the local calls (syntax), and the MIR facts (phase 2).

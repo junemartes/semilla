@@ -30,7 +30,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use cargo::{run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_features};
+pub use cargo::{Configuration, Features, run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_config, run_cargo_check_delta_features};
 
 /// A call to a function of another crate (design 10.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,10 +210,42 @@ pub struct BodyComparison {
     pub config: Vec<String>,
 }
 
-/// Parses the JSON lines of the driver.
+/// The record of one compile unit, from the compiler (batch 5t, part A). The driver writes it
+/// as the first line of each record file.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitRecord {
+    /// The name of the unit: the stem of the record file. Each body record has it as `target`.
+    pub target: String,
+    /// The name of the package.
+    #[serde(default)]
+    pub package: String,
+    /// The folder of the package, relative to the workspace root.
+    #[serde(default)]
+    pub folder: String,
+    /// Each true `cfg` name (`unix`) and each true pair (`feature="std"`).
+    pub cfg: BTreeSet<String>,
+    /// Each source file of the crate that the compiler read, relative to the workspace root.
+    pub files: BTreeSet<String>,
+    /// The root file of the crate, relative to the workspace root.
+    #[serde(default)]
+    pub root: String,
+    /// The target triple.
+    #[serde(default)]
+    pub triple: String,
+}
+
+#[derive(Deserialize)]
+struct UnitLine {
+    unit: UnitRecord,
+}
+
+/// The start of the line of a unit record.
+const UNIT_LINE: &str = "{\"unit\":";
+
+/// Parses the JSON lines of the driver. The line of the unit record is not a body record.
 pub fn parse_records(text: &str) -> Result<Vec<BodyRecord>> {
     text.lines()
-        .filter(|line| !line.trim().is_empty())
+        .filter(|line| !line.trim().is_empty() && !line.starts_with(UNIT_LINE))
         .enumerate()
         .map(|(number, line)| {
             serde_json::from_str(line)
@@ -237,6 +269,29 @@ pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
         records.extend(parse_records(&text).with_context(|| format!("in {}", file.display()))?);
     }
     Ok(records)
+}
+
+/// Reads the unit record of each `*.jsonl` file in a folder (in name order). `None`: a file has
+/// no unit record, so the units of the folder are not known.
+pub fn read_units(dir: &Path) -> Option<Vec<UnitRecord>> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+        .collect();
+    files.sort();
+    let mut units = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).ok()?;
+        let line = text.lines().find(|line| line.starts_with(UNIT_LINE))?;
+        let mut unit = serde_json::from_str::<UnitLine>(line).ok()?.unit;
+        // The name of the file is the name of the unit, also for a file that a caller copied.
+        if let Some(stem) = file.file_stem() {
+            unit.target = stem.to_string_lossy().into_owned();
+        }
+        units.push(unit);
+    }
+    Some(units)
 }
 
 /// Groups records by their level.

@@ -369,8 +369,61 @@ impl Printer {
                 self.config.extend(source.config_line());
                 source.suffix().unwrap_or_else(|| format!(" @{}", unique("config_value")))
             }
-            Some(None) => format!(" @{}", unique("config_value")),
+            Some(None) => self.origin_mark(span),
         }
+    }
+
+    /// The mark of an opaque value whose span gives no source (batch 5s, part E): the
+    /// computation of the value. For a promoted constant, this is the printed MIR of its body,
+    /// with the opaque parts of that body. For a named constant, this is its def path. The mark
+    /// has no counter, no process number, and no time, so it is the same in each build of the
+    /// same code. Two values with the same mark have the same computation.
+    ///
+    /// The mark stays different from each other text if the printer cannot see the computation:
+    /// no origin for the span, two different origins at one span, or a promoted body that the
+    /// printer cannot print.
+    fn origin_mark(&mut self, span: rustc_public::ty::Span) -> String {
+        use crate::config::Origin;
+        let origins = rustc_middle::ty::tls::with(|tcx| crate::config::span_origins(rustc_internal::internal(tcx, span)));
+        let mut texts: Vec<Option<String>> = Vec::new();
+        for origin in &origins {
+            let text = match origin {
+                Origin::Promoted(def_id, index) => self.promoted_text(*def_id, *index).map(|text| {
+                    // One line: other code reads the text of a body line by line.
+                    let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+                    format!("promoted {{ {} }}", lines.join(" | "))
+                }),
+                Origin::Named(path) => Some(path.clone()),
+                Origin::Hidden => None,
+            };
+            if !texts.contains(&text) {
+                texts.push(text);
+            }
+        }
+        match texts.as_slice() {
+            [Some(text)] if !text.contains("unknown_") => format!(" @{text}"),
+            _ => format!(" @{}", unique("config_value")),
+        }
+    }
+
+    /// The canonical text of promoted constant `index` of the body `def_id` (see `promoted_body`).
+    fn promoted_text(&mut self, def_id: rustc_span::def_id::DefId, index: u32) -> Option<String> {
+        if self.promoted_depth >= MAX_PROMOTED_DEPTH {
+            return None;
+        }
+        let body = rustc_middle::ty::tls::with(|tcx| {
+            if !tcx.is_mir_available(def_id) {
+                return None;
+            }
+            let promoted = tcx.promoted_mir(def_id);
+            let body = promoted.get(rustc_middle::mir::Promoted::from_u32(index))?;
+            Some(rustc_internal::stable(body))
+        })?;
+        let canonical = crate::normalize::canonical_body(&body);
+        self.promoted_depth += 1;
+        let text = self.body(&canonical);
+        self.promoted_depth -= 1;
+        Some(text)
     }
 
     fn statement(&mut self, kind: &StatementKind) -> String {
@@ -867,23 +920,8 @@ impl Printer {
     /// Returns the canonical text of a promoted constant body: promoted `index` of the body of
     /// `def`. It reads the MIR from rustc, and uses the same N0 rules as for a normal body.
     fn promoted_body(&mut self, def: &ConstDef, index: Promoted) -> Option<String> {
-        if self.promoted_depth >= MAX_PROMOTED_DEPTH {
-            return None;
-        }
-        let body = rustc_middle::ty::tls::with(|tcx| {
-            let def_id = rustc_internal::internal(tcx, def.def_id());
-            if !tcx.is_mir_available(def_id) {
-                return None;
-            }
-            let promoted = tcx.promoted_mir(def_id);
-            let body = promoted.get(rustc_middle::mir::Promoted::from_u32(index))?;
-            Some(rustc_internal::stable(body))
-        })?;
-        let canonical = crate::normalize::canonical_body(&body);
-        self.promoted_depth += 1;
-        let text = self.body(&canonical);
-        self.promoted_depth -= 1;
-        Some(text)
+        let def_id = rustc_middle::ty::tls::with(|tcx| rustc_internal::internal(tcx, def.def_id()));
+        self.promoted_text(def_id, index)
     }
 
     pub fn ty_const(&mut self, constant: &TyConst) -> String {

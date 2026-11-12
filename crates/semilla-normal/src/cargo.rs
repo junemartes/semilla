@@ -109,6 +109,171 @@ pub fn sysroot_lib(toolchain: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(sysroot.trim()).join("lib"))
 }
 
+/// The target triple of the check build: the host of the toolchain. The check build gives no
+/// `--target` to cargo. The answer is empty if `rustc` does not run.
+pub fn host_target() -> String {
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| {
+        let output = Command::new("rustc").arg("-vV").env("RUSTUP_TOOLCHAIN", toolchain()).output();
+        let text = output.map(|output| String::from_utf8_lossy(&output.stdout).to_string()).unwrap_or_default();
+        text.lines().find_map(|line| line.strip_prefix("host: ")).unwrap_or("").trim().to_string()
+    })
+    .clone()
+}
+
+/// The feature selection of a build configuration (design 8.12).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Features {
+    /// The default features of each package.
+    Default,
+    /// `--no-default-features`.
+    NoDefault,
+    /// `--all-features`.
+    All,
+    /// The default features and a list (`--features a,b`). The list is sorted.
+    Listed(Vec<String>),
+}
+
+/// One build configuration of a check build (batch 5s, A1): a cargo profile and a feature
+/// selection, for the target of this machine.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Configuration {
+    /// True for the `release` profile of the workspace. False for the `dev` profile.
+    pub release: bool,
+    pub features: Features,
+    /// True for the smaller build (batch 5t, part C): the libraries and the binaries only
+    /// (`--lib --bins`). False for the build of each target (`--all-targets`). Semilla uses
+    /// the smaller build only if the build of each target fails before the step.
+    pub narrow: bool,
+}
+
+impl Configuration {
+    /// The `dev` profile with the default features.
+    pub const DEV: Configuration = Configuration { release: false, features: Features::Default, narrow: false };
+
+    /// The end of the name of a smaller build.
+    pub const NARROW: &'static str = " (libraries and binaries only)";
+
+    /// A configuration with the build of each target.
+    pub fn new(release: bool, features: Features) -> Configuration {
+        Configuration { release, features, narrow: false }
+    }
+
+    /// The smaller build of this configuration: the libraries and the binaries only.
+    pub fn narrowed(&self) -> Configuration {
+        Configuration { narrow: true, ..self.clone() }
+    }
+
+    /// The short fixed name: `dev`, `release`, `dev, no default features`,
+    /// `release, all features`, `dev, features a,b`. The name of a smaller build ends with
+    /// [`Configuration::NARROW`].
+    pub fn name(&self) -> String {
+        let profile = if self.release { "release" } else { "dev" };
+        let name = match &self.features {
+            Features::Default => profile.to_string(),
+            Features::NoDefault => format!("{profile}, no default features"),
+            Features::All => format!("{profile}, all features"),
+            Features::Listed(list) => format!("{profile}, features {}", list.join(",")),
+        };
+        if self.narrow { format!("{name}{}", Configuration::NARROW) } else { name }
+    }
+
+    /// The suffix of each folder name of the configuration. It is empty for `dev`.
+    pub fn suffix(&self) -> String {
+        let profile = if self.release { "-release" } else { "" };
+        let features = match &self.features {
+            Features::Default => String::new(),
+            Features::NoDefault => "-nd".to_string(),
+            Features::All => "-all".to_string(),
+            Features::Listed(list) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                list.hash(&mut hasher);
+                format!("-f{:012x}", hasher.finish() & 0xffff_ffff_ffff)
+            }
+        };
+        format!("{profile}{features}{}", if self.narrow { "-lb" } else { "" })
+    }
+
+    /// The cargo arguments that select the targets of the build.
+    pub fn target_args(&self) -> &'static [&'static str] {
+        if self.narrow { &["--lib", "--bins"] } else { &["--all-targets"] }
+    }
+
+    /// The cargo arguments that select the configuration.
+    pub fn cargo_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.release {
+            args.push("--release".to_string());
+        }
+        match &self.features {
+            Features::Default => {}
+            Features::NoDefault => args.push("--no-default-features".to_string()),
+            Features::All => args.push("--all-features".to_string()),
+            Features::Listed(list) => {
+                args.push("--features".to_string());
+                args.push(list.join(","));
+            }
+        }
+        args
+    }
+}
+
+/// The feature state of each workspace package for a feature selection, by the manifests
+/// (`cargo metadata --no-deps`): the features of the selection, and each feature that they
+/// name in the feature table of the package.
+///
+/// Two selections with the same state give the same build: cargo computes each feature of the
+/// build from this state and the manifests. So Semilla checks only one of them (batch 5s, A2).
+pub fn feature_state(metadata: &serde_json::Value, features: &Features) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let mut state = std::collections::BTreeMap::new();
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        let name = package["name"].as_str().unwrap_or("").to_string();
+        let table: std::collections::BTreeMap<&str, Vec<&str>> = package["features"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(key, value)| (key.as_str(), value.as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect()))
+            .collect();
+        let mut on: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut todo: Vec<String> = Vec::new();
+        let default = table.contains_key("default").then(|| "default".to_string());
+        match features {
+            Features::Default => todo.extend(default),
+            Features::NoDefault => {}
+            Features::All => {
+                todo.extend(table.keys().map(|key| key.to_string()));
+                // An optional dependency is a feature, also when the table does not list it.
+                for dependency in package["dependencies"].as_array().into_iter().flatten() {
+                    if dependency["optional"].as_bool() == Some(true) {
+                        let name = dependency["rename"].as_str().or(dependency["name"].as_str()).unwrap_or("");
+                        todo.push(format!("dep:{name}"));
+                    }
+                }
+            }
+            Features::Listed(list) => {
+                todo.extend(default);
+                for feature in list {
+                    // `package/feature` selects a feature of one package.
+                    match feature.split_once('/') {
+                        Some((package, feature)) if package == name => todo.push(feature.to_string()),
+                        Some(_) => todo.push(feature.clone()),
+                        None if table.contains_key(feature.as_str()) => todo.push(feature.clone()),
+                        None => {}
+                    }
+                }
+            }
+        }
+        while let Some(feature) = todo.pop() {
+            if on.insert(feature.clone()) {
+                todo.extend(table.get(feature.as_str()).into_iter().flatten().map(|f| f.to_string()));
+            }
+        }
+        state.insert(name, on);
+    }
+    state
+}
+
 /// Runs `cargo check --workspace --all-targets` on `workspace` with the driver as
 /// `RUSTC_WORKSPACE_WRAPPER`. The driver writes one `.jsonl` file of records for each compiled
 /// target to `out`. Each call compiles all workspace crates again (a new `SEMILLA_MIR_RUN`
@@ -120,7 +285,7 @@ pub fn run_cargo_check(workspace: &Path, level: &str, out: &Path, target_dir: &P
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
     );
-    run_check(workspace, level, out, target_dir, &nonce, false, &[]).map(|_| ())
+    run_check(workspace, level, out, target_dir, &nonce, false, &Configuration::DEV).map(|_| ())
 }
 
 /// Runs `cargo check` for a delta build: `workspace` is a fixed build folder that changes only by
@@ -144,11 +309,24 @@ pub fn run_cargo_check_delta_features(
     target_dir: &Path,
     features: &[String],
 ) -> Result<()> {
+    let features = if features.is_empty() { Features::Default } else { Features::Listed(features.to_vec()) };
+    run_cargo_check_delta_config(workspace, level, out, target_dir, &Configuration::new(false, features))
+}
+
+/// [`run_cargo_check_delta`] for one build configuration. Use one build folder, one target
+/// folder, and one records folder for each configuration.
+pub fn run_cargo_check_delta_config(
+    workspace: &Path,
+    level: &str,
+    out: &Path,
+    target_dir: &Path,
+    config: &Configuration,
+) -> Result<()> {
     let driver = find_driver()?;
     let meta = std::fs::metadata(&driver)?;
     let modified = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
     let fingerprint = format!("driver-{}-{modified}", meta.len());
-    let units = run_check(workspace, level, out, target_dir, &fingerprint, true, features)?;
+    let units = run_check(workspace, level, out, target_dir, &fingerprint, true, config)?;
     for entry in std::fs::read_dir(out)? {
         let path = entry?.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -375,8 +553,30 @@ fn run_check(
     target_dir: &Path,
     nonce: &str,
     json: bool,
-    features: &[String],
+    config: &Configuration,
 ) -> Result<std::collections::BTreeSet<String>> {
+    let stdout = run_check_command(workspace, level, out, target_dir, nonce, if json { Mode::Json } else { Mode::Plain }, config)?;
+    Ok(unit_hashes(&stdout))
+}
+
+/// The output mode of the cargo command of a check build.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Plain,
+    /// `--message-format=json`.
+    Json,
+}
+
+/// Runs the cargo command of a check build, and returns its standard output.
+fn run_check_command(
+    workspace: &Path,
+    level: &str,
+    out: &Path,
+    target_dir: &Path,
+    nonce: &str,
+    mode: Mode,
+    config: &Configuration,
+) -> Result<String> {
     if !matches!(level, "n0" | "n2" | "n3") {
         bail!("unknown level {level:?}: use n0, n2, or n3");
     }
@@ -398,13 +598,13 @@ fn run_check(
     // flag, cargo tries to update the registry for a tree with no lock file (a library that
     // ignores `Cargo.lock`), and the build fails. With the flag, cargo uses the packages in the
     // cargo cache of this machine.
-    command.args(["check", "--workspace", "--all-targets", "--quiet", "--offline"]);
-    if json {
-        command.arg("--message-format=json");
+    command.args(["check", "--workspace", "--quiet", "--offline"]);
+    command.args(config.target_args());
+    match mode {
+        Mode::Plain => {}
+        Mode::Json => drop(command.arg("--message-format=json")),
     }
-    if !features.is_empty() {
-        command.arg("--features").arg(features.join(","));
-    }
+    command.args(config.cargo_args());
     command
         .arg("--target-dir")
         .arg(target_dir)
@@ -461,14 +661,15 @@ fn run_check(
         // A write that the sandbox stops shows as "Permission denied".
         // A dependency that cargo cannot get is not a defect of the code of the tree.
         if missing_dependency(&text) {
-            bail!("cargo cannot get a dependency for the check build in {} (level {level}):\n{text}\n\n{MISSING_DEPENDENCY}", workspace.display());
+            bail!("cargo cannot get a dependency for the check build in {} (level {level}, configuration `{}`):\n{text}\n\n{MISSING_DEPENDENCY}", workspace.display(), config.name());
         }
         let hint = if crate::sandbox::problem().is_none() && text.contains("Permission denied") {
             "\n\nThe check build runs in a sandbox: it can write only its build folder, and it does not download. Possible causes: a dependency is not in the cargo cache of this machine (run `cargo fetch` in the repository); `Cargo.lock` does not agree with a manifest (update it, and put it in the step); a build script or a proc macro writes a file outside `OUT_DIR`."
         } else {
             ""
         };
-        bail!("cargo check failed in {} (level {level}); the body check builds all targets, so the test code must compile too:\n{text}{hint}", workspace.display());
+        let targets = if config.narrow { "the body check builds the libraries and the binaries" } else { "the body check builds all targets, so the test code must compile too" };
+        bail!("cargo check failed in {} (level {level}, configuration `{}`); {targets}:\n{text}{hint}", workspace.display(), config.name());
     }
-    Ok(unit_hashes(&String::from_utf8_lossy(&output.stdout)))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

@@ -171,6 +171,10 @@ fn derive_known(name: &str) -> bool {
 pub(crate) enum Attr {
     /// `cfg`, or a `cfg_attr` with a content that can change the behavior.
     Select,
+    /// A `cfg`, or a `cfg_attr` with a content of the allow list or a `derive`, with a
+    /// condition that the checked configurations cover (batch 5s, part C). The proof in each
+    /// checked configuration is the check of the code that the attribute selects.
+    Covered,
     /// A `cfg_attr` with a content of the allow list.
     Free,
     /// A `cfg_attr` with `derive` of these traits and no other content that can change the
@@ -200,7 +204,10 @@ pub(crate) fn attr_kind(content: TokenStream) -> Option<Attr> {
         return None;
     }
     match name.to_string().as_str() {
-        "cfg" => Some(Attr::Select),
+        "cfg" => Some(match trees.get(1) {
+            Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis && crate::cfgcond::covered(group.stream()) => Attr::Covered,
+            _ => Attr::Select,
+        }),
         "cfg_attr" => {
             let Some(TokenTree::Group(group)) = trees.get(1) else { return Some(Attr::Select) };
             let mut parts: Vec<Vec<TokenTree>> = vec![Vec::new()];
@@ -245,7 +252,16 @@ pub(crate) fn attr_kind(content: TokenStream) -> Option<Attr> {
                 }
                 return Some(Attr::Select);
             }
-            Some(if derives.is_empty() { Attr::Free } else { Attr::Derive(derives) })
+            // A content that Semilla does not know stays `Select` above: it can be a `cfg` with
+            // a condition that is not covered.
+            let condition: TokenStream = parts.first().cloned().unwrap_or_default().into_iter().collect();
+            Some(if crate::cfgcond::covered(condition) {
+                Attr::Covered
+            } else if derives.is_empty() {
+                Attr::Free
+            } else {
+                Attr::Derive(derives)
+            })
         }
         _ => None,
     }
@@ -255,6 +271,7 @@ pub(crate) fn attr_kind(content: TokenStream) -> Option<Attr> {
 /// different attribute can be a macro: it can change the signature of a function, or
 /// remove the function.
 fn plain_attrs(item: &Item) -> bool {
+    let _at = crate::cfgcond::at(&item.file);
     item.attrs.iter().all(|attr| {
         let Ok(stream) = attr.parse::<TokenStream>() else { return false };
         let Some(group) = stream.into_iter().find_map(|tree| match tree {
@@ -266,7 +283,7 @@ fn plain_attrs(item: &Item) -> bool {
         let first = group.stream().into_iter().next().map(|tree| tree.to_string()).unwrap_or_default();
         match attr_kind(group.stream()) {
             Some(Attr::Free) => true,
-            Some(Attr::Select) => first == "cfg",
+            Some(Attr::Select) | Some(Attr::Covered) => first == "cfg",
             Some(Attr::Derive(_)) => false,
             None => first == "doc" || CFG_ATTR_FREE.contains(&first.as_str()),
         }
@@ -594,12 +611,13 @@ fn anchor(ty: &syn::Type, shadow: &BTreeSet<String>) -> bool {
 
 fn selects(attrs: &[syn::Attribute]) -> bool {
     use quote::ToTokens;
-    attrs.iter().any(|attr| attr_of(&attr.to_token_stream().to_string()).is_some())
+    attrs.iter().any(|attr| attr_of(&attr.to_token_stream().to_string()).is_some_and(|kind| !matches!(kind, Attr::Covered)))
 }
 
 /// The fields of a struct or an enum: for each one, true if the field or its variant is
 /// below `cfg`, and the type. Then the count of the variants with no `cfg` (1 for a struct).
 fn fields_of(item: &Item) -> Option<(Vec<(bool, syn::Type)>, usize, bool)> {
+    let _at = crate::cfgcond::at(&item.file);
     let mut out = Vec::new();
     let mut add = |fields: &syn::Fields, below: bool| {
         for field in fields {
@@ -698,11 +716,12 @@ fn selects_any<'t>(attrs: impl IntoIterator<Item = &'t String>, derive_ok: bool,
     attrs.into_iter().any(|attr| match attr_of(attr) {
         Some(Attr::Select) => true,
         Some(Attr::Derive(names)) => !derive_ok || names.iter().any(|name| !derive_known(name) || hidden(name)),
-        Some(Attr::Free) | None => false,
+        Some(Attr::Free) | Some(Attr::Covered) | None => false,
     })
 }
 
 fn own_cfg(item: &Item, shadow: &Shadow) -> bool {
+    let _at = crate::cfgcond::at(&item.file);
     selects_any(&item.attrs, matches!(item.kind, ItemKind::Struct | ItemKind::Enum), &|name| shadow.hides(item, name))
 }
 
@@ -1024,6 +1043,7 @@ fn derived(item: &Item, shadow: &Shadow) -> Vec<String> {
     if own_cfg(item, shadow) {
         return Vec::new();
     }
+    let _at = crate::cfgcond::at(&item.file);
     item.attrs.iter().filter_map(|attr| if let Some(Attr::Derive(names)) = attr_of(attr) { Some(names) } else { None }).flatten().collect()
 }
 
@@ -1352,6 +1372,10 @@ pub(crate) struct Opaque<'a> {
     type_uses: RefCell<[BTreeMap<String, BTreeSet<String>>; 2]>,
     /// The items under `cfg` that each item uses, by the driver, for each side.
     cfg_uses: RefCell<[BTreeMap<String, BTreeSet<String>>; 2]>,
+    /// The items below a `cfg` attribute with a covered condition, and below no other `cfg`
+    /// attribute, for each side (batch 5s, part C): the plain paths. The driver names such an
+    /// item as an item under `cfg`. Its use does not stop a proof.
+    covered: [BTreeSet<String>; 2],
     /// The trait facts that the configuration can change (batch 5q).
     facts: Facts,
 }
@@ -1769,6 +1793,7 @@ impl<'a> Opaque<'a> {
             entries: Default::default(),
             type_uses: Default::default(),
             cfg_uses: Default::default(),
+            covered: Default::default(),
         };
         let mut scan = Scan::new(before, after);
         let all = || [before, after].into_iter().flat_map(|ws| ws.items.values());
@@ -1915,6 +1940,7 @@ impl<'a> Opaque<'a> {
         let mut calm: BTreeSet<String> = BTreeSet::new();
         let mut not_calm: BTreeSet<String> = BTreeSet::new();
         for item in all().filter(|item| matches!(item.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Type | ItemKind::Other | ItemKind::Trait)) {
+            let _at = crate::cfgcond::at(&item.file);
             let good = item.kind == ItemKind::Enum
                 && !droppers.contains(&short(item))
                 && fields_of(item).is_some_and(|(fields, count, _)| count >= 1 && fields.iter().all(|(_, ty)| plain_data(ty, &empty, &shadow)))
@@ -1945,7 +1971,15 @@ impl<'a> Opaque<'a> {
             // The roots: each item with its own attribute, and each module file with an inner
             // attribute.
             let roots: Vec<&Item> = ws.items.values().filter(|item| rooted(item)).collect();
-            let inner: Vec<String> = ws.inner_attrs.iter().filter(|(_, (_, attrs))| selects_any(attrs, false, &|_| false)).map(|(module, _)| module.replace('-', "_")).collect();
+            let inner: Vec<String> = ws
+                .inner_attrs
+                .iter()
+                .filter(|(_, (file, attrs))| {
+                    let _at = crate::cfgcond::at(file);
+                    selects_any(attrs, false, &|_| false)
+                })
+                .map(|(module, _)| module.replace('-', "_"))
+                .collect();
             // The root above an item, itself included. The line test finds more than the real
             // parents (two items on one line): more items are opaque, not fewer.
             let above = |item: &Item| -> Option<String> {
@@ -1964,7 +1998,31 @@ impl<'a> Opaque<'a> {
                 let module = roots.iter().find(|root| root.kind == ItemKind::Mod && (root.path == item.path || item.path.starts_with(&format!("{}::", root.path)))).map(|root| root.path.clone());
                 module.or_else(|| inner.iter().find(|module| item.path.starts_with(&format!("{module}::"))).cloned()).or_else(|| rooted(item).then(|| item.path.clone()))
             };
+            // The items below covered conditions only (batch 5s, part C).
+            let covered_attr = |attrs: &[String]| attrs.iter().any(|attr| matches!(attr_of(attr), Some(Attr::Covered)));
+            let covered_at = |file: &str, attrs: &[String]| {
+                let _at = crate::cfgcond::at(file);
+                covered_attr(attrs)
+            };
+            let soft_roots: Vec<&Item> = ws.items.values().filter(|item| covered_at(&item.file, &item.attrs)).collect();
+            let soft_inner: Vec<String> = ws.inner_attrs.iter().filter(|(_, (file, attrs))| covered_at(file, attrs)).map(|(module, _)| module.replace('-', "_")).collect();
+            let mut hard_paths = BTreeSet::new();
             for item in ws.items.values() {
+                if above(item).is_some() {
+                    hard_paths.insert(plain_path(&item.path));
+                    continue;
+                }
+                let inside = |root: &&&Item| {
+                    let lines = root.file == item.file && root.line_start <= item.line_start && item.line_end <= root.line_end;
+                    lines || (root.kind == ItemKind::Mod && item.path.starts_with(&format!("{}::", root.path)))
+                };
+                if soft_roots.iter().any(|root| inside(&root)) || soft_inner.iter().any(|module| item.path == *module || item.path.starts_with(&format!("{module}::"))) {
+                    opaque.covered[side].insert(plain_path(&item.path));
+                }
+            }
+            opaque.covered[side].retain(|path| !hard_paths.contains(path));
+            for item in ws.items.values() {
+                let _at = crate::cfgcond::at(&item.file);
                 let name = short(item);
                 let root = above(item);
                 let is_root = rooted(item);
@@ -2135,7 +2193,17 @@ impl<'a> Opaque<'a> {
                     continue;
                 }
                 // A root.
-                let attr = if item.attrs.iter().any(|attr| compact(attr).replace(' ', "").starts_with("#[cfg(")) { "`cfg`" } else { "`cfg_attr`" };
+                let by_cfg_attr = !item.attrs.iter().any(|attr| compact(attr).replace(' ', "").starts_with("#[cfg("));
+                // The text names the attribute with its condition (batch 5s, C3): the first
+                // attribute that selects code and that the checked configurations do not cover.
+                let attr = item
+                    .attrs
+                    .iter()
+                    .find(|attr| matches!(attr_of(attr), Some(Attr::Select) | Some(Attr::Derive(_))))
+                    .or_else(|| item.attrs.iter().find(|attr| matches!(attr_of(attr), Some(Attr::Free))))
+                    .map(|attr| format!("`{}`", compact(attr).replace('`', "").chars().take(80).collect::<String>()))
+                    .unwrap_or_else(|| if by_cfg_attr { "`cfg_attr`".to_string() } else { "`cfg`".to_string() });
+                let attr = attr.as_str();
                 match item.kind {
                     ItemKind::Field | ItemKind::Variant => {
                         opaque.facts.fields = true;
@@ -2239,7 +2307,7 @@ impl<'a> Opaque<'a> {
                         }
                         // A `cfg_attr` with a content that Semilla does not know: it can add
                         // an `impl` of each trait (batch 5q).
-                        if matches!(item.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Type) && attr == "`cfg_attr`" {
+                        if matches!(item.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Type) && by_cfg_attr {
                             opaque.facts.some = true;
                             opaque.facts.any = true;
                         }
@@ -2260,14 +2328,14 @@ impl<'a> Opaque<'a> {
         // "2 definitions under `cfg`" for a name with more than one root.
         for (item, text, _) in candidates.iter_mut() {
             if let Some(count) = counts.get(&short(item)).filter(|count| **count > 1) {
-                *text = format!("{count} definitions {text}");
+                *text = format!("{count} definitions, one {text}");
             }
             opaque.node_text.insert(plain_path(&item.path), text.clone());
         }
         for (name, count) in counts {
             if count > 1 {
                 for cause in opaque.hard.get_mut(&name).into_iter().flatten().filter(|cause| cause.text.starts_with("under ")) {
-                    cause.text = format!("{count} definitions {}", cause.text);
+                    cause.text = format!("{count} definitions, one {}", cause.text);
                 }
             }
         }
@@ -2546,7 +2614,7 @@ impl<'a> Opaque<'a> {
     fn cfg_stops(&self, reader: Option<(usize, &str)>, path: &str) -> bool {
         let path = path.split('<').next().unwrap_or(path).trim();
         let Some((side, reader)) = reader else { return true };
-        if self.inside(side, reader, path) {
+        if self.inside(side, reader, path) || self.covered[side].contains(path) {
             return false;
         }
         // A call of a function with the same header in each configuration stays a node. The
@@ -2758,7 +2826,7 @@ impl<'a> Opaque<'a> {
             let old_cfg = old.and_then(|old| cfg_uses[0].get(&old.path));
             for item in cfg_uses[1].get(&path).into_iter().flatten() {
                 let name = last_name(item);
-                if !old_cfg.is_some_and(|old| old.contains(item)) && !self.inside(1, &path, item) && !uses.iter().any(|text| text.starts_with(&format!("`{name}` ("))) {
+                if !old_cfg.is_some_and(|old| old.contains(item)) && !self.inside(1, &path, item) && !self.covered[1].contains(item) && !uses.iter().any(|text| text.starts_with(&format!("`{name}` ("))) {
                     uses.push(format!("`{name}` ({})", self.node_text.get(item).map(String::as_str).unwrap_or("under `cfg`")));
                 }
             }

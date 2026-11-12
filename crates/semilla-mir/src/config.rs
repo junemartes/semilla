@@ -1,8 +1,10 @@
 //! The build configuration rule (design 8.2, batch 5k).
 //!
 //! A check build is one build configuration: one target, one profile, one feature set, one
-//! environment. A proof must hold in each build configuration. So no step of a proof can use a
-//! value that the build configuration decides.
+//! environment. Since batch 5s, Semilla compares the bodies in each configuration of a list, and
+//! a proof holds in each checked configuration. The rule of this file is the best-effort layer
+//! for a condition that the list does not cover: no step of a proof can use a value that the
+//! build configuration decides. The driver keeps each such value opaque in each build.
 //!
 //! A value is **configuration-free** only if it is equal in each build configuration. The allow
 //! list (`source_of`, `const_is_free`, `body_is_free`):
@@ -342,6 +344,16 @@ fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, Strin
         if tcx.has_typeck_results(def) {
             let mut sources = Sources { tcx, typeck: tcx.typeck(def), patterns: Vec::new(), paths: Vec::new() };
             sources.visit_body(body);
+            // The `main` function of the test harness names each test descriptor (a static) with
+            // the span of the test function. The record of this `main` does not show its MIR
+            // (see `harness.rs`). A note for this span marks each constant of the descriptor,
+            // and only if the compiler reads the `main` function first (batch 5s).
+            let harness = tcx.sess.is_test_crate()
+                && matches!(tcx.def_span(def).ctxt().outer_expn_data().kind, ExpnKind::AstPass(rustc_span::hygiene::AstPass::TestHarness))
+                && tcx.entry_fn(()).is_some_and(|(entry, _)| entry == def.to_def_id());
+            if harness {
+                sources.paths.clear();
+            }
             NOTED.with(|noted| {
                 let mut noted = noted.borrow_mut();
                 for (span, source) in sources.paths {
@@ -381,6 +393,7 @@ pub fn note_local_bodies(tcx: TyCtxt<'_>) {
     for def in tcx.mir_keys(()).iter().copied() {
         hir_sources(tcx, def);
     }
+    note_origins(tcx);
     write_free_constants(tcx);
 }
 
@@ -1404,6 +1417,75 @@ fn promoted_inner<'tcx>(tcx: TyCtxt<'tcx>, constant: &Const<'tcx>) -> Option<mir
 /// The source that the span of an opaque call gives, for the printer.
 pub fn span_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
     macro_source(tcx, span).or_else(|| NOTED.with(|noted| noted.borrow().get(&span).cloned()))
+}
+
+/// The computation behind an opaque call whose span gives no source (batch 5s, part E).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// A promoted constant: the body that owns it, and its index. Its MIR is the computation.
+    Promoted(DefId, u32),
+    /// A named constant: its def path.
+    Named(String),
+    /// The driver cannot see the computation.
+    Hidden,
+}
+
+thread_local! {
+    /// The origins of the opaque calls at each span that gives no source (`note_origins`).
+    static ORIGINS: RefCell<HashMap<Span, Vec<Origin>>> = RefCell::new(HashMap::new());
+}
+
+/// Reads the MIR of each function of the local crate after the pass. It keeps the origin of
+/// each opaque call of a constant whose span gives no source. The printer makes the mark of
+/// the value from the origin. So the mark is the same in each build of the same code.
+///
+/// The read is after the pass and not in the pass: the pass does not run for a body that rustc
+/// takes from its incremental data.
+fn note_origins(tcx: TyCtxt<'_>) {
+    for def in tcx.mir_keys(()).iter().copied() {
+        if !matches!(tcx.def_kind(def), DefKind::Fn | DefKind::AssocFn | DefKind::Closure | DefKind::SyntheticCoroutineBody) {
+            continue;
+        }
+        if !tcx.is_mir_available(def.to_def_id()) {
+            continue;
+        }
+        let body = tcx.optimized_mir(def.to_def_id());
+        for block in body.basic_blocks.iter() {
+            let Some(terminator) = &block.terminator else { continue };
+            let TerminatorKind::Call { func, args, .. } = &terminator.kind else { continue };
+            if !func.const_fn_def().is_some_and(|(def_id, _)| is_black_box(tcx, def_id)) {
+                continue;
+            }
+            let span = terminator.source_info.span;
+            if span.is_dummy() || span_source(tcx, span).is_some() {
+                continue;
+            }
+            let origin = match args.first().map(|arg| &arg.node) {
+                Some(Operand::Constant(constant)) => match &constant.const_ {
+                    Const::Unevaluated(unevaluated, _) => match unevaluated.promoted {
+                        // Only a promoted constant of this body: the printer reads its MIR.
+                        Some(promoted) if unevaluated.def == def.to_def_id() => Origin::Promoted(unevaluated.def, promoted.as_u32()),
+                        Some(_) => Origin::Hidden,
+                        None => Origin::Named(def_path(tcx, unevaluated.def)),
+                    },
+                    _ => Origin::Hidden,
+                },
+                _ => Origin::Hidden,
+            };
+            ORIGINS.with(|origins| {
+                let mut origins = origins.borrow_mut();
+                let list = origins.entry(span).or_default();
+                if !list.contains(&origin) {
+                    list.push(origin);
+                }
+            });
+        }
+    }
+}
+
+/// The origins of the opaque calls at a span that gives no source. An empty list: not known.
+pub fn span_origins(span: Span) -> Vec<Origin> {
+    ORIGINS.with(|origins| origins.borrow().get(&span).cloned().unwrap_or_default())
 }
 
 /// Replaces the first operand that it takes by a move of `local`.

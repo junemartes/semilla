@@ -84,12 +84,15 @@ pub struct BodyIndex {
     /// The item path and the MIR name → the uses of the build configuration in the changed
     /// bodies.
     config: BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// The item path and the MIR name → the configurations in which a body is not equal, if
+    /// the body is equal in a different checked configuration (batch 5s, A5).
+    differs_in: BTreeMap<String, std::collections::BTreeSet<String>>,
     pub available: bool,
 }
 
 impl BodyIndex {
     pub fn new(bodies: &[BodyComparison], after: &Workspace, before: &Workspace) -> BodyIndex {
-        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), available: !bodies.is_empty() };
+        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), differs_in: BTreeMap::new(), available: !bodies.is_empty() };
         for body in bodies {
             index.statuses.insert(body.name.clone(), body.status.clone());
             // A body that exists only before has its span in the "before" tree.
@@ -97,6 +100,12 @@ impl BodyIndex {
             let uses_config = !body.config.is_empty() && !matches!(body.status, BodyStatus::Equal { .. });
             if uses_config {
                 index.config.entry(body.name.clone()).or_default().extend(body.config.iter().cloned());
+            }
+            if !body.differs_in.is_empty() {
+                index.differs_in.entry(body.name.clone()).or_default().extend(body.differs_in.iter().cloned());
+                if let Some(item) = &item {
+                    index.differs_in.entry(item.clone()).or_default().extend(body.differs_in.iter().cloned());
+                }
             }
             if let Some(item) = item {
                 if uses_config {
@@ -113,6 +122,12 @@ impl BodyIndex {
     /// the text of each macro call. Empty for a body that is equal on the two sides.
     pub fn config(&self, name: &str) -> Vec<String> {
         self.config.get(name).into_iter().flatten().cloned().collect()
+    }
+
+    /// The configurations in which a body of an item (or a MIR name) is not equal, if the body
+    /// is equal in a different checked configuration.
+    pub fn differs_in(&self, name: &str) -> Vec<String> {
+        self.differs_in.get(name).into_iter().flatten().cloned().collect()
     }
 
     /// Each changed body that reads the build configuration (the item path and the MIR name

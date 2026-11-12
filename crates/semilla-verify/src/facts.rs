@@ -1000,13 +1000,17 @@ pub fn neutral_kind(fact: &Fact) -> bool {
 }
 
 /// The spotlight text of the build configuration (batch 5k, A1).
-pub(crate) const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on the build configuration. Semilla checks one configuration (debug, this target).";
+pub(crate) const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on a build condition that Semilla did not check. A proof holds only in the checked configurations.";
 
 /// The spotlight of a fact whose changed bodies read the build configuration, or `None`. The
 /// uses come from the MIR records (the expansion data of the compiler), not from the text.
 /// The spotlight text of a changed body with a macro or an attribute that Semilla cannot see
 /// into: the proof of the body holds only for the check configuration.
-pub(crate) const CONFIG_UNSEEN: &str = "build configuration: Semilla cannot see if this code depends on the build configuration. Semilla checks one configuration (debug, this target).";
+pub(crate) const CONFIG_UNSEEN: &str = "build configuration: Semilla cannot see if this code depends on a build condition that it did not check. A proof holds only in the checked configurations.";
+
+/// The start of the spotlight text of a body that is not equal in only some of the checked
+/// configurations (batch 5s, A5).
+pub(crate) const NOT_NEUTRAL_IN: &str = "build configuration: not neutral in";
 
 /// The spotlight text of a name with characters outside ASCII (batch 5k, D7).
 pub(crate) const NON_ASCII: &str = "an identifier with characters outside ASCII";
@@ -1068,8 +1072,24 @@ pub(crate) fn with_ascii_forms(text: &str) -> String {
 pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
     let mut uses: Vec<String> = Vec::new();
     let mut seen = false;
+    // The configurations in which a body is not equal, if it is equal in a different one.
+    let mut partial: Vec<String> = Vec::new();
+    let mut gaps: Vec<String> = Vec::new();
     for item in items {
+        for name in body_index.differs_in(item) {
+            let text = format!("`{name}`");
+            if !partial.contains(&text) {
+                partial.push(text);
+            }
+        }
         for call in body_index.config(item) {
+            // The state that no checked unit has (batch 5t, part B).
+            if call.starts_with(crate::joint::GAP) {
+                if !gaps.contains(&call) {
+                    gaps.push(call);
+                }
+                continue;
+            }
             // A macro or an attribute of another crate: Semilla does not see its content.
             let text = match call.strip_suffix(crate::srcconfig::UNSEEN) {
                 Some(call) => format!("`{call}` in `{item}` (Semilla cannot see into it)"),
@@ -1085,13 +1105,25 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
             }
         }
     }
-    if uses.is_empty() {
-        return None;
+    let partial = (!partial.is_empty()).then(|| format!("{NOT_NEUTRAL_IN} {} (the bodies are equal in each other checked configuration)", partial.join(", ")));
+    if uses.is_empty() && gaps.is_empty() {
+        return partial;
     }
     let more = if uses.len() > 3 { format!(" and {} more", uses.len() - 3) } else { String::new() };
     uses.truncate(3);
-    let start = if seen { CONFIG_SPOTLIGHT } else { CONFIG_UNSEEN };
-    Some(format!("{start} Uses: {}{more}", uses.join(", ")))
+    let start = if seen || uses.is_empty() { CONFIG_SPOTLIGHT } else { CONFIG_UNSEEN };
+    let uses = if uses.is_empty() { String::new() } else { format!(" Uses: {}{more}", uses.join(", ")) };
+    // One gap is the cause. The fix of the first gap shows the next gap, if there is one.
+    let gap = match gaps.first() {
+        Some(gap) if uses.is_empty() => format!(" Not{}", gap.strip_prefix("not").unwrap_or(gap)),
+        Some(gap) => format!("; {gap}"),
+        None => String::new(),
+    };
+    let text = format!("{start}{uses}{gap}");
+    Some(match partial {
+        Some(partial) => format!("{partial}; {text}"),
+        None => text,
+    })
 }
 
 /// Why a fact needs the reviewer's attention (design 22.5, rule 4), or `None`.

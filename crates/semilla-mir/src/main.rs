@@ -474,7 +474,11 @@ impl rustc_driver::Callbacks for Callbacks {
                 return Compilation::Stop;
             }
         };
+        // The first line is the record of the compile unit (batch 5t, part A).
         let mut text = String::new();
+        let unit = UnitLine { unit: unit_record(tcx, &target) };
+        text.push_str(&serde_json::to_string(&unit).expect("a unit record is valid JSON"));
+        text.push('\n');
         for record in &records {
             text.push_str(&serde_json::to_string(record).expect("a record is valid JSON"));
             text.push('\n');
@@ -495,6 +499,88 @@ impl rustc_driver::Callbacks for Callbacks {
                 Compilation::Continue
             }
         }
+    }
+}
+
+/// The record of one compile unit (batch 5t, part A). The compiler gives each value, so the
+/// record has the effect of each flag: the profile, `RUSTFLAGS`, a `--cfg` argument, and a
+/// `cargo:rustc-cfg` line of a build script.
+#[derive(serde::Serialize)]
+struct UnitRecord {
+    /// The name of the unit: the stem of the record file.
+    target: String,
+    /// The name of the package (`CARGO_PKG_NAME`).
+    package: String,
+    /// The folder of the package, relative to the workspace root (`CARGO_MANIFEST_DIR`).
+    folder: String,
+    /// Each true `cfg` name (`unix`) and each true pair (`feature="std"`), in order.
+    cfg: Vec<String>,
+    /// Each source file of this crate that the compiler read, relative to the workspace root.
+    files: Vec<String>,
+    /// The root file of the crate, relative to the workspace root.
+    root: String,
+    /// The target triple.
+    triple: String,
+}
+
+/// The line of a unit record in the output.
+#[derive(serde::Serialize)]
+struct UnitLine {
+    unit: UnitRecord,
+}
+
+/// A path without `.` and `..` parts, relative to the current folder if it is below it. Cargo
+/// starts the compiler in the workspace root for a package of the workspace.
+fn workspace_path(path: &std::path::Path) -> String {
+    let current = std::env::current_dir().unwrap_or_default();
+    let full = if path.is_absolute() { path.to_path_buf() } else { current.join(path) };
+    let mut clean = PathBuf::new();
+    for part in full.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                clean.pop();
+            }
+            part => clean.push(part),
+        }
+    }
+    clean.strip_prefix(&current).unwrap_or(&clean).to_string_lossy().into_owned()
+}
+
+fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
+    let mut cfg: Vec<String> = tcx
+        .sess
+        .config
+        .iter()
+        .map(|(name, value)| match value {
+            Some(value) => format!("{name}=\"{value}\""),
+            None => name.to_string(),
+        })
+        .collect();
+    cfg.sort();
+    let mut files = BTreeSet::new();
+    let root = match &tcx.sess.io.input {
+        rustc_session::config::Input::File(path) => workspace_path(path),
+        _ => String::new(),
+    };
+    for file in tcx.sess.source_map().files().iter() {
+        if file.cnum != rustc_span::def_id::LOCAL_CRATE {
+            continue;
+        }
+        if let rustc_span::FileName::Real(name) = &file.name
+            && let Some(path) = name.local_path()
+        {
+            files.insert(workspace_path(path));
+        }
+    }
+    UnitRecord {
+        target: target.to_string(),
+        package: std::env::var("CARGO_PKG_NAME").unwrap_or_default(),
+        folder: std::env::var("CARGO_MANIFEST_DIR").map(|folder| workspace_path(std::path::Path::new(&folder))).unwrap_or_default(),
+        cfg,
+        files: files.into_iter().collect(),
+        root,
+        triple: tcx.sess.opts.target_triple.to_string(),
     }
 }
 

@@ -525,6 +525,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             if let Some(line) = app.build_code_notice(&data.report) {
                 println!("{line}");
             }
+            // The checked configurations (batch 5s, B1), also on the terminal.
+            for line in crate::app::config_lines(&data.report) {
+                println!("{line}");
+            }
             if (md.is_some() || html.is_some()) && data.report.not_complete() {
                 return Ok(ExitCode::from(1));
             }
@@ -546,6 +550,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             if json {
                 std::println!("{}", serde_json::to_string_pretty(&result.report)?);
             } else {
+                // The checked configurations come first (batch 5s, B1).
+                for line in crate::app::config_lines(&result.report) {
+                    println!("{line}");
+                }
                 println!("{}\n{}", result.text, result.tree.render());
             }
             return Ok(if result.report.accepted { ExitCode::SUCCESS } else { ExitCode::from(1) });

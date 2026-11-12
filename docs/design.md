@@ -337,12 +337,67 @@ A rename of a field or a variant is then a path in the rename map, like a rename
 
 **The rustc inliner is not a proof method.** At N2, rustc inlines some small functions, so some extracts and renames become equal. This depends on heuristics. N1 and N3 must prove these changes (spike S1, finding 5).
 
-**A proof holds for each build configuration (batch 5k, A1). Decided by Claude.** A check build is one build configuration: one target, one profile, one feature set, one environment. A proof of `neutral` must hold for each build. So no step of a proof uses a value that the build configuration decides. The rule uses allow lists (I3).
+**A proof holds in each checked configuration (batch 5s). Decided by the user (2026-11-12).** The promise before batch 5s was: a proof of `neutral` holds for each build configuration. Semilla checked one configuration, and hand-written rules stopped a proof if an input of the proof depended on the configuration. Five rule rounds (batches 5k, 5l, 5o, 5p, 5q) did not make the rules complete: the batch 5q build gave nine false `neutral` results that the release build showed. A spike (batch 5r) showed that almost each body of a real crate reads some code under `cfg`. So a rule "no input depends on the configuration" cannot be sound and useful together. The new promise is narrower and exact:
+
+- A proof of `neutral` holds in each checked configuration. Semilla builds the two trees of a step in each configuration of a list (8.12) and compares the MIR in each one.
+- Semilla makes no promise for a configuration that is not in the list. Each reviewer output names the checked configurations, the target, each configuration of the default list that Semilla did not check, and each `cfg` condition that the checked configurations do not cover.
+
+The rules of the compare:
+
+1. **One result from all configurations.** A body is `neutral (proved)` only if it is equal in each checked configuration that compiles it. Semilla combines the states of two configurations with the same function that combines two views of one body (`combine`). An indirect change in one configuration is an indirect change, and its text names the configuration. Each claim check must hold in each checked configuration. *Decided by Claude:* the claim `tested-by` holds if the call path exists in one checked configuration.
+2. **The text names the configuration.** A body that is equal in the first configuration and different in a later one has the spotlight "build configuration: not neutral in `release` (the bodies are equal in each other checked configuration)". The fact needs a reason. *Decided by Claude:* a body that is different in the first configuration that compiles it has a plain fact with no such text.
+3. **A body that no checked configuration compiles** keeps the spotlight "inactive code". Known limit: an item with two definitions under `cfg` (`chk#0`, `chk#1`) has no body result, and a change of one definition shows with this spotlight.
+4. **The release profile.** Semilla uses the release profile of cargo and the same levels (N0 to N4). The MIR of the release profile has no overflow check: `CheckedAdd` and `CheckedMul` with an assert become `Add` and `Mul`. The value of `debug_assertions` is false if the profile says so. No rule of N4 uses a fact that holds only with overflow checks. The SMT check has its own list of six builds (rule 3 below).
+
+**A covered condition (batch 5s, B2 and part C; batch 5t, part A).** A condition is the predicate of a `cfg` attribute, of a `cfg_attr` attribute, or of `cfg!` in the source of the workspace. **The compiler gives the true values (batch 5t). Decided by Claude.** Batch 5s read the features and the `debug-assertions` value from the unit graph of cargo. The unit graph does not show each cause: a `rustflags` entry of a cargo configuration file, `RUSTFLAGS`, a `cargo:rustc-cfg` line of a build script, a target with `harness = false`. So batch 5s gave a false `neutral` for a condition that had one value in each build. Now the MIR driver writes one unit record as the first line of each record file:
+
+- the set of the true `cfg` names and pairs of the session;
+- the source files of the workspace that the unit reads (the source map), with each `mod` file and each `include!` file;
+- the package, its folder, the root file of the crate, and the target.
+
+The cover logic (`crates/semilla-verify/src/cfgcond.rs`) uses only these records:
+
+1. A condition at a place in a file is covered only if one checked unit that reads this file has the condition true and one has it false. This must hold in the two trees of the step.
+2. No rule decides by the name of an atom. Batch 5s said "each configuration covers `test`". This is false for a file under `tests/`: each unit that reads the file has `test` true. The rule is gone. A cost: the name of an item under `cfg(test)` in such a file is a hard name for each crate of the workspace. The control `fixedbitset-c-0020` loses its proof for this cause (the trait method `alternate` in `tests/tests.rs`). An atom with no evaluation rule (`version(…)`, `accessible(…)`) makes its condition not covered.
+3. A unit from the cache gives the same record, because the record is a line of the record file. A record file with no unit record makes each condition not covered (I3). A file that no checked unit reads has no covered condition.
+4. A text with no known file (a `cfg!` call of a body with no source position) is covered only if the condition is covered at each place in the two trees.
+5. The condition line of the reviewer outputs (8.12) uses the same logic.
+
+Semilla does not read the unit graph of cargo. The function `unit_settings` is gone: no other part used it. The driver keeps the value of `cfg!` opaque also for a covered condition. A covered `cfg_attr` with content that Semilla does not know stays an input of the rule.
+
+**The conditions of one proof must be covered together (batch 5t, part B). Decided by Claude.** One proof can use more than one condition. Each condition can be covered, and the proof can still be false in a build that is not in the list. Probe d11e of batch 5s: the type aliases `TA` and `TB` are under `feature = "fast"` and `feature = "slow"`. The list has the two features off and the two on. The step `a as TA as TB as u64` → `a as TB as u64` is equal in each checked build, and it is false with only `fast`. The rule (`crates/semilla-verify/src/joint.rs`):
+
+1. *The conditions of a proof.* Semilla finds them with the rule of the build configuration itself. The rule sees each input of a proof: the two sides, each callee that a form inlines, each type, constant, and name, and each `cfg!` call. Semilla runs the body check again with the rule on for a part of the covered conditions:
+   - with the rule on for each condition. A body with the same result uses no covered condition, and its result stands;
+   - with the rule on for the conditions of one atom, for each atom. `A` is the set of the atoms that change the result of the body;
+   - with the rule on for each condition that is not a condition of the atoms of `A` in a file of the crate of the body. The result must be the first result. Then the proof uses only conditions that the units of the body evaluate, with atoms of `A`.
+2. *The check.* A valuation of `A` is checked if one checked configuration has a unit with this valuation that compiles the body in the tree before the step, and one in the tree after it. The rule goes off only if each valuation of `A` that can occur is checked.
+3. *A valuation that cannot occur.* Only an exact cause excludes a valuation, and it must hold in the two trees:
+   - the feature table of the manifest of the package: with `std = ["alloc"]`, no build has `std` on and `alloc` off. Only a plain feature name counts, through each chain;
+   - a `#[cfg(P)]` attribute of the body, or of an item around the body in the same file, that the valuation makes false: no build with this valuation has the body.
+
+   *The full line.* The attribute of an item counts only if the item has the full line of the body. Only white space is before the item on its first line. Only white space or a line comment is after the item on its last line. A line can have the code of two items, and then the attribute of one item says nothing about the body (probes w2, w2e, w2s of batch 5t).
+
+   *The places of a body.* A body can have twins under `cfg`: two definitions with one name. A unit compiles one of them. A place is the file and the line of the body in a unit. Each place has its own units and its own attributes. An atom of these attributes is possibly not in `A`, because the attribute selects the twin and is not an input of the proof (probe w1). So the check uses each valuation of `A` and of these extra atoms. A valuation is excluded only if, in each tree, the feature table excludes it or each place has a false attribute. Else each place with no false attribute in the tree before the step, with each such place in the tree after it, needs one checked configuration that has units at the two places with the values of `A`. A unit that compiles a twin is not a check of the body.
+4. *Else the rule stays on.* The body gets the result of the run with the rule on for each condition. The spotlight "build configuration" has the gap and the fix in one line: "Not checked together: `feature = "fast"` on with `feature = "slow"` off. Add `feature-sets = [["fast"]]` to `[workspace.metadata.semilla]`". The fix text is there only if a `feature-sets` entry gives the state.
+5. *The limits.* The check applies also to a proof with one atom. A proof with more than 6 atoms keeps the rule on. The extra atoms count for a body with twins. For a body with one place and more than 6 atoms in the sum, an attribute with an extra atom excludes nothing. A proof that uses a condition of a different crate keeps the rule on, and the text says so. The same applies to a condition in a file that a unit of a different crate also reads. A test under `tests/` that uses an item under `cfg` of the library is such a proof.
+
+*No input is missing:* each rule of batches 5k to 5q asks `cfgcond` if a condition is covered. So a run with the rule on for a set of conditions shows each use of these conditions that the rule knows. The third run is the check of the set: the proof stands with the rule on for each other condition. *The cost:* a step with no covered condition has no added run. A step with a covered condition has one added compare of the stored records, and a body with an open result has one compare for each atom. No added build is necessary.
+
+*A body with equal MIR:* the rule applies also to a changed body that is equal at N0 in each checked build (d11e is such a body). A body with no text change keeps its result.
+
+**The best-effort layer: the rules of batches 5k to 5q (batch 5s, part C). Decided by the user (2026-11-12).** The rule text from here to the end of 8.2 applies only to a condition that is not covered. An input with a dependence that comes only from covered conditions is not hard: the compare in each configuration is the proof. An input with a condition that is not covered stays hard, and an input with no condition (`size_of`, `usize` arithmetic, a macro of another crate) stays as before. **This layer is not complete.** The known open classes:
+
+- **The target cases.** A change that only a different target shows (probes v17, w8, w8b, w16, w2b of batch 5q: a trait selection that depends on a fact of the target). Semilla checks one target and names it in each output.
+
+The joint feature case of batch 5s (probe d11e) is not a limit after batch 5t: the rule above keeps the proof open until the list has each joint state.
+
+**The rule of batch 5k (A1). Decided by Claude.** A check build is one build configuration: one target, one profile, one feature set, one environment. The rule stops a proof that uses a value that a condition decides, if the condition is not covered. The rule uses allow lists (I3).
 
 1. **The MIR.** A value is configuration-free only if it is equal in each build: a literal of the source text, a named constant of the local crate with a configuration-free initializer and no `cfg` attribute, and the constants `MIN`, `MAX`, and `BITS` of an integer type with a fixed width. Each other constant is opaque: `cfg!`, `debug_assertions`, `option_env!`, `env!`, a constant of another crate, a constant with `usize` or `isize` arithmetic. The driver puts each opaque constant through `black_box` before the optimizer runs, and the text of the value names its source (`@cfg!(debug_assertions)`). The same applies to an operation that the target decides: an operation with a `usize` or `isize` result on values that can be constants, `size_of`, `align_of`, `transmute`, and the length of an array as a value. A constant in a pattern that is not configuration-free stops the term of the body.
 2. **The source text.** The compiler removes the code of a false `cfg` attribute before the MIR. So the verifier reads the token text of each body with a text edit. An attribute or a macro call that is not in an allow list stops the proof of the body. A `cfg` or `cfg_attr` attribute in the body, and a macro of the workspace with one in its definition, is a use of the build configuration. A macro or an attribute of another crate is a use that Semilla cannot see into. A glob import from a crate outside the workspace makes the names of the standard macros not known in that file.
 3. **The solver.** An SMT check of a condition runs for each build of a list: 64, 32, and 16 bits for `usize` and `isize`, with and with no overflow checks. One counterexample in one build refutes the claim.
-4. **The output.** A body with a use of the build configuration is not `neutral`. Its facts have the class of their edits and the spotlight "build configuration: this code depends on the build configuration. Semilla checks one configuration (debug, this target)", with the list "Uses: …". The unseen case has its own text: "Semilla cannot see if this code depends on the build configuration". A fact in this spotlight needs a reason. An identity claim (`rename`, `move-item`) on such a step is `unproved`.
+4. **The output.** A body with a use of the build configuration is not `neutral`. Its facts have the class of their edits and the spotlight "build configuration: this code depends on a build condition that Semilla did not check. A proof holds only in the checked configurations.", with the list "Uses: …". The list names the condition: "`lim` (under `#[cfg(not(unix))]`)", "`lim` (2 definitions, one under `#[cfg(not(unix))]`)". The unseen case has its own text: "Semilla cannot see if this code depends on a build condition that it did not check". A fact in this spotlight needs a reason. An identity claim (`rename`, `move-item`) on such a step is `unproved`.
 
 The answers to the questions of the brief:
 
@@ -643,7 +698,29 @@ The change set is **accepted** only if every claim is `verified`, nothing is unc
 
 ### 8.12 Configurations
 
-A claim must be true in each configuration: the default features, each feature set that the project lists, and `--tests` when the test layer is on.
+**The list (batch 5s, part A).** A configuration is a profile (`dev` or `release`), a feature selection, and the target of this machine. Its name is short and fixed: `dev`, `release`, `dev, no default features`, `release, all features`, `dev, features a+b`. The default list has the two profiles, each with the default features, `--no-default-features`, `--all-features`, and each set of `feature-sets` in the manifest. Semilla computes the list from the manifests of the two trees of the step. No option of the agent makes the list shorter. *Decided by Claude:* the list is the union of the two trees. A selection with the same feature state of each package as an earlier selection, by the manifests, is not in the list. The test does not use the unified features, so two configurations of a workspace can have equal true features. This costs time and is not a risk.
+
+**A configuration that does not build.**
+
+- It builds before and after the step: Semilla checks it.
+- It does not build before the step: Semilla does not check it in this step. The output names it with the first error line of the compiler.
+- It builds before and not after: the step is rejected as a compile error. The message names the configuration and shows the error.
+- **It does not build with each target before the step (batch 5t, part C). Decided by Claude.** Semilla builds the configuration again with the libraries and the binaries only (`cargo check --lib --bins`). bs58 is the example: its tests need the feature `std`, so `--no-default-features` with `--all-targets` does not build. If this smaller build is good before the step, Semilla checks it. The name of the configuration ends with "(libraries and binaries only)", and the header says "the other targets do not build". A step that breaks the smaller build is rejected as a compile error. If the smaller build fails also, the configuration is not checked, and the output names it with the error of the build of each target. The smaller build has its own build folder, target folder, and record files. The cover rule needs no change: the smaller build has no test unit, and the rule uses the units of each file.
+- *Decided by Claude:* Semilla stores a compile error of a tree and a configuration in the cache (`.failed`). A missing dependency is not "does not build": it is an error of the full check (29.5). If no configuration builds before the step, the step has the error of the `dev` configuration.
+
+**The reviewer commands.** `review`, `ui`, `load`, `status <commit>`, `verify`, and `tag` use one function for the list and the check, so they compute the same result (I5). The cache key of each build has the tree, the level, the configuration, and the settings of the build.
+
+**The lines of the outputs (B1).** The terminal, the Markdown and HTML reports, the UI, the MCP tool `verify`, and `status` show three kinds of lines near the base line:
+
+```
+checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `release`, `dev, all features`, `release, all features`
+! configurations `dev, no default features`, `release, no default features` are not checked: it does not build before the step: error[E0599]: …
+! `cfg` conditions that Semilla did not check: `docsrs`, `feature = "alloc"`, `feature = "std"`
+```
+
+The condition line has at most eight conditions and then a count. `semilla step` has no new line if each configuration is checked, and one line for the configurations that are not checked. *Decided by Claude:* the target is the target of a unit record of the compiler, else the host of the toolchain. The checked list has the configurations that each compared step checked. Configurations with the same kind of cause go into one line with the error of the first one.
+
+**Cost.** The configurations of a step build in parallel, and each tree and configuration builds one time. Measured on one machine (one step, batch 5n → batch 5s): fixedbitset cold 11.3 s → 22.1 s, warm 2.7 s → 5.7 s, cache 104 MB → 470 MB; bs58 cold 14.1 s → 26.4 s, warm 1.6 s → 2.1 s, cache 98 MB → 466 MB. A later run on a calm machine (one step, batch 5s → batch 5t): fixture cold 0.8 s → 0.9 s, warm 0.5 s → 0.6 s; fixedbitset cold 15.4 s → 16.7 s, warm 4.1 s → 5.8 s, cache 470 MB → 470 MB; bs58 cold 18.8 s → 19.9 s, warm 2.1 s → 3.2 s, cache 466 MB → 469 MB. The added runs of part B make the warm step longer. bs58 has two more checked configurations (libraries and binaries only).
 
 In a workspace, Cargo unifies the features across the member crates. The verifier uses the same feature resolution as `cargo check --workspace`.
 
@@ -1982,6 +2059,18 @@ A swap of two statements, two operands, or two branches gave a fact with the sam
 
 See section 8.8.1.
 
-### 29.11 Not solved: a promoted constant with no known source
+### 29.11 Solved in batch 5s: a promoted constant with no known source
 
-The build configuration rule prints a promoted constant with no known source as an opaque value with a mark that is different in each build. A body with such a constant is never equal to itself. So a test body with `assert_eq!(x, 5 - 1)` or with `size_of` shows as an "indirect change" in each step that changes a body that the test body reaches. This rejects the first step on bit-vec, httpdate, bech32, and slab. The cause is in the build configuration rule, and a different work stream owns it. A possible rule: the mark of an opaque value is its content (the same in each build of the same code), and not a counter.
+**The defect.** The build configuration rule printed a promoted constant with no known source as an opaque value with a mark that was different in each build (a process number, a counter, a time). A body with such a constant was never equal to itself. So a test body with `assert_eq!(x, 5 - 1)` or with `size_of` showed as an "indirect change" in each step that changed a body that the test body reaches. This rejected the first step on bit-vec, httpdate, bech32, and slab.
+
+**The fix (batch 5s, part E). Decided by Claude.** The mark of such a value is its computation (`Printer::origin_mark` in `crates/semilla-mir/src/print.rs`, `note_origins` in `config.rs`):
+
+- A promoted constant of the body: the printed MIR of the promoted body, in one line, with its own opaque parts (`@promoted { … }`).
+- A named constant: its def path.
+- The mark has no counter, no process number, no time, and no evaluated value.
+
+**The soundness argument.** The value stays opaque: no normal form folds it. Two values with the same mark have the same printed computation. So two bodies with equal texts do the same computation on the same opaque inputs. They are equal in each configuration in which this computation compiles to the same MIR. The compare in each checked configuration tests that: a computation that the release profile compiles to a different MIR gives a different text in the release build.
+
+**The cases that stay.** The mark stays different from each other text if the driver cannot see the computation: a span with no origin, two different origins at one span, a promoted constant of a different body, an operand that is not a constant, and a promoted body that the printer cannot print or that has a failed read (`unknown_…`). The other calls of `print::unique` are marks of a failed read (a variant, a field, a layout, a cast, a statement that the printer cannot read). A correct body does not get them.
+
+**The result.** The first honest step is accepted with no reason on bit-vec, httpdate, bech32, and slab (nine edits; three of them prove `neutral`; six are plain facts of a compound assignment or a changed condition, with no indirect change).

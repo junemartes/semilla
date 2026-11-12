@@ -142,6 +142,7 @@ impl<'a> Scan<'a> {
     /// `own`: the stream starts with the attributes of the item itself. A `cfg` attribute of
     /// the item selects the full item, so each build that has the body has the same body.
     fn stream(&mut self, stream: TokenStream, item: &Item, own: bool, found: &mut Found) {
+        let _at = crate::cfgcond::at(&item.file);
         let trees: Vec<TokenTree> = stream.into_iter().collect();
         let punct = |tree: Option<&TokenTree>, c: char| matches!(tree, Some(TokenTree::Punct(p)) if p.as_char() == c);
         let mut leading = own;
@@ -153,7 +154,10 @@ impl<'a> Scan<'a> {
                 if let Some(TokenTree::Group(group)) = trees.get(at).filter(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket)) {
                     let name = attribute_name(group.stream());
                     let text = format!("#[{}]", compact(&group.stream().to_string()));
-                    let free_attr = name == "cfg_attr" && matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Free));
+                    // Free: a `cfg_attr` with a content of the allow list (batch 5o, A5), and an
+                    // attribute with a condition that the checked configurations cover (batch 5s).
+                    let free_attr = (name == "cfg_attr" && matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Free)))
+                        || matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Covered));
                     if ATTR_FREE.contains(&name.as_str()) || crate::facts::is_lint_tool(&name) || (leading && name == "cfg") || free_attr {
                         // A free attribute. Its arguments are not code. A `cfg_attr` is free
                         // if its content is in the allow list (batch 5o, A5).

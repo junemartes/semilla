@@ -385,7 +385,119 @@ pub struct Report {
     /// The build code that the change set changes, if it changes some (design 28).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_code: Option<BuildCodeNote>,
+    /// The build configurations that the body checks used (design 8.12). `None` for a report
+    /// with no body check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configs: Option<ConfigNote>,
     pub accepted: bool,
+}
+
+/// The build configurations of the body checks of a change set (design 8.12; batch 5s, B1).
+///
+/// A proof of Semilla holds in each checked configuration, and only there. Each output for the
+/// reviewer shows this data near the base line.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConfigNote {
+    /// The target triple of the check build.
+    pub target: String,
+    /// The names of the configurations that Semilla checked in each step.
+    pub checked: Vec<String>,
+    /// Each configuration of the default list that Semilla did not check in a step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_checked: Vec<ConfigGap>,
+    /// The `cfg` conditions of the source text that the checked configurations do not cover.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_covered: Vec<String>,
+}
+
+/// A configuration of the default list that Semilla did not check.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConfigGap {
+    /// The name of the configuration.
+    pub name: String,
+    /// The cause, with the first error line of the build.
+    pub cause: String,
+    /// The steps with no check in this configuration.
+    pub steps: Vec<usize>,
+}
+
+impl ConfigGap {
+    /// The kind of the cause: its text before the compiler error. The first error line of a
+    /// build can be different in each run, because cargo compiles the targets in parallel.
+    pub fn kind(&self) -> &str {
+        self.cause.split(": error").next().unwrap_or(&self.cause)
+    }
+}
+
+impl ConfigNote {
+    /// The highest number of conditions that a line shows.
+    pub const MOST_CONDITIONS: usize = 8;
+
+    /// The end of the name of a configuration with a build of the libraries and the binaries
+    /// only. The text is the text of `Configuration::NARROW` in `semilla-normal`.
+    pub const NARROW: &'static str = " (libraries and binaries only)";
+
+    /// The line of the checked configurations and the target.
+    pub fn checked_line(&self) -> String {
+        // The name of a smaller build ends with a note (batch 5t, part C).
+        let show = |name: &String| match name.strip_suffix(Self::NARROW) {
+            Some(short) => format!("`{short}` (libraries and binaries only: the other targets do not build)"),
+            None => format!("`{name}`"),
+        };
+        let list: Vec<String> = self.checked.iter().map(show).collect();
+        let list = if list.is_empty() { "none".to_string() } else { list.join(", ") };
+        format!("checked configurations (target `{}`): {list}", self.target)
+    }
+
+    /// The lines of the configurations that Semilla did not check: one line for each cause.
+    /// `all_steps`: the number of steps of the change set. A line starts with `!`: it is a
+    /// warning.
+    pub fn gap_lines(&self, all_steps: usize) -> Vec<String> {
+        // The configurations with the same kind of cause in the same steps go into one line.
+        // The line shows the compiler error of the first one.
+        let mut groups: Vec<(&ConfigGap, Vec<&str>)> = Vec::new();
+        for gap in &self.not_checked {
+            match groups.iter_mut().find(|(first, _)| first.kind() == gap.kind() && first.steps == gap.steps) {
+                Some((_, names)) => names.push(&gap.name),
+                None => groups.push((gap, vec![&gap.name])),
+            }
+        }
+        groups
+            .into_iter()
+            .map(|(gap, names)| {
+                let steps: Vec<String> = gap.steps.iter().map(|step| step.to_string()).collect();
+                let place = match gap.steps.len() {
+                    count if count >= all_steps => String::new(),
+                    1 => format!(" in step {}", steps[0]),
+                    _ => format!(" in steps {}", steps.join(", ")),
+                };
+                let list: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+                let (noun, verb) = if names.len() == 1 { ("configuration", "is") } else { ("configurations", "are") };
+                format!("! {noun} {} {verb} not checked{place}: {}", list.join(", "), gap.cause)
+            })
+            .collect()
+    }
+
+    /// The line of the conditions that the checked configurations do not cover, if one exists.
+    pub fn condition_line(&self) -> Option<String> {
+        if self.not_covered.is_empty() {
+            return None;
+        }
+        let shown: Vec<String> = self.not_covered.iter().take(Self::MOST_CONDITIONS).map(|text| format!("`{text}`")).collect();
+        let more = match self.not_covered.len().saturating_sub(Self::MOST_CONDITIONS) {
+            0 => String::new(),
+            count => format!(", and {count} more"),
+        };
+        Some(format!("! `cfg` conditions that Semilla did not check: {}{more}", shown.join(", ")))
+    }
+
+    /// The lines at the top of an output for the reviewer.
+    pub fn lines(&self, all_steps: usize) -> Vec<String> {
+        let mut lines = vec![self.checked_line()];
+        lines.extend(self.gap_lines(all_steps));
+        lines.extend(self.condition_line());
+        lines
+    }
 }
 
 /// One run of steps whose check uses build code that the change set changes (design 28).
@@ -622,5 +734,39 @@ mod tests {
         assert!(report.not_complete());
         assert_eq!(step_ranges(&[0, 1, 2, 5]), "steps 0–2, 5");
         assert_eq!(step_ranges(&[4]), "step 4");
+    }
+}
+
+#[cfg(test)]
+mod config_note_tests {
+    use super::*;
+
+    #[test]
+    fn the_lines_of_the_configurations_name_each_gap_and_at_most_eight_conditions() {
+        let gap = |name: &str, steps: &[usize]| ConfigGap { name: name.into(), cause: "it does not build before the step: error: no".into(), steps: steps.to_vec() };
+        let note = ConfigNote {
+            target: "x86_64-unknown-linux-gnu".into(),
+            checked: vec!["dev".into(), "release".into()],
+            not_checked: vec![gap("dev, all features", &[0, 1]), gap("release, all features", &[0, 1]), gap("dev, no default features", &[1])],
+            not_covered: (0..10).map(|index| format!("c{index}")).collect(),
+        };
+        let lines = note.lines(2);
+        assert_eq!(lines[0], "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `release`");
+        assert_eq!(lines[1], "! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no");
+        assert_eq!(lines[2], "! configuration `dev, no default features` is not checked in step 1: it does not build before the step: error: no");
+        assert_eq!(lines[3], "! `cfg` conditions that Semilla did not check: `c0`, `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, and 2 more");
+        // The first error line can be different in each build: one line for one kind of cause.
+        let other = ConfigGap { name: "release, all features".into(), cause: "it does not build before the step: error[E0599]: other".into(), steps: vec![0, 1] };
+        let note = ConfigNote { not_checked: vec![gap("dev, all features", &[0, 1]), other], ..note };
+        assert_eq!(note.gap_lines(2), ["! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no"]);
+        // No gap and no condition: one line.
+        let note = ConfigNote { not_checked: Vec::new(), not_covered: Vec::new(), ..note };
+        assert_eq!(note.lines(2).len(), 1);
+        // A smaller build (batch 5t, part C): the note is not a part of the name.
+        let note = ConfigNote { checked: vec!["dev".into(), "dev, no default features (libraries and binaries only)".into()], ..note };
+        assert_eq!(note.checked_line(), "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, no default features` (libraries and binaries only: the other targets do not build)");
+        // A report of an older version has no data.
+        let report: Report = serde_json::from_str(r#"{"steps":[],"organization":[],"warnings":[],"accepted":true}"#).unwrap();
+        assert!(report.configs.is_none());
     }
 }

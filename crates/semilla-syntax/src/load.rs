@@ -60,6 +60,12 @@ pub struct Item {
     pub file: String,
     pub line_start: usize,
     pub line_end: usize,
+    /// The column of the first character of the item in its first line, and the column after
+    /// its last character in its last line. A column is a count of characters from 0.
+    #[serde(skip)]
+    pub col_start: usize,
+    #[serde(skip)]
+    pub col_end: usize,
     /// The visibility text (`pub`, `pub(crate)`, or empty).
     pub vis: String,
     /// The token text of the item without its body, doc comments, and visibility.
@@ -890,6 +896,7 @@ impl Loader<'_> {
     fn add_parts(&mut self, path: String, kind: ItemKind, value: &(impl quote::ToTokens + Spanned), vis: &str, attrs: &[syn::Attribute], body: Option<Node>, members: Vec<String>, file: &str, source: &str, test: bool, signature: String) {
         let span = value.span();
         let (line_start, line_end) = (span.start().line, span.end().line);
+        let (col_start, col_end) = (span.start().column, span.end().column);
         let text_source = source_lines(source, line_start, line_end);
         // Doc comments are stored as `///` lines, as in the source.
         let doc_line = |attr: &syn::Attribute| match &attr.meta {
@@ -910,6 +917,8 @@ impl Loader<'_> {
             file: file.to_string(),
             line_start,
             line_end,
+            col_start,
+            col_end,
             vis: vis.to_string(),
             signature,
             docs,

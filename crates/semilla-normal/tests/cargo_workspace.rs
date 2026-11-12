@@ -103,6 +103,16 @@ pub struct Wide<T> {
 pub fn first_wide<T>(wides: &mut [Wide<T>]) -> *mut u8 {
     wides.as_mut_ptr() as *mut u8
 }
+// Batch 5s, part E: a promoted constant with no known source (`usize` arithmetic).
+pub fn kept_mark(x: usize) -> bool {
+    let limit: &'static usize = &(5 - 1);
+    x == *limit
+}
+
+pub fn new_mark(x: usize) -> bool {
+    let limit: &'static usize = &(5 - 1);
+    x == *limit
+}
 "#;
 
 const CORE_V2: &str = r#"
@@ -175,6 +185,16 @@ pub struct Wide<T> {
 
 pub fn first_wide<T>(wides: &mut [Wide<T>]) -> *mut u8 {
     wides.as_mut_ptr() as *mut u8
+}
+// Batch 5s, part E: a promoted constant with no known source (`usize` arithmetic).
+pub fn kept_mark(x: usize) -> bool {
+    let limit: &'static usize = &(5 - 1);
+    x == *limit
+}
+
+pub fn new_mark(x: usize) -> bool {
+    let limit: &'static usize = &(6 - 2);
+    x == *limit
 }
 "#;
 
@@ -321,6 +341,21 @@ fn two_versions_of_a_two_crate_workspace() {
             "no {prefix}* file in {files:?}"
         );
     }
+    // Batch 5t, part A: each record file starts with the record of its compile unit. The `cfg`
+    // set and the list of the source files come from the compiler.
+    let units = semilla_normal::read_units(&scratch.join("out-v1/n0")).expect("a unit record in each file");
+    assert_eq!(units.len(), files.len(), "{units:?}");
+    let unit = |prefix: &str| units.iter().find(|unit| unit.target.starts_with(prefix)).unwrap_or_else(|| panic!("no unit {prefix}: {units:?}"));
+    let (lib, test, bin) = (unit("app_b.lib."), unit("app_b.test."), unit("app_b.bin."));
+    assert!(lib.cfg.contains("debug_assertions") && !lib.cfg.contains("test"), "{lib:?}");
+    assert!(test.cfg.contains("test") && test.cfg.contains("debug_assertions"), "{test:?}");
+    assert_eq!((lib.package.as_str(), lib.folder.as_str(), lib.root.as_str()), ("app_b", "app_b", "app_b/src/lib.rs"));
+    // The file of an `include!` call is a file of the unit.
+    assert!(lib.files.contains("app_b/src/lib.rs") && lib.files.contains("app_b/src/rate.rs"), "{lib:?}");
+    assert!(!lib.files.contains("app_b/src/main.rs") && !lib.files.contains("core_a/src/lib.rs"), "{lib:?}");
+    assert_eq!(test.root, lib.root);
+    assert_eq!(bin.root, "app_b/src/main.rs");
+    assert!(!lib.triple.is_empty());
     let first = before["n0"].iter().find(|record| record.name == "app_b::get").expect("app_b::get");
     let span = first.span.as_ref().expect("a span");
     assert!(span.file.ends_with("app_b/src/lib.rs"), "{span:?}");
@@ -369,6 +404,15 @@ fn two_versions_of_a_two_crate_workspace() {
     assert!(matches!(status(&results, "core_a::first_slot"), BodyStatus::Equal { .. }), "{:?}", status(&results, "core_a::first_slot"));
     assert!(matches!(status(&results, "core_a::first_cell"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::first_cell"));
     assert!(matches!(status(&results, "core_a::first_wide"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::first_wide"));
+
+    // Batch 5s, part E: the mark of a promoted constant with no known source is its printed
+    // MIR. It is the same in each build (see the compare of `before` and `again`), so a body
+    // with no change is equal to itself. A different computation with the same value (`5 - 1`
+    // and `6 - 2`) gives a different text.
+    let kept = before["n0"].iter().find(|record| record.name == "core_a::kept_mark").expect("core_a::kept_mark");
+    assert!(kept.text.contains("@promoted {") && !kept.text.contains("unknown_"), "{}", kept.text);
+    assert!(matches!(status(&results, "core_a::kept_mark"), BodyStatus::Equal { level, .. } if level == "n0"), "{:?}", status(&results, "core_a::kept_mark"));
+    assert!(matches!(status(&results, "core_a::new_mark"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::new_mark"));
 
     // The renamed function itself has the same body.
     assert!(

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use semilla_core::Step;
 use semilla_core::report::Effect;
+use semilla_normal::cargo::{Configuration, Features};
 use semilla_verify::{BodyComparison, BodyOracle, BodyStatus, EffectCheck, ExprOracle};
 
 use crate::git::Repo;
@@ -25,7 +26,46 @@ pub struct NormalOracle {
     /// The build code state of each tree of the change set.
     pub code: crate::buildcode::BuildCode,
     pub mode: crate::buildcode::Mode,
+    /// The configurations of each step that this oracle compared (batch 5s).
+    pub log: ConfigLog,
 }
+
+/// The configurations of one compared step (batch 5s, B1): the data of the output.
+#[derive(Clone, Debug, Default)]
+pub struct StepConfigs {
+    /// The names of the checked configurations.
+    pub checked: Vec<String>,
+    /// The configurations of the default list that Semilla did not check, each with the cause.
+    pub not_checked: Vec<(String, String)>,
+    /// The true settings of each checked configuration, in the tree before the step and in the
+    /// tree after it.
+    pub truth: [Vec<semilla_verify::ConfigTruth>; 2],
+    /// The target triple of the check build.
+    pub target: String,
+}
+
+/// The configurations of each compared step, by the two trees of the step.
+pub type ConfigLog = std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), StepConfigs>>>;
+
+
+/// The file of the records cache that holds the error of a build with a compile error. The
+/// same tree, configuration, and settings give the same error.
+const FAILED_FILE: &str = ".failed";
+
+/// True if a build error is a compile error of the tree. A dependency that cargo cannot get,
+/// a full disk, and a write that the sandbox stops are not compile errors.
+fn is_compile_error(text: &str) -> bool {
+    text.contains("cargo check failed") && !semilla_normal::cargo::missing_dependency(text) && !text.contains("No space left on device") && !text.contains("Permission denied")
+}
+
+/// The first error line of a build error text.
+fn first_error_line(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|line| line.starts_with("error")).or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty())).unwrap_or("");
+    line.chars().take(160).collect()
+}
+
+/// The `cargo metadata` data of each tree of this process.
+static METADATA: std::sync::Mutex<BTreeMap<String, Option<serde_json::Value>>> = std::sync::Mutex::new(BTreeMap::new());
 
 /// The name of the file that marks the records of a tree with changed build code. The file
 /// holds the base tree of the change set.
@@ -82,15 +122,71 @@ impl NormalOracle {
         Ok(sets)
     }
 
-    /// The folder suffix of a feature set: empty for the default features.
-    fn set_suffix(features: &[String]) -> String {
-        if features.is_empty() {
-            return String::new();
+    /// The `cargo metadata` data of a tree (the manifests), or `None` if cargo cannot read them.
+    fn metadata(&self, tree: &str) -> Option<serde_json::Value> {
+        if let Some(known) = METADATA.lock().ok().and_then(|cache| cache.get(tree).cloned()) {
+            return known;
         }
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        features.hash(&mut hasher);
-        format!("-f{:012x}", hasher.finish() & 0xffff_ffff_ffff)
+        let found = self.repo.materialize(tree).ok().and_then(|dir| semilla_normal::cargo::cargo_metadata(&dir).ok());
+        if let Ok(mut cache) = METADATA.lock() {
+            cache.insert(tree.to_string(), found.clone());
+        }
+        found
+    }
+
+    /// The default list of configurations of a step (batch 5s, A2): the two profiles, each
+    /// with the default features, no default features, all features, and each listed feature
+    /// set. A feature selection with the same feature state as an earlier one, in the two
+    /// trees, is not in the list. The list comes only from the manifests of the two trees.
+    pub fn configurations(&self, before: &str, after: &str) -> Result<Vec<Configuration>> {
+        let mut selections = vec![Features::Default, Features::NoDefault, Features::All];
+        selections.extend(self.feature_sets(&[before, after])?.into_iter().filter(|set| !set.is_empty()).map(Features::Listed));
+        let metadata = [self.metadata(before), self.metadata(after)];
+        let mut seen = Vec::new();
+        let mut kept = Vec::new();
+        for selection in selections {
+            // A tree with manifests that cargo cannot read has no state: the selection stays.
+            let state: Vec<_> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::feature_state(data, &selection))).collect();
+            if state.iter().all(Option::is_some) && seen.contains(&state) {
+                continue;
+            }
+            seen.push(state);
+            kept.push(selection);
+        }
+        Ok(kept.into_iter().flat_map(|features| [false, true].map(|release| Configuration::new(release, features.clone()))).collect())
+    }
+
+    /// The cache folder of the records of a tree at a level and a configuration.
+    fn cache_folder(&self, tree: &str, level: &str, config: &Configuration) -> Result<(std::path::PathBuf, std::path::PathBuf, bool, String)> {
+        let (root, marked) = self.root(tree)?;
+        let base = root.join("build");
+        let settings = semilla_normal::cargo::settings_key(&base, semilla_normal::cargo::find_driver().ok().as_deref());
+        let name = format!("{level}{}", config.suffix());
+        let cache = root.join("mir").join(tree).join(format!("{name}-s{settings}"));
+        Ok((root, cache, marked, name))
+    }
+
+    /// The unit records of a configuration in a tree, by the compiler (batch 5t, part A). The
+    /// record files of the N0 build have them. `None`: a record file has no unit record.
+    fn units(&self, tree: &str, config: &Configuration) -> Option<Vec<semilla_normal::UnitRecord>> {
+        let (_, cache, _, _) = self.cache_folder(tree, "n0", config).ok()?;
+        semilla_normal::read_units(&cache)
+    }
+
+    /// The target triple of the check build of a tree: the target of the compiler, else the
+    /// host of the toolchain.
+    fn target(&self, tree: &str, config: &Configuration) -> String {
+        self.units(tree, config).and_then(|units| units.into_iter().map(|unit| unit.triple).find(|triple| !triple.is_empty())).unwrap_or_else(semilla_normal::cargo::host_target)
+    }
+
+    /// The true settings of a checked configuration in a tree.
+    fn truth(&self, tree: &str, config: &Configuration) -> semilla_verify::ConfigTruth {
+        let units = self.units(tree, config);
+        semilla_verify::ConfigTruth {
+            name: config.name(),
+            known: units.is_some(),
+            units: units.into_iter().flatten().map(|unit| semilla_verify::Unit { target: unit.target, package: unit.folder, cfg: unit.cfg, files: unit.files, root: unit.root }).collect(),
+        }
     }
 
     /// The folder set of a tree, and true if it is the separate set of the changed build code.
@@ -112,21 +208,23 @@ impl NormalOracle {
 
     /// The records of a tree at a level, with the default features.
     pub fn records(&self, tree: &str, level: &str) -> Result<Vec<semilla_normal::BodyRecord>> {
-        self.records_with(tree, level, &[])
+        self.records_with(tree, level, &Configuration::DEV)
     }
 
-    /// The records of a tree at a level and a feature set: from the cache, or from a delta build.
-    fn records_with(&self, tree: &str, level: &str, features: &[String]) -> Result<Vec<semilla_normal::BodyRecord>> {
-        // The cache key: the tree, the level, the feature set, and the build settings that are not
-        // in the tree (the outer cargo configuration and the driver binary).
-        let (root, marked) = self.root(tree)?;
+    /// The records of a tree at a level and a configuration: from the cache, or from a delta
+    /// build.
+    fn records_with(&self, tree: &str, level: &str, config: &Configuration) -> Result<Vec<semilla_normal::BodyRecord>> {
+        // The cache key: the tree, the level, the configuration, and the build settings that are
+        // not in the tree (the outer cargo configuration and the driver binary).
+        let (root, cache, marked, name) = self.cache_folder(tree, level, config)?;
         let base = root.join("build");
-        let settings = semilla_normal::cargo::settings_key(&base, semilla_normal::cargo::find_driver().ok().as_deref());
-        let name = format!("{level}{}", Self::set_suffix(features));
-        let cache = root.join("mir").join(tree).join(format!("{name}-s{settings}"));
         // A record with the mark is never a record of the shared folders.
         if !marked && cache.join(BUILD_CODE_FILE).exists() {
             let _ = std::fs::remove_dir_all(&cache);
+        }
+        // A compile error of this tree in this configuration: the same build gives it again.
+        if let Ok(error) = std::fs::read_to_string(cache.join(FAILED_FILE)) {
+            anyhow::bail!("{error}");
         }
         if cache.join(".complete").exists() {
             note_sandbox(&cache);
@@ -150,7 +248,15 @@ impl NormalOracle {
         std::fs::create_dir_all(root.join("target"))?;
         let started = std::time::Instant::now();
         self.repo.checkout_build(&build, tree)?;
-        semilla_normal::run_cargo_check_delta_features(&build, level, &records, &target, features)?;
+        if let Err(error) = semilla_normal::run_cargo_check_delta_config(&build, level, &records, &target, config) {
+            let text = format!("{error:#}");
+            if is_compile_error(&text) && !marked {
+                let _ = std::fs::remove_dir_all(&cache);
+                std::fs::create_dir_all(&cache)?;
+                std::fs::write(cache.join(FAILED_FILE), &text)?;
+            }
+            return Err(error);
+        }
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
         let _ = std::fs::remove_dir_all(&cache);
         std::fs::create_dir_all(&cache)?;
@@ -175,7 +281,7 @@ impl NormalOracle {
     }
 
     /// The records of both trees at some levels. Each level runs in its own thread.
-    fn levels(&self, before: &str, after: &str, levels: &[&str], features: &[String]) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
+    fn levels(&self, before: &str, after: &str, levels: &[&str], features: &Configuration) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
         let results: Vec<Result<(String, Vec<_>, Vec<_>)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = levels
                 .iter()
@@ -192,25 +298,59 @@ impl NormalOracle {
         Ok((old, new))
     }
 
-    /// Compares the bodies of one feature set. N0 first; N2 and N3 only when a body is still
-    /// different at N0.
-    fn compare_set(
+    /// Builds the N0 records of the two trees of a step in each configuration of the list. The
+    /// configurations build in parallel: each has its own build folder and target folder.
+    ///
+    /// The result for each configuration is `None` (the two trees build), or the first error
+    /// line (the tree before the step does not build: Semilla does not check the configuration
+    /// in this step). A configuration that builds before the step and not after it is a compile
+    /// error of the step (batch 5s, A4).
+    fn build_all(&self, step: &Step, configs: &[Configuration]) -> Result<Vec<Option<String>>> {
+        let results: Vec<Result<Option<String>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = configs
+                .iter()
+                .map(|config| {
+                    scope.spawn(move || {
+                        if let Err(error) = self.records_with(&step.tree_before, "n0", config) {
+                            let text = format!("{error:#}");
+                            return if is_compile_error(&text) { Ok(Some(first_error_line(&text))) } else { Err(error) };
+                        }
+                        match self.records_with(&step.tree_after, "n0", config) {
+                            Ok(_) => Ok(None),
+                            Err(error) if is_compile_error(&format!("{error:#}")) => {
+                                Err(error.context(format!("the code after the step does not compile in the configuration `{}` (it compiles before the step)", config.name())))
+                            }
+                            Err(error) => Err(error),
+                        }
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
+        });
+        // The first error in the order of the list, so that the output is stable.
+        results.into_iter().collect()
+    }
+
+    /// Compares the bodies of one configuration at N0.
+    fn compare_n0(
         &self,
         step: &Step,
         renames: &BTreeMap<String, String>,
         added: &[String],
-        features: &[String],
-        spans: &mut BTreeMap<String, (String, usize)>,
+        features: &Configuration,
+        index: usize,
         opaque: &dyn semilla_verify::OpaqueInputs,
-    ) -> Result<Vec<semilla_normal::BodyComparison>> {
-        let (mut before, mut after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
-        let renames = &with_moved_closures(renames, added, &before, &after);
+    ) -> Result<SetState> {
+        let (before, after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
+        let renames = with_moved_closures(renames, added, &before, &after);
+        let renames = &renames;
         // The bodies that the build configuration selects, by the syntax tree (batch 5l). No
         // normal form looks into them.
         for (levels, is_after) in [(&before, false), (&after, true)] {
             for record in levels.get("n0").into_iter().flatten() {
                 let span = record.span.as_ref().map(|span| (span.file.clone(), span.line_start));
                 opaque.note(is_after, &record.name, span.as_ref(), &record.adts);
+                opaque.body(is_after, &record.name, span.as_ref(), index, &record.target);
                 let names: Vec<semilla_verify::ExpandedName> = record
                     .names
                     .iter()
@@ -244,27 +384,51 @@ impl NormalOracle {
             marks
         };
         let (before_marks, after_marks) = (marks(&before, false), marks(&after, true));
-        let mut comparisons = semilla_normal::compare_with(&before, &after, renames, added, &before_marks, &after_marks);
-        if comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. })) {
-            let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], features)?;
-            before.extend(old);
-            after.extend(new);
-            semilla_normal::drop_opaque_inlines(&mut before, &before_marks);
-            semilla_normal::drop_opaque_inlines(&mut after, &after_marks);
-            let started = std::time::Instant::now();
-            comparisons = semilla_normal::compare_with(&before, &after, renames, added, &before_marks, &after_marks);
-            crate::timing("compare the bodies (N0 to N4)", started);
-        }
-        // The span of each body: the "after" records win (the name is the "after" name).
-        for record in [&before, &after].iter().flat_map(|levels| levels.values().flatten()) {
+        let comparisons = semilla_normal::compare_with(&before, &after, renames, added, &before_marks, &after_marks);
+        Ok(SetState { config: features.clone(), renames: renames.clone(), before, after, before_marks, after_marks, comparisons })
+    }
+
+    /// Compares the bodies of one configuration at N2 and N3 (with N4), after `compare_n0`.
+    fn compare_deep(&self, step: &Step, added: &[String], state: &mut SetState) -> Result<()> {
+        let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], &state.config)?;
+        state.before.extend(old);
+        state.after.extend(new);
+        semilla_normal::drop_opaque_inlines(&mut state.before, &state.before_marks);
+        semilla_normal::drop_opaque_inlines(&mut state.after, &state.after_marks);
+        let started = std::time::Instant::now();
+        state.comparisons = semilla_normal::compare_with(&state.before, &state.after, &state.renames, added, &state.before_marks, &state.after_marks);
+        crate::timing("compare the bodies (N0 to N4)", started);
+        Ok(())
+    }
+}
+
+/// The comparison of one configuration of a step.
+struct SetState {
+    config: Configuration,
+    renames: BTreeMap<String, String>,
+    before: semilla_normal::Levels,
+    after: semilla_normal::Levels,
+    before_marks: semilla_normal::Marks,
+    after_marks: semilla_normal::Marks,
+    comparisons: Vec<semilla_normal::BodyComparison>,
+}
+
+impl SetState {
+    /// True if a body is not equal at N0.
+    fn needs_deep(&self) -> bool {
+        self.comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. }))
+    }
+
+    /// The span of each body: the "after" records win (the name is the "after" name).
+    fn spans(&self, spans: &mut BTreeMap<String, (String, usize)>) {
+        for record in [&self.before, &self.after].iter().flat_map(|levels| levels.values().flatten()) {
             if let Some(span) = &record.span {
                 spans.insert(record.name.clone(), (span.file.clone(), span.line_start));
             }
         }
-        if let (Some(old), Some(new)) = (before.get("n0"), after.get("n0")) {
+        if let (Some(old), Some(new)) = (self.before.get("n0"), self.after.get("n0")) {
             spans.extend(changed_target_spans(old, new));
         }
-        Ok(comparisons)
     }
 }
 
@@ -322,7 +486,11 @@ fn with_moved_closures(
     renames
 }
 
-/// Combines the status of one body over the feature sets: equal only if it is equal in every set.
+/// Combines the status of one body over two configurations that compile it (batch 5s, A5).
+///
+/// The body is equal only if it is equal in each configuration. A body that only one side has
+/// in each configuration keeps that state. Each other pair is a changed body: for example a
+/// body that is equal in `dev` and exists only after the step in `release`.
 fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
     match (old, new) {
         (BodyStatus::Equal { level: a, proof: mut p }, BodyStatus::Equal { level: b, proof: q }) => {
@@ -330,9 +498,12 @@ fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
             BodyStatus::Equal { level: a.max(b), proof: p }
         }
         (BodyStatus::Different { cfg_changed: a }, BodyStatus::Different { cfg_changed: b }) => BodyStatus::Different { cfg_changed: a || b },
-        (BodyStatus::Different { cfg_changed }, _) | (_, BodyStatus::Different { cfg_changed }) => BodyStatus::Different { cfg_changed },
-        (BodyStatus::Equal { .. }, other) | (other, BodyStatus::Equal { .. }) => other,
-        (old, _) => old,
+        (BodyStatus::Different { cfg_changed }, BodyStatus::Equal { .. }) | (BodyStatus::Equal { .. }, BodyStatus::Different { cfg_changed }) => BodyStatus::Different { cfg_changed },
+        (BodyStatus::BeforeOnly, BodyStatus::BeforeOnly) => BodyStatus::BeforeOnly,
+        (BodyStatus::AfterOnly, BodyStatus::AfterOnly) => BodyStatus::AfterOnly,
+        // The set of the configurations that compile the body changed, or the body changed in
+        // one of them: the control flow of a build changed.
+        _ => BodyStatus::Different { cfg_changed: true },
     }
 }
 
@@ -355,12 +526,36 @@ impl BodyOracle for NormalOracle {
     }
 
     fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<BodyComparison>> {
-        let sets = self.feature_sets(&[&step.tree_before, &step.tree_after])?;
+        let checked = self.checked(step)?;
+        // N0 for each configuration. Then N2 and N3 for each configuration with a body that is
+        // not equal at N0: these builds run in parallel.
+        let mut states = Vec::new();
+        for (index, config) in checked.iter().enumerate() {
+            states.push(self.compare_n0(step, renames, added, config, index, opaque)?);
+        }
+        let deep: Vec<Result<()>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = states
+                .iter()
+                .filter(|state| state.needs_deep())
+                .map(|state| scope.spawn(move || self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], &state.config).map(|_| ())))
+                .collect();
+            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
+        });
+        deep.into_iter().collect::<Result<Vec<()>>>()?;
         let mut spans = BTreeMap::new();
         let mut combined: BTreeMap<String, BodyStatus> = BTreeMap::new();
+        // The configurations of each body: those that compile it, and those where it is not equal.
+        let mut compiled: BTreeMap<String, usize> = BTreeMap::new();
+        let mut differs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut first: BTreeMap<String, String> = BTreeMap::new();
         let mut config: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
-        for features in &sets {
-            for comparison in self.compare_set(step, renames, added, features, &mut spans, opaque)? {
+        for mut state in states {
+            if state.needs_deep() {
+                self.compare_deep(step, added, &mut state)?;
+            }
+            state.spans(&mut spans);
+            let name = state.config.name();
+            for comparison in state.comparisons {
                 if !comparison.config.is_empty() {
                     config.entry(comparison.name.clone()).or_default().extend(comparison.config.iter().cloned());
                 }
@@ -370,6 +565,11 @@ impl BodyOracle for NormalOracle {
                     semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
                     semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
                 };
+                *compiled.entry(comparison.name.clone()).or_default() += 1;
+                first.entry(comparison.name.clone()).or_insert_with(|| name.clone());
+                if !matches!(status, BodyStatus::Equal { .. }) {
+                    differs.entry(comparison.name.clone()).or_default().push(name.clone());
+                }
                 let merged = match combined.remove(&comparison.name) {
                     Some(old) => combine(old, status),
                     None => status,
@@ -379,17 +579,92 @@ impl BodyOracle for NormalOracle {
         }
         Ok(combined
             .into_iter()
-            .map(|(name, status)| BodyComparison { span: spans.get(&name).cloned(), status, config: config.remove(&name).into_iter().flatten().collect(), name })
+            .map(|(name, status)| {
+                // The output names the configurations only if the body is equal in the first
+                // configuration that compiles it (usually `dev`). A body that is not equal in
+                // that configuration is a usual change: its facts are not neutral, and they
+                // need no spotlight.
+                let differs_in = differs.remove(&name).filter(|list| list.len() < compiled.get(&name).copied().unwrap_or(0) && first.get(&name) != list.first()).unwrap_or_default();
+                BodyComparison { span: spans.get(&name).cloned(), status, config: config.remove(&name).into_iter().flatten().collect(), differs_in, name }
+            })
             .collect())
     }
 
+    fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
+        let checked = self.checked(step)?;
+        Ok([&step.tree_before, &step.tree_after].map(|tree| checked.iter().map(|config| self.truth(tree, config)).collect()))
+    }
+
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
-        let records = self.records(&step.tree_after, "n0")?;
+        // The facts of each checked configuration (batch 5s, A5). The verifier joins the facts
+        // of the bodies of an item, so a property claim must hold in each configuration.
+        let mut facts = Vec::new();
+        for config in self.checked(step)? {
+            facts.extend(self.facts_of(step, &config)?);
+        }
+        Ok(Some(facts))
+    }
+}
+
+impl NormalOracle {
+    /// The configurations of the default list that Semilla checks in a step: each configuration
+    /// that builds before the step. The call builds the N0 records, and keeps the list for the
+    /// output.
+    fn checked(&self, step: &Step) -> Result<Vec<Configuration>> {
+        let configs = self.configurations(&step.tree_before, &step.tree_after)?;
+        let built = self.build_all(step, &configs)?;
+        // Batch 5t, part C. A configuration that does not build with each target before the
+        // step: Semilla tries the libraries and the binaries only. If this smaller build is
+        // good before the step, Semilla checks it. A step that breaks it is a compile error.
+        let narrow: Vec<Configuration> = configs.iter().zip(&built).filter(|(_, error)| error.is_some()).map(|(config, _)| config.narrowed()).collect();
+        let mut smaller = self.build_all(step, &narrow)?.into_iter();
+        let mut log = StepConfigs::default();
+        let mut checked = Vec::new();
+        for (config, error) in configs.into_iter().zip(built) {
+            // The error of the smaller build is not in the output: the error of the build of
+            // each target is the cause that the reader can repair.
+            let (config, error) = match error {
+                Some(error) => match smaller.next() {
+                    Some(None) => (config.narrowed(), None),
+                    _ => (config, Some(error)),
+                },
+                None => (config, None),
+            };
+            match error {
+                None => {
+                    log.checked.push(config.name());
+                    log.truth[0].push(self.truth(&step.tree_before, &config));
+                    log.truth[1].push(self.truth(&step.tree_after, &config));
+                    if log.target.is_empty() {
+                        log.target = self.target(&step.tree_after, &config);
+                    }
+                    checked.push(config);
+                }
+                Some(error) => log.not_checked.push((config.name(), format!("it does not build before the step: {error}"))),
+            }
+        }
+        if checked.is_empty() {
+            // No configuration builds before the step: the error of the first one is the result.
+            let config = Configuration::DEV;
+            self.records_with(&step.tree_before, "n0", &config)?;
+            anyhow::bail!("no configuration of the default list builds before the step");
+        }
+        if let Ok(mut all) = self.log.lock() {
+            all.insert((step.tree_before.clone(), step.tree_after.clone()), log);
+        }
+        Ok(checked)
+    }
+
+    /// The MIR facts of the bodies after a step in one configuration.
+    fn facts_of(&self, step: &Step, config: &Configuration) -> Result<Vec<semilla_verify::BodyFacts>> {
+        // A target name is the name of one build: the walk over the live callees stays in it.
+        let tag = |target: String| if *config == Configuration::DEV { target } else { format!("{target} [{}]", config.name()) };
+        let records = self.records_with(&step.tree_after, "n0", config)?;
         // The MIR signature of each body before the step, by its name and its target (batch 5n,
         // A1). A body with a new name has no entry: its signature is not a known cause.
         let signature = |text: &str| text.lines().next().unwrap_or("").to_string();
-        let old: BTreeMap<(String, String), String> = self.records(&step.tree_before, "n0")?.into_iter().map(|record| ((record.name, record.target), signature(&record.text))).collect();
-        Ok(Some(
+        let old: BTreeMap<(String, String), String> = self.records_with(&step.tree_before, "n0", config)?.into_iter().map(|record| ((record.name, record.target), signature(&record.text))).collect();
+        Ok(
             records
                 .into_iter()
                 .map(|record| semilla_verify::BodyFacts {
@@ -405,7 +680,7 @@ impl BodyOracle for NormalOracle {
                     drop_calls: record.drop_calls.into_iter().map(|t| (t.path, t.call)).collect(),
                     impl_of: record.impl_of,
                     drop_of: record.drop_of,
-                    target: record.target,
+                    target: tag(record.target),
                     live: record.live_callees,
                     param_types: record.param_types.into_iter().map(|t| (t.path, t.krate)).collect(),
                     const_types: record.const_types.into_iter().map(|t| (t.path, t.krate)).collect(),
@@ -414,7 +689,7 @@ impl BodyOracle for NormalOracle {
                     name: record.name,
                 })
                 .collect(),
-        ))
+        )
     }
 }
 
@@ -501,20 +776,74 @@ mod tests {
         assert!(changed_target_spans(&old, &old).is_empty());
     }
 
+    // Batch 5s, A5: the status of a body over two configurations, for each pair of states.
     #[test]
-    fn a_body_is_equal_only_in_every_feature_set() {
+    fn a_body_is_equal_only_in_every_configuration() {
+        let different = |cfg_changed: bool| BodyStatus::Different { cfg_changed };
         assert_eq!(combine(equal("n0"), equal("n2")), equal("n2"));
-        assert_eq!(combine(equal("n0"), BodyStatus::Different { cfg_changed: false }), BodyStatus::Different { cfg_changed: false });
-        assert_eq!(combine(BodyStatus::Different { cfg_changed: true }, equal("n0")), BodyStatus::Different { cfg_changed: true });
-        assert_eq!(combine(BodyStatus::Different { cfg_changed: false }, BodyStatus::Different { cfg_changed: true }), BodyStatus::Different { cfg_changed: true });
-        assert_eq!(combine(equal("n0"), BodyStatus::AfterOnly), BodyStatus::AfterOnly);
+        assert_eq!(combine(equal("n0"), different(false)), different(false));
+        assert_eq!(combine(different(true), equal("n0")), different(true));
+        assert_eq!(combine(different(false), different(true)), different(true));
+        assert_eq!(combine(BodyStatus::BeforeOnly, BodyStatus::BeforeOnly), BodyStatus::BeforeOnly);
+        assert_eq!(combine(BodyStatus::AfterOnly, BodyStatus::AfterOnly), BodyStatus::AfterOnly);
+        // Each mixed pair is a changed body: no pair gives `Equal`, and the order has no effect.
+        let states = [equal("n0"), different(false), BodyStatus::BeforeOnly, BodyStatus::AfterOnly];
+        for (i, a) in states.iter().enumerate() {
+            for (j, b) in states.iter().enumerate() {
+                let result = combine(a.clone(), b.clone());
+                assert_eq!(matches!(result, BodyStatus::Equal { .. }), i == 0 && j == 0, "{a:?} + {b:?}");
+                assert_eq!(matches!(result, BodyStatus::Different { .. }), i != j || i == 1, "{a:?} + {b:?}");
+            }
+        }
     }
 
     #[test]
-    fn the_default_set_has_no_suffix() {
-        assert_eq!(NormalOracle::set_suffix(&[]), "");
-        let a = NormalOracle::set_suffix(&["serde".to_string()]);
-        assert!(a.starts_with("-f") && a != NormalOracle::set_suffix(&["std".to_string()]));
+    fn each_configuration_has_a_name_and_a_folder_suffix() {
+        let config = Configuration::new;
+        assert_eq!(Configuration::DEV.name(), "dev");
+        assert_eq!(Configuration::DEV.suffix(), "");
+        assert_eq!(config(true, Features::Default).name(), "release");
+        assert_eq!(config(false, Features::NoDefault).name(), "dev, no default features");
+        assert_eq!(config(true, Features::All).name(), "release, all features");
+        assert_eq!(config(false, Features::Listed(vec!["a".into(), "b".into()])).name(), "dev, features a,b");
+        let all = [
+            Configuration::DEV,
+            config(true, Features::Default),
+            config(false, Features::NoDefault),
+            config(true, Features::NoDefault),
+            config(false, Features::All),
+            config(true, Features::All),
+            config(false, Features::Listed(vec!["serde".into()])),
+            config(false, Features::Listed(vec!["std".into()])),
+        ];
+        let suffixes: std::collections::BTreeSet<String> = all.iter().map(Configuration::suffix).collect();
+        assert_eq!(suffixes.len(), all.len());
+        // Batch 5t, part C: the smaller build has its own name, folders, and cargo arguments.
+        let narrow = config(false, Features::NoDefault).narrowed();
+        assert_eq!(narrow.name(), "dev, no default features (libraries and binaries only)");
+        assert_eq!(narrow.suffix(), "-nd-lb");
+        assert_eq!(narrow.target_args(), ["--lib", "--bins"]);
+        assert_eq!(Configuration::DEV.target_args(), ["--all-targets"]);
+        assert_eq!(Configuration::NARROW, semilla_core::report::ConfigNote::NARROW);
+    }
+
+    // Batch 5s, A2: a feature selection with the feature state of an earlier one gives no build.
+    #[test]
+    fn the_feature_state_comes_from_the_manifests() {
+        use semilla_normal::cargo::feature_state;
+        let metadata = serde_json::json!({ "packages": [
+            { "name": "plain", "features": {}, "dependencies": [] },
+            { "name": "rich", "features": { "default": ["std"], "std": [], "extra": ["std"] }, "dependencies": [{ "name": "serde", "optional": true }] },
+        ]});
+        let state = |features: Features| feature_state(&metadata, &features);
+        let set = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<std::collections::BTreeSet<String>>();
+        assert_eq!(state(Features::Default)["plain"], set(&[]));
+        assert_eq!(state(Features::NoDefault)["plain"], state(Features::All)["plain"]);
+        assert_eq!(state(Features::Default)["rich"], set(&["default", "std"]));
+        assert_eq!(state(Features::NoDefault)["rich"], set(&[]));
+        assert_eq!(state(Features::All)["rich"], set(&["default", "std", "extra", "dep:serde"]));
+        assert_eq!(state(Features::Listed(vec!["extra".into()]))["rich"], set(&["default", "std", "extra"]));
+        // `std` is a default feature: the listed set is the default set.
+        assert_eq!(state(Features::Listed(vec!["std".into()])), state(Features::Default));
     }
 }
-

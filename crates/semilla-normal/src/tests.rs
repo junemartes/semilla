@@ -563,3 +563,28 @@ fn an_opaque_body_is_not_an_input_of_a_proof() {
     assert_eq!(status_of(&results, "k::f"), &BodyStatus::Different { cfg_changed: true });
     assert_eq!(status_of(&results, "k::g"), &BodyStatus::Equal { level: "n0".into(), proof: Vec::new() });
 }
+
+/// Batch 5t, part A: the first line of a record file is the record of the compile unit.
+#[test]
+fn a_record_file_starts_with_the_unit_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = serde_json::to_string(&record("demo::f", "n0", "bb0: return", &[])).unwrap();
+    let unit = r#"{"unit":{"target":"old name","package":"demo","folder":"","cfg":["debug_assertions","feature=\"std\""],"files":["src/lib.rs"],"root":"src/lib.rs","triple":"x86_64-unknown-linux-gnu"}}"#;
+    let text = format!("{unit}\n{body}\n");
+    // The unit line is not a body record.
+    let records = parse_records(&text).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].name, "demo::f");
+    std::fs::write(dir.path().join("demo.lib.1.jsonl"), &text).unwrap();
+    let units = read_units(dir.path()).unwrap();
+    assert_eq!(units.len(), 1);
+    // The name of the file is the name of the unit.
+    assert_eq!(units[0].target, "demo.lib.1");
+    assert!(units[0].cfg.contains("feature=\"std\"") && units[0].files.contains("src/lib.rs"));
+    assert_eq!(units[0].root, "src/lib.rs");
+    // A record file of an older driver has no unit record: the caller gets no list. Then no
+    // condition is covered.
+    std::fs::write(dir.path().join("demo.test.2.jsonl"), format!("{body}\n")).unwrap();
+    assert_eq!(read_units(dir.path()), None);
+    assert_eq!(read_units(&dir.path().join("none")), None);
+}

@@ -97,6 +97,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.skip.contains(&step.index) { Ok(None) } else { self.inner.facts(step) }
     }
 
+    fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
+        if self.skip.contains(&step.index) { Ok(Default::default()) } else { self.inner.truths(step) }
+    }
+
     fn build_code_files(&self, step: &Step) -> Vec<(String, String)> {
         self.code.host_files(step)
     }
@@ -726,6 +730,9 @@ impl App {
                 if let Some(line) = self.build_code_notice(&stored.report).filter(|_| !stored.report.not_complete()) {
                     put_line(&mut text, &format!("{line}"));
                 }
+                for line in config_lines(&stored.report) {
+                    put_line(&mut text, &line);
+                }
                 text.push_str("phase 2 (computed on this machine):\n");
                 text.push_str(&if verbose { stored.text } else { short_text(&stored.report) });
             }
@@ -943,7 +950,7 @@ impl App {
             // uses the separate folders (design 28).
             let head = self.repo.commit_tree("HEAD").or_else(|_| self.repo.git(&["hash-object", "-t", "tree", "/dev/null"]).map(|empty| empty.trim().to_string()))?;
             let code = self.build_code(&ChangeSet { base_tree: head, head_tree: tree.clone(), ..Default::default() })?;
-            let records = NormalOracle { repo: self.repo.clone(), code, mode: self.mode }.records(&tree, "n0")?;
+            let records = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: Default::default() }.records(&tree, "n0")?;
             semilla_normal::body_hashes(&records)
         };
         let items: Vec<serde_json::Value> = ws
@@ -1066,7 +1073,8 @@ impl App {
         // build code. Such a step gets its phase 1 facts, with no MIR data.
         let note = code.note(self.mode.runs_build_code());
         let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().collect();
-        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode }) };
+        let log = crate::oracle::ConfigLog::default();
+        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
         let exprs = SmtOracle::for_repo(&self.repo);
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
@@ -1082,6 +1090,7 @@ impl App {
             mark_not_checked(step, &format!("build code changed in step {change}"));
         }
         report.build_code = note;
+        report.configs = config_note(set, &log, &cache);
         crate::timing("verify the change set (with the body checks)", started);
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
@@ -1305,7 +1314,7 @@ impl App {
         use semilla_core::view::{GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, Status};
         // The folder set of the tree. A command with no permission reads no record of a tree
         // with changed build code (I6).
-        let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode }).root(tree) else { return };
+        let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default() }).root(tree) else { return };
         let settings = semilla_normal::cargo::settings_key(&root.join("build"), semilla_normal::cargo::find_driver().ok().as_deref());
         let cache = root.join("mir").join(tree).join(format!("n0-s{settings}"));
         if !cache.join(".complete").exists() || (!marked && cache.join(crate::oracle::BUILD_CODE_FILE).exists()) {
@@ -1371,6 +1380,8 @@ impl App {
         // The build code line is the first line of each output of a reviewer (design 28).
         result.report.notices.extend(self.build_code_notice(&result.report));
         result.report.notices.extend(self.base_notice(&set, commit));
+        // The checked configurations come next to the base line (batch 5s, B1).
+        result.report.notices.extend(config_lines(&result.report));
         // Each group shows the engine suggestion of its subgroups. A stored layout has labels of
         // the agent (a role, a title), and no reviewer output shows a stored label (5k, A3).
         let test_items = self.test_items(&set)?;
@@ -1422,6 +1433,53 @@ impl App {
 /// The short text of `status` (brief 5f, D2): one line for each step, then the result line.
 /// A line that makes the result not accepted stays, because the agent must correct it.
 /// `status --verbose` prints the facts.
+/// The build configurations of the body checks of a change set (design 8.12; batch 5s, B1),
+/// from the log of the oracle. `None` if no step has a body check.
+fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap<String, Workspace>) -> Option<semilla_core::report::ConfigNote> {
+    let log = log.lock().ok()?;
+    let mut note = semilla_core::report::ConfigNote::default();
+    let mut found = false;
+    let mut conditions: BTreeSet<String> = BTreeSet::new();
+    // A configuration is in the checked list only if each compared step has it.
+    let mut order: Vec<String> = Vec::new();
+    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    let mut compared = 0;
+    for step in &set.steps {
+        let Some(configs) = log.get(&(step.tree_before.clone(), step.tree_after.clone())) else { continue };
+        found = true;
+        compared += 1;
+        if note.target.is_empty() {
+            note.target = configs.target.clone();
+        }
+        for name in &configs.checked {
+            if !order.contains(name) {
+                order.push(name.clone());
+            }
+            *count.entry(name.clone()).or_default() += 1;
+        }
+        for (name, cause) in &configs.not_checked {
+            // One entry for a name and a kind of cause: it keeps the error text of the first step.
+            let new = semilla_core::report::ConfigGap { name: name.clone(), cause: cause.clone(), steps: vec![step.index] };
+            match note.not_checked.iter_mut().find(|gap| gap.name == new.name && gap.kind() == new.kind()) {
+                Some(gap) => gap.steps.push(step.index),
+                None => note.not_checked.push(new),
+            }
+        }
+        if let (Some(before), Some(after)) = (trees.get(&step.tree_before), trees.get(&step.tree_after)) {
+            let cover = semilla_verify::cfgcond::Cover::new(&[(before, &configs.truth[0]), (after, &configs.truth[1])]);
+            conditions.extend(cover.not_covered.iter().map(|text| semilla_verify::cfgcond::show(text)));
+        }
+    }
+    note.checked = order.into_iter().filter(|name| count.get(name) == Some(&compared)).collect();
+    note.not_covered = conditions.into_iter().collect();
+    found.then_some(note)
+}
+
+/// The lines of the build configurations for an output (batch 5s, B1), if the report has them.
+pub(crate) fn config_lines(report: &Report) -> Vec<String> {
+    report.configs.as_ref().map(|note| note.lines(report.steps.len())).unwrap_or_default()
+}
+
 pub(crate) fn short_text(report: &Report) -> String {
     let mut text = String::new();
     let not_checked = report.build_code.as_ref().map(|note| note.not_checked()).unwrap_or_default();

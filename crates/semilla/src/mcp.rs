@@ -74,7 +74,8 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
         "results" => app.status(text("commit"), args.get("wait").and_then(Value::as_u64), args.get("verbose").and_then(Value::as_bool).unwrap_or(false)),
         "verify" => {
             let result = app.check(None, args.get("final").and_then(Value::as_bool).unwrap_or(false))?;
-            Ok(format!("{}\n{}", result.text, result.tree.render()))
+            let configs: String = crate::app::config_lines(&result.report).into_iter().map(|line| format!("{line}\n")).collect();
+            Ok(format!("{configs}{}\n{}", result.text, result.tree.render()))
         }
         "tag" => app.tag(text("commit").unwrap_or("HEAD")),
         other => anyhow::bail!("unknown tool `{other}`"),

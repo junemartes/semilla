@@ -778,7 +778,7 @@ pub fn terms() -> &'static str {
 pub struct Manual;
 
 /// No checked configuration compiles this function.
-#[cfg(feature = "never")]
+#[cfg(target_os = "none")]
 pub fn hidden() -> &'static str {
     include_str!("hidden.txt")
 }
@@ -2525,7 +2525,7 @@ fn a_trailing_comment_is_a_comment_fact_not_a_doc_fact() {
 const FEES: &str = "pub mod cart;\n\npub const BASE_FEE: u64 = 25;\n\npub fn charge(amount: u64, rate: u64) -> u64 {\n    BASE_FEE + percent(amount, rate)\n}\n\npub fn percent(amount: u64, rate: u64) -> u64 {\n    amount * rate / 100\n}\n\npub fn scaled(amount: u64, rate: u64) -> u64 {\n    debug_assert!(rate <= 100);\n    amount * rate / 100\n}\n\npub fn withdraw(cents: u64, amount: u64) -> u64 {\n    let fee = charge(amount, 1);\n    let cost = amount + fee;\n    cents - cost\n}\n";
 
 /// The spotlight text of a body that reads the build configuration (batch 5k, A1).
-const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on the build configuration. Semilla checks one configuration (debug, this target).";
+const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on a build condition that Semilla did not check. A proof holds only in the checked configurations.";
 
 #[test]
 fn a_proof_holds_for_each_build_configuration() {
@@ -2556,15 +2556,15 @@ fn a_proof_holds_for_each_build_configuration() {
     };
 
     // The table of the brief. A use of `cfg!` gets the spotlight, so the step needs a reason.
-    let out = probe("if !cfg!(debug_assertions) { return 0; }", "", 1);
-    assert!(out.contains("[control_flow]") && out.contains(CONFIG_SPOTLIGHT) && out.contains("Uses: `cfg!(debug_assertions)` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
+    let out = probe("if !cfg!(unix) { return 0; }", "", 1);
+    assert!(out.contains("[control_flow]") && out.contains(CONFIG_SPOTLIGHT) && out.contains("Uses: `cfg!(unix)` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
     for statement in ["if usize::BITS != 64 { return 0; }", "if usize::MAX as u64 != u64::MAX { return 0; }", "if core::mem::size_of::<usize>() != 8 { return 0; }", "if core::mem::align_of::<u64>() != 8 { return 0; }", "if (1u64 << 40) as usize == 0 { return 0; }", "if (u64::MAX as usize as u64) != u64::MAX { return 0; }"] {
         let out = probe(statement, "", 0);
         assert!(out.contains("added early exit") && out.contains("[control_flow]") && !out.contains("neutral"), "{statement}: {out}");
     }
-    let out = probe("if !CHECKED { return 0; }", "\nconst CHECKED: bool = cfg!(debug_assertions);\n", 1);
+    let out = probe("if !CHECKED { return 0; }", "\nconst CHECKED: bool = cfg!(unix);\n", 1);
     assert!(out.contains("added early exit `if !CHECKED { return 0; }` at `shop_core::percent/S0` [control_flow]") && !out.contains("neutral"), "{out}");
-    assert!(out.contains("Uses: `cfg!(debug_assertions)` in `shop_core::CHECKED`") && out.contains("! spotlight: build configuration: shop_core::CHECKED") && !out.contains("cfg attribute"), "{out}");
+    assert!(out.contains("Uses: `cfg!(unix)` in `shop_core::CHECKED`") && out.contains("! spotlight: build configuration: shop_core::CHECKED") && !out.contains("cfg attribute"), "{out}");
     let out = probe("if option_env!(\"LEDGER_FREE\").is_some() { return 0; }", "", 1);
     assert!(out.contains("[control_flow]") && out.contains("Uses: `option_env!(\"LEDGER_FREE\")` in `shop_core::percent`"), "{out}");
     // A plain constant of the workspace is equal in each build: the fold is correct.
@@ -2579,14 +2579,14 @@ fn a_proof_holds_for_each_build_configuration() {
     assert!(out.contains("[control_flow]") && out.contains("Uses: `cfg!(target_os = \"windows\")` in `shop_core::withdraw`") && !out.contains("neutral"), "{out}");
     let out = probe("if cfg!(feature = \"x\") { return 0; }", "", 1);
     assert!(out.contains("[control_flow]") && out.contains("Uses: `cfg!(feature = \"x\")` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
-    let out = step(&FEES.replace(percent, &format!("macro_rules! free {{ () => {{ !cfg!(debug_assertions) }}; }}\n\n{percent}    if free!() {{ return 0; }}\n")), &["step", "probe"], 1);
-    assert!(out.contains("added early exit `if free!() { return 0; }` at `shop_core::percent/S0` [control_flow]") && out.contains("Uses: `cfg!(debug_assertions)` in `shop_core::percent`"), "{out}");
+    let out = step(&FEES.replace(percent, &format!("macro_rules! free {{ () => {{ !cfg!(unix) }}; }}\n\n{percent}    if free!() {{ return 0; }}\n")), &["step", "probe"], 1);
+    assert!(out.contains("added early exit `if free!() { return 0; }` at `shop_core::percent/S0` [control_flow]") && out.contains("Uses: `cfg!(unix)` in `shop_core::percent`"), "{out}");
 
     // `cfg!` hidden in a rename step (attempt 21), with no claim and with a `rename` claim. D5:
     // no line says "neutral rewrite" when a note says that the MIR changed.
-    let hidden = FEES.replace("BASE_FEE", "FIXED_FEE").replace("    FIXED_FEE + percent", "    if !cfg!(debug_assertions) { return 0; }\n    FIXED_FEE + percent");
+    let hidden = FEES.replace("BASE_FEE", "FIXED_FEE").replace("    FIXED_FEE + percent", "    if !cfg!(unix) { return 0; }\n    FIXED_FEE + percent");
     let out = step(&hidden, &["step", "rename the fee"], 1);
-    assert!(out.contains("added early exit `if !cfg!(debug_assertions) { return 0; }` at `shop_core::charge/S0` [control_flow]") && out.contains(CONFIG_SPOTLIGHT), "{out}");
+    assert!(out.contains("added early exit `if !cfg!(unix) { return 0; }` at `shop_core::charge/S0` [control_flow]") && out.contains(CONFIG_SPOTLIGHT), "{out}");
     assert!(!out.contains("neutral rewrite"), "{out}");
     let out = step(&hidden, &["step", "rename the fee", "--claim", "rename shop_core::BASE_FEE to=FIXED_FEE"], 1);
     assert!(out.contains("is unproved: an identity step must be neutral, but `shop_core::charge` has code that depends on the build configuration") && out.contains(CONFIG_SPOTLIGHT) && !out.contains("neutral rewrite"), "{out}");
@@ -2602,10 +2602,10 @@ fn a_proof_holds_for_each_build_configuration() {
 
     // A statement with a `cfg` attribute, in the text and in a macro of the workspace: the MIR of
     // the check configuration does not have this code.
-    let out = probe("#[cfg(not(debug_assertions))]\n    return 0;", "", 1);
-    assert!(out.contains("[control_flow]") && out.contains("Uses: `#[cfg(not(debug_assertions))]` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
-    let out = step(&FEES.replace(percent, &format!("macro_rules! rel {{ ($e:expr) => {{ #[cfg(not(debug_assertions))] {{ $e }} }}; }}\n\n{percent}    rel!(return 0);\n")), &["step", "probe"], 1);
-    assert!(out.contains("added macro statement `rel!(return 0);`") && out.contains("Uses: `rel! (#[cfg(not(debug_assertions))])` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
+    let out = probe("#[cfg(not(unix))]\n    return 0;", "", 1);
+    assert!(out.contains("[control_flow]") && out.contains("Uses: `#[cfg(not(unix))]` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
+    let out = step(&FEES.replace(percent, &format!("macro_rules! rel {{ ($e:expr) => {{ #[cfg(not(unix))] {{ $e }} }}; }}\n\n{percent}    rel!(return 0);\n")), &["step", "probe"], 1);
+    assert!(out.contains("added macro statement `rel!(return 0);`") && out.contains("Uses: `rel! (#[cfg(not(unix))])` in `shop_core::percent`") && !out.contains("neutral"), "{out}");
 
     // D4: a function with the name `cfg` has no `cfg` attribute.
     let out = step(&format!("{FEES}\npub fn cfg() -> u64 {{\n    7\n}}\n"), &["step", "add cfg"], 0);
@@ -2626,11 +2626,11 @@ fn a_proof_holds_for_each_build_configuration() {
 
 /// The items of the build configuration that the base of the test has (batch 5l, group 1).
 const CONFIG_ITEMS: &str = "
-#[cfg(debug_assertions)]
+#[cfg(unix)]
 pub fn strict() -> bool {
     true
 }
-#[cfg(not(debug_assertions))]
+#[cfg(not(unix))]
 pub fn strict() -> bool {
     false
 }
@@ -2648,7 +2648,7 @@ pub static LEVEL: u32 = usize::BITS;
 
 #[inline]
 pub fn fast() -> bool {
-    cfg!(debug_assertions)
+    cfg!(unix)
 }
 
 pub fn helper() -> bool {
@@ -2663,7 +2663,7 @@ pub fn guarded(amount: u64) -> u64 {
 }
 
 pub struct Guard;
-#[cfg(not(debug_assertions))]
+#[cfg(not(unix))]
 impl Drop for Guard {
     fn drop(&mut self) {
         std::process::exit(1)
@@ -2709,34 +2709,34 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     };
     // One probe: the statement goes first in `percent`, the item goes to the end of the file.
     let probe = |statement: &str, item: &str, expect: i32| -> String { step(&format!("{}{item}", base.replace(percent, &format!("{percent}    {statement}\n"))), expect) };
-    let uses = |out: &str, text: &str| out.contains("[control_flow]") && out.contains(CONFIG_SPOTLIGHT) && out.contains(&format!("Uses: {text} in `shop_core::percent`")) && !out.contains("neutral");
+    let uses = |out: &str, text: &str| out.contains("[control_flow]") && out.contains(CONFIG_SPOTLIGHT) && out.contains(&format!("Uses: {text}")) && !out.contains("neutral");
 
     // Group 1: the item is in the base and has no change.
     let out = probe("if !strict() { return 0; }", "", 1);
-    assert!(uses(&out, "`strict` (2 definitions under `cfg`)"), "{out}");
+    assert!(uses(&out, "`strict` (2 definitions, one under `#[cfg("), "{out}");
     let out = probe("if !wide() { return 0; }", "", 1);
     assert!(uses(&out, "`wide` (`#[cfg(target_pointer_width=\"64\")]`)"), "{out}");
     let out = probe("if LEVEL != 64 { return 0; }", "", 1);
     assert!(uses(&out, "static `LEVEL` (`usize::BITS`)"), "{out}");
 
     // Group 2: the step adds the item and the statement.
-    let out = probe("if !QUICK { return 0; }", "\nstatic QUICK: bool = cfg!(debug_assertions);\n", 1);
-    assert!(uses(&out, "static `QUICK` (`cfg!(debug_assertions)`)"), "{out}");
+    let out = probe("if !QUICK { return 0; }", "\nstatic QUICK: bool = cfg!(unix);\n", 1);
+    assert!(uses(&out, "static `QUICK` (`cfg!(unix)`)"), "{out}");
     let out = probe("if WIDE != 64 { return 0; }", "\nstatic WIDE: u32 = usize::BITS;\n", 1);
     assert!(uses(&out, "static `WIDE` (`usize::BITS`)"), "{out}");
-    let out = probe("if !is_quick() { return 0; }", "\nstatic QK: bool = cfg!(debug_assertions);\nfn is_quick() -> bool {\n    QK\n}\n", 1);
-    assert!(out.contains("added early exit `if !is_quick() { return 0; }`") && out.contains("static `QK` (`cfg!(debug_assertions)`) in `shop_core::is_quick`") && !out.contains("neutral"), "{out}");
-    let out = probe("if !exact() { return 0; }", "\n#[cfg(debug_assertions)]\nfn exact() -> bool {\n    true\n}\n#[cfg(not(debug_assertions))]\nfn exact() -> bool {\n    false\n}\n", 1);
-    assert!(uses(&out, "`exact` (2 definitions under `cfg`)"), "{out}");
-    let out = probe("if W::MAX as u64 != u64::MAX { return 0; }", "\n#[cfg(debug_assertions)]\ntype W = u64;\n#[cfg(not(debug_assertions))]\ntype W = u32;\n", 1);
-    assert!(uses(&out, "`W` (2 definitions under `cfg`)"), "{out}");
-    let out = probe("if !m::q() { return 0; }", "\n#[cfg(debug_assertions)]\nmod m {\n    pub fn q() -> bool {\n        true\n    }\n}\n#[cfg(not(debug_assertions))]\nmod m {\n    pub fn q() -> bool {\n        false\n    }\n}\n", 1);
-    assert!(uses(&out, "`m` (2 definitions under `cfg`)"), "{out}");
+    let out = probe("if !is_quick() { return 0; }", "\nstatic QK: bool = cfg!(unix);\nfn is_quick() -> bool {\n    QK\n}\n", 1);
+    assert!(out.contains("added early exit `if !is_quick() { return 0; }`") && out.contains("static `QK` (`cfg!(unix)`) in `shop_core::is_quick`") && !out.contains("neutral"), "{out}");
+    let out = probe("if !exact() { return 0; }", "\n#[cfg(unix)]\nfn exact() -> bool {\n    true\n}\n#[cfg(not(unix))]\nfn exact() -> bool {\n    false\n}\n", 1);
+    assert!(uses(&out, "`exact` (2 definitions, one under `#[cfg("), "{out}");
+    let out = probe("if W::MAX as u64 != u64::MAX { return 0; }", "\n#[cfg(unix)]\ntype W = u64;\n#[cfg(not(unix))]\ntype W = u32;\n", 1);
+    assert!(uses(&out, "`W` (2 definitions, one under `#[cfg("), "{out}");
+    let out = probe("if !m::q() { return 0; }", "\n#[cfg(unix)]\nmod m {\n    pub fn q() -> bool {\n        true\n    }\n}\n#[cfg(not(unix))]\nmod m {\n    pub fn q() -> bool {\n        false\n    }\n}\n", 1);
+    assert!(uses(&out, "`m` (2 definitions, one under `#[cfg("), "{out}");
 
     // More forms: a method of an `impl` under `cfg`, and an item that a macro with `cfg` makes.
-    let out = probe("if !amount.lim() { return 0; }", "\ntrait Lim {\n    fn lim(&self) -> bool;\n}\n#[cfg(debug_assertions)]\nimpl Lim for u64 {\n    fn lim(&self) -> bool {\n        true\n    }\n}\n#[cfg(not(debug_assertions))]\nimpl Lim for u64 {\n    fn lim(&self) -> bool {\n        false\n    }\n}\n", 1);
+    let out = probe("if !amount.lim() { return 0; }", "\ntrait Lim {\n    fn lim(&self) -> bool;\n}\n#[cfg(unix)]\nimpl Lim for u64 {\n    fn lim(&self) -> bool {\n        true\n    }\n}\n#[cfg(not(unix))]\nimpl Lim for u64 {\n    fn lim(&self) -> bool {\n        false\n    }\n}\n", 1);
     assert!(uses(&out, "`lim` (an `impl` under `cfg`)"), "{out}");
-    let out = probe("if !made() { return 0; }", "\nmacro_rules! twice {\n    () => {\n        #[cfg(debug_assertions)]\n        fn made() -> bool {\n            true\n        }\n        #[cfg(not(debug_assertions))]\n        fn made() -> bool {\n            false\n        }\n    };\n}\ntwice!();\n", 1);
+    let out = probe("if !made() { return 0; }", "\nmacro_rules! twice {\n    () => {\n        #[cfg(unix)]\n        fn made() -> bool {\n            true\n        }\n        #[cfg(not(unix))]\n        fn made() -> bool {\n            false\n        }\n    };\n}\ntwice!();\n", 1);
     assert!(uses(&out, "`made` (a macro with `cfg` makes it)"), "{out}");
 
     // A type with a drop that the configuration selects: the same MIR in the check build is not
@@ -2796,8 +2796,8 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     assert!(out.contains("`shop_core::percent`: neutral rewrite (proved N4: constant-switch)") && !out.contains("build configuration"), "{out}");
 
     // Batch 5l, P10: a variant under `cfg` changes the set of the values of the type. The check
-    // of the variant is not dead code, with `debug_assertions` and with a feature.
-    for attr in ["#[cfg(not(debug_assertions))]", "#[cfg(feature = \"check\")]"] {
+    // of the variant is not dead code, with `unix` and with a feature.
+    for attr in ["#[cfg(not(unix))]", "#[cfg(feature = \"check\")]"] {
         let check = "    assert!(matches!(mode, Mode::Plain), \"no strict mode here\");\n";
         let with_mode = format!("{base}\npub enum Mode {{\n    Plain,\n    {attr}\n    Strict,\n}}\npub fn fee_for(mode: Mode, amount: u64) -> u64 {{\n{check}    percent(amount, 1)\n}}\n");
         write(repo, "crates/shop-core/src/lib.rs", &with_mode);
@@ -2810,12 +2810,12 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
 
     // Batch 5l, B3: the body of an associated constant of a trait impl has a MIR name that is
     // not the key of the reason. Each message gives the key.
-    let with_const = format!("{}\npub trait K {{\n    const Q: bool;\n}}\nimpl K for u64 {{\n    const Q: bool = cfg!(debug_assertions);\n}}\n", base.replace(percent, &format!("{percent}    if !<u64 as K>::Q {{ return 0; }}\n")));
+    let with_const = format!("{}\npub trait K {{\n    const Q: bool;\n}}\nimpl K for u64 {{\n    const Q: bool = cfg!(unix);\n}}\n", base.replace(percent, &format!("{percent}    if !<u64 as K>::Q {{ return 0; }}\n")));
     write(repo, "crates/shop-core/src/lib.rs", &with_const);
     let (body, key) = ("<u64 as shop_core::K>::Q", "shop_core::impl <u64 as K>");
     let out = run(repo, &["step", "probe", "--reason", &format!("{body}=the debug build has more checks")], 1);
     assert!(out.contains(&format!("the reason for `{body}` belongs to no fact of this step; Semilla does not use it. `{body}` is a body of a fact with a spotlight: the key of the reason is `{key}`")), "{out}");
-    assert!(out.contains(&format!("Uses: `cfg!(debug_assertions)` in `{body}`; it needs a reason: --reason '{key}=…'")), "{out}");
+    assert!(out.contains(&format!("Uses: `cfg!(unix)` in `{body}`; it needs a reason: --reason '{key}=…'")), "{out}");
     assert!(out.contains(&format!("! spotlight: build configuration: {body} (the key of the reason: `{key}`)")), "{out}");
     assert!(out.contains(&format!("run again: semilla step 'probe' --reason '{key}=<why>'")), "{out}");
     let out = run(repo, &["step", "probe", "--reason", &format!("{key}=the debug build has more checks")], 0);
@@ -2828,7 +2828,7 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // a macro call does not have the names that the macro gives.
     let dir = setup();
     let repo = &dir.path().join("repo");
-    let off = "#[cfg(not(debug_assertions))]";
+    let off = "#[cfg(not(unix))]";
     let items = format!(
         "\nmod glob {{\n    pub fn lim() -> u64 {{\n        1\n    }}\n    pub const X: u64 = 1;\n}}\nuse glob::*;\n{off}\nfn lim() -> u64 {{\n    2\n}}\n{off}\nconst X: u64 = 2;\n\
          macro_rules! call {{\n    () => {{\n        lim()\n    }};\n}}\nmacro_rules! x {{\n    () => {{\n        X\n    }};\n}}\nmacro_rules! two {{\n    () => {{\n        2u64\n    }};\n}}\n\
@@ -2858,7 +2858,7 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // A new macro call that gives a function with a second definition under `cfg`. The
     // release build calls a different function.
     let out = step("    glob::lim()\n", "    call!()\n", 1);
-    assert!(out.contains(CONFIG_SPOTLIGHT) && out.contains("Uses: `lim` (under `cfg`; the macro `call!` puts the name into the code) in `shop_core::by_call`") && !out.contains("neutral"), "{out}");
+    assert!(out.contains(CONFIG_SPOTLIGHT) && out.contains("Uses: `lim` (under `#[cfg(not(unix))]`; the macro `call!` puts the name into the code) in `shop_core::by_call`") && !out.contains("neutral"), "{out}");
     // The edit removes a macro call that gives a constant under `cfg`.
     let out = step("    if x!() != 1 {\n        return 0;\n    }\n", "", 0);
     assert!(out.contains("deleted statement `if x!() != 1 { return 0; }`") && !out.contains("neutral"), "{out}");
@@ -2884,8 +2884,8 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     let items = "\nmod tr {\n    pub trait Sup {\n        fn dig(self) -> u64;\n    }\n    pub trait Mark {}\n    impl<X: Mark> Sup for X {\n        fn dig(self) -> u64 {\n            2\n        }\n    }\n    pub trait Other {\n        fn dig(&self) -> u64;\n    }\n\
          \x20   pub trait Low {\n        fn low(self) -> u64;\n    }\n    pub trait Flag {}\n    impl<X: Flag> Low for X {\n        fn low(self) -> u64 {\n            1\n        }\n    }\n    pub trait Base {\n        fn low(&self) -> u64;\n    }\n}\n\
          use tr::{Base as _, Low as _, Other as _, Sup as _};\n\
-         pub struct Coin(pub u64);\nimpl tr::Other for Coin {\n    fn dig(&self) -> u64 {\n        1\n    }\n}\n#[cfg(not(debug_assertions))]\nimpl tr::Mark for Coin {}\n\
-         pub struct Bill(pub u64);\nimpl tr::Base for Bill {\n    fn low(&self) -> u64 {\n        2\n    }\n}\n#[cfg(debug_assertions)]\nimpl tr::Flag for Bill {}\n";
+         pub struct Coin(pub u64);\nimpl tr::Other for Coin {\n    fn dig(&self) -> u64 {\n        1\n    }\n}\n#[cfg(not(unix))]\nimpl tr::Mark for Coin {}\n\
+         pub struct Bill(pub u64);\nimpl tr::Base for Bill {\n    fn low(&self) -> u64 {\n        2\n    }\n}\n#[cfg(unix)]\nimpl tr::Flag for Bill {}\n";
     let bodies = [
         "pub fn by_rival(t: Coin) -> u64 {\n    tr::Other::dig(&t)\n}\n",
         "pub fn by_fact(t: Bill) -> u64 {\n    let _ = &t;\n    1\n}\n",
@@ -2935,14 +2935,14 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
         run(repo, &["step", "probe"], expect)
     };
     // The winner is unstable: a build with no feature gives the call to `Emp::is_empty`.
-    let out = unstable("#![cfg_attr(debug_assertions, feature(exact_size_is_empty))]\n", "ExactSizeIterator::is_empty(&it)", "ExactSizeIterator::is_empty(&it)", "it.is_empty()", 1);
+    let out = unstable("#![cfg_attr(unix, feature(exact_size_is_empty))]\n", "ExactSizeIterator::is_empty(&it)", "ExactSizeIterator::is_empty(&it)", "it.is_empty()", 1);
     assert!(
         out.contains("Uses: `is_empty` (the call means `ExactSizeIterator::is_empty` now by the feature `exact_size_is_empty`; a configuration with no such feature can select a different item) in `shop_core::pick`")
             && !out.contains("neutral"),
         "{out}"
     );
     // The unstable candidate holds now: a build with the feature gives the call to it.
-    let out = unstable("#![cfg_attr(not(debug_assertions), feature(exact_size_is_empty))]\n", "Emp::is_empty(&mut it)", "Emp::is_empty(&mut it)", "it.is_empty()", 1);
+    let out = unstable("#![cfg_attr(not(unix), feature(exact_size_is_empty))]\n", "Emp::is_empty(&mut it)", "Emp::is_empty(&mut it)", "it.is_empty()", 1);
     assert!(
         out.contains("Uses: `is_empty` (the call means `Emp::is_empty` now; `ExactSizeIterator::is_empty` wins if the crate gets its unstable feature in a different configuration) in `shop_core::pick`")
             && !out.contains("neutral"),
@@ -2962,7 +2962,7 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
         let dir = setup();
         let repo = &dir.path().join("repo");
         let base = format!(
-            "{FEES}pub mod pick {{\n    pub mod inner {{\n        pub fn one() -> u64 {{\n            1\n        }}\n    }}\n    #[cfg(debug_assertions)]\n    pub use inner::*;\n}}\n\
+            "{FEES}pub mod pick {{\n    pub mod inner {{\n        pub fn one() -> u64 {{\n            1\n        }}\n    }}\n    #[cfg(unix)]\n    pub use inner::*;\n}}\n\
              #[derive(PartialEq, Eq, PartialOrd, Ord)]\npub struct Tok(pub u64);\n\
              pub fn plain(a: usize, b: usize) -> std::cmp::Ordering {{\n    let o = a.cmp(&b);\n    o\n}}\n\
              pub fn local(a: Tok, b: Tok) -> std::cmp::Ordering {{\n    Ord::cmp(&a, &b)\n}}\n"
@@ -3294,4 +3294,283 @@ fn a_lock_file_that_does_not_agree_with_a_manifest_gives_one_clear_line() {
     let (_, out) = run_env(repo, &["step", "a new version", "--reason", "Cargo.lock:package shop-core=the release", "--reason", "crates/shop-core/Cargo.toml:package.version=the release"], &[]);
     assert!(!out.contains("does not agree") && !out.contains("build code changed"), "{out}");
     assert!(out.contains("package.version \"0.1.0\" → \"0.2.0\""), "{out}");
+}
+
+/// Code for the tests of the configuration list (batch 5s): a `Drop` impl that only the release
+/// profile has, a function that only a feature compiles, and a pair of definitions.
+const CONFIG_LIST: &str = r#"
+pub struct Guard;
+#[cfg(not(debug_assertions))]
+impl Drop for Guard {
+    fn drop(&mut self) {
+        std::process::exit(1)
+    }
+}
+pub struct Hold(pub Guard);
+pub fn hold() -> Hold {
+    Hold(Guard)
+}
+pub fn note() {
+    eprintln!("note");
+}
+pub fn keep() -> u64 {
+    let _h = hold();
+    note();
+    1
+}
+
+#[cfg(feature = "fast")]
+pub fn only_fast(a: u64) -> u64 {
+    a * 2
+}
+
+#[cfg(debug_assertions)]
+fn chk(a: u64) -> u64 {
+    a
+}
+#[cfg(not(debug_assertions))]
+fn chk(a: u64) -> u64 {
+    a
+}
+pub fn via(a: u64) -> u64 {
+    chk(a) + 1
+}
+
+#[cfg(target_os = "none")]
+pub fn never() {}
+"#;
+
+#[test]
+fn a_proof_holds_in_each_checked_configuration() {
+    // Batch 5s, parts A, B, and C. Semilla checks a list of configurations: the two profiles,
+    // each with the default features and with all features.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = format!("{FEES}{CONFIG_LIST}");
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    write(repo, "crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nfast = []\n");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the list"]);
+    let step = |text: &str, expect: i32| -> String {
+        write(repo, "crates/shop-core/src/lib.rs", text);
+        let out = run(repo, &["step", "probe"], expect);
+        if expect == 0 {
+            run(repo, &["undo"], 0);
+        }
+        out
+    };
+
+    // A5: the bodies are equal in `dev`. The release profile has the `Drop` impl, so the edit
+    // moves a drop there. The fact names the configuration.
+    let out = step(&base.replace("let _h = hold();", "let _ = hold();"), 1);
+    assert!(out.contains("not neutral in `release`") && !out.contains("neutral rewrite") && !out.contains("Uses:"), "{out}");
+
+    // An honest rewrite of a body that only the feature `fast` compiles: the configuration with
+    // all features has the proof. The step output has no line for the configurations.
+    let out = step(&base.replace("    a * 2\n", "    let b = a * 2;\n    b\n"), 0);
+    assert!(out.contains("`shop_core::only_fast`: neutral rewrite") && !out.contains("configuration"), "{out}");
+
+    // Part C: the list covers `debug_assertions`, so a call of a function with a definition for
+    // each value does not stop the proof. The proof holds in each checked configuration.
+    let out = step(&base.replace("    chk(a) + 1\n", "    let b = chk(a);\n    b + 1\n"), 0);
+    assert!(out.contains("`shop_core::via`: neutral rewrite") && !out.contains("build configuration"), "{out}");
+
+    // B1: each output for the reviewer names the checked configurations, the target, and the
+    // conditions that the list does not cover.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("    chk(a) + 1\n", "    let b = chk(a);\n    b + 1\n"));
+    run(repo, &["step", "an honest rewrite"], 0);
+    let header = |out: &str| {
+        out.contains("checked configurations (target `")
+            && ["`dev`", "`release`", "`dev, all features`", "`release, all features`"].iter().all(|name| out.contains(name))
+            && out.contains("`cfg` conditions that Semilla did not check: `target_os = \"none\"`")
+            && !out.contains("is not checked")
+    };
+    let out = run(repo, &["status", "--wait", "600"], 0);
+    assert!(header(&out), "{out}");
+    let md = repo.join(".semilla/review.md");
+    let html = repo.join(".semilla/review.html");
+    let out = run(repo, &["review", "--md", md.to_str().unwrap(), "--html", html.to_str().unwrap()], 0);
+    assert!(header(&out), "{out}");
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(header(&text), "{text}");
+    let text = std::fs::read_to_string(&html).unwrap();
+    assert!(text.contains("checked configurations (target") && text.contains("release, all features"), "{text}");
+    let out = run(repo, &["verify"], 0);
+    assert!(header(&out), "{out}");
+}
+
+#[test]
+fn a_configuration_with_a_compile_error_is_named() {
+    // Batch 5s, A4. A configuration that does not build before the step has no check: the
+    // output names it with the first error line. A step that breaks a configuration is a
+    // compile error.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = format!("{FEES}\n#[cfg(feature = \"slow\")]\ncompile_error!(\"slow is not ready\");\n");
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    write(repo, "crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nfast = []\nslow = []\n");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a feature that does not build"]);
+    let percent = "pub fn percent(amount: u64, rate: u64) -> u64 {\n";
+    let gap = "! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: slow is not ready";
+
+    // The feature `fast` has no build with the value true: its condition is not covered, so
+    // the rule of the build configuration stays.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace(percent, &format!("{percent}    if cfg!(feature = \"fast\") {{\n        return 7;\n    }}\n")));
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(gap) && out.contains(CONFIG_SPOTLIGHT) && out.contains("Uses: `cfg!(feature = \"fast\")` in `shop_core::percent`"), "{out}");
+
+    // A step that breaks the release profile only: the message names the configuration and
+    // shows the error of the compiler.
+    write(repo, "crates/shop-core/src/lib.rs", &format!("{base}\n#[cfg(not(debug_assertions))]\npub fn broken() -> u64 {{\n    \"text\"\n}}\n"));
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains("the code after the step does not compile in the configuration `release` (it compiles before the step)") && out.contains("mismatched types"), "{out}");
+
+    // An honest step: one line for the configurations with no check, and the proof of the
+    // other configurations.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("    amount * rate / 100\n}\n\npub fn scaled", "    let part = amount * rate;\n    part / 100\n}\n\npub fn scaled"));
+    let out = run(repo, &["step", "an honest rewrite"], 0);
+    assert!(out.contains(gap) && out.matches("not checked").count() == 1, "{out}");
+    let out = run(repo, &["status", "--wait", "600"], 0);
+    assert!(out.contains("checked configurations (target `") && out.contains(gap) && out.contains("`feature = \"slow\"`"), "{out}");
+}
+
+/// A pair of items for one condition: `lim` is `m::lim` if the condition is true.
+fn twin(condition: &str) -> String {
+    format!("mod m {{ pub fn lim() -> u64 {{ 100 }} }}\n#[cfg({condition})]\nuse m::lim;\n#[cfg(not({condition}))]\nfn lim() -> u64 {{ 7 }}\npub fn via(a: u64) -> u64 {{ a / m::lim() }}\n")
+}
+
+#[test]
+fn the_compiler_gives_the_true_values_of_each_condition() {
+    // Batch 5t, part A. The values of the `cfg` names come from the compiler, for each
+    // compile unit. A condition is covered only if a checked unit that reads the file has it
+    // true and a checked unit that reads the file has it false.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let commit = |message: &str| {
+        git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+        git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message]);
+    };
+    let base = format!("{FEES}{}", twin("debug_assertions"));
+    let step = base.replace("a / m::lim()", "a / lim()");
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    let test_base = format!("{}\n#[test]\nfn t() {{ assert_eq!(via(100), 1); }}\n", twin("test").replace("pub fn via", "fn via"));
+    write(repo, "crates/shop-core/tests/it.rs", &test_base);
+    commit("the pairs");
+
+    // Control: the two profiles cover `debug_assertions`. The call of `lim` is the call of
+    // `m::lim` in the build with the assertions on, and it is not equal in the release build.
+    write(repo, "crates/shop-core/src/lib.rs", &step);
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains("not neutral in `release`") && !out.contains(CONFIG_SPOTLIGHT), "{out}");
+
+    // A file under `tests/`: `test` is true in each unit that reads the file. The item under
+    // `not(test)` is in no build, and the condition is not covered.
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    write(repo, "crates/shop-core/tests/it.rs", &test_base.replace("{ a / m::lim() }", "{ a / lim() }"));
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(CONFIG_SPOTLIGHT) && out.contains("under `#[cfg(not(test))]`) in `shop_core::it::via`") && !out.contains("neutral rewrite"), "{out}");
+    write(repo, "crates/shop-core/tests/it.rs", &test_base);
+
+    // The flags of the compiler set the debug assertions on in each build. No unit has the
+    // condition false: the proof of the step holds in no build with the assertions off.
+    write(repo, ".cargo/config.toml", "[build]\nrustflags = [\"-C\", \"debug-assertions=on\"]\n");
+    commit("the flags");
+    write(repo, "crates/shop-core/src/lib.rs", &step);
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(CONFIG_SPOTLIGHT) && out.contains("under `#[cfg(not(debug_assertions))]`) in `shop_core::via`") && !out.contains("neutral rewrite"), "{out}");
+
+    // The header names the condition: the list does not cover it.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("pub fn percent(amount: u64, rate: u64) -> u64 {\n    amount * rate / 100\n", "pub fn percent(amount: u64, rate: u64) -> u64 {\n    let part = amount * rate;\n    part / 100\n"));
+    run(repo, &["step", "an honest rewrite"], 0);
+    let out = run(repo, &["status", "--wait", "600"], 0);
+    let line = out.lines().find(|line| line.contains("`cfg` conditions that Semilla did not check")).unwrap_or_default();
+    assert!(line.contains("`debug_assertions`") && line.contains("`not(debug_assertions)`") && line.contains("`not(test)`"), "{out}");
+}
+
+#[test]
+fn a_configuration_that_builds_only_its_libraries_and_binaries_is_checked() {
+    // Batch 5t, part C. The test target needs the feature `std`, so the configurations with
+    // no default features do not build with each target. Semilla checks their libraries and
+    // binaries.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = format!("{FEES}{}\n#[cfg(feature = \"std\")]\npub fn label() -> &'static str {{\n    \"std\"\n}}\n", twin("feature = \"std\""));
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    write(repo, "crates/shop-core/tests/it.rs", "#[test]\nfn t() {\n    assert_eq!(shop_core::label(), \"std\");\n}\n");
+    write(repo, "crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"std\"]\nstd = []\n");
+    write(repo, "crates/shop-app/Cargo.toml", "[package]\nname = \"shop-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nshop-core = { path = \"../shop-core\", default-features = false }\n");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a test that needs std"]);
+    let narrow = "dev, no default features (libraries and binaries only)";
+
+    // The call of `lim` is the call of `m::lim` only with `std`. The smaller build shows it.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("a / m::lim()", "a / lim()"));
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(&format!("not neutral in `{narrow}`")) && !out.contains(CONFIG_SPOTLIGHT) && !out.contains("neutral rewrite"), "{out}");
+
+    // A step that breaks the smaller build is a compile error.
+    write(repo, "crates/shop-core/src/lib.rs", &format!("{base}\n#[cfg(not(feature = \"std\"))]\npub fn broken() -> u64 {{\n    \"text\"\n}}\n"));
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(&format!("the code after the step does not compile in the configuration `{narrow}` (it compiles before the step)")) && out.contains("mismatched types"), "{out}");
+
+    // An honest step: the header names the smaller builds, and no configuration has a gap.
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ a / m::lim() }", "{\n    let l = m::lim();\n    a / l\n}"));
+    let out = run(repo, &["step", "an honest rewrite"], 0);
+    assert!(out.contains("`shop_core::via`: neutral rewrite") && !out.contains("not checked"), "{out}");
+    let out = run(repo, &["status", "--wait", "600"], 0);
+    let line = out.lines().find(|line| line.contains("checked configurations (target `")).unwrap_or_default();
+    assert!(line.contains("`dev, no default features` (libraries and binaries only: the other targets do not build), `release, no default features` (libraries and binaries only: the other targets do not build)"), "{out}");
+    assert!(line.contains("`dev`, `release`") && !out.contains("are not checked") && !out.contains("`feature = \"std\"`"), "{out}");
+}
+
+#[test]
+fn a_proof_with_two_conditions_needs_each_joint_state() {
+    // Batch 5t, part B. Each of the two features is covered. The proof uses the two
+    // conditions, and no checked build has `fast` on with `slow` off.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let commit = |message: &str| {
+        git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+        git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message]);
+    };
+    let alias = |name: &str, feature: &str| format!("#[cfg(feature = \"{feature}\")]\ntype {name} = u8;\n#[cfg(not(feature = \"{feature}\"))]\ntype {name} = u64;\n");
+    let base = format!("{FEES}{}{}pub fn cut(a: u64) -> u64 {{ a as TA as TB as u64 }}\n", alias("TA", "fast"), alias("TB", "slow"));
+    // This step is false in the build with only `fast`: `a as u8 as u64` is not `a as u64`.
+    let drop = base.replace("a as TA as TB as u64", "a as TB as u64");
+    let honest = base.replace("{ a as TA as TB as u64 }", "{ let b = a as TA; b as TB as u64 }");
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    write(repo, "crates/shop-core/Cargo.toml", "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nfast = []\nslow = []\n");
+    commit("two features");
+    let gap = "Not checked together: `feature = \"fast\"` on with `feature = \"slow\"` off. Add `feature-sets = [[\"fast\"]]` to `[workspace.metadata.semilla]`";
+
+    // The bodies are equal in each checked build (the two aliases are `u64`, or the two are
+    // `u8`). The proof does not hold for the build with only `fast`.
+    write(repo, "crates/shop-core/src/lib.rs", &drop);
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(CONFIG_SPOTLIGHT) && out.contains(gap) && !out.contains("neutral rewrite"), "{out}");
+    // Semilla cannot tell an honest rewrite from this step: the rule stays on.
+    write(repo, "crates/shop-core/src/lib.rs", &honest);
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains(CONFIG_SPOTLIGHT) && out.contains(gap) && !out.contains("neutral rewrite"), "{out}");
+    // A body that uses one of the conditions keeps the rule of batch 5s.
+    write(repo, "crates/shop-core/src/lib.rs", &format!("{base}pub fn one(a: u64) -> u64 {{\n    let b = a as TA;\n    b as u64\n}}\n"));
+    commit("one alias");
+    write(repo, "crates/shop-core/src/lib.rs", &format!("{base}pub fn one(a: u64) -> u64 {{\n    a as TA as u64\n}}\n"));
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains("`shop_core::one`: neutral rewrite") && !out.contains("build configuration"), "{out}");
+    run(repo, &["undo"], 0);
+
+    // The list has each joint state after the two entries. The honest rewrite has a proof,
+    // and the false step is not equal in the build with only `fast`.
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    write(repo, "Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n\n[workspace.metadata.semilla]\nfeature-sets = [[\"fast\"], [\"slow\"]]\n");
+    commit("the feature sets");
+    write(repo, "crates/shop-core/src/lib.rs", &honest);
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains("`shop_core::cut`: neutral rewrite") && !out.contains("build configuration"), "{out}");
+    run(repo, &["undo"], 0);
+    write(repo, "crates/shop-core/src/lib.rs", &drop);
+    let out = run(repo, &["step", "probe"], 1);
+    assert!(out.contains("not neutral in `dev, features fast`, `release, features fast`") && !out.contains("neutral rewrite"), "{out}");
 }
