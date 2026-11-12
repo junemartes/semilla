@@ -20,17 +20,34 @@ use crate::review::{ReviewFile, ReviewState};
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct Counts {
     pub claims: usize,
+    /// Claims that Semilla proved in full.
     pub verified: usize,
+    /// Property claims that Semilla proved only in part (`verified (proof partial)`). The result
+    /// line of `tag` counts them as "partial", and each report uses the same counts.
+    pub partial: usize,
     pub unproved: usize,
     pub refuted: usize,
     pub empty: usize,
     pub malformed: usize,
     /// Claims whose body proof waits for the background check (phase 2).
     pub pending: usize,
+    /// Claims of a step that has no check: the step uses changed build code (design 28).
+    pub not_checked: usize,
     /// Claims without a result in the report.
     pub no_result: usize,
     pub uncovered: usize,
     pub reviewed: usize,
+}
+
+/// The fact counts of the result line.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+pub struct FactCounts {
+    pub total: usize,
+    pub neutral: usize,
+    pub read: usize,
+    pub spotlight: usize,
+    /// The facts of the steps that have no check (design 28). They are not in `read`.
+    pub not_checked: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -38,8 +55,12 @@ pub struct ChangeSetSummary {
     pub base_tree: String,
     pub head_tree: String,
     pub accepted: bool,
-    /// The coverage score of the report (design section 9.2), from 0 to 1.
-    pub coverage: f64,
+    /// True if a step has no check: it uses build code that the change set changes, and the
+    /// reviewer did not allow it (design 28). The result word is then `not complete`.
+    pub not_complete: bool,
+    /// The facts of all steps: the total, the facts that are proved neutral, the facts to read,
+    /// and the facts with a spotlight (brief 5f, D1).
+    pub fact_counts: FactCounts,
     /// `major`, `minor`, `patch`, or `none`. A hint only: the UI is not trusted.
     pub api_level: &'static str,
     /// The change in explicit panic sites from the verifier (`Report.panic_delta`).
@@ -49,12 +70,25 @@ pub struct ChangeSetSummary {
     pub counts: Counts,
     pub organization: Vec<String>,
     pub warnings: Vec<String>,
+    /// The base commit of the change set and its Semilla check (design 25.2).
+    #[serde(default)]
+    pub notices: Vec<String>,
     /// The changed lines by claim kind, and the same as one line of text.
     pub lines: semilla_core::LineCounts,
     pub lines_text: String,
     /// The pair warnings, with the reviewer's current decision.
     pub pairs: Vec<PairView>,
+    /// The derived facts of all steps (design 22.5), with their step.
+    pub facts: Vec<FactView>,
     pub groups: Vec<GroupSummary>,
+}
+
+/// One derived fact for the review UI.
+#[derive(Clone, Debug, Serialize)]
+pub struct FactView {
+    pub step: usize,
+    #[serde(flatten)]
+    pub fact: semilla_core::Fact,
 }
 
 /// One pair warning for the review UI.
@@ -180,7 +214,12 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         base_tree: ctx.data.changeset.base_tree.clone(),
         head_tree: ctx.data.changeset.head_tree.clone(),
         accepted: report.accepted,
-        coverage: report.score,
+        not_complete: report.not_complete(),
+        fact_counts: {
+            let (total, neutral, spotlight) = report.fact_counts();
+            let not_checked = report.steps.iter().flat_map(|step| &step.facts).filter(|fact| fact.class == Some(semilla_core::Class::NotChecked)).count();
+            FactCounts { total, neutral, read: total - neutral - not_checked, spotlight, not_checked }
+        },
         api_level: api_level(ctx),
         panic_delta: report.panic_delta,
         group_count: ctx.groups.len(),
@@ -188,9 +227,11 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         counts,
         organization: report.organization.clone(),
         warnings: report.warnings.clone(),
+        notices: report.notices.clone(),
         lines: report.lines,
-        lines_text: report.lines.summary(),
+        lines_text: report.lines_text().unwrap_or_default(),
         pairs: pair_views(report, review),
+        facts: report.steps.iter().flat_map(|step| step.facts.iter().map(|fact| FactView { step: step.step, fact: fact.clone() })).collect(),
         groups,
     }
 }
@@ -261,6 +302,7 @@ fn status_name(result: Option<&ClaimResult>) -> &'static str {
         Some(ClaimStatus::Empty) => "empty",
         Some(ClaimStatus::Malformed { .. }) => "malformed",
         Some(ClaimStatus::Pending { .. }) => "pending",
+        Some(ClaimStatus::NotChecked { .. }) => "not_checked",
         None => "no_result",
     }
 }
@@ -268,12 +310,14 @@ fn status_name(result: Option<&ClaimResult>) -> &'static str {
 fn add_status(counts: &mut Counts, view: &ClaimView) {
     counts.claims += 1;
     match view.status {
+        "verified" if matches!(view.result.as_ref().map(|result| &result.status), Some(ClaimStatus::Verified { proof }) if proof == "partial") => counts.partial += 1,
         "verified" => counts.verified += 1,
         "unproved" => counts.unproved += 1,
         "refuted" => counts.refuted += 1,
         "empty" => counts.empty += 1,
         "malformed" => counts.malformed += 1,
         "pending" => counts.pending += 1,
+        "not_checked" => counts.not_checked += 1,
         _ => counts.no_result += 1,
     }
     if view.review.is_reviewed() {
@@ -284,6 +328,7 @@ fn add_status(counts: &mut Counts, view: &ClaimView) {
 fn add_counts(total: &mut Counts, part: &Counts) {
     total.claims += part.claims;
     total.verified += part.verified;
+    total.partial += part.partial;
     total.unproved += part.unproved;
     total.refuted += part.refuted;
     total.empty += part.empty;
@@ -512,22 +557,46 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
     GroupSummary {
         id: group.id.clone(),
         title: group.title.clone(),
-        kind: group.kind,
+        kind: computed_kind(ctx, group, &claims),
         why: group.why.clone(),
         steps: group.steps.clone(),
         risk,
         risk_score,
         risk_reasons,
         depends_on: Vec::new(),
-        all_neutral: !claims.is_empty() && uncovered.is_empty() && claims.iter().all(|claim| ctx.is_proved_neutral(claim)),
+        // A4: a group is all neutral only if each claim is proved neutral and each fact of its
+        // steps is "neutral (proved)". A pending fact is not neutral.
+        all_neutral: {
+            let facts = group_facts(ctx, group);
+            (!claims.is_empty() || !facts.is_empty()) && uncovered.is_empty() && claims.iter().all(|claim| ctx.is_proved_neutral(claim)) && facts.iter().all(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight)
+        },
         panic_delta,
-        split_hint: split_hint(ctx, &claims),
+        split_hint: split_hint(ctx, group, &claims),
         synthetic: ctx.synthetic_groups.contains(&group.id),
         reviewed: !views.is_empty() && views.iter().all(|view| view.review.is_reviewed()),
         counts,
         subgroups,
         uncovered,
     }
+}
+
+/// The kind of a group in a reviewer output (batch 5k, A3). Semilla computes it from the facts
+/// and the claim results of the steps of the group. The stored kind is a claim of the agent
+/// (I5): no reviewer output reads it. While a class is pending, the kind is `behavior`.
+fn computed_kind(ctx: &Ctx, group: &Group, claims: &[&Claim]) -> GroupKind {
+    let steps: Vec<&semilla_core::StepReport> = ctx.data.report.steps.iter().filter(|step| group.steps.contains(&step.step)).collect();
+    let kind = semilla_core::report::derived_kind(&steps).unwrap_or(GroupKind::Behavior);
+    // Only verified identity claims, and no fact: the kind of the claims.
+    let identity = claims.iter().find(|claim| matches!(claim.op.as_str(), "rename" | "move-item")).map(|claim| if claim.op == "move-item" { GroupKind::Move } else { GroupKind::Rename });
+    match (kind, identity) {
+        (GroupKind::Refactor, Some(identity)) if steps.iter().all(|step| step.facts.is_empty() && step.claims.iter().all(|claim| claim.class == Some(Class::Neutral))) => identity,
+        (kind, _) => kind,
+    }
+}
+
+/// The derived facts of the steps of a group.
+fn group_facts<'a>(ctx: &'a Ctx, group: &Group) -> Vec<&'a semilla_core::Fact> {
+    ctx.data.report.steps.iter().filter(|step| group.steps.contains(&step.step)).flat_map(|step| step.facts.iter()).collect()
 }
 
 /// The risk of a group (design section 11.2): control flow, `unsafe`, public API, panic delta,
@@ -569,7 +638,8 @@ fn risk(
         .steps
         .iter()
         .any(|step| group.steps.contains(&step.step) && matches!(step.api_level.as_deref(), Some("major" | "minor")));
-    if group.kind == GroupKind::Api || interface || api_steps {
+    // The stored kind of the group does not count (A3): the API level comes from the report.
+    if interface || api_steps {
         score += 1;
         reasons.push("public API".to_string());
     }
@@ -577,7 +647,7 @@ fn risk(
         score += 1;
         reasons.push(format!("panics +{panic_delta}"));
     }
-    let failed = counts.claims.saturating_sub(counts.verified + counts.pending);
+    let failed = counts.claims.saturating_sub(counts.verified + counts.partial + counts.pending);
     if failed > 0 {
         score += 2;
         reasons.push(format!("{failed} not verified"));
@@ -594,13 +664,43 @@ fn risk(
         score += 1;
         reasons.push(format!("{logic} logic"));
     }
+    // A4 (trial 3, D9): the facts of the steps count as the claims do. A fact with no class yet
+    // (phase 2 did not run) is not neutral: it counts as logic until phase 2 gives its class.
+    let facts: Vec<&semilla_core::Fact> = group_facts(ctx, group);
+    let fact_control = facts.iter().filter(|fact| fact.class == Some(Class::ControlFlow)).count();
+    if fact_control > 0 {
+        if control == 0 {
+            score += 2;
+        }
+        reasons.push(format!("{fact_control} ctrl flow fact(s)"));
+    }
+    let fact_logic = facts.iter().filter(|fact| fact.class == Some(Class::Logic)).count();
+    if fact_logic > 0 {
+        if logic == 0 {
+            score += 1;
+        }
+        reasons.push(format!("{fact_logic} logic fact(s)"));
+    }
+    let fact_pending = facts.iter().filter(|fact| fact.class.is_none()).count();
+    if fact_pending > 0 {
+        if logic == 0 && fact_logic == 0 {
+            score += 1;
+        }
+        reasons.push(format!("{fact_pending} fact(s) with no class yet"));
+    }
+    let fact_spotlight = facts.iter().filter(|fact| fact.spotlight).count();
+    if fact_spotlight > 0 {
+        score += 1;
+        reasons.push(format!("{fact_spotlight} spotlight fact(s)"));
+    }
     // A whole rewrite gives the highest risk: the reviewer must read the whole item.
     let rewritten = claims.iter().filter(|claim| claim.op == "rewrite-item").count();
     if rewritten > 0 {
         score += 5;
         reasons.push(format!("{rewritten} rewritten"));
     }
-    let pairs = ctx.data.report.pairs.iter().filter(|pair| pair.claims.iter().any(|id| claims.iter().any(|claim| claim.id == *id))).count();
+    let fact_ids: Vec<String> = ctx.data.report.steps.iter().filter(|step| group.steps.contains(&step.step)).flat_map(|step| step.facts.iter().map(move |fact| format!("step {} {}", step.step, fact.id))).collect();
+    let pairs = ctx.data.report.pairs.iter().filter(|pair| pair.claims.iter().any(|id| claims.iter().any(|claim| claim.id == *id) || fact_ids.contains(id))).count();
     if pairs > 0 {
         score += 2;
         reasons.push(format!("{pairs} pair warning(s)"));
@@ -725,8 +825,10 @@ fn group_dependencies(ctx: &Ctx) -> HashMap<String, BTreeSet<String>> {
 }
 
 /// A split warning if the items of a group fall into parts with no link: no call edge, no
-/// parent link, and no name of one item in the claims of the other.
-fn split_hint(ctx: &Ctx, claims: &[&Claim]) -> Option<String> {
+/// parent link, no name of one item in the claims of the other, and no fact that links them (a
+/// fact links its entity, its affected bodies, and its sites). The parts come from the claims only:
+/// the facts of one intent are not a reason for a split.
+fn split_hint(ctx: &Ctx, group: &Group, claims: &[&Claim]) -> Option<String> {
     let mut items: Vec<String> = Vec::new();
     for claim in claims {
         if let Some(at) = &claim.at
@@ -735,6 +837,16 @@ fn split_hint(ctx: &Ctx, claims: &[&Claim]) -> Option<String> {
             items.push(at.item.clone());
         }
     }
+    let facts: Vec<&semilla_core::Fact> = ctx.data.report.steps.iter().filter(|step| group.steps.contains(&step.step)).flat_map(|step| &step.facts).collect();
+    let fact_links: Vec<BTreeSet<String>> = facts
+        .iter()
+        .map(|fact| {
+            let mut members: BTreeSet<String> = fact.affected.iter().cloned().collect();
+            members.extend(fact.at.iter().map(|at| at.item.clone()));
+            members.extend(fact.sites.iter().flat_map(|group| group.sites.iter().map(|site| site.item.clone())));
+            members
+        })
+        .collect();
     if items.len() < 2 {
         return None;
     }
@@ -773,7 +885,8 @@ fn split_hint(ctx: &Ctx, claims: &[&Claim]) -> Option<String> {
                 || items[b].starts_with(&format!("{}::", items[a]))
                 || items[a].starts_with(&format!("{}::", items[b]))
                 || contains_word(&texts[a], last_segment(&items[b]))
-                || contains_word(&texts[b], last_segment(&items[a]));
+                || contains_word(&texts[b], last_segment(&items[a]))
+                || fact_links.iter().any(|members| members.contains(&items[a]) && members.contains(&items[b]));
             if linked {
                 let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
                 parent[ra] = rb;

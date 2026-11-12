@@ -1,12 +1,17 @@
 //! The background check (phase 2, design section 19).
 //!
-//! - `step_end` and `tag` add a job to the queue in `.semilla/queue/`, and start a worker.
+//! - the end of a step and `tag` add a job to the queue, and start a worker.
 //! - The worker runs the full check of each job (the MIR builds, N1 to N4, SMT, indirect
 //!   changes), and stores the report. It stops when the queue is empty. One worker runs at a time.
 //! - A report has the hash of its change set. A changed change set makes the old report stale.
 //!
-//! The reports are local: `.semilla/reports/<key>.json`, and for a tagged commit also a git note
-//! under `refs/notes/semilla-report`.
+//! The queue, the reports (`reports/<key>.json`), and the worker log are in the cache folder of
+//! the user, outside the repository folder (invariant I5, design 27). The agent controls each
+//! file of the repository folder, so no result comes from a file there. A stored report names
+//! the tools that computed it (the Semilla binary, the MIR driver, the solver, the toolchain):
+//! a report of other tools is not valid. For a tagged commit, a git note under
+//! `refs/notes/semilla-report` holds a copy for other tools. Semilla never reads a result from
+//! that note: `status` and `review` compute the result again on this machine.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -28,13 +33,25 @@ pub struct Job {
     /// The change set of a session job. A commit job reads it from the commit note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changeset: Option<ChangeSet>,
+    /// Who asked for the check (design 28). A job of a reviewer command with no permission runs
+    /// no build code that the change set changes. An old job file has no mode: it is such a job.
+    #[serde(default)]
+    pub mode: crate::buildcode::Mode,
 }
 
 /// A stored report, with the hash of the change set that it checks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredReport {
     pub key: String,
+    /// The tree of the commit of `key` (empty for the session). A report is valid only for this
+    /// commit and this tree, so a copied report note is not valid for another commit.
+    #[serde(default)]
+    pub tree: String,
     pub hash: String,
+    /// The tools that computed the report ([`App::tools_key`]). A report is valid only for the
+    /// same tools: a run with another solver or another driver does not give a result here.
+    #[serde(default)]
+    pub tools: String,
     pub report: Report,
     /// The text report, for the agent tools and the CLI.
     pub text: String,
@@ -48,11 +65,19 @@ pub fn changeset_hash(set: &ChangeSet) -> String {
 }
 
 fn queue_dir(app: &App) -> PathBuf {
-    app.repo.state_dir().join("queue")
+    app.repo.cache_dir().join("queue")
 }
 
-fn report_file(app: &App, key: &str) -> PathBuf {
-    app.repo.state_dir().join("reports").join(format!("{key}.json"))
+/// The file of a stored result. A result that ran build code that the change set changes has
+/// the mark `build-code` in its name (design 28): a reviewer command with no permission never
+/// reads that file.
+fn report_file(app: &App, key: &str, marked: bool) -> PathBuf {
+    app.repo.cache_dir().join("reports").join(format!("{key}{}.json", if marked { ".build-code" } else { "" }))
+}
+
+/// True if a result ran build code that the change set changes.
+fn is_marked(report: &Report) -> bool {
+    report.build_code.as_ref().is_some_and(|note| note.ran && !note.changes.is_empty())
 }
 
 /// Adds a job. A newer job for the same key replaces the old one.
@@ -61,13 +86,24 @@ pub fn enqueue(app: &App, job: &Job) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     for entry in std::fs::read_dir(&dir)? {
         let path = entry?.path();
-        if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&format!("-{}.json", job.key))) {
+        // A job replaces only an older job of the same key and the same mode.
+        if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&format!("-{}{}.json", job.key, job.mode.suffix()))) {
             let _ = std::fs::remove_file(path);
         }
     }
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-    std::fs::write(dir.join(format!("{nanos:024}-{}.json", job.key)), serde_json::to_string(job)?)?;
+    std::fs::write(dir.join(format!("{nanos:024}-{}{}.json", job.key, job.mode.suffix())), serde_json::to_string(job)?)?;
     Ok(())
+}
+
+/// Removes each queued job of a key (each mode). `tag` calls it: the session jobs are done, and
+/// their result is stored under the tagged commit.
+pub fn remove_jobs(app: &App, key: &str) {
+    for (path, job) in jobs(app) {
+        if job.key == key {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// The jobs in the queue, oldest first.
@@ -81,11 +117,12 @@ pub fn jobs(app: &App) -> Vec<(PathBuf, Job)> {
 /// Starts a worker in the background, unless `SEMILLA_NO_WORKER` is set. A second worker stops at
 /// once when one already runs.
 pub fn spawn_worker(app: &App) -> Result<()> {
-    if std::env::var_os("SEMILLA_NO_WORKER").is_some() {
+    // A process with no cache that stays (`--fresh`) runs each check itself.
+    if std::env::var_os("SEMILLA_NO_WORKER").is_some() || app.repo.store.is_temporary() {
         return Ok(());
     }
     use std::os::unix::process::CommandExt;
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(app.repo.state_dir().join("worker.log"))?;
+    let log = std::fs::OpenOptions::new().create(true).append(true).open(app.repo.cache_dir().join("worker.log"))?;
     std::process::Command::new(std::env::current_exe()?)
         .arg("--repo")
         .arg(&app.repo.root)
@@ -99,43 +136,61 @@ pub fn spawn_worker(app: &App) -> Result<()> {
     Ok(())
 }
 
-/// Runs all jobs, then returns. Returns false if another worker already runs.
-pub fn run_worker(app: &mut App) -> Result<bool> {
-    let lock = std::fs::File::create(app.repo.state_dir().join("worker.lock"))?;
+/// Runs all jobs, then returns. Returns false if another worker already runs. With `log`, each
+/// job writes one line to the standard error (the worker log). A run inside `status` writes no
+/// log line to the normal output (C8).
+pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
+    let lock = std::fs::File::create(app.repo.cache_dir().join("worker.lock"))?;
     if lock.try_lock().is_err() {
         return Ok(false);
     }
     app.no_bodies = false;
+    let mode = app.mode;
     loop {
         let Some((path, job)) = jobs(app).into_iter().next() else { break };
+        // The job has the permission of the command that asked for it, not of this process.
+        app.mode = job.mode;
+        // The change set of a commit must belong to the commit (a copied note does not).
         let set = match &job.changeset {
             Some(set) => Some(set.clone()),
-            None => app.repo.read_note(&job.key).ok().and_then(|note| serde_json::from_str::<ChangeSet>(&note).ok()),
+            None => app.commit_changeset(&job.key).ok().map(|(_, set)| set),
         };
         if let Some(set) = set {
             let started = std::time::Instant::now();
             match app.check_set(&set, job.key != "session") {
                 Ok(result) => {
-                    let stored = StoredReport { key: job.key.clone(), hash: job.hash.clone(), report: result.report, text: result.text };
+                    let tree = if job.key == "session" { String::new() } else { app.repo.commit_tree(&job.key).unwrap_or_default() };
+                    let stored = StoredReport { key: job.key.clone(), tree, hash: job.hash.clone(), tools: app.tools_key(), report: result.report, text: result.text };
                     store(app, &stored)?;
-                    eprintln!("[worker] {} checked in {:.1} s", job.key, started.elapsed().as_secs_f64());
+                    if log {
+                        eprintln!("[worker] {} checked in {:.1} s", job.key, started.elapsed().as_secs_f64());
+                    }
                 }
-                Err(error) => eprintln!("[worker] {} failed: {error:#}", job.key),
+                Err(error) => {
+                    // The error stays in the log file, so that `status` can show the last error.
+                    // A background worker writes its standard error to that file.
+                    if !log {
+                        let _ = std::fs::OpenOptions::new().create(true).append(true).open(app.repo.cache_dir().join("worker.log")).and_then(|mut file| std::io::Write::write_all(&mut file, format!("[worker] {} failed: {error:#}\n", job.key).as_bytes()));
+                    } else {
+                        eprintln!("[worker] {} failed: {error:#}", job.key);
+                    }
+                }
             }
         }
         // A newer job for the same key may have replaced this file; remove only this one.
         let _ = std::fs::remove_file(&path);
     }
+    app.mode = mode;
     lock.unlock()?;
     Ok(true)
 }
 
-fn store(app: &App, stored: &StoredReport) -> Result<()> {
-    let file = report_file(app, &stored.key);
+pub(crate) fn store(app: &App, stored: &StoredReport) -> Result<()> {
+    let file = report_file(app, &stored.key, is_marked(&stored.report));
     std::fs::create_dir_all(file.parent().unwrap())?;
     std::fs::write(&file, serde_json::to_string_pretty(stored)?)?;
     if stored.key != "session" {
-        let note = app.repo.state_dir().join("report-note.json");
+        let note = app.repo.store.private_path("report-note");
         std::fs::write(&note, serde_json::to_string_pretty(stored)?)?;
         app.repo.git(&["notes", "--ref=semilla-report", "add", "-f", "-F", &note.to_string_lossy(), &stored.key])?;
         let _ = std::fs::remove_file(note);
@@ -145,10 +200,37 @@ fn store(app: &App, stored: &StoredReport) -> Result<()> {
 
 /// The stored report of a key, if one exists.
 pub fn stored(app: &App, key: &str) -> Option<StoredReport> {
-    let text = std::fs::read_to_string(report_file(app, key)).ok().or_else(|| {
-        (key != "session").then(|| app.repo.git(&["notes", "--ref=semilla-report", "show", key]).ok()).flatten()
-    })?;
-    serde_json::from_str(&text).ok()
+    candidates(app, key).into_iter().next()
+}
+
+/// The stored results of a key that the command can read, in the order of use.
+fn candidates(app: &App, key: &str) -> Vec<StoredReport> {
+    let allowed = app.mode.runs_build_code();
+    // A command with the permission reads the marked result first. A plain result serves it only
+    // if that result is complete.
+    let files = if allowed { vec![true, false] } else { vec![false] };
+    files.into_iter().filter_map(|marked| {
+        let text = std::fs::read_to_string(report_file(app, key, marked)).ok()?;
+        let stored: StoredReport = serde_json::from_str(&text).ok()?;
+        if stored.tools != app.tools_key() {
+            return None;
+        }
+        // A report belongs to its commit: a report of a different tree (a moved branch, a copied
+        // file) is not valid.
+        if key != "session" && (stored.key != key || app.repo.commit_tree(key).ok().as_deref() != Some(stored.tree.as_str())) {
+            return None;
+        }
+        // I6: the content decides, not only the file name.
+        if is_marked(&stored.report) != marked || (allowed && stored.report.not_complete()) {
+            return None;
+        }
+        Some(stored)
+    }).collect()
+}
+
+/// The stored result of a key for a change set hash, in the mode of the command.
+pub fn stored_for(app: &App, key: &str, hash: &str) -> Option<StoredReport> {
+    candidates(app, key).into_iter().find(|stored| stored.hash == hash)
 }
 
 /// The state of the background check of a key.
@@ -165,10 +247,10 @@ pub enum State {
 }
 
 pub fn state(app: &App, key: &str, hash: &str) -> State {
-    if stored(app, key).is_some_and(|report| report.hash == hash) {
+    if stored_for(app, key, hash).is_some() {
         return State::Ready;
     }
-    if jobs(app).iter().any(|(_, job)| job.key == key) {
+    if jobs(app).iter().any(|(_, job)| job.key == key && job.mode == app.mode) {
         return State::Queued;
     }
     if stored(app, key).is_some() { State::Stale } else { State::Missing }
@@ -183,7 +265,7 @@ pub fn wait(app: &mut App, key: &str, hash: &str, timeout: std::time::Duration) 
         if current != State::Queued || started.elapsed() > timeout {
             return Ok(current);
         }
-        if !run_worker(app)? {
+        if !run_worker(app, false)? {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
     }

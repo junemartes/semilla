@@ -17,16 +17,30 @@
       else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
       else if (key === 'dataset') Object.assign(node.dataset, value);
       else if (value === true) node.setAttribute(key, '');
-      else node.setAttribute(key, String(value));
+      else node.setAttribute(key, key === 'title' ? show(value) : String(value));
     }
     append(node, children);
     return node;
   }
 
+  // Text of the agent or of the repository can hold hidden characters: control characters,
+  // bidirectional controls, zero-width characters (batch 5k, A2). The UI shows each one as an
+  // escape. A line break stays: the browser shows it as a space or, in a code block, as a line.
+  const HIDDEN = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2028\u2029\u2060\u2066-\u2069\ufeff]/g;
+  const escapeOf = (c) => (c === '\n' ? '\\n' : c === '\r' ? '\\r' : c === '\t' ? '\\t' : '\\u{' + c.charCodeAt(0).toString(16) + '}');
+  function show(text) {
+    return String(text).replace(HIDDEN, escapeOf);
+  }
+  // The words of the agent, in quote marks (A3): the text cannot close its quote, and a line
+  // break shows as an escape.
+  function quoted(text) {
+    return '"' + show(String(text).replace(/["\\]/g, '\\$&')).replace(/\n/g, '\\n') + '"';
+  }
+
   function append(node, children) {
     for (const child of children.flat(Infinity)) {
       if (child === undefined || child === null || child === false) continue;
-      node.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
+      node.appendChild(child instanceof Node ? child : document.createTextNode(show(child)));
     }
     return node;
   }
@@ -55,7 +69,7 @@
   let toastTimer = null;
   function toast(text) {
     const node = $('#toast');
-    node.textContent = text;
+    node.textContent = show(text);
     node.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { node.hidden = true; }, 3500);
@@ -67,8 +81,10 @@
   }
 
   const MARKERS = { same: '≡', added: '+', removed: '−', changed: '~', moved: '→', extracted: '⤴', uncovered: '✗' };
-  const STATUS_ICONS = { verified: '✓', unproved: '?', refuted: '✗', empty: '∅', malformed: '!', pending: '…', no_result: '·' };
-  const CLASS_LABELS = { neutral: 'neutral', logic: 'logic', control_flow: 'ctrl flow', other: 'other' };
+  const STATUS_ICONS = { verified: '✓', unproved: '?', refuted: '✗', empty: '∅', malformed: '!', pending: '…', not_checked: '–', no_result: '·' };
+  const CLASS_LABELS = { neutral: 'neutral', logic: 'logic', control_flow: 'ctrl flow', other: 'other', not_checked: 'not checked' };
+  // The class of a fact in a text line. A step with no check gives `not checked` (design 28).
+  const factClass = (fact) => (fact.class === 'not_checked' ? 'not checked' : fact.class || 'class after phase 2');
 
   function marker(status) {
     return h('span', { class: 'marker m ' + (status || 'same'), title: status || '' }, MARKERS[status] || '·');
@@ -200,6 +216,17 @@
     renderChangeset();
   }
 
+  // The steps of a group for its title (C11): the groups are sorted by risk, so the title gives
+  // the order of the work, for example "steps 4–5".
+  function stepsLabel(steps) {
+    const sorted = [...(steps || [])].sort((a, b) => a - b);
+    if (!sorted.length) return 'no steps';
+    if (sorted.length === 1) return 'step ' + sorted[0];
+    const first = sorted[0], last = sorted[sorted.length - 1];
+    if (last - first + 1 === sorted.length) return 'steps ' + first + '–' + last;
+    return 'steps ' + sorted.join(', ');
+  }
+
   function riskDots(level) {
     const dots = [];
     for (let i = 0; i < 3; i++) dots.push(h('span', { class: i < level ? 'on' : 'off' }, i < level ? '●' : '○'));
@@ -239,32 +266,54 @@
     const facts = [
       h('b', null, cs.group_count), ' groups · ',
       h('b', null, cs.step_count), ' steps · ',
-      h('b', null, c.claims), ' claims · coverage ',
-      h('b', null, cs.coverage.toFixed(2)), ' · API: ',
+      h('b', null, c.claims), ' claims · ',
+      h('b', null, cs.fact_counts.total), ' facts: ',
+      h('b', null, cs.fact_counts.neutral), ' proved neutral, ',
+      h('b', null, cs.fact_counts.read), ' to read (',
+      h('b', null, cs.fact_counts.spotlight), ' with a spotlight)',
+      cs.fact_counts.not_checked ? ', ' + cs.fact_counts.not_checked + ' not checked' : '', ' · API: ',
       h('b', null, cs.api_level),
     ];
     if (cs.panic_delta !== null && cs.panic_delta !== undefined) facts.push(' · panics ', h('b', null, signed(cs.panic_delta)));
     root.appendChild(
       h('div', { class: 'cs-head' },
         h('h1', null, 'Change set'),
-        h('span', { class: 'chip ' + (cs.accepted ? 'ok' : 'bad') }, cs.accepted ? 'accepted' : 'rejected'),
+        h('span', { class: 'chip ' + (cs.accepted ? 'ok' : cs.not_complete ? 'warn' : 'bad') }, cs.accepted ? 'accepted' : cs.not_complete ? 'not complete' : 'rejected'),
         h('span', { class: 'facts' }, facts),
         h('span', { class: 'facts' },
           c.verified, ' verified',
+          c.partial ? ' · ' + c.partial + ' partial' : '',
           c.unproved ? ' · ' + c.unproved + ' unproved' : '',
           c.refuted ? ' · ' + c.refuted + ' refuted' : '',
           c.empty ? ' · ' + c.empty + ' empty' : '',
           c.malformed ? ' · ' + c.malformed + ' malformed' : '',
           c.pending ? ' · ' + c.pending + ' pending' : '',
+          c.not_checked ? ' · ' + c.not_checked + ' not checked' : '',
           c.uncovered ? ' · ' + c.uncovered + ' uncovered' : ''),
         h('span', { class: 'progress' }, c.reviewed + ' / ' + c.claims + ' claims reviewed'),
       ),
     );
+    // A3: the reviewer must know which text is not a result.
+    root.appendChild(h('p', { class: 'facts agent-text-note' }, 'Text in quote marks is the text of the agent. Semilla does not check it.'));
     const messages = [];
+    // The base commit and its Semilla check come first.
+    for (const text of cs.notices || []) messages.push(h('li', { class: text.startsWith('!') ? 'warning' : 'notice' }, text));
     for (const text of cs.organization) messages.push(h('li', { class: 'error' }, '✗ ', text));
     for (const text of cs.warnings) messages.push(h('li', { class: 'warning' }, '⚠ ', text));
     if (messages.length) root.appendChild(h('ul', { class: 'messages' }, messages));
     if (cs.lines_text) root.appendChild(h('p', { class: 'facts lines' }, cs.lines_text));
+    if (cs.facts && cs.facts.length) {
+      // The derived facts (design 22.5): Semilla computed them from the diff; no claim exists.
+      const items = cs.facts.map((fact) => {
+        const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']: ' + fact.description];
+        for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ')) parts.push(group.sites.length + ' site(s): ' + group.edit);
+        if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
+        if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
+        return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
+      });
+      root.appendChild(h('h3', {}, 'Derived facts'));
+      root.appendChild(h('ul', { class: 'messages facts' }, items));
+    }
     if (cs.pairs && cs.pairs.length) {
       const items = cs.pairs.map((pair) => {
         const decide = (decision) => async (event) => {
@@ -300,7 +349,7 @@
     const right = [];
     if (group.all_neutral) right.push(h('span', { class: 'chip ok' }, '✓ all neutral'));
     if (group.counts.uncovered) right.push(h('span', { class: 'chip bad' }, group.counts.uncovered + ' uncovered'));
-    const failed = group.counts.claims - group.counts.verified;
+    const failed = group.counts.claims - group.counts.verified - (group.counts.partial || 0);
     if (failed) right.push(h('span', { class: 'chip warn' }, failed + ' not verified'));
     if (group.panic_delta) right.push(h('span', { class: 'chip' }, 'panics ' + signed(group.panic_delta)));
     right.push(h('span', { class: 'chip' }, group.counts.reviewed + '/' + group.counts.claims));
@@ -309,8 +358,9 @@
       h('summary', null,
         h('span', { class: 'twisty' }),
         h('span', { class: 'gid' }, group.id),
+        h('span', { class: 'steps' }, stepsLabel(group.steps)),
         h('span', { class: 'kind' }, group.kind),
-        h('span', { class: 'title' }, '“' + group.title + '”'),
+        h('span', { class: 'title' }, group.synthetic ? group.title : quoted(group.title)),
         h('span', { class: 'risk', title: 'risk: ' + (group.risk_reasons.join(', ') || 'none') }, 'risk ', riskDots(group.risk)),
         group.synthetic ? h('span', { class: 'chip warn' }, 'made by the UI') : null,
         h('span', { class: 'right' }, right),
@@ -318,12 +368,24 @@
       ),
     );
     const body = h('div', { class: 'body' });
-    if (group.why) body.appendChild(h('p', { class: 'why' }, group.why));
+    if (group.why) body.appendChild(h('p', { class: 'why' }, group.synthetic ? group.why : quoted(group.why)));
     const facts = ['steps ' + group.steps.join(', ')];
     if (group.depends_on.length) facts.push('comes after ' + group.depends_on.join(', '));
     if (group.risk_reasons.length) facts.push('risk: ' + group.risk_reasons.join(', '));
     body.appendChild(h('p', { class: 'why' }, facts.join(' · ')));
     if (group.split_hint) body.appendChild(h('p', { class: 'hint' }, '⚠ ', group.split_hint));
+    // The derived facts of the steps of the group (design 22.5): as visible as its claims.
+    const groupFacts = (state.changeset.facts || []).filter((fact) => group.steps.includes(fact.step));
+    if (groupFacts.length) {
+      body.appendChild(h('h4', {}, 'Derived facts (' + groupFacts.length + ')'));
+      body.appendChild(h('ul', { class: 'messages facts' }, groupFacts.map((fact) => {
+        const parts = [fact.id + ' derived [' + factClass(fact) + ']: ' + fact.description];
+        for (const site of fact.sites || []) if (!fact.description.startsWith(site.edit + ' in ')) parts.push(site.sites.length + ' site(s): ' + site.edit);
+        if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
+        if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
+        return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
+      })));
+    }
     if (group.uncovered.length) {
       body.appendChild(
         h('ul', { class: 'uncovered-list' },
@@ -384,7 +446,7 @@
     const details = [];
     if (result.proof) details.push(h('div', { class: 'detail' }, 'proof: ', result.proof));
     if (result.reason) details.push(h('div', { class: 'detail' }, claim.status, ': ', result.reason));
-    if (result.effect) details.push(h('div', { class: 'detail' }, 'effect: ', result.effect, result.witness ? ' (for example ' + result.witness + ')' : ''));
+    if (result.effect) details.push(h('div', { class: 'detail' }, 'effect hint: ', result.effect, result.witness ? ' (for example ' + result.witness + ')' : ''));
     if (result.hint) details.push(h('div', { class: 'detail hint' }, 'hint: ', result.hint));
     if (claim.review === 'changed') details.push(h('div', { class: 'detail hint' }, 'The claim changed after the review.'));
     let ba = null;
@@ -435,6 +497,7 @@
       classChip(node.class),
       node.summary ? h('span', { class: 'summary' }, node.summary) : null,
       (node.claims || []).length ? h('span', { class: 'claim-ref' }, node.claims.join(' ')) : null,
+      (node.steps || []).length ? h('span', { class: 'summary' }, (node.steps.length === 1 ? 'step ' : 'steps ') + node.steps.join(', ')) : null,
     );
     const children = (node.children || []).filter((child) => mode !== 'changes' || treeHasChange(child));
     if (!children.length) return h('li', null, h('span', { class: 'leaf-pad' }), row);
@@ -524,7 +587,7 @@
     $('#flow-note').textContent = data.synthetic
       ? 'This function has no flow view in the data. The view shows its callers and callees.'
       : 'Click a node or a stub to go there.';
-    $('#flow-mermaid').textContent = data.mermaid;
+    $('#flow-mermaid').textContent = show(data.mermaid);
     const box = clear($('#flow-graph'));
     if (!mermaidReady && !setupMermaid()) {
       box.appendChild(h('p', { class: 'empty' }, 'Mermaid did not load. The Mermaid text is below.'));
@@ -534,7 +597,7 @@
     renderCounter += 1;
     let svg;
     try {
-      ({ svg } = await mermaid.render('flow-svg-' + renderCounter, themedMermaid(data.mermaid)));
+      ({ svg } = await mermaid.render('flow-svg-' + renderCounter, themedMermaid(show(data.mermaid))));
     } catch (error) {
       box.appendChild(h('p', { class: 'empty' }, 'Mermaid cannot draw this graph: ' + (error.message || error)));
       return;
@@ -548,7 +611,7 @@
       if (!link) continue;
       node.classList.add('clickable');
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = (link.flow ? 'Open the flow view of ' : 'Show ') + link.target;
+      title.textContent = show((link.flow ? 'Open the flow view of ' : 'Show ') + link.target);
       node.appendChild(title);
       node.addEventListener('click', () => {
         if (link.flow) navigateFlow(link.target);
@@ -618,7 +681,7 @@
         data: {
           id: node.id,
           parent,
-          label: node.kind === 'external' ? node.label + (node.badges.length ? ' [' + node.badges.join(' ') + ']' : '') : node.label,
+          label: show(node.kind === 'external' ? node.label + (node.badges.length ? ' [' + node.badges.join(' ') + ']' : '') : node.label),
           kind: node.kind,
           status: node.status,
           changes: node.changes || 0,

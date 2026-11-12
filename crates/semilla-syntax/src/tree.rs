@@ -70,9 +70,124 @@ impl Node {
     }
 }
 
+/// The signature of a function as a node (design 22.3, A5). The children are its parts:
+/// `qualifiers` (`const`, `async`, `unsafe`, `extern`), `generics` (the parameters with their
+/// inline bounds), `where`, one `param[NAME]` for each parameter (`param[self]` for the receiver;
+/// a pattern parameter has its pattern text as the name), and `ret`.
+pub fn signature(sig: &syn::Signature) -> Node {
+    let part = |kind: &'static str, role: String, text: String, span: Span| {
+        let (start, end) = pos_range(span);
+        Node { kind, role, text, attr: None, stmt: false, start, end, children: Vec::new() }
+    };
+    let qualifiers = [tokens(&sig.constness), tokens(&sig.asyncness), tokens(&sig.unsafety), tokens(&sig.abi)].into_iter().filter(|q| !q.is_empty()).collect::<Vec<_>>().join(" ");
+    let mut children = vec![
+        part("qualifiers", "qualifiers".into(), qualifiers, sig.fn_token.span),
+        part("generics", "generics".into(), tokens(&sig.generics), sig.generics.span()),
+        part("where", "where".into(), tokens(&sig.generics.where_clause), sig.generics.where_clause.span()),
+    ];
+    for input in &sig.inputs {
+        let name = match input {
+            syn::FnArg::Receiver(_) => "self".to_string(),
+            syn::FnArg::Typed(typed) => match typed.pat.as_ref() {
+                syn::Pat::Ident(ident) => ident.ident.to_string(),
+                other => tokens(other).replace(' ', ""),
+            },
+        };
+        let mut node = part("param", format!("param[{name}]"), tokens(input), input.span());
+        node.attr = Some(match input {
+            syn::FnArg::Receiver(receiver) => tokens(receiver),
+            syn::FnArg::Typed(typed) => tokens(&typed.ty),
+        });
+        children.push(node);
+    }
+    children.push(part("ret", "ret".into(), tokens(&sig.output), sig.output.span()));
+    let (start, end) = pos_range(sig.span());
+    Node { kind: "signature", role: "sig".into(), text: tokens(sig), attr: None, stmt: false, start, end, children }
+}
+
+/// The tokens of a source text for a display: `(white space before, text)`. A string literal, a
+/// char literal, and a comment are one token with their exact text. A word (a name, a number, a
+/// keyword) is one token. Each other character is one token.
+pub fn display_tokens(text: &str) -> Vec<(bool, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    // The end of a string literal that starts with the quote mark at `at`, with `hashes` hash
+    // marks (a raw string has no escapes).
+    let string_end = |at: usize, raw: bool, hashes: usize| -> usize {
+        let mut i = at + 1;
+        while i < chars.len() {
+            if chars[i] == '\\' && !raw {
+                i += 2;
+            } else if chars[i] == '"' && chars[i + 1..].iter().take(hashes).filter(|c| **c == '#').count() == hashes {
+                return i + 1 + hashes;
+            } else {
+                i += 1;
+            }
+        }
+        chars.len()
+    };
+    let mut tokens = Vec::new();
+    let (mut i, mut space) = (0, false);
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_whitespace() {
+            space = true;
+            i += 1;
+            continue;
+        }
+        let end = if c == '"' {
+            string_end(i, false, 0)
+        } else if c == '\'' {
+            if chars.get(i + 1) == Some(&'\\') {
+                // A char literal with an escape.
+                (i + 3..chars.len()).find(|at| chars[*at] == '\'').map_or(chars.len(), |at| at + 1)
+            } else if chars.get(i + 2) == Some(&'\'') {
+                i + 3
+            } else {
+                // A lifetime or a label.
+                (i + 1..chars.len()).find(|at| !word(chars[*at])).unwrap_or(chars.len())
+            }
+        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
+            (i..chars.len()).find(|at| chars[*at] == '\n').unwrap_or(chars.len())
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            (i + 2..chars.len()).find(|at| chars[*at] == '*' && chars.get(at + 1) == Some(&'/')).map_or(chars.len(), |at| at + 2)
+        } else if word(c) {
+            let end = (i..chars.len()).find(|at| !word(chars[*at])).unwrap_or(chars.len());
+            let name: String = chars[i..end].iter().collect();
+            let hashes = chars[end..].iter().take_while(|c| **c == '#').count();
+            let raw = matches!(name.as_str(), "r" | "br" | "cr");
+            if chars.get(end + hashes) == Some(&'"') && (raw || (hashes == 0 && matches!(name.as_str(), "b" | "c"))) {
+                string_end(end + hashes, raw, hashes)
+            } else {
+                end
+            }
+        } else {
+            i + 1
+        };
+        let end = end.clamp(i + 1, chars.len());
+        tokens.push((space, chars[i..end].iter().collect::<String>().trim_end().to_string()));
+        space = false;
+        i = end;
+    }
+    tokens
+}
+
+/// A source text on one line: each run of white space between two tokens is one space. The
+/// white space in a literal does not change (batch 5k, D6).
+pub fn one_line(text: &str) -> String {
+    let mut line = String::new();
+    for (space, token) in display_tokens(text) {
+        if space && !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(&token);
+    }
+    line
+}
+
 /// Shortens a text to `max` characters on one line.
 pub fn short(text: &str, max: usize) -> String {
-    let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = one_line(text);
     if line.chars().count() <= max {
         line
     } else {

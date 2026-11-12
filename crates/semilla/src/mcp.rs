@@ -1,62 +1,65 @@
-//! The MCP server: the tag tools for agents, over stdio (JSON-RPC 2.0, one message per line).
+//! The MCP server: the tools of the agent protocol (design 24.3), over stdio (JSON-RPC 2.0, one
+//! message per line). The tools of the old protocol are not served: the replay uses a plan.
 
 use std::io::{BufRead, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use semilla_core::{Class, GroupKind, Subgroup};
+use semilla_core::Class;
 use serde_json::{Value, json};
 
 use crate::app::App;
 
 /// The tools and their input schemas.
 fn tools() -> Value {
-    let ops: Vec<&str> = semilla_core::ops::OPS.iter().map(|op| op.name).collect();
     let class = json!({"type": "string", "enum": ["neutral", "logic", "control_flow", "other"]});
     json!([
-        {"name": "ops", "description": "List all claim operations with their level, class, role, and required arguments.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "replay_begin", "description": "Start a replay: semilla saves your finished work (or `commit`) as the target and puts the base tree in the working tree. Then rebuild the target in small steps, with replay_take or your own edits.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
-        {"name": "replay_status", "description": "List the hunks that remain between the working tree and the replay target, with the semantic changes and the suggested ops.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "replay_plan", "description": "Return a draft plan (JSON) of all replay steps: the takes and the draft claims of each step. Check and edit it, then send it with replay_apply.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "replay_apply", "description": "Apply a whole replay plan: start again from the base, run each step, and check the change set. It reports all problems at once; fix the plan and apply it again. `full: true` also runs the body proofs.", "inputSchema": {"type": "object", "properties": {"plan": {"type": "object"}, "full": {"type": "boolean"}}, "required": ["plan"]}},
-        {"name": "replay_take", "description": "Inside an open step: copy a part of the replay target into the working tree. `spec` is FILE, FILE:LINE, FILE:START-END (target lines), or an item path.", "inputSchema": {"type": "object", "properties": {"spec": {"type": "string"}}, "required": ["spec"]}},
-        {"name": "replay_end", "description": "End the replay. The working tree must be the target, and no step may be open.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "replay_abort", "description": "Stop the replay, remove its steps, and restore the working tree.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "step", "description": "Check and store one step (design 24.3). \"Before\" is the end of the last step (or HEAD for the first step); \"after\" is the working tree. Semilla derives a fact for each change, and proves renames and moves when the step has no other change. A rejected step stores nothing; the text gives the cause and the call to make again. `claims` are optional claims (`OP ANCHOR key=value …`); `reasons` maps an anchor to the reason for a fact in the spotlight.", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "group": {"type": "string"}, "claims": {"type": "array", "items": {"type": "string"}}, "reasons": {"type": "object", "additionalProperties": {"type": "string"}}, "class": class, "tree": {"type": "boolean"}, "fast": {"type": "boolean", "description": "Run only phase 1 now and phase 2 in the background (for a large project)."}}, "required": ["intent"]}},
+        {"name": "undo", "description": "Remove the last stored step. The working tree keeps its changes.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "tag", "description": "After `git commit`: the final check with phase 2, the result, and the git note on the commit (default HEAD). It stores nothing when the final check rejects the change set, and it gives each reason with its step.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
+        {"name": "results", "description": "The result of the session, or of a tagged commit: phase 1 runs again now; phase 2 comes only from a check on this machine (else it starts now). The text has one line for each step and the result line. `wait` waits at most this many seconds for phase 2. `verbose` adds the facts.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}, "wait": {"type": "integer"}, "verbose": {"type": "boolean"}}}},
+        {"name": "ops", "description": "List the optional claims with their arguments and an example.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "verify", "description": "Check the full change set (`final: true`: the final check of `tag`). It stores nothing.", "inputSchema": {"type": "object", "properties": {"final": {"type": "boolean"}}}},
         {"name": "pair_refuse", "description": "Refuse a pair warning: say why a removed item and an added item are really two items. The reviewer sees the reason and can still accept the warning. Without `reason`, remove the refusal.", "inputSchema": {"type": "object", "properties": {"old": {"type": "string"}, "new": {"type": "string"}, "reason": {"type": "string"}}, "required": ["old", "new"]}},
-        {"name": "step_begin", "description": "Start a step. Make the changes of the step with your own edit tools, then add claims, then call step_end.", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "class": class}, "required": ["intent"]}},
-        {"name": "claim", "description": "Add a claim to the open step. `at` is an anchor from the `anchor` tool. Claims on existing code use the anchors of the tree before the step; `add-*` statement claims use the anchor of the new statement.", "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ops}, "at": {"type": "string"}, "args": {"type": "object"}}, "required": ["op"]}},
-        {"name": "unclaim", "description": "Remove a claim from the open step.", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-        {"name": "step_end", "description": "End the open step.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "step_edit", "description": "Change the intent or the declared class of the open step (class: neutral, logic, control_flow, other, or none).", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "class": {"type": "string"}}}},
-        {"name": "step_drop", "description": "Remove the open step when it has no change, or the last ended step when it has no change and no claim.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "step_reopen", "description": "Open the last step again, to fix its claims (the working tree must be unchanged since step_end).", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "anchor", "description": "Return the anchor of the lowest node at a file position (the line and the column start at 1; the column is optional). With `before: true`, the position is in the tree before the open step: use this for claims on existing code. `up: N` goes N levels up.", "inputSchema": {"type": "object", "properties": {"file": {"type": "string"}, "line": {"type": "integer"}, "column": {"type": "integer"}, "before": {"type": "boolean"}, "up": {"type": "integer"}}, "required": ["file", "line"]}},
-        {"name": "check_step", "description": "Verify one step (default: the last or open step). Phase 1 only (fast): the syntax checks, with uncovered changes and hints; the body proofs are pending and run in the background. Set `full: true` to wait for the body proofs.", "inputSchema": {"type": "object", "properties": {"step": {"type": "integer"}, "full": {"type": "boolean"}}}},
-        {"name": "results", "description": "The result of the background check (phase 2) of the session, or of a tagged commit: ready, queued, or stale, with the full report.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
-        {"name": "suggest_claims", "description": "Suggest claims for the uncovered changes of the last step. The suggestions are not trusted: check and send them with `claim`.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "verify", "description": "Verify the full change set, with the group and subgroup rules.", "inputSchema": {"type": "object", "properties": {"final": {"type": "boolean"}}}},
-        {"name": "group_set", "description": "Declare a group: a set of steps with one intent (about one commit).", "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "kind": {"type": "string", "enum": ["refactor", "rename", "move", "api", "tests", "deps", "fix", "feature", "behavior"]}, "title": {"type": "string"}, "why": {"type": "string"}, "steps": {"type": "array", "items": {"type": "integer"}}}, "required": ["id", "kind", "title", "steps"]}},
-        {"name": "subgroups_suggest", "description": "Return the engine's subgroup suggestion for a group.", "inputSchema": {"type": "object", "properties": {"group": {"type": "string"}}, "required": ["group"]}},
-        {"name": "subgroups_set", "description": "Send the final subgroup layout of a group. Returns the rule violations, if any.", "inputSchema": {"type": "object", "properties": {"group": {"type": "string"}, "layout": {"type": "array", "items": {"type": "object"}}}, "required": ["group", "layout"]}},
-        {"name": "tag", "description": "Store the change set on a commit (default HEAD) as a git note. The last step must end at the commit tree.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}}
+        {"name": "replay_begin", "description": "Start a replay: semilla saves your finished work (or `commit`) as the target and puts the base tree in the working tree.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
+        {"name": "replay_status", "description": "List the hunks that remain between the working tree and the replay target.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_plan", "description": "Return a draft plan (JSON) of all replay steps: the intents, the takes, and the optional claims of each step. Check and edit it, then send it with replay_apply.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_apply", "description": "Apply a whole replay plan: start again from the base, run each step, and check the change set. It reports all problems at once. `full: true` also runs the body proofs.", "inputSchema": {"type": "object", "properties": {"plan": {"type": "object"}, "full": {"type": "boolean"}}, "required": ["plan"]}},
+        {"name": "replay_end", "description": "End the replay. The working tree must be the target.", "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "replay_abort", "description": "Stop the replay, remove its steps, and restore the working tree.", "inputSchema": {"type": "object", "properties": {}}}
     ])
 }
 
 /// Runs one tool call.
 fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
     let text = |key: &str| args.get(key).and_then(Value::as_str);
+    // The tools are agent commands (design 28). The result of a tagged commit and `verify` are
+    // reviewer commands: they run no build code that the change set changes (I6).
+    app.mode = match name {
+        "verify" => crate::buildcode::Mode::Reviewer,
+        "results" if text("commit").is_some() => crate::buildcode::Mode::Reviewer,
+        _ => crate::buildcode::Mode::Agent,
+    };
     match name {
-        "ops" => Ok(serde_json::to_string_pretty(semilla_core::ops::OPS)?),
-        "step_begin" => {
+        "ops" => {
+            let ops: Vec<&semilla_core::ops::OpInfo> = semilla_core::ops::OPS.iter().filter(|op| crate::onestep::CLAIMS.contains(&op.name)).collect();
+            Ok(serde_json::to_string_pretty(&ops)?)
+        }
+        "step" => {
+            let strings = |key: &str| args.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+            let reasons = match args.get("reasons") {
+                Some(Value::Object(map)) => map.iter().map(|(anchor, text)| format!("{anchor}={}", text.as_str().unwrap_or(""))).collect(),
+                _ => strings("reasons"),
+            };
             let class: Option<Class> = args.get("class").map(|c| serde_json::from_value(c.clone())).transpose()?;
-            app.step_begin(text("intent").context("`intent` is required")?, class)
+            let request = crate::onestep::StepRequest { intent: text("intent").context("`intent` is required")?.to_string(), group: text("group").map(str::to_string), claims: strings("claims"), reasons, class, tree: args.get("tree").and_then(Value::as_bool).unwrap_or(false), fast: args.get("fast").and_then(Value::as_bool).unwrap_or(false) };
+            let (text, stored) = app.step_once(&request)?;
+            if !stored {
+                anyhow::bail!("{text}");
+            }
+            Ok(text)
         }
-        "claim" => {
-            let claim_args = args.get("args").and_then(Value::as_object).cloned().unwrap_or_default();
-            let id = app.claim(text("op").context("`op` is required")?, text("at"), claim_args)?;
-            Ok(format!("claim {id} added"))
-        }
-        "unclaim" => app.unclaim(text("id").context("`id` is required")?).map(|_| format!("claim {} removed", text("id").unwrap_or(""))),
+        "undo" => app.undo(),
         "pair_refuse" => app.pair_refuse(text("old").context("`old` is required")?, text("new").context("`new` is required")?, text("reason")),
         "replay_begin" => app.replay_begin(text("commit")),
         "replay_status" => app.replay_status(),
@@ -66,66 +69,12 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             let applied = app.replay_apply(&plan, args.get("full").and_then(Value::as_bool).unwrap_or(false))?;
             Ok(applied.text)
         }
-        "replay_take" => app.replay_take(text("spec").context("`spec` is required")?),
         "replay_end" => app.replay_end(),
         "replay_abort" => app.replay_abort(),
-        "step_end" => app.step_end(),
-        "step_reopen" => app.step_reopen(),
-        "step_drop" => app.step_drop(),
-        "step_edit" => {
-            let class = match text("class") {
-                None => None,
-                Some("none") => Some(None),
-                Some(value) => Some(Some(serde_json::from_value(json!(value))?)),
-            };
-            app.step_edit(text("intent"), class)
-        }
-        "anchor" => {
-            let line = args.get("line").and_then(Value::as_u64).context("`line` is required")? as usize;
-            let column = args.get("column").and_then(Value::as_u64).map(|c| c as usize);
-            let before = args.get("before").and_then(Value::as_bool).unwrap_or(false);
-            let up = args.get("up").and_then(Value::as_u64).unwrap_or(0) as usize;
-            app.anchor_up(text("file").context("`file` is required")?, line, column, before, up)
-        }
-        "check_step" => {
-            let session = app.load_session()?;
-            let last = session.changeset.steps.len() + usize::from(session.open.is_some());
-            let step = args.get("step").and_then(Value::as_u64).map(|s| s as usize).unwrap_or(last.saturating_sub(1));
-            let full = args.get("full").and_then(Value::as_bool).unwrap_or(false);
-            let saved = app.no_bodies;
-            app.no_bodies = saved || !full;
-            let result = app.check(Some(step), false);
-            app.no_bodies = saved;
-            let result = result?;
-            Ok(format!("{}\n{}", result.text, result.tree.render()))
-        }
-        "results" => app.status(text("commit")),
-        "suggest_claims" => Ok(serde_json::to_string_pretty(&app.suggest_claims()?)?),
+        "results" => app.status(text("commit"), args.get("wait").and_then(Value::as_u64), args.get("verbose").and_then(Value::as_bool).unwrap_or(false)),
         "verify" => {
             let result = app.check(None, args.get("final").and_then(Value::as_bool).unwrap_or(false))?;
             Ok(format!("{}\n{}", result.text, result.tree.render()))
-        }
-        "group_set" => {
-            let kind: GroupKind = serde_json::from_value(args.get("kind").cloned().context("`kind` is required")?)?;
-            let steps: Vec<usize> = serde_json::from_value(args.get("steps").cloned().unwrap_or(json!([])))?;
-            app.group_set(text("id").context("`id` is required")?, kind, text("title").unwrap_or(""), text("why").unwrap_or(""), steps)?;
-            Ok("group saved".into())
-        }
-        "subgroups_suggest" => Ok(serde_json::to_string_pretty(&app.subgroups_suggest(text("group").context("`group` is required")?)?)?),
-        "subgroups_set" => {
-            let group = text("group").context("`group` is required")?;
-            let mut layout = Vec::new();
-            for entry in args.get("layout").and_then(Value::as_array).cloned().unwrap_or_default() {
-                let mut entry = entry;
-                if let Some(object) = entry.as_object_mut() {
-                    object.entry("group").or_insert(json!(group));
-                    object.entry("title").or_insert(json!(""));
-                }
-                let subgroup: Subgroup = serde_json::from_value(entry)?;
-                layout.push(subgroup);
-            }
-            let errors = app.subgroups_set(group, layout)?;
-            Ok(if errors.is_empty() { "ok".to_string() } else { format!("rejected:\n{}", errors.join("\n")) })
         }
         "tag" => app.tag(text("commit").unwrap_or("HEAD")),
         other => anyhow::bail!("unknown tool `{other}`"),
@@ -170,7 +119,13 @@ pub fn handle(app: &mut App, message: &Value) -> Option<Value> {
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             Ok(match call(app, name, &args) {
                 Ok(text) => json!({"content": [{"type": "text", "text": text}]}),
-                Err(error) => json!({"content": [{"type": "text", "text": format!("error: {error:#}")}], "isError": true}),
+                Err(error) => {
+                    let text = match error.downcast_ref::<crate::app::Rejected>() {
+                        Some(rejected) => rejected.to_string(),
+                        None => format!("error: {error:#}"),
+                    };
+                    json!({"content": [{"type": "text", "text": text}], "isError": true})
+                }
             })
         }
         _ if id.is_none() => return None,

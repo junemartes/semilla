@@ -335,6 +335,7 @@ pub fn role_label(role: Role) -> &'static str {
         Role::Config => "Config",
         Role::Propagation => "Propagation",
         Role::Mechanical => "Mechanical",
+        Role::Docs => "Docs",
         Role::Custom => "Custom",
     }
 }
@@ -346,6 +347,7 @@ pub fn class_label(class: Option<Class>) -> &'static str {
         Some(Class::Logic) => "logic",
         Some(Class::ControlFlow) => "ctrl flow",
         Some(Class::Other) => "other",
+        Some(Class::NotChecked) => "not checked",
         None => "unknown",
     }
 }

@@ -9,6 +9,7 @@
 //!   change set. It reports all problems at once, so that the agent can fix the plan and apply it
 //!   again.
 
+use semilla_core::text::put_line;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
@@ -62,6 +63,70 @@ pub struct PlanEdit {
     pub replace: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub word: bool,
+    /// With `field: true`, `find` is a field name: it changes only at the field positions
+    /// (`x.find`, `find: …` in a struct, a struct literal, or a pattern), not as a local variable
+    /// or in a comment. `file` can be `*`. Use it for the rename of a field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub field: bool,
+}
+
+/// Replaces a field name at its field positions in a Rust source text: after `.` (not a method
+/// call), and before `:` (not `::`) inside `{ }` after `{`, `,`, or `pub`. Comments and string
+/// literals do not change. Returns the text and the count of changes.
+pub fn replace_field(text: &str, field: &str, replace: &str) -> (String, usize) {
+    let bytes = text.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = String::with_capacity(text.len());
+    let mut count = 0;
+    let mut brackets: Vec<u8> = Vec::new();
+    let mut index = 0;
+    let mut last = 0;
+    let previous = |at: usize| -> (Option<u8>, &str) {
+        let head = text[..at].trim_end();
+        let word_start = head.rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '(' || c == ')')).map(|i| i + 1).unwrap_or(0);
+        (head.bytes().last(), &head[word_start..])
+    };
+    while index < bytes.len() {
+        let b = bytes[index];
+        // A comment or a string literal: skip it.
+        if b == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            index = text[index..].find('\n').map(|i| index + i).unwrap_or(bytes.len());
+            continue;
+        }
+        if b == b'"' {
+            index += 1;
+            while index < bytes.len() && bytes[index] != b'"' {
+                index += if bytes[index] == b'\\' { 2 } else { 1 };
+            }
+            index += 1;
+            continue;
+        }
+        match b {
+            b'{' | b'(' | b'[' => brackets.push(b),
+            b'}' | b')' | b']' => {
+                brackets.pop();
+            }
+            _ => {}
+        }
+        let start_ok = index == 0 || !is_ident(bytes[index - 1]);
+        if start_ok && text[index..].starts_with(field) && !bytes.get(index + field.len()).copied().is_some_and(is_ident) {
+            let rest = text[index + field.len()..].trim_start();
+            let (prev, prev_word) = previous(index);
+            let access = prev == Some(b'.') && !text[..index].trim_end().ends_with("..") && !rest.starts_with('(') && !rest.starts_with("::");
+            let member = brackets.last() == Some(&b'{') && rest.starts_with(':') && !rest.starts_with("::") && (matches!(prev, Some(b'{') | Some(b',')) || prev_word.starts_with("pub"));
+            if access || member {
+                out.push_str(&text[last..index]);
+                out.push_str(replace);
+                count += 1;
+                index += field.len();
+                last = index;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    out.push_str(&text[last..]);
+    (out, count)
 }
 
 /// Replaces each whole-word occurrence of `word` (an identifier) in `text`.
@@ -361,8 +426,9 @@ impl App {
             }
         }
 
-        // 3. One step for each connected set of units, in a safe order: new items first, then
-        //    renames, signature changes, other changes, removed items, and the other files.
+        // 3. One step for each connected set of units, in a safe order: renames first (an identity
+        //    step has no other change, design 22.4), then new items, moves, signature changes,
+        //    other changes, removed items, and the other files.
         let mut components: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for key in &keys {
             let found = root(&mut parent, key);
@@ -378,14 +444,18 @@ impl App {
         // The honest split of a pair: a rename (a neutral claim), then the other changes. The
         // components below take the hunks that remain after the renames.
         for (old, new) in &renamed {
-            let rename = PlanEdit { file: "*".into(), find: name(old), replace: name(new), word: true };
-            drafts.push((1, format!("rename `{}` to `{}`", name(old), name(new)), Vec::new(), vec![rename]));
+            // A field changes at its field positions only, so a local variable with the same name
+            // and the comments keep the old name (the rename step must have no other change).
+            let field = base_ws.items.get(old).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Field);
+            let short = |path: &str| if field { path.rsplit_once('.').map(|(_, f)| f.to_string()).unwrap_or_else(|| name(path)) } else { name(path) };
+            let rename = PlanEdit { file: "*".into(), find: short(old), replace: short(new), word: !field, field };
+            drafts.push((0, format!("rename `{}` to `{}`", name(old), name(new)), Vec::new(), vec![rename]));
         }
         for members in components.into_values() {
             let is_new = |u: &String| target_ws.items.contains_key(u) && !base_ws.items.contains_key(u) && !is_pair_new(u);
             let is_removed = |u: &String| base_ws.items.contains_key(u) && !target_ws.items.contains_key(u) && !is_pair_old(u);
             if let Some((old, new, score)) = pairs.iter().find(|(old, new, _)| members.contains(old) && owner(old) != owner(new)) {
-                drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: claim `move-item`, then the changes in a later step; or `rewrite-item`)", score * 100.0), members, Vec::new()));
+                drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: the move in its own step, then the changes in a later step)", score * 100.0), members, Vec::new()));
             } else if let Some(item) = members.iter().find(|m| signature_changes.contains(m)) {
                 drafts.push((2, format!("change the signature of `{}` and its call sites", name(item)), members, Vec::new()));
             } else if members.iter().all(is_new) {
@@ -448,7 +518,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), class: None, claims: claims.clone(), tree_before: String::new(), tree_after: String::new() };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), class: None, claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default() };
             let map = semilla_verify::checks::renames(&rename_step, &before_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
             let owners = vec![None; edits.len()];
@@ -457,7 +527,7 @@ impl App {
             claims.extend(rest);
             let mut todo: Vec<String> = edits
                 .iter()
-                .filter(|edit| semilla_verify::hints::suggest(edit).contains(' '))
+                .filter(|edit| { let hint = semilla_verify::hints::suggest(edit); hint.starts_with("rename (") || hint.starts_with("move-item (") })
                 .map(|edit| format!("{}: {} (at {})", semilla_verify::hints::suggest(edit), semilla_verify::hints::describe(edit), edit.before.as_ref().or(edit.after.as_ref()).map(|a| a.to_string()).unwrap_or_default()))
                 .collect();
             for edit in edits.iter().filter(|e| e.kind == semilla_syntax::EditKind::ItemAdded) {
@@ -466,11 +536,18 @@ impl App {
                     todo.push(format!("new function `{}`: add the property claims that are true (no-panic, no-unsafe, no-io, calls-only, tested-by)", item.path));
                 }
             }
+            // An identity step must have no other claim (design 22.4).
+            let identity = claims.iter().any(|c| matches!(c.op.as_str(), "rename" | "move-item"));
+            if identity && claims.iter().any(|c| !matches!(c.op.as_str(), "rename" | "move-item" | "edit-doc")) {
+                todo.push("split the step: put each rename and each move in its own step, before the other changes (an identity step must be neutral)".to_string());
+            }
             // The intent names the items of the claims: the units name only the innermost items.
             let intent = if step.edits.is_empty() { draft_intent(&claims).unwrap_or(step.intent.clone()) } else { step.intent.clone() };
             plan.steps.push(PlanStep {
                 intent,
-                claims: claims.into_iter().map(|c| PlanClaim { op: c.op, at: c.at.map(|a| a.to_string()), up: 0, args: c.args }).collect(),
+                // Design 24.2: only the claims that stay go into the plan. Semilla derives the rest,
+                // also the renames and the moves of a step with no other change.
+                claims: claims.into_iter().filter(|c| crate::onestep::CLAIMS.contains(&c.op.as_str()) && !matches!(c.op.as_str(), "rename" | "move-item")).map(|c| PlanClaim { op: c.op, at: c.at.map(|a| a.to_string()), up: 0, args: c.args }).collect(),
                 todo,
                 ..step
             });
@@ -578,8 +655,8 @@ impl App {
                     }
                     continue;
                 };
-                if edit.word {
-                    let (changed, count) = replace_word(&current, &edit.find, &edit.replace);
+                if edit.word || edit.field {
+                    let (changed, count) = if edit.field { replace_field(&current, &edit.find, &edit.replace) } else { replace_word(&current, &edit.find, &edit.replace) };
                     if count > 0 {
                         total += count;
                         contents.insert(file, Some(changed));
@@ -595,8 +672,8 @@ impl App {
                     }
                 }
             }
-            if edit.word && total == 0 {
-                problems.push(format!("edit {}: no whole-word `{}`", edit.file, edit.find));
+            if (edit.word || edit.field) && total == 0 {
+                problems.push(format!("edit {}: no {} `{}`", edit.file, if edit.field { "field use of" } else { "whole-word" }, edit.find));
             }
         }
         Ok((contents, problems))
@@ -671,17 +748,32 @@ impl App {
             self.step_end_with(false)?;
             problems += lines.len();
             let mark = if lines.is_empty() { "✓" } else { "✗" };
-            text.push_str(&format!("{mark} plan step {index}: {}\n", step.intent));
+            put_line(&mut text, &format!("{mark} plan step {index}: {}", semilla_core::text::quoted(&step.intent)));
             for line in lines {
-                text.push_str(&format!("    {line}\n"));
+                put_line(&mut text, &format!("    {line}"));
             }
         }
         let mut session = self.load_session()?;
         for group in &plan.groups {
             if let Err(error) = self.group_set(&group.id, group.kind, &group.title, &group.why, group.steps.clone()) {
-                text.push_str(&format!("✗ group {}: {error:#}\n", group.id));
+                put_line(&mut text, &format!("✗ group {}: {error:#}", group.id));
                 problems += 1;
             }
+        }
+        // A step that no plan group names is its own group, with its intent as the title, as with
+        // `semilla step` (design 24.3).
+        let mut number = plan.groups.len();
+        for (index, step) in plan.steps.iter().enumerate() {
+            if plan.groups.iter().any(|g| g.steps.contains(&index)) {
+                continue;
+            }
+            number += 1;
+            let mut id = format!("G{number}");
+            while plan.groups.iter().any(|g| g.id == id) {
+                number += 1;
+                id = format!("G{number}");
+            }
+            self.group_set(&id, GroupKind::Behavior, &step.intent, "", vec![index])?;
         }
         session = self.load_session().unwrap_or(session);
         let remaining = self.replay_remaining(&session)?.unwrap_or_default();
@@ -691,7 +783,7 @@ impl App {
         let saved = self.no_bodies;
         self.no_bodies = saved || !full;
         let set = self.current_changeset()?;
-        let result = self.check_set(&set, !plan.groups.is_empty());
+        let result = self.check_set(&set, true);
         self.no_bodies = saved;
         let result = result?;
         if !full {
@@ -699,7 +791,7 @@ impl App {
         }
         text.push('\n');
         text.push_str(&result.text);
-        text.push_str(&format!("replay: {remaining}\n"));
+        put_line(&mut text, &format!("replay: {remaining}"));
         let checked = if full { result.report.accepted } else { crate::phase1_ok(&result.report) };
         let ok = problems == 0 && at_target && checked;
         text.push_str(&if ok {
@@ -740,5 +832,19 @@ mod tests {
         assert_eq!(parse_position("src/a.rs:12:5").unwrap(), ("src/a.rs".into(), 12, Some(5)));
         assert_eq!(parse_position("src/a.rs:12").unwrap(), ("src/a.rs".into(), 12, None));
         assert!(parse_position("src/a.rs").is_err());
+    }
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::replace_field;
+
+    #[test]
+    fn a_field_rename_changes_only_the_field_positions() {
+        let text = "pub struct A {\n    pub balance: u64,\n}\n/// The new balance.\nfn f(balance: u64, a: &mut A) -> u64 {\n    let b = A { balance: 0 };\n    a.balance += balance;\n    let A { balance: x } = b;\n    a.balance() + x + \"balance\".len() as u64\n}\n";
+        let (out, count) = replace_field(text, "balance", "cents");
+        assert_eq!(count, 4, "{out}");
+        assert!(out.contains("pub cents: u64") && out.contains("A { cents: 0 }") && out.contains("a.cents += balance;") && out.contains("A { cents: x }"), "{out}");
+        assert!(out.contains("fn f(balance: u64") && out.contains("The new balance.") && out.contains("a.balance()") && out.contains("\"balance\""), "{out}");
     }
 }

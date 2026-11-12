@@ -1,12 +1,29 @@
 //! The semilla command line.
 
+// Each print of the CLI goes through the escape of `semilla_core::text` (batch 5k, A2): a
+// control character of the agent or of the repository never gets to the terminal. The line
+// breaks stay: the code that builds a line uses `put_line`. A print of JSON uses `std::println!`,
+// because the JSON escape is sufficient there.
+macro_rules! println {
+    ($($arg:tt)*) => { std::println!("{}", semilla_core::text::block(&format!($($arg)*))) };
+}
+macro_rules! print {
+    ($($arg:tt)*) => { std::print!("{}", semilla_core::text::block(&format!($($arg)*))) };
+}
+macro_rules! eprintln {
+    ($($arg:tt)*) => { std::eprintln!("{}", semilla_core::text::block(&format!($($arg)*))) };
+}
+
 mod app;
 mod background;
+mod buildcode;
 mod git;
 mod mcp;
+mod onestep;
 mod oracle;
 mod plan;
 mod replay;
+mod store;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,11 +35,15 @@ use semilla_core::{Class, GroupKind, Subgroup};
 use crate::app::App;
 
 #[derive(Parser)]
-#[command(name = "semilla", version, about = "Verified semantic changes for code review.")]
+#[command(name = "semilla", version, about = "Verified semantic changes for code review.", after_help = "The loop: edit the code, then `semilla step \"<intent>\"`. At the end: `git commit`, then `semilla tag`.\nThe commands of the old protocol are hidden. Only a replay by hand uses them (see `README.md`).")]
 struct Cli {
     /// The repository folder (default: the current folder).
     #[arg(long, global = true)]
     repo: Option<PathBuf>,
+    /// Read no cache: compute each record again in a new temporary folder (a full build). Use it
+    /// when the agent could write outside the repository folder (the cache folder of the user).
+    #[arg(long, global = true)]
+    fresh: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -30,21 +51,56 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Rebuild finished work as a series of checked steps.
+    #[command(display_order = 20)]
     Replay {
         #[command(subcommand)]
         action: ReplayAction,
     },
     /// Refuse a pair warning (a removed and an added item that look like one changed item).
+    #[command(display_order = 21)]
     Pair {
         #[command(subcommand)]
         action: PairAction,
     },
-    /// Manage steps.
+    /// Check and store one step: `semilla step "<intent>" [--group T] [--claim '…'] [--reason 'ANCHOR=TEXT'] [--class C]`.
+    ///
+    /// The first argument is always the intent. `step` has no subcommand (batch 5g): each word is
+    /// a valid intent, also `edit` or `end`.
+    #[command(display_order = 1)]
     Step {
+        /// The intent of the step.
+        intent: Option<String>,
+        /// The group title. Steps with the same title make one group.
+        #[arg(long)]
+        group: Option<String>,
+        /// An explicit claim: `OP ANCHOR key=value …`. The anchor can be `FILE:LINE[:COLUMN]`.
+        #[arg(long = "claim")]
+        claims: Vec<String>,
+        /// The reason for a fact in the spotlight: `ANCHOR=TEXT`.
+        #[arg(long = "reason")]
+        reasons: Vec<String>,
+        /// A declared class (neutral, logic, control_flow, other).
+        #[arg(long)]
+        class: Option<String>,
+        /// Also print the change tree.
+        #[arg(long)]
+        tree: bool,
+        /// Run only phase 1 now, and phase 2 in the background (for a large project). Without it,
+        /// the command runs phase 2 and prints the final result of the step.
+        #[arg(long)]
+        fast: bool,
+    },
+    /// Remove the last stored step (the working tree keeps its changes).
+    #[command(display_order = 2)]
+    Undo,
+    /// (old protocol, for the replay) Open and end a step by hand: `semilla old-step begin "<intent>"`, `semilla old-step end`.
+    #[command(hide = true, name = "old-step")]
+    OldStep {
         #[command(subcommand)]
         action: StepAction,
     },
-    /// Add a claim to the open step: `semilla claim add-if --at demo::f/S0 cond="x > 0"`.
+    /// (old protocol, for the replay) Add a claim to the open step: `semilla claim add-if --at demo::f/S0 cond="x > 0"`.
+    #[command(hide = true)]
     Claim {
         op: String,
         #[arg(long)]
@@ -52,9 +108,19 @@ enum Command {
         /// Arguments as `key=value`. A value that is valid JSON (a number, a list) stays JSON.
         args: Vec<String>,
     },
-    /// Remove a claim from the open step.
+    /// (old protocol, for the replay) Remove a claim from the open step.
+    #[command(hide = true)]
     Unclaim { id: String },
-    /// Print the anchor at a file position: `semilla anchor src/lib.rs:12[:8]`.
+    /// (old protocol, for the replay) Give the reason for a fact in the spotlight: `semilla reason --at ANCHOR "text"`. The
+    /// reason is free text for the reviewer, stored with the open step. An empty text removes it.
+    #[command(hide = true)]
+    Reason {
+        #[arg(long)]
+        at: String,
+        text: String,
+    },
+    /// (old protocol, for the replay) Print the anchor at a file position: `semilla anchor src/lib.rs:12[:8]`.
+    #[command(hide = true)]
     Anchor {
         position: String,
         /// Read the position in the tree before the open step (for claims on existing code).
@@ -64,8 +130,9 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         up: usize,
     },
-    /// Verify one step (default: the last or open step). Without `--full`, only phase 1 runs:
+    /// (old protocol, for the replay) Verify one step (default: the last or open step). Without `--full`, only phase 1 runs:
     /// the syntax checks; the body proofs are pending and run in the background.
+    #[command(hide = true)]
     Check {
         #[arg(long)]
         step: Option<usize>,
@@ -73,9 +140,28 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Show the background check of the session, or of a tagged commit.
-    Status { commit: Option<String> },
+    /// Show the check of the session, or of a tagged commit. Phase 1 runs again; phase 2 comes
+    /// only from a check on this machine (else it starts now). With a commit, the command waits
+    /// for phase 2 (at most 600 seconds).
+    #[command(display_order = 4)]
+    Status {
+        commit: Option<String>,
+        /// Wait at most this many seconds for phase 2. With a commit, this is the default.
+        #[arg(long, num_args = 0..=1, default_missing_value = "600")]
+        wait: Option<u64>,
+        /// With a commit: do not wait for phase 2. Print the present state.
+        #[arg(long, conflicts_with = "wait")]
+        no_wait: bool,
+        /// Print the facts and the claims of each step.
+        #[arg(long)]
+        verbose: bool,
+        /// Allow the check to run the build code that the change set changes (a build script, a
+        /// proc macro crate, a cargo configuration file). Read that change first.
+        #[arg(long)]
+        trust_build_code: bool,
+    },
     /// Review the session or a tagged commit: the UI, or a standalone report.
+    #[command(display_order = 5)]
     Review {
         /// `session` (default) or a commit.
         target: Option<String>,
@@ -85,13 +171,20 @@ enum Command {
         /// Write a standalone HTML report to this file.
         #[arg(long)]
         html: Option<PathBuf>,
+        /// With `--md`: add the change tree, each flow view, and each source.
+        #[arg(long)]
+        full: bool,
         /// Wait at most this many seconds for the background check.
         #[arg(long, default_value_t = 600)]
         wait: u64,
         #[arg(long, default_value_t = 7878)]
         port: u16,
+        /// Allow the check to run the build code that the change set changes (a build script, a
+        /// proc macro crate, a cargo configuration file). Read that change first.
+        #[arg(long)]
+        trust_build_code: bool,
     },
-    /// Run the background jobs, then stop (normally started by `step end` and `tag`).
+    /// Run the background jobs, then stop (normally started by a step and by `tag`).
     #[command(hide = true)]
     Worker,
     /// Verify the full change set.
@@ -102,10 +195,16 @@ enum Command {
         /// Print the report as JSON.
         #[arg(long)]
         json: bool,
+        /// Allow the check to run the build code that the change set changes (a build script, a
+        /// proc macro crate, a cargo configuration file). Read that change first.
+        #[arg(long)]
+        trust_build_code: bool,
     },
-    /// Suggest claims for the uncovered changes of the last step.
+    /// (old protocol, for the replay) Suggest claims for the uncovered changes of the last step.
+    #[command(hide = true)]
     SuggestClaims,
-    /// Declare a group.
+    /// (old protocol, for the replay) Declare a group.
+    #[command(hide = true)]
     Group {
         id: String,
         #[arg(long)]
@@ -118,7 +217,8 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         steps: Vec<usize>,
     },
-    /// Show the subgroup suggestion of a group, or set the layout from a JSON file.
+    /// (old protocol, for the replay) Show the subgroup suggestion of a group, or set the layout from a JSON file.
+    #[command(hide = true)]
     Subgroups {
         group: String,
         #[arg(long)]
@@ -126,9 +226,11 @@ enum Command {
     },
     /// Build the index of the working tree in `.semilla/index.json`.
     Index,
-    /// Print the change tree.
+    /// (old protocol, for the replay) Print the change tree.
+    #[command(hide = true)]
     Show,
-    /// Store the change set on a commit (default HEAD) as a git note.
+    /// After `git commit`: the final check with phase 2, the result, and the git note (default HEAD).
+    #[command(display_order = 3)]
     Tag { commit: Option<String> },
     /// Load the change set of a tagged commit for a review.
     Load { commit: String },
@@ -136,10 +238,15 @@ enum Command {
     Ui {
         #[arg(long, default_value_t = 7878)]
         port: u16,
+        /// Allow the check to run the build code that the change set changes (a build script, a
+        /// proc macro crate, a cargo configuration file). Read that change first.
+        #[arg(long)]
+        trust_build_code: bool,
     },
     /// Serve the agent tools over MCP (stdio).
     Mcp,
-    /// Print all claim operations, or the details of one.
+    /// Print the optional claims, or the details of one.
+    #[command(display_order = 6)]
     Ops { name: Option<String> },
 }
 
@@ -225,7 +332,13 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("error: {error:#}");
+            // A rejected result is not a tool error: its first line is the result line.
+            match error.downcast_ref::<app::Rejected>() {
+                Some(rejected) => eprintln!("{rejected}"),
+                // An error can have more than one line (the output of a tool), and it can hold
+                // text of the agent: each next line gets an indent.
+                None => eprintln!("error: {}", semilla_core::text::block_indent(&format!("{error:#}"), "  ")),
+            }
             ExitCode::from(2)
         }
     }
@@ -235,21 +348,54 @@ fn main() -> ExitCode {
 fn phase1_ok(report: &semilla_core::Report) -> bool {
     report.organization.is_empty()
         && report.steps.iter().all(|step| {
-            step.errors.is_empty() && step.uncovered.is_empty() && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
+            step.errors.is_empty() && step.uncovered.is_empty() && step.facts.iter().all(|f| !f.spotlight || f.reason.is_some()) && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
         })
+}
+
+/// Who runs a command (design 28). The agent commands are an allow list: each other command is
+/// a reviewer command, and it runs no build code that the change set changes (I6) unless it has
+/// `--trust-build-code`.
+fn command_mode(command: &Command) -> buildcode::Mode {
+    use buildcode::Mode;
+    match command {
+        Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index => Mode::Agent,
+        // `status` with no commit shows the session of the agent.
+        Command::Status { commit: None, .. } => Mode::Agent,
+        Command::Status { trust_build_code: true, .. } | Command::Review { trust_build_code: true, .. } | Command::Ui { trust_build_code: true, .. } | Command::Verify { trust_build_code: true, .. } => Mode::ReviewerTrust,
+        _ => Mode::Reviewer,
+    }
 }
 
 fn parse_class(text: &str) -> Result<Class> {
     serde_json::from_value(serde_json::Value::String(text.to_string())).with_context(|| format!("`{text}` is not a class (neutral, logic, control_flow, other)"))
 }
 
+/// Removes each folder of `PATH` that is relative or in the repository folder. Semilla starts
+/// `git`, `cargo`, and `rustc` by name. The agent controls the repository folder, so a program
+/// there is never one of these tools (invariant I5).
+fn safe_path(dir: &std::path::Path) {
+    let Some(path) = std::env::var_os("PATH") else { return };
+    // The repository folder: the first parent folder with a `.git` entry. Git is not asked,
+    // because the search for git uses `PATH`.
+    let start = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let root = start.ancestors().find(|folder| folder.join(".git").exists()).map(std::path::Path::to_path_buf);
+    let kept: Vec<PathBuf> = std::env::split_paths(&path).filter(|entry| entry.is_absolute() && root.as_ref().is_none_or(|root| !store::is_inside(entry, root))).collect();
+    if let Ok(joined) = std::env::join_paths(kept) {
+        // No other thread runs yet: this is the start of `main`.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
+}
+
 fn run(cli: Cli) -> Result<ExitCode> {
     let dir = cli.repo.clone().unwrap_or(std::env::current_dir()?);
+    store::set_fresh(cli.fresh);
+    safe_path(&dir);
     if matches!(cli.command, Command::Mcp) {
         mcp::serve(&dir)?;
         return Ok(ExitCode::SUCCESS);
     }
     let mut app = App::open(&dir)?;
+    app.mode = command_mode(&cli.command);
     match cli.command {
         Command::Pair { action: PairAction::Refuse { old, new, reason } } => println!("{}", app.pair_refuse(&old, &new, Some(&reason))?),
         Command::Pair { action: PairAction::Unrefuse { old, new } } => println!("{}", app.pair_refuse(&old, &new, None)?),
@@ -259,7 +405,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let text = serde_json::to_string_pretty(&app.replay_plan()?)?;
             let file = out.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
             if file.as_os_str() == "-" {
-                println!("{text}");
+                std::println!("{text}");
             } else {
                 std::fs::write(&file, text + "\n")?;
                 println!("wrote the draft plan to {}; check each step and claim, then run `semilla replay apply`", file.display());
@@ -281,10 +427,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { action: StepAction::Begin { intent, class } } => println!("{}", app.step_begin(&intent, class.as_deref().map(parse_class).transpose()?)?),
-        Command::Step { action: StepAction::End } => println!("{}", app.step_end()?),
-        Command::Step { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
-        Command::Step { action: StepAction::Edit { intent, class } } => {
+        Command::Step { intent, group, claims, reasons, class, tree, fast } => {
+            let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
+            let request = onestep::StepRequest { intent, group, claims, reasons, class: class.as_deref().map(parse_class).transpose()?, tree, fast };
+            let (text, stored) = app.step_once(&request)?;
+            print!("{text}");
+            if !stored {
+                // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
+                return Ok(ExitCode::from(1));
+            }
+        }
+        Command::Undo => println!("{}", app.undo()?),
+        Command::OldStep { action: StepAction::Begin { intent, class } } => println!("{}", app.step_begin(&intent, class.as_deref().map(parse_class).transpose()?)?),
+        Command::OldStep { action: StepAction::End } => println!("{}", app.step_end()?),
+        Command::OldStep { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
+        Command::OldStep { action: StepAction::Edit { intent, class } } => {
             let class = match class.as_deref() {
                 None => None,
                 Some("none") => Some(None),
@@ -292,7 +449,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             println!("{}", app.step_edit(intent.as_deref(), class)?);
         }
-        Command::Step { action: StepAction::Drop } => println!("{}", app.step_drop()?),
+        Command::OldStep { action: StepAction::Drop } => println!("{}", app.step_drop()?),
         Command::Claim { op, at, args } => {
             let mut map = serde_json::Map::new();
             for arg in args {
@@ -302,6 +459,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             println!("claim {} added", app.claim(&op, at.as_deref(), map)?);
         }
+        Command::Reason { at, text } => println!("{}", app.reason(&at, &text)?),
         Command::Unclaim { id } => {
             app.unclaim(&id)?;
             println!("claim {id} removed");
@@ -326,51 +484,73 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let ok = if full { result.report.accepted } else { phase1_ok(&result.report) };
             return Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
         }
-        Command::Status { commit } => println!("{}", app.status(commit.as_deref())?),
-        Command::Review { target, md, html, wait, port } => {
+        Command::Status { commit, wait, no_wait, verbose, .. } => {
+            // Batch 5k: a reviewer has no use for a list of pending facts, so `status <commit>`
+            // waits for the full check. `status` with no commit shows the present state.
+            let wait = match wait {
+                None if commit.is_some() && !no_wait => Some(600),
+                wait => wait,
+            };
+            let text = app.status(commit.as_deref(), wait, verbose)?;
+            println!("{text}");
+            // A result that is not complete has the exit code of a result that is not ready.
+            if text.lines().any(|line| line.starts_with("result: not complete")) {
+                return Ok(ExitCode::from(1));
+            }
+        }
+        Command::Review { target, md, html, full, wait, port, .. } => {
             let target = target.unwrap_or_else(|| "session".into());
             let (key, set) = app.review_target(&target)?;
             let hash = background::changeset_hash(&set);
-            if background::state(&app, &key, &hash) == background::State::Missing {
-                background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()) })?;
+            // A result of an older state or of an other mode (design 28) is not the result of
+            // this command: the check runs again.
+            if matches!(background::state(&app, &key, &hash), background::State::Missing | background::State::Stale) {
+                background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: app.mode })?;
             }
             let state = background::wait(&mut app, &key, &hash, std::time::Duration::from_secs(wait))?;
             if state != background::State::Ready {
                 println!("the background check of {key} is not ready ({state:?}); see `semilla status`");
                 return Ok(ExitCode::from(1));
             }
-            let data = app.ui_data_for(&set)?;
+            let data = app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?;
             if let Some(file) = &md {
-                std::fs::write(file, semilla_ui::export::render_markdown(&data))?;
+                std::fs::write(file, semilla_ui::export::render_markdown(&data, full))?;
                 println!("wrote {}", file.display());
             }
             if let Some(file) = &html {
                 std::fs::write(file, semilla_ui::export::render_html(&data))?;
                 println!("wrote {}", file.display());
             }
+            // The build code line of the result (design 28), also on the terminal.
+            if let Some(line) = app.build_code_notice(&data.report) {
+                println!("{line}");
+            }
+            if (md.is_some() || html.is_some()) && data.report.not_complete() {
+                return Ok(ExitCode::from(1));
+            }
             if md.is_none() && html.is_none() {
-                let review = app.repo.state_dir().join("review.json");
+                let review = app.review_file();
                 let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
                 println!("semilla review UI: http://{addr}");
                 tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
             }
         }
         Command::Worker => {
-            if !background::run_worker(&mut app)? {
+            if !background::run_worker(&mut app, true)? {
                 eprintln!("[worker] another worker runs");
             }
         }
-        Command::Verify { r#final, json } => {
+        Command::Verify { r#final, json, .. } => {
             let result = app.check(None, r#final)?;
             std::fs::write(app.repo.state_dir().join("report.json"), serde_json::to_string_pretty(&result.report)?)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&result.report)?);
+                std::println!("{}", serde_json::to_string_pretty(&result.report)?);
             } else {
                 println!("{}\n{}", result.text, result.tree.render());
             }
             return Ok(if result.report.accepted { ExitCode::SUCCESS } else { ExitCode::from(1) });
         }
-        Command::SuggestClaims => println!("{}", serde_json::to_string_pretty(&app.suggest_claims()?)?),
+        Command::SuggestClaims => println!("suggest-claims is retired: Semilla derives a fact for each change (design 24). Run `semilla step \"<intent>\"`."),
         Command::Group { id, kind, title, why, steps } => {
             let kind: GroupKind = serde_json::from_value(serde_json::Value::String(kind.clone())).with_context(|| format!("`{kind}` is not a group kind"))?;
             app.group_set(&id, kind, &title, &why, steps)?;
@@ -390,9 +570,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             None => {
                 let saved = app.subgroups_saved(&group)?;
                 if saved.is_empty() {
-                    println!("the engine suggestion (no saved layout):\n{}", serde_json::to_string_pretty(&app.subgroups_suggest(&group)?)?);
+                    std::println!("the engine suggestion (no saved layout):\n{}", serde_json::to_string_pretty(&app.subgroups_suggest(&group)?)?);
                 } else {
-                    println!("the saved layout:\n{}", serde_json::to_string_pretty(&saved)?);
+                    std::println!("the saved layout:\n{}", serde_json::to_string_pretty(&saved)?);
                 }
             }
         },
@@ -400,15 +580,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),
         Command::Load { commit } => println!("{}", app.load(&commit)?),
-        Command::Ui { port } => {
+        Command::Ui { port, .. } => {
             let data = app.ui_data()?;
-            let review = app.repo.state_dir().join("review.json");
+            let review = app.review_file();
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
             println!("semilla review UI: http://{addr}");
             tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
         }
         Command::Ops { name: None } => {
-            for op in semilla_core::ops::OPS {
+            println!("The claims that stay (design 24): Semilla derives each other change as a fact.");
+            for op in semilla_core::ops::OPS.iter().filter(|op| onestep::CLAIMS.contains(&op.name)) {
                 let args = if op.args.is_empty() { String::new() } else { format!(" ({})", op.args.join(", ")) };
                 println!("{:<26} {:<10} {}{args}", op.name, format!("{:?}", op.level).to_lowercase(), op.summary);
             }
@@ -423,7 +604,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let optional: Vec<&str> = app::optional_args(op.name).into_iter().filter(|arg| !op.args.contains(arg)).collect();
             println!("  optional: {}", optional.join(", "));
             let example_args: Vec<String> = op.args.iter().map(|a| format!("{a}=…")).collect();
-            println!("  example: semilla claim {} --at <anchor> {}", op.name, example_args.join(" "));
+            if let Some(message) = onestep::retired_claim(op.name) {
+                println!("  {message}");
+            }
+            println!("  example: semilla step \"<intent>\" --claim '{} <anchor> {}'", op.name, example_args.join(" "));
         }
         Command::Mcp => unreachable!(),
     }

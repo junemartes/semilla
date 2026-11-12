@@ -14,7 +14,7 @@ fn solver() -> Solver {
 fn env(pairs: &[(&str, &str)]) -> TypeEnv {
     let mut env = TypeEnv::new();
     for (name, ty) in pairs {
-        env.insert(name, TypeEnv::parse_type(ty));
+        env.insert_text(name, ty);
     }
     env
 }
@@ -164,6 +164,21 @@ fn widths_are_exact() {
     );
     let env = self::env(&[("x", "u16")]);
     assert_eq!(effect("x <= 255", "true", &env).effect, Effect::Widen);
+}
+
+#[test]
+fn an_unknown_integer_type_gives_no_panic_example() {
+    // Trial 3, D7: `cost > account.cents` → `cost > account.cents + 100` with no type for the
+    // field gave the example "account . cents = 38; after panics", which is not real for `u64`.
+    let result = effect("cost > account . cents", "cost > account . cents + 100", &env(&[]));
+    assert!(result.panic_conditions_differ, "{result:?}");
+    assert!(result.panic_witness.is_none(), "{result:?}");
+    assert!(result.notes.iter().any(|n| n.contains("no example of the panic difference") && n.contains("account . cents")), "{:?}", result.notes);
+    // With the type of the field, the example is real: the sum overflows.
+    let result = effect("cost > account . cents", "cost > account . cents + 100", &env(&[("cost", "u64"), ("account . cents", "u64")]));
+    let witness = result.panic_witness.unwrap();
+    let cents: u128 = value(&witness, "account . cents").parse().unwrap();
+    assert!(cents + 100 > u64::MAX as u128, "{witness}");
 }
 
 #[test]
@@ -480,4 +495,27 @@ fn type_parsing() {
             signed: false
         }
     );
+}
+
+#[test]
+fn a_proof_holds_for_each_build_configuration() {
+    // Batch 5k, A1: the check build has a pointer width of 64 bits and overflow checks. A
+    // proof for this build only is not a proof.
+    // The two sides are equal on each input with no overflow, and they panic on the same
+    // inputs. With no overflow checks, the left side is `b > 0` and the right side is not.
+    let u8s = env(&[("a", "u8"), ("b", "u8")]);
+    let result = effect("(a + b) - a > 0", "a + b > a", &u8s);
+    assert_eq!(result.effect, Effect::Unrelated, "{result:?}");
+    assert!(result.notes.iter().any(|note| note.contains("no proof for a build with a pointer width of 64 bits, no overflow checks")), "{result:?}");
+    assert!(!is_proved(&equivalent(&solver(), "(a + b) - a > 0", "a + b > a", &u8s).unwrap()));
+    // The width of `usize`: equal for 64 bits, different for 32 bits.
+    let sizes = env(&[("n", "usize")]);
+    let result = effect("n.wrapping_add(1 << 31).wrapping_add(1 << 31) == n", "n != n", &sizes);
+    assert_ne!(result.effect, Effect::Equivalent, "{result:?}");
+    let result = effect("(n as u64) < 0x1_0000_0000", "n == n", &sizes);
+    assert_ne!(result.effect, Effect::Equivalent, "{result:?}");
+    // The honest cases stay proved: they hold for each width and with wrapped results.
+    assert_eq!(effect("n > 0", "n >= 1", &sizes).effect, Effect::Equivalent);
+    assert_eq!(effect("a + b > 3", "b + a > 3", &u8s).effect, Effect::Equivalent);
+    assert!(is_proved(&equivalent(&solver(), "a + b", "b + a", &u8s).unwrap()));
 }

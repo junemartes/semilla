@@ -100,6 +100,11 @@ pub fn direct_local_callee(kind: &TerminatorKind) -> Option<String> {
 /// Inlines the calls of a body. Returns the new body, or `None` if no call qualifies (then the
 /// N3 body is the N2 body).
 pub fn inline_calls(body: &Body, callees: &Callees, scope: Scope) -> Option<Body> {
+    inline_calls_named(body, callees, scope, &mut Vec::new())
+}
+
+/// `inline_calls`, and the name of each callee that it inlined goes into `names`.
+pub fn inline_calls_named(body: &Body, callees: &Callees, scope: Scope, names: &mut Vec<String>) -> Option<Body> {
     let mut blocks = body.blocks.clone();
     let mut locals = body.locals().to_vec();
     let arg_count = body.arg_locals().len();
@@ -121,16 +126,19 @@ pub fn inline_calls(body: &Body, callees: &Callees, scope: Scope) -> Option<Body
         if depth[index] < MAX_DEPTH && blocks.len() < MAX_BODY_BLOCKS {
             let callee = direct_local_callee(&blocks[index].terminator.kind)
                 .filter(|name| scope == Scope::All || callees.loop_free.contains(name))
-                .and_then(|name| callees.bodies.get(&name))
-                .filter(|callee| match scope {
+                .and_then(|name| callees.bodies.get_key_value(&name))
+                .filter(|(_, callee)| match scope {
                     Scope::SmallLoopFree => callee.blocks.len() <= MAX_SMALL_CALLEE_BLOCKS,
                     Scope::TinyLoopFree => callee.blocks.len() <= MAX_TINY_CALLEE_BLOCKS,
                     Scope::All | Scope::LoopFree => true,
                 });
-            if let Some(callee) = callee {
+            if let Some((name, callee)) = callee {
                 let before = blocks.len();
                 let borrows = Borrows { taken: &mut taken, mut_taken: &mut mut_taken };
                 if inline_one(&mut blocks, &mut locals, borrows, index, callee) {
+                    if !names.contains(name) {
+                        names.push(name.clone());
+                    }
                     let added = blocks.len() - before;
                     depth.extend(std::iter::repeat_n(depth[index] + 1, added));
                     inlined = true;

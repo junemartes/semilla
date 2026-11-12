@@ -43,6 +43,10 @@ pub struct UiData {
     /// The source text before and after, by anchor text.
     #[serde(default)]
     pub sources: BTreeMap<String, SourcePair>,
+    /// The source text of the anchor of a fact, in the trees of its own step. The key is
+    /// `{step}:{anchor}`. The short report shows it with the fact.
+    #[serde(default)]
+    pub fact_sources: BTreeMap<String, SourcePair>,
 }
 
 /// The source text of one node in the before and the after version.

@@ -50,6 +50,59 @@ impl Cart {
         sum
     }
 }
+// Batch 5n, A5: the order of the operands of a symmetric operation.
+pub fn climb(xs: &[u32], step: u32) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        let v = *x;
+        total += step;
+        if v > total {
+            total = total + v;
+        }
+    }
+    total
+}
+
+pub fn drop_off(xs: &[u32], step: u32) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        let v = *x;
+        total = v - step;
+    }
+    total
+}
+
+pub fn before_key<const N: usize>(keys: [usize; N], i: usize) -> usize {
+    let head = &keys[..i];
+    head.len()
+}
+
+pub enum Slot<T> {
+    Free(usize),
+    Used(T),
+}
+
+pub fn first_slot<T>(slots: &mut [Slot<T>]) -> *mut u8 {
+    slots.as_mut_ptr() as *mut u8
+}
+
+pub enum Cell<T> {
+    Free(u32),
+    Used(T),
+}
+
+pub fn first_cell<T>(cells: &mut [Cell<T>]) -> *mut u8 {
+    cells.as_mut_ptr() as *mut u8
+}
+
+pub struct Wide<T> {
+    pub tag: u8,
+    pub value: T,
+}
+
+pub fn first_wide<T>(wides: &mut [Wide<T>]) -> *mut u8 {
+    wides.as_mut_ptr() as *mut u8
+}
 "#;
 
 const CORE_V2: &str = r#"
@@ -70,9 +123,68 @@ impl Cart {
         sum
     }
 }
+// Batch 5n, A5: the order of the operands of a symmetric operation.
+pub fn climb(xs: &[u32], step: u32) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        let v = *x;
+        total = total + (step);
+        if total < v {
+            total = v + total;
+        }
+    }
+    total
+}
+
+pub fn drop_off(xs: &[u32], step: u32) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        let v = *x;
+        total = step - v;
+    }
+    total
+}
+
+pub fn before_key<const N: usize>(keys: [usize; N], i: usize) -> usize {
+    let head = &keys[..i];
+    head.len()
+}
+
+pub enum Slot<T> {
+    Free(usize),
+    Used(T),
+}
+
+pub fn first_slot<T>(slots: &mut [Slot<T>]) -> *mut u8 {
+    slots.as_mut_ptr() as *mut u8
+}
+
+pub enum Cell<T> {
+    Free(u64),
+    Used(T),
+}
+
+pub fn first_cell<T>(cells: &mut [Cell<T>]) -> *mut u8 {
+    cells.as_mut_ptr() as *mut u8
+}
+#[repr(C)]
+pub struct Wide<T> {
+    pub tag: u8,
+    pub value: T,
+}
+
+pub fn first_wide<T>(wides: &mut [Wide<T>]) -> *mut u8 {
+    wides.as_mut_ptr() as *mut u8
+}
 "#;
 
 const APP_V1: &str = r#"
+include!("rate.rs");
+
+pub fn rated(v: &[u32]) -> Vec<u32> {
+    v.iter().map(|x| x * RATE).collect()
+}
+
 pub fn uses_helper(x: u32) -> u32 {
     core_a::helper(x) * 2
 }
@@ -95,6 +207,12 @@ mod tests {
 "#;
 
 const APP_V2: &str = r#"
+include!("rate.rs");
+
+pub fn rated(v: &[u32]) -> Vec<u32> {
+    v.iter().map(|x| x * RATE).collect()
+}
+
 pub fn uses_helper(x: u32) -> u32 {
     core_a::add_one(x) * 2
 }
@@ -138,6 +256,9 @@ fn make_workspace(root: &Path, core: &str, app: &str) {
     write(&root.join("app_b/Cargo.toml"), APP_TOML);
     write(&root.join("app_b/src/lib.rs"), app);
     write(&root.join("app_b/src/main.rs"), APP_MAIN);
+    // The const of an included file: version 2 has another value.
+    let rate = if app == APP_V1 { 1 } else { 3 };
+    write(&root.join("app_b/src/rate.rs"), &format!("pub const RATE: u32 = {rate};\n"));
 }
 
 /// Makes sure that a driver exists, and returns its path.
@@ -230,6 +351,25 @@ fn two_versions_of_a_two_crate_workspace() {
     let renames = BTreeMap::from([("core_a::helper".to_string(), "core_a::add_one".to_string())]);
     let results = compare(&before, &after, &renames, &[]);
 
+    // Batch 5n, A5: `x += y` against `x = x + (y)`, `a > b` against `b < a`, and `a + b` against
+    // `b + a` on integers. The optimizer of rustc orders the operands by the source text, and the
+    // printer gives them one order. An operation that is not symmetric stays different.
+    assert!(matches!(status(&results, "core_a::climb"), BodyStatus::Equal { level, .. } if level == "n2"), "{:?}", status(&results, "core_a::climb"));
+    assert!(matches!(status(&results, "core_a::drop_off"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::drop_off"));
+
+    // Batch 5n: a call of a trait method with a `const` parameter in its arguments
+    // (`<[usize; N] as Index<RangeTo<usize>>>::index`). The driver does not ask rustc for the impl
+    // of such a call: rustc stops there, and the build of the crate fails.
+    assert!(matches!(status(&results, "core_a::before_key"), BodyStatus::Equal { .. }), "{:?}", status(&results, "core_a::before_key"));
+
+    // Batch 5n: a pointer cast from a generic local type (`*mut Slot<T>`). rustc has no layout for
+    // such a type, so the layout note gives the declaration (the `repr` options and the member
+    // types). The note is the same in each build (see the compare of `before` and `again`), and
+    // it changes when a member type or the `repr` changes.
+    assert!(matches!(status(&results, "core_a::first_slot"), BodyStatus::Equal { .. }), "{:?}", status(&results, "core_a::first_slot"));
+    assert!(matches!(status(&results, "core_a::first_cell"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::first_cell"));
+    assert!(matches!(status(&results, "core_a::first_wide"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::first_wide"));
+
     // The renamed function itself has the same body.
     assert!(
         matches!(status(&results, "core_a::add_one"), BodyStatus::Equal { level, .. } if level == "n0")
@@ -251,6 +391,13 @@ fn two_versions_of_a_two_crate_workspace() {
     }
     // A real change stays different. The control flow is the same.
     assert_eq!(status(&results, "app_b::price"), &BodyStatus::Different { cfg_changed: false });
+    // The const of an included file changed its value: the body that uses it differs (probe 1 of
+    // batch 5a: the driver printed only the path of the const).
+    assert!(
+        matches!(status(&results, "app_b::rated::{closure#0}"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(&results, "app_b::rated::{closure#0}")
+    );
     assert!(matches!(status(&results, "app_b::tests::price_adds"), BodyStatus::Different { .. }));
     // The binary did not change.
     assert!(
@@ -267,4 +414,15 @@ fn two_versions_of_a_two_crate_workspace() {
         "{:?}",
         suggest_renames(&before, &after)
     );
+
+    // Batch 5n: a dependency that is not in the cargo cache. The check build runs cargo with
+    // `--offline`. The error says what to do, and it is not a "cargo check failed" error.
+    let v3 = scratch.join("v3");
+    make_workspace(&v3, CORE_V1, APP_V1);
+    write(&v3.join("core_a/Cargo.toml"), &format!("{CORE_TOML}\n[dependencies]\nzzz-not-in-the-cache = \"1\"\n"));
+    let error = run_cargo_check(&v3, "n0", &scratch.join("out-v3"), &target).expect_err("cargo cannot get the dependency");
+    let text = format!("{error:#}");
+    assert!(text.contains(semilla_normal::cargo::MISSING_DEPENDENCY), "{text}");
+    assert!(text.contains("zzz-not-in-the-cache"), "{text}");
+    assert!(!text.contains("cargo check failed"), "{text}");
 }

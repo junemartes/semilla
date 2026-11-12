@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use semilla_core::view::FlowGraph;
-use semilla_core::{Class, Report, Uncovered};
+use semilla_core::{text, Class, Report, Uncovered};
 
 use crate::ctx::{Ctx, class_label, contains, item_of};
 use crate::review::ReviewFile;
@@ -140,15 +140,19 @@ pub fn render_html(data: &UiData) -> String {
     let _ = writeln!(out, "<title>{}</title>", esc(&model.title()));
     let _ = writeln!(out, "<style>{CSS}</style>\n</head>\n<body>\n<main>");
     let _ = writeln!(out, "<h1>{}</h1>", esc(&model.title()));
-    out.push_str(
-        "<nav class=\"toc\"><a href=\"#summary\">Summary</a><a href=\"#groups\">Groups</a><a href=\"#uncovered\">Uncovered changes</a>\
-         <a href=\"#tree\">Change tree</a><a href=\"#flows\">Flow views</a><a href=\"#sources\">Sources</a></nav>\n",
+    let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(text::AGENT_TEXT_NOTE));
+    // An uncovered change is an internal error. The report shows the part only when one exists.
+    let uncovered = if model.uncovered().is_empty() { "" } else { "<a href=\"#uncovered\">Uncovered changes</a>" };
+    let _ = writeln!(
+        out,
+        "<nav class=\"toc\"><a href=\"#summary\">Summary</a><a href=\"#groups\">Groups</a>{uncovered}\
+         <a href=\"#tree\">Change tree</a><a href=\"#flows\">Flow views</a><a href=\"#sources\">Sources</a></nav>"
     );
     html_summary(&mut out, &model);
     html_groups(&mut out, &model);
     html_uncovered(&mut out, &model);
     out.push_str("<h2 id=\"tree\">Change tree</h2>\n");
-    let _ = writeln!(out, "<pre class=\"tree\">{}</pre>", esc(model.ctx.data.tree.render().trim_end()));
+    let _ = writeln!(out, "<pre class=\"tree\">{}</pre>", esc_block(model.ctx.data.tree.render().trim_end()));
     html_flows(&mut out, &model);
     html_sources(&mut out, &model);
     out.push_str("</main>\n");
@@ -163,19 +167,33 @@ pub fn render_html(data: &UiData) -> String {
     out
 }
 
-/// Renders the report as Markdown, with the same content as [`render_html`].
-pub fn render_markdown(data: &UiData) -> String {
+/// Renders the report as Markdown.
+///
+/// The default report is short (brief 5f, D2): the summary table, then the groups with each fact
+/// one time. A fact that is not "neutral (proved)" has its source diff. A body with a fact of
+/// the class `control_flow` or `logic` has its flow view, one time.
+///
+/// The full report (`full`) has the same content as [`render_html`]: it adds the public API
+/// changes, the change tree, the other flow views, and all sources.
+pub fn render_markdown(data: &UiData, full: bool) -> String {
     let model = Model::new(data);
     let mut out = String::new();
     let _ = writeln!(out, "# {}\n", md(&model.title()));
-    md_summary(&mut out, &model);
-    md_groups(&mut out, &model);
+    let _ = writeln!(out, "{}\n", md(text::AGENT_TEXT_NOTE));
+    md_summary(&mut out, &model, full);
+    md_groups(&mut out, &model, full);
     md_uncovered(&mut out, &model);
-    out.push_str("## Change tree\n\n");
-    out.push_str(&fence("text", model.ctx.data.tree.render().trim_end(), ""));
-    out.push('\n');
-    md_flows(&mut out, &model);
-    md_sources(&mut out, &model);
+    if full {
+        out.push_str("## Change tree\n\n");
+        out.push_str(&fence("text", model.ctx.data.tree.render().trim_end(), ""));
+        out.push('\n');
+    }
+    md_flows(&mut out, &model, full);
+    if full {
+        md_sources(&mut out, &model);
+    } else {
+        out.push_str("The change tree, the other flow views, and all sources: `semilla review --md FILE --full`.\n");
+    }
     out
 }
 
@@ -297,20 +315,32 @@ impl<'a> Model<'a> {
         let report = self.report();
         let api = if report.api_level.is_some() { summary.api_level.to_string() } else { format!("{} (estimate)", summary.api_level) };
         let mut facts = vec![
-            ("Verdict", if summary.accepted { "accepted".to_string() } else { "rejected".to_string() }),
-            ("Score", format!("{:.2} (1.00: all claims proved; a free edit counts 0.5, an uncovered change 0)", summary.coverage)),
+            ("Verdict", (if summary.not_complete { "not complete" } else if summary.accepted { "accepted" } else { "rejected" }).to_string()),
+            ("Facts", {
+                let facts = &summary.fact_counts;
+                if report.phase == "syntax" {
+                    format!("{}: {} with a spotlight; phase 2 gives the classes", facts.total, facts.spotlight)
+                } else {
+                    let not_checked = if facts.not_checked > 0 { format!(", {} not checked", facts.not_checked) } else { String::new() };
+                    format!("{}: {} proved neutral, {} to read ({} with a spotlight){not_checked}", facts.total, facts.neutral, facts.read, facts.spotlight)
+                }
+            }),
             ("Phase", self.phase_label()),
             ("Groups", summary.groups.len().to_string()),
             ("Steps", summary.step_count.to_string()),
             ("Claims", summary.counts.claims.to_string()),
-            ("Uncovered changes", self.uncovered().len().to_string()),
             ("API level", api),
             ("Panic delta", signed(summary.panic_delta)),
         ];
+        if !self.uncovered().is_empty() {
+            facts.push(("Uncovered changes (an internal error)", self.uncovered().len().to_string()));
+        }
         if report.pending > 0 {
             facts.push(("Pending claims", report.pending.to_string()));
         }
-        facts.push(("Changed lines", report.lines.summary().trim_start_matches("lines: ").to_string()));
+        if let Some(lines) = report.lines_text() {
+            facts.push(("Changed lines", lines.trim_start_matches("lines: ").to_string()));
+        }
         facts.push(("Base tree", short_hash(&summary.base_tree)));
         facts.push(("Head tree", short_hash(&summary.head_tree)));
         facts
@@ -383,6 +413,48 @@ impl<'a> Model<'a> {
 
     fn flow(&self, position: usize) -> &FlowGraph {
         &self.data.flows[self.flows[position]]
+    }
+
+    /// The positions of the flow views of the short report: each body with a fact of the class
+    /// `control_flow` or `logic`, one time.
+    fn fact_flows(&self) -> Vec<usize> {
+        let bodies: BTreeSet<&str> = self
+            .summary
+            .facts
+            .iter()
+            .filter(|view| matches!(view.fact.class, Some(semilla_core::Class::ControlFlow | semilla_core::Class::Logic)))
+            .filter_map(|view| view.fact.at.as_ref().map(|at| at.item.as_str()))
+            .collect();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        (0..self.flows.len()).filter(|position| {
+            let item = item_of(&self.flow(*position).function);
+            bodies.contains(item) && seen.insert(item)
+        }).collect()
+    }
+
+    /// The diff of a fact for the short report, or `None`.
+    ///
+    /// - A fact that is "neutral (proved)" has no diff.
+    /// - A new item, a removed item, and a part of a body show the source of the step.
+    /// - A change of an item that stays (its docs, its signature) shows the content of the fact:
+    ///   the source of the full item has too many lines.
+    /// - A change of one line that the description gives in full has no diff.
+    fn fact_diff(&self, view: &crate::summary::FactView) -> Option<String> {
+        let fact = &view.fact;
+        if fact.class == Some(semilla_core::Class::Neutral) {
+            return None;
+        }
+        let pair = fact.at.as_ref().and_then(|at| self.data.fact_sources.get(&format!("{}:{at}", view.step))).filter(|pair| pair.before != pair.after);
+        let part = fact.at.as_ref().is_some_and(|at| !at.path.is_empty());
+        let lines = |text: &Option<String>| text.as_deref().map_or(0, |text| text.lines().count());
+        match (pair, &fact.content) {
+            (Some(pair), content) if part || pair.before.is_none() || pair.after.is_none() => {
+                let short = lines(&pair.before) <= 1 && lines(&pair.after) <= 1 && content.is_none() && !fact.description.contains('…');
+                (!short).then(|| diff_text(&dedent(pair.before.as_deref().unwrap_or("")), &dedent(pair.after.as_deref().unwrap_or(""))))
+            }
+            (_, Some(content)) => Some(content.clone()),
+            _ => None,
+        }
     }
 
     fn source(&self, key: &str) -> &SourcePair {
@@ -523,15 +595,38 @@ fn rename_text(view: &ClaimView) -> Option<(String, String)> {
     (!before.contains('\n') && !after.contains('\n')).then(|| (before.to_string(), after.to_string()))
 }
 
+/// The steps of a group for its title (C11), for example `steps 4–5` or `step 2`: the reports sort
+/// the groups by risk, so the title gives the order of the work.
+fn steps_label(steps: &[usize]) -> String {
+    let mut sorted = steps.to_vec();
+    sorted.sort_unstable();
+    match sorted.as_slice() {
+        [] => "no steps".to_string(),
+        [one] => format!("step {one}"),
+        [first, .., last] if last - first + 1 == sorted.len() => format!("steps {first}–{last}"),
+        all => format!("steps {}", all.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+/// The source and the target of a move claim (C12).
+fn move_text(view: &ClaimView) -> Option<(String, String)> {
+    if view.op != "move-item" {
+        return None;
+    }
+    Some((view.at.clone()?, view.args.get("to")?.as_str()?.to_string()))
+}
+
 /// The counts as text, for example `3 claims: 2 verified, 1 unproved`.
 fn counts_text(counts: &Counts) -> String {
     let parts: Vec<String> = [
         (counts.verified, "verified"),
+        (counts.partial, "partial"),
         (counts.unproved, "unproved"),
         (counts.refuted, "refuted"),
         (counts.empty, "empty"),
         (counts.malformed, "malformed"),
         (counts.pending, "pending"),
+        (counts.not_checked, "not checked"),
         (counts.no_result, "no result"),
     ]
     .iter()
@@ -567,11 +662,26 @@ fn serde_name<T: Serialize>(value: &T) -> String {
 /// The Mermaid text of a flow view. The class colors are light, so the label text is dark in
 /// both themes (as in the UI).
 fn mermaid_text(flow: &FlowGraph) -> String {
-    flow.to_mermaid()
-        .lines()
+    let text = flow.to_mermaid();
+    // A class that no node uses needs no definition.
+    let used = |line: &str| line.trim_start().strip_prefix("classDef ").and_then(|rest| rest.split(' ').next()).is_none_or(|class| text.contains(&format!(":::{class}")));
+    text.lines()
+        .filter(|line| used(line))
         .map(|line| if line.trim_start().starts_with("classDef ") { format!("{line},color:#1a1a1a") } else { line.to_string() })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The text without the indent that all its lines have.
+fn dedent(text: &str) -> String {
+    let indent = text.lines().filter(|line| !line.trim().is_empty()).map(|line| line.len() - line.trim_start().len()).min().unwrap_or(0);
+    text.lines().map(|line| line.get(indent..).unwrap_or(line.trim_start())).collect::<Vec<_>>().join("\n")
+}
+
+/// The breadcrumb of a flow view, or `None` if it only repeats the heading: the heading of a
+/// body shows one time (trial 4, D9).
+fn breadcrumb_text(flow: &FlowGraph) -> Option<String> {
+    (!flow.breadcrumb.is_empty() && flow.breadcrumb.join("::") != flow.function).then(|| flow.breadcrumb.join(" › "))
 }
 
 /// The parts of a group line: the steps, the counts, the risk reasons, and the dependencies.
@@ -626,7 +736,7 @@ fn claim_meta(view: &ClaimView) -> Vec<(&'static str, String)> {
     }
     if let Some(result) = &view.result {
         if let Some(effect) = &result.effect {
-            meta.push(("effect", serde_name(effect)));
+            meta.push(("effect hint", serde_name(effect)));
         }
         if let Some(witness) = &result.witness {
             meta.push(("witness", witness.clone()));
@@ -716,8 +826,18 @@ fn source_diff(key: &str, pair: &SourcePair) -> String {
 // ---------------------------------------------------------------------------------------------
 // HTML.
 
-/// Escapes text for HTML element content and attribute values.
+/// Escapes inline text for HTML element content and attribute values. Each hidden character
+/// (a control character, a bidirectional control, a line break) shows as an escape (5k, A2).
 fn esc(text: &str) -> String {
+    html_escape(&text::inline(text))
+}
+
+/// Escapes the text of a block (a `pre` element): the line breaks stay.
+fn esc_block(text: &str) -> String {
+    html_escape(&text::block(text))
+}
+
+fn html_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
@@ -777,8 +897,18 @@ fn html_diff(out: &mut String, before: &str, after: &str, header: Option<(&str, 
 fn html_summary(out: &mut String, model: &Model) {
     let summary = &model.summary;
     let report = model.report();
+    for notice in &report.notices {
+        let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(notice));
+    }
     out.push_str("<h2 id=\"summary\">Summary</h2>\n");
-    let (class, verdict) = if summary.accepted { ("ok", "Accepted") } else { ("bad", "Rejected") };
+    let (class, verdict) = if summary.accepted {
+        ("ok", "Accepted")
+    } else if summary.not_complete {
+        // A step has no check (design 28). The first notice gives the steps and the cause.
+        ("warn", "Not complete")
+    } else {
+        ("bad", "Rejected")
+    };
     let _ = writeln!(out, "<p class=\"verdict\"><span class=\"chip {class}\">{verdict}</span> {}</p>", esc(&counts_text(&summary.counts)));
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(notice));
@@ -795,6 +925,11 @@ fn html_summary(out: &mut String, model: &Model) {
     if !report.warnings.is_empty() {
         out.push_str("<h3>Warnings</h3>\n");
         html_list(out, "warnings", &report.warnings);
+    }
+    let facts = fact_items_of(model, None);
+    if !facts.is_empty() {
+        out.push_str("<h3>Derived facts</h3>\n");
+        html_fact_list(out, &facts);
     }
     if !report.pairs.is_empty() {
         out.push_str("<h3>Pair warnings</h3>\n");
@@ -815,6 +950,12 @@ fn html_summary(out: &mut String, model: &Model) {
     }
 }
 
+/// The title or the `why` of a group: the words of the agent, in quote marks (batch 5k, A3).
+/// A group that the report makes (the steps with no group) has text of Semilla.
+fn agent_text(group: &GroupSummary, words: &str) -> String {
+    if group.synthetic { words.to_string() } else { text::quoted(words) }
+}
+
 fn html_groups(out: &mut String, model: &Model) {
     out.push_str("<h2 id=\"groups\">Groups</h2>\n");
     if model.summary.groups.is_empty() {
@@ -824,18 +965,24 @@ fn html_groups(out: &mut String, model: &Model) {
         let _ = writeln!(out, "<section class=\"group\" id=\"group-{}\" data-group=\"{}\">", esc(&group.id), esc(&group.id));
         let _ = writeln!(
             out,
-            "<div class=\"group-head\"><span class=\"kind\">{}</span><code>{}</code><h3>{}</h3><span class=\"risk\" title=\"{}\">{}</span></div>",
+            "<div class=\"group-head\"><span class=\"kind\">{}</span><code>{}</code> <span class=\"muted\">{}</span><h3>{}</h3><span class=\"risk\" title=\"{}\">{}</span></div>",
             esc(&serde_name(&group.kind)),
             esc(&group.id),
-            esc(&group.title),
+            esc(&steps_label(&group.steps)),
+            esc(&agent_text(group, &group.title)),
             esc(&risk_text(group)),
             risk_dots(group.risk),
         );
         if !group.why.is_empty() {
-            let _ = writeln!(out, "<p>{}</p>", esc(&group.why));
+            let _ = writeln!(out, "<p>{}</p>", esc(&agent_text(group, &group.why)));
         }
         let _ = writeln!(out, "<p class=\"muted\">{} · {}</p>", esc(&risk_text(group)), esc(&group_meta(group).join(" · ")));
         html_steps(out, model, group);
+        let facts = fact_items_of(model, Some(&group.steps));
+        if !facts.is_empty() {
+            let _ = writeln!(out, "<h4>Derived facts ({})</h4>", facts.len());
+            html_fact_list(out, &facts);
+        }
         if let Some(hint) = &group.split_hint {
             let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(hint));
         }
@@ -860,7 +1007,7 @@ fn html_steps(out: &mut String, model: &Model, group: &GroupSummary) {
     }
     out.push_str("<ul class=\"steps\">\n");
     for step in &steps {
-        let _ = write!(out, "<li data-step=\"{}\">step {}: {}", step.index, step.index, esc(&step.intent));
+        let _ = write!(out, "<li data-step=\"{}\">step {}: {}", step.index, step.index, esc(&text::quoted(&step.intent)));
         let classes = step.classes();
         if !classes.is_empty() {
             let _ = write!(out, " <span class=\"muted\">· {}</span>", esc(&classes.join(" · ")));
@@ -922,6 +1069,9 @@ fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
     if let Some(at) = &view.at {
         let _ = write!(out, "<code>{}</code>", esc(at));
     }
+    if let Some((_, to)) = move_text(view) {
+        let _ = write!(out, " → <code>{}</code>", esc(&to));
+    }
     if view.new_in_subgroup {
         out.push_str("<span class=\"chip warn\">new</span>");
     }
@@ -956,7 +1106,7 @@ fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
             "<div class=\"new-code\"><p>{} <code>{}</code></p><pre><code>{}</code></pre></div>",
             esc(new.label),
             esc(&new.key),
-            esc(&short_block(&new.text))
+            esc_block(&short_block(&new.text))
         );
     }
     out.push_str("</li>\n");
@@ -964,16 +1114,11 @@ fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
 
 fn html_uncovered(out: &mut String, model: &Model) {
     let items = model.uncovered();
-    out.push_str("<h2 id=\"uncovered\">Uncovered changes</h2>\n");
     if items.is_empty() {
-        out.push_str("<p class=\"muted\">No uncovered changes: each difference has a claim.</p>\n");
         return;
     }
-    let _ = writeln!(
-        out,
-        "<p class=\"notice bad\">{} change(s) have no claim. The change set cannot pass until a claim explains each one.</p>",
-        items.len()
-    );
+    out.push_str("<h2 id=\"uncovered\">Uncovered changes</h2>\n");
+    let _ = writeln!(out, "<p class=\"notice bad\">An internal error: {} change(s) have no fact. Semilla rejects the change set.</p>", items.len());
     out.push_str("<ul class=\"uncovered\">\n");
     for item in &items {
         let uncovered = item.uncovered;
@@ -1008,13 +1153,13 @@ fn html_flows(out: &mut String, model: &Model) {
         let flow = model.flow(position);
         let _ = writeln!(out, "<div class=\"flow\" id=\"flow-{position}\" data-flow=\"{}\">", esc(&flow.function));
         let _ = writeln!(out, "<h3><code>{}</code></h3>", esc(&flow.function));
-        if !flow.breadcrumb.is_empty() {
-            let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(&flow.breadcrumb.join(" › ")));
+        if let Some(breadcrumb) = breadcrumb_text(flow) {
+            let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(&breadcrumb));
         }
         let text = mermaid_text(flow);
         // Mermaid reads the text of the element and decodes the HTML entities.
-        let _ = writeln!(out, "<pre class=\"mermaid\">{}</pre>", esc(&text));
-        let _ = writeln!(out, "<details><summary class=\"muted\">Mermaid text</summary><pre>{}</pre></details>", esc(&text));
+        let _ = writeln!(out, "<pre class=\"mermaid\">{}</pre>", esc_block(&text));
+        let _ = writeln!(out, "<details><summary class=\"muted\">Mermaid text</summary><pre>{}</pre></details>", esc_block(&text));
         out.push_str("</div>\n");
     }
 }
@@ -1046,15 +1191,29 @@ fn md_with_code(text: &str) -> String {
         // The backticks are not in pairs: escape all of them.
         return md(text);
     }
-    parts.iter().enumerate().map(|(index, part)| if index % 2 == 1 { format!("`{}`", part.replace('\n', " ")) } else { md(part) }).collect()
+    // A code part has no backtick and no line break: it cannot close its span.
+    let last = parts.len() - 1;
+    parts.iter().enumerate().map(|(index, part)| if index % 2 == 1 { format!("`{}`", text::inline(part)) } else { md_part(part, index == 0, index == last) }).collect()
 }
 
-/// Escapes inline Markdown text. A line break becomes a space.
+/// Escapes inline Markdown text (5k, A2). Each hidden character shows as an escape, also a
+/// line break. The text cannot start or close a block: a heading, a quote, a fence, a table,
+/// a list, or HTML.
 fn md(text: &str) -> String {
+    md_part(text, true, true)
+}
+
+/// A part of an inline text. `first`: the part can be at the start of a line, so a mark that
+/// starts a list, a heading line, or a code block there gets an escape.
+fn md_part(text: &str, first: bool, last: bool) -> String {
+    let text = text::inline(text);
+    // White space at the start of a line can start a code block.
+    let text = if first { text.trim_start_matches(' ') } else { text.as_str() };
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
+    // The digits at the start: `1.` and `1)` start a list.
+    let digits = if first { text.chars().take_while(char::is_ascii_digit).count() } else { 0 };
+    for (index, c) in text.chars().enumerate() {
         match c {
-            '\n' | '\r' => out.push(' '),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '&' => out.push_str("&amp;"),
@@ -1062,15 +1221,27 @@ fn md(text: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
+            '-' | '+' | '=' if first && index == 0 => {
+                out.push('\\');
+                out.push(c);
+            }
+            '.' | ')' if digits > 0 && index == digits => {
+                out.push('\\');
+                out.push(c);
+            }
             c => out.push(c),
         }
+    }
+    // Two spaces at the end of a line are a line break.
+    if last {
+        out.truncate(out.trim_end_matches(' ').len());
     }
     out
 }
 
 /// An inline code span. It uses a backtick run longer than any run in the text.
 fn code(text: &str) -> String {
-    let text = text.replace(['\n', '\r'], " ");
+    let text = text::inline(text);
     let ticks = "`".repeat(longest_run(&text, '`') + 1);
     let pad = if text.starts_with('`') || text.ends_with('`') || text.starts_with(' ') { " " } else { "" };
     format!("{ticks}{pad}{text}{pad}{ticks}")
@@ -1078,6 +1249,7 @@ fn code(text: &str) -> String {
 
 /// A fenced code block. Each line has the indent, so the block can be part of a list item.
 fn fence(lang: &str, body: &str, indent: &str) -> String {
+    let body = &text::block(body);
     let ticks = "`".repeat(longest_run(body, '`').max(2) + 1);
     let mut out = format!("{indent}{ticks}{lang}\n");
     for line in body.lines() {
@@ -1098,11 +1270,96 @@ fn longest_run(text: &str, c: char) -> usize {
     best
 }
 
-fn md_summary(out: &mut String, model: &Model) {
+/// One line for each derived fact (design 22.5): the class, the description, the forced edits,
+/// the affected bodies, the spotlight with its reason, and the content change of a file fact.
+fn fact_items_of(model: &Model, steps: Option<&[usize]>) -> Vec<(String, Option<String>)> {
+    fact_items(model, steps, true)
+}
+
+/// The fact items of the full report (the content of each fact), or of the short report (a diff
+/// only for a fact that is not "neutral (proved)").
+fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool) -> Vec<(String, Option<String>)> {
+    model
+        .summary
+        .facts
+        .iter()
+        .filter(|view| steps.is_none_or(|steps| steps.contains(&view.step)))
+        .map(|view| {
+            let fact = &view.fact;
+            let class = fact
+                .class
+                .map(|c| match c {
+                    semilla_core::Class::Neutral => "neutral (proved)".to_string(),
+                    semilla_core::Class::NotChecked => "not checked".to_string(),
+                    other => serde_name(&other),
+                })
+                .unwrap_or_else(|| "class after phase 2".into());
+            let mut text = format!("step {}: {} derived [{class}]: {}", view.step, fact.id, fact.description);
+            for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
+                text.push_str(&format!("; {} site(s): {} ({})", group.sites.len(), group.edit, group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")));
+            }
+            // The short report shows the first bodies of a long list. The full report has each
+            // body (brief 5h, C6).
+            let list = |bodies: &[String]| {
+                let limit = if full { bodies.len() } else { semilla_core::report::LIST_LIMIT };
+                let more = if bodies.len() > limit { format!(", and {} more (the full list: `--full`)", bodies.len() - limit) } else { String::new() };
+                format!("{}{more}", bodies.iter().take(limit).map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", "))
+            };
+            if !fact.affected.is_empty() {
+                text.push_str(&format!("; {} affected bod{}: {}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
+            }
+            if !fact.equal_sites.is_empty() {
+                text.push_str(&format!("; {}: {}", semilla_core::report::EQUAL_SITES, list(&fact.equal_sites)));
+            }
+            if let Some(why) = &fact.spotlight_why {
+                text.push_str(&format!("; spotlight: {why}; reason: {}", fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
+            }
+            (text, if full { fact.content.clone() } else { model.fact_diff(view) })
+        })
+        .collect()
+}
+
+/// The Markdown list of fact items: each content change is a fenced block in its list item.
+fn md_fact_list(out: &mut String, items: &[(String, Option<String>)]) {
+    for (text, content) in items {
+        let _ = writeln!(out, "- {}", md_with_code(text));
+        if let Some(content) = content {
+            out.push('\n');
+            out.push_str(&fence("diff", content, "  "));
+        }
+    }
+    out.push('\n');
+}
+
+/// The HTML list of fact items: each content change is a `pre` block in its list item.
+fn html_fact_list(out: &mut String, items: &[(String, Option<String>)]) {
+    out.push_str("<ul class=\"derived-facts\">\n");
+    for (text, content) in items {
+        let _ = write!(out, "<li>{}", esc(text));
+        if let Some(content) = content {
+            let _ = write!(out, "<pre class=\"diff\">{}</pre>", esc_block(content));
+        }
+        out.push_str("</li>\n");
+    }
+    out.push_str("</ul>\n");
+}
+
+fn md_summary(out: &mut String, model: &Model, full: bool) {
     let summary = &model.summary;
     let report = model.report();
+    // The base commit and its Semilla check come first (design 25.2).
+    for notice in &report.notices {
+        let _ = writeln!(out, "> {}\n", md_with_code(notice));
+    }
     out.push_str("## Summary\n\n");
-    let verdict = if summary.accepted { "**Accepted**" } else { "**Rejected**" };
+    let verdict = if summary.accepted {
+        "**Accepted**"
+    } else if summary.not_complete {
+        // A step has no check (design 28). The first notice gives the steps and the cause.
+        "**Not complete**"
+    } else {
+        "**Rejected**"
+    };
     let _ = writeln!(out, "{verdict} · {}\n", md(&counts_text(&summary.counts)));
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "> **{}**\n", md(notice));
@@ -1112,12 +1369,14 @@ fn md_summary(out: &mut String, model: &Model) {
         let _ = writeln!(out, "| {} | {} |", md(label), md(&value));
     }
     out.push('\n');
+    // Each fact shows one time, in its group (D2). The public API changes repeat facts: they
+    // are in the full report only.
     let lists: [(&str, Vec<String>); 5] = [
         ("Organization errors", report.organization.clone()),
         ("Warnings", report.warnings.clone()),
         ("Pair warnings", report.pairs.iter().map(|pair| pair.text()).collect()),
         ("Spotlight", model.spotlight().iter().map(|(step, text)| format!("step {step}: {text}")).collect()),
-        ("Public API changes", model.api_changes().iter().map(|(step, text)| format!("step {step}: {text}")).collect()),
+        ("Public API changes", model.api_changes().iter().filter(|_| full).map(|(step, text)| format!("step {step}: {text}")).collect()),
     ];
     for (title, items) in lists {
         if items.is_empty() {
@@ -1131,18 +1390,29 @@ fn md_summary(out: &mut String, model: &Model) {
     }
 }
 
-fn md_groups(out: &mut String, model: &Model) {
+fn md_groups(out: &mut String, model: &Model, full: bool) {
     out.push_str("## Groups\n\n");
     if model.summary.groups.is_empty() {
         out.push_str("No groups.\n\n");
     }
     for group in &model.summary.groups {
-        let _ = writeln!(out, "### {} · {} · {}\n", code(&group.id), md(&serde_name(&group.kind)), md(&group.title));
+        let _ = writeln!(out, "### {} · {} · {} · {}\n", code(&group.id), md(&steps_label(&group.steps)), md(&serde_name(&group.kind)), md(&agent_text(group, &group.title)));
         if !group.why.is_empty() {
-            let _ = writeln!(out, "{}\n", md(&group.why));
+            let _ = writeln!(out, "{}\n", md(&agent_text(group, &group.why)));
         }
         let _ = writeln!(out, "{} · {}\n", md(&risk_text(group)), md(&group_meta(group).join(" · ")));
-        md_steps(out, model, group);
+        // The short report does not repeat the title of the group as the text of its one step.
+        let steps = model.steps(group);
+        let repeat = steps.len() == 1 && steps[0].intent == group.title && steps[0].errors.is_empty();
+        if full || !repeat {
+            md_steps(out, model, group);
+        }
+        // The facts of the steps of the group, as visible as its claims.
+        let facts = fact_items(model, Some(&group.steps), full);
+        if !facts.is_empty() {
+            let _ = writeln!(out, "#### Derived facts ({})\n", facts.len());
+            md_fact_list(out, &facts);
+        }
         if let Some(hint) = &group.split_hint {
             let _ = writeln!(out, "> {}\n", md(hint));
         }
@@ -1157,6 +1427,14 @@ fn md_groups(out: &mut String, model: &Model) {
             md_subgroup(out, model, sub);
         }
     }
+    // A step with no group: its facts show here, so that each fact shows one time.
+    let grouped: BTreeSet<usize> = model.summary.groups.iter().flat_map(|group| group.steps.iter().copied()).collect();
+    let free: Vec<usize> = model.report().steps.iter().map(|step| step.step).filter(|step| !grouped.contains(step)).collect();
+    let facts = fact_items(model, Some(&free), full);
+    if !facts.is_empty() {
+        let _ = writeln!(out, "### Steps with no group\n\n#### Derived facts ({})\n", facts.len());
+        md_fact_list(out, &facts);
+    }
 }
 
 fn md_steps(out: &mut String, model: &Model, group: &GroupSummary) {
@@ -1166,7 +1444,7 @@ fn md_steps(out: &mut String, model: &Model, group: &GroupSummary) {
     }
     out.push_str("Steps:\n\n");
     for step in &steps {
-        let mut line = format!("- step {}: {}", step.index, md(&step.intent));
+        let mut line = format!("- step {}: {}", step.index, md(&text::quoted(&step.intent)));
         if !step.claims.is_empty() {
             let ids: Vec<String> = step.claims.iter().map(|id| code(id)).collect();
             let _ = write!(line, " — {}", ids.join(", "));
@@ -1204,10 +1482,17 @@ fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
             md(&counts_text(&sub.counts)),
             md(&sub.fold_reason)
         );
-        // The renames and the new code stay visible in a folded subgroup.
+        // The renames, the moves, and the new code stay visible in a folded subgroup, with the
+        // status and its proof text (C6: the same notes as the HTML report; C12: a move shows its
+        // source and its target).
         for view in &sub.claims {
+            let status = StatusText::of(view).text();
             if let Some((before, after)) = rename_text(view) {
-                let _ = writeln!(out, "  - {} {}: {} → {}", code(&view.id), code(&view.op), code(&before), code(&after));
+                let _ = writeln!(out, "  - {} {}: {} → {} · {}", code(&view.id), code(&view.op), code(&before), code(&after), md(&status));
+            } else if let Some((from, to)) = move_text(view) {
+                let _ = writeln!(out, "  - {} {}: {} → {} · {}", code(&view.id), code(&view.op), code(&from), code(&to), md(&status));
+            } else if model.new_code(view).is_none() {
+                let _ = writeln!(out, "  - {} {}{} · {}", code(&view.id), code(&view.op), view.at.as_deref().map(|at| format!(" {}", code(at))).unwrap_or_default(), md(&status));
             }
             if let Some(new) = model.new_code(view) {
                 let _ = writeln!(out, "  - {} {}", code(&view.id), code(&view.op));
@@ -1219,9 +1504,15 @@ fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
     }
     let _ = writeln!(out, "#### ▾ {} · {}{marks}\n", md(sub.role_label), md(&sub.title));
     let mut lines = Vec::new();
-    if !sub.locations.is_empty() {
-        let files: Vec<String> = sub.locations.iter().map(|location| code(location)).collect();
+    // A location is a file, or a module or a crate when the item has no file (a removed item).
+    let is_file = |location: &&String| location.contains('/') || location.contains('.');
+    let files: Vec<String> = sub.locations.iter().filter(is_file).map(|location| code(location)).collect();
+    let modules: Vec<String> = sub.locations.iter().filter(|location| !is_file(location)).map(|location| code(location)).collect();
+    if !files.is_empty() {
         lines.push(format!("Files: {}", files.join(" · ")));
+    }
+    if !modules.is_empty() {
+        lines.push(format!("Modules: {}", modules.join(" · ")));
     }
     lines.push(md(&counts_text(&sub.counts)));
     if !sub.why.is_empty() {
@@ -1242,6 +1533,9 @@ fn md_claim(out: &mut String, model: &Model, view: &ClaimView) {
     let mut head = format!("- {} **{}** {}", status.icon(), md(&view.id), code(&view.op));
     if let Some(at) = &view.at {
         let _ = write!(head, " at {}", code(at));
+    }
+    if let Some((_, to)) = move_text(view) {
+        let _ = write!(head, " → {}", code(&to));
     }
     if view.new_in_subgroup {
         head.push_str(" · _new_");
@@ -1284,12 +1578,11 @@ fn md_claim(out: &mut String, model: &Model, view: &ClaimView) {
 
 fn md_uncovered(out: &mut String, model: &Model) {
     let items = model.uncovered();
-    out.push_str("## Uncovered changes\n\n");
     if items.is_empty() {
-        out.push_str("No uncovered changes: each difference has a claim.\n\n");
         return;
     }
-    let _ = writeln!(out, "**{} change(s) have no claim.** The change set cannot pass until a claim explains each one.\n", items.len());
+    out.push_str("## Uncovered changes\n\n");
+    let _ = writeln!(out, "**An internal error: {} change(s) have no fact.** Semilla rejects the change set.\n", items.len());
     for item in &items {
         let uncovered = item.uncovered;
         let mut meta = vec![format!("step {}", uncovered.step), format!("view {}", md(&serde_name(&uncovered.view)))];
@@ -1311,16 +1604,20 @@ fn md_uncovered(out: &mut String, model: &Model) {
     out.push('\n');
 }
 
-fn md_flows(out: &mut String, model: &Model) {
+fn md_flows(out: &mut String, model: &Model, full: bool) {
+    let positions: Vec<usize> = if full { (0..model.flows.len()).collect() } else { model.fact_flows() };
+    if positions.is_empty() && !full {
+        return;
+    }
     out.push_str("## Flow views\n\n");
-    if model.flows.is_empty() {
+    if positions.is_empty() {
         out.push_str("No flow views.\n\n");
     }
-    for position in 0..model.flows.len() {
+    for position in positions {
         let flow = model.flow(position);
         let _ = writeln!(out, "### {}\n", code(&flow.function));
-        if !flow.breadcrumb.is_empty() {
-            let _ = writeln!(out, "{}\n", md(&flow.breadcrumb.join(" › ")));
+        if let Some(breadcrumb) = breadcrumb_text(flow) {
+            let _ = writeln!(out, "{}\n", md(&breadcrumb));
         }
         out.push_str(&fence("mermaid", &mermaid_text(flow), ""));
         out.push('\n');
@@ -1357,6 +1654,35 @@ mod tests {
         assert_eq!(code("x`y"), "``x`y``");
         assert_eq!(code("`x"), "`` `x ``");
         assert!(fence("text", "```\nin", "").starts_with("````text\n"));
+    }
+
+    #[test]
+    fn the_text_of_the_agent_cannot_start_a_block() {
+        // Batch 5k, A2: inline text stays on one line and in its block.
+        assert_eq!(md("a\nresult: accepted\u{1b}[8m"), "a\\\\nresult: accepted\\\\u{1b}\\[8m");
+        for start in ["# title", "> quote", "- item", "+ item", "* item", "1. item", "2) item", "```", "~~~", "| a | b |", "<details>", "=== ", "    code", "\tcode", "---"] {
+            let text = md(start);
+            let first = text.chars().next().unwrap();
+            assert!(first == '\\' || first == '&' || first.is_ascii_alphanumeric(), "{start:?} gives {text:?}");
+            assert!(!text.contains('\n') && !text.contains('|') || text.contains("\\|"), "{start:?} gives {text:?}");
+        }
+        assert_eq!(md("1. item"), "1\\. item");
+        assert_eq!(md("a | b"), "a \\| b");
+        assert_eq!(md("\u{202e}x\u{200b}"), "\\\\u{202e}x\\\\u{200b}");
+        // A code span and a code fence are longer than each run of backticks in the content. A
+        // line break cannot end a code span. A fence keeps its line breaks.
+        assert_eq!(code("a\n```\nb"), "````a\\n```\\nb````");
+        let block = fence("diff", "+ a\u{1b}[8m\r\n````\n+ b\u{202e}", "");
+        assert_eq!(block, "`````diff\n+ a\\u{1b}[8m\\r\n````\n+ b\\u{202e}\n`````\n");
+        // The HTML report: the same escapes, then the HTML escape.
+        assert_eq!(esc("a\n<b>\u{1b}"), "a\\n&lt;b&gt;\\u{1b}");
+        assert_eq!(esc_block("a\n<b>\u{1b}"), "a\n&lt;b&gt;\\u{1b}");
+    }
+
+    #[test]
+    fn a_crate_is_not_a_file() {
+        let is_file = |location: &str| location.contains('/') || location.contains('.');
+        assert!(is_file("crates/cli/src/main.rs") && is_file("Cargo.toml") && !is_file("ledger_cli") && !is_file("ledger_cli::tests"));
     }
 
     #[test]

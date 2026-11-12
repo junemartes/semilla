@@ -36,7 +36,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: Value) -> Claim {
 }
 
 fn result(claim: &str, step: usize, status: ClaimStatus, class: Option<Class>) -> ClaimResult {
-    ClaimResult { claim: claim.to_string(), step, status, class, effect: None, witness: None, hint: None, before: None, after: None }
+    ClaimResult { claim: claim.to_string(), step, status, class, effect: None, witness: None, hint: None, before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() }
 }
 
 fn verified(claim: &str, step: usize, proof: &str, class: Class) -> ClaimResult {
@@ -57,6 +57,7 @@ fn step(index: usize, intent: &str, class: Option<Class>, claims: Vec<Claim>) ->
         claims,
         tree_before: format!("{:040x}", index * 0x1111),
         tree_after: format!("{:040x}", (index + 1) * 0x1111),
+        reasons: Default::default(),
     }
 }
 
@@ -327,7 +328,6 @@ pub fn demo_report() -> Report {
         steps,
         organization: Vec::new(),
         warnings: vec!["G3 is a refactor group, but claim c8 is not proved neutral.".into()],
-        score: 0.0,
         panic_delta: 0,
         api_level: None,
         accepted: false,
@@ -347,6 +347,7 @@ fn tree(id: &str, label: &str, status: Status) -> TreeNode {
         class: None,
         claims: Vec::new(),
         diff: None,
+        steps: Vec::new(),
         summary: None,
         children: Vec::new(),
     }
@@ -764,5 +765,6 @@ pub fn demo_data() -> UiData {
         flows: demo_flows(),
         graph: demo_graph(),
         sources: demo_sources(),
+        fact_sources: Default::default(),
     }
 }

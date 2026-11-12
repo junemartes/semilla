@@ -420,6 +420,12 @@ impl Problem {
         body
     }
 
+    /// The inputs of an unknown integer type: a model can give them a width that Rust does not
+    /// have, so a model with them is not a real example (B3).
+    pub(crate) fn unknown_width_inputs(&self) -> Vec<String> {
+        self.syms.iter().filter(|sym| matches!(sym.sort, Sort::Int { .. })).map(|sym| sym.display.clone()).collect()
+    }
+
     pub(crate) fn sym_names(&self) -> Vec<String> {
         self.syms.iter().map(|sym| sym.name.clone()).collect()
     }
@@ -541,6 +547,24 @@ impl Encoder {
         Ok(name)
     }
 
+    /// An overflow check. A build with no overflow checks does not panic: the operation wraps.
+    /// Returns true if the build has overflow checks. If not, the caller gives the term of the
+    /// wrapped result.
+    fn overflow(&mut self, out: &mut SideOut, guard: &str, ok: String) -> bool {
+        let checks = crate::build::current().overflow_checks;
+        if checks {
+            self.no_panic(out, guard, ok);
+        }
+        checks
+    }
+
+    /// The wrapped result of an operation on integers with no known width: a function of the
+    /// true result. The encoding does not know the function.
+    fn wrapped(&mut self, class: usize, result: String) -> String {
+        self.exact = false;
+        self.opaque("wrap", class, &[&result])
+    }
+
     fn no_panic(&mut self, out: &mut SideOut, guard: &str, ok: String) {
         out.can_panic = true;
         out.no_panic.push(implies(guard, &ok));
@@ -568,14 +592,13 @@ impl Encoder {
                             is_char: false,
                         },
                     ) => {
-                        self.no_panic(out, guard, format!("(not (= {term} {}))", signed_min(bits)));
+                        self.overflow(out, guard, format!("(not (= {term} {}))", signed_min(bits)));
                         Ok(format!("(bvneg {term})"))
                     }
                     (UnOp::Neg, Sort::Int { class }) => {
                         let result = format!("(- {term})");
                         let ok = self.in_range(class, &result);
-                        self.no_panic(out, guard, ok);
-                        Ok(result)
+                        if self.overflow(out, guard, ok) { Ok(result) } else { Ok(self.wrapped(class, result)) }
                     }
                     _ => Err(Skip::Unsupported(format!(
                         "the operator {op:?} on the type {sort:?}"
@@ -700,7 +723,8 @@ impl Encoder {
                         let ok = format!(
                             "(= ((_ {ext} {extra}) {result}) ({smt_op} ((_ {ext} {extra}) {l}) ((_ {ext} {extra}) {r})))"
                         );
-                        self.no_panic(out, guard, ok);
+                        // The bit vector operation gives the wrapped result.
+                        self.overflow(out, guard, ok);
                         Ok(result)
                     }
                     BinOp::Div | BinOp::Rem => {
@@ -742,8 +766,7 @@ impl Encoder {
                     };
                     let result = format!("({smt_op} {l} {r})");
                     let ok = self.in_range(class, &result);
-                    self.no_panic(out, guard, ok);
-                    Ok(result)
+                    if self.overflow(out, guard, ok) { Ok(result) } else { Ok(self.wrapped(class, result)) }
                 }
                 BinOp::Div | BinOp::Rem => {
                     self.truncating_division();
@@ -848,8 +871,12 @@ impl Encoder {
                                 )));
                             }
                         };
-                        self.no_panic(out, guard, ok);
-                        amount
+                        if self.overflow(out, guard, ok) {
+                            amount
+                        } else {
+                            // With no overflow checks, the shift uses the low bits of the amount.
+                            format!("(bvand {amount} {})", bv(bits as u128 - 1, bits))
+                        }
                     }
                 };
                 let smt_op = match (op, signed) {
@@ -873,8 +900,8 @@ impl Encoder {
                 self.defs
                     .entry(name.clone())
                     .or_insert_with(|| format!("(declare-fun {name} (Int) Bool)"));
-                self.no_panic(out, guard, format!("({name} {k})"));
-                if op == BinOp::Shr {
+                let checks = self.overflow(out, guard, format!("({name} {k})"));
+                if op == BinOp::Shr && checks {
                     // An arithmetic or logical right shift is a division by 2^k that rounds down.
                     Ok(format!("(div {l} {})", 1u128 << k))
                 } else {
@@ -1060,3 +1087,4 @@ mod tests {
         );
     }
 }
+

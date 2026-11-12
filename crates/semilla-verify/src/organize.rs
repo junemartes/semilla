@@ -40,9 +40,12 @@ fn role_title(role: Role) -> &'static str {
         Role::Config => "Config",
         Role::Propagation => "Propagation",
         Role::Mechanical => "Mechanical",
+        Role::Docs => "Docs",
         Role::Custom => "Custom",
     }
 }
+
+pub use semilla_core::report::{derived_kind, merge_kinds};
 
 /// Suggests the subgroups of a group, by role.
 pub fn suggest(set: &ChangeSet, group_id: &str, steps: &[StepReport], test_items: &BTreeSet<String>) -> Vec<Subgroup> {
@@ -114,8 +117,8 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
                 GroupKind::Rename | GroupKind::Move => (!matches!(*op, "rename" | "move-item" | "rename-local")).then(|| "a rename or move group can contain only identity claims"),
                 // A call site update can be any expression op; statement ops add new control flow.
                 GroupKind::Api => (!info.is_some_and(|i| matches!(i.level, OpLevel::Item | OpLevel::Expression) || i.role == Role::Propagation))
-                    .then(|| "an api group can contain only item claims (signatures, types, new items) and expression claims at call sites"),
-                GroupKind::Deps => (!info.is_some_and(|i| i.level == OpLevel::File || i.role == Role::Propagation)).then(|| "a deps group can contain only dependency and call site claims"),
+                    .then(|| "an api group can contain only claims of item-level ops and of expression-level ops"),
+                GroupKind::Deps => (!info.is_some_and(|i| i.level == OpLevel::File || i.role == Role::Propagation)).then(|| "a deps group can contain only call site claims (the manifest changes are facts)"),
                 GroupKind::Tests => None, // Checked below with the test items.
                 GroupKind::Fix | GroupKind::Feature | GroupKind::Behavior => None,
             };
@@ -148,7 +151,8 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             }
             let problem = match subgroup.role {
                 // Doc changes (class `other`, no behavior) are mechanical too.
-                Role::Mechanical => (!(neutral_proved || found.op == "edit-doc")).then(|| "a Mechanical subgroup can contain only proved neutral claims and doc changes"),
+                Role::Mechanical => (!neutral_proved).then(|| "a Mechanical subgroup can contain only proved neutral claims (doc changes go to a Docs subgroup)"),
+                Role::Docs => (found.op != "edit-doc").then(|| "a Docs subgroup can contain only `edit-doc` claims"),
                 Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation || i.level == OpLevel::Expression))
                     .then(|| "a Propagation subgroup can contain only call site claims: expression claims and rewrites"),
                 Role::Interface => (!info.is_some_and(|i| i.level == OpLevel::Item)).then(|| "an Interface subgroup can contain only item claims"),

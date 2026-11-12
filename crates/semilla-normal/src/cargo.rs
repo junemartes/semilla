@@ -52,6 +52,44 @@ pub fn find_driver() -> Result<PathBuf> {
         .context("cannot find semilla-mir-driver. Run `cargo build -p semilla-mir`, or set SEMILLA_MIR_DRIVER")
 }
 
+/// True for an environment variable that changes a build: the rust flags, and the `CARGO_PROFILE_`,
+/// `CARGO_BUILD_`, and `CARGO_TARGET_` settings.
+pub fn is_build_setting_env(name: &str) -> bool {
+    matches!(name, "RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS" | "RUSTDOCFLAGS" | "CARGO_ENCODED_RUSTDOCFLAGS")
+        || name.starts_with("CARGO_PROFILE_")
+        || name.starts_with("CARGO_BUILD_")
+        || (name.starts_with("CARGO_TARGET_") && name != "CARGO_TARGET_DIR")
+}
+
+/// The key of the build settings that are not in the tree: the cargo configuration files of the
+/// parent folders of the build folder and of `CARGO_HOME`, the toolchain, and the MIR driver
+/// binary (its path, its size, and its time). A cached record is valid only for the same key.
+/// So a record that a different driver or a different toolchain wrote is never read (batch 5h).
+pub fn settings_key(build_base: &Path, driver: Option<&Path>) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut configs: Vec<PathBuf> = build_base.ancestors().flat_map(|dir| [dir.join(".cargo/config.toml"), dir.join(".cargo/config")]).collect();
+    let home = std::env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+    if let Some(home) = home {
+        configs.extend([home.join("config.toml"), home.join("config")]);
+    }
+    for file in configs {
+        if let Ok(text) = std::fs::read(&file) {
+            file.hash(&mut hasher);
+            text.hash(&mut hasher);
+        }
+    }
+    toolchain().hash(&mut hasher);
+    if let Some(driver) = driver {
+        std::fs::canonicalize(driver).unwrap_or_else(|_| driver.to_path_buf()).hash(&mut hasher);
+        if let Ok(meta) = std::fs::metadata(driver) {
+            meta.len().hash(&mut hasher);
+            meta.modified().ok().hash(&mut hasher);
+        }
+    }
+    format!("{:012x}", hasher.finish() & 0xffff_ffff_ffff)
+}
+
 /// The root folder of the semilla workspace (where this crate was compiled).
 pub fn semilla_workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -143,6 +181,38 @@ fn first_errors(stderr: &str) -> String {
     out.join("\n")
 }
 
+/// The error text of a failed cargo run: the first compiler errors with their cause, then the
+/// `error` lines of cargo. With `--message-format=json`, the compiler writes each diagnostic as
+/// a JSON message to the standard output, and the standard error has only the last line
+/// ("could not compile …"). So the text of the compiler errors comes from the JSON messages
+/// (trial 4, D14).
+pub(crate) fn error_text(stdout: &str, stderr: &str) -> String {
+    let mut causes: Vec<String> = Vec::new();
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if message.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let Some(diagnostic) = message.get("message") else { continue };
+        if diagnostic.get("level").and_then(|l| l.as_str()).is_none_or(|level| !level.starts_with("error")) {
+            continue;
+        }
+        let rendered = diagnostic.get("rendered").and_then(|r| r.as_str()).or_else(|| diagnostic.get("message").and_then(|m| m.as_str()));
+        // The summary "aborting due to N previous errors" is not a cause.
+        if let Some(text) = rendered.filter(|text| !text.contains("aborting due to") && !causes.iter().any(|known| known == text.trim_end())) {
+            causes.push(text.trim_end().to_string());
+        }
+        if causes.len() == 5 {
+            break;
+        }
+    }
+    let rest = first_errors(stderr);
+    if causes.is_empty() {
+        return rest;
+    }
+    format!("{}\n\n{rest}", causes.join("\n\n"))
+}
+
 /// The hash of each unit in the JSON messages of cargo: the part after the last `-` of each
 /// artifact file name (`libname-<hash>.rmeta`).
 fn unit_hashes(stdout: &str) -> std::collections::BTreeSet<String> {
@@ -161,6 +231,141 @@ fn unit_hashes(stdout: &str) -> std::collections::BTreeSet<String> {
         }
     }
     hashes
+}
+
+/// The packages and the targets of a workspace, as cargo sees them: the output of
+/// `cargo metadata --no-deps --offline --format-version 1`. The command reads the manifests and
+/// the cargo configuration of the folder. It builds nothing and runs no code of the folder: with
+/// `--no-deps`, cargo does not start the compiler, so it starts no program that a configuration
+/// file names (batch 5i, A2: tested with `build.rustc` and `build.rustc-wrapper`). The command
+/// runs in the sandbox with an empty write set.
+pub fn cargo_metadata(workspace: &Path) -> Result<serde_json::Value> {
+    metadata_command(workspace, Graph::NoDeps, &crate::sandbox::Sandbox::default())
+}
+
+/// The packages of a workspace with the dependency graph: the output of
+/// `cargo metadata --offline --format-version 1`.
+///
+/// This command starts the compiler (`rustc -vV`), so it starts the program that
+/// `build.rustc` or `build.rustc-wrapper` of a configuration file of the tree names. The caller
+/// must not use it on a tree whose configuration files are not trusted (batch 5i, A1).
+///
+/// The command runs in the sandbox with an empty write set. Cargo must write a lock file when
+/// the tree has none. Then the command runs on a copy of the tree in `scratch` (hard links), and
+/// its write set is the lock file of the copy. The paths of the result are then paths of the copy:
+/// use them relative to `workspace_root`.
+///
+/// A tree with a lock file: the command has `--locked`, so cargo does not write the lock file.
+/// A lock file that does not agree with the manifests gives the error [`StaleLock`].
+pub fn cargo_metadata_full(workspace: &Path, scratch: &Path) -> Result<serde_json::Value> {
+    if workspace.join("Cargo.lock").is_file() {
+        return metadata_command(workspace, Graph::Locked, &crate::sandbox::Sandbox::default());
+    }
+    let _ = std::fs::remove_dir_all(scratch);
+    link_tree(workspace, scratch).with_context(|| format!("cannot copy {} to {}", workspace.display(), scratch.display()))?;
+    let lock = scratch.join("Cargo.lock");
+    std::fs::write(&lock, "")?;
+    let result = metadata_command(scratch, Graph::Full, &crate::sandbox::Sandbox { folders: Vec::new(), files: vec![lock] });
+    let _ = std::fs::remove_dir_all(scratch);
+    result
+}
+
+/// Copies a folder tree with hard links (a copy of the data when a link is not possible).
+fn link_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            link_tree(&source, &target)?;
+        } else if kind.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(std::fs::read_link(&source)?, &target)?;
+        } else if std::fs::hard_link(&source, &target).is_err() {
+            std::fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// The lock file of a tree does not agree with the manifests of the tree: cargo must change the
+/// lock file before it can build the tree. Semilla does not write a file of a tree.
+#[derive(Debug)]
+pub struct StaleLock {
+    /// The folder of the tree.
+    pub folder: std::path::PathBuf,
+}
+
+impl std::fmt::Display for StaleLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`Cargo.lock` does not agree with the manifests in {}", self.folder.display())
+    }
+}
+
+impl std::error::Error for StaleLock {}
+
+/// The part of the dependency data that `cargo metadata` gives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Graph {
+    /// The packages of the workspace only. Cargo does not start the compiler.
+    NoDeps,
+    /// The full graph. Cargo can write the lock file.
+    Full,
+    /// The full graph from the lock file of the tree. Cargo does not write the lock file.
+    Locked,
+}
+
+fn metadata_command(workspace: &Path, graph: Graph, sandbox: &crate::sandbox::Sandbox) -> Result<serde_json::Value> {
+    let mut command = Command::new("cargo");
+    command.arg("metadata");
+    match graph {
+        Graph::NoDeps => drop(command.arg("--no-deps")),
+        Graph::Full => {}
+        Graph::Locked => drop(command.arg("--locked")),
+    }
+    command.args(["--offline", "--format-version", "1"]).current_dir(workspace).env("RUSTUP_TOOLCHAIN", toolchain());
+    for name in ["RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_MANIFEST_DIR"] {
+        command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        let name = name.to_string_lossy().into_owned();
+        if is_build_setting_env(&name) {
+            command.env_remove(&name);
+        }
+    }
+    sandbox.apply_to_tool(&mut command);
+    let output = command.output().context("cannot run cargo")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Only this command gives `--locked`, so only the lock file rule of cargo names the flag.
+        // A package that is not in the cargo cache gives a different error (`--offline`).
+        if graph == Graph::Locked && stderr.lines().any(|line| line.starts_with("error") && line.contains("lock file") && line.contains("--locked was passed")) {
+            return Err(anyhow::Error::new(StaleLock { folder: workspace.to_path_buf() }));
+        }
+        bail!("cargo cannot read the manifests in {}:\n{}", workspace.display(), first_errors(&stderr));
+    }
+    serde_json::from_slice(&output.stdout).context("the output of `cargo metadata` is not JSON")
+}
+
+/// The text for a check build that stops because a dependency is not in the cargo cache. The
+/// step output uses it to tell that a code change is not necessary.
+pub const MISSING_DEPENDENCY: &str = "Semilla has no result for the bodies: the check build does not download (cargo runs with `--offline`), and a dependency is not in the cargo cache of this machine. Run `cargo fetch` in the repository, then run the command again. A code change is not necessary.";
+
+/// True if the error text of cargo says that cargo cannot get a dependency. The list has the
+/// texts of cargo for a package that is not in the cache and for a registry that cargo cannot
+/// read. Each other error stays a failed build.
+pub fn missing_dependency(text: &str) -> bool {
+    [
+        "failed to download",
+        "unable to update registry",
+        "failed to load source for dependency",
+        "no matching package named",
+        "you're using offline mode (--offline)",
+        "--offline was specified",
+    ]
+    .iter()
+    .any(|mark| text.contains(mark))
 }
 
 fn run_check(
@@ -189,7 +394,11 @@ fn run_check(
         _ => lib.into_os_string(),
     };
     let mut command = Command::new("cargo");
-    command.args(["check", "--workspace", "--all-targets", "--quiet"]);
+    // `--offline`: the check build does not download (the sandbox stops the network). Without the
+    // flag, cargo tries to update the registry for a tree with no lock file (a library that
+    // ignores `Cargo.lock`), and the build fails. With the flag, cargo uses the packages in the
+    // cargo cache of this machine.
+    command.args(["check", "--workspace", "--all-targets", "--quiet", "--offline"]);
     if json {
         command.arg("--message-format=json");
     }
@@ -216,13 +425,50 @@ fn run_check(
     ] {
         command.env_remove(name);
     }
-    let output = command.output().context("cannot run cargo")?;
+    // Build settings from the environment are not in the tree and not in the cache key: remove them,
+    // so that the records of a tree depend only on the tree (and the settings in `settings_key`).
+    for (name, _) in std::env::vars_os() {
+        let name = name.to_string_lossy().into_owned();
+        if is_build_setting_env(&name) {
+            command.env_remove(&name);
+        }
+    }
+    // The sandbox (design 27): the build can write only the cargo target folder and the records
+    // folder. A build script and a proc macro of the tree run in this build. They cannot change
+    // the source files of the build, the cache folder of the user, the cargo home folder, or
+    // the repository. The temporary files of the build go to the target folder.
+    std::fs::create_dir_all(target_dir).with_context(|| format!("cannot create {}", target_dir.display()))?;
+    let target_dir = std::fs::canonicalize(target_dir)?;
+    let temporary = target_dir.join("tmp");
+    std::fs::create_dir_all(&temporary)?;
+    command.env("TMPDIR", &temporary);
+    let mut sandbox = crate::sandbox::Sandbox { folders: vec![target_dir.clone(), out.clone()], files: Vec::new() };
+    // A tree with no lock file: cargo must write one. Semilla makes an empty file, and the build
+    // can write this one file. The next build of this folder starts from the files of its tree.
+    let lock = workspace.join("Cargo.lock");
+    if !lock.exists() && std::fs::write(&lock, "").is_ok() {
+        sandbox.files.push(lock);
+    }
+    if std::env::var_os("SEMILLA_NO_SANDBOX").is_none_or(|value| value.is_empty()) {
+        sandbox.apply(&mut command);
+    } else {
+        crate::sandbox::skip("the variable SEMILLA_NO_SANDBOX is set");
+    }
+    // The build runs to its end. Then Semilla stops each process that the build left.
+    let output = crate::sandbox::run_and_stop(&mut command).context("cannot run cargo")?;
     if !output.status.success() {
-        bail!(
-            "cargo check failed in {} (level {level}); the body check builds all targets, so the test code must compile too:\n{}",
-            workspace.display(),
-            first_errors(&String::from_utf8_lossy(&output.stderr))
-        );
+        let text = error_text(&String::from_utf8_lossy(&output.stdout), &String::from_utf8_lossy(&output.stderr));
+        // A write that the sandbox stops shows as "Permission denied".
+        // A dependency that cargo cannot get is not a defect of the code of the tree.
+        if missing_dependency(&text) {
+            bail!("cargo cannot get a dependency for the check build in {} (level {level}):\n{text}\n\n{MISSING_DEPENDENCY}", workspace.display());
+        }
+        let hint = if crate::sandbox::problem().is_none() && text.contains("Permission denied") {
+            "\n\nThe check build runs in a sandbox: it can write only its build folder, and it does not download. Possible causes: a dependency is not in the cargo cache of this machine (run `cargo fetch` in the repository); `Cargo.lock` does not agree with a manifest (update it, and put it in the step); a build script or a proc macro writes a file outside `OUT_DIR`."
+        } else {
+            ""
+        };
+        bail!("cargo check failed in {} (level {level}); the body check builds all targets, so the test code must compile too:\n{text}{hint}", workspace.display());
     }
     Ok(unit_hashes(&String::from_utf8_lossy(&output.stdout)))
 }

@@ -87,7 +87,10 @@ async fn changeset_summary() {
     let app = app();
     let cs = get(&app, "/api/changeset").await;
     let report = demo_data().report;
-    assert_eq!(cs["coverage"].as_f64().unwrap(), report.score);
+    // Brief 5f, D1: no score. The summary has the fact counts.
+    assert!(cs.get("coverage").is_none() && cs.get("score").is_none(), "{cs}");
+    let (total, neutral, spotlight) = report.fact_counts();
+    assert_eq!(cs["fact_counts"], serde_json::json!({ "total": total, "neutral": neutral, "read": total - neutral, "spotlight": spotlight, "not_checked": 0 }));
     assert_eq!(cs["accepted"], false);
     assert_eq!(cs["group_count"], 3);
     assert_eq!(cs["step_count"], 7);
@@ -212,7 +215,8 @@ async fn group_endpoint() {
     let app = app();
     let g2 = get(&app, "/api/group/G2").await;
     assert_eq!(g2["id"], "G2");
-    assert_eq!(g2["kind"], "api");
+    // The kind comes from the facts, not from the stored label `api` (batch 5k, A3).
+    assert_eq!(g2["kind"], "behavior");
     let steps = g2["step_details"].as_array().unwrap();
     assert_eq!(steps.len(), 2);
     assert_eq!(steps[1]["index"], 7);
@@ -769,11 +773,14 @@ async fn the_reviewer_decides_on_a_pair_warning() {
         claims: vec!["c1".into(), "c2".into()],
         refusal: Some("the contract is new".into()),
         reviewer: None,
+        resolves: Vec::new(),
     });
     let app = router(data, file.clone());
     let summary = get(&app, "/api/changeset").await;
     assert_eq!(summary["pairs"][0]["refusal"], "the contract is new");
-    assert!(summary["lines_text"].as_str().unwrap().starts_with("lines: "));
+    // No claim of the demo change set explains a line, so the summary has no line count
+    // (brief 5f, D3).
+    assert_eq!(summary["lines_text"], "");
 
     let pair = "old=shop_core%3A%3Acart%3A%3Aold_total&new=shop_core%3A%3Acart%3A%3Anew_total";
     assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=accepted")).await.status, StatusCode::OK);
@@ -809,6 +816,8 @@ async fn a_property_claim_is_a_checked_fact() {
         hint: None,
         before: None,
         after: Some(format!("no unsafe code in `{at}`")),
+        affected: Vec::new(),
+        complete_calls: Vec::new(),
     });
     data.report.finish();
     let app = router(data, review_path());

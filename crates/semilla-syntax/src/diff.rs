@@ -18,6 +18,11 @@ use serde::Serialize;
 use crate::load::{Item, ItemKind, Workspace};
 use crate::tree::Node;
 
+/// True for a doc line (`///`, `//!`, or a `#[doc]` attribute). A plain `//` comment is not one.
+pub fn is_doc_line(line: &str) -> bool {
+    line.starts_with("///") || line.starts_with("//!") || (crate::doc::code_part(line).0.len() == 1 && line.starts_with('#'))
+}
+
 /// The kind of an edit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +32,8 @@ pub enum EditKind {
     Visibility,
     Signature,
     Docs,
+    /// A plain `//` or `/* */` comment changed. A comment is not a doc.
+    Comment,
     Attrs,
     Members,
     /// A statement exists only after.
@@ -75,6 +82,9 @@ pub struct Edit {
     /// The file and the line, for views and hints.
     pub file: Option<String>,
     pub line: usize,
+    /// What changed in a file edit, for example `binary file changed` or `mode 100644 → 100755`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl Edit {
@@ -95,6 +105,7 @@ impl Edit {
             block_like: false,
             file: Some(file.to_string()),
             line: 0,
+            note: None,
         }
     }
 
@@ -116,6 +127,10 @@ pub struct Renames {
     pub items: BTreeMap<String, String>,
     /// Identifier renames: (scope item, or `None` for all items) → (old ident, new ident).
     pub idents: Vec<(Option<String>, String, String)>,
+    /// Field renames (old name, new name). They apply only where a field name can be: after `.`,
+    /// before `:` in a struct literal or pattern, and as a shorthand field (`S { old }` gives
+    /// `S { new: old }`). A local variable with the same name does not change.
+    pub fields: Vec<(String, String)>,
 }
 
 impl Renames {
@@ -126,8 +141,9 @@ impl Renames {
             .iter()
             .filter(|(scope, _, _)| scope.as_deref().is_none_or(|scope| scope == item))
             .collect();
+        let text = self.apply_fields(text);
         if renames.is_empty() {
-            return text.to_string();
+            return text;
         }
         // Replace whole identifiers only. Token text can put a delimiter next to a word
         // (`[len ..]`, `(len)`), so the scan looks at character classes, not at spaces.
@@ -150,6 +166,61 @@ impl Renames {
         }
         flush(&mut word, &mut out);
         out
+    }
+
+    /// Applies the field renames to a token text (the tokens are separated by spaces).
+    fn apply_fields(&self, text: &str) -> String {
+        if self.fields.is_empty() || !self.fields.iter().any(|(old, _)| text.contains(old.as_str())) {
+            return text.to_string();
+        }
+        let words: Vec<&str> = text.split(' ').collect();
+        let keyword = |w: &str| matches!(w, "if" | "while" | "match" | "for" | "else" | "loop" | "unsafe" | "async" | "move" | "in" | "return" | "break" | "const" | "static" | "let" | "mut" | "ref" | "where" | "impl" | "fn" | "dyn" | "as");
+        let ident = |w: &str| w.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && !keyword(w);
+        // The open brackets: `(`, `[`, or `{` with true for a struct literal or pattern.
+        let mut stack: Vec<(&str, bool)> = Vec::new();
+        // The conditions of `if`, `while`, `match`, and `for`: (depth, true while a pattern comes
+        // before `=` or `in`). Their `{` opens a block, not a struct literal.
+        let mut pending: Vec<(usize, bool)> = Vec::new();
+        let mut out: Vec<String> = Vec::with_capacity(words.len());
+        for (index, word) in words.iter().enumerate() {
+            let prev = index.checked_sub(1).map(|i| words[i]).unwrap_or("");
+            let next = words.get(index + 1).copied().unwrap_or("");
+            match *word {
+                "if" | "while" | "match" => pending.push((stack.len(), false)),
+                "for" => pending.push((stack.len(), true)),
+                "let" if pending.last().is_some_and(|(depth, _)| *depth == stack.len()) => pending.last_mut().unwrap().1 = true,
+                "=" | "in" if pending.last().is_some_and(|(depth, _)| *depth == stack.len()) => pending.last_mut().unwrap().1 = false,
+                "{" => {
+                    let condition = pending.last().copied().filter(|(depth, _)| *depth == stack.len());
+                    let literal = match condition {
+                        Some((_, true)) | None => ident(prev) || prev == ">",
+                        Some((_, false)) => {
+                            pending.pop();
+                            false
+                        }
+                    };
+                    stack.push(("{", literal));
+                }
+                "(" | "[" => stack.push((word, false)),
+                ")" | "]" | "}" => {
+                    stack.pop();
+                }
+                _ => {}
+            }
+            let Some((_, new)) = self.fields.iter().find(|(old, _)| old == word) else {
+                out.push(word.to_string());
+                continue;
+            };
+            let in_literal = stack.last().is_some_and(|(kind, literal)| *kind == "{" && *literal) && (prev == "{" || prev == ",");
+            if prev == "." && next != "(" && next != "::" || in_literal && next == ":" {
+                out.push(new.clone());
+            } else if in_literal && (next == "," || next == "}") {
+                out.push(format!("{new} : {word}"));
+            } else {
+                out.push(word.to_string());
+            }
+        }
+        out.join(" ")
     }
 }
 
@@ -188,17 +259,86 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
         }
     }
 
-    for (file, text) in &before.other_files {
-        match after.other_files.get(file) {
-            Some(other) if other == text => {}
-            Some(_) => edits.push(Edit::file_edit(EditKind::FileChanged, file)),
-            None => edits.push(Edit::file_edit(EditKind::FileRemoved, file)),
+    // The inner attributes of a crate root or a module file (`#![…]`): an attribute edit of the
+    // module. A crate root has no item, so the anchor is the crate name.
+    let modules: BTreeSet<&String> = before.inner_attrs.keys().chain(after.inner_attrs.keys()).collect();
+    for module in modules {
+        let (old, new) = (before.inner_attrs.get(module), after.inner_attrs.get(module));
+        // The inner doc lines (`//!`, or a doc attribute) are a doc edit. Each other inner
+        // attribute is an attribute edit.
+        let is_doc = |attr: &String| attr.starts_with("//!") || crate::doc::code_part(attr).0.len() == 1 && attr.starts_with('#');
+        for docs in [true, false] {
+            let texts = |entry: Option<&(String, Vec<String>)>| entry.map(|(_, attrs)| attrs.iter().filter(|attr| is_doc(attr) == docs).cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default();
+            if texts(old) == texts(new) {
+                continue;
+            }
+            let file = new.or(old).map(|(file, _)| file.as_str()).unwrap_or("");
+            let mut edit = Edit::file_edit(if docs { EditKind::Docs } else { EditKind::Attrs }, file);
+            edit.view = View::Syntax;
+            edit.before = Some(Anchor::item(module.as_str()));
+            edit.after = Some(Anchor::item(module.as_str()));
+            edit.text_before = Some(texts(old));
+            edit.text_after = Some(texts(new));
+            edit.line = 1;
+            edits.push(edit);
         }
     }
-    for file in after.other_files.keys() {
-        if !before.other_files.contains_key(file) {
-            edits.push(Edit::file_edit(EditKind::FileAdded, file));
+    edits.extend(file_edits(before, after));
+    edits
+}
+
+/// The file edits: one edit for each path whose entry (content or mode) or text differs, except a
+/// Rust file that the loader parses on each side where it exists. The syntax diff decides about
+/// the content of such a file (a change of the formatting only gives no edit). A mode change of
+/// such a file still gives a file edit.
+fn file_edits(before: &Workspace, after: &Workspace) -> Vec<Edit> {
+    let text = |ws: &'_ Workspace, path: &str| ws.other_files.get(path).or_else(|| ws.rust_files.get(path)).cloned();
+    let paths: BTreeSet<&String> = [before, after].iter().flat_map(|ws| ws.files.keys().chain(ws.other_files.keys()).chain(ws.rust_files.keys())).collect();
+    let mut edits = Vec::new();
+    for path in paths {
+        let (old, new) = (before.files.get(path), after.files.get(path));
+        let (old_text, new_text) = (text(before, path), text(after, path));
+        if old == new && old_text == new_text {
+            continue;
         }
+        let present = |entry: Option<&crate::load::FileEntry>, text: &Option<String>| entry.is_some() || text.is_some();
+        let (in_before, in_after) = (present(old, &old_text), present(new, &new_text));
+        let mode_changed = matches!((old, new), (Some(a), Some(b)) if a.mode != b.mode);
+        let parsed = |ws: &Workspace, exists: bool| !exists || ws.parsed_files.contains(path);
+        if parsed(before, in_before) && parsed(after, in_after) && !mode_changed {
+            continue;
+        }
+        let kind = match (in_before, in_after) {
+            (false, _) => EditKind::FileAdded,
+            (_, false) => EditKind::FileRemoved,
+            _ => EditKind::FileChanged,
+        };
+        // A file without a text is a binary file (or a link or a submodule, by its mode).
+        let what = |entry: Option<&crate::load::FileEntry>, text: &Option<String>| match entry.map(|e| e.mode.as_str()) {
+            Some("120000") => Some("symbolic link"),
+            Some("160000") => Some("submodule"),
+            _ if text.is_none() => Some("binary file"),
+            _ => None,
+        };
+        let mut notes = Vec::new();
+        let content_changed = old.map(|e| &e.hash) != new.map(|e| &e.hash) || old_text != new_text;
+        match kind {
+            EditKind::FileAdded => notes.extend(what(new, &new_text).map(|w| format!("new {w}"))),
+            EditKind::FileRemoved => notes.extend(what(old, &old_text).map(|w| format!("removed {w}"))),
+            _ => {
+                if content_changed {
+                    if let Some(w) = what(old, &old_text).or(what(new, &new_text)) {
+                        notes.push(format!("{w} changed"));
+                    }
+                }
+                if let (true, Some(a), Some(b)) = (mode_changed, old, new) {
+                    notes.push(format!("mode {} → {}", a.mode, b.mode));
+                }
+            }
+        }
+        let mut edit = Edit::file_edit(kind, path);
+        edit.note = (!notes.is_empty()).then(|| notes.join(", "));
+        edits.push(edit);
     }
     edits
 }
@@ -230,6 +370,7 @@ fn item_edit(kind: EditKind, before: Option<&Item>, after: Option<&Item>) -> Edi
         block_like: true,
         file: Some(any.file.clone()),
         line: any.line_start,
+        note: None,
     }
 }
 
@@ -247,6 +388,8 @@ pub fn kind_name(kind: ItemKind) -> &'static str {
         ItemKind::Use => "use",
         ItemKind::Mod => "mod",
         ItemKind::Macro => "macro",
+        ItemKind::Field => "field",
+        ItemKind::Variant => "variant",
         ItemKind::Other => "other",
     }
 }
@@ -268,6 +411,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         block_like: false,
         file: Some(after.file.clone()),
         line: after.line_start,
+        note: None,
     };
     let apply = |text: &str| renames.apply(&before.path, text);
 
@@ -275,17 +419,48 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         edits.push(attribute_edit(EditKind::Visibility, View::Signature, before.vis.clone(), after.vis.clone()));
     }
     if before.kind != ItemKind::Mod && apply(&before.signature) != after.signature {
-        edits.push(attribute_edit(EditKind::Signature, View::Signature, before.signature.clone(), after.signature.clone()));
+        // A function signature: one edit for each changed part (design 22.3, A5).
+        let parts = match (&before.sig, &after.sig) {
+            (Some(old), Some(new)) => signature_parts(before, after, old, new, renames),
+            _ => Vec::new(),
+        };
+        if parts.is_empty() {
+            // The kind of the item, for the facts: a field type, a const type, a discriminant.
+            let mut edit = attribute_edit(EditKind::Signature, View::Signature, before.signature.clone(), after.signature.clone());
+            edit.attr_before = Some(kind_name(before.kind).to_string());
+            edit.attr_after = Some(kind_name(after.kind).to_string());
+            edits.push(edit);
+        }
+        edits.extend(parts);
     }
-    if before.docs != after.docs {
-        edits.push(attribute_edit(EditKind::Docs, View::Syntax, before.docs.join("\n"), after.docs.join("\n")));
+    // A doc line (`///`, `//!`, `#[doc]`) and a plain comment are two different changes: a doc
+    // is text of the API, a comment is not. They get a fact each.
+    let split = |lines: &[String]| -> (Vec<String>, Vec<String>) { lines.iter().cloned().partition(|line| is_doc_line(line)) };
+    let (before_docs, before_comments) = split(&before.docs);
+    let (after_docs, after_comments) = split(&after.docs);
+    if before_docs != after_docs {
+        edits.push(attribute_edit(EditKind::Docs, View::Syntax, before_docs.join("\n"), after_docs.join("\n")));
+    }
+    if before_comments != after_comments {
+        edits.push(attribute_edit(EditKind::Comment, View::Syntax, before_comments.join("\n"), after_comments.join("\n")));
     }
     if before.attrs != after.attrs {
         edits.push(attribute_edit(EditKind::Attrs, View::Syntax, before.attrs.join("\n"), after.attrs.join("\n")));
     }
-    let old_members: Vec<String> = before.members.iter().map(|member| apply(member)).collect();
+    // A renamed field or variant keeps its place in the member list.
+    let renamed_member = |member: &String| {
+        [format!("{}.{member}", before.path), format!("{}::{member}", before.path)]
+            .iter()
+            .find_map(|path| renames.items.get(path))
+            .map(|new| new.rsplit(['.', ':']).next().unwrap_or(new).to_string())
+    };
+    let old_members: Vec<String> = before.members.iter().map(|member| renamed_member(member).unwrap_or_else(|| apply(member))).collect();
     if old_members != after.members {
-        edits.push(attribute_edit(EditKind::Members, View::Signature, before.members.join("\n"), after.members.join("\n")));
+        // The kind of the owner, for the hints (a struct, a variant, an enum, a trait, an impl).
+        let mut edit = attribute_edit(EditKind::Members, View::Signature, before.members.join("\n"), after.members.join("\n"));
+        edit.attr_before = Some(kind_name(before.kind).to_string());
+        edit.attr_after = Some(kind_name(after.kind).to_string());
+        edits.push(edit);
     }
     if let (Some(old), Some(new)) = (&before.body, &after.body) {
         let mut context = Context { renames, item_before: &before.path, item_after: &after.path, file: &after.file, source_before: before, source_after: after, edits: Vec::new() };
@@ -294,6 +469,67 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         context.edits.sort_by_key(|edit| edit.line);
         edits.extend(context.edits);
     }
+}
+
+/// The edits of the changed parts of a function signature: the qualifiers, the generics, the
+/// `where` clause, each parameter (by name: added, removed, or changed), the order of the
+/// parameters, and the return type.
+fn signature_parts(before: &Item, after: &Item, old: &Node, new: &Node, renames: &Renames) -> Vec<Edit> {
+    let apply = |text: &str| renames.apply(&before.path, text);
+    let anchor = |item: &Item, role: &str| Anchor::item(&item.path).child(semilla_core::Segment::Role("sig".into())).child(semilla_core::Segment::Role(role.to_string()));
+    let edit = |role: &str, kind: &'static str, old_node: Option<&Node>, new_node: Option<&Node>| Edit {
+        kind: EditKind::Signature,
+        view: View::Signature,
+        before: old_node.map(|n| anchor(before, if kind == "param" { &n.role } else { role })),
+        after: new_node.map(|n| anchor(after, if kind == "param" { &n.role } else { role })),
+        node_before: old_node.map(|_| kind),
+        node_after: new_node.map(|_| kind),
+        text_before: old_node.map(|n| n.text.clone()),
+        text_after: new_node.map(|n| n.text.clone()),
+        attr_before: None,
+        attr_after: None,
+        source_before: old_node.map(|n| n.text.clone()),
+        source_after: new_node.map(|n| n.text.clone()),
+        block_like: false,
+        file: Some(after.file.clone()),
+        line: new_node.or(old_node).map(|n| n.start.0).unwrap_or(after.line_start),
+        note: None,
+    };
+    let mut edits = Vec::new();
+    for role in ["qualifiers", "generics", "where"] {
+        let (a, b) = (old.child(role), new.child(role));
+        if a.map(|n| apply(&n.text)) != b.map(|n| n.text.clone()) {
+            edits.push(edit(role, a.or(b).map(|n| n.kind).unwrap_or("part"), a, b));
+        }
+    }
+    // The parameters by name. A renamed parameter (`rename-local`) has its new name.
+    let old_params: Vec<(String, &Node)> = old.children.iter().filter(|c| c.kind == "param").map(|c| (apply(&c.role), c)).collect();
+    let new_params: Vec<(String, &Node)> = new.children.iter().filter(|c| c.kind == "param").map(|c| (c.role.clone(), c)).collect();
+    for (role, node) in &old_params {
+        match new_params.iter().find(|(r, _)| r == role) {
+            None => edits.push(edit(role, "param", Some(node), None)),
+            Some((_, other)) if apply(&node.text) != other.text => edits.push(edit(role, "param", Some(node), Some(other))),
+            Some(_) => {}
+        }
+    }
+    for (role, node) in &new_params {
+        if !old_params.iter().any(|(r, _)| r == role) {
+            edits.push(edit(role, "param", None, Some(node)));
+        }
+    }
+    let common = |list: &[(String, &Node)], other: &[(String, &Node)]| list.iter().filter(|(r, _)| other.iter().any(|(o, _)| o == r)).map(|(r, _)| r.clone()).collect::<Vec<_>>();
+    let (old_order, new_order) = (common(&old_params, &new_params), common(&new_params, &old_params));
+    if old_order != new_order {
+        let mut order = edit("params", "params", Some(old), Some(new));
+        order.text_before = Some(old_order.join(", "));
+        order.text_after = Some(new_order.join(", "));
+        edits.push(order);
+    }
+    let (a, b) = (old.child("ret"), new.child("ret"));
+    if a.map(|n| apply(&n.text)) != b.map(|n| n.text.clone()) {
+        edits.push(edit("ret", "ret", a, b));
+    }
+    edits
 }
 
 struct Context<'a> {
@@ -368,6 +604,7 @@ impl Context<'_> {
             block_like: before.is_some_and(|(node, _)| node.has_block()) || after.is_some_and(|(node, _)| node.has_block()),
             file: Some(self.file.to_string()),
             line,
+            note: None,
         });
     }
 
@@ -442,9 +679,48 @@ impl Context<'_> {
         }
     }
 
+    /// Compares two chains of one binary operator with different operand counts (trial 4, D7:
+    /// `a + b` → `a + b + c` gave the two edits `a` → `a + b` and `b` → `c`). The result is one
+    /// edit for the full chain. If the change only adds or only removes operands, the note of the
+    /// edit names them: "added operand `+ c`". Returns false if the nodes are not such chains.
+    fn operand_chain(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) -> bool {
+        if before.kind != "binary" || after.kind != "binary" || before.attr.is_none() || before.attr != after.attr {
+            return false;
+        }
+        let operator = before.attr.as_deref().unwrap_or("");
+        let (old, new) = (operands(before, operator), operands(after, operator));
+        if old.len() == new.len() {
+            return false;
+        }
+        let pairs = lcs(&old, &new, |a, b| self.same(a, b));
+        if pairs.len() != old.len().min(new.len()) {
+            // Operands changed, and the count changed: the full expression is the change.
+            self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
+            return true;
+        }
+        let added = new.len() > old.len();
+        let (list, item, kept): (&[&Node], &Item, Vec<usize>) = if added { (&new, self.source_after, pairs.iter().map(|pair| pair.1).collect()) } else { (&old, self.source_before, pairs.iter().map(|pair| pair.0).collect()) };
+        let texts: Vec<String> = (0..list.len())
+            .filter(|index| !kept.contains(index))
+            .map(|index| {
+                let text = crate::tree::one_line(&node_source(item, list[index]).unwrap_or_else(|| list[index].text.clone()));
+                if index == 0 { format!("`{text} {operator}`") } else { format!("`{operator} {text}`") }
+            })
+            .collect();
+        let note = format!("{} operand{} {}", if added { "added" } else { "removed" }, if texts.len() == 1 { "" } else { "s" }, texts.join(", "));
+        self.edit(EditKind::Modified, Some((before, before_path)), Some((after, after_path)));
+        if let Some(edit) = self.edits.last_mut() {
+            edit.note = Some(note);
+        }
+        true
+    }
+
     /// Compares two paired nodes.
     fn node(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
         if self.same(before, after) {
+            return;
+        }
+        if self.operand_chain(before, after, before_path, after_path) {
             return;
         }
         let roles = |node: &Node| node.children.iter().map(|child| child.role.clone()).collect::<Vec<_>>();
@@ -468,10 +744,32 @@ impl Context<'_> {
             }
         }
         let attr_changed = before.attr.as_deref().map(|attr| self.renames.apply(self.item_before, attr)) != after.attr;
+        if attr_changed && self.edits.len() > edits_before && !before.has_block() && !after.has_block() {
+            // The node itself and a part of it changed (`a * b / 100` → `a / 100 * b`): one edit
+            // for the full expression, not one edit for the node and one for each part (trial 4,
+            // D7: one expression edit gave up to four facts that overlap).
+            self.edits.truncate(edits_before);
+            self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
+            return;
+        }
         if attr_changed || self.edits.len() == edits_before {
             // The node itself changed: an operator, a method name, or text outside the children.
             self.edit(EditKind::Modified, Some((before, before_path)), Some((after, after_path)));
         }
+    }
+}
+
+/// The operands of a chain of one binary operator, from left to right: `a + b + c` is
+/// `(a + b) + c` in the tree, and its operands are `a`, `b`, `c`. Only the left side continues a
+/// chain, as in the syntax of Rust.
+fn operands<'a>(node: &'a Node, operator: &str) -> Vec<&'a Node> {
+    match (node.children.first(), node.children.get(1)) {
+        (Some(lhs), Some(rhs)) if node.kind == "binary" && node.attr.as_deref() == Some(operator) && node.children.len() == 2 => {
+            let mut list = operands(lhs, operator);
+            list.push(rhs);
+            list
+        }
+        _ => vec![node],
     }
 }
 

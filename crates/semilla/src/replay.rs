@@ -13,6 +13,7 @@
 //! The steps are ordinary steps. So the free edits stay at the expression level, and a refactor
 //! of a function and a behavior change of the same function go in separate steps.
 
+use semilla_core::text::put_line;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +67,7 @@ impl App {
         let files = self.repo.changed_files(&base, &target)?.len();
         Ok(format!(
             "replay started: the working tree is now the base tree {base}; the target tree {target} has {} hunk(s) in {files} file(s).\n\
-             Rebuild the target in steps: `step begin`, `replay take` (or edit by hand), claims, `check`, `step end`.\n\
+             Rebuild the target in steps: `semilla replay plan` writes a draft plan, and `semilla replay apply --full` runs the plan.\n\
              `semilla replay status` lists the remaining hunks.",
             hunks.len()
         ))
@@ -102,20 +103,20 @@ impl App {
         for hunk in hunks.iter().take(MAX_HUNKS) {
             if hunk.file != file {
                 file = &hunk.file;
-                text.push_str(&format!("{file}\n"));
+                put_line(&mut text, &format!("{file}"));
             }
             let (lo, hi) = hunk.new_range();
             let place = if hunk.new_count == 0 { format!("delete after target line {lo}") } else { format!("target lines {lo}-{hi}") };
-            text.push_str(&format!("  take {file}:{lo}-{hi}   ({place}; working tree line {})\n", hunk.old_start));
+            put_line(&mut text, &format!("  take {file}:{lo}-{hi}   ({place}; working tree line {})", hunk.old_start));
             for line in hunk.lines.iter().take(MAX_LINES) {
-                text.push_str(&format!("      {}\n", semilla_syntax::tree::short(line, 100)));
+                put_line(&mut text, &format!("      {}", semilla_syntax::tree::short(line, 100)));
             }
             if hunk.lines.len() > MAX_LINES {
-                text.push_str(&format!("      … {} more line(s)\n", hunk.lines.len() - MAX_LINES));
+                put_line(&mut text, &format!("      … {} more line(s)", hunk.lines.len() - MAX_LINES));
             }
         }
         if hunks.len() > MAX_HUNKS {
-            text.push_str(&format!("  … {} more hunk(s)\n", hunks.len() - MAX_HUNKS));
+            put_line(&mut text, &format!("  … {} more hunk(s)", hunks.len() - MAX_HUNKS));
         }
         // The semantic view of the same difference: what each change is, and the op for it.
         let (now, target) = (self.workspace(&current)?, self.workspace(&replay.target)?);
@@ -124,7 +125,7 @@ impl App {
             text.push_str("the remaining changes (the suggested op; the anchor in the working tree):\n");
             for edit in edits.iter().take(MAX_HUNKS) {
                 let anchor = edit.before.as_ref().map(|a| a.to_string()).unwrap_or_else(|| "new code: anchor it after you take it".into());
-                text.push_str(&format!("  {:<28} {}  [{}]\n", semilla_verify::hints::suggest(edit), semilla_verify::hints::describe(edit), anchor));
+                put_line(&mut text, &format!("  {:<28} {}  [{}]", semilla_verify::hints::suggest(edit), semilla_verify::hints::describe(edit), anchor));
             }
         }
         Ok(text)
@@ -136,7 +137,7 @@ impl App {
         let session = self.load_session()?;
         let replay = Self::replay_of(&session)?.clone();
         if session.open.is_none() {
-            bail!("no step is open; start a step before you take a part of the target");
+            bail!("no step is open. `semilla replay take` is for a replay by hand, with the hidden command `old-step`. Use the plan: `semilla replay plan`, then `semilla replay apply --full`");
         }
         let current = self.repo.write_tree()?;
         let target_dir = self.repo.materialize(&replay.target)?;

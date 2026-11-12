@@ -111,14 +111,22 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
         return outcome(ClaimStatus::Malformed { reason: format!("`{to}` is not an expression pattern") }, Vec::new());
     }
     // The scope: one item (the anchor), or the whole workspace.
+    // The scope: an item, or a module or a crate (all its items).
     let scope = claim.at.as_ref().map(|a| a.item.clone());
-    let all_sites = claim.arg_str("sites").is_none_or(|sites| sites == "all");
+    let in_scope = |item: &str| scope.as_ref().is_none_or(|scope| item == scope || item.starts_with(&format!("{scope}::")));
+    // `sites`: `all` (the default), or the exact list of the site anchors.
+    let listed: Option<Vec<String>> = match claim.args.get("sites") {
+        None => None,
+        Some(serde_json::Value::String(text)) if text == "all" => None,
+        Some(_) => Some(claim.arg_list("sites")),
+    };
+    let all_sites = listed.is_none();
 
     let mut explains = Vec::new();
     let mut rewritten = Vec::new();
     for (index, edit) in context.edits.iter().enumerate() {
         let (Some(before_anchor), Some(after_anchor)) = (&edit.before, &edit.after) else { continue };
-        if scope.as_ref().is_some_and(|scope| &before_anchor.item != scope) {
+        if !in_scope(&before_anchor.item) {
             continue;
         }
         // Walk up from the edit to the site that matches the pattern.
@@ -155,7 +163,7 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
 
     if all_sites {
         let mut missed = Vec::new();
-        for item in context.before.items.values().filter(|item| scope.as_ref().is_none_or(|scope| &item.path == scope)) {
+        for item in context.before.items.values().filter(|item| in_scope(&item.path)) {
             let Some(body) = &item.body else { continue };
             let mut found = Vec::new();
             sites(&pattern, body, &mut found);
@@ -170,6 +178,15 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
             let mut result = outcome(ClaimStatus::Refuted { reason: format!("{} site(s) match `{from}` but were not rewritten: {}", missed.len(), missed.join(", ")) }, Vec::new());
             result.hint = Some("Rewrite the missed sites, or use `sites: [..]` with the exact list.".into());
             return result;
+        }
+    }
+    if let Some(listed) = &listed {
+        let mut done: Vec<String> = rewritten.iter().map(|a| a.to_string()).collect();
+        let mut wanted = listed.clone();
+        done.sort();
+        wanted.sort();
+        if done != wanted {
+            return outcome(ClaimStatus::Refuted { reason: format!("`sites` lists {}, but the rewritten sites are {}", wanted.join(", "), done.join(", ")) }, Vec::new());
         }
     }
     let mut result = outcome(ClaimStatus::Verified { proof: format!("pattern ({} sites)", rewritten.len()) }, explains);
@@ -190,6 +207,7 @@ fn outcome(status: ClaimStatus, explains: Vec<usize>) -> Outcome {
         after: None,
         needs_body_proof: false,
         self_evident: false,
+        complete_calls: Vec::new(),
     }
 }
 

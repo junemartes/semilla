@@ -32,7 +32,8 @@ impl Claim {
             Some(serde_json::Value::Array(values)) => {
                 values.iter().filter_map(|value| value.as_str().map(str::to_string)).collect()
             }
-            Some(serde_json::Value::String(value)) => vec![value.clone()],
+            // The comma form `a,b,c` is the same list as `["a", "b", "c"]`.
+            Some(serde_json::Value::String(value)) => value.split(',').map(|part| part.trim().to_string()).filter(|part| !part.is_empty()).collect(),
             _ => Vec::new(),
         }
     }
@@ -51,6 +52,10 @@ pub struct Step {
     pub tree_before: String,
     /// The git tree after the step.
     pub tree_after: String,
+    /// The reasons of the agent for the spotlight facts, by the anchor of the fact (`semilla
+    /// reason`). Free text for the reviewer.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub reasons: std::collections::BTreeMap<String, String>,
 }
 
 /// The kind of a group. Some kinds have rules that the verifier checks.
@@ -90,6 +95,8 @@ pub enum Role {
     Config,
     Propagation,
     Mechanical,
+    /// Doc and comment changes (`edit-doc`): not neutral, so not in `mechanical`.
+    Docs,
     Custom,
 }
 
@@ -104,6 +111,7 @@ impl Role {
             Role::Config => 4,
             Role::Propagation => 5,
             Role::Mechanical => 6,
+            Role::Docs => 7,
         }
     }
 }
@@ -194,6 +202,7 @@ mod tests {
             claims: vec![Claim { id: "c2".into(), op: "rename".into(), at: None, args: Default::default() }],
             tree_before: String::new(),
             tree_after: String::new(),
+            reasons: Default::default(),
         };
         let set = ChangeSet { steps: vec![step], ..Default::default() };
         assert_eq!(set.next_claim_id(), "c3");

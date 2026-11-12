@@ -49,11 +49,13 @@ pub struct Outcome {
     pub needs_body_proof: bool,
     /// True if the claim is valid without an edit (a rename that the diff applied first).
     pub self_evident: bool,
+    /// For a refuted `calls-only` claim: the complete list of `calls` that makes the claim true.
+    pub complete_calls: Vec<String>,
 }
 
 impl Outcome {
     fn new(status: ClaimStatus) -> Outcome {
-        Outcome { status, explains: Vec::new(), class: None, effect: None, witness: None, hint: None, before: None, after: None, needs_body_proof: false, self_evident: false }
+        Outcome { status, explains: Vec::new(), class: None, effect: None, witness: None, hint: None, before: None, after: None, needs_body_proof: false, self_evident: false, complete_calls: Vec::new() }
     }
 
     fn malformed(reason: impl Into<String>) -> Outcome {
@@ -77,15 +79,29 @@ pub struct BodyIndex {
     by_item: BTreeMap<String, Vec<BodyStatus>>,
     /// The MIR name → the item path.
     items: BTreeMap<String, String>,
+    /// The MIR name → its status.
+    statuses: BTreeMap<String, BodyStatus>,
+    /// The item path and the MIR name → the uses of the build configuration in the changed
+    /// bodies.
+    config: BTreeMap<String, std::collections::BTreeSet<String>>,
     pub available: bool,
 }
 
 impl BodyIndex {
     pub fn new(bodies: &[BodyComparison], after: &Workspace, before: &Workspace) -> BodyIndex {
-        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), available: !bodies.is_empty() };
+        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), available: !bodies.is_empty() };
         for body in bodies {
-            let item = find_item(body, after).or_else(|| find_item(body, before));
+            index.statuses.insert(body.name.clone(), body.status.clone());
+            // A body that exists only before has its span in the "before" tree.
+            let item = if body.status == BodyStatus::BeforeOnly { find_item(body, before).or_else(|| find_item(body, after)) } else { find_item(body, after).or_else(|| find_item(body, before)) };
+            let uses_config = !body.config.is_empty() && !matches!(body.status, BodyStatus::Equal { .. });
+            if uses_config {
+                index.config.entry(body.name.clone()).or_default().extend(body.config.iter().cloned());
+            }
             if let Some(item) = item {
+                if uses_config {
+                    index.config.entry(item.clone()).or_default().extend(body.config.iter().cloned());
+                }
                 index.items.insert(body.name.clone(), item.clone());
                 index.by_item.entry(item).or_default().push(body.status.clone());
             }
@@ -93,8 +109,41 @@ impl BodyIndex {
         index
     }
 
+    /// The uses of the build configuration in the changed bodies of an item (or a MIR name):
+    /// the text of each macro call. Empty for a body that is equal on the two sides.
+    pub fn config(&self, name: &str) -> Vec<String> {
+        self.config.get(name).into_iter().flatten().cloned().collect()
+    }
+
+    /// Each changed body that reads the build configuration (the item path and the MIR name
+    /// can be in the list for one body).
+    pub fn config_names(&self) -> impl Iterator<Item = &String> {
+        self.config.keys()
+    }
+
+    /// The MIR names of the compared bodies.
+    pub fn names(&self) -> impl Iterator<Item = &String> {
+        self.statuses.keys()
+    }
+
+    /// True if the body of an item (or a MIR name) differs in the step.
+    pub fn changed(&self, name: &str) -> bool {
+        let item = self.status(name).is_some_and(|status| !matches!(status, BodyStatus::Equal { .. }));
+        item || self.statuses.get(name).is_some_and(|status| !matches!(status, BodyStatus::Equal { .. }))
+    }
+
+    /// The item path of a MIR name.
+    pub fn item_of_name(&self, name: &str) -> Option<String> {
+        self.items.get(name).cloned()
+    }
+
     pub fn item_of(&self, body: &BodyComparison) -> Option<String> {
         self.items.get(&body.name).cloned()
+    }
+
+    /// True if at least one MIR body belongs to the item: a checked configuration compiles it.
+    pub fn has_body(&self, item: &str) -> bool {
+        self.by_item.contains_key(item)
     }
 
     /// The combined status of all bodies of an item: equal only if all are equal.
@@ -130,6 +179,10 @@ fn find_item(body: &BodyComparison, workspace: &Workspace) -> Option<String> {
 
 /// Finds the syntax item of a MIR body name and span.
 pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Workspace) -> Option<String> {
+    // The `main` function of the test harness has no source item.
+    if crate::is_test_harness_main(name) {
+        return None;
+    }
     if let Some((file, line)) = span {
         let found = workspace
             .items
@@ -141,7 +194,23 @@ pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Work
         }
     }
     let name = name.split("::{").next().unwrap_or(name);
-    workspace.items.contains_key(name).then(|| name.to_string())
+    if workspace.items.contains_key(name) {
+        return Some(name.to_string());
+    }
+    // A constant or a static of a target that is not the library (batch 5n, A4). The MIR name
+    // starts with the crate name of the target (`hex::DATA` for `benches/hex.rs`), and the item
+    // path starts with the package and the target (`hex::hex::DATA`). The span and the last
+    // name of the body find the item.
+    let (file, line) = span?;
+    let short = name.rsplit("::").next()?;
+    let found = workspace.items.values().filter(|item| {
+        matches!(item.kind, semilla_syntax::ItemKind::Const | semilla_syntax::ItemKind::Static)
+            && (file.ends_with(&item.file) || item.file.ends_with(file.as_str()))
+            && item.line_start <= *line
+            && *line <= item.line_end
+            && item.path.rsplit("::").next() == Some(short)
+    });
+    found.min_by_key(|item| item.line_end - item.line_start).map(|item| item.path.clone())
 }
 
 /// Builds the renames of a step from its identity claims.
@@ -156,10 +225,27 @@ pub fn renames(step: &Step, before: &Workspace) -> Renames {
                 let old_name = last_segment(&at.item);
                 let new_name = last_segment(&new_path);
                 renames.items.insert(at.item.clone(), new_path.clone());
-                // The methods of a renamed type follow the type.
-                let prefix = format!("{}::", at.item);
-                for path in before.items.keys().filter(|path| path.starts_with(&prefix)) {
-                    renames.items.insert(path.clone(), format!("{new_path}::{}", &path[prefix.len()..]));
+                // A field: the uses follow at the field positions only (not a local variable).
+                if before.items.get(&at.item).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Field) {
+                    if old_name != new_name {
+                        renames.fields.push((old_name.to_string(), new_name.to_string()));
+                    }
+                    continue;
+                }
+                // A trait method: the methods of the impls of the trait follow. The MIR names of
+                // the impl methods are `<Type as crate::Trait>::method`, so the map also has the
+                // key `crate::Trait>::method` for the body compare.
+                let owner = parent(&at.item);
+                if claim.op == "rename" && before.items.get(owner).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Trait) && owner == parent(&new_path) {
+                    let trait_name = last_segment(owner);
+                    for path in before.items.keys().filter(|path| impl_method_of(path, trait_name, old_name)) {
+                        renames.items.insert(path.clone(), format!("{}{new_name}", &path[..path.len() - old_name.len()]));
+                    }
+                    renames.items.insert(format!("{owner}>::{old_name}"), format!("{owner}>::{new_name}"));
+                }
+                // The methods, the fields, and the variants of a renamed type follow the type.
+                for path in before.items.keys().filter(|path| is_child(path, &at.item)) {
+                    renames.items.insert(path.clone(), format!("{new_path}{}", &path[at.item.len()..]));
                 }
                 if old_name != new_name {
                     renames.idents.push((None, old_name.to_string(), new_name.to_string()));
@@ -197,10 +283,20 @@ pub fn declared_new_items(claim: &Claim) -> Vec<String> {
     }
 }
 
-/// `to` can be a full path, or a new last segment for the same parent.
+/// True if `path` is the method `method` of an impl of a trait with the last name `trait_name`:
+/// `module::<Type as path::Trait>::method`.
+fn impl_method_of(path: &str, trait_name: &str, method: &str) -> bool {
+    let Some(owner) = path.strip_suffix(method).and_then(|rest| rest.strip_suffix(">::")) else { return false };
+    owner.rsplit_once(" as ").is_some_and(|(_, tr)| last_segment(tr.split('<').next().unwrap_or(tr)) == trait_name)
+}
+
+/// `to` can be a full path, or a new last segment for the same parent. For a field
+/// (`shop::Account.balance`), a last name replaces the field name.
 fn full_path(item: &str, to: &str) -> String {
-    if to.contains("::") {
+    if to.contains("::") || to.contains('.') {
         to.to_string()
+    } else if let Some((owner, _)) = item.rsplit_once('.').filter(|(_, field)| !field.contains("::")) {
+        format!("{owner}.{to}")
     } else {
         match item.rsplit_once("::") {
             Some((parent, _)) => format!("{parent}::{to}"),
@@ -209,8 +305,28 @@ fn full_path(item: &str, to: &str) -> String {
     }
 }
 
+/// True if `path` is a child of `parent`: a method or a variant (`parent::x`) or a field
+/// (`parent.x`).
+pub fn is_child(path: &str, parent: &str) -> bool {
+    path.strip_prefix(parent).is_some_and(|rest| rest.starts_with("::") || rest.starts_with('.'))
+}
+
 fn last_segment(path: &str) -> &str {
-    path.rsplit("::").next().unwrap_or(path)
+    let last = path.rsplit("::").next().unwrap_or(path);
+    last.rsplit_once('.').map(|(_, field)| field).unwrap_or(last)
+}
+
+/// The parent path (the module of an item), or the empty text.
+fn parent(path: &str) -> &str {
+    path.rsplit_once("::").map(|(parent, _)| parent).unwrap_or("")
+}
+
+/// The path without the twin suffix (`demo::impl Foo#1` gives `demo::impl Foo`).
+fn without_twin(path: &str) -> &str {
+    match path.rsplit_once('#') {
+        Some((base, index)) if !index.is_empty() && index.chars().all(|c| c.is_ascii_digit()) && !base.ends_with("::use") => base,
+        _ => path,
+    }
 }
 
 /// The variable name of a `let` statement (without `mut` and a type).
@@ -241,11 +357,22 @@ pub fn is_binding(item: &semilla_syntax::Item, name: &str) -> bool {
 
 /// Checks one claim.
 pub fn check(context: &Context, claim: &Claim) -> Outcome {
+    if let Some(message) = ops::retired(&claim.op) {
+        return Outcome::malformed(message);
+    }
     let Some(info) = ops::op(&claim.op) else {
         return Outcome::malformed(format!("unknown operation `{}`", claim.op));
     };
     if let Some(missing) = info.args.iter().find(|arg| !claim.args.contains_key(**arg)) {
         return Outcome::malformed(format!("`{}` needs the argument `{missing}`", claim.op));
+    }
+    if let Some(message) = claim.args.keys().find_map(|key| ops::retired_arg(key)) {
+        return Outcome::malformed(message);
+    }
+    // Each argument has a check. An argument that the op does not declare is an error.
+    let optional = ops::optional_args(&claim.op);
+    if let Some(unknown) = claim.args.keys().find(|key| !info.args.contains(&key.as_str()) && !optional.contains(&key.as_str())) {
+        return Outcome::malformed(format!("`{}` has no argument `{unknown}`", claim.op));
     }
     // `rewrite-pattern` without an anchor applies to the whole workspace.
     if info.level != OpLevel::File && claim.at.is_none() && claim.op != "rewrite-pattern" {
@@ -264,17 +391,13 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
         "rename" | "move-item" => check_rename(context, claim),
         "add-item" => check_item_edit(context, claim, EditKind::ItemAdded, true),
         "remove-item" => check_item_edit(context, claim, EditKind::ItemRemoved, false),
-        "change-signature" => check_attribute(context, claim, &[EditKind::Signature]),
-        "change-visibility" => check_attribute(context, claim, &[EditKind::Visibility]),
+        "change-signature" => check_signature(context, claim),
         "edit-doc" => check_attribute(context, claim, &[EditKind::Docs]),
-        "change-attribute" => check_attribute(context, claim, &[EditKind::Attrs]),
-        "add-struct-field" => check_member(context, claim, "field"),
-        "add-enum-variant" => check_member(context, claim, "variant"),
-        "add-trait-impl" => check_trait_impl(context, claim),
         "extract-function" | "inline-function" => check_across(context, claim),
-        "bump-dependency" | "edit-config" => check_file(context, claim),
+        // The compound ops first: `add-arm`, `add-else`, and `add-else-if` are not new statements.
+        "remove-if" => check_remove_if(context, claim),
+        "add-else" | "add-else-if" | "remove-else" | "add-arm" | "remove-arm" | "move-arm" | "change-loop-kind" => check_compound(context, claim),
         name if name.starts_with("add-") && info.level == OpLevel::Statement => check_add_statement(context, claim),
-        "add-else" | "add-else-if" | "remove-else" | "remove-if" | "add-arm" | "remove-arm" | "move-arm" | "change-loop-kind" => check_compound(context, claim),
         "delete-statement" => check_statement_edit(context, claim, EditKind::Deleted),
         "move-statement" => check_move_statement(context, claim),
         "wrap-statements" => check_wrap(context, claim, true),
@@ -351,11 +474,22 @@ fn body_proof(context: &Context, item: &str, mut outcome: Outcome) -> Outcome {
         None if !context.bodies.available => {
             outcome.status = ClaimStatus::Pending { reason: "the body proof runs in the background check (phase 2)".into() };
         }
+        // A function without a MIR body: no checked configuration compiles it (an inactive `cfg`).
+        // Nothing proves its body, so the claim is unproved.
+        None if is_function(context, item) => {
+            outcome.status = ClaimStatus::Unproved { reason: format!("no MIR body for `{item}`: no checked configuration compiles it (an inactive `cfg`?)") };
+            outcome.hint = Some("Add a feature set that compiles the function (design 8.12), or tag the change as logic.".into());
+        }
         None => {
             // No body: a non-function item. The syntax check is the proof.
         }
     }
     outcome
+}
+
+/// True if the item is a function on either side of the step.
+fn is_function(context: &Context, item: &str) -> bool {
+    [context.after, context.before].iter().any(|ws| ws.items.get(item).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Fn && item.body.is_some()))
 }
 
 fn texts(context: &Context, indexes: &[usize], mut outcome: Outcome) -> Outcome {
@@ -391,18 +525,30 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     if !context.after.items.contains_key(&to) {
         return Outcome::malformed(format!("`{to}` does not exist after the step"));
     }
-    // The diff applied the rename first. The claim also explains the `use` lines and the paths
-    // that name the item.
+    // The diff applied the rename first. The claim also explains the private `use` lines and the
+    // paths that name the item. `move-item` also explains the private `use` lines of the source
+    // module and the destination module (the moved body can need other imports). This is sound:
+    // a `use` change that changes a meaning changes a MIR body, and the indirect-change rule
+    // reports that body. A `pub use` line is API, so it needs its own claim.
     let (old_name, new_name) = (last_segment(&at.item), last_segment(&to));
+    let modules = [parent(&at.item), parent(&to)];
     let explains: Vec<usize> = context
         .edits
         .iter()
         .enumerate()
         .filter(|(_, edit)| {
-            let mentions = |text: &Option<String>, name: &str| text.as_deref().is_some_and(|text| text.split(' ').any(|token| token == name));
+            let mentions = |text: &Option<String>, name: &str| text.as_deref().is_some_and(|text| text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name));
             let is_use = edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use");
             let is_path = edit.kind == EditKind::Replaced && edit.node_before == Some("path") && edit.node_after == Some("path");
-            (is_use || is_path) && (mentions(&edit.text_before, old_name) || mentions(&edit.text_after, new_name))
+            let names_item = mentions(&edit.text_before, old_name) || mentions(&edit.text_after, new_name);
+            if is_use {
+                let private = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.vis.is_empty()));
+                let module = edit.item().map(parent);
+                let in_module = claim.op == "move-item" && module.is_some_and(|m| modules.contains(&m));
+                private(&edit.before, context.before) && private(&edit.after, context.after) && (names_item || in_module)
+            } else {
+                is_path && names_item
+            }
         })
         .map(|(index, _)| index)
         .collect();
@@ -410,7 +556,9 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     outcome.self_evident = true;
     outcome.before = Some(at.item.clone());
     outcome.after = Some(to.clone());
-    body_proof(context, &to, outcome)
+    // The proof is the MIR compare of the whole workspace (design 22.4). The step check makes it.
+    outcome.class = Some(Class::Neutral);
+    outcome
 }
 
 fn check_rename_local(context: &Context, claim: &Claim) -> Outcome {
@@ -441,13 +589,11 @@ fn check_item_edit(context: &Context, claim: &Claim, kind: EditKind, added: bool
         .enumerate()
         .filter(|(_, edit)| {
             let item = if added { edit.after.as_ref() } else { edit.before.as_ref() };
-            let own = edit.kind == kind && item.is_some_and(|item| item.item == at.item || item.item.starts_with(&format!("{}::", at.item)));
+            let own = edit.kind == kind && item.is_some_and(|item| item.item == at.item || is_child(&item.item, &at.item));
+            // A new or removed trait method changes the member list of its trait.
+            let trait_members = edit.kind == EditKind::Members && edit.attr_before.as_deref() == Some("trait") && edit.anchor().is_some_and(|anchor| anchor.item == parent(&at.item));
             // A new method changes the member list of its impl.
-            let impl_members = edit.kind == EditKind::Members && at.item.contains("::") && {
-                let owner = at.item.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
-                edit.anchor().is_some_and(|anchor| anchor.item.ends_with(&format!("impl {}", last_segment(owner))) || anchor.item.contains(&format!("impl {owner}")))
-            };
-            own || impl_members
+            own || trait_members || is_owner_members(edit, &at.item)
         })
         .map(|(index, _)| index)
         .collect();
@@ -461,6 +607,30 @@ fn check_item_edit(context: &Context, claim: &Claim, kind: EditKind, added: bool
     let mut outcome = texts(context, &ordered, outcome);
     outcome.class = Some(Class::Logic);
     outcome
+}
+
+/// `change-signature`: only the signature edits that no fact covers (a const or static value, a
+/// `macro_rules!` body, a function signature without a changed part).
+fn check_signature(context: &Context, claim: &Claim) -> Outcome {
+    let at = claim.at.as_ref().unwrap();
+    let explains: Vec<usize> = context
+        .edits
+        .iter()
+        .enumerate()
+        .filter(|(_, edit)| edit.kind == EditKind::Signature && edit.anchor().is_some_and(|anchor| anchor.item == at.item) && crate::facts::signature_part(edit).is_none())
+        .map(|(index, _)| index)
+        .collect();
+    if explains.is_empty() {
+        return Outcome::new(ClaimStatus::Empty);
+    }
+    // A doc test is code (brief 5h, B1): `edit-doc` explains a change of the doc text only.
+    if explains.iter().any(|&index| crate::facts::doc_test_change(&context.edits[index]).is_some()) {
+        let mut outcome = Outcome::new(ClaimStatus::Unproved { reason: format!("the doc change of `{}` adds, changes, or removes a code block: `cargo test` runs it as a doc test, so it is code", at.item) });
+        outcome.hint = Some("Remove the claim `edit-doc`. Semilla shows the change as the fact \"doc test of … added\" (or \"changed\", \"removed\") with the class `logic`.".into());
+        return outcome;
+    }
+    let outcome = Outcome::verified("shape", explains.clone());
+    texts(context, &explains, outcome)
 }
 
 fn check_attribute(context: &Context, claim: &Claim, kinds: &[EditKind]) -> Outcome {
@@ -477,44 +647,6 @@ fn check_attribute(context: &Context, claim: &Claim, kinds: &[EditKind]) -> Outc
     }
     let outcome = Outcome::verified("shape", explains.clone());
     texts(context, &explains, outcome)
-}
-
-fn check_member(context: &Context, claim: &Claim, arg: &str) -> Outcome {
-    let at = claim.at.as_ref().unwrap();
-    let name = claim.arg_str(arg).unwrap();
-    let Some(index) = context.edits.iter().position(|edit| edit.kind == EditKind::Members && edit.anchor().is_some_and(|a| a.item == at.item)) else {
-        return Outcome::new(ClaimStatus::Empty);
-    };
-    let edit = &context.edits[index];
-    let old: Vec<&str> = edit.text_before.as_deref().unwrap_or("").lines().collect();
-    let new: Vec<&str> = edit.text_after.as_deref().unwrap_or("").lines().collect();
-    let added: Vec<&&str> = new.iter().filter(|member| !old.contains(member)).collect();
-    let removed = old.iter().any(|member| !new.contains(member));
-    if removed || added.len() != 1 || !added[0].split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name) {
-        return Outcome::refuted(format!("the change is not one new member `{name}`"));
-    }
-    texts(context, &[index], Outcome::verified("shape", vec![index]))
-}
-
-fn check_trait_impl(context: &Context, claim: &Claim) -> Outcome {
-    let at = claim.at.as_ref().unwrap();
-    let owner = at.item.split_once("impl ").map(|(module, owner)| (module.trim_end_matches("::"), owner));
-    let explains: Vec<usize> = context
-        .edits
-        .iter()
-        .enumerate()
-        .filter(|(_, edit)| {
-            edit.kind == EditKind::ItemAdded
-                && edit.after.as_ref().is_some_and(|anchor| {
-                    anchor.item == at.item || owner.is_some_and(|(module, owner)| anchor.item.starts_with(&format!("{module}::{owner}::")))
-                })
-        })
-        .map(|(index, _)| index)
-        .collect();
-    if explains.is_empty() {
-        return Outcome::new(ClaimStatus::Empty);
-    }
-    texts(context, &explains.clone(), Outcome::verified("shape", explains))
 }
 
 /// `extract-function` and `inline-function`: an item appears (or goes), and a region of the
@@ -598,44 +730,6 @@ fn split_statement(at: &Anchor) -> Option<(Vec<Segment>, usize)> {
     }
 }
 
-fn check_file(context: &Context, claim: &Claim) -> Outcome {
-    let file_edits = context.edits.iter().enumerate().filter(|(_, edit)| matches!(edit.kind, EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged));
-    let explains: Vec<usize> = if claim.op == "edit-config" {
-        let file = claim.arg_str("file").unwrap();
-        file_edits.filter(|(_, edit)| edit.file.as_deref().is_some_and(|path| path == file || path.ends_with(&format!("/{file}")))).map(|(index, _)| index).collect()
-    } else {
-        let krate = claim.arg_str("crate").unwrap();
-        let version = claim.arg_str("to").unwrap();
-        let mut found = false;
-        let explains = file_edits
-            .filter(|(_, edit)| {
-                let path = edit.file.as_deref().unwrap_or("");
-                if path.ends_with("Cargo.lock") {
-                    return true;
-                }
-                if !path.ends_with("Cargo.toml") {
-                    return false;
-                }
-                let old = context.before.other_files.get(path).map(String::as_str).unwrap_or("");
-                let new = context.after.other_files.get(path).map(String::as_str).unwrap_or("");
-                let changed: Vec<&str> = new.lines().filter(|line| !old.lines().any(|o| o == *line)).chain(old.lines().filter(|line| !new.lines().any(|n| n == *line))).collect();
-                let only_this = !changed.is_empty() && changed.iter().all(|line| line.contains(krate));
-                found |= only_this && changed.iter().any(|line| line.contains(version));
-                only_this
-            })
-            .map(|(index, _)| index)
-            .collect();
-        if !found {
-            return Outcome::refuted(format!("no Cargo.toml line sets `{krate}` to `{version}`"));
-        }
-        explains
-    };
-    if explains.is_empty() {
-        return Outcome::new(ClaimStatus::Empty);
-    }
-    Outcome::verified("shape", explains)
-}
-
 /// The node kinds that each `add-*` statement op creates.
 fn add_kinds(op: &str) -> &'static [&'static str] {
     match op {
@@ -691,6 +785,66 @@ fn check_add_statement(context: &Context, claim: &Claim) -> Outcome {
     texts(context, &[index], Outcome::verified("shape", vec![index]))
 }
 
+/// `remove-if keep=then|else`: the `if` goes, and the statements of the named branch take its
+/// place in the block. The verifier compares the block after the step with the block before, with
+/// the `if` replaced by the kept branch.
+fn check_remove_if(context: &Context, claim: &Claim) -> Outcome {
+    let at = claim.at.as_ref().unwrap();
+    let keep = claim.arg_str("keep").unwrap_or("");
+    if keep != "then" && keep != "else" {
+        return Outcome::malformed(format!("`keep` must be `then` or `else`, not `{keep}`"));
+    }
+    let Some((parent, index)) = split_statement(at) else {
+        // An `if` expression (`let x = if c { a } else { b };`): the node after the step is the
+        // expression of the kept branch.
+        let Some(node) = semilla_syntax::resolve_node(context.before, at).filter(|node| node.kind == "if") else {
+            return Outcome::malformed(format!("no `if` at `{at}` before the step"));
+        };
+        let Some(kept) = node.child(keep).filter(|branch| branch.kind == "block" && branch.children.len() == 1) else {
+            return Outcome::refuted(format!("the `if` has no `{keep}` block with one expression"));
+        };
+        let after_anchor = Anchor { item: context.renames.items.get(&at.item).cloned().unwrap_or_else(|| at.item.clone()), path: at.path.clone() };
+        let actual = semilla_syntax::resolve_node(context.after, &after_anchor).map(|n| n.text.clone());
+        if actual != Some(context.renames.apply(&at.item, &kept.children[0].text)) {
+            return Outcome::refuted(format!("the expression after the step is not the `{keep}` branch"));
+        }
+        let explains = edits_inside(context, at, false);
+        if explains.is_empty() {
+            return Outcome::new(ClaimStatus::Empty);
+        }
+        return texts(context, &explains.clone(), Outcome::verified("shape", explains));
+    };
+    let Some(node) = semilla_syntax::resolve_node(context.before, at).filter(|node| node.kind == "if") else {
+        return Outcome::malformed(format!("no `if` statement at `{at}` before the step"));
+    };
+    let Some(branch) = node.child(keep).filter(|branch| branch.kind == "block") else {
+        return Outcome::refuted(format!("the `if` has no plain `{keep}` block"));
+    };
+    let block_anchor = Anchor { item: at.item.clone(), path: parent.clone() };
+    let after_item = context.renames.items.get(&at.item).cloned().unwrap_or_else(|| at.item.clone());
+    let (Some(old_block), Some(new_block)) = (semilla_syntax::resolve_node(context.before, &block_anchor), semilla_syntax::resolve_node(context.after, &Anchor { item: after_item, path: parent })) else {
+        return Outcome::malformed(format!("no block around `{at}`"));
+    };
+    let apply = |text: &str| context.renames.apply(&at.item, text);
+    let mut expected: Vec<String> = Vec::new();
+    for (position, child) in old_block.children.iter().enumerate() {
+        if position == index {
+            expected.extend(branch.children.iter().map(|c| apply(&c.text)));
+        } else {
+            expected.push(apply(&child.text));
+        }
+    }
+    let actual: Vec<String> = new_block.children.iter().map(|c| c.text.clone()).collect();
+    if expected != actual {
+        return Outcome::refuted(format!("the block after the step is not the block with the `{keep}` branch in place of the `if`"));
+    }
+    let explains = edits_inside(context, &block_anchor, false);
+    if explains.is_empty() {
+        return Outcome::new(ClaimStatus::Empty);
+    }
+    texts(context, &explains.clone(), Outcome::verified("shape", explains))
+}
+
 /// Changes to the branches of an `if` or a `match`, or to the kind of a loop.
 fn check_compound(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
@@ -713,6 +867,39 @@ fn check_compound(context: &Context, claim: &Claim) -> Outcome {
     };
     if !ok {
         return Outcome::refuted(format!("`{}` does not fit a `{}` statement", claim.op, before.kind));
+    }
+    // The arm ops are exact: the arm lists differ by one new arm, one removed arm, or the order.
+    if matches!(claim.op.as_str(), "add-arm" | "remove-arm" | "move-arm") {
+        let after_anchor = Anchor { item: context.renames.items.get(&at.item).cloned().unwrap_or_else(|| at.item.clone()), path: at.path.clone() };
+        let arms = |text: &str| -> Option<Vec<String>> {
+            match syn::parse_str::<syn::Expr>(text).ok()? {
+                syn::Expr::Match(m) => Some(m.arms.iter().map(|arm| quote::ToTokens::to_token_stream(arm).to_string().trim_end_matches(" ,").to_string()).collect()),
+                _ => None,
+            }
+        };
+        let old = arms(&context.renames.apply(&at.item, &before.text));
+        let new = semilla_syntax::resolve_node(context.after, &after_anchor).and_then(|node| arms(&node.text));
+        let (Some(old), Some(new)) = (old, new) else {
+            return Outcome::refuted(format!("no `match` at `{at}` on both sides"));
+        };
+        let one_more = |short: &[String], long: &[String]| long.len() == short.len() + 1 && (0..long.len()).any(|skip| {
+            let mut rest = long.to_vec();
+            rest.remove(skip);
+            rest == short
+        });
+        let exact = match claim.op.as_str() {
+            "add-arm" => one_more(&old, &new),
+            "remove-arm" => one_more(&new, &old),
+            _ => {
+                let (mut a, mut b) = (old.clone(), new.clone());
+                a.sort();
+                b.sort();
+                a == b && old != new
+            }
+        };
+        if !exact {
+            return Outcome::refuted(format!("the arms of the `match` changed in another way than `{}`: claim the other changes on their own", claim.op));
+        }
     }
     let _ = after;
     texts(context, &explains.clone(), Outcome::verified("shape", explains))
@@ -788,6 +975,10 @@ fn check_wrap(context: &Context, claim: &Claim, wrap: bool) -> Outcome {
         }
     }
     let _ = old_ws;
+    let count = claim.args.get("count").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
+    if count.is_some_and(|count| count as usize != moved.len()) {
+        return Outcome::refuted(format!("`count` is {}, but {} statements moved", count.unwrap_or(0), moved.len()));
+    }
     if moved != inner || moved.is_empty() {
         return Outcome::refuted("the statements inside the new block are not the moved statements");
     }
@@ -809,6 +1000,20 @@ fn check_neutral_region(context: &Context, claim: &Claim) -> Outcome {
     if explains.iter().any(|&index| context.edits[index].view != semilla_core::View::Syntax) {
         return Outcome::refuted("the region has changes outside the function body");
     }
+    // `extract-variable name`: the region has a new `let` with that name.
+    if claim.op == "extract-variable" {
+        let name = claim.arg_str("name").unwrap_or("");
+        let named = explains.iter().any(|&i| {
+            let edit = &context.edits[i];
+            edit.node_after == Some("let") && edit.text_after.as_deref().is_some_and(|text| {
+                let words: Vec<&str> = text.split(' ').collect();
+                words.first() == Some(&"let") && (words.get(1) == Some(&name) || (words.get(1) == Some(&"mut") && words.get(2) == Some(&name)))
+            })
+        });
+        if !named {
+            return Outcome::refuted(format!("the region has no new `let {name}`"));
+        }
+    }
     let outcome = texts(context, &explains.clone(), Outcome::verified("shape", explains));
     body_proof(context, &at.item, outcome)
 }
@@ -816,7 +1021,7 @@ fn check_neutral_region(context: &Context, claim: &Claim) -> Outcome {
 /// Expression ops that match one edit at the anchor (or one level below it).
 fn check_expression(context: &Context, claim: &Claim, shape: impl Fn(&Edit, &Edit) -> bool) -> Outcome {
     let at = claim.at.as_ref().unwrap();
-    let explains: Vec<usize> = edits_inside(context, at, false).into_iter().filter(|&i| at.depth_to(context.edits[i].before.as_ref().unwrap()).is_some_and(|d| d <= 1)).collect();
+    let explains: Vec<usize> = edits_inside(context, at, false).into_iter().filter(|&i| context.edits[i].before.as_ref().is_some_and(|before| at.depth_to(before).is_some_and(|d| d <= 1))).collect();
     let all_inside = edits_inside(context, at, false);
     if all_inside.is_empty() {
         return match semilla_syntax::resolve_node(context.before, at) {
@@ -880,20 +1085,78 @@ fn add_effect(context: &Context, at: &Anchor, outcome: &mut Outcome) {
             semilla_syntax::resolve_node(context.after, &current).map(|n| n.text.clone())
         });
     let (Some(before), Some(after)) = (before, after) else { return };
+    // A const with a literal value is not a free variable: put its value in the condition, so that
+    // the counterexample is a real input.
+    let (before, after) = (with_const_values(context.before, &before), with_const_values(context.after, &after));
     let types = local_types(context.before, &condition.item);
-    if let Some(check) = context.exprs.classify(&before, &after, &types) {
-        outcome.effect = Some(check.effect);
-        outcome.witness = check.witness;
-        // `narrow`, `widen`, and `negate` change which branch runs. `unrelated` can be an
-        // equivalence that the solver cannot see (method calls): the MIR decides the class.
+    // A plain negation (`C` to `!(C)`) is `negate` by its syntax. The solver is not necessary, so
+    // the label does not change with the terms of the condition.
+    let check = match plain_negation(&before, &after) {
+        true => Some(crate::EffectCheck { effect: Effect::Negate, witness: None }),
+        false => context.exprs.classify(&before, &after, &types),
+    };
+    if let Some(check) = check {
+        // The effect is a hint for the reviewer, not a proof (design 8.8.1). Only a definite
+        // answer shows: `narrow`, `widen`, and `negate` change which branch runs. `equivalent`
+        // does not show: only the MIR proves that a body has no change. `unrelated` does not
+        // show: it can be an equivalence that the solver cannot see (method calls, floats).
         match check.effect {
             Effect::Equivalent => outcome.class = Some(Class::Neutral),
-            Effect::Narrow | Effect::Widen | Effect::Negate => outcome.class = Some(Class::ControlFlow),
+            Effect::Narrow | Effect::Widen | Effect::Negate => {
+                outcome.class = Some(Class::ControlFlow);
+                outcome.effect = Some(check.effect);
+                outcome.witness = check.witness;
+            }
             Effect::Unrelated => {}
         }
     }
     outcome.before = Some(before);
     outcome.after = Some(after);
+}
+
+/// True if one side of a condition change is the `!` of the other side (`C` and `!(C)`), by the
+/// tokens. Parentheses around a side are not a difference.
+fn plain_negation(before: &str, after: &str) -> bool {
+    fn bare(mut expr: syn::Expr) -> syn::Expr {
+        loop {
+            expr = match expr {
+                syn::Expr::Paren(inner) => *inner.expr,
+                syn::Expr::Group(inner) => *inner.expr,
+                other => return other,
+            };
+        }
+    }
+    let side = |text: &str| syn::parse_str::<syn::Expr>(text).ok().map(bare);
+    let (Some(before), Some(after)) = (side(before), side(after)) else { return false };
+    let text = |expr: &syn::Expr| quote::ToTokens::to_token_stream(expr).to_string();
+    let negates = |outer: &syn::Expr, inner: &syn::Expr| match outer {
+        syn::Expr::Unary(syn::ExprUnary { op: syn::UnOp::Not(_), expr, .. }) => text(&bare((**expr).clone())) == text(inner),
+        _ => false,
+    };
+    negates(&after, &before) || negates(&before, &after)
+}
+
+/// For the tests: [`with_const_values`].
+#[doc(hidden)]
+pub fn const_values_for_tests(workspace: &Workspace, text: &str) -> String {
+    with_const_values(workspace, text)
+}
+
+/// Replaces each name of a const with a literal value (`DAILY_LIMIT` → `50_000`) in a token text.
+fn with_const_values(workspace: &Workspace, text: &str) -> String {
+    let values: BTreeMap<String, String> = workspace
+        .items
+        .values()
+        .filter(|item| item.kind == semilla_syntax::ItemKind::Const)
+        .filter_map(|item| {
+            let item_const = syn::parse_str::<syn::ItemConst>(&item.text).ok()?;
+            matches!(item_const.expr.as_ref(), syn::Expr::Lit(_)).then(|| (item_const.ident.to_string(), quote::ToTokens::to_token_stream(&item_const.expr).to_string()))
+        })
+        .collect();
+    if values.is_empty() {
+        return text.to_string();
+    }
+    text.split(' ').map(|word| values.get(word).cloned().unwrap_or_else(|| word.to_string())).collect::<Vec<_>>().join(" ")
 }
 
 /// The types of the parameters and the annotated `let` variables of a function.
@@ -907,6 +1170,29 @@ pub fn local_types(workspace: &Workspace, item: &str) -> BTreeMap<String, String
                     types.insert(ident.ident.to_string(), quote::ToTokens::to_token_stream(&typed.ty).to_string().replace(' ', ""));
                 }
             }
+        }
+    }
+    // B3: the fields of a parameter whose type is a struct of the crate (`account.cents: u64`),
+    // so that the SMT check knows the integer width of a field read.
+    let krate = item.path.split("::").next().unwrap_or("");
+    let params: Vec<(String, String)> = types.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (name, ty) in params {
+        let base = ty.trim_start_matches('&').trim_start_matches("mut").trim_start_matches('&');
+        if base.is_empty() || !base.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ':') {
+            continue;
+        }
+        let last = base.rsplit("::").next().unwrap_or(base);
+        let structs: Vec<&semilla_syntax::Item> = workspace.items.values().filter(|i| i.kind == semilla_syntax::ItemKind::Struct && i.path.starts_with(&format!("{krate}::")) && i.path.rsplit("::").next() == Some(last)).collect();
+        let [owner] = structs.as_slice() else { continue };
+        let prefix = format!("{}.", owner.path);
+        for field in workspace.items.values().filter(|i| i.kind == semilla_syntax::ItemKind::Field && i.path.starts_with(&prefix)) {
+            let field_name = &field.path[prefix.len()..];
+            if field_name.contains('.') || field_name.contains("::") {
+                continue;
+            }
+            let field_ty = field.signature.replace(' ', "");
+            types.entry(format!("{name} . {field_name}")).or_insert_with(|| field_ty.clone());
+            types.entry(format!("{name}.{field_name}")).or_insert(field_ty);
         }
     }
     if let Some(body) = &item.body {
@@ -969,7 +1255,12 @@ fn check_wrap_expression(context: &Context, claim: &Claim, wrap: bool) -> Outcom
         let outer_kind = if wrap { edit.node_after } else { edit.node_before };
         let outer_attr = if wrap { &edit.attr_after } else { &edit.attr_before };
         let wraps = outer.contains(inner.as_str()) && outer.len() > inner.len() && matches!(outer_kind, Some("call" | "method_call" | "ref" | "try" | "cast" | "struct" | "unary"));
-        wraps && method.as_ref().is_none_or(|m| outer_kind == Some("method_call") && outer_attr.as_deref() == Some(m.as_str()))
+        // `wrap-expression with`: the wrapper is the named call, operator, or method.
+        let named = claim.arg_str("with").is_none_or(|with| {
+            let with = with.trim();
+            outer.starts_with(&format!("{with} (")) || outer.starts_with(&format!("{with} ")) || (with == "?" && outer.ends_with(" ?")) || outer_attr.as_deref() == Some(with.trim_start_matches('.'))
+        });
+        wraps && named && method.as_ref().is_none_or(|m| outer_kind == Some("method_call") && outer_attr.as_deref() == Some(m.as_str()))
     })
 }
 
@@ -1099,14 +1390,18 @@ fn normalize_expr(text: &str) -> Option<String> {
 
 /// True if an anchor is in an item or in one of its members.
 fn in_item(anchor: Option<&Anchor>, item: &str) -> bool {
-    anchor.is_some_and(|anchor| anchor.item == item || anchor.item.starts_with(&format!("{item}::")))
+    anchor.is_some_and(|anchor| anchor.item == item || is_child(&anchor.item, item))
 }
 
 /// True if an edit is the member list of the impl that owns `item` (a new or removed method).
 fn is_owner_members(edit: &Edit, item: &str) -> bool {
     edit.kind == EditKind::Members && item.contains("::") && {
         let owner = item.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
-        edit.anchor().is_some_and(|anchor| anchor.item.ends_with(&format!("impl {}", last_segment(owner))) || anchor.item.contains(&format!("impl {owner}")))
+        let owner = without_twin(owner);
+        edit.anchor().is_some_and(|anchor| {
+            let impl_path = without_twin(&anchor.item);
+            impl_path.ends_with(&format!("impl {}", last_segment(owner))) || impl_path.contains(&format!("impl {owner}"))
+        })
     }
 }
 
@@ -1132,7 +1427,13 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
         .map(|(index, _)| index)
         .collect();
     if explains.is_empty() {
-        return Outcome::new(ClaimStatus::Empty);
+        let mut outcome = Outcome::new(ClaimStatus::Empty);
+        // With `new`, the name map pairs the old and the new item. Equal text means a pure move or
+        // rename, which is an identity claim, not a rewrite.
+        if new != at.item {
+            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Claim `move-item` (another module or crate) or `rename` in its own step.", at.item));
+        }
+        return outcome;
     }
     let mut outcome = Outcome::verified("rewrite", explains);
     outcome.before = Some(old_item.source.clone());
@@ -1145,9 +1446,6 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
     };
     outcome
 }
-
-/// The prefixes of the external APIs that `no-io` forbids.
-pub const IO_PREFIXES: &[&str] = &["std::fs::", "std::io::", "std::net::", "std::process::", "std::env::", "std::os::", "std::thread::", "tokio::", "async_std::", "reqwest::", "hyper::"];
 
 /// An item and the local items that it calls, directly or indirectly (from the syntax calls).
 pub fn reach(calls: &BTreeMap<String, BTreeSet<String>>, item: &str) -> BTreeSet<String> {
@@ -1183,6 +1481,76 @@ pub fn item_panic_sites(item: &semilla_syntax::Item) -> Vec<String> {
     sites
 }
 
+/// The answer of [`live_call`].
+enum LiveCall {
+    /// A block that the test can reach has a call path to the function.
+    Found,
+    /// The MIR has a call path, but not through the reachable blocks.
+    Dead,
+    /// The MIR has no call path.
+    None,
+    /// The MIR has no body of the test.
+    NoTest,
+}
+
+/// Finds a call path from the test item `test` to the item `target` in the MIR (batch 5f, A2).
+///
+/// The walk starts at the body of the test in each target that has it. It follows the live
+/// callees of each body: the calls in the blocks that the start block reaches after the constant
+/// conditions fold. The driver puts the calls of a closure in the body that makes the closure.
+/// A callee that is not in the same target is a function of another crate of the workspace.
+fn live_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &str) -> LiveCall {
+    // The body of an item: a body with no other body of the item above it (a nested function
+    // has its own calls).
+    let top = |item: &str, name: &str| facts.get(item).is_some_and(|f| !f.live.iter().any(|(other, _, _)| name.starts_with(&format!("{other}::"))));
+    let mut bodies: BTreeMap<(&str, &str), Vec<&[String]>> = BTreeMap::new();
+    let mut items: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (item, found) in facts {
+        for (name, target, live) in &found.live {
+            bodies.entry((target.as_str(), name.as_str())).or_default().push(live.as_slice());
+            targets.entry(name.as_str()).or_default().insert(target.as_str());
+            if top(item, name) {
+                items.insert(name.as_str(), item.as_str());
+            }
+        }
+    }
+    let Some(start) = facts.get(test) else { return LiveCall::NoTest };
+    let mut todo: Vec<(&str, &str)> = start.live.iter().filter(|(name, _, _)| top(test, name)).map(|(name, target, _)| (target.as_str(), name.as_str())).collect();
+    if todo.is_empty() {
+        return LiveCall::NoTest;
+    }
+    let mut seen: BTreeSet<(&str, &str)> = BTreeSet::new();
+    while let Some(at) = todo.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        for callee in bodies.get(&at).into_iter().flatten().flat_map(|live| live.iter()) {
+            if callee == target || items.get(callee.as_str()) == Some(&target) {
+                return LiveCall::Found;
+            }
+            if bodies.contains_key(&(at.0, callee.as_str())) {
+                todo.push((at.0, callee.as_str()));
+            } else {
+                todo.extend(targets.get(callee.as_str()).into_iter().flatten().map(|other| (*other, callee.as_str())));
+            }
+        }
+    }
+    // The call graph of the MIR with each call, also the calls in code that cannot run.
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut todo = vec![test];
+    while let Some(item) = todo.pop() {
+        if !seen.insert(item) {
+            continue;
+        }
+        if item == target {
+            return LiveCall::Dead;
+        }
+        todo.extend(facts.get(item).into_iter().flat_map(|f| f.callees.iter().map(String::as_str)));
+    }
+    LiveCall::None
+}
+
 /// The property claims (design section 21.4): facts about the code after the step.
 fn check_property(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
@@ -1203,73 +1571,286 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
         }
         text
     };
-    let mut outcome = match claim.op.as_str() {
+    // The scope of the property (design 25): each local body that can run, with the trait
+    // impls and the `Drop` impls that the code of another crate runs.
+    let found = context.facts.map(|facts| (facts, crate::scope::scope(&at.item, &reached, facts, context.after)));
+    let quoted = |found: &[String]| list(&found.iter().map(|path| format!("`{path}`")).collect::<Vec<_>>());
+    let outcome = match claim.op.as_str() {
         "no-unsafe" => {
-            let found: Vec<String> = reached
-                .iter()
-                .filter_map(|path| context.after.items.get(path))
-                .filter(|item| crate::hints::words(&item.text).contains(&"unsafe"))
-                .map(|item| item.path.clone())
-                .collect();
-            if found.is_empty() { Outcome::verified("syntax", Vec::new()) } else { Outcome::refuted(format!("unsafe code in {}", list(&found))) }
+            let unsafe_in = |items: &BTreeSet<String>| -> Vec<String> {
+                items.iter().filter_map(|path| context.after.items.get(path)).filter(|item| crate::hints::words(&item.text).contains(&"unsafe")).map(|item| item.path.clone()).collect()
+            };
+            let bad = unsafe_in(found.as_ref().map(|(_, scope)| &scope.items).unwrap_or(&reached));
+            if !bad.is_empty() {
+                return Outcome::refuted(format!("unsafe code in {}", list(&bad)));
+            }
+            let Some((facts, scope)) = &found else {
+                return Outcome::new(ClaimStatus::Pending { reason: "the trait impls and the `Drop` impls that can run come from the MIR in phase 2".into() });
+            };
+            let mut outcome = Outcome::verified(if scope.gaps.is_empty() { "mir" } else { "partial" }, Vec::new());
+            outcome.after = Some(format!("no `unsafe` in the local code that can run; {}; Semilla does not look for `unsafe` in the code of other crates", scope.text(facts, &[])));
+            return outcome;
         }
         "no-panic" => {
-            let found: Vec<String> = reached.iter().filter_map(|path| context.after.items.get(path)).flat_map(item_panic_sites).collect();
-            if found.is_empty() { Outcome::verified("syntax", Vec::new()) } else { Outcome::refuted(format!("explicit panic sites: {}", list(&found))) }
-        }
-        "tested-by" => {
-            let test = claim.arg_str("test").unwrap();
-            let path = if context.after.items.contains_key(test) { test.to_string() } else {
-                // A last name: the test items of the same crate with that name.
-                let krate = at.item.split("::").next().unwrap_or("");
-                match context.after.items.values().filter(|i| i.test && i.path.starts_with(&format!("{krate}::")) && last_segment(&i.path) == test).map(|i| i.path.clone()).collect::<Vec<_>>().as_slice() {
-                    [one] => one.clone(),
-                    [] => return Outcome::malformed(format!("no test `{test}` after the step")),
-                    _ => return Outcome::malformed(format!("more than one test is named `{test}`; use the full path")),
-                }
-            };
-            if !context.after.items.get(&path).is_some_and(|i| i.test) {
-                return Outcome::malformed(format!("`{path}` is not a test"));
+            let sites_in = |items: &BTreeSet<String>| -> Vec<String> { items.iter().filter_map(|path| context.after.items.get(path)).flat_map(item_panic_sites).collect() };
+            let explicit = sites_in(found.as_ref().map(|(_, scope)| &scope.items).unwrap_or(&reached));
+            if !explicit.is_empty() {
+                return Outcome::refuted(format!("explicit panic sites: {}", list(&explicit)));
             }
-            if reach(context.calls, &path).contains(&at.item) {
-                let mut outcome = Outcome::verified("graph", Vec::new());
-                outcome.after = Some(format!("the test `{path}` calls `{}`", at.item));
-                return outcome;
-            } else {
-                Outcome::refuted(format!("the test `{path}` does not call `{}`", at.item))
-            }
-        }
-        "no-io" | "calls-only" => {
-            let Some(facts) = context.facts else {
-                return Outcome::new(ClaimStatus::Pending { reason: "the external calls come from the MIR in the background check (phase 2)".into() });
+            // The implicit panic sites are MIR `Assert` terminators: a division, an index, an
+            // overflow check. They come from phase 2.
+            let Some((facts, scope)) = &found else {
+                return Outcome::new(ClaimStatus::Pending { reason: "the implicit panic sites (division, bounds, overflow) come from the MIR in phase 2".into() });
             };
-            // The MIR knows the real local calls: follow them too.
-            let mut items = reached.clone();
-            let mut todo: Vec<String> = items.iter().cloned().collect();
-            while let Some(current) = todo.pop() {
-                for callee in facts.get(&current).map(|f| f.callees.clone()).unwrap_or_default() {
-                    if items.insert(callee.clone()) {
-                        todo.push(callee);
+            let mut sites: Vec<String> = Vec::new();
+            for item in &scope.items {
+                let Some(item_facts) = facts.get(item) else { continue };
+                let calls = item_facts.externals.iter().filter(|path| is_panic_call(path)).map(|path| format!("a call to `{path}`"));
+                for kind in item_facts.panics.iter().cloned().chain(calls) {
+                    // A body can be in more than one target (the lib and its test build).
+                    let site = format!("{kind} {}", scope.place(item));
+                    if !sites.contains(&site) {
+                        sites.push(site);
                     }
                 }
             }
-            let externals: BTreeSet<String> = items.iter().filter_map(|item| facts.get(item)).flat_map(|f| f.externals.iter().cloned()).collect();
-            let allowed = claim.arg_list("calls");
-            let bad: Vec<String> = externals
-                .into_iter()
-                .filter(|path| {
-                    let plain = path.trim_start_matches('<');
-                    if claim.op == "no-io" { IO_PREFIXES.iter().any(|prefix| plain.starts_with(prefix)) } else { !allowed.iter().any(|prefix| plain.starts_with(prefix.as_str())) }
-                })
-                .collect();
-            if bad.is_empty() { Outcome::verified("mir", Vec::new()) } else { Outcome::refuted(format!("external calls: {}", list(&bad))) }
+            if !sites.is_empty() {
+                let overflow = sites.iter().any(|site| site.starts_with("overflow"));
+                let note = if overflow { " (the checked build is the dev profile of the tree: it has overflow checks)" } else { "" };
+                return Outcome::refuted(format!("implicit panic sites: {}{note}", list(&sites)));
+            }
+            // A function of another crate can panic. Semilla does not examine it.
+            let externals: Vec<String> = scope.externals.keys().cloned().collect();
+            let mut more = Vec::new();
+            if !externals.is_empty() {
+                more.push(format!("{} call(s) to other crates, and they can panic: {}", externals.len(), quoted(&externals)));
+            }
+            if !scope.std_drops.is_empty() {
+                more.push(format!("the destructors of {}", quoted(&scope.std_drops.keys().cloned().collect::<Vec<_>>())));
+            }
+            let partial = !more.is_empty() || !scope.gaps.is_empty();
+            let mut outcome = Outcome::verified(if partial { "partial" } else { "mir" }, Vec::new());
+            let start = if partial { "only partly verified: no panic site in the local code that can run" } else { "no panic site in the code that can run: no explicit panic, no MIR assert (division, bounds, overflow in the dev build), and no call to another crate" };
+            outcome.after = Some(format!("{start}; {}", scope.text(facts, &more)));
+            return outcome;
+        }
+        "tested-by" => {
+            fn attr_path(attr: &str) -> String {
+                let inner = attr.trim_start_matches('#').trim_start().trim_start_matches('[');
+                inner.split(['(', ']', '=']).next().unwrap_or("").replace(' ', "")
+            }
+            fn has_test_attr(item: &semilla_syntax::Item) -> bool {
+                item.kind == semilla_syntax::ItemKind::Fn && item.attrs.iter().any(|attr| attr_path(attr).rsplit("::").next() == Some("test"))
+            }
+            let test = claim.arg_str("test").unwrap();
+            let path = if context.after.items.contains_key(test) { test.to_string() } else {
+                // A last name: one test of the same crate with that name, or one test of the
+                // workspace with that name (trial 4, D10).
+                let krate = at.item.split("::").next().unwrap_or("");
+                let named: Vec<&String> = context.after.items.values().filter(|i| has_test_attr(i) && last_segment(&i.path) == test).map(|i| &i.path).collect();
+                let local: Vec<&String> = named.iter().copied().filter(|path| path.starts_with(&format!("{krate}::"))).collect();
+                match (local.as_slice(), named.as_slice()) {
+                    ([one], _) | (_, [one]) => one.to_string(),
+                    (_, []) => return Outcome::malformed(format!("no test `{test}` in the workspace after the step")),
+                    _ => return Outcome::malformed(format!("more than one test is named `{test}`: {}. Use the full path", quoted(&named.iter().map(|path| path.to_string()).collect::<Vec<_>>()))),
+                }
+            };
+            // A2 (trial 3, A10): the named function must be a test that runs: it has `#[test]`
+            // (or a test attribute of a test framework) and no `#[ignore]`. A helper function in
+            // a test module is not a test.
+            let Some(item) = context.after.items.get(&path).filter(|i| i.kind == semilla_syntax::ItemKind::Fn) else {
+                return Outcome::malformed(format!("`{path}` is not a test: it is not a function"));
+            };
+            if !has_test_attr(item) {
+                return Outcome::malformed(format!("`{path}` is not a test: it has no `#[test]` attribute, so `cargo test` does not run it"));
+            }
+            if item.attrs.iter().any(|attr| attr_path(attr) == "ignore" || (attr_path(attr) == "cfg_attr" && attr.contains("ignore"))) {
+                return Outcome::malformed(format!("the test `{path}` has `#[ignore]`, so it does not run; remove `#[ignore]`, or name a test that runs"));
+            }
+            let in_syntax = reach(context.calls, &path).contains(&at.item);
+            // 5f, A2: the call must be in code that the test can reach. The MIR of the test
+            // gives the calls in the blocks that the start block reaches after the constant
+            // conditions fold (`if false { f() }` has no such call).
+            let Some(facts) = context.facts else {
+                if !in_syntax {
+                    return Outcome::refuted(format!("the test `{path}` does not call `{}`", at.item));
+                }
+                return Outcome::new(ClaimStatus::Pending { reason: "the reachable calls of the test come from the MIR in the background check (phase 2)".into() });
+            };
+            match live_call(facts, &path, &at.item) {
+                LiveCall::Found => {
+                    let mut outcome = Outcome::verified("mir", Vec::new());
+                    outcome.after = Some(format!("the test `{path}` has a reachable call to `{}`. Semilla does not run the test and does not check what the test asserts.", at.item));
+                    return outcome;
+                }
+                LiveCall::NoTest => Outcome::refuted(format!("the compiler gives no body for the test `{path}` (a condition such as `#[cfg(…)]` can remove it), so Semilla cannot show a reachable call to `{}`", at.item)),
+                LiveCall::Dead => Outcome::refuted(format!("the test `{path}` has a call to `{}` only in code that cannot run", at.item)),
+                LiveCall::None if in_syntax => Outcome::refuted(format!("the test `{path}` has no reachable direct call to `{}`. Semilla follows the direct calls and the closures of the test. It does not follow a call through a trait object or a function pointer", at.item)),
+                LiveCall::None => Outcome::refuted(format!("the test `{path}` does not call `{}`", at.item)),
+            }
+        }
+        "no-io" | "calls-only" => {
+            // A4: each entry of `calls` is a path of full segments. An empty entry or an entry
+            // that is not a path allows nothing clear: the claim is malformed.
+            let mut allowed: Vec<String> = Vec::new();
+            if claim.op == "calls-only" {
+                let entries: Vec<String> = match claim.args.get("calls") {
+                    Some(serde_json::Value::Array(values)) => values.iter().map(|value| value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string())).collect(),
+                    Some(serde_json::Value::String(value)) => value.split(',').map(|part| part.trim().to_string()).collect(),
+                    Some(other) => vec![other.to_string()],
+                    None => Vec::new(),
+                };
+                for entry in entries {
+                    let path = entry.strip_suffix("::").unwrap_or(&entry);
+                    let valid = !path.is_empty() && path.split("::").all(|segment| !segment.is_empty() && !segment.starts_with(|c: char| c.is_ascii_digit()) && segment.chars().all(|c| c.is_alphanumeric() || c == '_'));
+                    if !valid {
+                        return Outcome::malformed(format!("the entry `{entry}` of `calls` is not a path. Each entry is a path of full segments, for example `core` or `std::iter`. It allows the path itself and each path below it."));
+                    }
+                    allowed.push(path.to_string());
+                }
+            }
+            let Some((facts, scope)) = &found else {
+                return Outcome::new(ClaimStatus::Pending { reason: "the external calls come from the MIR in the background check (phase 2)".into() });
+            };
+            // `calls-only`: each path of the printed name (the type and the trait of
+            // `<T as Trait>::f`, or the path of the function) must be below an allowed entry.
+            // The printed path can be a re-export (`std::iter::Iterator::sum` is a function of
+            // `core`). An entry can name the one path or the other: they are the same function.
+            let allows = |entries: &[String], printed: &str, def: &str| calls_allow(entries, printed) || (!def.is_empty() && calls_allow(entries, def));
+            let mut bad: Vec<String> = Vec::new();
+            let mut unknown: Vec<String> = Vec::new();
+            // `calls-only`: the entries that cover the calls and the drops outside the list.
+            let mut missing: Option<BTreeSet<String>> = Some(BTreeSet::new());
+            for (printed, (krate, def, item)) in &scope.externals {
+                if claim.op == "calls-only" {
+                    // `core` and `alloc` are always allowed (design 26.3). The crate that defines
+                    // the function decides, as for `no-io`: a re-export in `std` changes nothing.
+                    if matches!(krate.as_str(), "core" | "alloc") {
+                        continue;
+                    }
+                    if !allows(&allowed, printed, def) {
+                        bad.push(format!("`{printed}` {}", scope.place(item)));
+                        let entries = calls_entries(printed);
+                        match (&mut missing, entries.is_empty()) {
+                            (Some(missing), false) => missing.extend(entries),
+                            _ => missing = None,
+                        }
+                    }
+                    continue;
+                }
+                match crate::scope::io_class(krate, def) {
+                    crate::scope::Io::No => {}
+                    crate::scope::Io::Yes => bad.push(format!("`{printed}` {}", scope.place(item))),
+                    crate::scope::Io::NotExamined => unknown.push(printed.clone()),
+                }
+            }
+            // A drop of a value of a `std` type runs the code of `std`: a `File` closes.
+            for (ty, item) in &scope.std_drops {
+                let fine = if claim.op == "calls-only" { allowed.iter().any(|entry| crate::scope::has_prefix(ty, entry)) } else { crate::scope::io_class("std", ty) == crate::scope::Io::No };
+                if !fine {
+                    // D9: a type that only a call gives to generic code has the call as its
+                    // cause. The body does not drop a value of it.
+                    match scope.std_drop_calls.get(ty).filter(|_| !scope.std_drop_real.contains(ty)) {
+                        Some((call, item)) => bad.push(format!("a call of `{call}` with the type `{ty}` {} (the call can run the code of this type of `std`: a trait impl or the destructor)", scope.place(item))),
+                        None => bad.push(format!("a drop of a value of `{ty}` {}", scope.place(item))),
+                    }
+                    if let Some(missing) = &mut missing {
+                        missing.insert(module_path(ty, false));
+                    }
+                }
+            }
+            if !bad.is_empty() && claim.op == "calls-only" {
+                let mut outcome = Outcome::refuted(format!("external calls outside the list of `calls`: {} (calls to `core` and `alloc` are always allowed)", list(&bad)));
+                // The complete list: the entries of the claim, and the missing entries. An entry
+                // below another entry adds nothing. The list must pass the same check as a list
+                // of the agent: if it does not, Semilla gives no list.
+                let mut complete = allowed.clone();
+                complete.extend(missing.unwrap_or_default());
+                let all = complete.clone();
+                let mut seen = BTreeSet::new();
+                complete.retain(|entry| seen.insert(entry.clone()) && !all.iter().any(|other| other != entry && crate::scope::has_prefix(entry, other)));
+                // An entry that covers no call and no drop adds nothing (batch 5l, B2): an
+                // entry of the agent for code that the function does not call, or for `core`.
+                complete.retain(|entry| {
+                    let covers = |path: &str| calls_heads(path).iter().any(|head| crate::scope::has_prefix(head, entry));
+                    scope.externals.iter().any(|(printed, (krate, def, _))| !matches!(krate.as_str(), "core" | "alloc") && (covers(printed) || covers(def)))
+                        || scope.std_drops.keys().any(|ty| crate::scope::has_prefix(ty, entry))
+                });
+                let covers = scope.externals.iter().all(|(printed, (krate, def, _))| matches!(krate.as_str(), "core" | "alloc") || allows(&complete, printed, def))
+                    && scope.std_drops.keys().all(|ty| complete.iter().any(|entry| crate::scope::has_prefix(ty, entry)));
+                if covers {
+                    outcome.complete_calls = complete;
+                }
+                return outcome;
+            }
+            if !bad.is_empty() {
+                return Outcome::refuted(format!("external calls: {} (a function of `std` outside the allow list of modules counts as I/O)", list(&bad)));
+            }
+            let mut more = Vec::new();
+            if !unknown.is_empty() {
+                more.push(format!("{} call(s) to crates that are not the standard library: {}", unknown.len(), quoted(&unknown)));
+            }
+            let partial = !more.is_empty() || !scope.gaps.is_empty();
+            let mut outcome = Outcome::verified(if partial { "partial" } else { "mir" }, Vec::new());
+            let what = if claim.op == "no-io" {
+                "no call to an I/O, process, network, or environment API in the code that can run (`core` and `alloc` do no I/O; `std` has an allow list of modules)"
+            } else {
+                "each call to another crate is below an allowed path; calls to `core` and `alloc` are always allowed"
+            };
+            outcome.after = Some(format!("{what}; {}", scope.text(facts, &more)));
+            return outcome;
         }
         other => Outcome::malformed(format!("the verifier has no checker for `{other}`")),
     };
-    if outcome.status.is_verified() {
-        let checked: Vec<String> = reached.iter().map(|path| format!("`{path}`")).collect();
-        let what = if checked.len() == 1 { "the function" } else { "the function and its local callees" };
-        outcome.after = Some(format!("{what}: {}", list(&checked)));
-    }
     outcome
 }
+
+/// The paths of a printed function name that `calls-only` compares: the type and the trait of
+/// `<T as Trait>::f`, or the path of the function.
+fn calls_heads(printed: &str) -> Vec<&str> {
+    match printed.strip_prefix('<').and_then(|rest| rest.split_once(" as ")) {
+        Some((ty, rest)) => [crate::scope::path_tokens(ty).first().copied(), crate::scope::path_tokens(rest).first().copied()].into_iter().flatten().filter(|token| token.contains("::")).collect(),
+        None => crate::scope::path_tokens(printed).first().copied().into_iter().collect(),
+    }
+}
+
+/// True when each compared path of `printed` is below an entry of `calls`.
+fn calls_allow(entries: &[String], printed: &str) -> bool {
+    let heads = calls_heads(printed);
+    !heads.is_empty() && heads.iter().all(|head| entries.iter().any(|entry| crate::scope::has_prefix(head, entry)))
+}
+
+/// The module path of a path. A type or a trait loses its name: `std::fs::File` gives `std::fs`.
+/// A function also loses its name first: `std::fs::File::open` and `std::fs::write` give
+/// `std::fs`. The crate always stays.
+fn module_path(path: &str, function: bool) -> String {
+    let mut segments: Vec<&str> = path.split("::").collect();
+    if function && segments.len() > 1 && segments.last().is_some_and(|last| !last.starts_with(|c: char| c.is_uppercase())) {
+        segments.pop();
+    }
+    while segments.len() > 1 && segments.last().is_some_and(|last| last.starts_with(|c: char| c.is_uppercase())) {
+        segments.pop();
+    }
+    segments.join("::")
+}
+
+/// The entries of `calls` that cover one external call: the shortest module path of each
+/// compared path. `<std::fs::File as std::io::Write>::write_all` gives `std::fs` and `std::io`.
+/// The result is empty when the printed name has no path to compare.
+fn calls_entries(printed: &str) -> Vec<String> {
+    let trait_form = printed.starts_with('<');
+    calls_heads(printed)
+        .into_iter()
+        .map(|head| {
+            // `std::f64::<impl f64>::sqrt`: the path before the impl block is a module.
+            let module = !trait_form && printed.strip_prefix(head).is_some_and(|rest| rest.starts_with("::<impl"));
+            if module { head.to_string() } else { module_path(head, !trait_form) }
+        })
+        .collect()
+}
+
+/// True for a call to a function of the standard library that panics.
+fn is_panic_call(path: &str) -> bool {
+    ["core::panicking::", "std::panicking::", "std::rt::panic", "std::rt::begin_panic", "core::panic::", "std::process::abort", "core::intrinsics::abort"].iter().any(|prefix| path.starts_with(prefix))
+}
+

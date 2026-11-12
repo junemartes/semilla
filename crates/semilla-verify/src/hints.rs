@@ -15,8 +15,27 @@ pub fn describe(edit: &Edit) -> String {
         EditKind::ItemAdded => format!("new {} `{}`", edit.attr_after.as_deref().unwrap_or("item"), edit.after.as_ref().map(|a| a.item.as_str()).unwrap_or("")),
         EditKind::ItemRemoved => format!("removed {} `{}`", edit.attr_before.as_deref().unwrap_or("item"), edit.before.as_ref().map(|a| a.item.as_str()).unwrap_or("")),
         EditKind::Visibility => format!("visibility: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-        EditKind::Signature => format!("signature: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-        EditKind::Docs => "doc comments or comments changed".to_string(),
+        EditKind::Signature => match edit.node_after.or(edit.node_before) {
+            Some("param") => {
+                let role = edit.anchor().and_then(|a| a.path.last()).map(|s| s.to_string()).unwrap_or_default();
+                let name = role.trim_start_matches("param[").trim_end_matches(']');
+                match (&edit.text_before, &edit.text_after) {
+                    (None, Some(new)) => format!("parameter `{name}` added: `{}`", short(&Some(new.clone()))),
+                    (Some(old), None) => format!("parameter `{name}` removed: `{}`", short(&Some(old.clone()))),
+                    _ => format!("parameter `{name}` changed: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+                }
+            }
+            Some("params") => format!("parameter order: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            Some("ret") => format!("return type: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            Some("generics") => format!("generics: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            Some("where") => format!("`where` clause: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            Some("qualifiers") => format!("qualifiers: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            // The view of the line is "signature" already.
+            _ => format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+        },
+        EditKind::Docs if crate::facts::doc_test_change(edit).is_some() => "doc test changed (a code block in a doc comment)".to_string(),
+        EditKind::Docs => "doc comments changed".to_string(),
+        EditKind::Comment => "a comment changed".to_string(),
         EditKind::Attrs => "attributes changed".to_string(),
         EditKind::Members if edit.anchor().is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) => "methods of the impl changed".to_string(),
         EditKind::Members => "fields or variants changed".to_string(),
@@ -24,24 +43,63 @@ pub fn describe(edit: &Edit) -> String {
         EditKind::Deleted => format!("removed statement: `{}`", short(&edit.text_before)),
         EditKind::Moved => format!("moved statement: `{}`", short(&edit.text_before)),
         EditKind::Modified | EditKind::Replaced => format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-        EditKind::FileAdded => format!("new file `{}`", edit.file.as_deref().unwrap_or("")),
-        EditKind::FileRemoved => format!("removed file `{}`", edit.file.as_deref().unwrap_or("")),
-        EditKind::FileChanged => format!("changed file `{}`", edit.file.as_deref().unwrap_or("")),
+        EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => {
+            let what = match edit.kind {
+                EditKind::FileAdded => "new",
+                EditKind::FileRemoved => "removed",
+                _ => "changed",
+            };
+            let note = edit.note.as_deref().map(|note| format!(" ({note})")).unwrap_or_default();
+            format!("{what} file `{}`{note}", edit.file.as_deref().unwrap_or(""))
+        }
     }
+}
+
+/// The arm op of a changed `match`: one new arm, one removed arm, or the same arms in another
+/// order. `None` for another change.
+fn arm_op(edit: &Edit) -> Option<&'static str> {
+    let arms = |text: &Option<String>| -> Option<Vec<String>> {
+        match syn::parse_str::<syn::Expr>(text.as_deref()?).ok()? {
+            syn::Expr::Match(m) => Some(m.arms.iter().map(|arm| quote::ToTokens::to_token_stream(arm).to_string().trim_end_matches(" ,").to_string()).collect()),
+            _ => None,
+        }
+    };
+    let (old, new) = (arms(&edit.text_before)?, arms(&edit.text_after)?);
+    let one_more = |short: &[String], long: &[String]| long.len() == short.len() + 1 && (0..long.len()).any(|skip| {
+        let mut rest = long.to_vec();
+        rest.remove(skip);
+        rest == short
+    });
+    if one_more(&old, &new) {
+        return Some("add-arm");
+    }
+    if one_more(&new, &old) {
+        return Some("remove-arm");
+    }
+    let (mut a, mut b) = (old.clone(), new.clone());
+    a.sort();
+    b.sort();
+    (a == b && old != new).then_some("move-arm")
 }
 
 /// The name of the op that most likely explains an edit.
 pub fn suggest(edit: &Edit) -> &'static str {
     let in_condition = edit.before.as_ref().is_some_and(|a| a.path.iter().any(|s| matches!(s, Segment::Role(r) if r == "cond" || r.ends_with(".guard"))));
+    let owner = edit.attr_after.as_deref().or(edit.attr_before.as_deref()).unwrap_or("");
+    if crate::facts::is_fact_edit(edit) {
+        return "no claim: Semilla derives this fact";
+    }
     match edit.kind {
         EditKind::ItemAdded => "add-item",
         EditKind::ItemRemoved => "remove-item",
-        EditKind::Visibility => "change-visibility",
+        EditKind::Visibility | EditKind::Attrs => "no claim: Semilla derives this fact",
         EditKind::Signature => "change-signature",
+        EditKind::Docs if crate::facts::doc_test_change(edit).is_some() => "no claim: Semilla derives this fact (a doc test is code)",
         EditKind::Docs => "edit-doc",
-        EditKind::Attrs => "change-attribute",
+        EditKind::Comment => "no claim: Semilla derives this fact (a comment is not code)",
         EditKind::Members if edit.anchor().is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) => "add-item (for the new or removed method)",
-        EditKind::Members => "add-struct-field",
+        EditKind::Members if owner == "trait" => "add-item (for the new or removed trait method), or rewrite-item",
+        EditKind::Members => "rewrite-item (no fact covers this member list)",
         EditKind::Inserted => match edit.node_after.unwrap_or("") {
             "let" => "add-let",
             "if" if edit.text_after.as_deref().is_some_and(|t| (t.contains("return") || t.contains("break") || t.contains("continue")) && !t.contains("else")) => "add-early-exit",
@@ -65,10 +123,10 @@ pub fn suggest(edit: &Edit) -> &'static str {
         EditKind::Replaced if edit.node_before == Some("pattern") && crate::checks::alternatives_added(edit.text_after.as_deref().unwrap_or(""), edit.text_before.as_deref().unwrap_or("")) => "remove-alternative",
         EditKind::Replaced if edit.node_before == Some("pattern") => "replace-pattern",
         EditKind::Replaced | EditKind::Modified if edit.node_before == Some("macro") && edit.node_after == Some("macro") => "replace-macro-input",
+        _ if edit.node_before == Some("match") && edit.node_after == Some("match") && arm_op(edit).is_some() => arm_op(edit).unwrap(),
         _ if edit.block_like => "a structured statement op (add-if, add-arm, wrap-statements, …)",
         EditKind::Replaced | EditKind::Modified => "replace-expression",
-        EditKind::FileChanged if edit.file.as_deref().is_some_and(|f| f.ends_with("Cargo.toml")) => "bump-dependency or edit-config",
-        EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => "edit-config",
+        EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => "no claim: Semilla derives this fact",
     }
 }
 
@@ -106,9 +164,6 @@ pub fn suggest_claims_with_renames(edits: &[Edit], owners: &[Option<usize>], ren
             }
             "move-statement" => {
                 args.insert("to".into(), edit.after.as_ref().map(|a| a.to_string()).unwrap_or_default().into());
-            }
-            "add-struct-field" => {
-                args.insert("field".into(), "?".into());
             }
             _ => {}
         }

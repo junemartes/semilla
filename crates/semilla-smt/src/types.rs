@@ -59,8 +59,13 @@ impl RustType {
                 bits: 32,
                 signed: false,
             },
-            "u64" | "usize" => RustType::Int {
+            "u64" => RustType::Int {
                 bits: 64,
+                signed: false,
+            },
+            // The width of a pointer is a property of the target.
+            "usize" => RustType::Int {
+                bits: crate::build::current().pointer_bits,
                 signed: false,
             },
             "u128" => RustType::Int {
@@ -79,8 +84,12 @@ impl RustType {
                 bits: 32,
                 signed: true,
             },
-            "i64" | "isize" => RustType::Int {
+            "i64" => RustType::Int {
                 bits: 64,
+                signed: true,
+            },
+            "isize" => RustType::Int {
+                bits: crate::build::current().pointer_bits,
                 signed: true,
             },
             "i128" => RustType::Int {
@@ -99,6 +108,10 @@ impl RustType {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeEnv {
     types: HashMap<String, RustType>,
+    /// The names with the type `usize` (false) or `isize` (true): the width is a property of
+    /// the target, so [`TypeEnv::get`] gives the width of the build configuration.
+    #[serde(default)]
+    pointer: HashMap<String, bool>,
 }
 
 impl TypeEnv {
@@ -112,6 +125,16 @@ impl TypeEnv {
         self.types.insert(normalize_key(name), ty);
     }
 
+    /// Sets the type of a variable or an atom from the source text of the type.
+    pub fn insert_text(&mut self, name: &str, text: &str) {
+        match text.trim() {
+            "usize" => self.pointer.insert(normalize_key(name), false),
+            "isize" => self.pointer.insert(normalize_key(name), true),
+            _ => self.pointer.remove(&normalize_key(name)),
+        };
+        self.insert(name, RustType::parse(text));
+    }
+
     /// Parses the source text of a type. See [`RustType::parse`].
     pub fn parse_type(text: &str) -> RustType {
         RustType::parse(text)
@@ -119,6 +142,9 @@ impl TypeEnv {
 
     /// Returns the type of a variable or an atom, or `Unknown`.
     pub fn get(&self, name: &str) -> RustType {
+        if let Some(signed) = self.pointer.get(name).or_else(|| self.pointer.get(&normalize_key(name))) {
+            return RustType::Int { bits: crate::build::current().pointer_bits, signed: *signed };
+        }
         self.types
             .get(name)
             .or_else(|| self.types.get(&normalize_key(name)))

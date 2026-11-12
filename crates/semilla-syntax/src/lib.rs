@@ -3,17 +3,19 @@
 //! - [`load`]: loads a Cargo workspace into the entity tree.
 //! - [`tree`]: the node tree inside an item.
 //! - [`diff`]: the syntax diff of two workspaces.
+//! - [`doc`]: the code part of a doc text (doc tests).
 //! - [`flow`]: flow views of functions.
 //! - [`graph`]: the workspace graph.
 
 pub mod diff;
+pub mod doc;
 pub mod flow;
 pub mod graph;
 pub mod load;
 pub mod tree;
 
 pub use diff::{Edit, EditKind, Renames, diff};
-pub use load::{CrateInfo, Item, ItemKind, Workspace};
+pub use load::{CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
 pub use tree::Node;
 
 use semilla_core::{Anchor, Segment};
@@ -60,8 +62,12 @@ pub fn resolve<'a>(workspace: &'a Workspace, anchor: &Anchor) -> Option<Resolved
     if anchor.path.is_empty() {
         return Some(Resolved::Item(item));
     }
-    let mut node = item.body.as_ref()?;
-    for segment in &anchor.path {
+    // A signature part: `item/sig/param[a]`.
+    let (mut node, path) = match &anchor.path[0] {
+        Segment::Role(role) if role == "sig" => (item.sig.as_ref()?, &anchor.path[1..]),
+        _ => (item.body.as_ref()?, &anchor.path[..]),
+    };
+    for segment in path {
         node = node.child(&segment_role(segment))?;
     }
     Some(Resolved::Node(item, node))
@@ -295,6 +301,147 @@ mod tests {
             assert!(kinds.contains(expected), "missing {expected}: {kinds:?}");
         }
         assert!(!edits.iter().any(|e| e.attr_after.as_deref() == Some("use")), "an unchanged use gives no edit");
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn summary(edits: &[Edit]) -> Vec<String> {
+        edits.iter().map(|e| format!("{:?} {}", e.kind, e.anchor().map(|a| a.to_string()).or(e.file.clone()).unwrap_or_default())).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_changed_file_gives_an_edit() {
+        let lib = "pub fn f() -> u32 {\n    1\n}\n";
+        let files = |binary: &[u8], orphan: &[u8], lib: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            write_files(dir.path(), &[("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("run.sh", "#!/bin/sh\necho hi\n"), ("build.rs", "fn main() {}\n")]);
+            std::fs::write(dir.path().join("logo.bin"), binary).unwrap();
+            std::fs::write(dir.path().join("src/orphan.rs"), orphan).unwrap();
+            dir
+        };
+        let old_dir = files(&[0, 1, 2, 0xff, 0xfe], b"pub fn g() {}\n", lib);
+        let new_dir = files(&[0, 1, 2, 0xff, 0xfe, 7], &[0xff, 0xfe, b'\n'], "pub fn f() -> u32 { 1 }\n");
+        set_mode(&new_dir.path().join("run.sh"), 0o755);
+        std::fs::write(new_dir.path().join("build.rs"), "fn main() { println!(\"x\"); }\n").unwrap();
+        let (old, new) = (Workspace::load(old_dir.path()).unwrap(), Workspace::load(new_dir.path()).unwrap());
+        let edits = diff(&old, &new, &Renames::default());
+        // The formatting change of the parsed file `src/lib.rs` gives no edit.
+        assert_eq!(summary(&edits), ["FileChanged build.rs", "FileChanged logo.bin", "FileChanged run.sh", "FileChanged src/orphan.rs"], "{edits:#?}");
+        let note = |file: &str| edits.iter().find(|e| e.file.as_deref() == Some(file)).and_then(|e| e.note.clone()).unwrap_or_default();
+        assert_eq!(note("logo.bin"), "binary file changed");
+        assert_eq!(note("run.sh"), "mode 100644 → 100755");
+        assert_eq!(note("src/orphan.rs"), "binary file changed", "a Rust file that the loader does not parse is a file");
+    }
+
+    #[test]
+    fn cfg_twins_get_distinct_paths() {
+        let src = |win: &str| {
+            format!(
+                "#[cfg(windows)]\npub fn sep() -> char {{\n    '{win}'\n}}\n\n#[cfg(not(windows))]\npub fn sep() -> char {{\n    '/'\n}}\n\npub fn other() {{}}\n\n#[cfg(unix)]\nmod imp {{\n    use std::fmt;\n    pub fn f() -> u32 {{ 1 }}\n}}\n#[cfg(windows)]\nmod imp {{\n    use std::fmt;\n    pub fn f() -> u32 {{ 2 }}\n}}\n\npub struct S;\nimpl S {{\n    pub fn a() {{}}\n}}\nimpl S {{\n    pub fn b() {{}}\n}}\n"
+            )
+        };
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &src("\\\\"))]);
+        let paths: Vec<&str> = old.items.keys().map(String::as_str).collect();
+        for expected in ["demo::sep#0", "demo::sep#1", "demo::other", "demo::imp#0", "demo::imp#1", "demo::imp#0::f", "demo::imp#1::f", "demo::imp#0::use#0", "demo::imp#1::use#0", "demo::impl S#0", "demo::impl S#1", "demo::S::a"] {
+            assert!(paths.contains(&expected), "missing {expected}: {paths:?}");
+        }
+        assert!(!paths.contains(&"demo::sep") && !paths.contains(&"demo::imp::f"), "{paths:?}");
+        assert_eq!(old.items["demo::sep#0"].line_start, 1);
+        assert_eq!(old.items["demo::sep#1"].line_start, 6);
+        assert_eq!(anchor_at(&old, "src/lib.rs", 3, None).unwrap().to_string(), "demo::sep#0/tail");
+
+        // A change in the first twin is an edit of the first twin.
+        let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &src(";"))]);
+        assert_eq!(summary(&diff(&old, &new, &Renames::default())), ["Replaced demo::sep#0/tail"]);
+
+        // A change in the second twin module is an edit of the second twin module.
+        let changed = src("\\\\").replace("    use std::fmt;\n    pub fn f() -> u32 { 2 }", "    pub fn f() -> u32 { 2 }");
+        let (_d3, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &changed)]);
+        assert_eq!(summary(&diff(&old, &new, &Renames::default())), ["ItemRemoved demo::imp#1::use#0"]);
+    }
+
+    #[test]
+    fn a_changed_impl_header_is_an_edit_of_the_impl() {
+        let before = "pub struct W<T> { pub inner: T }\nimpl<T: Clone> W<T> {\n    pub fn get(&self) -> T { self.inner.clone() }\n}\nimpl<T> std::fmt::Display for W<T> {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"w\") }\n}\n";
+        let after = "pub struct W<T> { pub inner: T }\nimpl<'a, T: Clone + std::fmt::Debug> W<T> {\n    pub fn get(&self) -> T { self.inner.clone() }\n}\nimpl<T: Copy> std::fmt::Display for W<T> {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"w\") }\n}\n";
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)]);
+        let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
+        assert!(old.items.contains_key("demo::W::get") && old.items.contains_key("demo::<W as std::fmt::Display>::fmt"), "{:?}", old.items.keys());
+        assert_eq!(summary(&diff(&old, &new, &Renames::default())), ["Signature demo::impl <W as std::fmt::Display>", "Signature demo::impl W"]);
+        // Two impls of one type with the same method name still have distinct paths.
+        let (_d3, two) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "pub struct W<T>(T);\nimpl W<u8> {\n    pub fn get(&self) {}\n}\nimpl W<u16> {\n    pub fn get(&self) {}\n}\n")]);
+        for path in ["demo::W::get#0", "demo::W::get#1", "demo::impl W#0", "demo::impl W#1"] {
+            assert!(two.items.contains_key(path), "missing {path}: {:?}", two.items.keys());
+        }
+    }
+
+    const TYPES: &str = "pub struct Account {\n    pub id: u32,\n    pub balance: u32,\n}\npub struct Pair(pub u32, pub u32);\npub enum Event {\n    Open,\n    Deposit(u32),\n    Close { reason: String },\n}\npub trait Price {\n    fn price(&self) -> u32;\n    fn label(&self) -> String {\n        String::from(\"item\")\n    }\n}\n";
+
+    #[test]
+    fn members_are_items() {
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", TYPES)]);
+        let kind = |path: &str| old.items.get(path).map(|item| item.kind);
+        assert_eq!(kind("demo::Account.balance"), Some(ItemKind::Field));
+        assert_eq!(kind("demo::Pair.1"), Some(ItemKind::Field));
+        assert_eq!(kind("demo::Event::Open"), Some(ItemKind::Variant));
+        assert_eq!(kind("demo::Event::Deposit.0"), Some(ItemKind::Field));
+        assert_eq!(kind("demo::Event::Close.reason"), Some(ItemKind::Field));
+        assert_eq!(kind("demo::Price::label"), Some(ItemKind::Fn));
+        assert!(old.items["demo::Price::price"].body.is_none() && old.items["demo::Price::label"].body.is_some());
+        assert_eq!(anchor_at(&old, "src/lib.rs", 3, None).unwrap().to_string(), "demo::Account.balance");
+        let edits = |after: &str| {
+            let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
+            summary(&diff(&old, &new, &Renames::default()))
+        };
+        // One aspect of one member gives one edit of that member, not a blob edit of its owner.
+        assert_eq!(edits(&TYPES.replace("pub balance: u32", "pub balance: u64")), ["Signature demo::Account.balance"]);
+        assert_eq!(edits(&TYPES.replace("pub balance: u32", "balance: u32")), ["Visibility demo::Account.balance"]);
+        assert_eq!(edits(&TYPES.replace("    pub balance: u32,\n", "    pub balance: u32,\n    pub created: u64,\n")), ["Members demo::Account", "ItemAdded demo::Account.created"]);
+        assert_eq!(edits(&TYPES.replace("Close { reason: String }", "Close { reason: String, code: u8 }")), ["Members demo::Event::Close", "ItemAdded demo::Event::Close.code"]);
+        assert_eq!(edits(&TYPES.replace("Deposit(u32)", "Deposit { n: u32 }")), ["Signature demo::Event::Deposit", "Members demo::Event::Deposit", "ItemRemoved demo::Event::Deposit.0", "ItemAdded demo::Event::Deposit.n"]);
+        assert_eq!(edits(&TYPES.replace("\"item\"", "\"thing\"")), ["Replaced demo::Price::label/tail/args[0]"]);
+        assert_eq!(edits(&TYPES.replace("fn price(&self) -> u32;", "fn price(&self, unit: u8) -> u32;")), ["Signature demo::Price::price/sig/param[unit]"]);
+        // A new order of the fields is an edit of the owner.
+        assert_eq!(edits(&TYPES.replace("    pub id: u32,\n    pub balance: u32,\n", "    pub balance: u32,\n    pub id: u32,\n")), ["Members demo::Account"]);
+    }
+
+    #[test]
+    fn inner_attributes_give_an_edit() {
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "pub mod m;\n"), ("src/m.rs", "pub fn f() {}\n")]);
+        let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "#![allow(dead_code)]\npub mod m;\n"), ("src/m.rs", "#![cfg(any())]\npub fn f() {}\n")]);
+        let edits = diff(&old, &new, &Renames::default());
+        assert_eq!(summary(&edits), ["Attrs demo", "Attrs demo::m"], "{edits:#?}");
+        assert_eq!(edits[1].text_after.as_deref(), Some("# ! [cfg (any ())]"));
+        assert_eq!(edits[1].file.as_deref(), Some("src/m.rs"));
+    }
+
+    #[test]
+    fn signature_parts_are_nodes() {
+        let src = "pub struct S;\nimpl S {\n    pub fn m(&self, a: u32) -> u32 { a }\n}\npub trait T {\n    fn t(&self) -> u32;\n}\npub fn f<X: Clone>(a: u32, b: &str) -> u32 where X: Copy { a }\n";
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", src)]);
+        let anchor: Anchor = "demo::f/sig/param[b]".parse().unwrap();
+        assert_eq!(resolve_node(&old, &anchor).unwrap().text, "b : & str");
+        let edits = |after: &str| {
+            let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
+            summary(&diff(&old, &new, &Renames::default()))
+        };
+        assert_eq!(edits(&src.replace("b: &str)", "b: &str, c: bool)")), ["Signature demo::f/sig/param[c]"]);
+        assert_eq!(edits(&src.replace("(a: u32, b: &str)", "(a: u32)")), ["Signature demo::f/sig/param[b]"]);
+        assert_eq!(edits(&src.replace("b: &str)", "b: String)")), ["Signature demo::f/sig/param[b]"]);
+        assert_eq!(edits(&src.replace("(a: u32, b: &str)", "(b: &str, a: u32)")), ["Signature demo::f/sig/params"]);
+        assert_eq!(edits(&src.replace("-> u32 where", "-> u64 where")), ["Signature demo::f/sig/ret"]);
+        assert_eq!(edits(&src.replace("<X: Clone>", "<X: Clone + Send>")), ["Signature demo::f/sig/generics"]);
+        assert_eq!(edits(&src.replace("where X: Copy", "where X: Copy + Send")), ["Signature demo::f/sig/where"]);
+        assert_eq!(edits(&src.replace("pub fn f", "pub async fn f")), ["Signature demo::f/sig/qualifiers"]);
+        assert_eq!(edits(&src.replace("pub fn m(&self", "pub fn m(&mut self")), ["Signature demo::S::m/sig/param[self]"]);
+        assert_eq!(edits(&src.replace("fn t(&self) -> u32;", "fn t(&self, x: u8) -> u32;")), ["Signature demo::T::t/sig/param[x]"]);
+        // Two parts change: two edits.
+        assert_eq!(edits(&src.replace("b: &str) -> u32 where", "b: String) -> u64 where")), ["Signature demo::f/sig/param[b]", "Signature demo::f/sig/ret"]);
     }
 
     use std::collections::BTreeSet;

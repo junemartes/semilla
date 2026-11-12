@@ -64,6 +64,7 @@ use serde::{Deserialize, Serialize};
 
 pub use semilla_core::report::Effect;
 
+pub mod build;
 mod encode;
 mod lower;
 mod solver;
@@ -264,6 +265,27 @@ pub fn classify_condition(
     after: &str,
     env: &TypeEnv,
 ) -> Result<EffectResult> {
+    let result = classify_one(solver, before, after, env)?;
+    if result.effect != Effect::Equivalent || result.panic_conditions_differ {
+        return Ok(result);
+    }
+    // "Equivalent" is a proof, and a proof must hold for each build configuration.
+    for other in &build::ALL[1..] {
+        let holds = build::with(*other, || classify_one(solver, before, after, env)).is_ok_and(|other| other.effect == Effect::Equivalent && !other.panic_conditions_differ);
+        if !holds {
+            return Ok(EffectResult::unrelated(format!("the two sides are equivalent in the check build, and there is no proof for a build with {other}"), result.query));
+        }
+    }
+    Ok(result)
+}
+
+/// [`classify_condition`] for the build configuration of this thread.
+fn classify_one(
+    solver: &Solver,
+    before: &str,
+    after: &str,
+    env: &TypeEnv,
+) -> Result<EffectResult> {
     let problem = match prepare(before, after, env, Top::Condition)? {
         Ok(problem) => problem,
         Err(reason) => return Ok(EffectResult::unrelated(reason, String::new())),
@@ -340,7 +362,17 @@ pub fn classify_condition(
 
     let (panic_conditions_differ, panic_witness) = match run.panic_difference()? {
         Ok(()) => (false, None),
-        Err(PanicDifference::Found(witness)) => (true, Some(witness)),
+        Err(PanicDifference::Found(witness)) => {
+            // B3: an input of an unknown integer type has no real width in the model, so the
+            // model is not an example. The text says that no example exists.
+            let unknown = run.problem.unknown_width_inputs();
+            if unknown.is_empty() {
+                (true, Some(witness))
+            } else {
+                notes.push(format!("no example of the panic difference: the integer type of {} is not known", unknown.join(", ")));
+                (true, None)
+            }
+        }
         Err(PanicDifference::Unknown(reason)) => {
             notes.push(format!(
                 "the solver did not show that the panic conditions are the same ({reason})"
@@ -394,6 +426,30 @@ pub fn check_rule(solver: &Solver, lhs: &str, rhs: &str, env: &TypeEnv) -> Resul
 }
 
 fn compare(
+    solver: &Solver,
+    before: &str,
+    after: &str,
+    env: &TypeEnv,
+    strict: bool,
+) -> Result<Equivalence> {
+    let result = compare_one(solver, before, after, env, strict)?;
+    // The check with `strict == false` is about the inputs with no panic in the check build. It
+    // is not a proof of equal behavior, and no caller uses it as one.
+    if !strict || !matches!(result, Equivalence::Proved { .. }) {
+        return Ok(result);
+    }
+    // A proof must hold for each build configuration.
+    for other in &build::ALL[1..] {
+        let holds = build::with(*other, || compare_one(solver, before, after, env, strict)).is_ok_and(|other| matches!(other, Equivalence::Proved { .. }));
+        if !holds {
+            return Ok(Equivalence::NotProved { reason: format!("the two sides are equal in the check build, and there is no proof for a build with {other}") });
+        }
+    }
+    Ok(result)
+}
+
+/// [`compare`] for the build configuration of this thread.
+fn compare_one(
     solver: &Solver,
     before: &str,
     after: &str,

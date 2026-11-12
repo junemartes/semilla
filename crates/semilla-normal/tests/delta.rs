@@ -60,14 +60,20 @@ fn delta_builds_reuse_only_fresh_crates() {
     write(&build.join("app_b/Cargo.toml"), "[package]\nname = \"app_b\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ncore_a = { path = \"../core_a\" }\n");
     write(&build.join("app_b/src/lib.rs"), "pub fn run(x: u32) -> u32 {\n    core_a::helper(x) * 2\n}\n");
 
-    run_cargo_check_delta(&build, "n0", &out, &target).unwrap_or_else(|e| panic!("{e:#}"));
+    // The trees of this test have no lock file. The checkout of a tree removes the lock file of
+    // the build before, and the sandbox lets cargo write only a lock file that Semilla made.
+    let check = |build: &Path| {
+        let _ = std::fs::remove_file(build.join("Cargo.lock"));
+        run_cargo_check_delta(build, "n0", &out, &target)
+    };
+    check(&build).unwrap_or_else(|e| panic!("{e:#}"));
     let (core_file, core_time) = record_file(&out, "core_a").expect("core_a records");
     let (_, app_time) = record_file(&out, "app_b").expect("app_b records");
 
     // 1. Change app_b only: core_a is fresh, and keeps its record file unchanged.
     std::thread::sleep(std::time::Duration::from_millis(20));
     write(&build.join("app_b/src/lib.rs"), "pub fn run(x: u32) -> u32 {\n    core_a::helper(x) * 3\n}\n");
-    run_cargo_check_delta(&build, "n0", &out, &target).unwrap_or_else(|e| panic!("{e:#}"));
+    check(&build).unwrap_or_else(|e| panic!("{e:#}"));
     let (core_file_2, core_time_2) = record_file(&out, "core_a").expect("core_a records stay");
     assert_eq!(core_file, core_file_2);
     assert_eq!(core_time, core_time_2, "a fresh crate is not compiled again");
@@ -78,7 +84,7 @@ fn delta_builds_reuse_only_fresh_crates() {
     // 2. Change core_a: app_b depends on it, so both are compiled again.
     std::thread::sleep(std::time::Duration::from_millis(20));
     write(&build.join("core_a/src/lib.rs"), "pub fn helper(x: u32) -> u32 {\n    x + 2\n}\n");
-    run_cargo_check_delta(&build, "n0", &out, &target).unwrap_or_else(|e| panic!("{e:#}"));
+    check(&build).unwrap_or_else(|e| panic!("{e:#}"));
     let (_, core_time_3) = record_file(&out, "core_a").expect("core_a records");
     let (_, app_time_3) = record_file(&out, "app_b").expect("app_b records");
     assert!(core_time_3 > core_time_2);
@@ -88,7 +94,7 @@ fn delta_builds_reuse_only_fresh_crates() {
     // 3. Remove app_b: its records go.
     write(&build.join("Cargo.toml"), "[workspace]\nresolver = \"3\"\nmembers = [\"core_a\"]\n");
     std::fs::remove_dir_all(build.join("app_b")).unwrap();
-    run_cargo_check_delta(&build, "n0", &out, &target).unwrap_or_else(|e| panic!("{e:#}"));
+    check(&build).unwrap_or_else(|e| panic!("{e:#}"));
     assert!(record_file(&out, "app_b").is_none(), "the records of a removed crate are removed");
     assert!(record_file(&out, "core_a").is_some());
 }

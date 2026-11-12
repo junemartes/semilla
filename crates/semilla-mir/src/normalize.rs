@@ -52,6 +52,8 @@ use crate::print::Printer;
 pub struct Canonical {
     pub text: String,
     pub callees: Vec<String>,
+    /// The uses of the build configuration in the body (see `config.rs`), sorted.
+    pub config: Vec<String>,
 }
 
 /// Returns the canonical text of a body that `canonical_body` made. Two bodies with the same
@@ -59,7 +61,9 @@ pub struct Canonical {
 pub fn canonical_text(body: &Body) -> Canonical {
     let mut printer = Printer::default();
     let text = printer.body(body);
-    Canonical { text: stable_closure_names(&text), callees: printer.callees.into_iter().collect() }
+    let mut config = std::mem::take(&mut printer.config);
+    config.sort();
+    Canonical { text: stable_closure_names(&text), callees: printer.callees.into_iter().collect(), config }
 }
 
 /// Returns the shape of the control flow graph: the kind of each terminator and its successors,

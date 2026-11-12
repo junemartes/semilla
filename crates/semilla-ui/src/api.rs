@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, Uri, header};
@@ -29,6 +28,30 @@ struct AppState {
 }
 
 type Shared = Arc<AppState>;
+
+/// A JSON response (batch 5k, A2). The JSON escape is sufficient for a control character. The
+/// response also gives each other hidden character (a bidirectional control, a zero-width
+/// character) as a `\uXXXX` escape of JSON, so the data has no raw hidden character. The UI
+/// escapes each text again at output.
+struct Json<T>(T);
+
+impl<T: serde::Serialize> IntoResponse for Json<T> {
+    fn into_response(self) -> Response {
+        match serde_json::to_string(&self.0) {
+            Ok(body) => ([(header::CONTENT_TYPE, "application/json")], json_hidden(&body)).into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
+    }
+}
+
+/// A hidden character is legal only in a string of JSON: there, `\uXXXX` has the same value.
+fn json_hidden(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    for c in body.chars() {
+        if semilla_core::text::is_hidden(c) && c != '\n' { out.push_str(&format!("\\u{:04x}", c as u32)) } else { out.push(c) }
+    }
+    out
+}
 
 /// An API error: a status code and a JSON body `{"error": "..."}`.
 struct ApiError(StatusCode, String);
@@ -448,5 +471,18 @@ async fn static_file(uri: Uri) -> Response {
     match assets::find(path) {
         Some(asset) => ([(header::CONTENT_TYPE, asset.content_type), (header::CACHE_CONTROL, "no-cache")], asset.bytes).into_response(),
         None => (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_json_response_has_no_raw_hidden_character() {
+        // Batch 5k, A2: serde gives a control character as an escape. The response gives each
+        // other hidden character as an escape too. The value of the string does not change.
+        let value = serde_json::json!({ "intent": "a\nb\u{1b}[8m \u{202e}c\u{200b}\u{2028}\u{feff} é" });
+        let body = super::json_hidden(&serde_json::to_string(&value).unwrap());
+        assert_eq!(body, r#"{"intent":"a\nb\u001b[8m \u202ec\u200b\u2028\ufeff é"}"#);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), value);
     }
 }

@@ -52,6 +52,10 @@ pub struct TreeNode {
     /// A summary for changed ancestors, for example `1 ctrl flow · 2 logic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The numbers of the steps that made the change of this node. Empty for a change set of one
+    /// step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TreeNode>,
 }
@@ -70,16 +74,21 @@ impl TreeNode {
         out.push_str(branch);
         out.push_str(self.status.marker());
         out.push(' ');
-        out.push_str(&self.label);
+        // A label can hold a file name or a literal text: no hidden character gets out (5k, A2).
+        out.push_str(&crate::text::inline(&self.label));
         if let Some(diff) = &self.diff {
             out.push_str("   ");
-            out.push_str(diff);
+            out.push_str(&crate::text::inline(diff));
         }
         if let Some(class) = self.class {
             out.push_str(&format!("   [{}]", serde_json::to_value(class).unwrap().as_str().unwrap()));
         }
         if let Some(summary) = &self.summary {
-            out.push_str(&format!("   ({summary})"));
+            out.push_str(&format!("   ({})", crate::text::inline(summary)));
+        }
+        if !self.steps.is_empty() {
+            let numbers: Vec<String> = self.steps.iter().map(|step| step.to_string()).collect();
+            out.push_str(&format!("   step{} {}", if numbers.len() == 1 { "" } else { "s" }, numbers.join(", ")));
         }
         out.push('\n');
         let child_prefix = if root { String::new() } else { format!("{prefix}{}", if last { "   " } else { "│  " }) };
@@ -268,6 +277,7 @@ mod tests {
             class: None,
             claims: vec![],
             diff: None,
+            steps: Vec::new(),
             summary: None,
             children: vec![TreeNode {
                 id: "a::f".into(),
@@ -276,6 +286,7 @@ mod tests {
                 class: Some(Class::Logic),
                 claims: vec!["c1".into()],
                 diff: None,
+                steps: Vec::new(),
                 summary: None,
                 children: vec![],
             }],

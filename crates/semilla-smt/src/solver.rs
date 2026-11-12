@@ -47,22 +47,28 @@ pub(crate) enum Answer {
 }
 
 impl Solver {
+    /// Finds the solver binary for a tool that checks no repository (the tests of this crate).
+    /// See [`Solver::find_for`].
+    pub fn find() -> Result<Solver> {
+        Solver::find_for(&[], None)
+    }
+
     /// Finds the solver binary. The search order is:
     ///
     /// 1. The `SEMILLA_Z3` environment variable.
-    /// 2. `.semilla/tools/z3` under the current directory or an ancestor.
-    /// 3. `z3` on `PATH`.
+    /// 2. `z3` in each folder of `tool_dirs` (the caller gives the folder next to the Semilla
+    ///    binary and the cache folder of the user).
+    /// 3. `z3` on `PATH` (only an absolute folder).
     /// 4. `.semilla/tools/z3` of the semilla workspace that built this crate (where
-    ///    `scripts/fetch-z3.sh` installs it), so that other repositories find it too.
-    pub fn find() -> Result<Solver> {
-        let cwd = std::env::current_dir().ok();
-        match locate(std::env::var_os(SOLVER_ENV), cwd.as_deref(), std::env::var_os("PATH")) {
-            Ok(path) => Solver::at(path),
-            Err(error) => {
-                let own = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(TOOLS_PATH);
-                if own.is_file() { Solver::at(own) } else { Err(error) }
-            }
-        }
+    ///    `scripts/fetch-z3.sh` installs it). This path is fixed at build time.
+    ///
+    /// `repository` is the folder of the repository that Semilla checks. The agent controls each
+    /// file there (invariant I5). So the search never takes a solver from that folder: a
+    /// candidate of step 2, 3, or 4 in the folder is skipped. The search does not look at the
+    /// current folder or its parents.
+    pub fn find_for(tool_dirs: &[PathBuf], repository: Option<&Path>) -> Result<Solver> {
+        let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(TOOLS_PATH);
+        Solver::at(locate(std::env::var_os(SOLVER_ENV), tool_dirs, std::env::var_os("PATH"), Some(&own), repository)?)
     }
 
     /// Returns true if [`Solver::find`] finds a solver that runs.
@@ -205,11 +211,13 @@ impl Solver {
     }
 }
 
-/// Finds the solver binary. See [`Solver::find`].
+/// Finds the solver binary. See [`Solver::find_for`].
 pub(crate) fn locate(
     env_value: Option<OsString>,
-    start_dir: Option<&Path>,
+    tool_dirs: &[PathBuf],
     path_var: Option<OsString>,
+    build_time: Option<&Path>,
+    repository: Option<&Path>,
 ) -> Result<PathBuf> {
     if let Some(value) = env_value.filter(|value| !value.is_empty()) {
         let path = PathBuf::from(&value);
@@ -221,25 +229,21 @@ pub(crate) fn locate(
             path.display()
         );
     }
-    if let Some(start) = start_dir {
-        for dir in start.ancestors() {
-            let candidate = dir.join(TOOLS_PATH);
-            if is_executable(&candidate) {
-                return Ok(candidate);
-            }
-        }
-    }
-    if let Some(path_var) = path_var {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join("z3");
-            if is_executable(&candidate) {
-                return Ok(candidate);
-            }
+    // A candidate in the checked repository is never the solver: the agent can write it.
+    let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let repository = repository.map(real);
+    let allowed = |candidate: &Path| is_executable(candidate) && repository.as_ref().is_none_or(|repository| !real(candidate).starts_with(repository));
+    let on_path = path_var.iter().flat_map(std::env::split_paths).filter(|dir| dir.is_absolute()).collect::<Vec<_>>();
+    let candidates = tool_dirs.iter().chain(&on_path).map(|dir| dir.join("z3")).chain(build_time.map(Path::to_path_buf));
+    for candidate in candidates {
+        if allowed(&candidate) {
+            return Ok(candidate);
         }
     }
     bail!(
         "no Z3 SMT solver found. Set {SOLVER_ENV} to the path of a z3 binary, \
-         or run scripts/fetch-z3.sh to install one at {TOOLS_PATH}, or put z3 on PATH"
+         or run scripts/fetch-z3.sh to install one, or put z3 on PATH. \
+         Semilla never takes a solver from the repository that it checks"
     )
 }
 
@@ -443,8 +447,7 @@ mod tests {
 
     #[test]
     fn missing_solver_gives_a_clear_error() {
-        let empty = std::env::temp_dir().join("semilla-smt-no-solver-here");
-        let error = locate(None, Some(&empty), Some(OsStr::new("").to_os_string())).unwrap_err();
+        let error = locate(None, &[], Some(OsStr::new("").to_os_string()), None, None).unwrap_err();
         let text = error.to_string();
         assert!(text.contains("no Z3 SMT solver found"), "{text}");
         assert!(text.contains("SEMILLA_Z3"), "{text}");
@@ -453,13 +456,45 @@ mod tests {
 
     #[test]
     fn a_bad_env_value_is_an_error() {
-        let error = locate(Some("/nonexistent/z3".into()), None, None)
+        let error = locate(Some("/nonexistent/z3".into()), &[], None, None, None)
             .unwrap_err()
             .to_string();
         assert!(
             error.contains("SEMILLA_Z3 is set to /nonexistent/z3"),
             "{error}"
         );
+    }
+
+    /// Batch 5h, A1: the agent controls the repository folder. A solver there is never used:
+    /// not from a tool folder, not from `PATH`, not from the build-time path, and not from the
+    /// current folder.
+    #[test]
+    fn a_solver_in_the_checked_repository_is_never_used() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("semilla-smt-locate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let program = |path: &Path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "#!/bin/sh\necho unsat\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let repo = base.join("repo");
+        let inside = [repo.join(".semilla/tools/z3"), repo.join("bin/z3")];
+        inside.iter().for_each(|path| program(path));
+        let path_var = std::env::join_paths([repo.join("bin"), PathBuf::from("relative")]).unwrap();
+        let tool_dirs = [repo.join(".semilla/tools")];
+        let error = locate(None, &tool_dirs, Some(path_var.clone()), Some(&inside[0]), Some(&repo)).unwrap_err().to_string();
+        assert!(error.contains("never takes a solver from the repository"), "{error}");
+        // A link from outside into the repository is in the repository also.
+        std::os::unix::fs::symlink(repo.join("bin"), base.join("link")).unwrap();
+        assert!(locate(None, &[base.join("link")], None, None, Some(&repo)).is_err());
+        // A solver outside the repository is found: in a tool folder first, then on `PATH`.
+        let outside = base.join("cache/tools/z3");
+        program(&outside);
+        assert_eq!(locate(None, &[base.join("cache/tools")], Some(path_var.clone()), None, Some(&repo)).unwrap(), outside);
+        let on_path = std::env::join_paths([repo.join("bin"), base.join("cache/tools")]).unwrap();
+        assert_eq!(locate(None, &[], Some(on_path), None, Some(&repo)).unwrap(), outside);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
