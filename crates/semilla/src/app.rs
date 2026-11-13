@@ -60,6 +60,38 @@ pub struct Session {
     /// The commit that `tag` stored this change set on. A new replay can then replace the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tagged: Option<String>,
+    /// The last `semilla step`, if Semilla rejected it and no step came after it (batch 5x,
+    /// part C). `tag` and `status` then say the cause, and not "run `semilla step`".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected: Option<RejectedStep>,
+}
+
+/// A rejected `semilla step`: nothing is stored for it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RejectedStep {
+    pub intent: String,
+    /// The cause, in a short form.
+    pub cause: String,
+    /// The command that runs the step again with the missing parts, if a command can succeed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl Session {
+    /// The fix for an edit that has no step. After a rejected step, the fix is not the same
+    /// command again: it is the command with the missing parts, or a change of the code.
+    pub fn step_fix(&self) -> String {
+        match &self.rejected {
+            Some(rejected) => {
+                let again = match &rejected.command {
+                    Some(command) => format!("Run it again with the missing parts: `{command}`"),
+                    None => "Correct the cause, then run the step again".to_string(),
+                };
+                format!("The last `semilla step` ({}) was rejected, and Semilla stored nothing: {}. {again}", semilla_core::text::quoted(&rejected.intent), rejected.cause)
+            }
+            None => "Run `semilla step \"<intent>\"` for the edit".to_string(),
+        }
+    }
 }
 
 /// The semilla application on one repository.
@@ -812,7 +844,13 @@ impl App {
                 if let Some(line) = self.build_code_notice(&stored.report).filter(|_| !stored.report.not_complete()) {
                     put_line(&mut text, &format!("{line}"));
                 }
-                for line in config_lines(&stored.report) {
+                // The agent gets the short line of the conditions (batch 5x, part E). The
+                // reviewer (a `status` with a commit) gets the full lines.
+                let lines = match (&stored.report.configs, commit) {
+                    (Some(note), None) => note.agent_lines(stored.report.steps.len(), verbose),
+                    _ => config_lines(&stored.report),
+                };
+                for line in lines {
                     put_line(&mut text, &line);
                 }
                 text.push_str("phase 2 (computed on this machine):\n");
@@ -863,7 +901,7 @@ impl App {
         if head == set.base_tree {
             // No commit of the work yet: the working tree must be the tree of the last step.
             if session.open.is_none() && !same(self, &work)? {
-                problems.push("the working tree has an edit after the last step. The edit has no step. Run `semilla step \"<intent>\"` for the edit.".to_string());
+                problems.push(format!("the working tree has an edit after the last step. The edit has no step. {}.", session.step_fix()));
             }
             return Ok(problems);
         }
@@ -881,7 +919,7 @@ impl App {
                 // The steps are complete in the working tree. The commit is older than a step.
                 problems.push("the commit HEAD does not have the changes of the last step. Run `git add -A`, then `git commit --amend --no-edit`, then `semilla tag`.".to_string());
             } else {
-                problems.push(format!("the last step ends at tree {}, but commit HEAD has tree {head}: an edit after the last step has no step. Run `semilla step \"<intent>\"` for the edit, then `git commit --amend --no-edit`, then `semilla tag`.", set.head_tree));
+                problems.push(format!("the last step ends at tree {}, but commit HEAD has tree {head}: an edit after the last step has no step. {}, then `git commit --amend --no-edit`, then `semilla tag`.", set.head_tree, session.step_fix()));
             }
         }
         Ok(problems)
@@ -1255,6 +1293,11 @@ impl App {
         report.build_code = note;
         report.configs = config_note(set, &log, &cache);
         crate::timing("verify the change set (with the body checks)", started);
+        // The parts of that time (batch 5x, part F).
+        crate::oracle::READ_TIME.print("read the records of a cache folder");
+        crate::oracle::MARK_TIME.print("give the records to the build configuration rules");
+        crate::oracle::N0_TIME.print("compare the bodies at N0");
+        crate::oracle::DEEP_TIME.print("compare the bodies (N0 to N4)");
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);
@@ -1263,10 +1306,11 @@ impl App {
         for pair in &mut report.pairs {
             pair.reviewer = review.pair(&pair.key()).map(str::to_string);
             if pair.reviewer.as_deref() == Some("accepted") {
-                report.organization.push(format!(
-                    "the reviewer accepted the pair warning `{}`: make it one changed item: put the rename or the move in its own step with no other change, then change the body in the next step",
-                    pair.key()
-                ));
+                // "Own step" is not a route when the step of the pair has no other change.
+                report.organization.push(match &pair.stopped {
+                    Some(cause) => format!("the reviewer accepted the pair warning `{}`: its step has no other change, and Semilla has no proof that it is one item ({cause}). Change the code that stops the proof, or ask the reviewer to dismiss the warning", pair.key()),
+                    None => format!("the reviewer accepted the pair warning `{}`: make it one changed item: put the rename or the move in its own step with no other change, then change the body in the next step", pair.key()),
+                });
             }
         }
         report.phase = if self.no_bodies { "syntax".into() } else { "full".into() };
@@ -1381,8 +1425,14 @@ impl App {
         if session.open.is_some() {
             bail!("a step is still open; end it first");
         }
+        // After a rejected step, the fix is the step with its missing parts (batch 5x, part C).
+        let step_fix = session.step_fix();
+        let rejected = session.rejected.is_some();
         let mut set = session.changeset;
         if set.steps.is_empty() {
+            if rejected {
+                bail!("the change set has no step. {step_fix}, then `git commit --amend --no-edit`, then `semilla tag`.");
+            }
             bail!("the change set has no step; edit the code and run `semilla step \"<intent>\"` first");
         }
         let commit = self.repo.git(&["rev-parse", commit])?;
@@ -1416,7 +1466,7 @@ impl App {
             let (last, head) = (self.workspace(&set.head_tree)?, self.workspace(&tree)?);
             if !semilla_syntax::diff(&last, &head, &Default::default()).is_empty() {
                 // B1: the commands for an edit after the last step.
-                bail!("the last step ends at tree {}, but commit {commit} has tree {tree}: an edit after the last step has no step. Run `semilla step \"<intent>\"` for the edit, then `git commit --amend --no-edit`, then `semilla tag`.", set.head_tree);
+                bail!("the last step ends at tree {}, but commit {commit} has tree {tree}: an edit after the last step has no step. {step_fix}, then `git commit --amend --no-edit`, then `semilla tag`.", set.head_tree);
             }
             set.head_tree = tree.clone();
         }

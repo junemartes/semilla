@@ -455,7 +455,9 @@ impl App {
             let is_new = |u: &String| target_ws.items.contains_key(u) && !base_ws.items.contains_key(u) && !is_pair_new(u);
             let is_removed = |u: &String| base_ws.items.contains_key(u) && !target_ws.items.contains_key(u) && !is_pair_old(u);
             if let Some((old, new, score)) = pairs.iter().find(|(old, new, _)| members.contains(old) && owner(old) != owner(new)) {
-                drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: the move in its own step, then the changes in a later step)", score * 100.0), members, Vec::new()));
+                // A pair with the same text has no change for a later step.
+                let rest = if *score >= 0.9995 { "the move in a step with no other change" } else { "the move in its own step, then the changes in a later step" };
+                drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: {rest})", score * 100.0), members, Vec::new()));
             } else if let Some(item) = members.iter().find(|m| signature_changes.contains(m)) {
                 drafts.push((2, format!("change the signature of `{}` and its call sites", name(item)), members, Vec::new()));
             } else if members.iter().all(is_new) {

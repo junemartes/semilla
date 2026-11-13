@@ -1539,10 +1539,10 @@ fn a_move_gets_move_hints() {
     let report = run(MOVE_BEFORE, MOVE_AFTER, rewrite, &[], None);
     assert_eq!(status_of(&report, "c1"), &ClaimStatus::Empty);
     assert!(report.claims[0].hint.as_deref().is_some_and(|h| h.contains("move-item")), "{:?}", report.claims[0].hint);
-    let pair = semilla_core::PairWarning { old: "a::x::f".into(), new: "b::f".into(), similarity: 1.0, claims: vec![], refusal: None, reviewer: None, resolves: vec![] };
+    let pair = semilla_core::PairWarning { old: "a::x::f".into(), new: "b::f".into(), similarity: 1.0, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: None };
     // C2: the claim syntax of `semilla step`, and no retired op.
     assert!(pair.text().contains("`--claim 'move-item a::x::f to=b::f'`") && !pair.text().contains("--at") && !pair.text().contains("rewrite-item"), "{}", pair.text());
-    let pair = semilla_core::PairWarning { old: "a::percent".into(), new: "a::pct".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![] };
+    let pair = semilla_core::PairWarning { old: "a::percent".into(), new: "a::pct".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: None };
     assert!(pair.text().contains("`--claim 'rename a::percent to=pct'`"), "{}", pair.text());
 }
 
@@ -2161,7 +2161,9 @@ fn a_doc_change_and_a_parameter_rename_do_not_stop_an_identity() {
     assert!(texts[0].starts_with("renamed `demo::Account.balance` → `demo::Account.cents` (proved N0"), "{texts:?}");
     assert!(report.facts.iter().any(|f| f.description == "parameter `balance` of `demo::make` renamed to `cents`: `u32`" && f.class == Some(Class::Neutral)), "{texts:?}");
     assert!(report.facts.iter().any(|f| f.description.starts_with("changed docs") && f.class == Some(Class::Other)), "{texts:?}");
-    assert_eq!(report.facts.len(), 3, "{texts:?}");
+    // The field is a part of the public API: the rename has one more fact to read (design 31.8).
+    assert_eq!(texts[3], "public API: `demo::Account.balance` is now `demo::Account.cents` (a different crate can no longer use the old path)", "{texts:?}");
+    assert_eq!(report.facts.len(), 4, "{texts:?}");
     // C1: a new module doc and a new inner doc attribute have the class `other`.
     for doc in ["//! The demo crate.\n", "#![doc = \"The demo crate.\"]\n"] {
         let report = run_derived(before, &format!("{doc}{before}"), &[("demo::get", equal("n0")), ("demo::make", equal("n0"))]);
@@ -2253,13 +2255,16 @@ fn a_variant_rename_with_a_derived_debug_is_a_derived_identity() {
     let bodies = [("demo::check", equal("n0")), (debug, different(false)), ("<demo::LedgerError as std::cmp::PartialEq>::eq", equal("n0"))];
     let report = run_derived(before, &before.replace("Frozen", "Locked"), &bodies);
     assert!(report.accepted() && report.notes.is_empty(), "{report:#?}");
-    assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
+    // Two facts: the rename, and the fact for the public API (design 31.8).
+    assert_eq!(report.facts.len(), 2, "{:#?}", report.facts);
+    assert_eq!(report.facts[1].description, "public API: `demo::LedgerError::Frozen` is now `demo::LedgerError::Locked` (a different crate can no longer use the old path)");
     let fact = &report.facts[0];
     assert!(fact.description.starts_with("renamed `demo::LedgerError::Frozen` → `demo::LedgerError::Locked` (proved N0; neutral, but 1 derived body shows the name (Debug for demo::LedgerError)"), "{}", fact.description);
     assert_eq!(fact.class, Some(Class::Neutral));
     // A field of a variant: the same rule.
     let report = run_derived(before, &before.replace("max", "limit"), &bodies);
-    assert!(report.accepted() && report.facts.len() == 1 && report.facts[0].description.contains("1 derived body shows the name (Debug for demo::LedgerError)"), "{report:#?}");
+    assert!(report.accepted() && report.facts.len() == 2 && report.facts[0].description.contains("1 derived body shows the name (Debug for demo::LedgerError)"), "{report:#?}");
+    assert_eq!(report.facts[1].description, "public API: `demo::LedgerError::OverLimit.max` is now `demo::LedgerError::OverLimit.limit` (a different crate can no longer use the old path)");
     // A body that is not derived keeps the rule: no proof.
     let other = [("demo::check", different(false)), (debug, different(false))];
     let report = run_derived(before, &before.replace("Frozen", "Locked"), &other);
@@ -2287,8 +2292,10 @@ fn a_rename_with_no_claim_gets_a_derived_proof() {
     let report = run_derived(before, &after, &bodies);
     assert!(report.accepted(), "{report:#?}");
     assert!(report.claims.is_empty(), "{:#?}", report.claims);
-    // One fact: the forced edits fold under it, and the derived body rule applies.
-    assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
+    // One identity fact: the forced edits fold under it, and the derived body rule applies.
+    // The field is a part of the public API: the second fact says so (design 31.8).
+    assert_eq!(report.facts.len(), 2, "{:#?}", report.facts);
+    assert_eq!(report.facts[1].description, "public API: `demo::Account.balance` is now `demo::Account.cents` (a different crate can no longer use the old path)");
     let fact = &report.facts[0];
     assert!(fact.description.starts_with("renamed `demo::Account.balance` → `demo::Account.cents` (proved N0; neutral, but 1 derived body shows the name"), "{}", fact.description);
     assert_eq!(fact.class, Some(Class::Neutral));
@@ -2604,16 +2611,23 @@ fn a_group_of_a_rename_with_its_docs_is_not_behavior() {
 }
 
 #[test]
-fn the_text_output_shows_six_bodies_of_a_fact() {
-    // Brief 5h, C6: the `step` and `status` output shows at most 6 bodies of a list, then
-    // "and N more". The report with `--full` has the full list.
+fn the_text_output_shows_the_scope_of_a_long_list() {
+    // Batch 5x, part E (before: brief 5h, C6): the `step` output shows a list of more than 8
+    // bodies as a count and the scope. `semilla status --verbose` shows each name.
     let bodies: Vec<String> = (0..21).map(|index| format!("demo::body_{index:02}")).collect();
     let fact = semilla_core::Fact { id: "f1".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), class: Some(Class::Logic), affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
-    let report = StepReport { facts: vec![fact], ..Default::default() };
+    let mut report = StepReport { facts: vec![fact], ..Default::default() };
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
-    assert!(text.contains("      affected bodies: demo::body_00, demo::body_01, demo::body_02, demo::body_03, demo::body_04, demo::body_05, and 15 more\n"), "{text}");
-    assert!(text.contains("      bodies with a changed call site and no change of behavior (proved): demo::body_00, demo::body_01, demo::body_02, demo::body_03, demo::body_04, demo::body_05, and 2 more\n"), "{text}");
-    assert!(!text.contains("demo::body_06"), "{text}");
+    assert!(text.contains("      affected bodies: 21 bodies of the crate `demo` (`semilla status --verbose` shows the names)\n"), "{text}");
+    // A list of 8 bodies shows each name.
+    assert!(text.contains(&format!("      bodies with a changed call site and no change of behavior (proved): {}\n", bodies[..8].join(", "))), "{text}");
+    assert!(!text.contains("demo::body_08"), "{text}");
+    let verbose = crate::views::text_report(std::slice::from_ref(&report));
+    assert!(verbose.contains(&format!("      affected bodies: {}\n", bodies.join(", "))), "{verbose}");
+    // Two crates: the scope names each crate with its count.
+    report.facts[0].affected.push("<other::T as demo::Show>::show".into());
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains("      affected bodies: 22 bodies of 2 crates: `demo` (21), `other` (1) ("), "{text}");
 }
 
 /// The facts of a step whose MIR oracle says that `demo::f` is equal (N0).
@@ -4006,4 +4020,714 @@ fn an_identity_in_code_that_no_checked_configuration_compiles_has_no_proof() {
     let step = step(vec![claim("c1", "rename", Some("demo::m::twice"), serde_json::json!({"to": "thrice"}))]);
     let report = verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report;
     assert!(matches!(&report.claims[0].status, ClaimStatus::Unproved { reason } if reason.contains("so the identity of `demo::m::twice` has no proof")), "{report:#?}");
+}
+
+/// A step with files, a MIR oracle with a fixed status for each body, and derived facts.
+fn run_derived_files(before: &[(&str, &str)], after: &[(&str, &str)], bodies: &[(&str, BodyStatus)]) -> StepReport {
+    let (_d1, old) = load_files(before);
+    let (_d2, new) = load_files(after);
+    let step = step(Vec::new());
+    let oracle = FakeBodies(bodies.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report
+}
+
+/// Batch 5x, part A (trial 7 on `humantime`): a macro import has the scope of its crate root,
+/// a `use` line shadows a standard macro only with a name that it brings, and a text that
+/// differs only by the names of the rename map has no edit.
+#[test]
+fn a_macro_import_of_a_different_target_does_not_stop_a_rename() {
+    const MANIFEST_OTHER: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nother = \"1\"\n";
+    let lib = "use std::fmt::Write;\npub fn show(out: &mut String, n: u32) {\n    item(out, n);\n}\nfn item(out: &mut String, n: u32) {\n    let _ = write!(out, \"{n}\");\n}\n";
+    let bodies = [("demo::piece", equal("n1")), ("demo::show", equal("n1"))];
+    let run = |head: &str, body: &str, extra: &[(&str, &str)]| {
+        let old = format!("{head}{body}");
+        let new = old.replace("item(", "piece(");
+        let mut before = vec![("Cargo.toml", MANIFEST_OTHER), ("src/lib.rs", old.as_str())];
+        let mut after = vec![("Cargo.toml", MANIFEST_OTHER), ("src/lib.rs", new.as_str())];
+        before.extend(extra.iter().copied());
+        after.extend(extra.iter().copied());
+        run_derived_files(&before, &after, &bodies)
+    };
+    let renamed = |report: &StepReport| descriptions(report).iter().any(|d| d.starts_with("renamed `demo::item` → `demo::piece` (proved N1"));
+    let notes = |report: &StepReport| report.notes.join("\n");
+    let macro_use = "#[macro_use]\nextern crate other;\n";
+
+    // The trial: `#[macro_use] extern crate` in a bench target, and a path segment `format`.
+    let bench = [("benches/speed.rs", "#[macro_use]\nextern crate other;\nuse other::format::Fixed::*;\nfn main() {}\n")];
+    let report = run("", lib, &bench);
+    assert!(renamed(&report), "{report:#?}");
+    // The same in a test target, an example, and a binary.
+    for file in ["tests/it.rs", "examples/demo.rs", "src/bin/tool.rs"] {
+        let report = run("", lib, &[(file, "#[macro_use]\nextern crate other;\nuse other::write;\nfn main() {}\n")]);
+        assert!(renamed(&report), "{file}: {report:#?}");
+    }
+    // A segment in the middle of a path brings no name. An alias and a group name bring one.
+    let report = run("use other::format::Thing;\nuse other::write::{self as w, vec as list};\n", lib, &[]);
+    assert!(renamed(&report), "{report:#?}");
+
+    // A real shadow in the library continues to stop the proof of an edit, with the cause. An
+    // import of a different target does not.
+    let edit_old = "use std::fmt::Write;\npub fn f(out: &mut String, a: u32) -> u32 {\n    let b = a;\n    let _ = write!(out, \"{b}\");\n    b\n}\n";
+    let edit_new = edit_old.replace("let b = a;", "let c = a;").replace("{b}", "{c}").replace("    b\n", "    c\n");
+    let edit = |head: &str, extra: &[(&str, &str)]| {
+        let (old, new) = (format!("{head}{edit_old}"), format!("{head}{edit_new}"));
+        let mut before = vec![("Cargo.toml", MANIFEST_OTHER), ("src/lib.rs", old.as_str())];
+        let mut after = vec![("Cargo.toml", MANIFEST_OTHER), ("src/lib.rs", new.as_str())];
+        before.extend(extra.iter().copied());
+        after.extend(extra.iter().copied());
+        run_derived_files(&before, &after, &[("demo::f", equal("n0"))]).facts
+    };
+    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.class == Some(Class::Neutral));
+    let spotlight = |facts: &[semilla_core::report::Fact]| facts.iter().filter_map(|f| f.spotlight_why.clone()).collect::<Vec<_>>().join("\n");
+    let shadows = ["use other::write;\n", "use other::{gate, put as write};\n", "pub(crate) use other::write;\n", "mod inner {\n    use other::write;\n}\n", "use other::*;\n", macro_use];
+    for head in shadows {
+        let facts = edit(head, &[]);
+        assert!(!proved(&facts) && spotlight(&facts).contains("`write!` in `demo::f` (Semilla cannot see into it)"), "{head}: {facts:#?}");
+    }
+    let facts = edit("use other::format::Thing;\n", &bench);
+    assert!(proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
+    // A `pub use` of a different workspace target can give the name to each crate.
+    let facts = edit("", &[("src/bin/tool.rs", "pub use other::write;\nfn main() {}\n")]);
+    assert!(!proved(&facts), "{facts:#?}");
+    // A rename with a real shadow: the text of `item` differs only by the name, and the name
+    // is not in the tokens of the call, so the text has no edit. With the name in the tokens
+    // of the call, the proof stops, and the note says the cause.
+    for head in shadows {
+        let report = run(head, lib, &[]);
+        assert!(renamed(&report), "{head}: {report:#?}");
+        let report = run(head, &lib.replace("    item(out, n);\n", "    let _ = write!(out, \"{}\", item(out, n) == ());\n"), &[]);
+        assert!(!renamed(&report), "{head}: {report:#?}");
+        assert!(notes(&report).contains("`write!` with the name `item` of the rename in its tokens (Semilla cannot see into it)"), "{head}: {}", notes(&report));
+        // Batch 5x, part C: the step has no second change, so the pair warning does not say
+        // "own step". It says the cause.
+        let cause = report.notes.iter().find_map(|note| stopped_pair(note, "demo::item", "demo::piece"));
+        assert!(cause.as_deref().is_some_and(|cause| cause.contains("`write!`")), "{head}: {:?}", report.notes);
+        assert!(report.notes.iter().all(|note| stopped_pair(note, "demo::item", "demo::other").is_none()));
+        let pair = semilla_core::PairWarning { old: "demo::item".into(), new: "demo::piece".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: cause };
+        assert!(pair.text().contains("their step has no other change. Semilla has no proof that it is one item: ") && pair.text().contains("`write!`") && !pair.text().contains("own step"), "{}", pair.text());
+    }
+    // A module file of two crate roots has the imports of the two roots.
+    let shared = "use std::fmt::Write;\npub fn show(out: &mut String, n: u32) {\n    item(out, n);\n}\nfn item(out: &mut String, n: u32) {\n    let _ = write!(out, \"{n}\");\n}\n";
+    let files = |text: &str| -> Vec<(String, String)> {
+        vec![
+            ("Cargo.toml".to_string(), MANIFEST_OTHER.to_string()),
+            ("src/lib.rs".to_string(), "pub mod util;\n".to_string()),
+            ("src/main.rs".to_string(), format!("{macro_use}mod util;\nfn main() {{}}\n")),
+            ("src/util.rs".to_string(), text.to_string()),
+        ]
+    };
+    let (_dir, both) = load_files(&files(shared).iter().map(|(a, b)| (a.as_str(), b.as_str())).collect::<Vec<_>>());
+    let mut roots = BTreeMap::new();
+    crate::srcconfig::file_roots(&both, &mut roots);
+    let names = |file: &str| roots.get(file).map(|set: &std::collections::BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    assert_eq!((names("src/lib.rs"), names("src/main.rs"), names("src/util.rs")), ("src/lib.rs".to_string(), "src/main.rs".to_string(), "src/lib.rs src/main.rs".to_string()));
+
+    // A caller with a macro call that Semilla cannot see into: a text with only the new name
+    // has no edit. A renamed name in the tokens of the call stops the proof, with the cause.
+    let caller = lib.replace("    item(out, n);\n", "    other::gate!(n);\n    item(out, n);\n");
+    let report = run("", &caller, &[]);
+    assert!(renamed(&report), "{report:#?}");
+    let inside = lib.replace("    item(out, n);\n", "    other::gate!(item(out, n));\n");
+    let report = run("", &inside, &[]);
+    assert!(!renamed(&report), "{report:#?}");
+    assert!(notes(&report).contains("`gate!` with the name `item` of the rename in its tokens (Semilla cannot see into it)"), "{}", notes(&report));
+    // An attribute that Semilla cannot see into, and a `cfg` attribute in the body: no proof.
+    for form in ["    #[other::watch]\n    item(out, n);\n", "    #[cfg(windows)]\n    let piece = |_: &mut String, _: u32| {};\n    item(out, n);\n"] {
+        let report = run("", &lib.replace("    item(out, n);\n", form), &[]);
+        assert!(!renamed(&report), "{form}: {report:#?}");
+    }
+}
+
+/// The files of a small crate with the module `date` (batch 5x, part B).
+fn move_files<'a>(lib: &'a str, date: &'a str, calendar: Option<&'a str>) -> Vec<(&'a str, &'a str)> {
+    let mut files = vec![("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("src/date.rs", date)];
+    files.extend(calendar.map(|text| ("src/calendar.rs", text)));
+    files
+}
+
+fn run_claim_files(before: &[(&str, &str)], after: &[(&str, &str)], claims: Vec<Claim>, bodies: &[(&str, BodyStatus)]) -> StepReport {
+    let (_d1, old) = load_files(before);
+    let (_d2, new) = load_files(after);
+    let step = step(claims);
+    let oracle = FakeBodies(bodies.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
+    verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report
+}
+
+/// Batch 5x, part B (trial 7 on `humantime`): a move into a new module gets its proof in one
+/// step, with the claim and also derived. The parts of the move: the item, the `mod` line and
+/// the file of the new module, the `use` lines, and a wider visibility (a fact to read).
+#[test]
+fn a_move_into_a_new_module_gets_its_proof_in_one_step() {
+    const DATE: &str = "pub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\nfn is_leap(y: u64) -> bool {\n    y % 4 == 0\n}\n";
+    const DATE_AFTER: &str = "use crate::calendar::is_leap;\n\npub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\n";
+    const CALENDAR: &str = "pub(crate) fn is_leap(y: u64) -> bool {\n    y % 4 == 0\n}\n";
+    let before = move_files("mod date;\n", DATE, None);
+    let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", equal("n0"))];
+    let claims = || vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
+    let moved = "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1";
+    let proved = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with(moved));
+
+    // 1. The honest move: derived, and with the claim.
+    let after = move_files("mod calendar;\nmod date;\n", DATE_AFTER, Some(CALENDAR));
+    let report = run_derived_files(&before, &after, &bodies);
+    assert!(proved(&report), "{report:#?}");
+    let texts = descriptions(&report);
+    assert!(!texts.iter().any(|text| text.contains("added") || text.contains("removed")), "{texts:?}");
+    // The visibility is a fact to read, with no spotlight.
+    let visibility = report.facts.iter().find(|fact| fact.description == "visibility of `demo::calendar::is_leap`: `private` → `pub (crate)`").unwrap_or_else(|| panic!("{texts:?}"));
+    assert!(!visibility.spotlight && report.spotlight.is_empty(), "{report:#?}");
+    let report = run_claim_files(&before, &after, claims(), &bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified() && report.uncovered.is_empty(), "{report:#?}");
+    assert!(descriptions(&report).iter().any(|text| text.starts_with("visibility of `demo::calendar::is_leap`")), "{report:#?}");
+    // `pub(super)` and a module with a `use` line of its own are also parts of a move.
+    let with_use = CALENDAR.replace("pub(crate) fn", "use std::fmt;\npub(super) fn");
+    let report = run_derived_files(&before, &move_files("mod calendar;\nmod date;\n", DATE_AFTER, Some(&with_use)), &bodies);
+    assert!(proved(&report), "{report:#?}");
+
+    // 2. No proof: each of these steps has a change that is not a part of a move.
+    let cases: Vec<(&str, String, String, Vec<(&str, BodyStatus)>)> = vec![
+        // A different callee after the move: the new module has a different item of the same
+        // name in scope. The MIR of the moved body is not equal.
+        ("a different callee", "mod calendar;\nmod date;\n".into(), CALENDAR.into(), vec![("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", different(false))]),
+        // An edit in the body.
+        ("a body edit", "mod calendar;\nmod date;\n".into(), CALENDAR.replace("== 0", "== 0 && y != 0"), vec![("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", different(false))]),
+        // A caller that changes.
+        ("a changed caller", "mod calendar;\nmod date;\n".into(), CALENDAR.into(), vec![("demo::date::parse", different(false)), ("demo::calendar::is_leap", equal("n0"))]),
+        // A `cfg` on the path: the new module has a `cfg` attribute.
+        ("a cfg on the module", "#[cfg(not(windows))]\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), bodies.to_vec()),
+        ("a cfg in the file", "mod calendar;\nmod date;\n".into(), format!("#![cfg(not(windows))]\n{CALENDAR}"), bodies.to_vec()),
+        ("a path attribute", "#[path = \"calendar.rs\"]\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), bodies.to_vec()),
+        // A public module is a change of the API.
+        ("a public module", "pub mod calendar;\nmod date;\n".into(), CALENDAR.into(), bodies.to_vec()),
+        // A second item in the new module.
+        ("a second item", "mod calendar;\nmod date;\n".into(), format!("{CALENDAR}pub(crate) fn other() -> u64 {{\n    1\n}}\n"), bodies.to_vec()),
+        ("a public import", "mod calendar;\nmod date;\n".into(), format!("pub use std::fmt;\n{CALENDAR}"), bodies.to_vec()),
+    ];
+    for (name, lib, calendar, bodies) in &cases {
+        let after = move_files(lib, DATE_AFTER, Some(calendar));
+        let report = run_derived_files(&before, &after, bodies);
+        assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{name}: {report:#?}");
+        let report = run_claim_files(&before, &after, claims(), bodies);
+        assert!(!report.accepted() && !status_of(&report, "c1").is_verified(), "{name}: {report:#?}");
+    }
+
+    // 3. A move into a module that is not new, with a `cfg` attribute: the path of the item
+    // gets a condition, so the move has no proof.
+    let old = move_files("#[cfg(not(windows))]\nmod calendar;\nmod date;\n", DATE, Some(""));
+    let new = move_files("#[cfg(not(windows))]\nmod calendar;\nmod date;\n", DATE_AFTER, Some(CALENDAR));
+    let report = run_derived_files(&old, &new, &bodies);
+    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+    let report = run_claim_files(&old, &new, claims(), &bodies);
+    assert!(!report.accepted() && !status_of(&report, "c1").is_verified(), "{report:#?}");
+    // The same condition on the two paths: the move has its proof.
+    let old = move_files("#[cfg(not(windows))]\nmod calendar;\n#[cfg(not(windows))]\nmod date;\n", DATE, Some(""));
+    let new = move_files("#[cfg(not(windows))]\nmod calendar;\n#[cfg(not(windows))]\nmod date;\n", DATE_AFTER, Some(CALENDAR));
+    assert!(proved(&run_derived_files(&old, &new, &bodies)));
+}
+
+/// Batch 5x, part B, rule 5: a moved constant and a moved struct with its `impl` block.
+#[test]
+fn a_moved_constant_and_a_moved_struct_get_their_proof() {
+    // A constant.
+    let before = move_files("mod date;\n", "const LIMIT: u64 = 4;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n", None);
+    let after = move_files("mod calendar;\nmod date;\n", "use crate::calendar::LIMIT;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n", Some("pub(crate) const LIMIT: u64 = 4;\n"));
+    let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::LIMIT", equal("n0"))];
+    let report = run_derived_files(&before, &after, &bodies);
+    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::LIMIT` → `demo::calendar::LIMIT` (proved N1")), "{report:#?}");
+    let claims = vec![claim("c1", "move-item", Some("demo::date::LIMIT"), serde_json::json!({"to": "demo::calendar::LIMIT"}))];
+    let report = run_claim_files(&before, &after, claims, &bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+    // A different value is not a move.
+    let changed = move_files("mod calendar;\nmod date;\n", "use crate::calendar::LIMIT;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n", Some("pub(crate) const LIMIT: u64 = 5;\n"));
+    let report = run_derived_files(&before, &changed, &[("demo::date::parse", different(false)), ("demo::calendar::LIMIT", different(false))]);
+    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+
+    // A struct with an `impl` block.
+    const YEAR: &str = "pub struct Year(pub u64);\nimpl Year {\n    pub fn leap(&self) -> bool {\n        self.0 % 4 == 0\n    }\n}\n";
+    const PARSE: &str = "pub fn parse(y: u64) -> bool {\n    Year(y).leap()\n}\n";
+    let date = format!("{YEAR}{PARSE}");
+    let date_after = format!("use crate::calendar::Year;\n{PARSE}");
+    let before = move_files("mod date;\n", &date, None);
+    let after = move_files("mod calendar;\nmod date;\n", &date_after, Some(YEAR));
+    let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::Year::leap", equal("n1"))];
+    let report = run_derived_files(&before, &after, &bodies);
+    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::Year` → `demo::calendar::Year` (proved N1")), "{report:#?}");
+    assert!(!descriptions(&report).iter().any(|text| text.contains("added") || text.contains("removed")), "{report:#?}");
+    let claims = vec![claim("c1", "move-item", Some("demo::date::Year"), serde_json::json!({"to": "demo::calendar::Year"}))];
+    let report = run_claim_files(&before, &after, claims, &bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+    // An edit in a method of the moved type is not a move.
+    let edited = YEAR.replace("% 4", "% 400");
+    let after = move_files("mod calendar;\nmod date;\n", &date_after, Some(&edited));
+    let report = run_derived_files(&before, &after, &[("demo::date::parse", equal("n1")), ("demo::calendar::Year::leap", different(false))]);
+    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+}
+
+#[test]
+fn a_reason_with_the_path_of_an_item_covers_each_spotlight_in_the_item() {
+    // Batch 5x, part D (trial 7 on humantime): only a rejection gave the exact key of a reason,
+    // so each step with a spotlight was two commands. The agent knows the path of the item.
+    let src = "pub mod m {\n    pub fn f(a: u32) -> u32 {\n        a\n    }\n    pub fn g(a: u32) -> u32 {\n        a\n    }\n}\n";
+    let after = src.replace("pub fn f", "pub unsafe fn f").replace("pub fn g", "pub unsafe fn g");
+    let check = |reasons: &[(&str, &str)]| {
+        let (_d1, old) = load(src);
+        let (_d2, new) = load(&after);
+        let mut step = step(vec![]);
+        for (at, text) in reasons {
+            step.reasons.insert(at.to_string(), text.to_string());
+        }
+        verify_step(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle).report
+    };
+    let reason = |report: &StepReport, item: &str| {
+        let fact = report.facts.iter().find(|fact| fact.at.as_ref().is_some_and(|at| at.item == item)).unwrap();
+        assert!(fact.spotlight, "{fact:#?}");
+        (fact.reason.clone().unwrap_or_default(), fact.reason_key.clone().unwrap_or_default())
+    };
+    let report = check(&[]);
+    assert_eq!(facts_of(&report), ["qualifiers demo::m::f/sig/qualifiers", "qualifiers demo::m::g/sig/qualifiers"]);
+    assert!(!report.accepted());
+    // The path of the function covers the spotlight in it, and no other spotlight.
+    let report = check(&[("demo::m::f", "the caller checks")]);
+    assert_eq!(reason(&report, "demo::m::f"), ("the caller checks".to_string(), "demo::m::f".to_string()));
+    assert_eq!(reason(&report, "demo::m::g"), (String::new(), String::new()));
+    assert!(!report.accepted());
+    // Each output shows the reason with the key that the agent gave.
+    assert!(views::text_report(std::slice::from_ref(&report)).contains("; reason (key `demo::m::f`): \"the caller checks\""), "{}", views::text_report(std::slice::from_ref(&report)));
+    // The exact key continues to work, and it goes first.
+    let report = check(&[("demo::m::f", "the caller checks"), ("demo::m::g/sig/qualifiers", "exact"), ("demo::m::f/sig/qualifiers", "exact f")]);
+    assert_eq!(reason(&report, "demo::m::f"), ("exact f".to_string(), String::new()));
+    assert_eq!(reason(&report, "demo::m::g"), ("exact".to_string(), String::new()));
+    assert!(report.accepted());
+    assert!(views::text_report(std::slice::from_ref(&report)).contains("; reason: \"exact f\""));
+    // A module path and a crate name are not a key of this form. A name that only starts with
+    // the path of an item is not in the item.
+    for key in ["demo::m", "demo", "demo::m::f/sig", "demo::m::", "demo::m::f/"] {
+        let report = check(&[(key, "wide")]);
+        assert_eq!((reason(&report, "demo::m::f"), reason(&report, "demo::m::g")), ((String::new(), String::new()), (String::new(), String::new())), "{key}");
+    }
+    let (_d1, old) = load(src);
+    let (_d2, new) = load(&format!("{after}pub struct S;\npub const C: u32 = 1;\npub trait T {{}}\nimpl S {{\n    pub fn new() -> S {{\n        S\n    }}\n}}\n"));
+    for key in ["demo::m::f", "demo::S", "demo::C", "demo::T", "demo::S::new"] {
+        assert!(is_item_reason_key(key, &old, &new), "{key}");
+    }
+    for key in ["demo::m", "demo", "demo::impl S", "demo::none"] {
+        assert!(!is_item_reason_key(key, &old, &new), "{key}");
+    }
+}
+
+#[test]
+fn a_nested_function_is_its_own_body() {
+    // Batch 5x, part E (trial 7): an edit in a nested function showed the outer function as the
+    // affected body. The outer function is affected only if its MIR changes.
+    let before = "pub fn outer(n: u32) -> u32 {\n    fn inner() -> u32 {\n        7\n    }\n    n + inner()\n}\n";
+    let after = before.replace("7", "8");
+    let outer = |status| body("demo::outer", "src/lib.rs", 1, status);
+    let inner = |name: &str| body(name, "src/lib.rs", 2, different(false));
+    let affected = |bodies: Vec<BodyComparison>| -> Vec<String> {
+        let report = run_derived_with(before, &after, &SpanBodies(bodies));
+        assert!(report.accepted() && report.facts.len() == 1 && report.facts[0].class == Some(Class::Logic), "{report:#?}");
+        report.facts[0].affected.clone()
+    };
+    assert_eq!(affected(vec![outer(equal("n0")), inner("demo::outer::inner")]), ["demo::outer::inner"]);
+    // The outer function shows when its MIR changes, also through a closure.
+    assert_eq!(affected(vec![outer(different(false)), inner("demo::outer::inner")]), ["demo::outer", "demo::outer::inner"]);
+    assert_eq!(affected(vec![outer(equal("n0")), inner("demo::outer::{closure#0}"), inner("demo::outer::inner::{closure#0}")]), ["demo::outer", "demo::outer::inner"]);
+    // With no nested function, the list has the item.
+    assert_eq!(affected(vec![outer(different(false))]), ["demo::outer"]);
+}
+
+/// Batch 5x, part E: a reason with the exact key of a fact with no spotlight shows as a note.
+/// The class of the fact stays.
+#[test]
+fn a_stored_reason_of_a_fact_with_no_spotlight_is_a_note() {
+    let before = "pub fn f(x: u32) -> u32 {\n    x + 1\n}\n";
+    let after = "pub fn f(x: u32) -> u32 {\n    x + 2\n}\n";
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let oracle = FakeBodies([("demo::f".to_string(), different(false))].into_iter().collect());
+    let run = |step: &Step| crate::verify_step_with(&StepInput { step, before: &old, after: &new }, &oracle, &NoOracle, true).report;
+    let mut step = step(Vec::new());
+    let plain = run(&step);
+    assert_eq!(plain.facts.len(), 1, "{:?}", plain.facts);
+    assert!(!plain.facts[0].spotlight && plain.facts[0].reason.is_none(), "{:?}", plain.facts);
+    assert!(!views::text_report(std::slice::from_ref(&plain)).contains("gave a reason"));
+    step.reasons.insert(plain.facts[0].reason_place(), "the limit is new".into());
+    let report = run(&step);
+    assert_eq!(report.facts[0].reason.as_deref(), Some("the limit is new"));
+    assert_eq!((report.facts[0].class, report.facts[0].spotlight), (plain.facts[0].class, false));
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("      note: no spotlight; the agent gave a reason: \"the limit is new\""), "{text}");
+}
+
+/// A step with claims, and a derived fact for each edit with no claim (as the command `step`).
+fn run_claim_facts(before: &[(&str, &str)], after: &[(&str, &str)], claims: Vec<Claim>, bodies: &[(&str, BodyStatus)]) -> StepReport {
+    let (_d1, old) = load_files(before);
+    let (_d2, new) = load_files(after);
+    let step = step(claims);
+    let oracle = FakeBodies(bodies.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report
+}
+
+/// Batch 5x, round 2, part 1: a plain doc comment in the file of the new module, or on the
+/// moved item, does not stop the proof of a move. Each doc change stays a fact to read. Each
+/// other attribute stops the proof as before.
+#[test]
+fn a_plain_doc_comment_does_not_stop_the_proof_of_a_move() {
+    const DATE: &str = "pub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\nfn is_leap(y: u64) -> bool {\n    y % 4 == 0\n}\n";
+    const DATE_AFTER: &str = "use crate::calendar::is_leap;\n\npub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\n";
+    const CALENDAR: &str = "pub(crate) fn is_leap(y: u64) -> bool {\n    y % 4 == 0\n}\n";
+    const LIB: &str = "mod calendar;\nmod date;\n";
+    const HEAD: &str = "//! Calendar computations.\n\n";
+    let before = move_files("mod date;\n", DATE, None);
+    let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", equal("n0"))];
+    let claims = || vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
+    let proved = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1"));
+    let doc_facts = |report: &StepReport| report.facts.iter().filter(|fact| fact.description.starts_with("changed docs") && fact.class == Some(Class::Other)).count();
+
+    // 1. Each form of a plain doc comment: in the file, on the item, and the two together.
+    let forms = [
+        (HEAD, ""),
+        ("/*! Calendar computations. */\n", ""),
+        ("#![doc = \"Calendar computations.\"]\n", ""),
+        ("", "/// True for a leap year.\n"),
+        ("", "/** True for a leap year. */\n"),
+        ("", "#[doc = \"True for a leap year.\"]\n"),
+        (HEAD, "/// True for a leap year.\n"),
+        // A long doc comment on a short item: the doc text is not a part of the pair test.
+        ("", "/// True for a leap year.\n///\n/// A year is a leap year if 4 divides it. This function does not know the rule of\n/// the centuries, and it does not know the calendar before the year 1582.\n"),
+    ];
+    for (head, doc) in forms {
+        let calendar = format!("{head}{doc}{CALENDAR}");
+        let after = move_files(LIB, DATE_AFTER, Some(&calendar));
+        let count = [head, doc].iter().filter(|text| !text.is_empty()).count();
+        let report = run_derived_files(&before, &after, &bodies);
+        assert!(proved(&report), "{calendar}: {report:#?}");
+        assert!(!descriptions(&report).iter().any(|text| text.contains("added") || text.contains("removed")), "{calendar}: {report:#?}");
+        // Each doc change is its own fact to read, with the class `other`.
+        assert_eq!(doc_facts(&report), count, "{calendar}: {report:#?}");
+        let report = run_claim_facts(&before, &after, claims(), &bodies);
+        assert!(report.accepted() && status_of(&report, "c1").is_verified() && report.uncovered.is_empty(), "{calendar}: {report:#?}");
+        assert_eq!(doc_facts(&report), count, "{calendar}: {report:#?}");
+    }
+
+    // 2. No proof, also with a doc comment in the new file.
+    let changed = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", different(false))];
+    let cases: Vec<(&str, String, String, &[(&str, BodyStatus)])> = vec![
+        ("a body edit", LIB.into(), format!("{HEAD}{}", CALENDAR.replace("== 0", "== 0 && y != 0")), &changed),
+        // A bare name of the body is a different item in the new module: the MIR differs.
+        ("a different callee", LIB.into(), format!("{HEAD}{CALENDAR}"), &changed),
+        ("a cfg on the module", "#[cfg(not(windows))]\nmod calendar;\nmod date;\n".into(), format!("{HEAD}{CALENDAR}"), &bodies),
+        ("an allow attribute", LIB.into(), format!("{HEAD}#![allow(dead_code)]\n{CALENDAR}"), &bodies),
+        ("an allow attribute only", LIB.into(), format!("#![allow(dead_code)]\n{CALENDAR}"), &bodies),
+        ("a doc in a cfg_attr", LIB.into(), format!("#![cfg_attr(windows, doc = \"Calendar.\")]\n{CALENDAR}"), &bodies),
+        ("a computed doc in the file", LIB.into(), format!("#![doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies),
+        ("a doc test in the file", LIB.into(), format!("//! Calendar.\n//!\n//! ```\n//! assert!(false);\n//! ```\n{CALENDAR}"), &bodies),
+        ("a hidden item", LIB.into(), format!("{HEAD}#[doc(hidden)]\n{CALENDAR}"), &bodies),
+        ("a computed doc on the item", LIB.into(), format!("{HEAD}#[doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies),
+        ("a cfg on the item", LIB.into(), format!("{HEAD}#[cfg(not(windows))]\n{CALENDAR}"), &bodies),
+        ("a doc test on the item", LIB.into(), format!("{HEAD}/// ```\n/// assert!(false);\n/// ```\n{CALENDAR}"), &bodies),
+        // A doc comment on the `mod` line has no fact of its own, so it is not a part of a move.
+        ("a doc on the mod line", "/// Calendar computations.\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies),
+        ("a doc test on the mod line", "/// ```\n/// assert!(false);\n/// ```\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies),
+    ];
+    for (name, lib, calendar, bodies) in &cases {
+        let after = move_files(lib, DATE_AFTER, Some(calendar));
+        let report = run_derived_files(&before, &after, bodies);
+        assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{name}: {report:#?}");
+        let report = run_claim_facts(&before, &after, claims(), bodies);
+        assert!(!report.accepted() && !status_of(&report, "c1").is_verified(), "{name}: {report:#?}");
+    }
+    // A moved constant with a different value, and a doc comment in the new file.
+    let before = move_files("mod date;\n", "const LIMIT: u64 = 4;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n", None);
+    let date = "use crate::calendar::LIMIT;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n";
+    let same = move_files(LIB, date, Some("//! Calendar computations.\n\n/// The cycle.\npub(crate) const LIMIT: u64 = 4;\n"));
+    let report = run_derived_files(&before, &same, &[("demo::date::parse", equal("n1")), ("demo::calendar::LIMIT", equal("n0"))]);
+    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::LIMIT` → `demo::calendar::LIMIT`")), "{report:#?}");
+    assert_eq!(doc_facts(&report), 2, "{report:#?}");
+    let other = move_files(LIB, date, Some("//! Calendar computations.\n\npub(crate) const LIMIT: u64 = 5;\n"));
+    let report = run_derived_files(&before, &other, &[("demo::date::parse", different(false)), ("demo::calendar::LIMIT", different(false))]);
+    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+}
+
+/// Batch 5x, round 2, part 1, rule 7: a rename step with a doc comment change keeps its proof.
+/// A doc test and an attribute of the `doc` family with no text stop it.
+#[test]
+fn a_plain_doc_comment_does_not_stop_the_proof_of_a_rename() {
+    const LIB: &str = "pub fn show(n: u32) -> u32 {\n    item(n)\n}\n/// The item.\nfn item(n: u32) -> u32 {\n    n + 1\n}\n";
+    let bodies = [("demo::show", equal("n1")), ("demo::piece", equal("n1"))];
+    let renamed = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("renamed `demo::item` → `demo::piece` (proved N1"));
+    let claims = || vec![claim("c1", "rename", Some("demo::item"), serde_json::json!({"to": "piece"}))];
+    let after = LIB.replace("item(", "piece(");
+    for (doc, proof) in [
+        ("/// The piece.\n", true),
+        ("/// The piece.\n/// It adds one.\n", true),
+        ("", true),
+        ("/** The piece. */\n", true),
+        ("#[doc = \"The piece.\"]\n", true),
+        ("/// The piece.\n///\n/// ```\n/// assert!(false);\n/// ```\n", false),
+        ("/// The item.\n#[doc(hidden)]\n", false),
+        ("#[doc = include_str!(\"../README.md\")]\n", false),
+    ] {
+        let after = after.replace("/// The item.\n", doc);
+        let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", LIB)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], &bodies);
+        assert_eq!(renamed(&report), proof, "{doc}: {report:#?}");
+        let report = run_claim_facts(&[("Cargo.toml", MANIFEST), ("src/lib.rs", LIB)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], claims(), &bodies);
+        assert_eq!(report.accepted() && status_of(&report, "c1").is_verified(), proof, "{doc}: {report:#?}");
+        if proof {
+            // The doc change is a fact to read with the class `other`.
+            let fact = report.facts.iter().find(|fact| fact.description.starts_with("changed docs")).unwrap_or_else(|| panic!("{doc}: {report:#?}"));
+            assert_eq!(fact.class, Some(Class::Other), "{doc}: {report:#?}");
+        } else {
+            // The message does not name a plain doc change: the cause is the other change.
+            assert!(status_of(&report, "c1").text().contains("an identity step must be neutral, but the step also has the change at `demo::piece`"), "{doc}: {report:#?}");
+        }
+    }
+}
+
+/// Batch 5x, round 2, part 2: a visibility change that changes the set of the items that a
+/// different crate can name is a fact to read (the class `other`), and its text says so. A
+/// change with no such effect stays proved neutral.
+#[test]
+fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
+    const DATE: &str = "pub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\nfn is_leap(y: u64) -> bool {\n    y % 4 == 0\n}\n";
+    const CALENDAR: &str = "fn leap(y: u64) -> bool {\n    y % 4 == 0\n}\npub fn days(y: u64) -> u64 {\n    if leap(y) { 366 } else { 365 }\n}\n";
+    const LIB: &str = "pub mod calendar;\nmod date;\n";
+    const NOW: &str = " (the public API changes: a different crate can now use the item)";
+    const GONE: &str = " (the public API changes: a different crate can no longer use the item)";
+    let bodies = [("demo::date::parse", equal("n0")), ("demo::date::is_leap", equal("n0")), ("demo::calendar::leap", equal("n0")), ("demo::calendar::days", equal("n0")), ("demo::calendar::is_leap", equal("n0")), ("demo::time::parse", equal("n0")), ("demo::time::is_leap", equal("n0")), ("demo::date::Year::leap", equal("n0"))];
+    // The visibility fact of a step: its text and its class.
+    let visibility = |before: &[(&str, &str)], after: &[(&str, &str)]| -> (String, Option<Class>) {
+        let report = run_derived_files(before, after, &bodies);
+        assert!(report.accepted(), "{report:#?}");
+        let fact = report.facts.iter().find(|fact| fact.description.starts_with("visibility of ")).unwrap_or_else(|| panic!("{report:#?}"));
+        assert!(!fact.spotlight, "{report:#?}");
+        (fact.description.clone(), fact.class)
+    };
+    let files = |lib: &'static str, date: &'static str, calendar: &'static str| move_files(lib, date, Some(calendar));
+    let base = files(LIB, DATE, CALENDAR);
+    let leaked: &str = Box::leak(CALENDAR.replace("fn leap", "pub fn leap").into_boxed_str());
+    let in_crate: &str = Box::leak(CALENDAR.replace("fn leap", "pub(crate) fn leap").into_boxed_str());
+    let public_date: &str = Box::leak(DATE.replace("fn is_leap", "pub fn is_leap").into_boxed_str());
+
+    // V1: `fn` → `pub fn` in a public module.
+    let (text, class) = visibility(&base, &files(LIB, DATE, leaked));
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `private` → `pub`{NOW}"), Some(Class::Other)));
+    // The reverse of V1.
+    let (text, class) = visibility(&files(LIB, DATE, leaked), &base);
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub` → `private`{GONE}"), Some(Class::Other)));
+    // `private` → `pub(crate)`: no crate other than this one sees a difference.
+    let (text, class) = visibility(&base, &files(LIB, DATE, in_crate));
+    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub (crate)`".to_string(), Some(Class::Neutral)));
+    // `pub(crate)` → `pub` in a public module.
+    let (text, class) = visibility(&files(LIB, DATE, in_crate), &files(LIB, DATE, leaked));
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub (crate)` → `pub`{NOW}"), Some(Class::Other)));
+    // `pub` in a private module with no re-export. A `pub use` line of a different item of
+    // the module does not bring the item.
+    for lib in [LIB, "pub mod calendar;\nmod date;\npub use self::date::parse;\n", "pub mod calendar;\nmod date;\npub use self::date::{parse as read};\n"] {
+        let (text, class) = visibility(&files(lib, DATE, CALENDAR), &files(lib, public_date, CALENDAR));
+        assert_eq!((text, class), ("visibility of `demo::date::is_leap`: `private` → `pub`".to_string(), Some(Class::Neutral)), "{lib}");
+    }
+    // `pub` in a private module, and a `pub use` line that can bring the item: by its name, by
+    // the name of the module, with a glob, and through an `as` name of a private `use` line.
+    for (lib, cause) in [
+        ("pub mod calendar;\nmod date;\npub use date::is_leap;\n", "a `pub use` line names `is_leap`"),
+        ("pub mod calendar;\nmod date;\npub use self::date::{parse, is_leap as leap};\n", "a `pub use` line names `is_leap`"),
+        ("pub mod calendar;\nmod date;\npub use crate::date as time;\n", "a `pub use` line names `date`"),
+        ("pub mod calendar;\nmod date;\npub use date::*;\n", "a glob `pub use` line names `date`"),
+        ("pub mod calendar;\nmod date;\nuse date as time;\npub use time::*;\n", "a glob `pub use` line names `time`"),
+        ("pub mod calendar;\nmod date;\npub mod all {\n    pub use super::*;\n}\n", "a glob `pub use` line with a relative path"),
+        ("pub mod calendar;\nmod date;\nmacro_rules! export {\n    ($name:ident) => {\n        pub use $name::*;\n    };\n}\nexport!(date);\n", "the macro `export!` has a `pub use` line"),
+        ("pub mod calendar;\nmod date;\nother::export!(date);\n", "a macro call names `date`"),
+        ("pub mod calendar;\nmod date;\n#[path = \"date.rs\"]\npub mod time;\n", "the module `demo::time` has a `#[path]` attribute"),
+    ] {
+        let (text, class) = visibility(&files(lib, DATE, CALENDAR), &files(lib, public_date, CALENDAR));
+        assert!(text.starts_with("visibility of `demo::date::is_leap`: `private` → `pub` (the public API can change: ") && text.contains(cause), "{lib}: {text}");
+        assert_eq!(class, Some(Class::Other), "{lib}");
+    }
+    // A method of a `pub` type in a private module: a public signature can give the type to a
+    // different crate. A method of a type that is not `pub` stays neutral.
+    const YEAR: &str = "pub struct Year(pub u64);\nimpl Year {\n    fn leap(&self) -> bool {\n        self.0 % 4 == 0\n    }\n}\npub fn parse(y: u64) -> bool {\n    Year(y).leap()\n}\n";
+    let year_public: &str = Box::leak(YEAR.replace("    fn leap", "    pub fn leap").into_boxed_str());
+    let (text, class) = visibility(&files(LIB, YEAR, CALENDAR), &files(LIB, year_public, CALENDAR));
+    assert_eq!(class, Some(Class::Other), "{text}");
+    assert!(text.contains("(the public API can change: the type `Year` is `pub`, and a public signature can give it to a different crate)"), "{text}");
+    let hidden: &str = Box::leak(YEAR.replace("pub struct Year", "pub(crate) struct Year").into_boxed_str());
+    let hidden_public: &str = Box::leak(hidden.replace("    fn leap", "    pub fn leap").into_boxed_str());
+    let (text, class) = visibility(&files(LIB, hidden, CALENDAR), &files(LIB, hidden_public, CALENDAR));
+    assert_eq!((text, class), ("visibility of `demo::date::Year::leap`: `private` → `pub`".to_string(), Some(Class::Neutral)));
+    // A module that becomes public.
+    let (text, class) = visibility(&files(LIB, DATE, CALENDAR), &files("pub mod calendar;\npub mod date;\n", DATE, CALENDAR));
+    assert_eq!((text, class), (format!("visibility of `demo::date`: `private` → `pub`{NOW}"), Some(Class::Other)));
+
+    // V2: a move into the public module, with `pub`. The move stays proved neutral, and the
+    // visibility is the fact to read.
+    let moved_date = "use crate::calendar::is_leap;\n\npub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\n";
+    let moved_calendar: &str = Box::leak(format!("{CALENDAR}pub fn is_leap(y: u64) -> bool {{\n    y % 4 == 0\n}}\n").into_boxed_str());
+    let v2_bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", equal("n0")), ("demo::calendar::leap", equal("n0")), ("demo::calendar::days", equal("n0"))];
+    let report = run_derived_files(&base, &files(LIB, moved_date, moved_calendar), &v2_bodies);
+    assert!(report.accepted(), "{report:#?}");
+    let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(moved.class, Some(Class::Neutral));
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("visibility of ")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!((fact.description.clone(), fact.class), (format!("visibility of `demo::calendar::is_leap`: `private` → `pub`{NOW}"), Some(Class::Other)));
+    let claims = vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
+    let report = run_claim_facts(&base, &files(LIB, moved_date, moved_calendar), claims, &v2_bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("visibility of ")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(fact.class, Some(Class::Other), "{report:#?}");
+
+    // A binary crate has no API for a different crate: the change stays proved neutral.
+    let main = "pub mod calendar;\nfn main() {\n    let _ = calendar::days(4);\n}\n";
+    let binary = |calendar: &'static str| vec![("Cargo.toml", MANIFEST), ("src/main.rs", main), ("src/calendar.rs", calendar)];
+    let (text, class) = visibility(&binary(CALENDAR), &binary(leaked));
+    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub`".to_string(), Some(Class::Neutral)));
+}
+
+/// Batch 5x, round 3: a proved rename or move that changes the set of the paths that a
+/// different crate can use gets one fact to read (the class `other`). The identity fact stays
+/// proved neutral, and an identity claim stays verified. A private item gets no such fact.
+#[test]
+fn a_rename_or_a_move_that_changes_the_public_api_gets_a_fact_to_read() {
+    const DATE: &str = "pub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\npub fn is_leap(y: u64) -> bool {\n    y % 4 == 0\n}\n";
+    const DATE_MOVED: &str = "use crate::calendar::is_leap;\n\npub fn parse(y: u64) -> bool {\n    is_leap(y)\n}\n";
+    const CALENDAR: &str = "fn leap(y: u64) -> bool {\n    y % 4 == 0\n}\npub fn days(y: u64) -> u64 {\n    if leap(y) { 366 } else { 365 }\n}\n";
+    const LIB: &str = "pub mod calendar;\nmod date;\n";
+    const PRIVATE: &str = "mod calendar;\nmod date;\n";
+    let moved_calendar = format!("{CALENDAR}pub fn is_leap(y: u64) -> bool {{\n    y % 4 == 0\n}}\n");
+    let bodies = [
+        ("demo::date::parse", equal("n1")),
+        ("demo::date::is_leap", equal("n0")),
+        ("demo::calendar::is_leap", equal("n0")),
+        ("demo::calendar::leap", equal("n0")),
+        ("demo::calendar::leap_year", equal("n0")),
+        ("demo::calendar::days", equal("n1")),
+        ("demo::calendar::day_count", equal("n1")),
+    ];
+    // The API facts of a report. Each one has the class `other`, no spotlight, and no reason.
+    let api = |report: &StepReport| -> Vec<String> {
+        let facts: Vec<&semilla_core::Fact> = report.facts.iter().filter(|fact| fact.description.contains("public API")).collect();
+        assert!(facts.iter().all(|fact| fact.class == Some(Class::Other) && !fact.spotlight && fact.reason.is_none()), "{report:#?}");
+        facts.iter().map(|fact| fact.description.clone()).collect()
+    };
+    // The identity fact of a derived rename or move: it stays proved neutral.
+    let proved = |report: &StepReport, start: &str| {
+        assert!(report.accepted(), "{report:#?}");
+        let fact = report.facts.iter().find(|fact| fact.description.starts_with(start)).unwrap_or_else(|| panic!("{start}: {report:#?}"));
+        assert_eq!(fact.class, Some(Class::Neutral), "{report:#?}");
+    };
+
+    // V3: a `pub fn` moves from a private module into a public module, with no visibility edit.
+    let before = move_files(LIB, DATE, Some(CALENDAR));
+    let after = move_files(LIB, DATE_MOVED, Some(&moved_calendar));
+    let report = run_derived_files(&before, &after, &bodies);
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    assert_eq!(api(&report), ["public API: a different crate can now use `demo::calendar::is_leap`"]);
+    assert_eq!(report.computed_class, Some(Class::Other));
+    assert_eq!(report.facts.len(), 2, "{report:#?}");
+    // The text report shows the new fact with its class, and no line asks for a reason.
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("public API: a different crate can now use `demo::calendar::is_leap` [other]") && !text.contains("needs a reason"), "{text}");
+    // The kind of the group stays `move`: the new fact is no second change.
+    assert_eq!(semilla_core::report::derived_kind(&[&report]), Some(semilla_core::GroupKind::Move));
+    // The reverse of V3: the item goes out of the public API.
+    let report = run_derived_files(&after, &before, &bodies);
+    proved(&report, "moved `demo::calendar::is_leap` → `demo::date::is_leap` (proved N1");
+    assert_eq!(api(&report), ["public API: a different crate can no longer use `demo::calendar::is_leap`"]);
+    // V3 with the claim `move-item`: the claim stays verified.
+    let claims = vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
+    let report = run_claim_facts(&before, &after, claims, &bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+    assert_eq!(api(&report), ["public API: a different crate can now use `demo::calendar::is_leap`"]);
+
+    // A rename of a `pub fn` in a public module: the old public name stops to exist.
+    let renamed = CALENDAR.replace("days", "day_count");
+    let after = move_files(LIB, DATE, Some(&renamed));
+    const RENAME: &str = "public API: `demo::calendar::days` is now `demo::calendar::day_count` (a different crate can no longer use the old path)";
+    let report = run_derived_files(&before, &after, &bodies);
+    proved(&report, "renamed `demo::calendar::days` → `demo::calendar::day_count` (proved N1");
+    assert_eq!(api(&report), [RENAME]);
+    assert_eq!(semilla_core::report::derived_kind(&[&report]), Some(semilla_core::GroupKind::Rename));
+    // The same rename with the claim `rename`: accepted, the claim is verified.
+    let claims = || vec![claim("c1", "rename", Some("demo::calendar::days"), serde_json::json!({"to": "day_count"}))];
+    let report = run_claim_facts(&before, &after, claims(), &bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+    assert_eq!(api(&report), [RENAME]);
+    assert_eq!(report.computed_class, Some(Class::Other));
+    // A declared class `neutral` is not the class of the step: the new fact gives `other`.
+    let (_d1, old) = load_files(&before);
+    let (_d2, new) = load_files(&after);
+    let declared = Step { class: Some(Class::Neutral), ..step(claims()) };
+    let oracle = FakeBodies(bodies.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
+    let report = verify_step_with(&StepInput { step: &declared, before: &old, after: &new }, &oracle, &NoOracle, true).report;
+    let errors: Vec<&String> = report.errors.iter().filter(|error| error.starts_with("the step declares the class `neutral`")).collect();
+    assert!(errors.len() == 1 && errors[0].contains("public API: ") && errors[0].ends_with("give(s) the class `other`"), "{report:#?}");
+    // The public module is a private module: no different crate can use the name.
+    let report = run_derived_files(&move_files(PRIVATE, DATE, Some(CALENDAR)), &move_files(PRIVATE, DATE, Some(&renamed)), &bodies);
+    proved(&report, "renamed `demo::calendar::days` → `demo::calendar::day_count` (proved N1");
+    assert_eq!((api(&report).len(), report.facts.len(), report.computed_class), (0, 1, Some(Class::Neutral)), "{report:#?}");
+
+    // A rename of a private function: no new fact.
+    let private = CALENDAR.replace("leap", "leap_year");
+    let report = run_derived_files(&before, &move_files(LIB, DATE, Some(&private)), &bodies);
+    proved(&report, "renamed `demo::calendar::leap` → `demo::calendar::leap_year` (proved N1");
+    assert_eq!((api(&report).len(), report.facts.len(), report.computed_class), (0, 1, Some(Class::Neutral)), "{report:#?}");
+    let claims = vec![claim("c1", "rename", Some("demo::calendar::leap"), serde_json::json!({"to": "leap_year"}))];
+    let report = run_claim_facts(&before, &move_files(LIB, DATE, Some(&private)), claims, &bodies);
+    assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+    assert_eq!((api(&report).len(), report.facts.len(), report.computed_class), (0, 0, Some(Class::Neutral)), "{report:#?}");
+
+    // A move of a private function between two private modules: no new fact.
+    let date = DATE.replace("pub fn is_leap", "fn is_leap");
+    let calendar = moved_calendar.replace("pub fn is_leap", "pub(crate) fn is_leap");
+    let report = run_derived_files(&move_files(PRIVATE, &date, Some(CALENDAR)), &move_files(PRIVATE, DATE_MOVED, Some(&calendar)), &bodies);
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    assert_eq!((api(&report).len(), report.computed_class), (0, Some(Class::Neutral)), "{report:#?}");
+    assert_eq!(descriptions(&report).len(), 2, "{report:#?}");
+
+    // Rule 6 (V2): the step has a visibility fact with an API text for the same item. One
+    // fact is sufficient.
+    let report = run_derived_files(&move_files(LIB, &date, Some(CALENDAR)), &move_files(LIB, DATE_MOVED, Some(&moved_calendar)), &bodies);
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    assert_eq!(api(&report), ["visibility of `demo::calendar::is_leap`: `private` → `pub` (the public API changes: a different crate can now use the item)"]);
+
+    // A "possibly" side: a glob `pub use` line can bring the old path.
+    let glob = "mod calendar;\nmod date;\npub use date::*;\n";
+    let report = run_derived_files(&move_files(glob, DATE, Some(CALENDAR)), &move_files(glob, DATE_MOVED, Some(&moved_calendar)), &bodies);
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    assert_eq!(api(&report), ["public API can change: a glob `pub use` line names `date` (`demo::date::is_leap` is now `demo::calendar::is_leap`)"]);
+
+    // A move between two public modules. A `pub use` line can keep the old path: then the
+    // text does not say that the old path stops.
+    let public = "pub mod calendar;\npub mod date;\n";
+    let report = run_derived_files(&move_files(public, DATE, Some(CALENDAR)), &move_files(public, DATE_MOVED, Some(&moved_calendar)), &bodies);
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    assert_eq!(api(&report), ["public API: `demo::date::is_leap` is now `demo::calendar::is_leap` (a different crate can no longer use the old path)"]);
+    let glob = |date: &str| format!("pub use crate::calendar::*;\n\n{}", date.replace("use crate::calendar::is_leap;\n\n", ""));
+    let report = run_derived_files(&move_files(public, &glob(DATE), Some(CALENDAR)), &move_files(public, &glob(DATE_MOVED), Some(&moved_calendar)), &bodies);
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    assert_eq!(api(&report), ["public API: `demo::date::is_leap` is now `demo::calendar::is_leap` (a `pub use` line can keep the old path)"]);
+
+    // A variant has no visibility of its own: the enum gives the answer.
+    for (vis, expected) in [("pub ", 1), ("", 0)] {
+        let before = format!("{vis}enum Event {{\n    Open,\n    Close,\n}}\npub fn code(e: &Event) -> u32 {{\n    match e {{\n        Event::Open => 1,\n        Event::Close => 2,\n    }}\n}}\n");
+        let after = before.replace("Open", "Opened");
+        let claims = vec![claim("c1", "rename", Some("demo::Event::Open"), serde_json::json!({"to": "Opened"}))];
+        let report = run_claim_facts(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &before)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], claims, &[("demo::code", equal("n1"))]);
+        assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+        let facts = api(&report);
+        assert_eq!(facts.len(), expected, "{report:#?}");
+        assert!(facts.iter().all(|text| text == "public API: `demo::Event::Open` is now `demo::Event::Opened` (a different crate can no longer use the old path)"), "{facts:?}");
+    }
+    // A method of a trait has no visibility of its own: the trait gives the answer.
+    for (vis, expected) in [("pub ", 1), ("", 0)] {
+        let before = format!("pub struct A;\n{vis}trait Price {{\n    fn price(&self) -> u32;\n    fn twice(&self) -> u32 {{\n        self.price() * 2\n    }}\n}}\nimpl Price for A {{\n    fn price(&self) -> u32 {{\n        3\n    }}\n}}\npub fn total(a: &A) -> u32 {{\n    a.price()\n}}\n");
+        let after = before.replace("price", "cost");
+        let claims = vec![claim("c1", "rename", Some("demo::Price::price"), serde_json::json!({"to": "cost"}))];
+        let bodies = [("demo::Price::twice", equal("n0")), ("demo::<A as Price>::cost", equal("n0")), ("demo::total", equal("n0"))];
+        let report = run_claim_facts(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &before)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], claims, &bodies);
+        assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
+        let facts = api(&report);
+        assert_eq!(facts.len(), expected, "{report:#?}");
+        assert!(facts.iter().all(|text| text == "public API: `demo::Price::price` is now `demo::Price::cost` (a different crate can no longer use the old path)"), "{facts:?}");
+    }
 }

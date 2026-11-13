@@ -32,6 +32,33 @@ pub struct NormalOracle {
     pub added: std::sync::Mutex<Added>,
 }
 
+/// Batch 5x, part C (trial 7): the build does not find a module file (`E0583`), and the file is
+/// in the folder of the repository. Git ignores the file, or the tree of the step does not have
+/// it. Semilla builds a tree of git, so the note says the cause.
+pub(crate) fn missing_module_note(repo: &Repo, error: &str, tree: &str) -> Option<String> {
+    if !error.contains("E0583") {
+        return None;
+    }
+    let mut notes: Vec<String> = Vec::new();
+    // The help line of the compiler: `create file "src/x.rs" or "src/x/mod.rs"`.
+    for line in error.lines().filter(|line| line.contains("help: to create the module")) {
+        for path in line.split('"').skip(1).step_by(2) {
+            if !repo.root.join(path).is_file() || repo.git(&["cat-file", "-e", &format!("{tree}:{path}")]).is_ok() {
+                continue;
+            }
+            let note = if repo.git(&["check-ignore", "-q", "--", path]).is_ok() {
+                format!("`{path}` is in the folder, but git ignores it (`git check-ignore -v {path}` shows the rule). Semilla builds only files that git tracks or that are not ignored.")
+            } else {
+                format!("`{path}` is in the folder, but it is not in the tree that Semilla builds. Semilla builds the tree of the step, not the folder.")
+            };
+            if !notes.contains(&note) {
+                notes.push(note);
+            }
+        }
+    }
+    (!notes.is_empty()).then(|| notes.join(" "))
+}
+
 /// The added feature selections of the steps of one oracle (batch 5u, part C).
 #[derive(Debug, Default)]
 pub struct Added {
@@ -42,7 +69,18 @@ pub struct Added {
     memo: Vec<((String, String), Vec<Features>, Vec<Configuration>, StepConfigs)>,
     /// The steps that have the builds of the hint.
     hinted: std::collections::BTreeSet<(String, String)>,
+    /// The comparison of one configuration of a step, by its inputs (batch 5x, part F). The
+    /// verifier asks for the same comparison more than one time. The comparison is a function
+    /// of the records of the two trees, the rename map, the added items, and the marks.
+    compared: BTreeMap<CompareKey, Compared>,
 }
+
+/// The inputs of the comparison of one configuration: the two trees, the configuration, the
+/// rename map, the added items, and the marks of the two sides (opaque, then stop).
+type CompareKey = (String, String, Configuration, BTreeMap<String, String>, Vec<String>, [std::collections::BTreeSet<String>; 4]);
+
+/// The result of the comparison of one configuration: the comparisons and the spans.
+type Compared = (Vec<semilla_normal::BodyComparison>, BTreeMap<String, (String, usize)>);
 
 /// The name of the hint file in the cache folder (batch 5u, part C): the feature selections
 /// that the last step with an added configuration needed. Semilla builds them with the default
@@ -306,13 +344,20 @@ impl NormalOracle {
     /// The records of a tree at a level and a configuration: from the cache, or from a delta
     /// build.
     fn records_with(&self, tree: &str, level: &str, config: &Configuration) -> Result<Vec<semilla_normal::BodyRecord>> {
+        self.records_or_build(tree, level, config, true)
+    }
+
+    /// Makes the records of a tree at a level and a configuration, and reads them with `read`.
+    /// A caller that needs only the build reads nothing (batch 5x, part F): the result is empty.
+    fn records_or_build(&self, tree: &str, level: &str, config: &Configuration, read: bool) -> Result<Vec<semilla_normal::BodyRecord>> {
+        let read_cached = |cache: &std::path::Path| if read { read_cached(cache) } else { Ok(Vec::new()) };
         // The cache key: the tree, the level, the configuration, and the build settings that are
         // not in the tree (the outer cargo configuration and the driver binary).
         let (root, cache, marked, name) = self.cache_folder(tree, level, config)?;
         let base = root.join("build");
         // A record with the mark is never a record of the shared folders.
         if !marked && cache.join(BUILD_CODE_FILE).exists() {
-            let _ = std::fs::remove_dir_all(&cache);
+            remove_cache(&cache);
         }
         // A compile error of this tree in this configuration: the same build gives it again.
         if let Ok(error) = std::fs::read_to_string(cache.join(FAILED_FILE)) {
@@ -320,7 +365,7 @@ impl NormalOracle {
         }
         if cache.join(".complete").exists() {
             note_sandbox(&cache);
-            return semilla_normal::read_records(&cache);
+            return read_cached(&cache);
         }
         std::fs::create_dir_all(&base)?;
         // One build folder serves one build at a time, also across processes.
@@ -330,7 +375,7 @@ impl NormalOracle {
         if cache.join(".complete").exists() {
             lock.unlock()?;
             note_sandbox(&cache);
-            return semilla_normal::read_records(&cache);
+            return read_cached(&cache);
         }
         let build = base.join(&name);
         let records = base.join(format!("{name}-records"));
@@ -345,7 +390,7 @@ impl NormalOracle {
             Err(error) => {
                 let text = format!("{error:#}");
                 if is_compile_error(&text) && !marked {
-                    let _ = std::fs::remove_dir_all(&cache);
+                    remove_cache(&cache);
                     std::fs::create_dir_all(&cache)?;
                     std::fs::write(cache.join(FAILED_FILE), &text)?;
                 }
@@ -353,7 +398,7 @@ impl NormalOracle {
             }
         };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
-        let _ = std::fs::remove_dir_all(&cache);
+        remove_cache(&cache);
         std::fs::create_dir_all(&cache)?;
         // The cache gets only the record file of each unit of this build (design 28.8). Each
         // other file of the records folder stays out, and the result names it. A program of
@@ -375,7 +420,7 @@ impl NormalOracle {
         std::fs::write(cache.join(".complete"), "")?;
         lock.unlock()?;
         note_sandbox(&cache);
-        semilla_normal::read_records(&cache)
+        read_cached(&cache)
     }
 
     /// The records of both trees at some levels. Each level runs in its own thread.
@@ -415,14 +460,16 @@ impl NormalOracle {
                 .iter()
                 .map(|config| {
                     scope.spawn(move || {
-                        if let Err(error) = self.records_with(&step.tree_before, "n0", config) {
+                        if let Err(error) = self.records_or_build(&step.tree_before, "n0", config, false) {
                             let text = format!("{error:#}");
                             return if is_compile_error(&text) { Ok(Some(first_error_line(&text))) } else { Err(error) };
                         }
-                        match self.records_with(&step.tree_after, "n0", config) {
+                        match self.records_or_build(&step.tree_after, "n0", config, false) {
                             Ok(_) => Ok(None),
                             Err(error) if is_compile_error(&format!("{error:#}")) => {
-                                Err(error.context(format!("the code after the step does not compile in the configuration `{}` (it compiles before the step)", config.name())))
+                                // A module file that the folder has and the tree does not have.
+                                let ignored = missing_module_note(&self.repo, &format!("{error:#}"), &step.tree_after).map(|note| format!(". {note} The output of the build")).unwrap_or_default();
+                                Err(error.context(format!("the code after the step does not compile in the configuration `{}` (it compiles before the step){ignored}", config.name())))
                             }
                             Err(error) => Err(error),
                         }
@@ -446,6 +493,7 @@ impl NormalOracle {
         let (before, after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
         let renames = with_moved_closures(renames, added, &before, &after);
         let renames = &renames;
+        let started = std::time::Instant::now();
         // The bodies that the build configuration selects, by the syntax tree (batch 5l). No
         // normal form looks into them.
         for (levels, is_after) in [(&before, false), (&after, true)] {
@@ -486,8 +534,17 @@ impl NormalOracle {
             marks
         };
         let (before_marks, after_marks) = (marks(&before, false), marks(&after, true));
+        MARK_TIME.add(started);
+        // The same comparison of an earlier call (batch 5x, part F): the result is in memory.
+        let key: CompareKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone(), renames.clone(), added.to_vec(), [before_marks.opaque.clone(), before_marks.stop.clone(), after_marks.opaque.clone(), after_marks.stop.clone()]);
+        let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).compared.get(&key).cloned();
+        if let Some((comparisons, spans)) = known {
+            return Ok(SetState { config: features.clone(), renames: renames.clone(), before, after, before_marks, after_marks, comparisons, done: Some(spans) });
+        }
+        let started = std::time::Instant::now();
         let comparisons = semilla_normal::compare_with(&before, &after, renames, added, &before_marks, &after_marks);
-        Ok(SetState { config: features.clone(), renames: renames.clone(), before, after, before_marks, after_marks, comparisons })
+        N0_TIME.add(started);
+        Ok(SetState { config: features.clone(), renames: renames.clone(), before, after, before_marks, after_marks, comparisons, done: None })
     }
 
     /// Compares the bodies of one configuration at N2 and N3 (with N4), after `compare_n0`.
@@ -499,9 +556,54 @@ impl NormalOracle {
         semilla_normal::drop_opaque_inlines(&mut state.after, &state.after_marks);
         let started = std::time::Instant::now();
         state.comparisons = semilla_normal::compare_with(&state.before, &state.after, &state.renames, added, &state.before_marks, &state.after_marks);
-        crate::timing("compare the bodies (N0 to N4)", started);
+        DEEP_TIME.add(started);
         Ok(())
     }
+}
+
+/// The totals of the time of the phases that run for each configuration (batch 5x, part F).
+pub(crate) static READ_TIME: crate::TimeTotal = crate::TimeTotal::new();
+pub(crate) static N0_TIME: crate::TimeTotal = crate::TimeTotal::new();
+pub(crate) static DEEP_TIME: crate::TimeTotal = crate::TimeTotal::new();
+pub(crate) static MARK_TIME: crate::TimeTotal = crate::TimeTotal::new();
+
+/// The key of the records in memory: the cache folder and the time of its `.complete` file.
+type FolderKey = (std::path::PathBuf, std::time::SystemTime);
+
+/// The records of the cache folders that this process read last (batch 5x, part F). One check
+/// of a step reads the same folder many times. The time of the `.complete` file is a part of
+/// the key: a folder that a build made again is a new entry.
+static RECORDS: std::sync::Mutex<BTreeMap<FolderKey, std::sync::Arc<Vec<semilla_normal::BodyRecord>>>> = std::sync::Mutex::new(BTreeMap::new());
+
+/// The most folders with records in memory: the folders of two steps with four configurations.
+const MOST_FOLDERS: usize = 48;
+
+/// Removes a cache folder, and its records in memory.
+fn remove_cache(cache: &std::path::Path) {
+    RECORDS.lock().unwrap_or_else(|error| error.into_inner()).retain(|(folder, _), _| folder != cache);
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+/// Reads the records of a complete cache folder.
+fn read_cached(cache: &std::path::Path) -> Result<Vec<semilla_normal::BodyRecord>> {
+    let key = std::fs::metadata(cache.join(".complete")).and_then(|file| file.modified()).ok().map(|time| (cache.to_path_buf(), time));
+    if let Some(key) = &key {
+        let known = RECORDS.lock().unwrap_or_else(|error| error.into_inner()).get(key).cloned();
+        if let Some(records) = known {
+            return Ok(records.as_ref().clone());
+        }
+    }
+    let started = std::time::Instant::now();
+    let records = semilla_normal::read_records(cache);
+    READ_TIME.add(started);
+    if let (Some(key), Ok(records)) = (key, &records) {
+        let mut folders = RECORDS.lock().unwrap_or_else(|error| error.into_inner());
+        if folders.len() >= MOST_FOLDERS {
+            folders.clear();
+        }
+        folders.insert(key, std::sync::Arc::new(records.clone()));
+    }
+    records
 }
 
 /// The comparison of one configuration of a step.
@@ -513,6 +615,8 @@ struct SetState {
     before_marks: semilla_normal::Marks,
     after_marks: semilla_normal::Marks,
     comparisons: Vec<semilla_normal::BodyComparison>,
+    /// The spans of a comparison that an earlier call did: the comparisons are complete.
+    done: Option<BTreeMap<String, (String, usize)>>,
 }
 
 impl SetState {
@@ -639,7 +743,16 @@ impl BodyOracle for NormalOracle {
             let handles: Vec<_> = states
                 .iter()
                 .filter(|state| state.needs_deep())
-                .map(|state| scope.spawn(move || self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], &state.config).map(|_| ())))
+                .filter(|state| state.done.is_none())
+                .flat_map(|state| ["n2", "n3"].map(|level| (state, level)))
+                .map(|(state, level)| {
+                    scope.spawn(move || {
+                        // Only the builds: `compare_deep` reads the records (batch 5x, part F).
+                        self.records_or_build(&step.tree_before, level, &state.config, false)?;
+                        self.records_or_build(&step.tree_after, level, &state.config, false)?;
+                        Ok(())
+                    })
+                })
                 .collect();
             handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
         });
@@ -651,10 +764,27 @@ impl BodyOracle for NormalOracle {
         let mut differs: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut config: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
         for mut state in states {
-            if state.needs_deep() {
-                self.compare_deep(step, added, &mut state)?;
-            }
-            state.spans(&mut spans);
+            let own = match state.done.take() {
+                Some(own) => own,
+                None => {
+                    if state.needs_deep() {
+                        self.compare_deep(step, added, &mut state)?;
+                    }
+                    let mut own = BTreeMap::new();
+                    state.spans(&mut own);
+                    let key: CompareKey = (
+                        step.tree_before.clone(),
+                        step.tree_after.clone(),
+                        state.config.clone(),
+                        state.renames.clone(),
+                        added.to_vec(),
+                        [state.before_marks.opaque.clone(), state.before_marks.stop.clone(), state.after_marks.opaque.clone(), state.after_marks.stop.clone()],
+                    );
+                    self.added.lock().unwrap_or_else(|error| error.into_inner()).compared.insert(key, (state.comparisons.clone(), own.clone()));
+                    own
+                }
+            };
+            spans.extend(own);
             let name = state.config.name();
             for comparison in state.comparisons {
                 if !comparison.config.is_empty() {
@@ -922,6 +1052,35 @@ impl ExprOracle for SmtOracle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Batch 5x, part F: the records in memory are the records of the folder on the disk.
+    #[test]
+    fn the_records_in_memory_follow_the_cache_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let write = |text: &str, seconds: u64| {
+            let line = serde_json::json!({ "name": "demo::f", "level": "n0", "text": text });
+            std::fs::create_dir_all(folder.path()).unwrap();
+            std::fs::write(folder.path().join("unit.jsonl"), line.to_string()).unwrap();
+            let complete = std::fs::File::create(folder.path().join(".complete")).unwrap();
+            complete.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+        };
+        let in_memory = || RECORDS.lock().unwrap().keys().filter(|(path, _)| path == folder.path()).count();
+        write("a", 1_000);
+        let first = read_cached(folder.path()).unwrap();
+        assert_eq!(first[0].text, "a");
+        assert_eq!(in_memory(), 1);
+        // The second read gives the same records, also if the record file is not there.
+        std::fs::remove_file(folder.path().join("unit.jsonl")).unwrap();
+        assert_eq!(read_cached(folder.path()).unwrap(), first);
+        // A build made the folder again: the `.complete` file has a new time.
+        write("b", 2_000);
+        assert_eq!(read_cached(folder.path()).unwrap()[0].text, "b");
+        // The removal of the folder removes its records in memory.
+        remove_cache(folder.path());
+        assert_eq!(in_memory(), 0);
+        write("c", 2_000);
+        assert_eq!(read_cached(folder.path()).unwrap()[0].text, "c");
+    }
 
     fn equal(level: &str) -> BodyStatus {
         BodyStatus::Equal { level: level.into(), proof: Vec::new() }

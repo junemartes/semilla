@@ -485,6 +485,8 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 // An operator expression that is a statement has no op: use the words of
                 // `replace-expression`.
                 None if matches!(node, "binary" | "unary") => format!("changed expression `{old}` → `{new}`"),
+                // A doc comment of a renamed or moved item: the words of each other doc fact.
+                None if edit.kind == EditKind::Docs => format!("changed docs `{old}` → `{new}`"),
                 None => format!("changed {node}: `{old}` → `{new}`"),
             }
         });

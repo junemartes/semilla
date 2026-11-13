@@ -107,6 +107,8 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
     }
 
     // 2. The parts of paired entities.
+    // The visibility facts that change the public API.
+    let mut api_keys: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
     for &index in &free {
         if fact_key[index].is_some() {
             continue;
@@ -116,7 +118,16 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         let item = after.items.get(&anchor.item).or_else(|| before.items.get(&anchor.item));
         let old_new = || format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after));
         let found: Option<(Key, String)> = match edit.kind {
-            EditKind::Visibility => Some(((anchor.item.clone(), "visibility".into()), format!("visibility of `{}`: {}", anchor.item, old_new()))),
+            EditKind::Visibility => {
+                // An empty visibility shows as `private` (batch 5x).
+                let side = |text: &Option<String>| if text.as_deref().is_none_or(|text| text.trim().is_empty()) { "private".to_string() } else { short(text) };
+                // A change of the public API is a fact to read (batch 5x, round 2).
+                let api = crate::visibility_api_change(edit, before, after).map(|text| format!(" ({text})")).unwrap_or_default();
+                if !api.is_empty() {
+                    api_keys.insert((anchor.item.clone(), "visibility".to_string()));
+                }
+                Some(((anchor.item.clone(), "visibility".into()), format!("visibility of `{}`: `{}` → `{}`{api}", anchor.item, side(&edit.text_before), side(&edit.text_after))))
+            }
             EditKind::Attrs => Some(((anchor.item.clone(), "attribute".into()), attribute_description(&anchor.item, edit))),
             EditKind::Members => members_fact(edit, &anchor, item, &keys).map(|(key, text)| (key, text)),
             EditKind::Signature => match edit.node_after.or(edit.node_before) {
@@ -253,7 +264,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         equal_sites.dedup();
         let place = anchor.to_string();
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false,
+        facts.push(Fact { build_code: None, build_code_change: false, reason_key: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
@@ -262,7 +273,17 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             status: "derived".into(),
             // A member order is never neutral: it has effects outside the MIR records (the drop
             // order of the fields, the derive output order, the discriminant values of an enum).
-            class: if !body_index.available { None } else if affected.is_empty() && key.1 != "member order" { Some(Class::Neutral) } else { Some(Class::Logic) },
+            // A visibility change of the public API has no MIR: the class is `other`, as for an
+            // attribute. It is a fact to read (batch 5x, round 2).
+            class: if !body_index.available {
+                None
+            } else if !affected.is_empty() || key.1 == "member order" {
+                Some(Class::Logic)
+            } else if api_keys.contains(key) {
+                Some(Class::Other)
+            } else {
+                Some(Class::Neutral)
+            },
             affected,
             spotlight: spotlight_why.is_some(),
             spotlight_why,

@@ -87,6 +87,20 @@
   // The title of a build code change of a step (design 28.3).
   const BUILD_CODE_SECTION = 'build code changed in this step; read this change first';
   const factClass = (fact) => (fact.class === 'not_checked' ? 'not checked' : fact.class || 'class after phase 2');
+  // A folded fact has the count and the text of its sites in its description (batch 5x, part E).
+  const folds = (fact, group) => ['site(s)', 'bodies'].some((what) => fact.description.startsWith(group.sites.length + ' ' + what + ': ' + group.edit));
+  // A list of more than 8 bodies shows the count and the scope (batch 5x, part E).
+  function affectedText(list) {
+    if (list.length <= 8) return list.length + ' affected: ' + list.join(', ');
+    const crates = new Map();
+    for (const body of list) {
+      const name = body.replace(/^[<&]+/, '').split('::')[0];
+      crates.set(name, (crates.get(name) || 0) + 1);
+    }
+    const names = [...crates.keys()].sort();
+    const scope = names.length === 1 ? 'the crate `' + names[0] + '`' : names.length + ' crates: ' + names.map((name) => '`' + name + '` (' + crates.get(name) + ')').join(', ');
+    return list.length + ' affected bodies of ' + scope + ' (the names: the Markdown report with `--full`)';
+  }
 
   function marker(status) {
     return h('span', { class: 'marker m ' + (status || 'same'), title: status || '' }, MARKERS[status] || '·');
@@ -310,10 +324,11 @@
       // The derived facts (design 22.5): Semilla computed them from the diff; no claim exists.
       const items = cs.facts.map((fact) => {
         const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']' + (fact.mark || '') + ': ' + fact.description];
-        for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ')) parts.push(group.sites.length + ' site(s): ' + group.edit);
-        if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
+        for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ') && !folds(fact, group)) parts.push(group.sites.length + ' site(s): ' + group.edit);
+        if (fact.affected && fact.affected.length) parts.push(affectedText(fact.affected));
         if (fact.note) parts.push('note: ' + fact.note + (fact.part_mark || ''));
-        if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
+        if (!fact.spotlight_why && fact.reason) parts.push('note: no spotlight; the agent gave a reason: ' + quoted(fact.reason));
+        if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason' + (fact.reason_key ? ' (key `' + fact.reason_key + '`)' : '') + ': ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
         // A build code change says so (design 28.3). The server puts it first in its step.
         const first = fact.build_code_change ? h('b', null, BUILD_CODE_SECTION + ': ') : null;
         return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', first, parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
@@ -389,10 +404,11 @@
       body.appendChild(h('h4', {}, title + ' (' + facts.length + ')'));
       body.appendChild(h('ul', { class: 'messages facts' }, facts.map((fact) => {
         const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']' + (fact.mark || '') + ': ' + fact.description];
-        for (const site of fact.sites || []) if (!fact.description.startsWith(site.edit + ' in ')) parts.push(site.sites.length + ' site(s): ' + site.edit);
-        if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
+        for (const site of fact.sites || []) if (!fact.description.startsWith(site.edit + ' in ') && !folds(fact, site)) parts.push(site.sites.length + ' site(s): ' + site.edit);
+        if (fact.affected && fact.affected.length) parts.push(affectedText(fact.affected));
         if (fact.note) parts.push('note: ' + fact.note + (fact.part_mark || ''));
-        if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
+        if (!fact.spotlight_why && fact.reason) parts.push('note: no spotlight; the agent gave a reason: ' + quoted(fact.reason));
+        if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason' + (fact.reason_key ? ' (key `' + fact.reason_key + '`)' : '') + ': ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
         return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
       })));
     };

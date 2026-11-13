@@ -1076,7 +1076,10 @@ fn one_command_for_each_step() {
     assert_eq!(output.status.code(), Some(1), "{text}");
     assert!(text.starts_with("rejected: step 0") && text.contains("run again: semilla step 'no overflow checks' --reason 'Cargo.toml:profile.dev.overflow-checks=<why>'"), "{text}");
     let session = std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap_or_default();
-    assert!(!session.contains("no overflow checks"), "a rejected step is not stored: {session}");
+    // The session has the record of the rejection for `tag` (batch 5x, part C), and no step.
+    let stored: serde_json::Value = serde_json::from_str(&session).unwrap_or_default();
+    assert!(stored["changeset"]["steps"].as_array().is_none_or(|steps| steps.is_empty()) && stored["open"].is_null(), "a rejected step is not stored: {session}");
+    assert_eq!(stored["rejected"]["intent"], "no overflow checks", "{session}");
     let stored = run(repo, &["step", "no overflow checks", "--reason", "Cargo.toml:profile.dev.overflow-checks=the benchmark needs it"], 0);
     assert!(stored.starts_with("accepted"), "{stored}");
     // `undo` removes the last step; the working tree keeps the change.
@@ -1236,7 +1239,10 @@ fn a_rename_and_a_move_need_no_claim() {
     write(repo, "crates/shop-app/src/main.rs", &app);
     let renamed = run(repo, &["step", "rename balance to cents"], 0);
     assert!(renamed.starts_with("accepted: step 0") && renamed.contains("renamed `shop_core::Account.balance` → `shop_core::Account.cents` (proved N1: rename-map"), "{renamed}");
-    assert_eq!(renamed.matches('◆').count(), 1, "the forced edits fold under the identity fact: {renamed}");
+    // The field is a part of the public API: the rename gets one more fact to read (batch 5x,
+    // round 3).
+    assert!(renamed.contains("public API: `shop_core::Account.balance` is now `shop_core::Account.cents` (a different crate can no longer use the old path) [other]"), "{renamed}");
+    assert_eq!(renamed.matches('◆').count(), 2, "the forced edits fold under the identity fact: {renamed}");
 
     // A move with a hidden change: no proof, the change shows, and a note.
     let core_after = core.replace("\npub fn over(account: &Account) -> bool {\n    account.cents > LIMIT\n}\n", "");
@@ -1250,6 +1256,7 @@ fn a_rename_and_a_move_need_no_claim() {
     write(repo, "crates/shop-app/src/main.rs", &app_after(">"));
     let moved = run(repo, &["step", "move over to the app"], 0);
     assert!(moved.contains("moved `shop_core::over` → `shop_app::over` (proved"), "{moved}");
+    assert!(moved.contains("public API: a different crate can no longer use `shop_core::over` [other]"), "{moved}");
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "work"]);
     let tagged = run(repo, &["tag"], 0);
     assert!(tagged.starts_with("result: accepted · 2 steps · ") && tagged.lines().next().unwrap().ends_with(" · 0 claims"), "{tagged}");
@@ -2472,16 +2479,25 @@ fn a_later_step_prints_the_phase_2_state_of_a_fast_step() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the bonus"]);
 
+    // These steps start no background worker. A `--fast` step prints the long route when the
+    // background result of the change set is complete at its start, and the short line when
+    // it is not. With a worker, the text of the last `--fast` step depends on the time.
+    let no_worker = |repo: &Path, args: &[&str], expect: i32| -> String {
+        let output = semilla_env(repo, args, &[("SEMILLA_NO_WORKER", "1")]);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert_eq!(output.status.code(), Some(expect), "semilla {args:?}\n--- stdout\n{stdout}\n--- stderr\n{}", String::from_utf8_lossy(&output.stderr));
+        stdout
+    };
     write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
-    run(repo, &["step", "a larger limit"], 0);
+    no_worker(repo, &["step", "a larger limit"], 0);
     // The data file: phase 1 does not know its effect, so the class is pending, not `other`.
     write(repo, "crates/shop-core/bonus.txt", "900\n");
-    let fast = run(repo, &["step", "--fast", "update the bonus data"], 0);
+    let fast = no_worker(repo, &["step", "--fast", "update the bonus data"], 0);
     assert!(fast.contains("accepted (phase 1;") && fast.contains("crates/shop-core/bonus.txt: changed [pending]"), "{fast}");
     assert!(!fast.contains("step 1: phase 2"), "the step itself has no phase 2 line: {fast}");
     // A later step with phase 2 computes the state of the fast step, and gives the commands.
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
-    let later = run(repo, &["step", "rename a local"], 0);
+    let later = no_worker(repo, &["step", "rename a local"], 0);
     assert!(later.contains("accepted: step 2"), "{later}");
     assert!(later.contains("step 1: phase 2 rejected: indirect change, cause not known: `shop_core::bonus`"), "{later}");
     assert!(later.contains("to fix step 1 (it is not the last step): run `semilla undo` 2 times.") && later.contains("the files stay"), "{later}");
@@ -2491,7 +2507,7 @@ fn a_later_step_prints_the_phase_2_state_of_a_fast_step() {
     assert!(commands[1].ends_with("&& semilla step 'rename a local'"), "{later}");
     // A later step of `--fast` prints the stored state.
     write(repo, "crates/shop-core/src/cart.rs", CART_V2);
-    let fast = run(repo, &["step", "--fast", "an early return"], 0);
+    let fast = no_worker(repo, &["step", "--fast", "an early return"], 0);
     assert!(fast.contains("step 1: phase 2 rejected: indirect change") && fast.contains("to fix step 1: run `semilla undo` 3 time(s)"), "{fast}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
@@ -4578,7 +4594,11 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     // The header names the condition: the list does not cover it.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("pub fn percent(amount: u64, rate: u64) -> u64 {\n    amount * rate / 100\n", "pub fn percent(amount: u64, rate: u64) -> u64 {\n    let part = amount * rate;\n    part / 100\n"));
     run(repo, &["step", "an honest rewrite"], 0);
+    // An agent command shows the count and the first condition (batch 5x, part E).
     let out = run(repo, &["status", "--wait", "600"], 0);
+    let line = out.lines().find(|line| line.contains("`cfg` conditions that Semilla did not check")).unwrap_or_default();
+    assert!(line.starts_with("! ") && line.contains(" more (`semilla status --verbose` shows each one)") && line.matches('`').count() == 6, "{out}");
+    let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
     let line = out.lines().find(|line| line.contains("`cfg` conditions that Semilla did not check")).unwrap_or_default();
     assert!(line.contains("`debug_assertions`") && line.contains("`not(debug_assertions)`") && line.contains("`not(test)`"), "{out}");
 }
@@ -5084,4 +5104,120 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     write(repo, "crates/shop-core/src/nix.rs", &file.replace("{a}{SEP}{b}", "{b}{SEP}{a}"));
     let out = run(repo, &["step", "a comment and a live edit"], 0);
     assert!(!out.contains("spotlight") && out.contains("affected bodies: shop_core::nix::join"), "{out}");
+}
+
+#[test]
+fn tag_after_a_rejected_step_says_the_cause() {
+    // Batch 5x, part C (trial 7): after a rejected step and a commit, `tag` said "run
+    // `semilla step`": the same step that failed. Now it says the cause and the command.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", FEES);
+    commit_all(repo, "fees");
+    // The first step of the change set is rejected: a spotlight has no reason.
+    let unix = FEES.replace("    BASE_FEE + percent", "    if !cfg!(unix) { return 0; }\n    BASE_FEE + percent");
+    write(repo, "crates/shop-core/src/lib.rs", &unix);
+    let out = run(repo, &["step", "only unix"], 1);
+    assert!(out.contains("run again: semilla step 'only unix' --reason 'shop_core::charge/S0=<why>'"), "{out}");
+    commit_all(repo, "x");
+    let tag = semilla(repo, &["tag"]);
+    let text = String::from_utf8_lossy(&tag.stderr).to_string();
+    let fix = "The last `semilla step` (\"only unix\") was rejected, and Semilla stored nothing: 1 spotlight with no reason. Run it again with the missing parts: `semilla step 'only unix' --reason 'shop_core::charge/S0=<why>'`, then `git commit --amend --no-edit`, then `semilla tag`.";
+    assert!(!tag.status.success() && text.contains("the change set has no step. ") && text.contains(fix), "{text}");
+    assert!(!text.contains("Run `semilla step \"<intent>\"`"), "{text}");
+    // The same after a stored step: `tag` and `status` say it.
+    git(repo, &["reset", "-q", "--soft", "HEAD^"]);
+    write(repo, "crates/shop-core/src/lib.rs", &FEES.replace("amount * rate / 100\n}\n\npub fn scaled", "amount * rate / 10\n}\n\npub fn scaled"));
+    run(repo, &["step", "a new rate"], 0);
+    write(repo, "crates/shop-core/src/lib.rs", &unix);
+    run(repo, &["step", "only unix"], 1);
+    commit_all(repo, "x");
+    let tag = semilla(repo, &["tag"]);
+    let text = String::from_utf8_lossy(&tag.stderr).to_string();
+    assert!(!tag.status.success() && text.contains("an edit after the last step has no step. ") && text.contains(fix), "{text}");
+    let (_, out) = run_env(repo, &["status"], &[]);
+    assert!(out.contains("✗ `semilla tag` rejects this state: the last step ends at tree") && out.contains(fix), "{out}");
+    // The step with the reason, then the commit: `tag` accepts, and the record is gone.
+    run(repo, &["step", "only unix", "--reason", "shop_core::charge/S0=the shop has only unix hosts"], 0);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "--no-edit", "-a"]);
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains("result: accepted") && !out.contains("was rejected"), "{out}");
+    // An edit with no step and no rejected step keeps the old text.
+    let now = unix.replace("/ 100\n}\n\npub fn scaled", "/ 10\n}\n\npub fn scaled");
+    write(repo, "crates/shop-core/src/lib.rs", &now.replace("charge(amount, 1)", "charge(amount, 2)"));
+    run(repo, &["step", "a new rate of the fee"], 0);
+    write(repo, "crates/shop-core/src/lib.rs", &now.replace("charge(amount, 1)", "charge(amount, 3)"));
+    let (_, out) = run_env(repo, &["status"], &[]);
+    assert!(out.contains("The edit has no step. Run `semilla step \"<intent>\"` for the edit.") && !out.contains("was rejected"), "{out}");
+}
+
+#[test]
+fn a_module_file_that_git_ignores_has_its_cause_in_the_build_error() {
+    // Batch 5x, part C (trial 7): the build said only `E0583`. The file is in the folder, and
+    // git ignores it: Semilla builds a tree of git.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", FEES);
+    commit_all(repo, "fees");
+    let note = "`crates/shop-core/src/extra.rs` is in the folder, but git ignores it (`git check-ignore -v crates/shop-core/src/extra.rs` shows the rule). Semilla builds only files that git tracks or that are not ignored.";
+    for rules in [".git/info/exclude", ".gitignore"] {
+        let old = std::fs::read_to_string(repo.join(rules)).unwrap_or_default();
+        write(repo, rules, &format!("{old}extra.rs\n"));
+        if rules == ".gitignore" {
+            commit_all(repo, "ignore");
+        }
+        write(repo, "crates/shop-core/src/lib.rs", &format!("pub mod extra;\n{FEES}"));
+        write(repo, "crates/shop-core/src/extra.rs", "pub fn extra() -> u32 {\n    1\n}\n");
+        let out = run(repo, &["step", "a new module"], 1);
+        assert!(out.contains("E0583") && out.contains(note), "{rules}: {out}");
+        // With no rule, the step has the file.
+        std::fs::remove_file(repo.join("crates/shop-core/src/extra.rs")).unwrap();
+        write(repo, "crates/shop-core/src/lib.rs", FEES);
+        write(repo, rules, &old);
+        if rules == ".gitignore" {
+            commit_all(repo, "no ignore");
+        }
+        write(repo, "crates/shop-core/src/lib.rs", &format!("pub mod extra;\n{FEES}"));
+        write(repo, "crates/shop-core/src/extra.rs", "pub fn extra() -> u32 {\n    1\n}\n");
+        let out = run(repo, &["step", "a new module"], 0);
+        assert!(out.contains("added `shop_core::extra`") && !out.contains("git ignores it"), "{rules}: {out}");
+        run(repo, &["undo"], 0);
+        std::fs::remove_file(repo.join("crates/shop-core/src/extra.rs")).unwrap();
+        write(repo, "crates/shop-core/src/lib.rs", FEES);
+    }
+    // A module with no file in the folder: the build error has no note.
+    write(repo, "crates/shop-core/src/lib.rs", &format!("pub mod extra;\n{FEES}"));
+    let out = run(repo, &["step", "a new module"], 1);
+    assert!(out.contains("E0583") && !out.contains("is in the folder"), "{out}");
+}
+
+#[test]
+fn a_reason_with_an_item_path_is_enough_in_the_first_call() {
+    // Batch 5x, part D (trial 7): the key of a reason was only in the rejection.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", FEES);
+    commit_all(repo, "fees");
+    // Two spotlights in one function.
+    let unix = FEES.replace("    BASE_FEE + percent", "    if !cfg!(unix) { return 0; }\n    if cfg!(windows) { return 1; }\n    BASE_FEE + percent");
+    write(repo, "crates/shop-core/src/lib.rs", &unix);
+    // A crate name and a module path are not a key: the step says so, and it has no reason.
+    for (key, kind) in [("shop_core", "crate"), ("shop_core::cart", "module")] {
+        let out = run(repo, &["step", "only unix", "--reason", &format!("{key}=the shop has only unix hosts")], 1);
+        assert!(out.contains(&format!("the reason for `{key}` belongs to no fact of this step; Semilla does not use it. `{key}` is a {kind}, and a {kind} is not a valid key of a reason. A key is the path of an item")), "{out}");
+        assert!(out.contains("it needs a reason: --reason 'shop_core::charge/S0=…'") && out.contains("--reason 'shop_core::charge/S1=<why>'"), "the rejection prints the exact keys\n{out}");
+    }
+    // An item with no spotlight: the result of an unused reason, as before this batch.
+    let out = run(repo, &["step", "only unix", "--reason", "shop_core::percent=the shop has only unix hosts"], 1);
+    assert!(out.contains("the reason for `shop_core::percent` belongs to no fact of this step; Semilla does not use it\n"), "{out}");
+    // The path of the function covers the two spotlights. Each output shows the key.
+    let out = run(repo, &["step", "only unix", "--reason", "shop_core::charge=the shop has only unix hosts"], 0);
+    assert_eq!(out.matches("; reason (key `shop_core::charge`): \"the shop has only unix hosts\"").count(), 2, "{out}");
+    assert!(!out.contains("belongs to no fact"), "{out}");
+    let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert_eq!(out.matches("; reason (key `shop_core::charge`): \"the shop has only unix hosts\"").count(), 2, "{out}");
+    let file = dir.path().join("report.md");
+    run(repo, &["review", "--md", file.to_str().unwrap()], 0);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(text.matches("; reason (key `shop_core::charge`): \"the shop has only unix hosts\"").count(), 2, "{text}");
 }

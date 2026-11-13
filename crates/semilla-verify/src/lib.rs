@@ -434,15 +434,60 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     let mut step = input.step.clone();
     step.reasons.retain(|_, reason| !reason.trim().is_empty());
     let input = &StepInput { step: &step, before: input.before, after: input.after };
-    let plain = verify_core(input, bodies, exprs, derive_edits, false);
+    let mut plain = verify_core(input, bodies, exprs, derive_edits, false);
     if !derive_edits || input.step.claims.iter().any(is_identity) {
+        if derive_edits {
+            identity_api_facts(input, &mut plain);
+        }
+        item_reasons(input, &mut plain.report);
         return plain;
     }
-    let outcome = identity::derive(input, bodies, exprs, plain);
+    let mut outcome = identity::derive(input, bodies, exprs, plain);
     // The search for an identity does more checks, and each check sets its own list of added
     // configurations. The oracle must have the list of this result: the output shows it.
     let _ = bodies.set_selections(input.step, &outcome.selections);
+    identity_api_facts(input, &mut outcome);
+    item_reasons(input, &mut outcome.report);
     outcome
+}
+
+/// True if `key` is the path of an item that a reason can name for each spotlight in it: a
+/// function, a method, a constant, a static, a type, or a trait (batch 5x, part D). A module, a
+/// crate, an impl block, a field, and a variant are not such a key.
+pub fn is_item_reason_key(key: &str, before: &Workspace, after: &Workspace) -> bool {
+    use semilla_syntax::ItemKind::{Const, Enum, Fn, Static, Struct, Trait, Type};
+    [after, before].iter().any(|ws| ws.items.get(key).is_some_and(|item| matches!(item.kind, Fn | Struct | Enum | Trait | Const | Static | Type)))
+}
+
+/// Batch 5x, part D (trial 7 on humantime): a reason whose key is the path of an item covers
+/// each spotlight of the step whose key is that path, or starts with that path and `/`. The
+/// agent can then give the reason in the first call: it knows the item, not the exact key.
+/// The exact key of a fact goes first. A reason proves nothing: it is text for the reviewer.
+fn item_reasons(input: &StepInput, report: &mut StepReport) {
+    // Batch 5x, part E: a fact with no spotlight gets the reason that has its exact key. The
+    // outputs show the reason as a note. A reason proves nothing.
+    for fact in report.facts.iter_mut().filter(|fact| !fact.spotlight && fact.spotlight_why.is_none() && fact.reason.is_none()) {
+        fact.reason = input.step.reasons.get(&fact.reason_place()).cloned();
+    }
+    let keys: Vec<(&String, &String)> = input.step.reasons.iter().filter(|(key, _)| is_item_reason_key(key, input.before, input.after)).collect();
+    if keys.is_empty() {
+        return;
+    }
+    for fact in report.facts.iter_mut().filter(|fact| fact.spotlight) {
+        let place = fact.reason_place();
+        if input.step.reasons.contains_key(&place) {
+            continue;
+        }
+        // The longest path that covers the fact: the nearest item.
+        let covers = |key: &str| place.strip_prefix(key).is_some_and(|rest| rest.starts_with('/'));
+        let Some((key, reason)) = keys.iter().filter(|(key, _)| covers(key)).max_by_key(|(key, _)| key.len()) else { continue };
+        match &fact.reason {
+            None => fact.reason = Some((*reason).clone()),
+            Some(text) if text == *reason => {}
+            Some(_) => continue,
+        }
+        fact.reason_key = Some((*key).clone());
+    }
 }
 
 /// The check of one step. `derived_identity` is true when the identity claims of the step come
@@ -453,7 +498,9 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let mut report = StepReport { step: step.index, intent: step.intent.clone(), declared_class: step.class, ..Default::default() };
 
     // 1. The renames from the identity claims, then the syntax edits.
-    let renames = checks::renames(step, input.before);
+    let mut renames = checks::renames(step, input.before);
+    checks::moved_impls(step, input.before, input.after, &mut renames);
+    let renames = renames;
     let edits = semilla_syntax::diff(input.before, input.after, &renames);
 
     // 2. The MIR bodies.
@@ -771,7 +818,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 uncovered.hint = Some(if parent(&old_name) == parent(&new_name) {
                     format!("rename (it looks like a rename of `{old_name}` to `{new_name}`)")
                 } else {
-                    format!("move-item (it looks like a move of `{old_name}` to `{new_name}`: anchor `{old_name}`, to={new_name}, in its own step)")
+                    format!("move-item (it looks like a move of `{old_name}` to `{new_name}`: anchor `{old_name}`, to={new_name}; a move gets its proof in a step with no other change)")
                 });
             }
         }
@@ -1163,21 +1210,23 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         uncompiled::apply(&dead, [input.before, input.after], step, &edits, &fact_of, &renames, &mut report);
     }
 
-    report.computed_class = report.claims.iter().filter_map(|claim| claim.class).chain(report.facts.iter().filter_map(|fact| fact.class)).max_by_key(|class| class_rank(*class));
-    if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
-        if declared != computed {
-            // Name the facts and the claims that give the class (M4).
-            let mut causes: Vec<String> = report.facts.iter().filter(|f| f.class == Some(computed)).map(|f| format!("the fact \"{}\"", f.description)).collect();
-            causes.extend(report.claims.iter().filter(|c| c.class == Some(computed)).map(|c| format!("the claim {}", c.claim)));
-            let more = if causes.len() > 3 { format!(", and {} more", causes.len() - 3) } else { String::new() };
-            causes.truncate(3);
-            report.errors.push(format!("the step declares the class `{}`, but {} give(s) the class `{}`{more}", class_name(declared), causes.join(", "), class_name(computed)));
-        }
-    }
+    step_class(step, &mut report);
 
     // The final assertion (invariant I1): no path removes a changed body from the report.
     for name in owners::check(&owner_input, &report) {
         report.errors.push(format!("internal: a changed body has no owner: `{name}`"));
+    }
+
+    // A nested function is its own body (batch 5x, part E). The lists get the names for the
+    // reader after the last pass that reads them.
+    if body_index.available {
+        let lists = report.facts.iter_mut().map(|fact| &mut fact.affected).chain(report.claims.iter_mut().map(|claim| &mut claim.affected));
+        for list in lists {
+            let mut shown: Vec<String> = list.iter().flat_map(|item| body_index.shown_bodies(item)).collect();
+            shown.sort();
+            shown.dedup();
+            *list = shown;
+        }
     }
 
     if derive_edits {
@@ -1188,6 +1237,24 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
     StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, selections }
+}
+
+/// Computes the class of a step from its claims and its facts. A declared class that is
+/// different gives an error. A second call replaces the error of the first call.
+fn step_class(step: &Step, report: &mut StepReport) {
+    const ERROR: &str = "the step declares the class `";
+    report.errors.retain(|error| !error.starts_with(ERROR));
+    report.computed_class = report.claims.iter().filter_map(|claim| claim.class).chain(report.facts.iter().filter_map(|fact| fact.class)).max_by_key(|class| class_rank(*class));
+    if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
+        if declared != computed {
+            // Name the facts and the claims that give the class (M4).
+            let mut causes: Vec<String> = report.facts.iter().filter(|f| f.class == Some(computed)).map(|f| format!("the fact \"{}\"", f.description)).collect();
+            causes.extend(report.claims.iter().filter(|c| c.class == Some(computed)).map(|c| format!("the claim {}", c.claim)));
+            let more = if causes.len() > 3 { format!(", and {} more", causes.len() - 3) } else { String::new() };
+            causes.truncate(3);
+            report.errors.push(format!("{ERROR}{}`, but {} give(s) the class `{}`{more}", class_name(declared), causes.join(", "), class_name(computed)));
+        }
+    }
 }
 
 /// A derived body of a claimed type: the MIR name is `<TYPE as TRAIT>::method`, the type derives
@@ -1220,6 +1287,117 @@ fn visibility_rank(vis: &str) -> u8 {
         "pub(crate)" => 2,
         _ => 1,
     }
+}
+
+/// The cause of a stopped proof of one body, from the uses that the code knows (batch 5x,
+/// part C): "`write!` in `k::f` (Semilla cannot see into it)". `None` with no known cause.
+fn stop_cause(body: &BodyComparison) -> Option<String> {
+    // The forms of the entries are the forms of `config_spotlight`.
+    let name = &body.name;
+    let show = |text: &String| match text.strip_suffix(srcconfig::UNSEEN) {
+        Some(call) => format!("`{call}` in `{name}` (Semilla cannot see into it)"),
+        // A full sentence (a macro call with a name of the rename in its tokens).
+        None if text.ends_with(')') && text.starts_with('`') => text.clone(),
+        None if text.starts_with('`') || text.starts_with("static `") || text.starts_with("code that") => format!("{text} in `{name}`"),
+        None => format!("`{text}` in `{name}`"),
+    };
+    let mut causes: Vec<String> = Vec::new();
+    for text in body.stopped.iter().chain(&body.config).map(show) {
+        if !causes.contains(&text) {
+            causes.push(text);
+        }
+    }
+    if causes.is_empty() {
+        return None;
+    }
+    let more = if causes.len() > 3 { format!(", and {} more", causes.len() - 3) } else { String::new() };
+    Some(format!("{}{more}", causes.into_iter().take(3).collect::<Vec<_>>().join(", ")))
+}
+
+/// True if a token text has one of the names in a string literal or in the tokens of a macro
+/// call (batch 5x, part C). A text that does not parse gives true.
+fn names_in_text(text: &str, names: &BTreeSet<String>) -> bool {
+    use proc_macro2::{TokenStream, TokenTree};
+    fn walk(stream: TokenStream, names: &BTreeSet<String>, in_macro: bool) -> bool {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        trees.iter().enumerate().any(|(index, tree)| match tree {
+            TokenTree::Literal(literal) => {
+                let text = literal.to_string();
+                text.contains('"') && names.iter().any(|name| text.contains(name.as_str()))
+            }
+            TokenTree::Ident(ident) => in_macro && names.contains(&ident.to_string()),
+            TokenTree::Group(group) => {
+                let call = index > 0 && matches!(&trees[index - 1], TokenTree::Punct(punct) if punct.as_char() == '!');
+                walk(group.stream(), names, in_macro || call)
+            }
+            TokenTree::Punct(_) => false,
+        })
+    }
+    if names.is_empty() {
+        return false;
+    }
+    text.parse::<TokenStream>().map_or(true, |stream| walk(stream, names, false))
+}
+
+/// The `cfg` conditions on the path of an item: the `cfg` and `cfg_attr` attributes of each
+/// module above the item, and the inner ones of each module file (batch 5x, part B).
+fn path_conditions(workspace: &Workspace, path: &str) -> BTreeSet<String> {
+    let condition = |attr: &String| -> Option<String> {
+        let text: String = attr.chars().filter(|c| !c.is_whitespace()).collect();
+        let inner = text.trim_start_matches('#').trim_start_matches('!').trim_start_matches('[');
+        (inner.starts_with("cfg(") || inner.starts_with("cfg_attr(")).then(|| format!("#[{inner}"))
+    };
+    let mut found = BTreeSet::new();
+    let mut current = path;
+    while let Some((parent, _)) = current.rsplit_once("::") {
+        current = parent;
+        found.extend(workspace.items.get(current).into_iter().flat_map(|item| item.attrs.iter()).filter_map(condition));
+        found.extend(workspace.inner_attrs.get(current).into_iter().flat_map(|(_, attrs)| attrs.iter()).filter_map(condition));
+    }
+    found
+}
+
+/// True for a new module that has only the items of a move (batch 5x, part B): the `mod` line
+/// and the file of the module are parts of the move.
+///
+/// The conditions keep each change of behavior out of the rule:
+/// - the `mod` item has no attribute (`cfg`, `path`, `macro_use`), and it is not `pub`;
+/// - the file of the module has no inner attribute other than a plain doc comment (`//!`,
+///   `/*! */`, `#![doc = "text"]`). The doc text stays its own fact, and a code block in it
+///   is a doc test that stops the identity step (batch 5x, round 2);
+/// - the `mod` item has no doc comment: such a doc text has no fact of its own;
+/// - the module is new: no item had this path, or a path in it, before the step;
+/// - each item in the module is an item of the rename map (a moved item or a member of one),
+///   or a private `use` line with no attribute. The MIR compare with the rename map is the
+///   check of each moved body, so a `use` line that changes a meaning stops the proof.
+fn new_module_of_move(module: &semilla_syntax::Item, renames: &semilla_syntax::Renames, before: &Workspace, after: &Workspace) -> bool {
+    use semilla_syntax::ItemKind;
+    if module.kind != ItemKind::Mod || !module.attrs.is_empty() || visibility_rank(&module.vis) > 2 {
+        return false;
+    }
+    // The loader stores a doc comment with a literal text as `//!` lines. Each other inner
+    // attribute keeps its token form (`# ! [...]`), also a doc attribute with a computed text.
+    let plain_doc = |attr: &String| attr.lines().all(|line| line.starts_with("//!"));
+    if after.inner_attrs.get(&module.path).is_some_and(|(_, attrs)| !attrs.iter().all(plain_doc)) {
+        return false;
+    }
+    // A doc line or a doc attribute on the `mod` item is a part of the added item.
+    if module.docs.iter().any(|line| semilla_syntax::diff::is_doc_line(line) || line.starts_with('#')) {
+        return false;
+    }
+    let inside = format!("{}::", module.path);
+    if before.items.contains_key(&module.path) || before.items.keys().any(|path| path.starts_with(&inside)) {
+        return false;
+    }
+    let moved: BTreeSet<&String> = renames.items.iter().filter(|(old, new)| old != new).map(|(_, new)| new).collect();
+    let mut count = 0;
+    after.items.values().filter(|item| item.path.starts_with(&inside)).all(|item| {
+        if moved.contains(&item.path) {
+            count += 1;
+            return true;
+        }
+        item.kind == ItemKind::Use && item.vis.is_empty() && item.attrs.is_empty() && !item.path[inside.len()..].contains("::")
+    }) && count > 0
 }
 
 /// The check of an identity step (design 22.4). Returns the status (and the hint) of its identity
@@ -1261,6 +1439,19 @@ fn identity_step(
             Some("Put each rename and each move in its own step, with no other change. Then make the other changes in the next step.".to_string()),
         ))
     };
+    // A move keeps the `cfg` conditions on the path of the item (batch 5x, part B): a module
+    // with a different condition puts the item in a different set of builds.
+    for (claim, _) in results.iter().filter(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified()) {
+        let Some((old, new)) = claim.at.as_ref().and_then(|at| renames.items.get(&at.item).map(|new| (&at.item, new))) else { continue };
+        let (old_conditions, new_conditions) = (path_conditions(before, old), path_conditions(after, new));
+        if old_conditions != new_conditions {
+            let list = |conditions: &BTreeSet<String>| if conditions.is_empty() { "none".to_string() } else { conditions.iter().map(|text| format!("`{text}`")).collect::<Vec<_>>().join(", ") };
+            return Some((
+                ClaimStatus::Unproved { reason: format!("the move of `{old}` changes the `cfg` conditions on its path (before: {}; after: {}): the item is not in the same builds", list(&old_conditions), list(&new_conditions)) },
+                Some("Move the item to a module with the same `cfg` conditions. Or remove the identity claim: the items show as removed and added, with the changes as facts.".to_string()),
+            ));
+        }
+    }
     // The rules of design 22.4 for each body:
     // 1. a body with no text edit can be equal at each level (N0 to N4);
     // 2. a body with a text edit must be equal at N0 or N1;
@@ -1334,17 +1525,22 @@ fn identity_step(
             }
         }
     }
-    // A wider visibility of a moved item.
+    // A wider visibility of a moved item (`pub(crate)`, `pub(super)`, `pub`) does not stop the
+    // move. It stays its own fact to read, with no reason (batch 5x, part B): see `allowed`.
+    let moved_item = |edit: &Edit| {
+        edit.after.as_ref().is_some_and(|a| a.path.is_empty() && results.iter().any(|(claim, _)| claim.op == "move-item" && claim.at.as_ref().is_some_and(|at| renames.items.get(&at.item) == Some(&a.item))))
+    };
+    let wider = |edit: &Edit| edit.kind == EditKind::Visibility && moved_item(edit) && visibility_rank(edit.text_after.as_deref().unwrap_or("")) > visibility_rank(edit.text_before.as_deref().unwrap_or(""));
+    // A new module that has only the items of a move is a part of the move (batch 5x, part B).
     for (index, edit) in edits.iter().enumerate() {
-        if owners[index].is_some() || edit.kind != EditKind::Visibility {
+        if owners[index].is_some() || edit.kind != EditKind::ItemAdded {
             continue;
         }
-        let moved = results.iter().position(|(claim, _)| claim.op == "move-item" && claim.arg_str("to").is_some_and(|_| edit.after.as_ref().is_some_and(|a| renames.items.get(&claim.at.as_ref().map(|at| at.item.clone()).unwrap_or_default()) == Some(&a.item))));
-        if let Some(claim) = moved {
-            if visibility_rank(edit.text_after.as_deref().unwrap_or("")) > visibility_rank(edit.text_before.as_deref().unwrap_or("")) {
-                owners[index] = Some(claim);
-            }
+        let Some(module) = edit.after.as_ref().filter(|a| a.path.is_empty()).and_then(|a| after.items.get(&a.item)) else { continue };
+        if !new_module_of_move(module, renames, before, after) {
+            continue;
         }
+        owners[index] = results.iter().position(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified() && claim.arg_str("to").is_some_and(|to| to.strip_prefix(module.path.as_str()).is_some_and(|rest| rest.starts_with("::") && !rest[2..].contains("::"))));
     }
     if !body_index.available {
         return Some((ClaimStatus::Pending { reason: "the MIR proof of the identity step runs in the background check (phase 2)".into() }, None));
@@ -1354,24 +1550,51 @@ fn identity_step(
     // own fact (a doc fact has the class `other`). A parameter rename is allowed only when its
     // body is equal (N0 or N1): a parameter name is a local in the MIR.
     // A doc test change is not a plain doc change (brief 5h, B1): it stops the identity.
+    // An attribute of the `doc` family with no literal text (`#[doc(hidden)]`) is in the
+    // comment edit of its item. It is not a plain doc comment: it stops the identity (batch 5x,
+    // round 2).
+    let attribute_lines = |text: &Option<String>| -> Vec<String> { text.as_deref().unwrap_or("").lines().filter(|line| line.starts_with('#')).map(str::to_string).collect() };
     let allowed = |index: usize, edit: &Edit| {
-        edit.kind == EditKind::Comment
+        (edit.kind == EditKind::Comment && attribute_lines(&edit.text_before) == attribute_lines(&edit.text_after))
+            || wider(edit)
             || (edit.kind == EditKind::Docs && facts::doc_test_change(edit).is_none())
             || (facts::is_parameter_rename(edits, index, before, after) && edit.anchor().is_some_and(|a| equal_body(&renames.items.get(&a.item).cloned().unwrap_or_else(|| a.item.clone()))))
     };
     let other_edit = edits.iter().zip(owners.iter()).enumerate().find(|(index, (edit, owner))| owner.is_none() && !allowed(*index, edit)).map(|(_, (edit, _))| format!("the step also has the change {}", edit.anchor().map(|a| format!("at `{a}`")).or_else(|| edit.file.clone()).unwrap_or_default()));
     if let Some(name) = bad.first() {
+        // The cause that the code knows (batch 5x, part C): the uses that stopped the proof.
+        let cause = bodies.iter().find(|body| body.name == *name).and_then(stop_cause);
         // "Split the step" is a route only when the step has a second change.
         if other_claim.is_some() || other_edit.is_some() {
             // A body with code for a different build configuration: its MIR can be equal.
             if !body_index.config(name).is_empty() {
                 return split(format!("`{name}` has code that depends on the build configuration"));
             }
+            if let Some(cause) = cause {
+                return split(format!("`{name}` has no proof: {cause}"));
+            }
             return split(format!("the MIR of `{name}` changed"));
         }
+        let remove = "Remove the identity claim: the items show as removed and added, with the changes as facts.";
+        if let Some(cause) = cause {
+            return Some((
+                ClaimStatus::Unproved { reason: format!("no proof for `{name}`: {cause}") },
+                Some(format!("Semilla cannot prove an identity step with this code in `{name}`. {remove}")),
+            ));
+        }
+        // The old name in a string or in a macro call: only then the hint can be true.
+        let olds: BTreeSet<String> = renames.items.iter().filter_map(|(old, new)| (checks::last_segment(old) != checks::last_segment(new)).then(|| checks::last_segment(old).to_string())).collect();
+        let item = body_index.item_of_name(name).unwrap_or_else(|| name.to_string());
+        let old_item = renames.items.iter().find(|(_, new)| **new == item).map(|(old, _)| old.clone()).unwrap_or_else(|| item.clone());
+        let look = before.items.get(&old_item).is_some_and(|found| names_in_text(&found.text, &olds));
+        let hint = if look {
+            format!("Look at `{name}`: it has the old name in a string or in a macro call. If the output of this code changes, the change is real. Then remove the identity claim: the items show as removed and added, with the changes as facts.")
+        } else {
+            remove.to_string()
+        };
         return Some((
             ClaimStatus::Unproved { reason: format!("the MIR of `{name}` changes with the identity claim, and `{name}` has no text edit and is not a derived body: the step is not neutral for it") },
-            Some(format!("Look at `{name}`: if it uses the old name (in a string, `stringify!`, or a macro), the change is real. Then remove the identity claim: the items show as removed and added, with the changes as facts.")),
+            Some(hint),
         ));
     }
     if let Some(what) = other_claim.or(other_edit) {
@@ -1554,7 +1777,7 @@ pub fn pair_warnings_with(set: &ChangeSet, report: &Report, items: &BTreeMap<Str
         used.insert(old.path.clone());
         used.insert(new.path.clone());
         let refusal = set.pair_refusals.iter().find(|r| r.old == old.path && r.new == new.path).map(|r| r.reason.clone());
-        warnings.push(semilla_core::PairWarning { old: old.path.clone(), new: new.path.clone(), similarity, claims: vec![removed, added], refusal, reviewer: None, resolves: Vec::new() });
+        warnings.push(semilla_core::PairWarning { old: old.path.clone(), new: new.path.clone(), similarity, claims: vec![removed, added], refusal, reviewer: None, resolves: Vec::new(), stopped: None });
     }
     warnings.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
     warnings
@@ -1636,6 +1859,223 @@ fn is_public(workspace: &Workspace, path: &str) -> bool {
         current = parent;
     }
     true
+}
+
+/// The answer to "can a different crate name this item?" (batch 5x, round 2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// No path from a different crate goes to the item.
+    No,
+    /// The item and each owner on its path are `pub`.
+    Yes,
+    /// Semilla cannot decide. The text is the cause.
+    Maybe(String),
+}
+
+/// True if the file of an item can be a part of a library: a different crate can use a library
+/// only. A binary, a test, an example, and a bench have no API. A file with no known target
+/// counts as a library file.
+fn in_library(workspace: &Workspace, item: &semilla_syntax::Item) -> bool {
+    let mut roots = BTreeMap::new();
+    srcconfig::file_roots(workspace, &mut roots);
+    let Some(roots) = roots.get(&item.file) else { return true };
+    workspace.targets.iter().filter(|target| roots.contains(&target.file)).any(|target| !matches!(target.kind.as_str(), "bin" | "test" | "example" | "bench" | "custom-build"))
+}
+
+/// The leaves of a `use` tree: the path of each leaf, the name that it gives, and the glob mark.
+fn use_leaves(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
+    let with = |ident: &syn::Ident| -> Vec<String> { if ident == "self" && !prefix.is_empty() { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() } };
+    match tree {
+        syn::UseTree::Path(path) => use_leaves(&path.tree, &with(&path.ident), out),
+        syn::UseTree::Name(name) => out.push((with(&name.ident), None, false)),
+        syn::UseTree::Rename(rename) => out.push((with(&rename.ident), Some(rename.rename.to_string()), false)),
+        syn::UseTree::Group(group) => group.items.iter().for_each(|tree| use_leaves(tree, prefix, out)),
+        syn::UseTree::Glob(_) => out.push((prefix.to_vec(), None, true)),
+    }
+}
+
+/// Decides if a different crate can name an item (batch 5x, round 2). The rule is conservative:
+/// each case that the text does not decide gives `Maybe`.
+///
+/// 1. `No`: the item is not `pub`, it is test code, or its file is not a part of a library.
+/// 2. `Yes`: each owner on the path of the item (a module or a type) is `pub`.
+/// 3. `Maybe`: a `pub use` line of the crate brings the item or an owner on its path (by the
+///    name, also through an `as` name of a `use` line), or it is a glob on a relative path.
+/// 4. `Maybe`: a macro of the crate has a `pub use` line, or a macro call names the item or
+///    an owner. A module of the crate has a `#[path]` attribute.
+/// 5. `Maybe`: the item is a member of a `pub` type. A public signature or a type alias can
+///    give the type to a different crate with no `pub use` line.
+/// 6. `No` in each other case.
+pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
+    use semilla_syntax::ItemKind;
+    let Some(item) = workspace.items.get(path) else { return Reach::No };
+    let compact = |text: &str| text.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    if item.test || compact(&item.vis) != "pub" || !in_library(workspace, item) {
+        return Reach::No;
+    }
+    // The owners on the path, from the nearest one: `c::m::T.f` has `c::m::T` and `c::m`.
+    let mut owners: Vec<&semilla_syntax::Item> = Vec::new();
+    let mut current = path;
+    while let Some(at) = current.rfind("::").into_iter().chain(current.rfind('.')).max() {
+        current = &current[..at];
+        owners.extend(workspace.items.get(current));
+    }
+    if owners.iter().all(|owner| compact(&owner.vis) == "pub" || owner.kind == ItemKind::Impl) {
+        return Reach::Yes;
+    }
+    // The names on the path, with no twin suffix (`f#1`). The crate name is not one of them.
+    let own_name = |path: &str| path.rsplit(['.', ':']).next().unwrap_or(path).split('#').next().unwrap_or("").to_string();
+    let mut names: BTreeSet<String> = owners.iter().map(|owner| own_name(&owner.path)).chain([own_name(path)]).filter(|name| !name.is_empty()).collect();
+    // A `use` line has no name of its own: its names are the names that it brings.
+    if let Some(parsed) = syn::parse_str::<syn::ItemUse>(&item.signature).ok().filter(|_| item.kind == ItemKind::Use) {
+        let mut leaves = Vec::new();
+        use_leaves(&parsed.tree, &[], &mut leaves);
+        names.extend(leaves.into_iter().filter_map(|(target, alias, _)| alias.or_else(|| target.last().cloned())));
+    }
+    let same_crate = |other: &&semilla_syntax::Item| other.crate_name == item.crate_name;
+    let uses: Vec<(bool, Vec<(Vec<String>, Option<String>, bool)>)> = workspace
+        .items
+        .values()
+        .filter(same_crate)
+        .filter(|other| other.kind == ItemKind::Use)
+        .filter_map(|other| {
+            let parsed = syn::parse_str::<syn::ItemUse>(&other.signature).ok()?;
+            let mut leaves = Vec::new();
+            use_leaves(&parsed.tree, &[], &mut leaves);
+            Some((compact(&other.vis) == "pub", leaves))
+        })
+        .collect();
+    // An `as` name of a `use` line for a name of the path is a name of the path too.
+    for _ in 0..4 {
+        for (_, leaves) in &uses {
+            for (target, alias, glob) in leaves {
+                if let Some(alias) = alias.as_ref().filter(|_| !glob && target.last().is_some_and(|last| names.contains(last))) {
+                    names.insert(alias.clone());
+                }
+            }
+        }
+    }
+    let relative = |segment: &String| matches!(segment.as_str(), "crate" | "self" | "super");
+    for (_, leaves) in uses.iter().filter(|(public, _)| *public) {
+        for (target, _, glob) in leaves {
+            if *glob && target.iter().all(relative) {
+                return Reach::Maybe("a glob `pub use` line with a relative path".into());
+            }
+            let found = if *glob { target.iter().find(|segment| names.contains(*segment)) } else { target.last().filter(|last| names.contains(*last)) };
+            if let Some(name) = found {
+                return Reach::Maybe(format!("a {}`pub use` line names `{name}`", if *glob { "glob " } else { "" }));
+            }
+        }
+    }
+    for other in workspace.items.values().filter(same_crate) {
+        if other.kind == ItemKind::Macro {
+            if other.text.contains("pub use") {
+                return Reach::Maybe(format!("the macro `{}` has a `pub use` line", own_name(&other.path)));
+            }
+            let definition = other.text.starts_with("macro_rules");
+            if let Some(name) = names.iter().find(|name| !definition && other.text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name.as_str())) {
+                return Reach::Maybe(format!("a macro call names `{name}`"));
+            }
+        }
+        if other.kind == ItemKind::Mod && other.attrs.iter().any(|attr| compact(attr).contains("path=")) {
+            return Reach::Maybe(format!("the module `{}` has a `#[path]` attribute", other.path));
+        }
+    }
+    if let Some(owner) = owners.iter().find(|owner| matches!(owner.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Trait | ItemKind::Type | ItemKind::Other)) {
+        if compact(&owner.vis) == "pub" {
+            return Reach::Maybe(format!("the type `{}` is `pub`, and a public signature can give it to a different crate", own_name(&owner.path)));
+        }
+    }
+    Reach::No
+}
+
+/// The effect of a visibility edit on the public API (batch 5x, round 2): the words for the
+/// fact, or `None` if no crate other than the crate of the item sees a difference.
+pub(crate) fn visibility_api_change(edit: &Edit, before: &Workspace, after: &Workspace) -> Option<String> {
+    let old = edit.before.as_ref().map_or(Reach::No, |anchor| api_reach(before, &anchor.item));
+    let new = edit.after.as_ref().map_or(Reach::No, |anchor| api_reach(after, &anchor.item));
+    match (old, new) {
+        (Reach::No, Reach::No) => None,
+        (Reach::Yes, Reach::Yes) => None,
+        (_, Reach::Yes) => Some("the public API changes: a different crate can now use the item".into()),
+        (Reach::Yes, Reach::No) => Some("the public API changes: a different crate can no longer use the item".into()),
+        (Reach::Maybe(cause), _) | (_, Reach::Maybe(cause)) => Some(format!("the public API can change: {cause}")),
+    }
+}
+
+/// The answer of `api_reach` for an item of an identity pair (batch 5x, round 3). A variant, a
+/// field of a variant, and a method of a trait have no visibility of their own: the owner
+/// gives the answer.
+fn member_reach(workspace: &Workspace, path: &str) -> Reach {
+    use semilla_syntax::ItemKind;
+    let Some(item) = workspace.items.get(path) else { return Reach::No };
+    let owner = path.rfind("::").into_iter().chain(path.rfind('.')).max().and_then(|at| workspace.items.get(&path[..at]));
+    match owner {
+        Some(owner) if item.vis.is_empty() && (matches!(owner.kind, ItemKind::Trait | ItemKind::Variant) || item.kind == ItemKind::Variant) => member_reach(workspace, &owner.path),
+        _ => api_reach(workspace, path),
+    }
+}
+
+/// True if a `pub use` line of the crate of `path` can give the last name of `path`: a line
+/// with that name, or a glob line.
+fn pub_use_gives(workspace: &Workspace, path: &str) -> bool {
+    use semilla_syntax::ItemKind;
+    let name = path.rsplit(['.', ':']).next().unwrap_or(path);
+    let krate = path.split("::").next().unwrap_or(path);
+    workspace.items.values().filter(|item| item.kind == ItemKind::Use && item.crate_name == krate && item.vis.replace(' ', "") == "pub").any(|item| {
+        let Ok(parsed) = syn::parse_str::<syn::ItemUse>(&item.signature) else { return true };
+        let mut leaves = Vec::new();
+        use_leaves(&parsed.tree, &[], &mut leaves);
+        leaves.iter().any(|(target, alias, glob)| *glob || alias.as_deref().or(target.last().map(String::as_str)) == Some(name))
+    })
+}
+
+/// The effect of a proved rename or move on the public API (batch 5x, round 3): the words for
+/// one fact, or `None` if no different crate can use the old path or the new path.
+pub(crate) fn identity_api_change(old: &str, new: &str, before: &Workspace, after: &Workspace) -> Option<String> {
+    match (member_reach(before, old), member_reach(after, new)) {
+        (Reach::No, Reach::No) => None,
+        (Reach::Yes, Reach::Yes) if pub_use_gives(after, old) => Some(format!("public API: `{old}` is now `{new}` (a `pub use` line can keep the old path)")),
+        (Reach::Yes, Reach::Yes) => Some(format!("public API: `{old}` is now `{new}` (a different crate can no longer use the old path)")),
+        (_, Reach::Yes) => Some(format!("public API: a different crate can now use `{new}`")),
+        (Reach::Yes, Reach::No) => Some(format!("public API: a different crate can no longer use `{old}`")),
+        (Reach::Maybe(cause), _) | (_, Reach::Maybe(cause)) => Some(format!("public API can change: {cause} (`{old}` is now `{new}`)")),
+    }
+}
+
+/// Adds one fact for each proved rename or move that changes the public API (batch 5x, round
+/// 3; design 31.8). The pair is the top item of a derived identity fact or of a verified
+/// identity claim. The fact has the class `other`: it is a fact to read, and it stops no proof.
+fn identity_api_facts(input: &StepInput, outcome: &mut StepOutcome) {
+    let report = &mut outcome.report;
+    let mut olds: Vec<String> = report.facts.iter().filter(|fact| fact.part == "identity").filter_map(|fact| fact.at.as_ref()).map(|at| at.item.clone()).collect();
+    for claim in input.step.claims.iter().filter(|claim| is_identity(claim)) {
+        let verified = report.claims.iter().any(|result| result.claim == claim.id && result.status.is_verified());
+        olds.extend(claim.at.iter().filter(|_| verified).map(|at| at.item.clone()));
+    }
+    let count = report.facts.len();
+    for old in olds {
+        let Some(new) = outcome.renames.items.get(&old) else { continue };
+        let Some(description) = identity_api_change(&old, new, input.before, input.after) else { continue };
+        // A visibility fact with an API text for the same item says the same thing.
+        let said = |fact: &semilla_core::Fact| fact.part == "visibility" && fact.description.contains("public API") && fact.at.as_ref().is_some_and(|at| at.item == *new || at.item == old);
+        if report.facts.iter().any(said) {
+            continue;
+        }
+        report.facts.push(semilla_core::Fact {
+            id: format!("f{}", report.facts.len() + 1),
+            at: Some(Anchor::item(new)),
+            file: input.after.items.get(new).map(|item| item.file.clone()),
+            part: "public api".into(),
+            description,
+            status: "derived".into(),
+            class: Some(Class::Other),
+            ..Default::default()
+        });
+    }
+    if report.facts.len() > count {
+        step_class(input.step, report);
+    }
 }
 
 /// Estimates the semver level of the public API change of a step, from the syntax edits.
@@ -1878,7 +2318,20 @@ pub fn verify_changeset(
             }
         }
     }
+    // Batch 5x, part C: the step of the pair has no second change, and the proof of the rename
+    // or the move stopped. The note of the step has the cause (`identity::derive`).
+    for pair in report.pairs.iter_mut() {
+        pair.stopped = report.steps.iter().flat_map(|step| &step.notes).find_map(|note| stopped_pair(note, &pair.old, &pair.new));
+    }
     (report, outcomes)
+}
+
+/// The cause in the note of a derived rename or move that has no proof, when its step has no
+/// other change (`identity::derive`). `None` for each other note.
+fn stopped_pair(note: &str, old: &str, new: &str) -> Option<String> {
+    let (pairs, rest) = note.split_once(" show(s) as removed and added: no proof of the ")?;
+    let cause = rest.split_once(" (")?.1.strip_suffix(')')?;
+    pairs.contains(&format!("`{old}` → `{new}`")).then(|| cause.to_string())
 }
 
 #[cfg(test)]

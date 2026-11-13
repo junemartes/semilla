@@ -49,6 +49,9 @@ pub(crate) struct Found {
     pub(crate) config: BTreeSet<String>,
     /// Each macro call and each attribute that Semilla cannot see into.
     pub(crate) unseen: BTreeSet<String>,
+    /// Each macro call that Semilla cannot see into, with a name of the rename map in its
+    /// tokens (batch 5x, part A). The text is a cause for the reader.
+    pub(crate) named: BTreeSet<String>,
 }
 
 pub(crate) struct Scan<'a> {
@@ -56,19 +59,79 @@ pub(crate) struct Scan<'a> {
     macros: BTreeMap<String, Vec<&'a Item>>,
     /// The names of the workspace crates.
     crates: BTreeSet<String>,
-    /// The files with a glob import from a crate that is not in the workspace, and the crates
-    /// with `#[macro_use]`: a macro of such a crate can have the name of a standard macro.
+    /// The files with a glob import from a crate that is not in the workspace: a macro of such
+    /// a crate can have the name of a standard macro.
     foreign: BTreeSet<String>,
-    /// The names that an import from a crate outside the workspace gives.
-    shadowed: BTreeSet<String>,
+    /// The crate roots with `#[macro_use]` on an item (batch 5x, part A). The scope of such an
+    /// import is its crate root: a different target of the same package does not get it.
+    macro_use: BTreeSet<String>,
+    /// The packages with `#[macro_use]` in a file with no known crate root (the wide rule).
+    macro_use_wide: BTreeSet<String>,
+    /// The names that an import from a crate outside the workspace gives, each with its scope:
+    /// a crate root, or [`EACH`] for each crate (batch 5x, part A).
+    shadowed: BTreeSet<(String, String)>,
+    /// The crate roots of each file: the root file of each target that compiles the file.
+    roots: BTreeMap<String, BTreeSet<String>>,
+    /// The names of a rename map. `call` keeps each macro call that Semilla cannot see into
+    /// and that has one of the names in its tokens (batch 5x, part A).
+    watch: BTreeSet<String>,
     memo: BTreeMap<String, Option<Found>>,
+}
+
+/// The scope "each crate" of a shadowed name.
+const EACH: &str = "";
+
+/// The crate roots of each file of a workspace: the root file of each target that compiles
+/// the file. A file with a module of the target is a file of the target. The result can have
+/// more roots for a file than the compiler has (a module and a target with the same path),
+/// never fewer: a file that this function does not find has no entry, and the caller uses the
+/// wide rule for it.
+pub(crate) fn file_roots(workspace: &Workspace, out: &mut BTreeMap<String, BTreeSet<String>>) {
+    // The files of the modules below each file.
+    let mut below: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for module in workspace.items.values().filter(|item| item.kind == ItemKind::Mod) {
+        // A module file that two targets read has two module items, with a twin suffix at the
+        // end of the path. The items of the file have the path with no suffix.
+        let plain = match module.path.rfind('#') {
+            Some(at) if !module.path[at..].contains("::") => &module.path[..at],
+            _ => module.path.as_str(),
+        };
+        for prefix in [format!("{}::", module.path), format!("{plain}::")] {
+            for (_, item) in workspace.items.range(prefix.clone()..).take_while(|(path, _)| path.starts_with(&prefix)) {
+                if item.file != module.file {
+                    below.entry(module.file.as_str()).or_default().insert(item.file.as_str());
+                }
+            }
+        }
+    }
+    for target in &workspace.targets {
+        let mut todo = vec![target.file.as_str()];
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        while let Some(file) = todo.pop() {
+            if seen.insert(file) {
+                out.entry(file.to_string()).or_default().insert(target.file.clone());
+                todo.extend(below.get(file).into_iter().flatten().copied());
+            }
+        }
+    }
 }
 
 impl<'a> Scan<'a> {
     pub(crate) fn new(before: &'a Workspace, after: &'a Workspace) -> Scan<'a> {
-        let mut scan = Scan { macros: BTreeMap::new(), crates: BTreeSet::new(), foreign: BTreeSet::new(), shadowed: BTreeSet::new(), memo: BTreeMap::new() };
+        let mut scan = Scan {
+            macros: BTreeMap::new(),
+            crates: BTreeSet::new(),
+            foreign: BTreeSet::new(),
+            macro_use: BTreeSet::new(),
+            macro_use_wide: BTreeSet::new(),
+            shadowed: BTreeSet::new(),
+            roots: BTreeMap::new(),
+            watch: BTreeSet::new(),
+            memo: BTreeMap::new(),
+        };
         for workspace in [before, after] {
             scan.crates.extend(workspace.crates.iter().map(|c| c.name.replace('-', "_")));
+            file_roots(workspace, &mut scan.roots);
         }
         for workspace in [before, after] {
             for item in workspace.items.values() {
@@ -79,26 +142,74 @@ impl<'a> Scan<'a> {
                         scan.macros.entry(name).or_default().push(item);
                     }
                     ItemKind::Use | ItemKind::Other => {
-                        let idents: Vec<String> = item.text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|t| !t.is_empty()).map(str::to_string).collect();
-                        let macro_use = item.text.replace(' ', "").contains("#[macro_use");
-                        let first = idents.iter().find(|t| !["pub", "use", "extern", "in"].contains(&t.as_str()) && !LOCAL.contains(&t.as_str())).cloned().unwrap_or_default();
-                        let local_start = idents.iter().find(|t| !["pub", "use", "extern", "in"].contains(&t.as_str())).is_some_and(|t| LOCAL.contains(&t.as_str()));
-                        if macro_use {
-                            scan.foreign.insert(format!("crate {}", item.crate_name));
+                        // The crate roots that have the item. `None`: not known, so the scope
+                        // is the wide one.
+                        let roots: Option<Vec<String>> = scan.roots.get(&item.file).filter(|roots| !roots.is_empty()).map(|roots| roots.iter().cloned().collect());
+                        // `#[macro_use] extern crate x;`: the macros of `x` are in each module
+                        // of the crate root that has the item, and in no other crate root
+                        // (batch 5x, part A: a bench target of `humantime` stopped each proof
+                        // of the library).
+                        if item.text.replace(' ', "").contains("#[macro_use") {
+                            match &roots {
+                                Some(roots) => scan.macro_use.extend(roots.iter().cloned()),
+                                None => {
+                                    scan.macro_use_wide.insert(item.crate_name.clone());
+                                }
+                            }
                         }
-                        if item.kind != ItemKind::Use || local_start || STD.contains(&first.as_str()) || scan.crates.contains(&first) {
+                        if item.kind != ItemKind::Use {
                             continue;
                         }
-                        if item.text.contains('*') {
-                            scan.foreign.insert(item.file.clone());
+                        // A `pub use` can give the name to a different crate. Each other `use`
+                        // stays in its crate root: a child module gets it with `use super::*`.
+                        let scopes: Vec<String> = match &roots {
+                            Some(roots) if item.vis != "pub" => roots.clone(),
+                            _ => vec![EACH.to_string()],
+                        };
+                        let foreign = |first: &str| !(LOCAL.contains(&first) || STD.contains(&first) || scan.crates.contains(first));
+                        match crate::opaque::use_imports(&item.text) {
+                            // A name that the line can bring: the last segment, the name after
+                            // `as`, each name of a group. A segment in the middle of a path
+                            // brings no name (`use chrono::format::Fixed::*;` brings no macro
+                            // with the name `format` by that segment).
+                            Some(imports) => {
+                                for import in imports.iter().filter(|import| foreign(&import.first)) {
+                                    match &import.leaf {
+                                        None => {
+                                            scan.foreign.insert(item.file.clone());
+                                        }
+                                        Some(name) if MACRO_FREE.contains(&name.as_str()) => scan.shadowed.extend(scopes.iter().map(|scope| (scope.clone(), name.clone()))),
+                                        Some(_) => {}
+                                    }
+                                }
+                            }
+                            // A text that Semilla cannot read: each word is a name, for each
+                            // crate.
+                            None => {
+                                let idents = item.text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|t| !t.is_empty());
+                                scan.shadowed.extend(idents.filter(|t| MACRO_FREE.contains(t)).map(|t| (EACH.to_string(), t.to_string())));
+                                scan.foreign.insert(item.file.clone());
+                            }
                         }
-                        scan.shadowed.extend(idents.into_iter().filter(|t| MACRO_FREE.contains(&t.as_str())));
                     }
                     _ => {}
                 }
             }
         }
         scan
+    }
+
+    /// True if a macro of a crate outside the workspace can have the name `name` in `item`,
+    /// with no path before the name.
+    fn hidden(&self, name: &str, item: &Item) -> bool {
+        if self.foreign.contains(&item.file) || self.macro_use_wide.contains(&item.crate_name) || self.shadowed.contains(&(EACH.to_string(), name.to_string())) {
+            return true;
+        }
+        match self.roots.get(&item.file).filter(|roots| !roots.is_empty()) {
+            Some(roots) => roots.iter().any(|root| self.macro_use.contains(root) || self.shadowed.contains(&(root.clone(), name.to_string()))),
+            // No known crate root: the wide rule (each `#[macro_use]`, each import of the name).
+            None => !self.macro_use.is_empty() || self.shadowed.iter().any(|(_, shadowed)| shadowed == name),
+        }
     }
 
     /// The uses in the definitions of the workspace macro `name`. `None`: no such macro.
@@ -218,11 +329,24 @@ impl<'a> Scan<'a> {
                     found.unseen.extend(inner.unseen.iter().map(|text| format!("{shown} ({text})")));
                     true
                 }
-                None => !qualified && std_free && !self.shadowed.contains(name) && !self.foreign.contains(&item.file) && !self.foreign.contains(&format!("crate {}", item.crate_name)),
+                None => !qualified && std_free && !self.hidden(name, item),
             }
         } else {
             false
         };
+        // A name of the rename map in the tokens of a call that Semilla cannot see into (the
+        // call itself, or a macro of a different crate that a workspace macro calls). The
+        // macro can make a string from the name, or a different item.
+        let passes = found.unseen.iter().any(|text| text.starts_with(&format!("{shown} (")));
+        if (!free || passes) && !self.watch.is_empty() {
+            let mut inside = BTreeSet::new();
+            if let Some(TokenTree::Group(group)) = trees.get(index + 2) {
+                idents(&group.stream().into_iter().collect::<Vec<_>>(), &mut inside);
+            }
+            if let Some(name) = inside.iter().map(|name| name.trim_start_matches("r#")).find(|name| self.watch.contains(*name)) {
+                found.named.insert(format!("`{shown}` with the name `{name}` of the rename in its tokens (Semilla cannot see into it)"));
+            }
+        }
         if !free {
             found.unseen.insert(shown);
         }
@@ -334,6 +458,9 @@ fn changed(old: Vec<TokenTree>, new: Vec<TokenTree>) -> (Vec<TokenTree>, Vec<Tok
 pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &Workspace, renames: &BTreeMap<String, String>) {
     let mut scan = Scan::new(before, after);
     let old_of: BTreeMap<&String, &String> = renames.iter().map(|(old, new)| (new, old)).collect();
+    // The names of the rename map (batch 5x, part A).
+    let pairs = crate::opaque::rename_pairs(renames);
+    scan.watch = pairs.iter().filter(|(old, new)| old != new).flat_map(|(old, new)| [old.clone(), new.clone()]).collect();
     let mut done: BTreeMap<String, Option<(Found, Found, Option<BTreeSet<String>>)>> = BTreeMap::new();
     for body in bodies.iter_mut() {
         if !matches!(body.status, BodyStatus::Equal { .. } | BodyStatus::Different { .. }) {
@@ -353,6 +480,18 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
             let mut words: Option<BTreeSet<String>> = None;
             if let Some(old) = old {
                 scan.text(&old.text, old, true, &mut found);
+                // A text that differs only by the names of the rename map has no edit (batch
+                // 5x, part A; the same rule as in `Opaque::apply`). The MIR with the rename
+                // map is the proof in each checked configuration. Three cases keep the rule
+                // of an edit: the compiler does not show Semilla what the new name means
+                // there. (1) A name of the map in the tokens of a macro call that Semilla
+                // cannot see into. (2) An attribute that Semilla cannot see into: it gets the
+                // tokens of its item. (3) A `cfg` attribute in the body: the code of a
+                // different configuration can give the new name a different meaning.
+                let calls_only = found.unseen.iter().all(|text| !text.starts_with('#') && text.contains('!'));
+                if crate::opaque::same_text(&old.text, &new.text, &pairs) && found.config.is_empty() && found.named.is_empty() && calls_only {
+                    return None;
+                }
                 // The uses in the changed statements (batch 5o, A4). A text that Semilla
                 // cannot read keeps each use.
                 near = found.clone();
@@ -395,7 +534,8 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
         if equal {
             body.status = BodyStatus::Different { cfg_changed: true };
             // The cause, for the note of a fact with no spotlight (batch 5u).
-            let causes = found.config.iter().cloned().chain(found.unseen.iter().map(|text| format!("{text}{UNSEEN}")));
+            // A call with a name of the rename map is the first cause (batch 5x, part A).
+            let causes = found.named.iter().cloned().chain(found.config.iter().cloned()).chain(found.unseen.iter().map(|text| format!("{text}{UNSEEN}")));
             for text in causes {
                 if !body.stopped.contains(&text) {
                     body.stopped.push(text);

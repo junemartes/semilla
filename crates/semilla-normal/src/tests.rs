@@ -509,6 +509,25 @@ fn a_variant_rename_sorts_the_switch_targets_again() {
     // `otherwise` stays last, and a switch with number targets keeps its order.
     assert_eq!(super::sort_variant_lists("switchInt(_2) -> [k::E::B: bb1, k::E::A: bb2, otherwise: bb3];"), "switchInt(_2) -> [k::E::A: bb2, k::E::B: bb1, otherwise: bb3];");
     assert_eq!(super::sort_variant_lists("switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];"), "switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];");
+    // Batch 5x, part B: the entry `otherwise` does not make a number switch a named switch.
+    let numbers = "switchInt(move _2) -> [1: bb1, 2: bb2, 10: bb3, otherwise: bb4];";
+    assert_eq!(super::sort_variant_lists(numbers), numbers);
+}
+
+#[test]
+fn a_caller_with_a_number_switch_is_equal_after_the_move_of_its_callee() {
+    // Batch 5x, part B (trial 7 on humantime): the caller has no text edit. Its MIR differs
+    // only by the path of the moved item, and it has a switch on numbers with `otherwise`.
+    let text = |callee: &str| {
+        format!("fn _(_1: u64) -> bool {{\n    bb0: {{\n        switchInt(_1) -> [1: bb1, 2: bb2, 10: bb3, 11: bb4, otherwise: bb5];\n    }}\n    bb1: {{\n        _0 = {callee}(_1);\n    }}\n}}\n")
+    };
+    let before = levels(vec![record("k::date::parse", "n0", &text("k::date::is_leap"), &[])]);
+    let after = levels(vec![record("k::date::parse", "n0", &text("k::calendar::is_leap"), &[])]);
+    let renames: BTreeMap<String, String> = [("k::date::is_leap".to_string(), "k::calendar::is_leap".to_string())].into();
+    assert_eq!(status_of(&compare(&before, &after, &renames, &[]), "k::date::parse"), &BodyStatus::Equal { level: "n1".to_string(), proof: vec!["rename-map".to_string()] });
+    // A different target of a number is a real change.
+    let swapped = levels(vec![record("k::date::parse", "n0", &text("k::calendar::is_leap").replace("10: bb3, 11: bb4", "10: bb4, 11: bb3"), &[])]);
+    assert!(matches!(status_of(&compare(&before, &swapped, &renames, &[]), "k::date::parse"), BodyStatus::Different { .. }));
 }
 
 #[test]

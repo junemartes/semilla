@@ -2317,3 +2317,139 @@ Trial 7 was a held-out trial on `humantime` 2.3.0, a crate that the project did 
 - The section "Spotlight" of a report has one line with the two counts: the lines of the section name sensitive code that a step changed, and the summary counts the facts with a spotlight.
 - The header line of changed build code says "The check ran it with a sandbox that is not complete: …" when a limit of the sandbox is missing.
 - The scope text of `no-panic` shows `std::hint::black_box` for the intrinsic `std::intrinsics::black_box`.
+
+## 31. Batch 5x: the cost of the honest flow in trial 7
+
+Trial 7 on `humantime` (section 30) also showed the cost for an honest agent: a rename and a move got no proof, a message gave the wrong cause, and each step with a spotlight took two commands. Each rule of this section is a decision of batch 5x. **Decided by Claude.**
+
+### 31.1 The scope of a macro import (part A)
+
+**The defect.** A rename of `humantime::duration::item_plural` (a function with a `write!` call) got no proof. The note did not say the cause.
+
+**The cause.** A bench target has `#[macro_use] extern crate bencher;`, and a bench file has `use chrono::format::Fixed::*;`. The text rule of `srcconfig.rs` used the two lines for each file of the package. Then `write!` in the library was a macro that Semilla cannot see into, and a body with a text edit got no proof. A rename changes the text of the body.
+
+**The rule. Decided by Claude.**
+
+1. The scope of `#[macro_use]` and of a private `use` line is the crate root (the target) that has the line. `srcconfig::file_roots` gives the crate roots of each file. A file that two targets compile has the two scopes. A file with no known crate root keeps the wide rule (the package).
+2. A `pub use` line can give a name to each crate, so its scope is each crate. A glob import of a path outside the workspace keeps its rule: the file that has it.
+3. A `use` line gives only the names that it can bring: the last segment, the name after `as`, and each name of a group. A segment in the middle of a path gives no name.
+4. A body whose text differs only by the names of the rename map has no edit for the build configuration rule (`opaque::same_text`, one function for `opaque.rs` and `srcconfig.rs`). The MIR with the rename map is the proof in each checked configuration. Three cases keep the stop: a name of the map in the tokens of a macro call that Semilla cannot see into, an attribute that Semilla cannot see into, and a `cfg` attribute in the body.
+5. The rule uses the source text, not the field `mac` of the `names` records. The records exist only for code that a checked configuration compiles. The text rule must also hold for code under a condition that no checked configuration has.
+
+**The limit.** A macro of a different crate that only an unchecked configuration imports is not in the text of a different crate root. The rule of section 30.1 applies to an edit in such code.
+
+### 31.2 A move in one step (part B)
+
+**The defect.** A move of `humantime::date::is_leap_year` to a new module `calendar` got no proof: "the MIR of `humantime::date::parse_rfc3339_weak` changes with the identity claim". The caller had no text edit.
+
+**The cause.** The caller has a `match` on the month: a switch with the number targets 1 to 12 and `otherwise`. The rename map of the move changes the text of the caller record. After a text change, `sort_variant_lists` of `semilla-normal` sorts the named targets of each switch again. Its test for "only number targets" counted `otherwise` as a name. So it sorted the numbers as text (`10, 11, 12, 1, …`) on one side only, and the two texts were different. The correction: `otherwise` is not a named target.
+
+**The rule. Decided by Claude.** A move gets its proof in one step, derived and with the claim, when the step has only the parts of a move:
+
+- the text of the item, equal after the rename map. The `impl` blocks of a moved type follow the type when they are in the new module (`checks::moved_impls`). A method of a trait `impl` is not a pair of its own;
+- a new module with only the items of the move (`new_module_of_move`): the `mod` item has no attribute and is not `pub`, the file has no inner attribute other than a plain doc comment (31.7), no item had the path before, and each other item is a private `use` line with no attribute;
+- each `use` line that the move needs;
+- a wider visibility of the moved item (`pub(super)`, `pub(crate)`, `pub`). It stays its own fact, "visibility of `B`: `private` → `pub (crate)`", with the class rule that a visibility fact had before this batch, and with no spotlight.
+
+Three changes continue to stop the proof. A name of the body that means a different item in the new module changes the MIR, so the compare fails. A `cfg` condition on the old path or on the new path that the other path does not have stops the move (`path_conditions`); this is stricter than before. An edit in the moved body is a second change: the items show as removed and added.
+
+### 31.3 A message says the cause that the code knows (part C)
+
+- A stopped identity proof names the cause from `body.stopped` and `body.config` (`stop_cause`): "`write!` in `f` (Semilla cannot see into it)". The text "has no text edit and is not a derived body" is only for a stop with no known cause.
+- "Split the step" and "its own step" show only when the step has a second change. With no second change, the pair warning says: "their step has no other change. Semilla has no proof that it is one item: …" (`PairWarning.stopped`).
+- The hint "if it uses the old name (in a string, `stringify!`, or a macro)" shows only when the text of the body has the old name in a string or in the tokens of a macro call (`names_in_text`).
+- A rejected step stores nothing, but the session file keeps its intent, its cause, and the command to run again (`Session.rejected`). `semilla tag` prints them when an edit has no step. The next `semilla step` and `semilla undo` remove the record.
+- For the compiler error `E0583` in the tree after the step, Semilla looks for the module file in the folder. It says if git ignores the file or if the file is not in the tree of the step (`oracle::missing_module_note`).
+
+### 31.4 A reason key is the path of an item (part D)
+
+**The defect.** Only a rejection printed the key of a reason (`humantime::date::pick/S0/arm[0].body`). So each step with a spotlight took two commands.
+
+**The rule. Decided by Claude.** A reason whose key is the path of an item covers each spotlight of the step whose key is that path, or starts with that path and `/` (`item_reasons`). An item is a function, a method, a constant, a static, a struct, an enum, a type alias, or a trait. The exact key of a spotlight goes first, then the longest item path. A module path and a crate name cover no item: such a reason is an unused reason, and its line says the rule. An unused reason does not change the result of the step, as before. Each output shows the reason at each spotlight that it covers, with the key of the agent: "reason (key `c4::pick`): …" (`Fact.reason_key`). A file key (`path/to/file:`) and the exact key work as before, and a rejection continues to print the exact keys.
+
+### 31.5 Lists and report noise (part E)
+
+**The defects.** A step that changed `features.default` listed 45 bodies. A fact of a nested function named the outer function. The Markdown report showed the groups as G10, G1, G11, and showed the text of a folded fact two times. Each `status` printed many hundred characters of `cfg` conditions. A stored reason of a fact with no spotlight was not in the report.
+
+**The rules. Decided by Claude.**
+
+- A list of more than 8 bodies shows the count and the scope: "45 bodies of the crate `humantime`". The scope is the crate of each name, with a count for each crate if there are two or more. The text does not say "each body of the crate": the view does not know all bodies of the crate. `semilla status --verbose`, the reviewer text, and the Markdown report with `--full` show each name (`views::body_list`, `report::list_scope`).
+- A nested function is a body of its own. The span of its MIR body is in the outer item, so the list showed the outer item. Now the list shows the MIR name of each changed body of the item (`BodyIndex::shown_bodies`). The outer item shows only if a body of its own changed (a closure is a body of the outer item). The rule changes only the names in a list, after the last check that reads the list.
+- Groups with the same risk have the order of their first step (`summary::ordered_groups`). The order by risk and by dependency of section 11.2 stays.
+- A folded fact has the count and the text in its description. The Markdown report and the web UI then show only the anchors (`Fact::folds`).
+- An agent command (`status` with no commit) prints the count of the `cfg` conditions and the first one. `status --verbose`, each reviewer command, and each report print the list (`ConfigNote::agent_lines`).
+- A reason with the exact key of a fact with no spotlight shows as a note: "no spotlight; the agent gave a reason: …". The reason changes no class and no result.
+
+**Not changed.** The class of a changed literal comes from the MIR of the full body: `control_flow` if the graph of the body changed, `logic` if not. A changed literal in a match arm can change a jump table, so the graph changes. One class for each value change needs a rule for each edit kind, not for each body. That rule is not simple, so the class stays.
+
+### 31.6 The time of the final check (part F)
+
+**The measurement.** `SEMILLA_TIMING=1` now also prints four totals after "verify the change set": the read of the records, the build configuration rules with the marks, the compare at N0, and the compare from N0 to N4 (`TimeTotal` in `main.rs`). The final check of the 11 steps of `humantime-part1` took 89.2 s with a warm cache. The verifier asked the oracle 184 times for 44 pairs of a step and a configuration. The oracle read a record folder 1448 times (13.6 s). The build passes read the records and did not use them.
+
+**The changes. Decided by Claude.**
+
+- A build pass only builds. `NormalOracle::records_or_build` has a `read` flag, and `build_each` and the parallel N2 and N3 pass set it to off.
+- The records of a cache folder stay in memory (`RECORDS`, at most 48 folders). The key is the folder and the time of its `.complete` file. `remove_cache` removes the folder and its entry.
+- The oracle keeps the result of a comparison in memory (`Added::compared`). The key has each input of the comparison: the two trees, the configuration, the rename map, the added items, and the marks of the two sides. A call with an equal key does not compare again.
+
+**No check is removed.** Each call still gives each N0 record to the build configuration rules, and it still computes the marks. The marks are a part of the key, so a rule that changes a mark gets a new comparison. The comparison is a function of its key: the records of a tree do not change in one process.
+
+**The result.** The final check takes 77.8 s (13 % less). The result text is the same. The read count is 168 (1.7 s). Only 24 of the 184 calls have an equal key: the other calls have a different rename map or different marks.
+
+**Open.** The comparison of the bodies takes 47 s of the 78 s. About 31 s are 136 comparisons of one changed body (230 ms each, with a debug binary), and the same body comes many times with different marks. A memo for each body needs a key with each input of the body ladder (the texts, the content hashes of the callees, the marks). This batch does not do it.
+
+### 31.7 A doc comment does not stop a move or a rename (fix round 2)
+
+**The cause.** The verification of batch 5x found the defect. A move into a new module with the line `//! Calendar computations.` in the new file got five facts to read and no "moved" fact. With the claim, the step was rejected: "an identity step must be neutral, but the step also has the change at `humantime::calendar`". `new_module_of_move` refused each module file with an inner attribute, and an inner doc comment was one. A second form: a long `///` comment on a short moved item got no derived move, because the pair test (`identity::similarity`) counted the tokens of the doc text.
+
+**The rule. Decided by Claude.**
+
+- A plain doc comment is one of: `//!`, `/*! */`, `///`, `/** */`, `#[doc = "<string literal>"]`, `#![doc = "<string literal>"]`.
+- A plain doc comment in the file of the new module does not stop the rule of the new module. The loader stores it as `//!` lines, and each other inner attribute keeps its token form, so the test is on the form of the stored text.
+- A plain doc comment that the step adds, removes, or changes on a moved or renamed item does not stop the proof. The pair test compares the token text of the two items with no `# [doc = "…"]` attribute (`identity::without_docs`).
+- Each doc change stays its own fact with the class `other`. Its text now starts with "changed docs" (before, a doc change on a moved item said "changed code").
+- Each other attribute stops the proof as before: `#![allow(…)]`, `#![cfg_attr(…, doc = …)]`, a doc attribute with a computed text (`include_str!`), `#[cfg(…)]`. A code block in a doc comment is a doc test, and it stops the proof.
+
+**More decisions of this round. Each one: Decided by Claude.**
+
+- `#[doc(hidden)]` on an item of an identity step stops the proof. The loader puts this attribute in the comment edit of the item, and an identity step permitted each comment edit. Now a comment edit is permitted only when its attribute lines are equal on the two sides.
+- A doc comment on the `mod` line of the new module stops the rule of the new module. That text is a part of the added `mod` item and has no fact of its own, so the reviewer could not read it.
+
+**Not changed.** A body edit, a different value of a moved constant, a name that means a different item in the new module, and a `cfg` condition on the `mod` line stop the proof as before, also with a doc comment in the new file.
+
+### 31.8 A visibility change of the public API is a fact to read (fix round 2)
+
+**The cause.** The verification of batch 5x found the defect. `fn leap` → `pub fn leap` in a public module gave one fact with the class `neutral (proved)`. A move into a public module as `pub fn` gave two such facts. The crate had a new public function, and the reviewer had nothing to read. The MIR does not change with the visibility, so the class rule said "neutral".
+
+**The rule. Decided by Claude.** `api_reach` (in `semilla-verify/src/lib.rs`) answers for one item of one side: can a different crate name it? The answer is "no", "yes", or "possibly", with the cause.
+
+- "No": the item is not `pub`, or it is test code, or it is not in a library target. A binary, a test, an example, a bench, and a build script have no API for a different crate.
+- "Yes": the item and each module and each type on its path are `pub`.
+- "Possibly": a `pub use` line of the crate names the item or a module on its path (also through an `as` name), or uses a glob on one of them, or is a glob with a relative path. Also: a macro of the crate has the text `pub use`, a macro call names a name of the path, a module has a `#[path]` attribute, or the owner type of a member is `pub`.
+- Else "no".
+
+`visibility_api_change` compares the answer of the two sides. "No" and "no", or "yes" and "yes": the fact is as before (`neutral (proved)` when no body changes). Each other result: the fact gets the class `other`, and its text says the cause: "(the public API changes: a different crate can now use the item)", "(the public API changes: a different crate can no longer use the item)", or "(the public API can change: a `pub use` line names `leap`)".
+
+**The class. Decided by Claude.** The class is `other`: "a change with no MIR". The change is real, and the MIR cannot show it, as for an attribute or a doc. `logic` stays the class when a body changes. No new class is necessary. The move fact of the same step stays `neutral (proved)`.
+
+**Why a new function. Decided by Claude.** `is_public` (for `api_level`) uses a word match on each `pub use` line. It says "public" for each `pub` item of a module when a `pub use` line names a different item of that module. That is safe for a warning, but it makes a fact to read of each `pub` in a private module. `api_reach` parses the `use` tree and compares the names.
+
+**A rename or a move that changes the public API (fix round 3). Decided by Claude.** A `pub` item that moves from a private module into a public module has no visibility edit. A rename of a `pub` item in a public module has none too. Before this round, each of them had only the identity fact, with the class `neutral (proved)`, and the result was "0 to read".
+
+`identity_api_facts` reads each proved identity pair: a derived `renamed …` fact or `moved …` fact, or a verified `rename` claim or `move-item` claim. It uses only the top item of the pair, not the members of a moved type. It computes `api_reach` of the old path on the before side and of the new path on the after side.
+
+- "No" and "no": no new fact. This is the usual case (a private helper).
+- "Yes" and "yes": "public API: `a::old` is now `a::new` (a different crate can no longer use the old path)". If a `pub use` line of the after side can give the old name (by the name or by a glob), the end of the text is "(a `pub use` line can keep the old path)".
+- The new side is "yes": "public API: a different crate can now use `a::new`".
+- "Yes" and "no": "public API: a different crate can no longer use `a::old`".
+- Each other case has a "possibly" side: "public API can change: CAUSE (`a::old` is now `a::new`)".
+
+The new fact has the part `public api` and the class `other`. It is a fact to read. It needs no reason, and it has no spotlight. It is the last fact of the step. The identity fact stays `neutral (proved)`, and an identity claim stays verified: the new fact stops no proof. The class of the step becomes `other`. `api_level` does not change.
+
+The kind of the group stays `rename` or `move`: `derived_kind` does not count the new fact, as it does not count a doc fact (24.3). A rename of a public item is a rename, and the fact to read says the effect. With an identity claim, the kind is `refactor`, as for a claim with a doc fact.
+
+If the step has a visibility fact with an API text for the same item, the step gets no second fact: the visibility fact says the same thing.
+
+A variant, a field of a variant, and a method of a trait have no visibility of their own. For them, the owner gives the answer of `api_reach` (`member_reach`).
+
+A pending identity claim (phase 1 of `--fast`) gets no fact: only a proved pair has one.

@@ -592,7 +592,10 @@ pub fn ordered_groups(ctx: &Ctx, review: &ReviewFile) -> Vec<GroupSummary> {
     // depends on. In a cycle, the priority decides.
     let code: Vec<bool> = ctx.groups.iter().map(|group| group_facts(ctx, group).iter().any(|fact| fact.build_code_change)).collect();
     let mut priority: Vec<usize> = (0..summaries.len()).collect();
-    priority.sort_by(|a, b| code[*b].cmp(&code[*a]).then(summaries[*b].risk_score.cmp(&summaries[*a].risk_score)).then(a.cmp(b)));
+    // The order of the change set is the order of the steps, as numbers (batch 5x, part E): the
+    // list of the groups can have the order of the ID texts (`G1`, `G10`, `G11`, `G2`).
+    let first_step = |index: usize| ctx.groups[index].steps.iter().min().copied().unwrap_or(usize::MAX);
+    priority.sort_by(|a, b| code[*b].cmp(&code[*a]).then(summaries[*b].risk_score.cmp(&summaries[*a].risk_score)).then(first_step(*a).cmp(&first_step(*b))).then(a.cmp(b)));
     let mut placed: Vec<usize> = Vec::new();
     let mut done: BTreeSet<String> = BTreeSet::new();
     while placed.len() < summaries.len() {

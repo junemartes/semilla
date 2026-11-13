@@ -611,9 +611,11 @@ const TABLE_OPEN: &str = " values [";
 /// as it is.
 fn sort_variant_lists(text: &str) -> String {
     let text = sort_list(text, TABLE_OPEN, "", |_| true);
-    // A switch with number targets only keeps the order of the driver.
+    // A switch with number targets only keeps the order of the driver. The entry `otherwise`
+    // is not a named target (batch 5x, part B): with it in the test, the rename of a callee
+    // sorted the numbers as text (`10, 11, 1, 2`), and the caller was not equal.
     sort_list(&text, SWITCH_OPEN, " -> [", |parts| {
-        parts.iter().any(|part| !part.starts_with(|c: char| c.is_ascii_digit()))
+        parts.iter().any(|part| !part.starts_with(|c: char| c.is_ascii_digit() || c == '-') && !part.starts_with("otherwise: "))
     })
 }
 

@@ -1328,26 +1328,40 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
                 .unwrap_or_else(|| "class after phase 2".into());
             let mut text = format!("step {}: {} derived [{class}]{}: {}", view.step, fact.id, fact.mark(), fact.description);
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
-                text.push_str(&format!("; {} site(s): {} ({})", group.sites.len(), group.edit, group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")));
+                let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
+                // A folded fact has the count and the text in its description: only the anchors
+                // follow (batch 5x, part E).
+                if fact.folds(group) {
+                    text.push_str(&format!(" (at {anchors})"));
+                } else {
+                    text.push_str(&format!("; {} site(s): {} ({anchors})", group.sites.len(), group.edit));
+                }
             }
-            // The short report shows the first bodies of a long list. The full report has each
-            // body (brief 5h, C6).
+            // The short report shows the count and the scope of a long list (batch 5x, part E).
+            // The full report has each body (brief 5h, C6).
             let list = |bodies: &[String]| {
-                let limit = if full { bodies.len() } else { semilla_core::report::LIST_LIMIT };
-                let more = if bodies.len() > limit { format!(", and {} more (the full list: `--full`)", bodies.len() - limit) } else { String::new() };
-                format!("{}{more}", bodies.iter().take(limit).map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", "))
+                if full || bodies.len() <= semilla_core::report::LIST_LIMIT {
+                    format!(": {}", bodies.iter().map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", "))
+                } else {
+                    format!(" of {} (the names: `--full`)", semilla_core::report::list_scope(bodies))
+                }
             };
             if !fact.affected.is_empty() {
-                text.push_str(&format!("; {} affected bod{}: {}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
+                text.push_str(&format!("; {} affected bod{}{}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
             }
             if !fact.equal_sites.is_empty() {
-                text.push_str(&format!("; {}{}: {}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
+                let count = if full || fact.equal_sites.len() <= semilla_core::report::LIST_LIMIT { String::new() } else { format!("{} ", fact.equal_sites.len()) };
+                text.push_str(&format!("; {count}{}{}{}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
             }
             if let Some(note) = &fact.note {
                 text.push_str(&format!("; note: {note}{}", fact.part_mark()));
             }
+            // A stored reason of a fact with no spotlight is a note (batch 5x, part E).
+            if let Some(reason) = fact.reason.as_deref().filter(|_| fact.spotlight_why.is_none()) {
+                text.push_str(&format!("; note: no spotlight; the agent gave a reason: {}", text::quoted(reason)));
+            }
             if let Some(why) = &fact.spotlight_why {
-                text.push_str(&format!("; spotlight: {why}; reason: {}", fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
+                text.push_str(&format!("; spotlight: {why}; {}: {}", fact.reason_label(), fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
             }
             (text, if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) })
         })

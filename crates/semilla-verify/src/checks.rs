@@ -182,6 +182,31 @@ impl BodyIndex {
         item || self.statuses.get(name).is_some_and(|status| !matches!(status, BodyStatus::Equal { .. }))
     }
 
+    /// The names to show for an affected item (batch 5x, part E). A nested function is its own
+    /// body: it has no source item, so its MIR body belongs to the function around it. The
+    /// result has the name of each nested function with a changed body, and the item itself
+    /// only if a body of its own (the function, a closure) changed.
+    pub fn shown_bodies(&self, item: &str) -> Vec<String> {
+        let mut own = false;
+        let mut nested = std::collections::BTreeSet::new();
+        for (name, _) in self.items.iter().filter(|(_, of)| of.as_str() == item) {
+            if self.statuses.get(name).is_none_or(|status| matches!(status, BodyStatus::Equal { .. })) {
+                continue;
+            }
+            let base = name.split("::{").next().unwrap_or(name);
+            match base.strip_prefix(item).filter(|rest| rest.starts_with("::")) {
+                Some(_) => {
+                    nested.insert(base.to_string());
+                }
+                None => own = true,
+            }
+        }
+        if nested.is_empty() {
+            return vec![item.to_string()];
+        }
+        own.then(|| item.to_string()).into_iter().chain(nested).collect()
+    }
+
     /// The item path of a MIR name.
     pub fn item_of_name(&self, name: &str) -> Option<String> {
         self.items.get(name).cloned()
@@ -261,6 +286,47 @@ pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Work
             && item.path.rsplit("::").next() == Some(short)
     });
     found.min_by_key(|item| item.line_end - item.line_start).map(|item| item.path.clone())
+}
+
+/// Adds the `impl` blocks of each moved type to the rename map (batch 5x, part B): a block of
+/// the old module with the moved type as its self type, when the block is not in the old module
+/// after the step and a block with the same name is in the new module. The methods of a trait
+/// impl follow their block. The diff then compares each block with its moved block, and an
+/// edit in a block stays an edit.
+pub fn moved_impls(step: &Step, before: &Workspace, after: &Workspace, renames: &mut Renames) {
+    use semilla_syntax::ItemKind;
+    for claim in step.claims.iter().filter(|claim| claim.op == "move-item") {
+        let Some((at, to)) = claim.at.as_ref().zip(claim.arg_str("to")) else { continue };
+        let new_path = full_path(&at.item, to);
+        let (old_module, new_module, name) = (parent(&at.item), parent(&new_path), last_segment(&at.item));
+        let is_type = before.items.get(&at.item).is_some_and(|item| matches!(item.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Type));
+        if !is_type || old_module == new_module || name != last_segment(&new_path) {
+            continue;
+        }
+        let start = format!("{old_module}::impl ");
+        let blocks: Vec<(String, String)> = before
+            .items
+            .values()
+            .filter(|item| item.kind == ItemKind::Impl)
+            .filter_map(|item| {
+                let tail = item.path.strip_prefix(&start)?;
+                // The owner of the block: `Name`, or `<Name as Trait>`. A twin has a suffix `#N`.
+                let owner = tail.rsplit_once('#').filter(|(_, number)| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())).map_or(tail, |(owner, _)| owner);
+                let own = owner == name || owner.strip_prefix('<').and_then(|rest| rest.strip_prefix(name)).is_some_and(|rest| rest.starts_with(" as "));
+                let moved = format!("{new_module}::impl {tail}");
+                (own && !after.items.contains_key(&item.path) && after.items.get(&moved).is_some_and(|found| found.kind == ItemKind::Impl)).then(|| (owner.to_string(), tail.to_string()))
+            })
+            .collect();
+        for (owner, tail) in blocks {
+            renames.items.entry(format!("{start}{tail}")).or_insert_with(|| format!("{new_module}::impl {tail}"));
+            if owner.starts_with('<') {
+                let methods = format!("{old_module}::{owner}::");
+                for path in before.items.keys().filter(|path| path.starts_with(&methods)) {
+                    renames.items.entry(path.clone()).or_insert_with(|| format!("{new_module}::{}", &path[old_module.len() + 2..]));
+                }
+            }
+        }
+    }
 }
 
 /// Builds the renames of a step from its identity claims.
@@ -361,7 +427,7 @@ pub fn is_child(path: &str, parent: &str) -> bool {
     path.strip_prefix(parent).is_some_and(|rest| rest.starts_with("::") || rest.starts_with('.'))
 }
 
-fn last_segment(path: &str) -> &str {
+pub(crate) fn last_segment(path: &str) -> &str {
     let last = path.rsplit("::").next().unwrap_or(path);
     last.rsplit_once('.').map(|(_, field)| field).unwrap_or(last)
 }
@@ -1481,7 +1547,7 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
         // With `new`, the name map pairs the old and the new item. Equal text means a pure move or
         // rename, which is an identity claim, not a rewrite.
         if new != at.item {
-            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Claim `move-item` (another module or crate) or `rename` in its own step.", at.item));
+            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Remove the claim, or claim `move-item` (another module or crate) or `rename`. A step with no other change gets the proof.", at.item));
         }
         return outcome;
     }

@@ -64,7 +64,10 @@ fn kind_name(kind: ItemKind) -> &'static str {
 
 /// The entities of one side that the other side does not have. A child of such an entity (the
 /// field of a renamed struct) follows its owner, so it is not a candidate of its own.
-fn only_in<'a>(side: &'a Workspace, other: &Workspace) -> Vec<(&'a str, ItemKind)> {
+///
+/// `open` (batch 5x, part B): the new modules that are not a renamed or moved module. An item of
+/// such a module can be a moved item, so it is a candidate.
+fn only_in<'a>(side: &'a Workspace, other: &Workspace, open: &BTreeSet<&str>) -> Vec<(&'a str, ItemKind)> {
     let paths: BTreeSet<&str> = side.items.keys().filter(|path| !other.items.contains_key(*path)).map(String::as_str).collect();
     side.items
         .values()
@@ -75,7 +78,7 @@ fn only_in<'a>(side: &'a Workspace, other: &Workspace) -> Vec<(&'a str, ItemKind
         .filter(|item| {
             let mut current = owner(&item.path);
             while !current.is_empty() {
-                if paths.contains(current) {
+                if paths.contains(current) && !open.contains(current) {
                     return false;
                 }
                 current = owner(current);
@@ -86,11 +89,35 @@ fn only_in<'a>(side: &'a Workspace, other: &Workspace) -> Vec<(&'a str, ItemKind
         .collect()
 }
 
+/// The token text of an item with no plain doc comment (`# [doc = "…"]`). A doc comment is not
+/// a part of the identity of an item: a short item with a new doc comment stays a candidate
+/// (batch 5x, round 2).
+fn without_docs(text: &str) -> String {
+    const START: &str = "# [doc = \"";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(START) {
+        // The end of the string literal: the first quote with no escape before it.
+        let literal = &rest[at + START.len()..];
+        let mut escaped = false;
+        let end = literal.char_indices().find(|(_, c)| {
+            let quote = !escaped && *c == '"';
+            escaped = !escaped && *c == '\\';
+            quote
+        });
+        let Some(tail) = end.and_then(|(end, _)| literal[end + 1..].strip_prefix(']')) else { break };
+        out.push_str(&rest[..at]);
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The similarity of two item texts, with the own name of each item as one token `$name`.
 fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
     let tokens = |item: &semilla_syntax::Item| -> Vec<String> {
         let own = name(&item.path);
-        item.text.split(' ').filter(|t| !t.is_empty()).map(|t| if t == own { "$name".to_string() } else { t.to_string() }).collect()
+        without_docs(&item.text).split(' ').filter(|t| !t.is_empty()).map(|t| if t == own { "$name".to_string() } else { t.to_string() }).collect()
     };
     let (x, y) = (tokens(a), tokens(b));
     if x.is_empty() || y.is_empty() || x.len() * y.len() > 4_000_000 {
@@ -109,13 +136,27 @@ fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
 
 /// The candidate pairs of a step, and the notes for the limits.
 pub fn candidates(before: &Workspace, after: &Workspace) -> (Vec<Candidate>, Vec<String>) {
-    let removed = only_in(before, after);
-    let added = only_in(after, before);
+    let none = BTreeSet::new();
+    let removed = only_in(before, after, &none);
+    let added = only_in(after, before, &none);
+    let first = pairs_of(before, after, &removed, &added);
+    // A new module that is not the new side of a pair: its items can be moved items (batch 5x,
+    // part B). The check of the step decides if the module is a part of the move.
+    let open: BTreeSet<&str> = added.iter().filter(|(path, kind)| *kind == ItemKind::Mod && !first.0.iter().any(|pair| pair.new == *path)).map(|(path, _)| *path).collect();
+    if open.is_empty() {
+        return first;
+    }
+    let added = only_in(after, before, &open);
+    pairs_of(before, after, &removed, &added)
+}
+
+/// The pairs of the removed and the added entities, and the notes for the limits.
+fn pairs_of(before: &Workspace, after: &Workspace, removed: &[(&str, ItemKind)], added: &[(&str, ItemKind)]) -> (Vec<Candidate>, Vec<String>) {
     let mut groups: BTreeMap<(&str, &str), (usize, usize)> = BTreeMap::new();
-    for (path, kind) in &removed {
+    for (path, kind) in removed {
         groups.entry((kind_name(*kind), owner(path))).or_default().0 += 1;
     }
-    for (path, kind) in &added {
+    for (path, kind) in added {
         groups.entry((kind_name(*kind), owner(path))).or_default().1 += 1;
     }
     let mut notes = BTreeSet::new();
@@ -129,9 +170,14 @@ pub fn candidates(before: &Workspace, after: &Workspace) -> (Vec<Candidate>, Vec
         over
     };
     let mut found = Vec::new();
-    for (old, old_kind) in &removed {
-        for (new, new_kind) in &added {
+    for (old, old_kind) in removed {
+        for (new, new_kind) in added {
             if old_kind != new_kind {
+                continue;
+            }
+            // A method of a trait impl follows the move of its type (batch 5x, part B:
+            // `checks::moved_impls`). It is not a candidate of its own.
+            if old.contains('<') || new.contains('<') {
                 continue;
             }
             let op = if owner(old) == owner(new) && name(old) != name(new) {

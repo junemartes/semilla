@@ -343,6 +343,33 @@ pub fn timing(phase: &str, started: std::time::Instant) {
     }
 }
 
+/// A total of the time of a phase that runs many times (batch 5x, part F).
+pub struct TimeTotal {
+    nanos: std::sync::atomic::AtomicU64,
+    count: std::sync::atomic::AtomicU64,
+}
+
+impl TimeTotal {
+    pub const fn new() -> Self {
+        Self { nanos: std::sync::atomic::AtomicU64::new(0), count: std::sync::atomic::AtomicU64::new(0) }
+    }
+
+    /// Adds the time from `started` to now.
+    pub fn add(&self, started: std::time::Instant) {
+        self.nanos.fetch_add(started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Prints the total to stderr when `SEMILLA_TIMING` is set, and starts a new total.
+    pub fn print(&self, phase: &str) {
+        let nanos = self.nanos.swap(0, std::sync::atomic::Ordering::Relaxed);
+        let count = self.count.swap(0, std::sync::atomic::Ordering::Relaxed);
+        if std::env::var_os("SEMILLA_TIMING").is_some() && count > 0 {
+            eprintln!("[timing] total of {phase} ({count} times): {:.2} s", nanos as f64 / 1e9);
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {

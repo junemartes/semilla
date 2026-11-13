@@ -799,6 +799,7 @@ async fn the_reviewer_decides_on_a_pair_warning() {
         refusal: Some("the contract is new".into()),
         reviewer: None,
         resolves: Vec::new(),
+        stopped: None,
     });
     let app = router(data, file.clone());
     let summary = get(&app, "/api/changeset").await;

@@ -585,16 +585,54 @@ fn a_partial_claim_is_not_counted_as_verified() {
 
 #[test]
 fn a_long_list_of_bodies_is_short_in_the_short_report() {
-    // Brief 5h, C6. The text output and the short report show 6 bodies of a fact, then
-    // "and N more". The report with `--full` has each body.
+    // Brief 5h, C6, and batch 5x, part E. The short report shows the count and the scope of a
+    // list of more than 8 bodies. The report with `--full` has each body.
     let mut data = demo_data();
     let bodies: Vec<String> = (0..21).map(|index| format!("demo::body_{index:02}")).collect();
     let fact = semilla_core::Fact { id: "f9".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), class: Some(semilla_core::Class::Logic), affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
     data.report.steps[0].facts.push(fact);
     let line = |text: &str| text.lines().find(|line| line.contains("f9 derived")).unwrap_or_default().to_string();
     let short = line(&semilla_ui::export::render_markdown(&data, false));
-    assert!(short.contains("21 affected bodies: `demo::body_00`") && short.contains("`demo::body_05`, and 15 more (the full list: `--full`)") && !short.contains("demo::body_06"), "{short}");
-    assert!(short.contains("bodies with a changed call site and no change of behavior (proved): `demo::body_00`") && short.contains("and 2 more"), "{short}");
+    // Batch 5x, part E: a list of more than 8 bodies shows the count and the scope.
+    assert!(short.contains("; 21 affected bodies of the crate `demo` (the names: `--full`)") && !short.contains("demo::body_08"), "{short}");
+    assert!(short.contains("bodies with a changed call site and no change of behavior (proved): `demo::body_00`") && short.contains("`demo::body_07`"), "{short}");
     let full = line(&semilla_ui::export::render_markdown(&data, true));
     assert!(bodies.iter().all(|body| full.contains(&format!("`{body}`"))) && !full.contains(" more"), "{full}");
+}
+
+#[test]
+fn groups_with_one_risk_have_the_order_of_the_steps() {
+    // Batch 5x, part E (trial 7): the report showed the groups as G10, G1, G11. The list of the
+    // groups had the order of the ID texts.
+    let mut data = demo_data();
+    let step = |index: usize| semilla_core::Step { index, intent: format!("step {index}"), claims: Vec::new(), ..data.changeset.steps[0].clone() };
+    data.changeset.steps = (0..11).map(step).collect();
+    data.changeset.subgroups.clear();
+    let group = |id: &str, step: usize| semilla_core::Group { id: id.into(), title: format!("group {id}"), kind: data.changeset.groups[0].kind, why: String::new(), steps: vec![step] };
+    data.changeset.groups = vec![group("G1", 0), group("G10", 9), group("G11", 10), group("G2", 1)];
+    data.report.steps = (0..11).map(|index| semilla_core::StepReport { step: index, intent: format!("step {index}"), ..Default::default() }).collect();
+    let markdown = semilla_ui::export::render_markdown(&data, false);
+    let place = |id: &str| markdown.find(&format!("### `{id}` ")).unwrap_or_else(|| panic!("no group {id}: {markdown}"));
+    assert!(place("G1") < place("G2") && place("G2") < place("G10") && place("G10") < place("G11"), "{markdown}");
+}
+
+#[test]
+fn a_folded_fact_shows_its_text_one_time() {
+    // Batch 5x, part E (trial 7): the report showed the text of a folded fact two times. The
+    // description has the count and the text, and the anchors follow.
+    let mut data = demo_data();
+    let sites: Vec<semilla_core::Anchor> = ["demo::a", "demo::b", "demo::c"].iter().map(|item| semilla_core::Anchor::item(*item)).collect();
+    let edit = "changed path `old` → `new`";
+    let group = semilla_core::report::SiteGroup { edit: edit.into(), sites };
+    let fact = semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: format!("3 site(s): {edit}"), status: "derived".into(), class: Some(semilla_core::Class::Logic), sites: vec![group.clone()], ..Default::default() };
+    assert!(fact.folds(&group));
+    data.report.steps[0].facts.push(fact);
+    let line = |data: &semilla_ui::UiData| semilla_ui::export::render_markdown(data, false).lines().find(|line| line.contains("f9 derived")).unwrap_or_default().to_string();
+    let folded = line(&data);
+    assert_eq!(folded.matches("changed path").count(), 1, "{folded}");
+    assert!(folded.contains("3 site(s): changed path `old` → `new`") && folded.contains(" (at `demo::a`, `demo::b`, `demo::c`)"), "{folded}");
+    // A fact with a different description keeps the text of its sites.
+    data.report.steps[0].facts.last_mut().unwrap().description = "type of `demo::T` changed".into();
+    let plain = line(&data);
+    assert!(plain.contains("; 3 site(s): changed path `old` → `new` (`demo::a`, `demo::b`, `demo::c`)"), "{plain}");
 }

@@ -209,6 +209,10 @@ pub struct Fact {
     /// The reason of the agent (`semilla reason`), free text for the reviewer. It is not verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The key that the agent gave for the reason, when it is the path of the item and not the
+    /// exact key of this fact (batch 5x, part D).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_key: Option<String>,
     /// The forced edits at other sites, grouped by the inserted or removed text (design 22.6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sites: Vec<SiteGroup>,
@@ -235,6 +239,20 @@ pub struct Fact {
 }
 
 impl Fact {
+    /// The label of the reason in each output. It has the key of the agent, when the key is
+    /// the path of the item and not the exact key of the fact (batch 5x, part D).
+    pub fn reason_label(&self) -> String {
+        match &self.reason_key {
+            Some(key) => format!("reason (key `{key}`)"),
+            None => "reason".to_string(),
+        }
+    }
+
+    /// The exact key of the reason of this fact: its anchor, or its part.
+    pub fn reason_place(&self) -> String {
+        self.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| self.part.clone())
+    }
+
     /// True if the first line of the fact in an output shows a proof: the class `neutral
     /// (proved)`, or a description with a proof (`renamed … (proved N1)`).
     pub fn has_proof(&self) -> bool {
@@ -264,8 +282,21 @@ impl Fact {
         self.class == Some(Class::Other) && self.part == "edit" && self.description.starts_with("changed docs")
     }
 
+    /// True for the fact of a proved rename or move that changes the public API (design 31.8).
+    /// The fact is text for the reviewer about the identity fact: it is no second change.
+    pub fn is_api_note(&self) -> bool {
+        self.class == Some(Class::Other) && self.part == "public api"
+    }
+
     pub fn names_sites(&self, group: &SiteGroup) -> bool {
         self.description.starts_with(&format!("{} in ", group.edit))
+    }
+
+    /// True if the fact is the fold of the sites of the group: its description has the count
+    /// and the text of the group ("3 site(s): changed path `a` → `b`"). A view shows the text
+    /// one time, then the anchors (batch 5x, part E).
+    pub fn folds(&self, group: &SiteGroup) -> bool {
+        ["site(s)", "bodies"].iter().any(|what| self.description.starts_with(&format!("{} {what}: {}", group.sites.len(), group.edit)))
     }
 }
 
@@ -339,6 +370,10 @@ pub struct PairWarning {
     /// workspace on the two sides (batch 5k, B5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolves: Vec<PairName>,
+    /// The cause that stopped the proof of the rename or the move, when the step of the pair has
+    /// no other change (batch 5x, part C). The advice "own step" is then not true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<String>,
 }
 
 /// A name in the text of a pair, and the item that it points to on each side.
@@ -366,6 +401,15 @@ impl PairWarning {
             self.new,
             self.similarity * 100.0
         );
+        if let Some(cause) = &self.stopped {
+            // The step has no second change: a new step gives the same result.
+            text = format!(
+                "`{}` (removed) and `{}` (added) are {:.0}% similar, and their step has no other change. Semilla has no proof that it is one item: {cause}",
+                self.old,
+                self.new,
+                self.similarity * 100.0
+            );
+        }
         if !self.resolves.is_empty() {
             // B5 of batch 5k: the texts are equal, and a name has a different meaning in the new
             // place. The advice "own step" does not help: the move itself changes the code.
@@ -574,11 +618,34 @@ impl ConfigNote {
         Some(format!("! `cfg` conditions that Semilla did not check: {}{more}", shown.join(", ")))
     }
 
+    /// The line of the conditions for an agent command (batch 5x, part E). The short line has
+    /// the count and the first condition. The line of `--verbose` has each condition.
+    pub fn agent_condition_line(&self, verbose: bool) -> Option<String> {
+        let first = self.not_covered.first()?;
+        let count = self.not_covered.len();
+        if verbose {
+            let all: Vec<String> = self.not_covered.iter().map(|text| format!("`{text}`")).collect();
+            return Some(format!("! `cfg` conditions that Semilla did not check: {}", all.join(", ")));
+        }
+        if count == 1 {
+            return self.condition_line();
+        }
+        Some(format!("! {count} `cfg` conditions that Semilla did not check: `{first}`, and {} more (`semilla status --verbose` shows each one)", count - 1))
+    }
+
     /// The lines at the top of an output for the reviewer.
     pub fn lines(&self, all_steps: usize) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
         lines.extend(self.gap_lines(all_steps));
         lines.extend(self.condition_line());
+        lines
+    }
+
+    /// The lines at the top of an output of an agent command (batch 5x, part E).
+    pub fn agent_lines(&self, all_steps: usize, verbose: bool) -> Vec<String> {
+        let mut lines = vec![self.checked_line()];
+        lines.extend(self.gap_lines(all_steps));
+        lines.extend(self.agent_condition_line(verbose));
         lines
     }
 }
@@ -789,9 +856,24 @@ impl Report {
 /// The title of the list of the bodies that have a forced edit and an equal MIR (brief 5h, C8).
 pub const EQUAL_SITES: &str = "bodies with a changed call site and no change of behavior (proved)";
 
-/// The largest number of bodies that a list of the `step` and `status` output shows (brief 5h,
-/// C6). The report with `--full` has the full list.
-pub const LIST_LIMIT: usize = 6;
+/// The largest number of bodies that a list shows with each name (batch 5x, part E). A longer
+/// list shows the count and the scope ([`list_scope`]). `semilla status --verbose` and the
+/// report with `--full` have each name.
+pub const LIST_LIMIT: usize = 8;
+
+/// The scope of a long list of bodies (batch 5x, part E): "the crate `humantime`", or
+/// "2 crates: `a` (30), `b` (15)". The crate is the first segment of the name of a body.
+pub fn list_scope(bodies: &[String]) -> String {
+    let mut crates: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for body in bodies {
+        let name = body.trim_start_matches(['<', '&']);
+        *crates.entry(name.split("::").next().unwrap_or(name)).or_default() += 1;
+    }
+    match crates.len() {
+        1 => format!("the crate `{}`", crates.keys().next().copied().unwrap_or_default()),
+        count => format!("{count} crates: {}", crates.iter().map(|(name, count)| format!("`{name}` ({count})")).collect::<Vec<_>>().join(", ")),
+    }
+}
 
 /// The kind of a group from its facts and proofs (design 24.3), or `None` while a class is pending.
 ///
@@ -800,9 +882,10 @@ pub const LIST_LIMIT: usize = 6;
 /// - Else: `behavior`.
 ///
 /// A property claim changes no code, so it does not count. A doc fact changes no behavior, so it
-/// does not count (trial 4, D9): a rename with its doc comments is not `behavior`.
+/// does not count (trial 4, D9): a rename with its doc comments is not `behavior`. The API fact
+/// of a proved rename or move does not count: a rename of a public item is a rename.
 pub fn derived_kind(steps: &[&StepReport]) -> Option<crate::GroupKind> {
-    let all: Vec<&Fact> = steps.iter().flat_map(|s| &s.facts).collect();
+    let all: Vec<&Fact> = steps.iter().flat_map(|s| &s.facts).filter(|f| !f.is_api_note()).collect();
     let facts: Vec<&Fact> = all.iter().copied().filter(|f| !f.is_doc()).collect();
     if facts.is_empty() && !all.is_empty() && all.iter().all(|f| f.is_doc()) && steps.iter().all(|s| s.claims.iter().all(|c| c.class.is_none() && c.status.is_verified())) {
         // Only doc facts: no code changed.
@@ -960,6 +1043,11 @@ mod config_note_tests {
         assert_eq!(lines[1], "! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no");
         assert_eq!(lines[2], "! configuration `dev, no default features` is not checked in step 1: it does not build before the step: error: no");
         assert_eq!(lines[3], "! `cfg` conditions that Semilla did not check: `c0`, `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, and 2 more");
+        // An agent command has the count and the first condition (batch 5x, part E).
+        assert_eq!(note.agent_lines(2, false)[3], "! 10 `cfg` conditions that Semilla did not check: `c0`, and 9 more (`semilla status --verbose` shows each one)");
+        assert!(note.agent_lines(2, true)[3].ends_with("`c7`, `c8`, `c9`"));
+        let one = ConfigNote { not_covered: vec!["c0".into()], ..note.clone() };
+        assert_eq!(one.agent_condition_line(false), one.condition_line());
         // The first error line can be different in each build: one line for one kind of cause.
         let other = ConfigGap { name: "release, all features".into(), cause: "it does not build before the step: error[E0599]: other".into(), steps: vec![0, 1] };
         let note = ConfigNote { not_checked: vec![gap("dev, all features", &[0, 1]), other], ..note };

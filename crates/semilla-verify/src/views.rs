@@ -603,7 +603,7 @@ fn fact_id(outcome: &StepOutcome, index: usize) -> Option<String> {
 
 /// A text report of the steps, for the CLI and the agent tools (design section 8.15).
 pub fn text_report(steps: &[StepReport]) -> String {
-    text_report_with(steps, false)
+    text_report_lists(steps, false, true)
 }
 
 /// The short cause of a claim that is not verified, for a claim list below the full text: the
@@ -647,16 +647,18 @@ pub fn short_cause(status: &ClaimStatus) -> String {
 
 pub use semilla_core::report::{EQUAL_SITES, LIST_LIMIT};
 
-/// A list of bodies for the text output: the first [`LIST_LIMIT`] names, then "and N more".
-pub fn short_list(items: &[String]) -> String {
-    let shown: Vec<&str> = items.iter().take(LIST_LIMIT).map(String::as_str).collect();
-    let more = if items.len() > LIST_LIMIT { format!(", and {} more", items.len() - LIST_LIMIT) } else { String::new() };
-    format!("{}{more}", shown.join(", "))
+/// A list of bodies for the text output (batch 5x, part E). A list of more than [`LIST_LIMIT`]
+/// bodies shows the count and the scope. `names` shows each name (`semilla status --verbose`).
+pub fn body_list(items: &[String], names: bool) -> String {
+    if names || items.len() <= LIST_LIMIT {
+        return items.join(", ");
+    }
+    format!("{} bodies of {} (`semilla status --verbose` shows the names)", items.len(), semilla_core::report::list_scope(items))
 }
 
 /// Writes one fact of the text report. `diff` adds the content change of the fact (a build code
 /// change, design 28.3).
-fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool) {
+fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool, names: bool) {
     use text::put_line as put;
         let class = match (fact.class, fact.affected.is_empty()) {
             (Some(Class::Neutral), _) => " [neutral (proved)]".to_string(),
@@ -688,18 +690,22 @@ fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool) {
             }
         }
         if !fact.affected.is_empty() {
-            put(out, &format!("      affected bodies: {}", short_list(&fact.affected)));
+            put(out, &format!("      affected bodies: {}", body_list(&fact.affected, names)));
         }
         if !fact.equal_sites.is_empty() {
-            put(out, &format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), short_list(&fact.equal_sites)));
+            put(out, &format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
         }
         // The note asks for no reason (batch 5u, part A).
         if let Some(note) = &fact.note {
             put(out, &format!("      note: {note}{}", fact.part_mark()));
         }
+        // A stored reason of a fact with no spotlight is a note (batch 5x, part E).
+        if let Some(reason) = fact.reason.as_ref().filter(|_| fact.spotlight_why.is_none()) {
+            put(out, &format!("      note: no spotlight; the agent gave a reason: {}", text::quoted(reason)));
+        }
         if let Some(why) = &fact.spotlight_why {
             match &fact.reason {
-                Some(reason) => put(out, &format!("      spotlight: {why}; reason: {}", text::quoted(reason))),
+                Some(reason) => put(out, &format!("      spotlight: {why}; {}: {}", fact.reason_label(), text::quoted(reason))),
                 None => put(out, &format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone()))),
             }
         }
@@ -714,6 +720,11 @@ fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool) {
 /// The text report. With `short_failures`, a claim that is not verified shows only its status
 /// and a short cause: the caller prints the full text and the hint before the report.
 pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
+    text_report_lists(steps, short_failures, false)
+}
+
+/// The text report. `names` shows each name of a long list of bodies (batch 5x, part E).
+fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) -> String {
     // Each line of the report can hold text of the agent or of the repository: `put` shows
     // each hidden character of a line as an escape, so no text starts a new line (5k, A2).
     use text::put_line as put;
@@ -724,7 +735,7 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
         if step.facts.iter().any(|fact| fact.build_code_change) {
             put(&mut out, &format!("  ! {}", semilla_core::report::BUILD_CODE_SECTION));
             for fact in step.facts.iter().filter(|fact| fact.build_code_change) {
-                put_fact(&mut out, fact, true);
+                put_fact(&mut out, fact, true, names);
             }
         }
         for claim in &step.claims {
@@ -745,7 +756,7 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
             let witness = claim.witness.as_ref().map(|w| format!(" (example: {w})")).unwrap_or_default();
             put(&mut out, &format!("  {mark} {} {detail}{}{class}{effect}{witness}", claim.claim, claim.mark()));
             if !claim.affected.is_empty() {
-                put(&mut out, &format!("      changed bodies: {}", short_list(&claim.affected)));
+                put(&mut out, &format!("      changed bodies: {}", body_list(&claim.affected, names)));
             }
             // A property claim states its scope (what Semilla examined, and what it did not).
             let property = matches!(&claim.status, ClaimStatus::Verified { proof } if matches!(proof.as_str(), "partial" | "mir" | "graph" | "syntax"));
@@ -758,7 +769,7 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
         }
         // The facts: Semilla derives them, the agent writes no claim (design 22.5).
         for fact in step.facts.iter().filter(|fact| !fact.build_code_change) {
-            put_fact(&mut out, fact, false);
+            put_fact(&mut out, fact, false, names);
         }
         for uncovered in &step.uncovered {
             let at = uncovered.at.as_ref().map(|a| a.to_string()).or_else(|| uncovered.file.clone()).unwrap_or_default();

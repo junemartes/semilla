@@ -667,6 +667,24 @@ fn words(text: &str) -> Vec<&str> {
     out
 }
 
+/// The name pairs of a rename map: the last name of each old path and of each new path.
+pub(crate) fn rename_pairs(renames: &BTreeMap<String, String>) -> BTreeSet<(String, String)> {
+    let name_of = |path: &str| {
+        let last = segments(path).last().copied().unwrap_or("");
+        plain(last.rsplit('.').next().unwrap_or(last)).to_string()
+    };
+    renames.iter().map(|(old, new)| (name_of(old), name_of(new))).collect()
+}
+
+/// True if the two token texts differ only by the names of a rename map: each token is the
+/// same, or it is the old name and the new name of one pair. Such a text has no edit for the
+/// rules of the build configuration (`Opaque::apply` and `srcconfig::apply` use this one
+/// function).
+pub(crate) fn same_text(old: &str, new: &str, pairs: &BTreeSet<(String, String)>) -> bool {
+    let (old, new) = (words(old), words(new));
+    old.len() == new.len() && old.iter().zip(&new).all(|(a, b)| a == b || pairs.contains(&(a.to_string(), b.to_string())))
+}
+
 /// The segments of an item path. A `::` inside `<…>` does not split.
 fn segments(path: &str) -> Vec<&str> {
     let (mut out, mut depth, mut start) = (Vec::new(), 0usize, 0usize);
@@ -749,11 +767,11 @@ pub(crate) struct Shadow {
 }
 
 /// One import of a `use` item.
-struct Import {
+pub(crate) struct Import {
     /// The first segment of the path.
-    first: String,
+    pub(crate) first: String,
     /// The name that the import gives. `None`: a glob.
-    leaf: Option<String>,
+    pub(crate) leaf: Option<String>,
     /// The last segment of the path. A `use` with `as` gives it a different name.
     source: String,
     /// The segments before the name. For a glob: each segment.
@@ -997,7 +1015,7 @@ fn trait_bounds(text: &str) -> Option<Vec<String>> {
 }
 
 /// The imports of a `use` item. `None`: Semilla cannot read the text.
-fn use_imports(text: &str) -> Option<Vec<Import>> {
+pub(crate) fn use_imports(text: &str) -> Option<Vec<Import>> {
     fn walk(tree: &syn::UseTree, prefix: &mut Vec<String>, rooted: bool, out: &mut Vec<Import>) {
         let name = |ident: &syn::Ident| ident.to_string().trim_start_matches("r#").to_string();
         let first = |prefix: &[String], leaf: &str| prefix.first().cloned().unwrap_or_else(|| leaf.to_string());
@@ -2739,15 +2757,7 @@ impl<'a> Opaque<'a> {
         let [before, after] = self.sides;
         let old_of: BTreeMap<&String, &String> = renames.iter().map(|(old, new)| (new, old)).collect();
         // The names of the rename map: a text with only these changes has no edit.
-        let name_of = |path: &str| {
-            let last = segments(path).last().copied().unwrap_or("");
-            plain(last.rsplit('.').next().unwrap_or(last)).to_string()
-        };
-        let pairs: BTreeSet<(String, String)> = renames.iter().map(|(old, new)| (name_of(old), name_of(new))).collect();
-        let same_text = |old: &str, new: &str| {
-            let (old, new) = (words(old), words(new));
-            old.len() == new.len() && old.iter().zip(&new).all(|(a, b)| a == b || pairs.contains(&(a.to_string(), b.to_string())))
-        };
+        let pairs = rename_pairs(renames);
         let layouts = self.layouts.borrow();
         for body in bodies.iter_mut() {
             if !matches!(body.status, BodyStatus::Equal { .. } | BodyStatus::Different { .. }) {
@@ -2756,7 +2766,7 @@ impl<'a> Opaque<'a> {
             let Some(path) = crate::checks::find_item_by(&body.name, body.span.as_ref(), after) else { continue };
             let Some(new) = after.items.get(&path) else { continue };
             let old = before.items.get(old_of.get(&path).copied().unwrap_or(&path));
-            if old.is_some_and(|old| old.text == new.text || same_text(&old.text, &new.text)) {
+            if old.is_some_and(|old| old.text == new.text || same_text(&old.text, &new.text, &pairs)) {
                 continue;
             }
             let new_names = self.hard_names(1, new);

@@ -191,6 +191,8 @@ impl App {
             bail!("the intent has no text. The reviewer reads the intent: say what the step does, for example `semilla step \"rename the field\"`");
         }
         let mut session = self.load_session()?;
+        // The record of a rejected step is for the last `semilla step` only.
+        session.rejected = None;
         if session.open.is_some() {
             bail!("a step of the old protocol is open (the hidden command `old-step`, for the replay); end it with `semilla old-step end`, or remove it with `semilla old-step drop`");
         }
@@ -319,6 +321,19 @@ impl App {
             .iter()
             .filter(|(_, key, reason)| !report.facts.iter().any(|fact| fact.reason.as_ref() == Some(reason)) && !claim_anchors.contains(key))
             .collect();
+        // The unused keys that are a module path or a crate name.
+        let mut wide_keys: BTreeMap<String, &str> = BTreeMap::new();
+        if !unused.is_empty() {
+            if let Ok(after_ws) = self.workspace(&tree) {
+                for (_, key, _) in &unused {
+                    if after_ws.crates.iter().any(|found| found.name == *key) {
+                        wide_keys.insert(key.clone(), "crate");
+                    } else if after_ws.items.get(key).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Mod) {
+                        wide_keys.insert(key.clone(), "module");
+                    }
+                }
+            }
+        }
         // A key that is the name of a body, not the anchor of its fact (batch 5l, B3): the
         // message gives the key of the fact.
         let unused_line = |key: &String| -> String {
@@ -328,7 +343,14 @@ impl App {
                 .filter(|fact| fact.spotlight_why.is_some() && fact.affected.contains(key))
                 .map(|fact| format!("`{}`", fact.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| fact.part.clone())))
                 .collect();
-            let hint = if keys.is_empty() { String::new() } else { format!(". `{key}` is a body of a fact with a spotlight: the key of the reason is {}", keys.join(", ")) };
+            let hint = if !keys.is_empty() {
+                format!(". `{key}` is a body of a fact with a spotlight: the key of the reason is {}", keys.join(", "))
+            } else if let Some(kind) = wide_keys.get(key) {
+                // Batch 5x, part D: a module path and a crate name are not a key of a reason.
+                format!(". `{key}` is a {kind}, and a {kind} is not a valid key of a reason. A key is the path of an item (a function, a method, a constant, a static, a type, a trait), the exact key of a spotlight, or a file key (`path/to/file:`)")
+            } else {
+                String::new()
+            };
             format!("  ! the reason for `{key}` belongs to no fact of this step; Semilla does not use it{hint}")
         };
         // The first step of a change set states its base commit after the result line (design
@@ -429,6 +451,7 @@ impl App {
             if !text.ends_with('\n') {
                 text.push('\n');
             }
+            let mut again = None;
             if blocked.is_empty() {
                 let what = match (corrected.claims.len() < request.claims.len(), !widened.is_empty()) {
                     (true, true) => " (without the claim that failed, and with the complete list of `calls`)",
@@ -448,11 +471,29 @@ impl App {
                     text.push_str("the other route: keep the claim, put the identity change in its own step (a code change), and make the other changes in the next step\n");
                 }
                 put_line(&mut text, &format!("run again{what}: {}", corrected.command(&missing)));
+                again = Some(corrected.command(&missing));
             } else if blocked.iter().any(|error| error.contains(semilla_normal::cargo::MISSING_DEPENDENCY)) {
                 text.push_str("a code change is not necessary: run `cargo fetch` in the repository, then run the step again\n");
             } else {
                 text.push_str("no command can succeed without a code change: fix the cause, then run the step again\n");
             }
+            // `tag` and `status` say this cause, and not "run `semilla step`" (batch 5x, part C).
+            let failed = report.claims.iter().filter(|c| !c.status.is_verified()).count();
+            let mut causes = Vec::new();
+            if !missing.is_empty() {
+                causes.push(format!("{} spotlight{} with no reason", missing.len(), if missing.len() == 1 { "" } else { "s" }));
+            }
+            if failed > 0 {
+                causes.push(format!("{failed} claim{} with no proof", if failed == 1 { "" } else { "s" }));
+            }
+            if let Some(error) = blocked.iter().find(|error| !error.starts_with("claim ")) {
+                causes.push(error.lines().next().unwrap_or("").chars().take(200).collect());
+            }
+            if causes.is_empty() {
+                causes.push("the result of the step says the cause".to_string());
+            }
+            restore.rejected = Some(crate::app::RejectedStep { intent: request.intent.clone(), cause: causes.join("; "), command: again });
+            self.save_session(&restore)?;
             return Ok((text, false));
         }
         // Accepted: store the step and its group.
@@ -562,6 +603,7 @@ impl App {
             bail!("the change set is tagged; a tagged step cannot be removed");
         }
         let step = session.changeset.steps.pop().context("no step to remove")?;
+        session.rejected = None;
         session.fast_steps.retain(|index, _| *index < step.index);
         session.changeset.head_tree = step.tree_before.clone();
         if session.changeset.steps.is_empty() {
