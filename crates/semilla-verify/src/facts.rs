@@ -86,7 +86,12 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             ItemKind::Impl if item.path.contains(" as ") => {
                 let key = (item.path.clone(), format!("trait impl {verb}"));
                 fact_key[index] = Some(key.clone());
-                add(key, Anchor::item(&item.path), index, format!("trait impl `{}` {verb}", item.path.rsplit("::impl ").next().unwrap_or(&item.path)), &mut keys);
+                // 5y, B1: the text shows the generic arguments of the trait (`From<DecodeError>`).
+                let mut name = item.path.rsplit("::impl ").next().unwrap_or(&item.path).to_string();
+                if let (Some(arguments), Some(end)) = (crate::trait_arguments(item), name.rfind('>')) {
+                    name.insert_str(end, &format!("<{}>", arguments.replace(',', ", ")));
+                }
+                add(key, Anchor::item(&item.path), index, format!("trait impl `{name}` {verb}"), &mut keys);
             }
             _ => {}
         }
@@ -149,7 +154,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                         None => (anchor.item.clone(), part.to_string()),
                     };
                     let text = match (part, const_parts(&edit.text_before), const_parts(&edit.text_after)) {
-                        ("value", Some((_, old)), Some((_, new))) => format!("value of `{}` changed: {old} → {new}", anchor.item),
+                        ("value", Some((_, old)), Some((_, new))) => long_value_description(&anchor.item, &old, &new).unwrap_or_else(|| format!("value of `{}` changed: {old} → {new}", anchor.item)),
                         _ => format!("{part} of `{}`: {}", anchor.item, old_new()),
                     };
                     (key, text)
@@ -725,6 +730,72 @@ fn const_parts(text: &Option<String>) -> Option<(String, String)> {
     Some((head.to_string(), value.trim_end_matches(';').trim().to_string()))
 }
 
+/// The text of a changed value that is long (batch 5y, C1): the two sides, cut to the changed
+/// part, and the index of each changed element if the value is an array. `None` for a short
+/// value: the full text of the two sides is the better output.
+pub(crate) fn long_value_description(item: &str, old: &str, new: &str) -> Option<String> {
+    if old.chars().count() <= 60 && new.chars().count() <= 60 {
+        return None;
+    }
+    let (short_old, short_new) = crate::edits::short_texts(old.to_string(), new.to_string());
+    let place = match (array_elements(old), array_elements(new)) {
+        (Some(a), Some(b)) if a.len() == b.len() => {
+            let changed: Vec<String> = (0..a.len()).filter(|index| a[*index] != b[*index]).map(|index| index.to_string()).collect();
+            match changed.len() {
+                0 => String::new(),
+                1 => format!(" at the index {} (of {} elements)", changed[0], a.len()),
+                count if count <= 8 => format!(" at the indexes {} (of {} elements)", changed.join(", "), a.len()),
+                count => format!(" at {count} indexes, the first is {} (of {} elements)", changed[0], a.len()),
+            }
+        }
+        (Some(a), Some(b)) => format!(" ({} elements → {} elements)", a.len(), b.len()),
+        _ => String::new(),
+    };
+    Some(format!("value of `{item}` changed{place}: `{short_old}` → `{short_new}`"))
+}
+
+/// The elements of an array value (`[a, b]` or `&[a, b]`), as texts with no spaces. `None` if
+/// the value is not an array, or if it is a repeat array (`[0; 4]`).
+fn array_elements(value: &str) -> Option<Vec<String>> {
+    let inner = value.trim().trim_start_matches('&').trim().strip_prefix('[')?.strip_suffix(']')?;
+    let mut elements = vec![String::new()];
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    for ch in inner.chars() {
+        if let Some(open) = quote {
+            elements.last_mut()?.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.checked_sub(1)?,
+            ',' if depth == 0 => {
+                elements.push(String::new());
+                continue;
+            }
+            ';' if depth == 0 => return None,
+            _ => {}
+        }
+        if !ch.is_whitespace() {
+            elements.last_mut()?.push(ch);
+        }
+    }
+    // A comma after the last element adds no element.
+    if elements.last().is_some_and(String::is_empty) {
+        elements.pop();
+    }
+    Some(elements)
+}
+
 /// True if an edit without a claim is (a part of) a fact. The hints and the claim suggestions skip
 /// these edits.
 pub fn is_fact_edit(edit: &Edit) -> bool {
@@ -1114,6 +1185,12 @@ pub(crate) struct Mark {
 /// a char. The text of a literal and of a line comment is not a name. A text that is not clear
 /// counts as a name: the reviewer then reads it.
 pub(crate) fn marks(text: &str) -> Vec<Mark> {
+    marks_of(text, false)
+}
+
+/// See [`marks`]. With `cut`, the text is an output text of Semilla: a string that ends with
+/// the cut mark `…` before the end of its code span ends before the mark (batch 5y, C4).
+fn marks_of(text: &str, cut: bool) -> Vec<Mark> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let at = |index: usize| chars.get(index).map(|(_, c)| *c);
     let offset = |index: usize| chars.get(index).map(|(offset, _)| *offset).unwrap_or(text.len());
@@ -1127,6 +1204,9 @@ pub(crate) fn marks(text: &str) -> Vec<Mark> {
             match c {
                 '\\' => index += 1,
                 '"' => break,
+                // Batch 5y, C4: the cut mark of Semilla at the end of a code span is not text
+                // of the literal. The literal ends before the mark.
+                '\u{2026}' if cut && at(index) == Some('`') => return index - 1,
                 _ => {}
             }
         }
@@ -1199,7 +1279,7 @@ pub(crate) fn non_ascii_names(text: &str) -> Vec<(std::ops::Range<usize>, String
 /// The form comes after the code span of the name or the literal.
 pub(crate) fn with_ascii_forms(text: &str) -> String {
     let mut out = text.to_string();
-    for mark in marks(text).into_iter().rev() {
+    for mark in marks_of(text, true).into_iter().rev() {
         let Some(form) = semilla_core::text::ascii_form(&mark.text) else { continue };
         // Each output shows a hidden character as its escape. A second form adds nothing.
         if mark.text.chars().all(|c| c.is_ascii() || semilla_core::text::is_hidden(c)) {

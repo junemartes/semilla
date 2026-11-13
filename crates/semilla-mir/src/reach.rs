@@ -48,6 +48,25 @@ pub struct Reach {
     pub gaps: Vec<String>,
 }
 
+/// The path of an item of a different crate, with the name of that crate first (batch 5y, C4).
+/// For a crate that the code gets with an `extern crate` item (`#![no_std]` with `extern crate
+/// std;`), the compiler prints the path of the item first: `data_encoding::std::fs::metadata`.
+/// This function puts the name of the crate in the place of the path of the item.
+pub fn extern_crate_path(tcx: TyCtxt<'_>, path: String) -> String {
+    use rustc_crate_store::ExternCrateSource;
+    for krate in tcx.crates(()) {
+        let Some(ExternCrateSource::Extern(item)) = tcx.extern_crate(*krate).map(|found| found.src) else { continue };
+        if !item.is_local() {
+            continue;
+        }
+        let prefix = ty::print::with_no_trimmed_paths!(tcx.def_path_str(item));
+        if let Some(rest) = path.strip_prefix(&prefix).filter(|rest| rest.starts_with("::")) {
+            return format!("{}{rest}", tcx.crate_name(*krate));
+        }
+    }
+    path
+}
+
 /// The def path of an item in the crate that defines it (no re-export path), with the crate
 /// name first.
 pub fn real_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
@@ -552,7 +571,7 @@ pub fn origin(def_id: DefId) -> (String, String) {
 
 /// The printed path of a function of another crate, as the call list prints it.
 pub fn printed_path(def_id: DefId) -> String {
-    ty::tls::with(|tcx| tcx.def_path_str(def_id))
+    ty::tls::with(|tcx| extern_crate_path(tcx, tcx.def_path_str(def_id)))
 }
 
 /// The blocks that the start block can reach after the constant conditions fold (batch 5f, A2).
@@ -697,7 +716,19 @@ fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
 /// Only a call terminator with a constant callee counts. A direct call of a local closure
 /// gives the sure callees of the closure. A function that the body gives to a different
 /// function (`map(f)`) is not a sure callee: Semilla does not know that the function runs.
-pub fn sure_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> Option<Vec<String>> {
+///
+/// The second value has the facts for the ends of a run that are not a return (batch 5y, A4).
+/// The keys:
+///
+/// - `ends`: the calls of the body and of its closures that end the process and are not panic
+///   code (`std::process::exit`, a call with no return, a foreign function).
+/// - `calls`: the functions that the body and its closures can call and that can end the
+///   process, as far as the driver knows. The verifier follows them.
+/// - `before NAME`: the entries of `ends` (with `end ` first) and of `calls` that can run
+///   before the sure callee `NAME`.
+/// - `first`: the sure callees with no call, no assert, and no drop before them. In a
+///   `#[should_panic]` test, only such a call runs in each run.
+pub fn sure_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> Option<(Vec<String>, std::collections::BTreeMap<String, Vec<String>>)> {
     ty::tls::with(|tcx| {
         let owner = rustc_internal::internal(tcx, owner);
         // Only a function has the fact. The descriptor constant of a test has the name of the
@@ -706,11 +737,219 @@ pub fn sure_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::colle
             return None;
         }
         let mut open = HashSet::new();
-        Some(sure_walk(tcx, owner, body, bodies, &mut open).into_iter().collect())
+        let mut opens = Vec::new();
+        let sure: Vec<String> = sure_walk(tcx, owner, body, bodies, &mut open, Some(&mut opens)).into_iter().collect();
+        let facts = end_facts(tcx, bodies);
+        let mut ends = std::collections::BTreeMap::new();
+        let none: Vec<(usize, Ender)> = Vec::new();
+        let own = facts.scans.get(&owner).unwrap_or(&none);
+        let all = flat(tcx, &facts, own.iter().map(|(_, ender)| ender));
+        let (end, calls): (Vec<String>, Vec<String>) = all.into_iter().partition(|entry| entry.starts_with("end "));
+        let mut put = |key: String, list: Vec<String>| {
+            if !list.is_empty() {
+                ends.insert(key, list);
+            }
+        };
+        put("ends".into(), end.iter().map(|entry| entry["end ".len()..].to_string()).collect());
+        put("calls".into(), calls);
+        let mut first = Vec::new();
+        for (name, seen, closures) in opens {
+            // The call can be in a closure that the body calls: each ender of the closure
+            // counts (a conservative rule).
+            let inner: Vec<Ender> = closures.into_iter().map(|def| Ender::Local(def, String::new())).collect();
+            put(format!("before {name}"), flat(tcx, &facts, own.iter().filter(|(index, _)| seen[*index]).map(|(_, ender)| ender).chain(&inner)));
+            let can_panic = |kind: &TerminatorKind| matches!(kind, TerminatorKind::Call { .. } | TerminatorKind::Assert { .. } | TerminatorKind::Drop { .. } | TerminatorKind::InlineAsm { .. });
+            if !body.blocks.iter().enumerate().any(|(index, block)| seen[index] && can_panic(&block.terminator.kind)) {
+                first.push(name);
+            }
+        }
+        put("first".into(), first);
+        Some((sure, ends))
     })
 }
 
-fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>, open: &mut HashSet<DefId>) -> BTreeSet<String> {
+/// What a block can run that matters for the end of the process (batch 5y, A4).
+#[derive(Clone)]
+enum Ender {
+    /// A call that ends the process and that is not panic code: the name.
+    End(String),
+    /// A function of a different crate that is not of the standard library: the driver does
+    /// not know its body.
+    Extern(String),
+    /// A local function or a local closure.
+    Local(DefId, String),
+}
+
+/// The enders of each local body, and the local bodies that can get to an end of the process
+/// or to code that the driver does not know.
+struct EndFacts {
+    scans: std::collections::HashMap<DefId, Vec<(usize, Ender)>>,
+    maybe: HashSet<DefId>,
+}
+
+thread_local! {
+    static END_FACTS: std::cell::RefCell<Option<std::rc::Rc<EndFacts>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The facts of [`EndFacts`] for the crate. One driver process compiles one crate.
+fn end_facts<'tcx>(tcx: TyCtxt<'tcx>, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> std::rc::Rc<EndFacts> {
+    if let Some(found) = END_FACTS.with(|cell| cell.borrow().clone()) {
+        return found;
+    }
+    let mut scans = std::collections::HashMap::new();
+    for (def, body) in bodies {
+        let def = rustc_internal::internal(tcx, *def);
+        if tcx.is_closure_like(def) || matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
+            scans.insert(def, enders(tcx, def, body));
+        }
+    }
+    // A local function with no body here is code that the driver does not know.
+    let unknown = |ender: &Ender, maybe: &HashSet<DefId>| match ender {
+        Ender::Local(def, _) => maybe.contains(def) || !scans.contains_key(def),
+        _ => true,
+    };
+    let mut maybe: HashSet<DefId> = HashSet::new();
+    loop {
+        let more: Vec<DefId> = scans.iter().filter(|(def, list)| !maybe.contains(*def) && list.iter().any(|(_, ender)| unknown(ender, &maybe))).map(|(def, _)| *def).collect();
+        if more.is_empty() {
+            break;
+        }
+        maybe.extend(more);
+    }
+    let facts = std::rc::Rc::new(EndFacts { scans, maybe });
+    END_FACTS.with(|cell| *cell.borrow_mut() = Some(facts.clone()));
+    facts
+}
+
+/// The entries of a list of enders for the verifier: `end NAME` for an end of the process, and
+/// `NAME` for a function that can get to one. A closure gives the entries of its body.
+fn flat<'a, 'tcx>(tcx: TyCtxt<'tcx>, facts: &'a EndFacts, enders: impl Iterator<Item = &'a Ender>) -> Vec<String> {
+    let mut found = BTreeSet::new();
+    let mut seen = HashSet::new();
+    let mut todo: Vec<&Ender> = enders.collect();
+    while let Some(ender) = todo.pop() {
+        match ender {
+            Ender::End(name) => drop(found.insert(format!("end {name}"))),
+            Ender::Extern(name) => drop(found.insert(name.clone())),
+            Ender::Local(def, name) => {
+                if tcx.is_closure_like(*def) {
+                    if seen.insert(*def) {
+                        todo.extend(facts.scans.get(def).into_iter().flatten().map(|(_, ender)| ender));
+                    }
+                } else if facts.maybe.contains(def) || !facts.scans.contains_key(def) {
+                    found.insert(name.clone());
+                }
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// True for a function of the standard library that is panic code. A call of it with no return
+/// is a panic, not an end of the process with success.
+fn panic_code(name: &str) -> bool {
+    name.contains("panic") || name.contains("unwind") || name.ends_with("_failed") || name.ends_with("_fail")
+}
+
+/// The enders of the live blocks of a body, with the block index. The types of the constants
+/// of a block give the functions that the block calls or gives to a different function, and
+/// the closures.
+fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, Ender)> {
+    use rustc_public::mir::AggregateKind;
+    use rustc_public::CrateDef;
+
+    struct Types<'tcx> {
+        tcx: TyCtxt<'tcx>,
+        types: Vec<Ty<'tcx>>,
+        made: Vec<DefId>,
+    }
+    impl MirVisitor for Types<'_> {
+        fn visit_mir_const(&mut self, constant: &MirConst, _location: Location) {
+            self.types.push(rustc_internal::internal(self.tcx, constant.ty()));
+        }
+        fn visit_rvalue(&mut self, rvalue: &Rvalue, location: Location) {
+            match rvalue {
+                Rvalue::Aggregate(AggregateKind::Closure(def, _), _) => self.made.push(rustc_internal::internal(self.tcx, def.def_id())),
+                Rvalue::Aggregate(AggregateKind::Coroutine(def, _), _) => self.made.push(rustc_internal::internal(self.tcx, def.def_id())),
+                _ => {}
+            }
+            self.super_rvalue(rvalue, location);
+        }
+    }
+    let typing = ty::TypingEnv::post_analysis(tcx, owner);
+    let live = live_blocks(body);
+    let mut found = Vec::new();
+    for (index, block) in body.blocks.iter().enumerate() {
+        if !live[index] {
+            continue;
+        }
+        let mut types = Types { tcx, types: Vec::new(), made: Vec::new() };
+        types.visit_basic_block(block);
+        let mut defs: Vec<DefId> = types.made;
+        for ty in types.types {
+            for arg in ty.walk() {
+                let Some(inner) = arg.as_type() else { continue };
+                match inner.kind() {
+                    ty::FnDef(def_id, args) => {
+                        let mut target = *def_id;
+                        if matches!(tcx.def_kind(*def_id), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
+                            let args = args.skip_binder();
+                            let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
+                            if let Ok(Ok(Some(instance))) = resolved {
+                                if let ty::InstanceKind::Item(item) = instance.def {
+                                    target = item;
+                                }
+                            }
+                        }
+                        defs.push(target);
+                    }
+                    ty::Closure(def_id, _) | ty::Coroutine(def_id, _) | ty::CoroutineClosure(def_id, _) => defs.push(*def_id),
+                    _ => {}
+                }
+            }
+        }
+        // A call with no return through a function pointer: Semilla does not know the function.
+        if let TerminatorKind::Call { func, target: None, .. } = &block.terminator.kind {
+            let direct = func.ty(body.locals()).ok().is_some_and(|ty| matches!(rustc_internal::internal(tcx, ty).kind(), ty::FnDef(..)));
+            if !direct {
+                found.push((index, Ender::End("a call with no return through a function pointer".to_string())));
+            }
+        }
+        for def in defs {
+            let local = def.is_local();
+            if tcx.is_closure_like(def) {
+                if local {
+                    found.push((index, Ender::Local(def, tcx.def_path_str(def))));
+                }
+                continue;
+            }
+            if !matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
+                continue;
+            }
+            let name = if local { tcx.def_path_str(def) } else { real_path(tcx, def) };
+            let library = is_std(&crate_name(tcx, def));
+            let ender = if tcx.is_foreign_item(def) {
+                // A foreign function can do each thing (`exit` of the C library).
+                (!library).then(|| Ender::End(name))
+            } else if local {
+                Some(Ender::Local(def, name))
+            } else if name.ends_with("CommandExt>::exec") || name.ends_with("CommandExt::exec") {
+                // `exec` puts a different program in the process.
+                Some(Ender::End(name))
+            } else if tcx.fn_sig(def).skip_binder().output().skip_binder().is_never() {
+                (!(library && panic_code(&name))).then(|| Ender::End(name))
+            } else {
+                (!library).then(|| Ender::Extern(name))
+            };
+            found.extend(ender.map(|ender| (index, ender)));
+        }
+    }
+    found
+}
+
+fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>, open: &mut HashSet<DefId>, mut opens: Option<&mut Vec<(String, Vec<bool>, Vec<DefId>)>>) -> BTreeSet<String> {
+    // The closures that give a callee name through a direct call.
+    let mut through: std::collections::BTreeMap<String, Vec<DefId>> = std::collections::BTreeMap::new();
     use rustc_public::mir::Operand;
 
     let typing = ty::TypingEnv::post_analysis(tcx, owner);
@@ -737,8 +976,11 @@ fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
             // A direct call of a closure: the sure callees of the closure body.
             match bodies.get(&rustc_internal::stable(target)).filter(|_| target.is_local() && open.insert(target)) {
                 Some(inner) => {
-                    let found = sure_walk(tcx, target, inner, bodies, open);
+                    let found = sure_walk(tcx, target, inner, bodies, open, None);
                     open.remove(&target);
+                    for name in &found {
+                        through.entry(name.clone()).or_default().push(target);
+                    }
                     found.into_iter().collect()
                 }
                 None => Vec::new(),
@@ -776,6 +1018,9 @@ fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
         // that is an end (a diverging call) is closed too.
         let open_ends = reach(&blocks);
         if !ends.is_empty() && ends.iter().all(|end| !open_ends[*end]) {
+            if let Some(opens) = opens.as_mut() {
+                opens.push((name.clone(), open_ends, through.remove(&name).unwrap_or_default()));
+            }
             sure.insert(name);
         }
     }

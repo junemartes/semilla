@@ -262,6 +262,40 @@ pub(crate) fn redo_route(set: &ChangeSet, report: &semilla_core::report::StepRep
     text
 }
 
+/// The text after `result: ` of the result line of an output, if the output has one. Each line
+/// of an output has the escape of the text of the agent, so that text cannot start a line.
+pub(crate) fn result_word(text: &str) -> Option<&str> {
+    text.lines().find_map(|line| line.strip_prefix("result: "))
+}
+
+/// True if the result line of an output gives the exit code 1 (batch 5y, A3): the result is
+/// rejected or not complete. With `full`, a result with no phase 2 fails too (the result of a
+/// commit for a reviewer). An output with no result line does not fail.
+pub(crate) fn result_fails(text: &str, full: bool) -> bool {
+    result_word(text).is_some_and(|word| word.starts_with("rejected") || word.starts_with("not complete") || (full && !word.starts_with("accepted")))
+}
+
+/// What this machine knows about the Semilla check of a commit (batch 5y, A2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommitCheck {
+    /// No note that belongs to the commit.
+    None,
+    /// The result that this machine computed for the commit is accepted.
+    Accepted,
+    /// The stored result of this machine, or phase 1, rejects the change set of the commit.
+    Rejected,
+    /// The note belongs to the commit and phase 1 accepts it, but this machine has no full result.
+    DataOnly,
+}
+
+/// Adds a problem of the change set to a result. The result line and the problem agree (B1): no
+/// "accepted" line with a rejection below it.
+fn add_problem(result: &mut CheckResult, problem: String) {
+    result.report.organization.push(problem);
+    result.report.accepted = false;
+    result.text = format!("{}{}", semilla_verify::views::text_report(&result.report.steps), summary_line(&result.report));
+}
+
 /// A rejected result. The CLI prints its text as it is: the first line is "result: rejected",
 /// with no "error:" before it (brief 5f, B1).
 #[derive(Debug)]
@@ -775,6 +809,14 @@ impl App {
                 let session = self.load_session()?;
                 // B1: a tagged change set is closed. It is not the session.
                 if let (Some(tagged), None, None) = (&session.tagged, &session.open, &session.replay) {
+                    // Batch 5y, A1: the session file is not a git object. The commit is "tagged"
+                    // only if git has a note that belongs to it.
+                    if self.note_set(tagged).is_none() {
+                        return Ok(format!(
+                            "no open change set; the session names commit {tagged}, but that commit has no Semilla check\n{}The next `semilla step` starts a new change set at HEAD.\n",
+                            self.head_check_line(None)
+                        ));
+                    }
                     return Ok(format!(
                         "no open change set; the last tagged commit is {tagged}\n{}For its result, run `semilla status {}`. The next `semilla step` starts a new change set at HEAD.\n",
                         self.head_check_line(Some(tagged)),
@@ -838,6 +880,15 @@ impl App {
         if let Some(notice) = self.base_build_code_notice(&set, commit.is_some().then_some(key.as_str())) {
             put_line(&mut text, &notice);
         }
+        // Batch 5y, C4.5. The hint of a result for a commit names the commit: `semilla status
+        // --verbose` with no commit shows the session, which is a different result.
+        let short = |report: &Report| {
+            let text = short_text(report);
+            match commit {
+                Some(name) => text.replace("`semilla status --verbose`", &format!("`semilla status {name} --verbose`")),
+                None => text,
+            }
+        };
         match stored {
             Some(stored) => {
                 // Design 28.4: a result that ran the changed build code says so first.
@@ -854,11 +905,11 @@ impl App {
                     put_line(&mut text, &line);
                 }
                 text.push_str("phase 2 (computed on this machine):\n");
-                text.push_str(&if verbose { stored.text } else { short_text(&stored.report) });
+                text.push_str(&if verbose { stored.text } else { short(&stored.report) });
             }
             None => {
                 text.push_str("phase 1 (computed now):\n");
-                text.push_str(&if verbose { phase1.text } else { short_text(&phase1.report) });
+                text.push_str(&if verbose { phase1.text } else { short(&phase1.report) });
                 if wait.is_some() {
                     let log = std::fs::read_to_string(self.repo.cache_dir().join("worker.log")).unwrap_or_default();
                     let last = log.lines().rev().find(|line| line.contains("failed")).unwrap_or("no message");
@@ -876,7 +927,28 @@ impl App {
                 text = with_tag_problems(&text, &problems);
             }
         }
+        // Batch 5y, A3: the first line agrees with the result line. `ready` alone is the first
+        // line of an accepted result only.
+        let ready = format!("{key}: ready\n");
+        if text.starts_with(&ready) {
+            if let Some(word) = ["rejected", "not complete"].into_iter().find(|word| result_word(&text).is_some_and(|result| result.starts_with(word))) {
+                text = format!("{key}: ready, {word}\n{}", &text[ready.len()..]);
+            }
+        }
         Ok(text)
+    }
+
+    /// The message for a commit that lacks changes of the last step when the working files have
+    /// them (batch 5y, B2): the files (a maximum of five) and the commands. `git commit -am`
+    /// does not add a new file.
+    fn missing_in_commit(&self, commit_tree: &str, step_tree: &str) -> String {
+        let files = self.repo.changed_files(commit_tree, step_tree).unwrap_or_default();
+        let mut names: Vec<String> = files.iter().take(5).map(|file| format!("`{}`", semilla_core::text::inline(file))).collect();
+        if files.len() > 5 {
+            names.push(format!("and {} more", files.len() - 5));
+        }
+        let list = if names.is_empty() { String::new() } else { format!(": {}", names.join(", ")) };
+        format!("the commit HEAD does not have the changes of the last step in {} file(s){list}. The working files have them (`git commit -am` does not add a new file). Run `git add -A`, then `git commit --amend --no-edit`, then `semilla tag`.", files.len())
     }
 
     /// The problems of the present state (`HEAD` and the working tree) that `semilla tag` rejects
@@ -917,7 +989,7 @@ impl App {
         if !same(self, &head)? {
             if work != head && same(self, &work)? {
                 // The steps are complete in the working tree. The commit is older than a step.
-                problems.push("the commit HEAD does not have the changes of the last step. Run `git add -A`, then `git commit --amend --no-edit`, then `semilla tag`.".to_string());
+                problems.push(self.missing_in_commit(&head, &set.head_tree));
             } else {
                 problems.push(format!("the last step ends at tree {}, but commit HEAD has tree {head}: an edit after the last step has no step. {}, then `git commit --amend --no-edit`, then `semilla tag`.", set.head_tree, session.step_fix()));
             }
@@ -995,22 +1067,54 @@ impl App {
         (steps > 0 && steps != set.steps.len()).then(|| format!("{start}: the note has {} steps, but `{prefix}` has {steps} step refs", set.steps.len()))
     }
 
-    /// True if a commit has a Semilla result: a note of `tag` that belongs to the commit.
-    /// `tag` writes a note only for a change set that the final check accepts.
-    fn has_check(&self, commit: &str, noted: &BTreeSet<String>) -> bool {
+    /// The change set of the note of a commit, if the note belongs to the commit: it parses, it
+    /// has a step, and it passes [`App::check_binding`].
+    fn note_set(&self, commit: &str) -> Option<(String, ChangeSet)> {
+        let note = self.repo.read_note(commit).ok()?;
+        let set = serde_json::from_str::<ChangeSet>(&note).ok()?;
+        (!set.steps.is_empty() && self.check_binding(commit, &set).is_ok()).then_some((note, set))
+    }
+
+    /// The state of the Semilla check of a commit (batch 5y, A2; trial 8). A note that belongs to
+    /// the commit is data only: an agent can write it for a change set that Semilla rejects. So
+    /// the result decides, and the result is one that this machine computes (rule T6: never a
+    /// text of the note). The order: a stored result of this machine for the commit; if none,
+    /// phase 1 (no build) for the change set of the note. The answer of phase 1 stays in the
+    /// machine cache, with a key from the commit, the note content, and the tools.
+    fn commit_check(&mut self, commit: &str, noted: &BTreeSet<String>) -> CommitCheck {
         if !noted.contains(commit) {
-            return false;
+            return CommitCheck::None;
         }
-        let Ok(note) = self.repo.read_note(commit) else { return false };
-        let Ok(set) = serde_json::from_str::<ChangeSet>(&note) else { return false };
-        !set.steps.is_empty() && self.check_binding(commit, &set).is_ok()
+        let Some((note, set)) = self.note_set(commit) else { return CommitCheck::None };
+        if let Some(stored) = crate::background::stored_for(self, commit, &crate::background::changeset_hash(&set)) {
+            return if stored.report.accepted { CommitCheck::Accepted } else { CommitCheck::Rejected };
+        }
+        let key = crate::store::stable_hash(format!("{commit}\0{note}\0{}", self.tools_key()).as_bytes());
+        let file = self.repo.cache_dir().join("commit-check").join(format!("{key:016x}"));
+        match std::fs::read_to_string(&file).as_deref() {
+            Ok("rejected") => return CommitCheck::Rejected,
+            Ok("data") => return CommitCheck::DataOnly,
+            _ => {}
+        }
+        let saved = self.no_bodies;
+        self.no_bodies = true;
+        let phase1 = self.check_set(&set, true);
+        self.no_bodies = saved;
+        // An error is not a result: the line says that this machine has no full result.
+        let Ok(phase1) = phase1 else { return CommitCheck::DataOnly };
+        let rejected = !phase1.report.organization.is_empty() || phase1.report.steps.iter().any(hard_problem);
+        let _ = std::fs::create_dir_all(file.parent().unwrap_or(&file));
+        let _ = std::fs::write(&file, if rejected { "rejected" } else { "data" });
+        if rejected { CommitCheck::Rejected } else { CommitCheck::DataOnly }
     }
 
     /// The base commit of a change set, and if that commit has a Semilla check (design 25.2;
     /// trial 4, cheat C3: a commit with plain `git` before an honest change set). `commit` is
     /// the commit of the change set, or `None` for the session. The answer comes from git at the
     /// time of the call, not from a value in a note. A line that starts with `!` is a warning.
-    pub fn base_notice(&self, set: &ChangeSet, commit: Option<&str>) -> Option<String> {
+    /// A commit has a check only if the result that this machine computes for it is accepted
+    /// (batch 5y, A2).
+    pub fn base_notice(&mut self, set: &ChangeSet, commit: Option<&str>) -> Option<String> {
         let base = match commit {
             Some(commit) => self.repo.parent(commit).ok()??,
             None if set.steps.is_empty() => self.repo.git(&["rev-parse", "HEAD"]).ok()?,
@@ -1018,21 +1122,30 @@ impl App {
         };
         let short = |commit: &str| commit[..7.min(commit.len())].to_string();
         let noted: BTreeSet<String> = self.repo.git(&["notes", "--ref=semilla", "list"]).unwrap_or_default().lines().filter_map(|line| line.split_whitespace().nth(1).map(str::to_string)).collect();
-        if self.has_check(&base, &noted) {
-            return Some(format!("base `{}`: it has a Semilla check", short(&base)));
+        match self.commit_check(&base, &noted) {
+            CommitCheck::Accepted => return Some(format!("base `{}`: it has a Semilla check", short(&base))),
+            CommitCheck::Rejected => return Some(format!("! base `{0}`: its Semilla check is rejected. Run `semilla status {0}`", short(&base))),
+            CommitCheck::DataOnly => return Some(format!("base `{0}`: it has Semilla data, but this machine did not compute the full result. Run `semilla status {0}`", short(&base))),
+            CommitCheck::None => {}
         }
         // The commits from the base back to the last commit with a check.
         let log = self.repo.git(&["log", "--format=%H %s", "-n", "500", &base]).unwrap_or_default();
         let mut open: Vec<String> = Vec::new();
         for line in log.lines() {
             let (hash, subject) = line.split_once(' ').unwrap_or((line, ""));
-            if self.has_check(hash, &noted) {
+            let state = self.commit_check(hash, &noted);
+            if matches!(state, CommitCheck::Accepted | CommitCheck::DataOnly) {
                 let more = if open.len() > 10 { format!(", and {} more", open.len() - 10) } else { String::new() };
                 let (count, verb) = if open.len() == 1 { ("1 commit".to_string(), "has") } else { (format!("{} commits", open.len()), "have") };
-                return Some(format!("! {count} before this change set {verb} no Semilla check: {}{more} (the last checked commit is `{}`)", open.iter().take(10).cloned().collect::<Vec<_>>().join(", "), short(hash)));
+                let last = match state {
+                    CommitCheck::Accepted => format!("the last checked commit is `{}`", short(hash)),
+                    _ => format!("the last commit with Semilla data is `{0}`; this machine did not compute its full result: run `semilla status {0}`", short(hash)),
+                };
+                return Some(format!("! {count} before this change set {verb} no Semilla check: {}{more} ({last})", open.iter().take(10).cloned().collect::<Vec<_>>().join(", ")));
             }
             // The subject is text of the agent: quote marks, and an escape for each hidden character.
-            open.push(format!("`{}` {}", short(hash), semilla_core::text::quoted(subject)));
+            let mark = if state == CommitCheck::Rejected { " (its Semilla check is rejected)" } else { "" };
+            open.push(format!("`{}` {}{mark}", short(hash), semilla_core::text::quoted(subject)));
         }
         Some(format!("base `{}`: no Semilla check (no checked commit before it)", short(&base)))
     }
@@ -1176,17 +1289,18 @@ impl App {
 
     /// The line of `status` that says if `HEAD` has a Semilla check (brief 5h, C4), or an empty
     /// text when `HEAD` is the tagged commit of the session.
-    fn head_check_line(&self, tagged: Option<&str>) -> String {
+    fn head_check_line(&mut self, tagged: Option<&str>) -> String {
         let Ok(head) = self.repo.git(&["rev-parse", "HEAD"]) else { return String::new() };
         if tagged == Some(head.as_str()) {
             return String::new();
         }
         let short = &head[..head.len().min(7)];
         let noted: BTreeSet<String> = self.repo.git(&["notes", "--ref=semilla", "list"]).unwrap_or_default().lines().filter_map(|line| line.split_whitespace().nth(1).map(str::to_string)).collect();
-        if self.has_check(&head, &noted) {
-            format!("HEAD `{short}` has a Semilla check: for its result, run `semilla status {short}`\n")
-        } else {
-            format!("HEAD `{short}` has no Semilla check\n")
+        match self.commit_check(&head, &noted) {
+            CommitCheck::Accepted => format!("HEAD `{short}` has a Semilla check: for its result, run `semilla status {short}`\n"),
+            CommitCheck::Rejected => format!("! HEAD `{short}`: its Semilla check is rejected. Run `semilla status {short}`\n"),
+            CommitCheck::DataOnly => format!("HEAD `{short}` has Semilla data, but this machine did not compute the full result. Run `semilla status {short}`\n"),
+            CommitCheck::None => format!("HEAD `{short}` has no Semilla check\n"),
         }
     }
 
@@ -1231,12 +1345,63 @@ impl App {
         }
         let mut result = self.check_set_with(&set, require_groups, &code)?;
         if let Some(problem) = base_problem {
-            // B1: the result line and the problem agree. No "accepted" line with a rejection below.
-            result.report.organization.push(problem);
-            result.report.accepted = false;
-            result.text = format!("{}{}", semilla_verify::views::text_report(&result.report.steps), summary_line(&result.report));
+            add_problem(&mut result, problem);
         }
         Ok(result)
+    }
+
+    /// The check of `semilla verify` (batch 5y, A1; trial 8). The change set comes from the
+    /// session file, and the agent controls that file. So the result is accepted only if the
+    /// session agrees with git. A closed session must be the note of `HEAD`: then the check uses
+    /// the change set of the note. An open session must start at the tree of a commit on the
+    /// first-parent chain of `HEAD`, and its last step must end at the tree of `HEAD` or at the
+    /// tree of the working files. The first value is the line that says what the result covers.
+    pub fn verify(&mut self, require_groups: bool) -> Result<(String, CheckResult)> {
+        let session = self.load_session()?;
+        let short = |commit: &str| commit[..commit.len().min(7)].to_string();
+        let count = |steps: usize| format!("{steps} step{}", if steps == 1 { "" } else { "s" });
+        let head = self.repo.git(&["rev-parse", "HEAD"]).ok();
+        if let (Some(tagged), None, None) = (&session.tagged, &session.open, &session.replay) {
+            let problem = match self.repo.read_note(tagged).ok().and_then(|note| serde_json::from_str::<ChangeSet>(&note).ok()) {
+                _ if head.as_deref() != Some(tagged.as_str()) => format!("the session is the closed change set of commit `{}`, but HEAD is `{}`: this result is not a result of HEAD. Run `semilla status HEAD`", short(tagged), head.as_deref().map(short).unwrap_or_default()),
+                None => format!("the session names the tagged commit `{}`, but that commit has no Semilla note: this result is not a result of the commit", short(tagged)),
+                Some(set) => match self.check_binding(tagged, &set) {
+                    // The change set of the note belongs to `HEAD`: the result is its result.
+                    Ok(()) => {
+                        let base = self.repo.parent(tagged).ok().flatten().map(|base| format!("the base `{}`", short(&base))).unwrap_or_else(|| "no base commit".to_string());
+                        let result = self.check_set(&set, require_groups)?;
+                        return Ok((format!("verify: {base}, {}, the tagged commit `{}`", count(set.steps.len()), short(tagged)), result));
+                    }
+                    Err(error) => format!("the note of the tagged commit `{}` does not belong to it: {error}", short(tagged)),
+                },
+            };
+            let mut result = self.check(None, require_groups)?;
+            add_problem(&mut result, problem);
+            return Ok((format!("verify: {}, the session of this folder (not a commit)", count(result.report.steps.len())), result));
+        }
+        let set = self.current_changeset()?;
+        let mut result = self.check(None, require_groups)?;
+        let chain = self.repo.git(&["log", "--first-parent", "--format=%H %T", "-n", "200", "HEAD"]).unwrap_or_default();
+        let base = chain.lines().filter_map(|line| line.split_once(' ')).find(|(_, tree)| *tree == set.base_tree).map(|(commit, _)| commit.to_string());
+        if !set.steps.is_empty() {
+            let last = set.steps.last().map(|step| step.tree_after.clone()).unwrap_or_default();
+            let (head_tree, work_tree) = (self.repo.commit_tree("HEAD").unwrap_or_default(), self.repo.write_tree()?);
+            // A difference in formatting only is not an edit (the rule of `tag`).
+            let mut same = |tree: &str| -> Result<bool> {
+                if tree == last {
+                    return Ok(true);
+                }
+                let (one, other) = (self.workspace(&last)?, self.workspace(tree)?);
+                Ok(semilla_syntax::diff(&one, &other, &Default::default()).is_empty())
+            };
+            if base.is_none() {
+                add_problem(&mut result, format!("the session does not agree with git: it starts at tree {}, but no commit on the first-parent chain of HEAD has that tree", short(&set.base_tree)));
+            } else if !same(&head_tree)? && !same(&work_tree)? {
+                add_problem(&mut result, format!("the session does not agree with git: its last step ends at tree {}, but HEAD has tree {} and the working files are different too. An edit has no step, or the session is not the session of this work", short(&last), short(&head_tree)));
+            }
+        }
+        let base = base.map(|base| format!("the base `{}`", short(&base))).unwrap_or_else(|| "no base commit".to_string());
+        Ok((format!("verify: {base}, {}, the session of this folder (not a commit)", count(set.steps.len())), result))
     }
 
     pub fn check_set(&mut self, set: &ChangeSet, require_groups: bool) -> Result<CheckResult> {
@@ -1465,6 +1630,12 @@ impl App {
             // commit). A changed comment is not formatting.
             let (last, head) = (self.workspace(&set.head_tree)?, self.workspace(&tree)?);
             if !semilla_syntax::diff(&last, &head, &Default::default()).is_empty() {
+                // 5y, B2 (trial 8): `git commit -am` does not add a new file. The working files
+                // have the changes of the last step, and the commit does not.
+                let work = self.repo.write_tree()?;
+                if self.repo.commit_tree("HEAD").ok().as_deref() == Some(tree.as_str()) && work != tree && (work == set.head_tree || semilla_syntax::diff(&last, &self.workspace(&work)?, &Default::default()).is_empty()) {
+                    bail!("{}", self.missing_in_commit(&tree, &set.head_tree));
+                }
                 // B1: the commands for an edit after the last step.
                 bail!("the last step ends at tree {}, but commit {commit} has tree {tree}: an edit after the last step has no step. {step_fix}, then `git commit --amend --no-edit`, then `semilla tag`.", set.head_tree);
             }
@@ -1526,8 +1697,34 @@ impl App {
     pub fn load(&mut self, commit: &str) -> Result<String> {
         let (commit, set) = self.commit_changeset(commit)?;
         let steps = set.steps.len();
-        self.save_session(&Session { changeset: set, tagged: Some(commit.clone()), ..Default::default() })?;
-        Ok(format!("loaded {steps} steps from {commit}"))
+        self.save_session(&Session { changeset: set.clone(), tagged: Some(commit.clone()), ..Default::default() })?;
+        // Batch 5y (A3, C4): `load` is a reviewer output. It starts with the build code line
+        // (design 28.4), and it prints the result that this machine has for the commit: the
+        // stored result, or phase 1 now. It takes no result from the note (rule T6).
+        let stored = crate::background::stored_for(self, &commit, &crate::background::changeset_hash(&set));
+        let full = stored.is_some();
+        let report = match stored {
+            Some(stored) => stored.report,
+            None => {
+                let saved = self.no_bodies;
+                self.no_bodies = true;
+                let phase1 = self.check_set(&set, true);
+                self.no_bodies = saved;
+                phase1?.report
+            }
+        };
+        let mut text = String::new();
+        if let Some(line) = self.build_code_notice(&report) {
+            put_line(&mut text, &line);
+        }
+        put_line(&mut text, &format!("loaded {steps} steps from {commit}"));
+        let result = summary_line(&report);
+        if full || result_fails(&result, false) {
+            text.push_str(result.lines().next().unwrap_or_default());
+        } else {
+            text.push_str(&format!("phase 1 ok; this machine has no phase 2 result for the commit. For the result, run `semilla status {}`", &commit[..commit.len().min(7)]));
+        }
+        Ok(text)
     }
 
     /// Replaces the guessed external calls of the graph with the calls from the MIR, when the N0
@@ -1687,6 +1884,12 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
                 }
             }
         }
+        for (name, same_as) in &configs.same {
+            match note.same.iter_mut().find(|same| same.name == *name && same.same_as == *same_as) {
+                Some(same) => same.steps.push(step.index),
+                None => note.same.push(semilla_core::report::ConfigSame { name: name.clone(), same_as: same_as.clone(), steps: vec![step.index] }),
+            }
+        }
         for (name, cause) in &configs.not_checked {
             // One entry for a name and a kind of cause: it keeps the error text of the first step.
             let new = semilla_core::report::ConfigGap { name: name.clone(), cause: cause.clone(), steps: vec![step.index] };
@@ -1699,6 +1902,12 @@ fn config_note(set: &ChangeSet, log: &crate::oracle::ConfigLog, trees: &BTreeMap
             let cover = semilla_verify::cfgcond::Cover::new(&[(before, &configs.truth[0]), (after, &configs.truth[1])]);
             conditions.extend(cover.not_covered.iter().map(|text| semilla_verify::cfgcond::show(text)));
         }
+    }
+    // Batch 5y, C4.4. A configuration of the default list that only some steps have: the
+    // output names it with its steps. Before, no output of the reviewer had it.
+    for name in order.iter().filter(|name| count.get(*name) != Some(&compared) && !note.added.iter().any(|added| added.name == **name)) {
+        let steps = set.steps.iter().filter(|step| log.get(&(step.tree_before.clone(), step.tree_after.clone())).is_some_and(|configs| configs.checked.contains(name))).map(|step| step.index).collect();
+        note.in_steps.push(semilla_core::report::ConfigAdded { name: name.clone(), steps });
     }
     note.checked = order.into_iter().filter(|name| count.get(name) == Some(&compared)).collect();
     // An added configuration of each compared step needs no step list.

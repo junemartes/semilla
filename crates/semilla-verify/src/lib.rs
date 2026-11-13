@@ -152,6 +152,12 @@ pub struct BodyFacts {
     /// The functions that the body calls on each path from its start to a normal return (a
     /// path that ends with a panic does not count). `None` as for `live`.
     pub sure: Option<Vec<String>>,
+    /// The facts for the ends of a run that are not a return (batch 5y, A4). The keys: `ends`
+    /// (the calls of the body that end the process and are not panic code), `calls` (the
+    /// functions that the body can call and that can end the process), `before NAME` (the
+    /// entries that can run before the sure callee `NAME`; an end has `end ` first), and
+    /// `first` (the sure callees with no call and no assert before them).
+    pub ends: BTreeMap<String, Vec<String>>,
 }
 
 /// The local types whose member order or layout a printed body depends on, with no name of the
@@ -257,6 +263,8 @@ pub struct ItemFacts {
     /// The bodies of the item that have a list of sure callees, as `live` (see
     /// [`BodyFacts::sure`]).
     pub sure: Vec<(String, String, Vec<String>)>,
+    /// The end facts of the bodies of `sure`, in the same order (see [`BodyFacts::ends`]).
+    pub ends: Vec<BTreeMap<String, Vec<String>>>,
 }
 
 /// The access to the normal forms. The real one runs the MIR driver on both snapshots.
@@ -433,6 +441,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     // A reason with no text is not a reason (brief 5f, A4: an empty value proves nothing).
     let mut step = input.step.clone();
     step.reasons.retain(|_, reason| !reason.trim().is_empty());
+    impl_names(&mut step, input.before, input.after);
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     let mut plain = verify_core(input, bodies, exprs, derive_edits, false);
     if !derive_edits || input.step.claims.iter().any(is_identity) {
@@ -449,6 +458,158 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     identity_api_facts(input, &mut outcome);
     item_reasons(input, &mut outcome.report);
     outcome
+}
+
+/// The parts of the name of an item of a trait impl (`m::<Type as Trait<A>>::method#0`,
+/// `m::impl <Type as Trait>`): the text before `<`, the type, the trait path, the generic
+/// arguments of the trait, and the text after `>`.
+fn impl_name_parts(name: &str) -> Option<(&str, &str, &str, Option<&str>, &str)> {
+    for (start, _) in name.match_indices('<') {
+        if !(start == 0 || name[..start].ends_with("::") || name[..start].ends_with("impl ")) {
+            continue;
+        }
+        let (mut depth, mut end, mut split) = (0usize, None, None);
+        for (index, c) in name[start..].char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' if name[..start + index].ends_with('-') => {}
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + index);
+                        break;
+                    }
+                }
+                ' ' if depth == 1 && split.is_none() && name[start + index..].starts_with(" as ") => split = Some(start + index),
+                _ => {}
+            }
+        }
+        let (Some(end), Some(split)) = (end, split) else { continue };
+        let trait_text = &name[split + 4..end];
+        let (path, arguments) = match trait_text.find('<') {
+            Some(at) if trait_text.ends_with('>') => (&trait_text[..at], Some(&trait_text[at + 1..trait_text.len() - 1])),
+            _ => (trait_text, None),
+        };
+        return Some((&name[..start], &name[start + 1..split], path, arguments, &name[end + 1..]));
+    }
+    None
+}
+
+/// The generic arguments of the trait in the header of a trait impl (`DecodeError` for
+/// `impl From<DecodeError> for std::io::Error`), with no space.
+pub(crate) fn trait_arguments(item: &semilla_syntax::Item) -> Option<String> {
+    let (_, _, path, _, _) = impl_name_parts(&item.path)?;
+    let last = path.rsplit("::").next()?;
+    let header = item.signature.split(" for ").next()?.trim_end();
+    // The last full word `last` of the header that has `<` after it.
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let start = header.rmatch_indices(last).map(|(at, _)| at).find(|at| !header[..*at].ends_with(word) && header[at + last.len()..].trim_start().starts_with('<'))?;
+    let arguments = header[start + last.len()..].trim_start().strip_prefix('<')?.strip_suffix('>')?;
+    Some(arguments.chars().filter(|c| !c.is_whitespace()).collect())
+}
+
+/// Batch 5y, B1 (trial 8): the items of a trait impl that the name `name` can mean. An agent
+/// writes the name from the source: a full trait path (`core::convert::From`) and the generic
+/// arguments of the trait (`From<DecodeError>`). The item name has the trait path of the source
+/// and no arguments, and a twin has `#0`, `#1`. The arguments of `name` select between twins.
+pub(crate) fn impl_name_matches(name: &str, workspace: &Workspace) -> Vec<String> {
+    let plain = |text: &str| -> String {
+        let mut depth = 0usize;
+        text.chars().filter(|c| match c {
+            '<' => { depth += 1; false }
+            '>' => { depth = depth.saturating_sub(1); false }
+            c => depth == 0 && !c.is_whitespace(),
+        }).collect()
+    };
+    let key = |name: &str, short: bool| -> Option<String> {
+        let (before, self_type, path, _, after) = impl_name_parts(name)?;
+        let after = after.rsplit_once('#').filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).map_or(after, |(start, _)| start);
+        let self_type = plain(self_type);
+        let self_type = if short { self_type.rsplit("::").next().unwrap_or_default().to_string() } else { self_type };
+        // A name with no `impl ` word and no text after `>` means the impl block: the text of
+        // the fact shows the block as `<Type as Trait<A>>`.
+        let before = before.strip_suffix("impl ").unwrap_or(before);
+        Some(format!("{before}<{self_type} as {}>{after}", path.rsplit("::").next().unwrap_or(path)))
+    };
+    let Some((_, _, _, arguments, _)) = impl_name_parts(name) else { return Vec::new() };
+    let mut found: Vec<&semilla_syntax::Item> = Vec::new();
+    for short in [false, true] {
+        let wanted = key(name, short);
+        found = workspace.items.values().filter(|item| item.path.contains(" as ") && key(&item.path, short) == wanted).collect();
+        if !found.is_empty() {
+            break;
+        }
+    }
+    if let (true, Some(arguments)) = (found.len() > 1, arguments) {
+        let arguments: String = arguments.chars().filter(|c| !c.is_whitespace()).collect();
+        // The impl block of an item: the nearest impl that has the lines of the item.
+        let block = |item: &semilla_syntax::Item| -> Option<String> {
+            if item.kind == semilla_syntax::ItemKind::Impl {
+                return trait_arguments(item);
+            }
+            workspace.items.values().filter(|other| other.kind == semilla_syntax::ItemKind::Impl && other.file == item.file && other.line_start <= item.line_start && item.line_end <= other.line_end).max_by_key(|other| other.line_start).and_then(trait_arguments)
+        };
+        let selected: Vec<&semilla_syntax::Item> = found.iter().copied().filter(|item| block(item).as_deref() == Some(arguments.as_str())).collect();
+        if !selected.is_empty() {
+            found = selected;
+        }
+    }
+    found.into_iter().map(|item| item.path.clone()).collect()
+}
+
+/// A list of names for a message: each name in backticks.
+fn ticks(names: &[String]) -> String {
+    names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ")
+}
+
+/// The text after "no item `NAME` …": the names that `name` can mean (batch 5y, B1).
+pub(crate) fn name_hint(name: &str, workspace: &Workspace) -> String {
+    let matches = impl_name_matches(name, workspace);
+    if matches.len() > 1 {
+        return format!(". More than one item matches: {}. Use one of these names, or give the generic arguments of the trait (`<Type as From<Source>>`)", ticks(&matches));
+    }
+    let last = |path: &str| path.rsplit("::").next().unwrap_or(path).split('#').next().unwrap_or_default().to_string();
+    let wanted = last(name);
+    let near: Vec<String> = workspace.items.keys().filter(|path| !wanted.is_empty() && last(path) == wanted).take(5).cloned().collect();
+    if near.is_empty() {
+        return String::new();
+    }
+    format!(". The nearest names: {}", ticks(&near))
+}
+
+/// Batch 5y, B1: puts the item name of the workspace in each claim anchor and each reason key
+/// that names an item of a trait impl in a different form. A name with more than one match
+/// stays for a claim (the message of the claim lists the names). A reason goes to each match:
+/// a reason is text for the reviewer, and it proves nothing.
+fn impl_names(step: &mut Step, before: &Workspace, after: &Workspace) {
+    let known = |name: &str| after.items.contains_key(name) || before.items.contains_key(name);
+    let matches = |name: &str| -> Vec<String> {
+        if !name.contains(" as ") || known(name) {
+            return Vec::new();
+        }
+        let found = impl_name_matches(name, after);
+        if found.is_empty() { impl_name_matches(name, before) } else { found }
+    };
+    for claim in &mut step.claims {
+        let Some(at) = claim.at.as_mut() else { continue };
+        if let [one] = matches(&at.item).as_slice() {
+            at.item = one.clone();
+        }
+    }
+    let keys: Vec<String> = step.reasons.keys().filter(|key| key.contains(" as ")).cloned().collect();
+    for key in keys {
+        // A key can have a part after the item (`ITEM/…`).
+        let cut = key.rfind('>').and_then(|at| key[at..].find('/').map(|slash| at + slash)).unwrap_or(key.len());
+        let (item, rest) = key.split_at(cut);
+        let found = matches(item);
+        if found.is_empty() {
+            continue;
+        }
+        let reason = step.reasons.remove(&key).unwrap_or_default();
+        for name in found {
+            step.reasons.entry(format!("{name}{rest}")).or_insert_with(|| reason.clone());
+        }
+    }
 }
 
 /// True if `key` is the path of an item that a reason can name for each spotlight in it: a
@@ -1147,6 +1308,16 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         })
         .collect();
     report.spotlight.extend(config_lines);
+    // Batch 5y, B3: the line of a features change prints the name of the manifest. The name is
+    // not the key of a reason, so the line gives the keys of the facts of the features table.
+    for line in report.spotlight.iter_mut() {
+        let Some(file) = line.strip_prefix("features: ") else { continue };
+        let prefix = format!("{file}:features.");
+        let keys: Vec<String> = report.facts.iter().filter(|fact| fact.spotlight && fact.at.is_none() && fact.part.starts_with(&prefix)).map(|fact| format!("`{}`", fact.part)).collect();
+        if !keys.is_empty() {
+            *line = format!("{line} (the key of the reason: {})", keys.join(", "));
+        }
+    }
     report.spotlight.sort();
     // An edit inside a function that no checked configuration compiles (design B11). Only the
     // syntax checks this edit, so the reviewer must read it.
@@ -1689,6 +1860,7 @@ fn item_facts(found: &[BodyFacts], after: &Workspace) -> BTreeMap<String, ItemFa
         }
         if let Some(sure) = &body.sure {
             entry.sure.push((body.name.clone(), body.target.clone(), sure.clone()));
+            entry.ends.push(body.ends.clone());
         }
         entry.casts.extend(body.casts.iter().filter(|c| !entry.casts.contains(c)).cloned().collect::<Vec<_>>());
         entry.layouts.extend(body.layouts.iter().filter(|c| !entry.layouts.contains(c)).cloned().collect::<Vec<_>>());

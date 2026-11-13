@@ -343,8 +343,19 @@ impl App {
                 .filter(|fact| fact.spotlight_why.is_some() && fact.affected.contains(key))
                 .map(|fact| format!("`{}`", fact.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| fact.part.clone())))
                 .collect();
+            // Batch 5y, B3: a key that is the file of a fact, or the text of a fact. A message
+            // prints these texts, so the message gives the keys that the next call accepts.
+            let file_keys: Vec<String> = report
+                .facts
+                .iter()
+                .filter(|fact| fact.spotlight && fact.reason.is_none())
+                .filter(|fact| fact.description == *key || (fact.at.is_none() && fact.part.strip_prefix(key.as_str()).is_some_and(|rest| rest.starts_with(':') && rest.len() > 1)))
+                .map(|fact| format!("`{}`", fact.reason_place()))
+                .collect();
             let hint = if !keys.is_empty() {
                 format!(". `{key}` is a body of a fact with a spotlight: the key of the reason is {}", keys.join(", "))
+            } else if !file_keys.is_empty() {
+                format!(". `{key}` is not the key of a reason. Each fact has its own key: {}", file_keys.join(", "))
             } else if let Some(kind) = wide_keys.get(key) {
                 // Batch 5x, part D: a module path and a crate name are not a key of a reason.
                 format!(". `{key}` is a {kind}, and a {kind} is not a valid key of a reason. A key is the path of an item (a function, a method, a constant, a static, a type, a trait), the exact key of a spotlight, or a file key (`path/to/file:`)")
@@ -411,7 +422,11 @@ impl App {
                 let place = fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone());
                 // Part B of batch 5j: the body below shows the fact with "it needs a reason" and
                 // the exact anchor. The top summary does not repeat the reason line of the fact.
-                missing.push(format!("{place}=<why>"));
+                // Batch 5y, B3: two facts of one item have one key. The command gives it one time.
+                let entry = format!("{place}=<why>");
+                if !missing.contains(&entry) {
+                    missing.push(entry);
+                }
             }
             for claim in report.claims.iter().filter(|c| !c.status.is_verified()) {
                 let written = claim_texts.iter().find(|(id, _)| *id == claim.claim).map(|(_, text)| text.clone());

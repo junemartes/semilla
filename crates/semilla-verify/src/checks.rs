@@ -1527,7 +1527,7 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
     let new = claim.arg_str("new").map(|new| full_path(&at.item, new)).unwrap_or_else(|| at.item.clone());
     let Some(old_item) = context.before.items.get(&at.item) else {
-        return Outcome::malformed(format!("no item `{}` before the step", at.item));
+        return Outcome::malformed(format!("no item `{}` before the step{}", at.item, crate::name_hint(&at.item, context.before)));
     };
     let Some(new_item) = context.after.items.get(&new) else {
         return Outcome::malformed(format!("no item `{new}` after the step; `new` names the path after the rewrite"));
@@ -1674,8 +1674,35 @@ fn live_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &st
 ///
 /// A body name can exist in more than one target. A callee is sure only if each body with the
 /// name has the call.
-fn sure_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &str) -> bool {
+///
+/// Batch 5y, A4: with `rule`, an end of the process that is not a panic is an end of the test
+/// too (`std::process::exit`, a call with no return that is not panic code, a function that
+/// can get to such a call). No such end can run before the sure call, at each level. With
+/// `rule` true (a `#[should_panic]` test), a panic is an end too: no call and no assert can
+/// run before the sure call. `cause` gets the first cause that stops a sure call.
+fn sure_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &str, rule: Option<bool>, cause: &mut Option<String>) -> bool {
+    type Ends = BTreeMap<String, Vec<String>>;
     let top = |item: &str, name: &str| facts.get(item).is_some_and(|f| !f.sure.iter().any(|(other, _, _)| name.starts_with(&format!("{other}::"))));
+    let mut ends: BTreeMap<(&str, &str), Vec<&Ends>> = BTreeMap::new();
+    let mut named: BTreeMap<&str, Vec<&Ends>> = BTreeMap::new();
+    for found in facts.values() {
+        for ((name, target, _), map) in found.sure.iter().zip(&found.ends) {
+            ends.entry((target.as_str(), name.as_str())).or_default().push(map);
+            named.entry(name.as_str()).or_default().push(map);
+        }
+    }
+    // The first end of the process that the function `name` can get to: the call and the
+    // function that has it.
+    fn can_end<'a>(named: &BTreeMap<&'a str, Vec<&'a Ends>>, name: &'a str, seen: &mut BTreeSet<&'a str>) -> Option<(String, String)> {
+        if !seen.insert(name) {
+            return None;
+        }
+        let maps = named.get(name)?;
+        if let Some(end) = maps.iter().find_map(|map| map.get("ends").and_then(|list| list.first())) {
+            return Some((end.clone(), name.to_string()));
+        }
+        maps.iter().flat_map(|map| map.get("calls").into_iter().flatten()).find_map(|callee| can_end(named, callee, seen))
+    }
     let mut bodies: BTreeMap<(&str, &str), Vec<&[String]>> = BTreeMap::new();
     let mut items: BTreeMap<&str, &str> = BTreeMap::new();
     let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
@@ -1694,8 +1721,34 @@ fn sure_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &st
         targets: BTreeMap<&'a str, BTreeSet<&'a str>>,
         target: &'a str,
         open: BTreeSet<(&'a str, &'a str)>,
+        rule: Option<bool>,
+        ends: BTreeMap<(&'a str, &'a str), Vec<&'a BTreeMap<String, Vec<String>>>>,
+        named: BTreeMap<&'a str, Vec<&'a BTreeMap<String, Vec<String>>>>,
+        cause: Option<String>,
     }
     impl<'a> Walk<'a> {
+        /// The cause, if the body `at` can end the run before its sure call of `callee`.
+        fn early_end(&self, at: (&'a str, &'a str), callee: &'a str) -> Option<String> {
+            let panic_end = self.rule?;
+            let maps = self.ends.get(&at).cloned().unwrap_or_default();
+            for map in &maps {
+                for entry in map.get(&format!("before {callee}")).into_iter().flatten() {
+                    if let Some(end) = entry.strip_prefix("end ") {
+                        return Some(format!("the test can end the process before the call: `{end}` in `{}`", at.1));
+                    }
+                    if entry != callee {
+                        if let Some((end, function)) = can_end(&self.named, entry, &mut BTreeSet::new()) {
+                            return Some(format!("the test can end the process before the call: `{end}` in `{function}`"));
+                        }
+                    }
+                }
+            }
+            if panic_end && !(!maps.is_empty() && maps.iter().all(|map| map.get("first").is_some_and(|list| list.iter().any(|name| name == callee)))) {
+                return Some(format!("the test has `#[should_panic]`, and a panic can end the test before the call (`{}` has a call or a check before its call of `{callee}`)", at.1));
+            }
+            None
+        }
+
         fn sure(&mut self, at: (&'a str, &'a str)) -> bool {
             // A cycle of calls gives no proof.
             if !self.open.insert(at) {
@@ -1718,7 +1771,14 @@ fn sure_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &st
                     found = !others.is_empty() && others.into_iter().all(|other| self.sure((other, callee)));
                 }
                 if found {
-                    break;
+                    // 5y, A4: the call is sure only if no end of the run is before it.
+                    match self.early_end(at, callee) {
+                        Some(problem) => {
+                            self.cause.get_or_insert(problem);
+                            found = false;
+                        }
+                        None => break,
+                    }
                 }
             }
             self.open.remove(&at);
@@ -1727,8 +1787,10 @@ fn sure_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &st
     }
     let Some(start) = facts.get(test) else { return false };
     let starts: Vec<(&str, &str)> = start.sure.iter().filter(|(name, _, _)| top(test, name)).map(|(name, target, _)| (target.as_str(), name.as_str())).collect();
-    let mut walk = Walk { bodies, items, targets, target, open: BTreeSet::new() };
-    !starts.is_empty() && starts.into_iter().all(|at| walk.sure(at))
+    let mut walk = Walk { bodies, items, targets, target, open: BTreeSet::new(), rule, ends, named, cause: None };
+    let sure = !starts.is_empty() && starts.into_iter().all(|at| walk.sure(at));
+    *cause = walk.cause;
+    sure
 }
 
 /// The property claims (design section 21.4): facts about the code after the step.
@@ -1738,7 +1800,7 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
         return Outcome::malformed(format!("`{}` is a claim on an item; use the item anchor `{}`", claim.op, at.item));
     }
     let Some(item) = context.after.items.get(&at.item) else {
-        return Outcome::malformed(format!("no item `{}` after the step", at.item));
+        return Outcome::malformed(format!("no item `{}` after the step{}", at.item, crate::name_hint(&at.item, context.after)));
     };
     if item.body.is_none() {
         return Outcome::malformed(format!("`{}` is not a function", at.item));
@@ -1868,7 +1930,17 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                 // 5w, part C: `verified` only if each path of the test from its start to its
                 // normal return has the call. A call under a condition, in a loop, or after
                 // an early return is a reachable call that a run of the test can miss.
-                LiveCall::Found if sure_call(facts, &path, &at.item) => {
+                LiveCall::Found if sure_call(facts, &path, &at.item, None, &mut None) => {
+                    // 5y, A4: an end of the process that is not a panic is an end of the test.
+                    // In a `#[should_panic]` test, a panic is an end too.
+                    let should_panic = item.attrs.iter().any(|attr| attr_path(attr) == "should_panic" || (attr_path(attr) == "cfg_attr" && attr.contains("should_panic")));
+                    let mut cause = None;
+                    if !sure_call(facts, &path, &at.item, Some(should_panic), &mut cause) {
+                        let cause = cause.unwrap_or_else(|| "the test can end before the call".to_string());
+                        let mut outcome = Outcome::verified("partial", Vec::new());
+                        outcome.after = Some(format!("only partly verified: the test `{path}` calls `{}` on each path from its start to its normal return, but {cause}. Semilla did not prove that the test runs the call.", at.item));
+                        return outcome;
+                    }
                     let mut outcome = Outcome::verified("mir", Vec::new());
                     outcome.after = Some(format!("the test `{path}` calls `{}` on each path from its start to its normal return. Semilla does not run the test and does not check what the test asserts.", at.item));
                     return outcome;

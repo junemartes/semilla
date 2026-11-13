@@ -140,7 +140,7 @@ fn short_pair(edit: &Edit) -> (String, String) {
 /// The short texts of a pair of texts with one line each (batch 5k, D6). A long pair shows each
 /// changed token of the two sides. A cut is only in a part that is equal on the two sides, and
 /// each cut has the mark `…`. So the two sides never look the same, and no cut hides a change.
-fn short_texts(old: String, new: String) -> (String, String) {
+pub(crate) fn short_texts(old: String, new: String) -> (String, String) {
     if old.chars().count() <= 60 && new.chars().count() <= 60 {
         return (old, new);
     }

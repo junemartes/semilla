@@ -9,13 +9,14 @@ Semilla checks what changed in each step of your work. You edit the code with yo
 semilla step "<intent>"              # check and store the step
 # 2. repeat for each intent
 # 3. at the end
-git commit -am "<message>"
+git add -A && git commit -m "<message>"   # `-A` adds each new file of the steps
 semilla tag                          # the final check, the result line, the git note
 ```
 
 - "Before" is the end of the last step (or `HEAD` for the first step). "After" is the working tree. Do not commit between steps. If `HEAD` moves, `step` prints a note with the fix: `git reset --soft <base>`, then one commit.
 - `semilla step` runs both phases (the syntax and the MIR proofs) and prints the final result of the step: each fact with its class, the claims, the notes, and the pair warnings. `tag` adds no new result for a step.
 - A step is stored only when its result is accepted. A rejected step stores nothing: fix the cause and run the command again. The last line of a rejection is the exact command to run again.
+- The step numbers start at 0. A rejected result has the exit code 1. `semilla verify` checks the session and takes no commit: for a commit, use `semilla status HEAD`.
 - `semilla undo` removes the last stored step. The working tree keeps the changes. The output gives the exact `git restore` command that also restores the files of the step before. Do not use `git checkout .`: it goes back to `HEAD`, not to the last step.
 - The first step prints the base of the change set: "base `2f12d95`: it has a Semilla check", "base `7adafc0`: no Semilla check (no checked commit before it)", or "! 1 commit before this change set has no Semilla check: …". The line tells the reviewer that Semilla did not check the code before the change set. Do nothing for it.
 - `semilla tag` prints the result line: `result: accepted · 7 steps · 23 facts: 3 proved neutral, 20 to read (0 with a spotlight) · 2 claims: 2 verified`. The result has no score: the reviewer reads the facts "to read".
@@ -44,7 +45,7 @@ An anchor is an item path (`ledger_core::fees::charge`, `ledger_core::Account.ba
 
 You write nothing for these. Each one is a fact (`◆ f1 derived: …`) with a class:
 
-- Each statement or expression edit, with the words of the change: "added early exit `if account.frozen { return … }`", "removed `if`, kept the `else` branch", "changed literal `1` → `2`", "changed operator `amount > DAILY_LIMIT` → `amount >= DAILY_LIMIT` (effect hint: widen, example: amount = 50000)". The effect is a hint, not a proof: it shows only for `narrow`, `widen`, and `negate`. A moved node shows its two places: "moved let: `let n = v.len();` from `S0` to `S1` in `f`". An edit with no exact shape gives "changed NODE: `A` → `B`".
+- Each statement or expression edit, with the words of the change: "added early exit `if account.frozen { return … }`", "removed `if`, kept the `else` branch", "changed literal `1` → `2`", "changed operator `amount > DAILY_LIMIT` → `amount >= DAILY_LIMIT` (effect hint: widen, example: amount = 50000)". The effect is a hint, not a proof: it shows only for a change in a condition (for example of an `if`), and only for `narrow`, `widen`, and `negate`. A moved node shows its two places: "moved let: `let n = v.len();` from `S0` to `S1` in `f`". An edit with no exact shape gives "changed NODE: `A` → `B`".
 - Added and removed items, docs, attributes, and visibility. A code block in a doc comment is a doc test, and `cargo test` runs it: "doc test of `f` added (block attributes: `no_run`) [logic]", with the diff of the doc lines.
 - Type-level changes: fields, variants, parameters, return types, generics, trait impls. A fact owns its forced edits: "4 site(s): add the argument `1` (in …)". Under the fact, "affected bodies: …" lists the bodies whose MIR changes, and "bodies with a changed call site and no change of behavior (proved): …" lists the bodies with a forced edit and an equal MIR. A list shows 6 bodies, then "and N more"; `semilla review --full` shows each body. A changed order of generic parameters adds "; generic arguments go by position: N site(s)", with each body that names the item with explicit arguments. A renamed parameter with the same type and position is one fact: "parameter `a` of `f` renamed to `b`". A new type is one fact ("added `T`"): its fields and variants are not facts of their own.
 - Renames and moves: "renamed `A` → `B` (proved N1: rename-map)", "moved `A` → `B` (proved N1)". See below.
@@ -74,13 +75,15 @@ A claim says something that the diff does not show. If it is false, the step is 
 
 | Claim | Example | Result |
 |---|---|---|
-| `tested-by` | `--claim 'tested-by shop_core::cart::sum_wide test=wide'` | `verified (mir)`: each run of the test calls the function. `verified (partial)`: the call is under a condition, in a loop, or after an early return or a `?` |
+| `tested-by` | `--claim 'tested-by shop_core::cart::sum_wide test=wide'` | `verified (mir)`: the test calls the function on each path from its start to its normal return, and no end of the process is before the call. `verified (partial)`: the call is under a condition, in a loop, after an early return or a `?`, or after a possible `std::process::exit`. The scope line gives the cause |
 | `no-panic` | `--claim 'no-panic shop_core::cart::share'` on `total / n` | `refuted: implicit panic sites: division by zero …` |
 | `no-unsafe`, `no-io` | `--claim 'no-io shop_core::cart::sum_wide'` | `verified (mir)` |
 | `calls-only` | `--claim 'calls-only shop_core::cart::save calls=["std::fs"]'` | `verified (mir)`: each call to another crate is under a path in `calls`. Calls to `core` and `alloc` are always allowed |
 | `rewrite-pattern` | `--claim 'rewrite-pattern shop_core::cart::show from="$c.total($m)" to="$c.total($m).min(9)"'` | `verified`: each site in the anchor is rewritten, and no site is missed |
 | `rename` | `--claim 'rename shop_core::cart::show to=display'` | `verified (N0)`: no other body uses the name, and each body is equal |
 | `move-item` | `--claim 'move-item shop_core::over to=shop_app::over'` | `verified (N1: rename-map)`: a body uses the name, and each body is equal with the name map |
+
+The anchor of a method of a trait impl is `<Type as Trait>::method`. Write it as in the source: Semilla accepts a full trait path and the generic arguments of the trait. Example: `--claim 'no-unsafe shop_core::cart::<Weight as core::convert::From<Kilos>>::from'`. A reason key for an impl is `impl <Type as Trait>`: `--reason 'shop_core::cart::impl <Weight as From<Grams>>=the scale gives grams'`. Two impls of one trait for one type have the names `…#0` and `…#1`: the generic arguments select the impl. If a name matches no item, the message lists the nearest names.
 
 Each other op is retired as a claim: the command says so. `semilla ops` lists the claims. An empty value (`test=`, `to=`, an empty anchor) is `malformed`.
 
@@ -150,12 +153,13 @@ For an edit in an item, the anchor is the path of the item (a function, a method
 | `The file … is outside the build folder` | The code names a file with an absolute path. The build reads only the files of the tree. Put the file in the tree, and name it with a relative path. |
 | `! build code changed in step N: …` | The step changes build code (a build script, a proc macro crate, a host package, a cargo or rustup configuration file). Each command runs it in the sandbox, and each proof from step N on has the mark `(with the build code of step N)`. Give the reason for the change. If the tree compiles without the other changes, put the build code change in its own step: then the mark starts at that step, and the reviewer reads the build code alone. Do nothing more for the line. |
 | `tag`: `commit … has no step` | You made a commit with no step. Run the printed commands: `git reset --soft <commit>`, `semilla step "<intent>"`, `git commit`, `semilla tag`. |
+| `tag`: `the commit HEAD does not have the changes of the last step` | The commit lacks a file of a step (`git commit -am` does not add a new file). The message names the files. Run `git add -A`, then `git commit --amend --no-edit`, then `semilla tag`. |
 | `tag`: `an edit after the last step has no step` | Run `semilla step "<intent>"` for the edit, then `git commit --amend --no-edit`, then `semilla tag`. |
 | `the note does not agree with the step refs` | Someone changed the git note or the step refs after `tag`. The result is not accepted. Do the change set again. |
 
 ## What Semilla does not do
 
-- It does not run tests. `tested-by` is `verified (mir)` if each path of the test from its start to its normal return calls the function (directly or through local functions). A reachable call that is not on each path gives `verified (partial)`. `partial` is the correct result for a test with the call in a loop: the step is accepted, and the reviewer reads the scope. Do not change an honest test to get `verified`. A call in code that cannot run (`if false { … }`) refutes the claim. Semilla does not check what the test asserts, and it does not follow a call through a trait object or a function pointer.
+- It does not run tests. `tested-by` is `verified (mir)` if each path of the test from its start to its normal return calls the function (directly or through local functions). A reachable call that is not on each path gives `verified (partial)`. A call after a possible end of the process (`std::process::exit`, `abort`), or after a possible panic in a `#[should_panic]` test, gives `verified (partial)` too. `partial` is the correct result for a test with the call in a loop: the step is accepted, and the reviewer reads the scope. Do not change an honest test to get `verified`. A call in code that cannot run (`if false { … }`) refutes the claim. Semilla does not check what the test asserts, and it does not follow a call through a trait object or a function pointer.
 - A property claim (`no-panic`, `no-unsafe`, `no-io`, `calls-only`) examines the local code that can run from the function: its local callees, each function that the body uses as a value, each closure, each `Drop` body of a value that the code drops, and each trait impl of a local type that goes to generic code of another crate or to a trait object (for example `Display::fmt` through `to_string`). The result gives the scope: "examined: 3 local bodies (1 through trait impls, 0 drop bodies); not examined: …".
 - The result is `verified (partial)` when something is "not examined": a call through a function pointer or a trait object, a call to another crate (`no-panic`), a foreign function, inline assembly, a parameter that holds a trait object or a function pointer, a `#[global_allocator]`, or a `#[panic_handler]`. The reviewer reads a partial result.
 - `no-io` uses the crate that defines each called function. `core` and `alloc` do no I/O. `std` does no I/O only in the modules of an allow list (`std::collections`, `std::hash`, `std::num`, `std::sync`, …; see `docs/design.md` 25.1); each other `std` function is I/O and refutes the claim. A function of another crate is "not examined". `no-unsafe` means: no `unsafe` in the local code that can run. `no-panic` checks the explicit panics, the MIR asserts, and the calls to the panic functions; a division by a constant that is not zero is not a panic site.

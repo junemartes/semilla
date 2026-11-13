@@ -132,6 +132,9 @@ pub struct StepConfigs {
     /// The names of the checked configurations that Semilla added for a proof (batch 5u,
     /// part C).
     pub added: Vec<String>,
+    /// Each configuration of the default list that is not in the list of the step, with the
+    /// configuration that has the same feature state (batch 5y, C4.4). Only the `dev` names.
+    pub same: Vec<(String, String)>,
 }
 
 /// The configurations of each compared step, by the two trees of the step.
@@ -265,23 +268,34 @@ impl NormalOracle {
     /// proof (batch 5u, part C). The second part of an entry is true for an added
     /// configuration. The default list is the same for each `extra`: an added selection is
     /// after each selection of the default list.
-    fn configurations_with(&self, before: &str, after: &str, extra: &[Features]) -> Result<Vec<(Configuration, bool)>> {
+    ///
+    /// The second result (batch 5y, C4.4): each selection of the default list that is not in
+    /// the list, with the selection that has the same feature state. An entry has the names
+    /// of the two `dev` configurations. The `release` configurations have the same relation.
+    #[allow(clippy::type_complexity)]
+    fn configurations_with(&self, before: &str, after: &str, extra: &[Features]) -> Result<(Vec<(Configuration, bool)>, Vec<(String, String)>)> {
         let mut selections = vec![(Features::Default, false), (Features::NoDefault, false), (Features::All, false)];
         selections.extend(self.feature_sets(&[before, after])?.into_iter().filter(|set| !set.is_empty()).map(|set| (Features::Listed(set), false)));
         selections.extend(extra.iter().map(|features| (features.clone(), true)));
         let metadata = [self.metadata(before), self.metadata(after)];
-        let mut seen = Vec::new();
+        let mut seen: Vec<(Vec<_>, Features)> = Vec::new();
         let mut kept = Vec::new();
+        let mut same = Vec::new();
         for (selection, added) in selections {
             // A tree with manifests that cargo cannot read has no state: the selection stays.
             let state: Vec<_> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::feature_state(data, &selection))).collect();
-            if state.iter().all(Option::is_some) && seen.contains(&state) {
-                continue;
+            if state.iter().all(Option::is_some) {
+                if let Some((_, first)) = seen.iter().find(|(known, _)| *known == state) {
+                    if !added {
+                        same.push((Configuration::new(false, selection.clone()).name(), Configuration::new(false, first.clone()).name()));
+                    }
+                    continue;
+                }
             }
-            seen.push(state);
+            seen.push((state, selection.clone()));
             kept.push((selection, added));
         }
-        Ok(kept.into_iter().flat_map(|(features, added)| [false, true].map(|release| (Configuration::new(release, features.clone()), added))).collect())
+        Ok((kept.into_iter().flat_map(|(features, added)| [false, true].map(|release| (Configuration::new(release, features.clone()), added))).collect(), same))
     }
 
     /// The cache folder of the records of a tree at a level and a configuration.
@@ -892,7 +906,7 @@ impl NormalOracle {
             let hint = if state.hinted.insert(key.clone()) { std::fs::read_to_string(self.repo.cache_dir().join(HINT_FILE)).map(|text| parse_hint(&text)).unwrap_or_default() } else { Vec::new() };
             (extra, hint)
         };
-        let listed = self.configurations_with(&step.tree_before, &step.tree_after, &extra)?;
+        let (listed, same) = self.configurations_with(&step.tree_before, &step.tree_after, &extra)?;
         let configs: Vec<Configuration> = listed.iter().map(|(config, _)| config.clone()).collect();
         // The builds of the hint run with the builds of the list. Their results, and their
         // errors, have no use: only the list decides the checked configurations.
@@ -908,7 +922,7 @@ impl NormalOracle {
         // good before the step, Semilla checks it. A step that breaks it is a compile error.
         let narrow: Vec<Configuration> = configs.iter().zip(&built).filter(|(_, error)| error.is_some()).map(|(config, _)| config.narrowed()).collect();
         let mut smaller = self.build_all(step, &narrow)?.into_iter();
-        let mut log = StepConfigs::default();
+        let mut log = StepConfigs { same, ..StepConfigs::default() };
         let mut checked = Vec::new();
         for ((config, added), error) in listed.into_iter().zip(built) {
             // The error of the smaller build is not in the output: the error of the build of
@@ -977,6 +991,7 @@ impl NormalOracle {
                     target: tag(record.target),
                     live: record.live_callees,
                     sure: record.sure_callees,
+                    ends: record.sure_ends.unwrap_or_default(),
                     param_types: record.param_types.into_iter().map(|t| (t.path, t.krate)).collect(),
                     const_types: record.const_types.into_iter().map(|t| (t.path, t.krate)).collect(),
                     casts: semilla_verify::discriminant_casts(&record.text),

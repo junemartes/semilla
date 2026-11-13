@@ -2785,6 +2785,9 @@ fn a_changed_literal_with_a_new_character_outside_ascii_needs_a_reason() {
     assert!(non_ascii_names("match c { '\u{3bc}' => 1, _ => r\"\u{3bc}s\".len() }").is_empty(), "the text of a literal is not a name");
     assert_eq!(with_ascii_forms("changed pattern `\"us\" | \"\u{b5}s\"` \u{2192} `\"us\" | \"\u{3bc}s\"` at `demo::f`"), "changed pattern `\"us\" | \"\u{b5}s\"` (`\"\\u{b5}s\"`) \u{2192} `\"us\" | \"\u{3bc}s\"` (`\"\\u{3bc}s\"`) at `demo::f`");
     assert_eq!(with_ascii_forms("added the arm `'\u{3bc}' => 1`"), "added the arm `'\u{3bc}' => 1` (`'\\u{3bc}'`)");
+    // Batch 5y, C4: the cut mark of Semilla gets no escape. The text before the cut gets it.
+    assert_eq!(with_ascii_forms("added the statement `let a = \"abc def\u{2026}` at `demo::f`"), "added the statement `let a = \"abc def\u{2026}` at `demo::f`");
+    assert_eq!(with_ascii_forms("added the statement `let a = \"\u{3bc}s\u{2026}` at `demo::f`"), "added the statement `let a = \"\u{3bc}s\u{2026}` (`\"\\u{3bc}s`) at `demo::f`");
     assert_eq!(change_sides("value changed: \"a \u{2192} b\" \u{2192} \"c\""), Some(("value changed: \"a \u{2192} b\"", "\"c\"")));
     let new = |text: &str, chars: &[char]| NewLiteral { text: text.to_string(), chars: chars.to_vec() };
     assert_eq!(new_literals("\"usec\" | \"us\" | \"\u{b5}s\"", "\"usec\" | \"us\" | \"\u{3bc}s\""), [new("\"\u{3bc}s\"", &['\u{3bc}'])]);
@@ -4730,4 +4733,68 @@ fn a_rename_or_a_move_that_changes_the_public_api_gets_a_fact_to_read() {
         assert_eq!(facts.len(), expected, "{report:#?}");
         assert!(facts.iter().all(|text| text == "public API: `demo::Price::price` is now `demo::Price::cost` (a different crate can no longer use the old path)"), "{facts:?}");
     }
+}
+
+#[test]
+fn the_name_of_a_trait_impl_item_accepts_the_forms_of_the_source() {
+    // Batch 5y, B1 (trial 8): the agent wrote the full trait path and the generic arguments.
+    let (_dir, ws) = load("pub struct A;\npub struct B;\npub struct Label(pub u8);\nimpl From<A> for Label {\n    fn from(_: A) -> Label { Label(1) }\n}\nimpl core::convert::From<B> for Label {\n    fn from(_: B) -> Label { Label(2) }\n}\nimpl std::fmt::Display for Label {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, \"l\") }\n}\n");
+    let names: Vec<&String> = ws.items.keys().filter(|path| path.contains(" as ")).collect();
+    let one = |name: &str| crate::impl_name_matches(name, &ws);
+    // A full trait path, and a short one: the lookup removes the path.
+    assert_eq!(one("demo::<Label as core::fmt::Display>::fmt"), ["demo::<Label as std::fmt::Display>::fmt"], "{names:?}");
+    assert_eq!(one("demo::impl <Label as Display>"), ["demo::impl <Label as std::fmt::Display>"], "{names:?}");
+    // The generic arguments select between the twins.
+    assert_eq!(one("demo::<Label as core::convert::From<A>>::from"), ["demo::<Label as From>::from"], "{names:?}");
+    assert_eq!(one("demo::<Label as From<B>>::from"), ["demo::<Label as core::convert::From>::from"], "{names:?}");
+    assert_eq!(one("demo::impl <demo::Label as From< A >>"), ["demo::impl <Label as From>"], "{names:?}");
+    assert!(one("demo::<Label as Into<A>>::from").is_empty());
+    // A name with no `impl ` word is the impl block.
+    assert_eq!(one("demo::<Label as From<B>>"), ["demo::impl <Label as core::convert::From>"], "{names:?}");
+    assert_eq!(one("demo::<Label as core::fmt::Display>"), ["demo::impl <Label as std::fmt::Display>"], "{names:?}");
+    // No arguments: each match.
+    assert_eq!(one("demo::<Label as From>::from").len(), 2);
+    // The text of the fact shows the arguments.
+    let block = &ws.items["demo::impl <Label as From>"];
+    assert_eq!(crate::trait_arguments(block).as_deref(), Some("A"));
+    assert_eq!(crate::trait_arguments(&ws.items["demo::impl <Label as std::fmt::Display>"]), None);
+    // No match: the message lists the names with the same last segment.
+    assert_eq!(crate::name_hint("demo::Label::from", &ws), ". The nearest names: `demo::<Label as From>::from`, `demo::<Label as core::convert::From>::from`");
+}
+
+#[test]
+fn a_long_constant_value_shows_the_changed_part_and_the_index() {
+    // Batch 5y, C1 (trial 8): one changed element of a table gave one line with the full table.
+    let table = |value: u32| {
+        let elements: Vec<String> = (0..120u32).map(|index| if index == 67 { value.to_string() } else { (index % 50 + 60).to_string() }).collect();
+        format!("pub const TABLE: &[u8] = &[\n    {},\n];\npub fn first() -> u8 {{\n    TABLE[0]\n}}\n", elements.join(", "))
+    };
+    let (before, after) = (table(128), table(129));
+    let bodies = vec![("demo::TABLE", different(false), vec![]), ("demo::first", different(false), vec![])];
+    let report = run_calls(&before, &after, bodies);
+    assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
+    let text = &report.facts[0].description;
+    assert!(text.starts_with("value of `demo::TABLE` changed at the index 67 (of 120 elements): `"), "{text}");
+    assert!(text.contains("128") && text.contains("129") && text.contains('…') && text.chars().count() < 200, "{text}");
+    // A short value has the full text of the two sides, and an array with a new length has the counts.
+    assert_eq!(crate::facts::long_value_description("demo::A", "[1, 2]", "[1, 3]"), None);
+    let long = "[10000000, 20000000, 30000000, 40000000, 50000000, 60000000, 70000000]";
+    let text = crate::facts::long_value_description("demo::A", long, &long.replace(", 70000000", "")).unwrap();
+    assert!(text.contains("(7 elements → 6 elements)"), "{text}");
+}
+
+#[test]
+fn the_note_of_a_move_with_no_proof_gives_the_cause_that_stops_the_proof() {
+    // Batch 5y, C3 (trial 8): a moved function that reads `module_path!()` has a different MIR.
+    // The note gave the wider visibility as the cause, but a wider visibility stops no proof.
+    let before = MOVE_BEFORE.replace("    pub fn over", "    pub(crate) fn over");
+    let bodies = [("demo::b::over", different(false)), ("demo::b::run", equal("n1"))];
+    let report = run_derived(&before, MOVE_AFTER, &bodies);
+    assert!(!descriptions(&report).iter().any(|d| d.starts_with("moved")), "{:?}", descriptions(&report));
+    let note = report.notes.iter().find(|n| n.contains("show(s) as removed and added")).unwrap_or_else(|| panic!("{:?}", report.notes));
+    assert!(note.contains("`demo::a::over` → `demo::b::over` show(s) as removed and added: the MIR of the item differs after the move (`demo::b::over`)"), "{note}");
+    assert!(!note.contains("the pair has a difference") && !note.contains("visibility"), "{note}");
+    // The same move with an equal MIR has a proof.
+    let report = run_derived(&before, MOVE_AFTER, &[("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))]);
+    assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over` (proved N1")), "{report:#?}");
 }

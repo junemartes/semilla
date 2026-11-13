@@ -318,6 +318,10 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
         // hidden change (a changed literal) has its own fact.
         // The differences of the pairs of the first map, for the note (trial 4, D8).
         let mut differences: Vec<String> = Vec::new();
+        // True if the pair has a text difference that does not stop a proof.
+        let mut only_permitted = false;
+        // The bodies of the new items whose MIR differs from the old items.
+        let mut mir_differs: Vec<String> = Vec::new();
         if let Some((map, _, failed)) = failures.first() {
             let known: BTreeSet<String> = plain.report.facts.iter().map(|f| f.description.clone()).collect();
             let mut extra = Vec::new();
@@ -326,9 +330,16 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                 // Under the name map, each edit that is left inside the new item is a real
                 // difference: the map hides the forced edits of the name.
                 let changed = failed.bodies.iter().any(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. }));
+                mir_differs.extend(failed.bodies.iter().filter(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. })).map(|b| b.name.clone()));
                 for edit in failed.edits.iter().filter(|e| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved)) {
                     let text = crate::edits::display_text(edit);
-                    if !differences.contains(&text) {
+                    // Batch 5y, C3: a wider visibility of a moved item does not stop the proof of
+                    // the move, so the note does not give it as the cause.
+                    let rank = |text: &Option<String>| crate::visibility_rank(text.as_deref().unwrap_or(""));
+                    let permitted = edit.kind == EditKind::Visibility && pair.op == "move-item" && edit.anchor().is_some_and(|a| a.path.is_empty() && a.item == pair.new) && rank(&edit.text_after) > rank(&edit.text_before);
+                    if permitted {
+                        only_permitted = true;
+                    } else if !differences.contains(&text) {
                         differences.push(text.clone());
                     }
                     if known.iter().any(|k| k.ends_with(&text)) {
@@ -362,6 +373,11 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                 // the first changed body of the step.
                 let more = if differences.len() > 3 { format!(", and {} more", differences.len() - 3) } else { String::new() };
                 plain.report.notes.push(format!("{} show(s) as removed and added: the pair has a difference: {}{more}. A {what} with no other change in its step gets a proof", pair_text(map), differences.iter().take(3).cloned().collect::<Vec<_>>().join("; ")));
+            } else if only_permitted && !mir_differs.is_empty() {
+                // Each text difference of the pair is a permitted one. The cause is in the MIR:
+                // for example, the item reads `module_path!()` or `line!()`.
+                let names: Vec<String> = mir_differs.iter().take(3).map(|name| format!("`{name}`")).collect();
+                plain.report.notes.push(format!("{} show(s) as removed and added: the MIR of the item differs after the {what} ({}). The text of the pair has no difference that stops a proof. A possible cause: the item reads its place (`module_path!()`, `line!()`, `file!()`)", pair_text(map), names.join(", ")));
             } else if reason.contains("split the step") {
                 let other = reason.strip_prefix("an identity step must be neutral, but ").and_then(|r| r.strip_suffix(": split the step")).unwrap_or("the step has other changes");
                 plain.report.notes.push(format!("{} show(s) as removed and added: {other}. Put the {what} in its own step to get a proof", pair_text(map)));

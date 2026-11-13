@@ -452,6 +452,28 @@ fn changed(old: Vec<TokenTree>, new: Vec<TokenTree>) -> (Vec<TokenTree>, Vec<Tok
     (old[start..old_end + tail].to_vec(), new[start..new_end + tail].to_vec(), start == 0)
 }
 
+/// The text of the tokens of an item without the doc comments in the attributes before the
+/// item (`/// text` is the attribute `#[doc = "text"]`). Each other attribute stays.
+fn without_item_docs(stream: TokenStream) -> String {
+    let tokens: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index + 1 < tokens.len() {
+        let (proc_macro2::TokenTree::Punct(mark), proc_macro2::TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        if mark.as_char() != '#' || group.delimiter() != proc_macro2::Delimiter::Bracket {
+            break;
+        }
+        let mut inner = group.stream().into_iter();
+        let doc = matches!((inner.next(), inner.next()), (Some(proc_macro2::TokenTree::Ident(name)), Some(proc_macro2::TokenTree::Punct(equal))) if name == "doc" && equal.as_char() == '=');
+        if !doc {
+            kept.push(format!("# {group}"));
+        }
+        index += 2;
+    }
+    kept.extend(tokens[index..].iter().map(|token| token.to_string()));
+    kept.join(" ")
+}
+
 /// Changes the comparison of each body with a text edit and with code that depends on the
 /// build configuration in its source text. The body is not equal for each build, so the
 /// status is "different", and the comparison names the uses.
@@ -496,6 +518,14 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
                 // cannot read keeps each use.
                 near = found.clone();
                 if let (Ok(old_stream), Ok(new_stream)) = (old.text.parse::<TokenStream>(), new.text.parse::<TokenStream>()) {
+                    // Batch 5y, C4: an edit only in the doc comments before the item is not an
+                    // edit of its code. The compiler gets the same code tokens in each build.
+                    // An attribute that Semilla cannot see into can read the doc text, so it
+                    // keeps the rule of an edit.
+                    let no_attribute = found.unseen.iter().all(|text| !text.starts_with('#'));
+                    if no_attribute && without_item_docs(old_stream.clone()) == without_item_docs(new_stream.clone()) {
+                        return None;
+                    }
                     let (old_part, new_part, start) = changed(old_stream.into_iter().collect(), new_stream.into_iter().collect());
                     // The same tokens: the edit is in a comment or in the space.
                     if old_part.is_empty() && new_part.is_empty() {

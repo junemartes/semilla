@@ -2453,3 +2453,81 @@ If the step has a visibility fact with an API text for the same item, the step g
 A variant, a field of a variant, and a method of a trait have no visibility of their own. For them, the owner gives the answer of `api_reach` (`member_reach`).
 
 A pending identity claim (phase 1 of `--fast`) gets no fact: only a proved pair has one.
+
+## 32. Batch 5y: the results of held-out trial 8
+
+Trial 8 on `data-encoding` (a `no_std` crate with the features `alloc` and `std`) showed three results that said "accepted" for data that Semilla did not compute for the commit, and it showed the cost of the honest flow in messages. Each rule of this section is a decision of batch 5y. **Decided by Claude.**
+
+### 32.1 `verify` accepts only a session that agrees with git (part A1)
+
+**The cause (trial 8).** `verify` read the change set from `.semilla/session.json` and compared nothing with git. A session file that Semilla did not write gave `result: accepted` and the exit code 0, while `HEAD` had a different change.
+
+**The rule. Decided by Claude.**
+
+1. `verify` and `status` with no commit are results for the agent. A result for a reviewer has a commit.
+2. `verify` compares the session with git. An open change set: a commit on the first-parent chain of `HEAD` has the base tree of the session, and the last step ends at the tree of `HEAD` or at the tree of the working files. A closed change set: `HEAD` is the tagged commit, and `verify` checks the change set of the note of that commit, not the session file.
+3. A difference in formatting only is permitted, as for `tag`. An empty session gets no git check.
+4. If the session does not agree, the result line is not `accepted`, one line names the cause, and the exit code is 1.
+5. `verify` takes no commit. `semilla verify HEAD` is an error with the hint "use `semilla status HEAD`".
+
+### 32.2 A base with a rejected check is not a checked base (part A2)
+
+**The cause (trial 8).** The base line said "it has a Semilla check" for a commit with a note that phase 1 rejects.
+
+**The rule. Decided by Claude.** `commit_check` gives one of four answers for a commit: no note, accepted, rejected, or "data only". An accepted answer needs the result that this machine computed. A phase 1 error gives "data only": the note has data, but this machine has no accepted result. Semilla does not store this answer. "Data only" ends the walk over the older commits, and the base line has its own text.
+
+### 32.3 A rejected result has the exit code 1 (part A3)
+
+**The cause (trial 8).** `status <commit>` and `review <commit>` printed `result: rejected` with the exit code 0. A script that reads only the exit code saw a good result.
+
+**The rule. Decided by Claude.**
+
+1. `status`, `review --md`, `review --html`, and `load` give the exit code 1 if the result that they print is rejected or not complete. `review` writes its report file in each case, and it prints the result line on the terminal.
+2. `status <commit>` gives the exit code 1 also when this machine has no full result (for example with `--no-wait`): for a reviewer, a result with no phase 2 is not a result.
+3. `status` with no commit keeps the exit code 0 while phase 2 runs in the background.
+4. `load` prints the result line.
+
+### 32.4 `tested-by` and the end of the process (part A4)
+
+**The cause (trial 8).** A test that calls `std::process::exit` before the call of the function got `verified (mir)`. The rule of 30.3 counted only a return and a panic as an end of the test.
+
+**The rule. Decided by Claude.**
+
+1. The driver records the facts of each body: a call of a function that does not return, a foreign function, and `CommandExt::exec`. The verifier decides across the crates of the workspace.
+2. A function of a crate outside the workspace is an end of the process only if its return type is `!`, or it is a foreign function, or it is `CommandExt::exec`. Each foreign function that is not of `std` counts.
+3. If a possible end of the process is before the call, the claim is `verified (partial)`: "the test can end the process before the call: `PATH` in `ITEM`. Semilla did not prove that the test runs the call."
+4. The closures of a direct closure call count in full.
+5. In a `#[should_panic]` test, each call, each assert, and each drop before the sure call is a possible panic.
+6. Semilla finds the panic code of `std` by its name (`panic`, `unwind`, `_failed`, `_fail`).
+7. A limit: Semilla does not follow a call through a trait object or a function pointer that returns.
+
+### 32.5 An anchor of a trait impl accepts the forms of the source (part B1)
+
+**The cause (trial 8).** The agent wrote the anchor `<Weight as From<Kilos>>::from`, as the source has it. Semilla has the name with the full trait path, and the message was "malformed: no item … after the step".
+
+**The rule. Decided by Claude.** The lookup runs in the verifier (`verify_step_with`). It accepts the name of Semilla, the trait path as the source writes it, and the form with no generic arguments. The stored step keeps the text of the agent. A reason key with more than one match goes to each match. A claim anchor with more than one match gives a message with the candidates. Only the fact text shows the trait arguments.
+
+### 32.6 `tag` names the new files that the commit lacks (part B2)
+
+**The cause (trial 8).** `git commit -am` does not add a new file. `tag` said "an edit after the last step has no step", which was not the cause.
+
+**The rule. Decided by Claude.** If the commit is `HEAD`, and the working files agree with the last step (equal, or different in formatting only), and the commit does not, the message names the files and gives the commands: `git add -A`, `git commit --amend --no-edit`, `semilla tag`. The docs use `git add -A && git commit -m "<message>"` in each place.
+
+### 32.7 Each printed reason key is a key that the next call accepts (part B3)
+
+**The cause (trial 8).** The spotlight line gave a file name (`features: Cargo.toml`), and the cause list gave the text of a fact. The agent used the two as reason keys, and Semilla did not accept them. Two facts with one anchor gave the same key two times in the "run again" command.
+
+**The rule. Decided by Claude.** One reason for each fact stays: a file name and a fact text are not keys. The line of a reason that Semilla does not use names the keys of the facts of that file. The features line names the key of each fact. The "run again" command has each key one time. With these rules, the first rejected result gives each key that the step needs.
+
+### 32.8 Small changes (part C)
+
+Each one: **Decided by Claude.**
+
+- **A long constant value (C1).** If a side of a value has more than 60 characters, the fact shows the changed part and its place: "changed at the index N (of M elements)". The index starts at 0.
+- **Equal diff blocks (C2).** In a report, the second fact of a step with an equal diff block prints "the same diff as fN". The Markdown report and the HTML report use the same list.
+- **The note of a move with no proof (C3).** A wider visibility of the moved item is a permitted difference. If the text of the pair has no difference that stops a proof, the note says that the MIR differs, and it names a possible cause (`module_path!()`, `line!()`, `file!()`).
+- **A cut mark in a quoted text (C4.1).** The scan of an output text ends a literal at a cut mark before the closing backtick. The scan of source text has no change.
+- **A call through an `extern crate` item (C4.2).** The driver puts the real crate name in the place of the path of the `extern crate` item. The name comes from compiler data.
+- **A doc comment edit and the build configuration rule (C4.3).** An edit only in the doc comments before an item is not a code edit for the rule of `srcconfig`, unless the item has an attribute that Semilla cannot see into. The cause of the "indirect change" fact was this rule, not the MIR: the records of the two trees were equal.
+- **The configurations of a reviewer output (C4.4).** The cause: the list had only a configuration that each compared step has. Now a configuration of only some steps is in the list with its steps ("only in step N"). One more line names each configuration that is not in the list because its features are the same as those of a checked configuration.
+- **The hint of `status <commit>` (C4.5).** The hint is `semilla status <commit> --verbose`.

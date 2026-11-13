@@ -22,6 +22,7 @@
 #![feature(rustc_private)]
 
 extern crate rustc_attr_ir;
+extern crate rustc_crate_store;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -196,6 +197,9 @@ struct BodyRecord {
     /// `reach::sure_callees`). Not for a closure. At n0 only.
     #[serde(skip_serializing_if = "Option::is_none")]
     sure_callees: Option<Vec<String>>,
+    /// The facts for the ends of a run that are not a return (see `reach::sure_callees`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sure_ends: Option<std::collections::BTreeMap<String, Vec<String>>>,
     /// The callees that the inline step put into the body, at each depth (batch 5l). At n3
     /// only. The compare drops the record if one of them is opaque.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -296,7 +300,8 @@ fn external_calls(body: &Body) -> Vec<External> {
             }
         }
         let (krate, real) = rustc_middle::ty::tls::with(|tcx| reach::origin(rustc_public::rustc_internal::internal(tcx, def.def_id())));
-        found.insert(External { path: def.name(), badges, krate, def: real });
+        let path = rustc_middle::ty::tls::with(|tcx| reach::extern_crate_path(tcx, def.name()));
+        found.insert(External { path, badges, krate, def: real });
     }
     found.into_iter().collect()
 }
@@ -672,7 +677,10 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                     if level == Level::N0 {
                         add_reach(&mut found, *item, body);
                         found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
-                        found.sure_callees = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten();
+                        if let Some((sure, ends)) = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten() {
+                            found.sure_callees = Some(sure);
+                            found.sure_ends = Some(ends).filter(|ends| !ends.is_empty());
+                        }
                         // No list: the driver failed. The marker makes the body opaque.
                         found.adts = guarded(|| reach::adts(body)).unwrap_or_else(|| vec!["?".to_string()]);
                         // A type alias of a crate outside the workspace: an entry `alias PATH`.
@@ -809,6 +817,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         drop_of: None,
         live_callees: None,
         sure_callees: None,
+        sure_ends: None,
         inlined: Vec::new(),
         adts: Vec::new(),
         names: Vec::new(),
@@ -953,6 +962,7 @@ fn record(
         drop_of: None,
         live_callees: None,
         sure_callees: None,
+        sure_ends: None,
         inlined: Vec::new(),
         adts: Vec::new(),
         names: Vec::new(),

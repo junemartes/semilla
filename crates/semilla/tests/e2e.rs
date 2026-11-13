@@ -664,7 +664,7 @@ fn a_note_belongs_to_its_commit_and_tag_needs_an_accepted_set() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "-am", "raise the max"]);
     let other = git(repo, &["rev-parse", "HEAD"]);
     git(repo, &["notes", "--ref=semilla", "copy", &honest, &other]);
-    let status = run(repo, &["status", "HEAD"], 0);
+    let status = run(repo, &["status", "HEAD"], 1);
     assert!(status.contains("rejected") && status.contains("does not belong to this commit"), "{status}");
     let review = semilla(repo, &["review", "HEAD", "--md", "/dev/null"]);
     assert!(String::from_utf8_lossy(&review.stderr).contains("does not belong to this commit"));
@@ -756,7 +756,7 @@ fn a_note_that_does_not_agree_with_the_step_refs_is_not_accepted() {
     let file = repo.join(".semilla/forged.json");
     std::fs::write(&file, forged.to_string()).unwrap();
     git(repo, &["notes", "--ref=semilla", "add", "-f", "-F", file.to_str().unwrap(), "HEAD"]);
-    let status = run(repo, &["status", "HEAD"], 0);
+    let status = run(repo, &["status", "HEAD"], 1);
     assert!(status.starts_with("the note does not agree with the step refs"), "{status}");
     assert!(status.contains("result: rejected") && !status.contains("accepted"), "{status}");
     let review = semilla(repo, &["review", "HEAD", "--md", "/dev/null"]);
@@ -1111,7 +1111,8 @@ fn one_command_for_each_step() {
     assert!(step_lines[0].starts_with("step 0  \"no overflow checks\" · 1 fact: "), "{status}");
     assert!(step_lines[1].starts_with("step 1  \"raise the max\" · "), "{status}");
     assert!(status.contains("\nresult: accepted · 2 steps") && !status.contains("f1 derived"), "{status}");
-    assert!(status.contains("run `semilla status --verbose`"), "{status}");
+    // Batch 5y, C4.5: the hint for a commit names the commit.
+    assert!(status.contains("run `semilla status HEAD --verbose`"), "{status}");
     let verbose = run(repo, &["status", "HEAD", "--verbose"], 0);
     assert!(verbose.contains("f1 derived") && verbose.contains("\nresult: accepted · 2 steps"), "{verbose}");
     // The default report is short. `--full` adds the change tree and the sources.
@@ -1558,6 +1559,97 @@ fn tested_by_is_verified_only_if_each_run_of_the_test_calls_the_function() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-a", "-m", "add the tests"]);
     let text = run(repo, &["tag"], 0);
     assert!(text.contains("2 claims: 1 verified, 1 partial"), "{text}");
+}
+
+/// Batch 5y, A4: tests that can end the process, or end with a panic, before the call.
+const ENDS_CODE: &str = r#"
+pub fn twice(n: u32) -> u32 { n * 2 }
+pub fn unit() -> u32 { 1 }
+pub fn done() { std::process::exit(0) }
+
+#[cfg(test)]
+mod ends {
+    use super::*;
+
+    fn stop() { std::process::exit(0) }
+    fn outer() { stop() }
+
+    #[test]
+    fn exit_in_a_helper() { stop(); assert_eq!(twice(2), 5); }
+
+    #[test]
+    fn exit_through_two_helpers() { outer(); assert_eq!(twice(2), 5); }
+
+    #[test]
+    fn exit_under_a_condition() { if std::env::args().count() > 0 { std::process::exit(0); } assert_eq!(twice(2), 5); }
+
+    #[test]
+    fn exit_in_a_closure() { Some(1).into_iter().for_each(|_| stop()); assert_eq!(twice(2), 5); }
+
+    #[test]
+    fn abort_under_a_condition() { if std::env::args().count() > 0 { std::process::abort(); } assert_eq!(twice(2), 5); }
+
+    #[test]
+    #[should_panic]
+    fn panic_before_the_call() { let n: u32 = "x".parse().unwrap(); assert_eq!(twice(n), 4); }
+
+    #[test]
+    fn normal() { assert_eq!(twice(2), 4); }
+
+    #[test]
+    fn after_an_unwrap() { let n: u32 = "2".parse().unwrap(); assert_eq!(twice(n), 4); }
+
+    #[test]
+    fn after_an_assert() { let n = std::hint::black_box(2); assert!(n > 1); assert_eq!(twice(n), 4); }
+
+    #[test]
+    fn exit_after_the_call() { assert_eq!(twice(2), 4); stop(); }
+
+    #[test]
+    #[should_panic]
+    fn panic_after_the_call() { let n = twice(2); assert_eq!(n, 5); }
+}
+"#;
+
+#[test]
+fn tested_by_counts_an_end_of_the_process_as_an_end_of_the_test() {
+    // Batch 5y, A4 (trial 8): a test with `std::process::exit(0)` before the call got
+    // `verified (mir)`. Under `cargo test`, no one calls the function, and the run has success.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{ENDS_CODE}"));
+    // A test of a different crate: the function that ends the process is in the library.
+    write(repo, "crates/shop-app/src/main.rs", &format!("{MAIN_V0}\n#[cfg(test)]\nmod tests {{\n    #[test]\n    fn exit_in_the_library() {{\n        shop_core::cart::done();\n        assert_eq!(shop_core::cart::twice(2), 5);\n    }}\n\n    #[test]\n    fn normal_in_the_app() {{\n        let n = shop_core::cart::unit();\n        assert_eq!(shop_core::cart::twice(n), 2);\n    }}\n}}\n"));
+    let end = |call: &str, function: &str| format!("on each path from its start to its normal return, but the test can end the process before the call: `{call}` in `{function}`. Semilla did not prove that the test runs the call.");
+    let tests = [
+        ("exit_in_a_helper", Some(end("std::process::exit", "shop_core::cart::ends::stop"))),
+        ("exit_through_two_helpers", Some(end("std::process::exit", "shop_core::cart::ends::stop"))),
+        ("exit_under_a_condition", Some(end("std::process::exit", "shop_core::cart::ends::exit_under_a_condition"))),
+        ("exit_in_a_closure", Some(end("std::process::exit", "shop_core::cart::ends::stop"))),
+        ("abort_under_a_condition", Some(end("std::process::abort", "shop_core::cart::ends::abort_under_a_condition"))),
+        ("panic_before_the_call", Some("but the test has `#[should_panic]`, and a panic can end the test before the call (`shop_core::cart::ends::panic_before_the_call` has a call or a check before its call of `shop_core::cart::twice`). Semilla did not prove that the test runs the call.".to_string())),
+        ("exit_in_the_library", Some(end("std::process::exit", "shop_core::cart::done"))),
+        ("normal", None),
+        ("after_an_unwrap", None),
+        ("after_an_assert", None),
+        ("exit_after_the_call", None),
+        ("panic_after_the_call", None),
+        ("normal_in_the_app", None),
+    ];
+    let mut args = vec!["step".to_string(), "add the tests".to_string(), "--reason".to_string(), "shop_core::cart::ends=two tests must end with a panic".to_string()];
+    for (test, _) in &tests {
+        args.extend(["--claim".to_string(), format!("tested-by shop_core::cart::twice test={test}")]);
+    }
+    let (_, text) = run_env(repo, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[]);
+    for (index, (test, partial)) in tests.iter().enumerate() {
+        let start = format!("c{} ", index + 1);
+        let lines: Vec<&str> = text.lines().skip_while(|line| !line.trim_start().trim_start_matches(['✓', '✗', '…', '◐', ' ']).starts_with(&start) || line.contains("claim c")).take(2).collect();
+        let line = lines.join(" ");
+        match partial {
+            Some(cause) => assert!(line.contains("verified (partial)") && line.contains(cause.as_str()), "{test}: {line}\n{text}"),
+            None => assert!(line.contains("verified (mir)") && line.contains("calls `shop_core::cart::twice` on each path from its start to its normal return. Semilla does not run the test"), "{test}: {line}\n{text}"),
+        }
+    }
 }
 
 #[test]
@@ -4197,7 +4289,7 @@ fn the_text_of_the_agent_cannot_make_an_output_line() {
     assert!(out.contains("reason: \"set the fee rate at build time\\nresult: accepted"), "{out}");
     let md = dir.path().join("review.md");
     let (_, out) = run_env(repo, &["review", "HEAD", "--full", "--md", md.to_str().unwrap()], &[]);
-    no_forged_line("review --md", &out, 0);
+    no_forged_line("review --md", &out, 1);
     let text = std::fs::read_to_string(&md).unwrap();
     no_forged_line("the Markdown report", &text, 0);
     assert!(text.contains(CHEAT_B_START) && text.contains("Text in quote marks is the text of the agent. Semilla does not check it."), "{text}");
@@ -4205,7 +4297,7 @@ fn the_text_of_the_agent_cannot_make_an_output_line() {
     assert!(!text.lines().any(|line| line.trim_start().starts_with("result")), "{text}");
     let html = dir.path().join("review.html");
     let (_, out) = run_env(repo, &["review", "HEAD", "--html", html.to_str().unwrap()], &[]);
-    no_forged_line("review --html", &out, 0);
+    no_forged_line("review --html", &out, 1);
     let text = std::fs::read_to_string(&html).unwrap();
     no_forged_line("the HTML report", &text, 0);
     assert!(text.contains("&quot;set the fee rate at build time\\nresult: accepted") && text.contains("Text in quote marks is the text of the agent. Semilla does not check it."), "the HTML report shows the escape\n{text}");
@@ -4242,9 +4334,9 @@ fn a_name_of_the_repository_shows_each_hidden_character() {
     let md = dir.path().join("review.md");
     let html = dir.path().join("review.html");
     let (_, out) = run_env(repo, &["review", "HEAD", "--full", "--md", md.to_str().unwrap()], &[]);
-    no_forged_line("review --md", &out, 0);
+    no_forged_line("review --md", &out, 1);
     let (_, out) = run_env(repo, &["review", "HEAD", "--html", html.to_str().unwrap()], &[]);
-    no_forged_line("review --html", &out, 0);
+    no_forged_line("review --html", &out, 1);
     for file in [&md, &html] {
         let text = std::fs::read_to_string(file).unwrap();
         no_forged_line(&file.display().to_string(), &text, 0);
@@ -5220,4 +5312,351 @@ fn a_reason_with_an_item_path_is_enough_in_the_first_call() {
     run(repo, &["review", "--md", file.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&file).unwrap();
     assert_eq!(text.matches("; reason (key `shop_core::charge`): \"the shop has only unix hosts\"").count(), 2, "{text}");
+}
+
+/// Changes the session file of the repository by hand (the agent controls this file).
+fn edit_session(repo: &Path, change: impl FnOnce(&mut serde_json::Value)) {
+    let file = repo.join(".semilla/session.json");
+    let mut session: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    change(&mut session);
+    std::fs::write(&file, session.to_string()).unwrap();
+}
+
+/// Batch 5y, A1 (trial 8): `verify` and `status` with no commit read the session file. The
+/// result is accepted only if the session agrees with git.
+#[test]
+fn verify_accepts_only_a_session_that_agrees_with_git() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let short = |rev: &str| git(repo, &["rev-parse", "--short=7", rev]).trim().to_string();
+    let base = short("HEAD");
+    // The normal flow: after a step, after the commit, and after `tag`.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "raise the max"], 0);
+    let out = run(repo, &["verify"], 0);
+    assert!(out.starts_with(&format!("verify: the base `{base}`, 1 step, the session of this folder (not a commit)\n")) && out.contains("result: accepted"), "{out}");
+    commit_all(repo, "raise the max");
+    let out = run(repo, &["verify"], 0);
+    assert!(out.starts_with(&format!("verify: the base `{base}`, 1 step, the session of this folder (not a commit)\n")) && out.contains("result: accepted"), "{out}");
+    run(repo, &["tag"], 0);
+    let tagged = short("HEAD");
+    let out = run(repo, &["verify"], 0);
+    assert!(out.starts_with(&format!("verify: the base `{base}`, 1 step, the tagged commit `{tagged}`\n")) && out.contains("result: accepted"), "{out}");
+    // `verify` takes no commit: the error gives the command for a commit.
+    let output = semilla(repo, &["verify", "HEAD"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("use `semilla status HEAD`"), "{}", String::from_utf8_lossy(&output.stderr));
+    // A different change in a new commit with plain `git`. The session is the old change set.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "99"));
+    commit_all(repo, "a change with no step");
+    let other = short("HEAD");
+    let out = run(repo, &["verify"], 1);
+    assert!(out.contains(&format!("the session is the closed change set of commit `{tagged}`, but HEAD is `{other}`")) && out.contains("result: rejected") && !out.contains("result: accepted"), "{out}");
+    // A session file that names `HEAD` as the tagged commit. `HEAD` has no note.
+    let head = git(repo, &["rev-parse", "HEAD"]);
+    edit_session(repo, |session| session["tagged"] = serde_json::json!(head));
+    let out = run(repo, &["verify"], 1);
+    assert!(out.contains("that commit has no Semilla note") && out.contains("result: rejected") && !out.contains("result: accepted"), "{out}");
+    let out = run(repo, &["status"], 0);
+    assert!(out.contains(&format!("the session names commit {head}, but that commit has no Semilla check")) && !out.contains("the last tagged commit"), "{out}");
+    // An open session that does not end at `HEAD` or at the working files.
+    edit_session(repo, |session| {
+        session.as_object_mut().unwrap().remove("tagged");
+    });
+    let out = run(repo, &["verify"], 1);
+    assert!(out.contains("the session does not agree with git: its last step ends at tree") && out.contains("result: rejected") && !out.contains("result: accepted"), "{out}");
+    // An open session with a base that no commit of `HEAD` has.
+    let tree = git(repo, &["rev-parse", "HEAD^{tree}"]);
+    edit_session(repo, |session| {
+        let old = session["changeset"]["steps"][0]["tree_after"].clone();
+        session["changeset"]["base_tree"] = old.clone();
+        session["changeset"]["steps"][0]["tree_before"] = old;
+        session["changeset"]["steps"][0]["tree_after"] = serde_json::json!(tree);
+        session["changeset"]["head_tree"] = serde_json::json!(tree);
+    });
+    let out = run(repo, &["verify"], 0);
+    assert!(out.contains(&format!("verify: the base `{tagged}`, 1 step, the session of this folder (not a commit)")), "a session from a commit of the chain to HEAD agrees with git\n{out}");
+    git(repo, &["reset", "-q", "--hard", &base]);
+    let out = run(repo, &["verify"], 1);
+    assert!(out.contains("the session does not agree with git: it starts at tree") && out.contains("no commit on the first-parent chain of HEAD has that tree") && !out.contains("result: accepted"), "{out}");
+}
+
+/// A change set with a spotlight (a new script) and its reason, in a tagged commit. Then the note
+/// loses the reason: the note belongs to the commit (the trees and the step refs agree), but the
+/// result that Semilla computes for it is rejected. Returns the short name of the commit.
+fn commit_with_a_rejected_note(repo: &Path) -> String {
+    write(repo, "ci.sh", "cargo test\n");
+    run(repo, &["step", "add the CI script", "--reason", "ci.sh:=the CI runs it"], 0);
+    git(repo, &["add", "-A"]);
+    commit_all(repo, "add the CI script");
+    run(repo, &["tag"], 0);
+    let note = git(repo, &["notes", "--ref=semilla", "show", "HEAD"]);
+    let mut forged: serde_json::Value = serde_json::from_str(&note).unwrap();
+    assert!(forged["steps"][0]["reasons"].as_object().is_some_and(|reasons| !reasons.is_empty()), "the note has the reason: {note}");
+    forged["steps"][0].as_object_mut().unwrap().remove("reasons");
+    let file = repo.join(".semilla/forged.json");
+    std::fs::write(&file, forged.to_string()).unwrap();
+    git(repo, &["notes", "--ref=semilla", "add", "-f", "-F", file.to_str().unwrap(), "HEAD"]);
+    git(repo, &["rev-parse", "--short=7", "HEAD"]).trim().to_string()
+}
+
+/// Batch 5y, A2 (trial 8): a commit has a Semilla check only if the result that this machine
+/// computes for it is accepted. A note that belongs to the commit is not sufficient.
+#[test]
+fn a_base_with_a_rejected_check_is_not_a_checked_base() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let short = |rev: &str| git(repo, &["rev-parse", "--short=7", rev]).trim().to_string();
+    // An accepted change set.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "raise the max"], 0);
+    commit_all(repo, "raise the max");
+    run(repo, &["tag"], 0);
+    let good = short("HEAD");
+    let other_cache = dir.path().join("other-cache");
+    // A change set whose note Semilla rejects.
+    let bad = commit_with_a_rejected_note(repo);
+    // The next change set on it: the base line is a warning, and it gives the command.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "30"));
+    let step = run(repo, &["step", "raise the max again"], 0);
+    let line = format!("! base `{bad}`: its Semilla check is rejected. Run `semilla status {bad}`");
+    assert!(step.contains(&line) && !step.contains("it has a Semilla check"), "{step}");
+    // The answer is in the machine cache, and no file of the repository folder holds it.
+    assert!(std::fs::read_dir(repo_cache(repo).join("commit-check")).unwrap().count() >= 1, "the cache has the answer");
+    let status = run(repo, &["status", "--wait", "600"], 0);
+    assert!(status.contains(&line), "{status}");
+    commit_all(repo, "raise the max again");
+    let tag = run(repo, &["tag"], 0);
+    assert!(tag.contains(&line), "{tag}");
+    let status = run(repo, &["status", "HEAD"], 0);
+    assert!(status.contains(&line) && status.contains("result: accepted"), "the line is a warning for the reviewer\n{status}");
+    // On a machine with no stored result, the base of the change set on the good commit has
+    // data only. After `status` of that commit, it has a check.
+    let env = [("SEMILLA_CACHE_DIR", other_cache.to_str().unwrap())];
+    let (code, out) = run_env(repo, &["status", &bad, "--no-wait"], &env);
+    assert!(code == 1 && out.contains(&format!("base `{good}`: it has Semilla data, but this machine did not compute the full result. Run `semilla status {good}`")), "{code}\n{out}");
+    let (code, out) = run_env(repo, &["status", &good], &env);
+    assert!(code == 0 && out.contains("result: accepted"), "{code}\n{out}");
+    let (_, out) = run_env(repo, &["status", &bad, "--no-wait"], &env);
+    assert!(out.contains(&format!("base `{good}`: it has a Semilla check")), "{out}");
+    // The walk over older commits uses the same rule: a commit with a rejected check is a commit
+    // with no check, and the walk stops at the last commit with an accepted result.
+    git(repo, &["reset", "-q", "--hard", &bad]);
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "40"));
+    commit_all(repo, "a commit with no step");
+    let plain = short("HEAD");
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "50"));
+    let step = run(repo, &["step", "the next step"], 0);
+    let line = format!("! 2 commits before this change set have no Semilla check: `{plain}` \"a commit with no step\", `{bad}` \"add the CI script\" (its Semilla check is rejected) (the last checked commit is `{good}`)");
+    assert!(step.contains(&line), "{step}");
+}
+
+/// Batch 5y, A3 (trial 8): a result that is rejected or not complete has the exit code 1, and
+/// the first line says `rejected`.
+#[test]
+fn a_rejected_result_has_the_exit_code_1() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // An accepted commit: the exit code 0, and `ready` alone in the first line.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "raise the max"], 0);
+    commit_all(repo, "raise the max");
+    run(repo, &["tag"], 0);
+    let good = git(repo, &["rev-parse", "HEAD"]);
+    let out = run(repo, &["status", "HEAD"], 0);
+    assert!(out.starts_with(&format!("{good}: ready\n")) && out.contains("result: accepted"), "{out}");
+    let md = dir.path().join("good.md");
+    let out = run(repo, &["review", "HEAD", "--md", md.to_str().unwrap()], 0);
+    assert!(out.contains("result: accepted") && md.is_file(), "{out}");
+    let out = run(repo, &["load", "HEAD"], 0);
+    assert!(out.contains("loaded 1 steps") && out.contains("result: accepted"), "{out}");
+    // With no stored result, `status <commit> --no-wait` has no full result: the exit code 1.
+    let other_cache = dir.path().join("other-cache");
+    let (code, out) = run_env(repo, &["status", "HEAD", "--no-wait"], &[("SEMILLA_CACHE_DIR", other_cache.to_str().unwrap())]);
+    assert!(code == 1 && out.contains("result: phase 1 ok"), "{code}\n{out}");
+    // A commit with a rejected result.
+    commit_with_a_rejected_note(repo);
+    let bad = git(repo, &["rev-parse", "HEAD"]);
+    let out = run(repo, &["status", "HEAD"], 1);
+    assert!(out.starts_with(&format!("{bad}: ready, rejected\n")), "{out}");
+    assert!(out.lines().any(|line| line.starts_with("result: rejected")) && !out.contains("result: accepted"), "{out}");
+    let md = dir.path().join("bad.md");
+    let out = run(repo, &["review", "HEAD", "--md", md.to_str().unwrap()], 1);
+    assert!(out.contains("result: rejected") && md.is_file(), "the report file is there\n{out}");
+    let out = run(repo, &["load", "HEAD"], 1);
+    assert!(out.contains("loaded 1 steps") && out.contains("result: rejected"), "{out}");
+    // The session: an edit with no step is a rejected result. A result that is not there yet
+    // (phase 2 runs) keeps the exit code 0.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "30"));
+    run(repo, &["step", "raise the max again", "--fast"], 0);
+    let out = run(repo, &["status"], 0);
+    assert!(!out.contains("result: rejected"), "{out}");
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "31"));
+    let out = run(repo, &["status", "--wait", "600"], 1);
+    assert!(out.starts_with("session: ready, rejected\n") && out.contains("result: rejected"), "{out}");
+}
+
+#[test]
+fn an_anchor_of_a_trait_impl_accepts_the_forms_of_the_source() {
+    // Batch 5y, B1 (trial 8): the agent wrote `<Type as core::convert::From<Source>>::from`.
+    // Semilla said "no item … after the step", and no doc showed the name that Semilla uses.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let code = "\npub struct Grams(pub u32);\npub struct Kilos(pub u32);\npub struct Weight(pub u32);\n\nimpl From<Grams> for Weight {\n    fn from(grams: Grams) -> Weight {\n        Weight(grams.0)\n    }\n}\n\nimpl From<Kilos> for Weight {\n    fn from(kilos: Kilos) -> Weight {\n        Weight(kilos.0.wrapping_mul(1000))\n    }\n}\n";
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V1}{code}"));
+    // The key has no generic arguments, and two impls match: the message lists the names.
+    let (code_1, out) = run_env(repo, &["step", "add the weight types", "--claim", "no-unsafe shop_core::cart::<Weight as core::convert::From>::from"], &[]);
+    assert_eq!(code_1, 1, "{out}");
+    assert!(out.contains("no item `shop_core::cart::<Weight as core::convert::From>::from` after the step. More than one item matches: `shop_core::cart::<Weight as From>::from#0`, `shop_core::cart::<Weight as From>::from#1`. Use one of these names, or give the generic arguments of the trait"), "{out}");
+    // A name with no match: the nearest names.
+    let (_, out) = run_env(repo, &["step", "add the weight types", "--claim", "no-unsafe shop_core::cart::Weight::from"], &[]);
+    assert!(out.contains("no item `shop_core::cart::Weight::from` after the step. The nearest names: `shop_core::cart::<Weight as From>::from#0`, `shop_core::cart::<Weight as From>::from#1`"), "{out}");
+    // The full trait path and the generic arguments select one impl, in a claim and in a reason key.
+    let (code_2, out) = run_env(repo, &["step", "add the weight types", "--claim", "no-unsafe shop_core::cart::<Weight as core::convert::From<Kilos>>::from", "--reason", "shop_core::cart::impl <Weight as From<Grams>>=the scale gives grams"], &[]);
+    assert_eq!(code_2, 0, "{out}");
+    assert!(out.contains("c1 verified"), "{out}");
+    let out = run(repo, &["status", "--verbose"], 0);
+    assert!(out.contains("trait impl `<Weight as From<Grams>>#0` added") && out.contains("trait impl `<Weight as From<Kilos>>#1` added"), "{out}");
+    let grams = out.lines().skip_while(|line| !line.contains("trait impl `<Weight as From<Grams>>#0` added")).take(4).collect::<Vec<_>>().join("\n");
+    assert!(grams.contains("the scale gives grams"), "{out}");
+    assert_eq!(out.matches("the scale gives grams").count(), 1, "{out}");
+}
+
+#[test]
+fn tag_names_the_new_files_that_the_commit_lacks() {
+    // Batch 5y, B2 (trial 8): `git commit -am` does not add a new file. Then `tag` said "an edit
+    // after the last step has no step", and `step` said "no change since the last step".
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod unit;\n");
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn unit() -> u32 {\n    1\n}\n");
+    run(repo, &["step", "add the module unit"], 0);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-a", "-m", "add the module unit"]);
+    let (code, out) = run_env(repo, &["tag"], &[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("the commit HEAD does not have the changes of the last step in 1 file(s): `crates/shop-core/src/unit.rs`. The working files have them (`git commit -am` does not add a new file). Run `git add -A`, then `git commit --amend --no-edit`, then `semilla tag`."), "{out}");
+    assert!(!out.contains("an edit after the last step has no step"), "{out}");
+    // `status` gives the same text.
+    let (_, out) = run_env(repo, &["status"], &[]);
+    assert!(out.contains("does not have the changes of the last step in 1 file(s): `crates/shop-core/src/unit.rs`"), "{out}");
+    // A real edit after the last step: the old message stays.
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn unit() -> u32 {\n    2\n}\n");
+    let (code, out) = run_env(repo, &["tag"], &[]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("an edit after the last step has no step. Run `semilla step \"<intent>\"` for the edit"), "{out}");
+    // The commands of the message give an accepted tag.
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn unit() -> u32 {\n    1\n}\n");
+    git(repo, &["add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "--no-edit"]);
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains("result: accepted"), "{out}");
+}
+
+#[test]
+fn a_manifest_step_gets_each_reason_key_one_time_in_one_round() {
+    // Batch 5y, B3 (trial 8): the first rejected result gives each key that the step needs, each
+    // printed key is a key that the next call accepts, and the command gives each key one time.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let member = "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nstd = []\n";
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{member}default = [\"std\"]\n"));
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod unit;\n");
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u32 {\n    if cfg!(debug_assertions) { x } else { x + 1 }\n}\n");
+    commit_all(repo, "a default feature");
+    let root = std::fs::read_to_string(repo.join("Cargo.toml")).unwrap();
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{member}default = []\n"));
+    write(repo, "Cargo.toml", &format!("{root}\n[profile.release]\ndebug-assertions = true\noverflow-checks = false\n"));
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u64 {\n    if cfg!(debug_assertions) { x as u64 } else { x as u64 + 2 }\n}\n");
+    // A file name and the text of a fact are not keys. The message gives the keys.
+    let (code, out) = run_env(repo, &["step", "change the build", "--reason", "crates/shop-core/Cargo.toml=the file", "--reason", "crates/shop-core/Cargo.toml: features.default: \"std\" removed=the text"], &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("`crates/shop-core/Cargo.toml` is not the key of a reason. Each fact has its own key: `crates/shop-core/Cargo.toml:features.default`, `crates/shop-core/Cargo.toml:features.default: \"std\"`"), "{out}");
+    assert!(out.contains("`crates/shop-core/Cargo.toml: features.default: \"std\" removed` is not the key of a reason. Each fact has its own key: `crates/shop-core/Cargo.toml:features.default: \"std\"`"), "{out}");
+    assert!(out.contains("! spotlight: features: crates/shop-core/Cargo.toml (the key of the reason: `crates/shop-core/Cargo.toml:features.default`, `crates/shop-core/Cargo.toml:features.default: \"std\"`)"), "{out}");
+    // The command of the last line has each key one time.
+    let again = out.lines().find(|line| line.starts_with("run again")).unwrap_or_else(|| panic!("{out}"));
+    let keys: Vec<&str> = again.split("--reason '").skip(1).filter_map(|part| part.split("=<why>'").next()).collect();
+    let mut unique = keys.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(keys.len(), unique.len(), "{again}");
+    for key in ["crates/shop-core/Cargo.toml:features.default", "crates/shop-core/Cargo.toml:features.default: \"std\"", "Cargo.toml:profile.release.debug-assertions", "Cargo.toml:profile.release.overflow-checks", "shop_core::unit::mode/sig/ret"] {
+        assert!(keys.contains(&key), "{key}: {again}");
+    }
+    // The second call with these keys is accepted: the first result had each key.
+    let reasons: Vec<String> = keys.iter().map(|key| format!("{key}=the build needs it")).collect();
+    let mut args = vec!["step", "change the build"];
+    for reason in &reasons {
+        args.extend(["--reason", reason.as_str()]);
+    }
+    let (code, out) = run_env(repo, &args, &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("accepted: step 0"), "{out}");
+}
+
+#[test]
+fn a_reviewer_output_names_a_configuration_of_only_some_steps() {
+    // Batch 5y, C4.4 and C4.5 (trial 8). Step 1 changes the default features: only this step
+    // has the configuration `all features`. `status HEAD` had no line for it.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let member = "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nstd = []\n";
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{member}default = [\"std\"]\n"));
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod unit;\n");
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u32 {\n    x + 1\n}\n");
+    commit_all(repo, "a default feature");
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u32 {\n    x + 1\n}\n\npub fn two() -> u32 {\n    2\n}\n");
+    let (code, out) = run_env(repo, &["step", "add a function"], &[]);
+    assert_eq!(code, 0, "{out}");
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{member}default = []\n"));
+    let key = "crates/shop-core/Cargo.toml:features.default";
+    let (code, out) = run_env(repo, &["step", "no default feature", "--reason", &format!("{key}=the library needs no std"), "--reason", &format!("{key}: \"std\"=the library needs no std")], &[]);
+    assert_eq!(code, 0, "{out}");
+    commit_all(repo, "add a function, no default feature");
+    run(repo, &["tag"], 0);
+    let (_, out) = run_env(repo, &["status", "HEAD"], &[]);
+    let checked = out.lines().find(|line| line.starts_with("checked configurations")).unwrap_or_else(|| panic!("{out}"));
+    assert!(checked.contains("`dev, all features` (only in step 1)") && checked.contains("`release, all features` (only in step 1)"), "{out}");
+    // One line says why step 0 does not have the configuration.
+    assert!(out.contains("not in the list, because the features are the same (also for `release`): `dev, all features` = `dev` in step 0\n"), "{out}");
+    // C4.5: the hint for a commit names the commit.
+    assert!(out.contains("run `semilla status HEAD --verbose`"), "{out}");
+    assert!(!out.contains("`semilla status --verbose`"), "{out}");
+}
+
+#[test]
+fn a_call_through_an_extern_crate_item_has_the_name_of_its_crate() {
+    // Batch 5y, C4 (trial 8): in a `no_std` crate with `extern crate std;`, the external call
+    // had the name `data_encoding::std::fs::metadata`: the local crate before a different crate.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/bare/Cargo.toml", "[package]\nname = \"bare\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    write(repo, "crates/bare/src/lib.rs", "#![no_std]\nextern crate std;\n\npub fn size(path: &str) -> u64 {\n    std::fs::metadata(path).map(|data| data.len()).unwrap_or(0)\n}\n");
+    let (code, out) = run_env(repo, &["step", "add the crate bare", "--claim", "no-io bare::size"], &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("external calls: `std::fs::Metadata::len` in `bare::size`, `std::fs::metadata` in `bare::size`"), "{out}");
+    assert!(!out.contains("bare::std::"), "{out}");
+}
+
+#[test]
+fn a_doc_test_fence_change_gives_no_indirect_fact() {
+    // Batch 5y, C4 (trial 8): the item has a macro call that depends on the build. A change of
+    // the fence of its doc test gave a second fact: "indirect change, cause not known: … (the
+    // MIR changed, but the text did not)". The MIR did not change, and the code text did not.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let unit = "use core::debug_assert as safety_assert;\n\n/// Returns one.\n///\n/// ```rust\n/// assert_eq!(shop_core::unit::one(), 1);\n/// ```\npub fn one() -> u32 {\n    safety_assert!(1 == 1);\n    1\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod unit;\n");
+    write(repo, "crates/shop-core/src/unit.rs", unit);
+    commit_all(repo, "a function with a doc test");
+    write(repo, "crates/shop-core/src/unit.rs", &unit.replace("```rust", "```text"));
+    let (code, out) = run_env(repo, &["step", "make the example a text block"], &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("doc test of `shop_core::unit::one` changed"), "{out}");
+    assert!(!out.contains("indirect change") && !out.contains("needs a reason"), "{out}");
+    // An edit of the code of the same item keeps the rule: the build condition needs a reason.
+    write(repo, "crates/shop-core/src/unit.rs", &unit.replace("```rust", "```text").replace("1 == 1", "2 == 2"));
+    let (code, out) = run_env(repo, &["step", "a different check"], &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("build configuration") && out.contains("needs a reason"), "{out}");
 }

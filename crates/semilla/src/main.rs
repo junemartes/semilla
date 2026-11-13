@@ -197,8 +197,12 @@ enum Command {
     /// Run the background jobs, then stop (normally started by a step and by `tag`).
     #[command(hide = true)]
     Worker,
-    /// Verify the full change set.
+    /// Check the change set of the session of this folder (a result for the agent). It takes
+    /// no commit: for the result of a commit, use `semilla status <commit>`.
     Verify {
+        /// (not valid) `verify` takes no commit.
+        #[arg(hide = true)]
+        commit: Option<String>,
         /// Require groups (the final check before a review).
         #[arg(long)]
         r#final: bool,
@@ -558,8 +562,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             let text = app.status(commit.as_deref(), wait, verbose)?;
             println!("{text}");
-            // A result that is not complete has the exit code of a result that is not ready.
-            if text.lines().any(|line| line.starts_with("result: not complete")) {
+            // Batch 5y, A3: a result that is rejected or not complete has the exit code 1. For a
+            // commit, a result with no phase 2 is not a result. For the session, phase 2 can
+            // run in the background: that state keeps the exit code 0.
+            if app::result_fails(&text, commit.is_some()) {
                 return Ok(ExitCode::from(1));
             }
         }
@@ -594,7 +600,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             for line in crate::app::config_lines(&data.report) {
                 println!("{line}");
             }
-            if (md.is_some() || html.is_some()) && data.report.not_complete() {
+            // Batch 5y, A3: the terminal shows the result line, and a result that is rejected
+            // or not complete has the exit code 1. The report file is there in each case.
+            let result = app::summary_line(&data.report);
+            println!("{}", result.lines().next().unwrap_or_default());
+            if (md.is_some() || html.is_some()) && !data.report.accepted {
                 return Ok(ExitCode::from(1));
             }
             if md.is_none() && html.is_none() {
@@ -609,14 +619,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 eprintln!("[worker] another worker runs");
             }
         }
+        Command::Verify { commit: Some(commit), .. } => {
+            let commit = semilla_core::text::quoted(&commit);
+            anyhow::bail!("`semilla verify` takes no commit ({commit}): it checks the session of this folder. For the result of a commit, use `semilla status HEAD` (or `semilla status <commit>`)");
+        }
         Command::Verify { r#final, json, .. } => {
-            let result = app.check(None, r#final)?;
+            // Batch 5y, A1: the result is accepted only if the session agrees with git. The
+            // first line says what the result covers.
+            let (cover, result) = app.verify(r#final)?;
             std::fs::write(app.repo.state_dir().join("report.json"), serde_json::to_string_pretty(&result.report)?)?;
             if json {
                 std::println!("{}", serde_json::to_string_pretty(&result.report)?);
             } else {
                 // The build code line of the result comes first (design 28.4), then the checked
                 // configurations (batch 5s, B1).
+                println!("{cover}");
                 for line in app.build_code_notice(&result.report).into_iter().chain(crate::app::config_lines(&result.report)) {
                     println!("{line}");
                 }
@@ -653,7 +670,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Index => println!("{}", app.index()?),
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),
-        Command::Load { commit } => println!("{}", app.load(&commit)?),
+        Command::Load { commit } => {
+            let text = app.load(&commit)?;
+            println!("{text}");
+            if app::result_fails(&text, false) {
+                return Ok(ExitCode::from(1));
+            }
+        }
         Command::Ui { port, .. } => {
             let data = app.ui_data()?;
             let review = app.review_file();

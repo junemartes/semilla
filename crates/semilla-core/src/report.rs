@@ -505,6 +505,27 @@ pub struct ConfigNote {
     /// The checked configurations that Semilla added for a proof (batch 5u, part C).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub added: Vec<ConfigAdded>,
+    /// The configurations of the default list that Semilla checked only in some steps (batch
+    /// 5y, C4.4). In each other step, a different configuration has the same feature state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_steps: Vec<ConfigAdded>,
+    /// The configurations of the default list that are not in the list of a step: a different
+    /// configuration has the same feature state (batch 5y, C4.4). Only the `dev` names: the
+    /// `release` configurations have the same relation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub same: Vec<ConfigSame>,
+}
+
+/// A configuration that is not in the list of a step, because a different configuration has
+/// the same feature state.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSame {
+    /// The name of the configuration.
+    pub name: String,
+    /// The name of the checked configuration with the same feature state.
+    pub same_as: String,
+    /// The steps where the two are the same.
+    pub steps: Vec<usize>,
 }
 
 /// A checked configuration that Semilla added for a proof: a proof of a step needs a feature
@@ -561,6 +582,12 @@ impl ConfigNote {
         };
         let mut list: Vec<String> = self.checked.iter().map(|name| format!("{}{}", show(name), self.added.iter().find(|added| added.name == *name).map(mark).unwrap_or_default())).collect();
         list.extend(self.added.iter().filter(|added| !self.checked.contains(&added.name)).map(|added| format!("{}{}", show(&added.name), mark(added))));
+        // A configuration of the default list that only some steps have (batch 5y, C4.4).
+        let steps = |entry: &ConfigAdded| match entry.steps.len() {
+            1 => format!(" (only in step {})", entry.steps[0]),
+            _ => format!(" (only in steps {})", entry.steps.iter().map(|step| step.to_string()).collect::<Vec<_>>().join(", ")),
+        };
+        list.extend(self.in_steps.iter().map(|entry| format!("{}{}", show(&entry.name), steps(entry))));
         let list = if list.is_empty() { "none".to_string() } else { list.join(", ") };
         format!("checked configurations (target `{}`): {list}", self.target)
     }
@@ -633,9 +660,32 @@ impl ConfigNote {
         Some(format!("! {count} `cfg` conditions that Semilla did not check: `{first}`, and {} more (`semilla status --verbose` shows each one)", count - 1))
     }
 
+    /// The line of the configurations that are not in the list, because a different
+    /// configuration has the same feature state (batch 5y, C4.4), if one exists.
+    /// `all_steps`: the number of steps of the change set.
+    pub fn same_line(&self, all_steps: usize) -> Option<String> {
+        if self.same.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = self
+            .same
+            .iter()
+            .map(|same| {
+                let place = match same.steps.len() {
+                    count if count >= all_steps => String::new(),
+                    1 => format!(" in step {}", same.steps[0]),
+                    _ => format!(" in steps {}", same.steps.iter().map(|step| step.to_string()).collect::<Vec<_>>().join(", ")),
+                };
+                format!("`{}` = `{}`{place}", same.name, same.same_as)
+            })
+            .collect();
+        Some(format!("not in the list, because the features are the same (also for `release`): {}", list.join(", ")))
+    }
+
     /// The lines at the top of an output for the reviewer.
     pub fn lines(&self, all_steps: usize) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
+        lines.extend(self.same_line(all_steps));
         lines.extend(self.gap_lines(all_steps));
         lines.extend(self.condition_line());
         lines
@@ -644,6 +694,7 @@ impl ConfigNote {
     /// The lines at the top of an output of an agent command (batch 5x, part E).
     pub fn agent_lines(&self, all_steps: usize, verbose: bool) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
+        lines.extend(self.same_line(all_steps));
         lines.extend(self.gap_lines(all_steps));
         lines.extend(self.agent_condition_line(verbose));
         lines
@@ -1036,7 +1087,7 @@ mod config_note_tests {
             checked: vec!["dev".into(), "release".into()],
             not_checked: vec![gap("dev, all features", &[0, 1]), gap("release, all features", &[0, 1]), gap("dev, no default features", &[1])],
             not_covered: (0..10).map(|index| format!("c{index}")).collect(),
-            added: Vec::new(),
+            ..ConfigNote::default()
         };
         let lines = note.lines(2);
         assert_eq!(lines[0], "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `release`");
@@ -1070,6 +1121,16 @@ mod config_note_tests {
         // A report of an older version has no data.
         let report: Report = serde_json::from_str(r#"{"steps":[],"organization":[],"warnings":[],"accepted":true}"#).unwrap();
         assert!(report.configs.is_none());
+        // Batch 5y, C4.4: a configuration of only some steps, and the equal configurations.
+        let part = ConfigNote {
+            target: "t".into(),
+            checked: vec!["dev".into()],
+            in_steps: vec![added("dev, all features", &[1])],
+            same: vec![ConfigSame { name: "dev, no default features".into(), same_as: "dev".into(), steps: vec![0, 1] }, ConfigSame { name: "dev, all features".into(), same_as: "dev".into(), steps: vec![0] }],
+            ..ConfigNote::default()
+        };
+        assert_eq!(part.checked_line(), "checked configurations (target `t`): `dev`, `dev, all features` (only in step 1)");
+        assert_eq!(part.lines(2)[1], "not in the list, because the features are the same (also for `release`): `dev, no default features` = `dev`, `dev, all features` = `dev` in step 0");
         let note: ConfigNote = serde_json::from_str(r#"{"target":"t","checked":["dev"],"not_checked":[],"not_covered":[]}"#).unwrap();
         assert!(note.added.is_empty());
     }

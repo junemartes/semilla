@@ -1310,7 +1310,7 @@ fn build_code_title(count: usize) -> String {
 /// (`Some(true)`), the other facts (`Some(false)`), or each fact (`None`). A build code change
 /// has its diff in each report (design 28.3).
 fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<bool>) -> Vec<(String, Option<String>)> {
-    model
+    let items: Vec<(usize, &str, String, Option<String>)> = model
         .summary
         .facts
         .iter()
@@ -1363,9 +1363,31 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
             if let Some(why) = &fact.spotlight_why {
                 text.push_str(&format!("; spotlight: {why}; {}: {}", fact.reason_label(), fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
             }
-            (text, if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) })
+            (view.step, fact.id.as_str(), text, if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) })
         })
-        .collect()
+        .collect();
+    without_equal_diffs(items)
+}
+
+/// Batch 5y, C2. In one step, the second fact with an equal diff block does not show the
+/// block again: its text names the first fact. The Markdown report and the HTML report use
+/// this list.
+fn without_equal_diffs(items: Vec<(usize, &str, String, Option<String>)>) -> Vec<(String, Option<String>)> {
+    let mut shown: Vec<(usize, &str, String)> = Vec::new();
+    let mut result = Vec::new();
+    for (step, id, text, content) in items {
+        let first = content.as_ref().and_then(|content| shown.iter().find(|(known, _, block)| *known == step && block == content).map(|(_, first, _)| *first));
+        match (first, content) {
+            (Some(first), _) => result.push((format!("{text}; the same diff as {first}"), None)),
+            (None, content) => {
+                if let Some(content) = &content {
+                    shown.push((step, id, content.clone()));
+                }
+                result.push((text, content));
+            }
+        }
+    }
+    result
 }
 
 /// The Markdown list of fact items: each content change is a fenced block in its list item.
@@ -1748,6 +1770,16 @@ mod tests {
     fn a_crate_is_not_a_file() {
         let is_file = |location: &str| location.contains('/') || location.contains('.');
         assert!(is_file("crates/cli/src/main.rs") && is_file("Cargo.toml") && !is_file("ledger_cli") && !is_file("ledger_cli::tests"));
+    }
+
+    #[test]
+    fn the_second_equal_diff_of_a_step_names_the_first_fact() {
+        // Batch 5y, C2: two facts of one step with the same diff block. An equal block in a
+        // different step stays.
+        let block = Some("- a\n+ b".to_string());
+        let items = vec![(0, "f1", "one".to_string(), block.clone()), (0, "f2", "two".to_string(), block.clone()), (0, "f3", "three".to_string(), None), (1, "f1", "four".to_string(), block.clone())];
+        let list = without_equal_diffs(items);
+        assert_eq!(list, [("one".to_string(), block.clone()), ("two; the same diff as f1".to_string(), None), ("three".to_string(), None), ("four".to_string(), block)]);
     }
 
     #[test]
