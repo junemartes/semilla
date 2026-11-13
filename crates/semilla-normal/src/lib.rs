@@ -30,7 +30,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use cargo::{Configuration, Features, run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_config, run_cargo_check_delta_features};
+pub use cargo::{Built, Configuration, Features, run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_config, run_cargo_check_delta_features, run_cargo_check_with_trait_table};
 
 /// A call to a function of another crate (design 10.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

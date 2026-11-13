@@ -18,8 +18,8 @@ pub enum Class {
     ControlFlow,
     /// A change with no MIR: docs, `Cargo.toml`, attributes.
     Other,
-    /// No check ran: the step uses build code that the change set changes, and the reviewer
-    /// did not allow it (invariant I6, design 28). It is never a proof.
+    /// No check ran: the step uses build code that the change set changes, and the command
+    /// had `--no-build-code` (design 28). It is never a proof.
     NotChecked,
 }
 

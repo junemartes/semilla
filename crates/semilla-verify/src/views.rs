@@ -216,7 +216,7 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
 }
 
 fn new_node(id: &str, label: &str) -> TreeNode {
-    TreeNode { id: id.into(), label: label.into(), status: Status::Changed, class: None, claims: Vec::new(), diff: None, steps: Vec::new(), summary: None, children: Vec::new() }
+    TreeNode { id: id.into(), label: label.into(), status: Status::Changed, class: None, build_code: None, claims: Vec::new(), diff: None, steps: Vec::new(), summary: None, children: Vec::new() }
 }
 
 /// Builds the change tree: one diff from the base tree (`before`) to the head tree (`after`), with
@@ -641,6 +641,63 @@ pub fn short_list(items: &[String]) -> String {
     format!("{}{more}", shown.join(", "))
 }
 
+/// Writes one fact of the text report. `diff` adds the content change of the fact (a build code
+/// change, design 28.3).
+fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool) {
+    use text::put_line as put;
+        let class = match (fact.class, fact.affected.is_empty()) {
+            (Some(Class::Neutral), _) => " [neutral (proved)]".to_string(),
+            (Some(class), _) => format!(" [{}]", crate::class_name(class)),
+            (None, _) => " [pending]".to_string(),
+        };
+        put(out, &format!("  ◆ {} derived: {}{class}{}", fact.id, fact.description, fact.mark()));
+        for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
+            if matches!(fact.part.as_str(), "edit" | "body") {
+                // A fold of equal facts: the bodies, with the count of sites in each.
+                let mut items: Vec<(String, usize)> = Vec::new();
+                for site in &group.sites {
+                    match items.iter_mut().find(|(item, _)| *item == site.item) {
+                        Some((_, count)) => *count += 1,
+                        None => items.push((site.item.clone(), 1)),
+                    }
+                }
+                let shown: Vec<String> = items.iter().take(6).map(|(item, count)| if *count > 1 { format!("{item} ({count})") } else { item.clone() }).collect();
+                let more = if items.len() > 6 { format!(", and {} more", items.len() - 6) } else { String::new() };
+                put(out, &format!("      in: {}{more}", shown.join(", ")));
+            } else {
+                // The bodies of the sites (D15): a body with a site can be proved equal, so it
+                // is not always in the affected bodies.
+                let mut items: Vec<&str> = group.sites.iter().map(|s| s.item.as_str()).collect();
+                items.dedup();
+                let more = if items.len() > 4 { format!(", and {} more", items.len() - 4) } else { String::new() };
+                items.truncate(4);
+                put(out, &format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", ")));
+            }
+        }
+        if !fact.affected.is_empty() {
+            put(out, &format!("      affected bodies: {}", short_list(&fact.affected)));
+        }
+        if !fact.equal_sites.is_empty() {
+            put(out, &format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), short_list(&fact.equal_sites)));
+        }
+        // The note asks for no reason (batch 5u, part A).
+        if let Some(note) = &fact.note {
+            put(out, &format!("      note: {note}{}", fact.part_mark()));
+        }
+        if let Some(why) = &fact.spotlight_why {
+            match &fact.reason {
+                Some(reason) => put(out, &format!("      spotlight: {why}; reason: {}", text::quoted(reason))),
+                None => put(out, &format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone()))),
+            }
+        }
+    if let Some(content) = fact.content.as_ref().filter(|_| diff) {
+        put(out, "      diff:");
+        for line in content.lines() {
+            put(out, &format!("        {line}"));
+        }
+    }
+}
+
 /// The text report. With `short_failures`, a claim that is not verified shows only its status
 /// and a short cause: the caller prints the full text and the hint before the report.
 pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
@@ -650,6 +707,13 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
     let mut out = String::new();
     for step in steps {
         put(&mut out, &format!("step {}  {}", step.step, text::quoted(&step.intent)));
+        // Design 28.3: the build code changes of the step come first, with the diff.
+        if step.facts.iter().any(|fact| fact.build_code_change) {
+            put(&mut out, &format!("  ! {}", semilla_core::report::BUILD_CODE_SECTION));
+            for fact in step.facts.iter().filter(|fact| fact.build_code_change) {
+                put_fact(&mut out, fact, true);
+            }
+        }
         for claim in &step.claims {
             let mark = match &claim.status {
                 ClaimStatus::Verified { .. } => "✓",
@@ -666,7 +730,7 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
             let class = claim.class.map(|c| format!(" [{}]", crate::class_name(c))).unwrap_or_default();
             let effect = claim.effect.map(|e| format!(" effect hint: {e:?}").to_lowercase()).unwrap_or_default();
             let witness = claim.witness.as_ref().map(|w| format!(" (example: {w})")).unwrap_or_default();
-            put(&mut out, &format!("  {mark} {} {detail}{class}{effect}{witness}", claim.claim));
+            put(&mut out, &format!("  {mark} {} {detail}{}{class}{effect}{witness}", claim.claim, claim.mark()));
             if !claim.affected.is_empty() {
                 put(&mut out, &format!("      changed bodies: {}", short_list(&claim.affected)));
             }
@@ -680,52 +744,8 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
             }
         }
         // The facts: Semilla derives them, the agent writes no claim (design 22.5).
-        for fact in &step.facts {
-            let class = match (fact.class, fact.affected.is_empty()) {
-                (Some(Class::Neutral), _) => " [neutral (proved)]".to_string(),
-                (Some(class), _) => format!(" [{}]", crate::class_name(class)),
-                (None, _) => " [pending]".to_string(),
-            };
-            put(&mut out, &format!("  ◆ {} derived: {}{class}", fact.id, fact.description));
-            for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
-                if matches!(fact.part.as_str(), "edit" | "body") {
-                    // A fold of equal facts: the bodies, with the count of sites in each.
-                    let mut items: Vec<(String, usize)> = Vec::new();
-                    for site in &group.sites {
-                        match items.iter_mut().find(|(item, _)| *item == site.item) {
-                            Some((_, count)) => *count += 1,
-                            None => items.push((site.item.clone(), 1)),
-                        }
-                    }
-                    let shown: Vec<String> = items.iter().take(6).map(|(item, count)| if *count > 1 { format!("{item} ({count})") } else { item.clone() }).collect();
-                    let more = if items.len() > 6 { format!(", and {} more", items.len() - 6) } else { String::new() };
-                    put(&mut out, &format!("      in: {}{more}", shown.join(", ")));
-                } else {
-                    // The bodies of the sites (D15): a body with a site can be proved equal, so it
-                    // is not always in the affected bodies.
-                    let mut items: Vec<&str> = group.sites.iter().map(|s| s.item.as_str()).collect();
-                    items.dedup();
-                    let more = if items.len() > 4 { format!(", and {} more", items.len() - 4) } else { String::new() };
-                    items.truncate(4);
-                    put(&mut out, &format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", ")));
-                }
-            }
-            if !fact.affected.is_empty() {
-                put(&mut out, &format!("      affected bodies: {}", short_list(&fact.affected)));
-            }
-            if !fact.equal_sites.is_empty() {
-                put(&mut out, &format!("      {EQUAL_SITES}: {}", short_list(&fact.equal_sites)));
-            }
-            // The note asks for no reason (batch 5u, part A).
-            if let Some(note) = &fact.note {
-                put(&mut out, &format!("      note: {note}"));
-            }
-            if let Some(why) = &fact.spotlight_why {
-                match &fact.reason {
-                    Some(reason) => put(&mut out, &format!("      spotlight: {why}; reason: {}", text::quoted(reason))),
-                    None => put(&mut out, &format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone()))),
-                }
-            }
+        for fact in step.facts.iter().filter(|fact| !fact.build_code_change) {
+            put_fact(&mut out, fact, false);
         }
         for uncovered in &step.uncovered {
             let at = uncovered.at.as_ref().map(|a| a.to_string()).or_else(|| uncovered.file.clone()).unwrap_or_default();

@@ -33,6 +33,20 @@ pub struct Counts {
     pub pending: usize,
     /// Claims of a step that has no check: the step uses changed build code (design 28).
     pub not_checked: usize,
+    /// Verified claims whose proof used changed build code (design 28, invariant I6), and the
+    /// text for the count, for example ` (1 with the build code of step 1)`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub marked: usize,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub marked_text: String,
+    /// The same for the claims with a partial proof.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub partial_marked: usize,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub partial_marked_text: String,
+    /// The steps of the marks.
+    #[serde(skip)]
+    pub mark_steps: Vec<usize>,
     /// Claims without a result in the report.
     pub no_result: usize,
     pub uncovered: usize,
@@ -48,6 +62,10 @@ pub struct FactCounts {
     pub spotlight: usize,
     /// The facts of the steps that have no check (design 28). They are not in `read`.
     pub not_checked: usize,
+    /// The proved neutral facts with the mark of changed build code (design 28), and the text
+    /// for the count: ` (1 with the build code of step 1)`, or an empty text.
+    pub marked: usize,
+    pub marked_text: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,7 +74,7 @@ pub struct ChangeSetSummary {
     pub head_tree: String,
     pub accepted: bool,
     /// True if a step has no check: it uses build code that the change set changes, and the
-    /// reviewer did not allow it (design 28). The result word is then `not complete`.
+    /// command had `--no-build-code` (design 28). The result word is then `not complete`.
     pub not_complete: bool,
     /// The facts of all steps: the total, the facts that are proved neutral, the facts to read,
     /// and the facts with a spotlight (brief 5f, D1).
@@ -89,6 +107,17 @@ pub struct FactView {
     pub step: usize,
     #[serde(flatten)]
     pub fact: semilla_core::Fact,
+    /// The mark of changed build code (design 28, I6) for the class of the fact, with a space
+    /// before it, or an empty text.
+    pub mark: String,
+    /// The same mark for a proof in the details of the fact (the note of a partial proof).
+    pub part_mark: String,
+}
+
+impl FactView {
+    pub fn new(step: usize, fact: &semilla_core::Fact) -> FactView {
+        FactView { step, fact: fact.clone(), mark: fact.mark(), part_mark: fact.part_mark() }
+    }
 }
 
 /// One pair warning for the review UI.
@@ -133,6 +162,11 @@ pub struct GroupSummary {
     pub depends_on: Vec<String>,
     /// True if all claims are proved neutral and nothing is uncovered.
     pub all_neutral: bool,
+    /// The mark of changed build code for the text "all neutral" (design 28, I6), with a
+    /// space before it, or an empty text.
+    pub mark: String,
+    /// The same mark for the kind, if the kind comes from proofs (`refactor`, `rename`, `move`).
+    pub kind_mark: String,
     /// The sum of `StepReport.panic_delta` over the steps of the group.
     pub panic_delta: i64,
     /// A warning if the group has parts with no link (design section 6.2).
@@ -157,7 +191,11 @@ pub struct SubgroupSummary {
     /// True if the UI made this subgroup for claims without a subgroup.
     pub synthetic: bool,
     pub folded: bool,
+    /// The cause. A cause that is a proof has the mark of changed build code (design 28, I6).
     pub fold_reason: String,
+    /// The mark of changed build code for a folded subgroup, with a space before it, or an
+    /// empty text.
+    pub mark: String,
     /// The locations of the claims: files, or modules when no file is known.
     pub locations: Vec<String>,
     /// The claims that the engine added after the agent's edit (design section 6.3, rule 5).
@@ -190,6 +228,9 @@ pub struct ClaimView {
     pub op_role: Option<Role>,
     /// `verified`, `unproved`, `refuted`, `empty`, `malformed`, `pending`, or `no_result`.
     pub status: &'static str,
+    /// The mark of changed build code (design 28, I6) for a verified claim, with a space
+    /// before it, or an empty text.
+    pub mark: String,
     pub result: Option<ClaimResult>,
     pub review: ReviewState,
     /// The function of the flow view that shows this claim.
@@ -218,7 +259,8 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         fact_counts: {
             let (total, neutral, spotlight) = report.fact_counts();
             let not_checked = report.steps.iter().flat_map(|step| &step.facts).filter(|fact| fact.class == Some(semilla_core::Class::NotChecked)).count();
-            FactCounts { total, neutral, read: total - neutral - not_checked, spotlight, not_checked }
+            let marked = report.marked_count();
+            FactCounts { total, neutral, read: total - neutral - not_checked, spotlight, not_checked, marked, marked_text: report.marked_text(marked) }
         },
         api_level: api_level(ctx),
         panic_delta: report.panic_delta,
@@ -231,7 +273,8 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         lines: report.lines,
         lines_text: report.lines_text().unwrap_or_default(),
         pairs: pair_views(report, review),
-        facts: report.steps.iter().flat_map(|step| step.facts.iter().map(|fact| FactView { step: step.step, fact: fact.clone() })).collect(),
+        // Design 28.3: the build code changes of a step come before its other facts.
+        facts: report.steps.iter().flat_map(|step| step.facts.iter().filter(|fact| fact.build_code_change).chain(step.facts.iter().filter(|fact| !fact.build_code_change)).map(|fact| FactView::new(step.step, fact))).collect(),
         groups,
     }
 }
@@ -251,6 +294,8 @@ pub fn group_detail(ctx: &Ctx, review: &ReviewFile, id: &str) -> Option<Value> {
                 "intent": step.map(|step| step.intent.clone()).or_else(|| report.map(|report| report.intent.clone())),
                 "declared_class": step.and_then(|step| step.class),
                 "computed_class": report.and_then(|report| report.computed_class),
+                // Design 28, I6: the step whose build code change the proofs of this step used.
+                "build_code": ctx.data.report.build_code.as_ref().and_then(|note| note.mark_of(*index)),
                 "accepted": report.map(|report| report.accepted()),
                 "claims": step.map(|step| step.claims.iter().map(|claim| claim.id.clone()).collect::<Vec<_>>()).unwrap_or_default(),
                 "uncovered": report.map(|report| report.uncovered.clone()).unwrap_or_default(),
@@ -282,6 +327,7 @@ pub fn claim_view(ctx: &Ctx, review: &ReviewFile, claim: &Claim) -> ClaimView {
         op_role: ops::op(&claim.op).map(|info| info.role),
         property: is_property(&claim.op),
         status: status_name(result.as_ref()),
+        mark: result.as_ref().map(ClaimResult::mark).unwrap_or_default(),
         review: review.state(&claim.id, ctx.claim_hashes.get(&claim.id).map(String::as_str)),
         flow: at.as_deref().and_then(|at| ctx.flow_function(at)),
         at,
@@ -307,8 +353,24 @@ fn status_name(result: Option<&ClaimResult>) -> &'static str {
     }
 }
 
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
 fn add_status(counts: &mut Counts, view: &ClaimView) {
     counts.claims += 1;
+    // I6: the count of the proofs says how many used changed build code.
+    if let Some((result, step)) = view.result.as_ref().and_then(|result| Some((result, result.build_code?))).filter(|(result, _)| result.status.is_verified()) {
+        match &result.status {
+            ClaimStatus::Verified { proof } if proof == "partial" => counts.partial_marked += 1,
+            _ => counts.marked += 1,
+        }
+        if !counts.mark_steps.contains(&step) {
+            counts.mark_steps.push(step);
+        }
+        counts.marked_text = semilla_core::report::count_mark(counts.marked, &counts.mark_steps);
+        counts.partial_marked_text = semilla_core::report::count_mark(counts.partial_marked, &counts.mark_steps);
+    }
     match view.status {
         "verified" if matches!(view.result.as_ref().map(|result| &result.status), Some(ClaimStatus::Verified { proof }) if proof == "partial") => counts.partial += 1,
         "verified" => counts.verified += 1,
@@ -335,6 +397,15 @@ fn add_counts(total: &mut Counts, part: &Counts) {
     total.malformed += part.malformed;
     total.pending += part.pending;
     total.no_result += part.no_result;
+    total.marked += part.marked;
+    total.partial_marked += part.partial_marked;
+    for step in &part.mark_steps {
+        if !total.mark_steps.contains(step) {
+            total.mark_steps.push(*step);
+        }
+    }
+    total.marked_text = semilla_core::report::count_mark(total.marked, &total.mark_steps);
+    total.partial_marked_text = semilla_core::report::count_mark(total.partial_marked, &total.mark_steps);
     total.uncovered += part.uncovered;
     total.reviewed += part.reviewed;
 }
@@ -383,7 +454,19 @@ pub fn fold_state(ctx: &Ctx, claims: &[&Claim]) -> (bool, String) {
     if not_verified > 0 {
         return (false, format!("{not_verified} claim(s) not verified"));
     }
-    (true, "all claims are proved neutral".to_string())
+    (true, format!("all claims are proved neutral{}", proofs_mark(claims.iter().filter_map(|claim| ctx.results.get(&claim.id)).filter_map(|result| result.build_code))))
+}
+
+/// The mark of changed build code for a text that sums proofs (design 28, I6): the mark of the
+/// step, or a mark with no step when the proofs used the build code of more than one step. It
+/// has a space before it. It is empty when no proof used changed build code.
+fn proofs_mark(steps: impl Iterator<Item = usize>) -> String {
+    let steps: BTreeSet<usize> = steps.collect();
+    match (steps.len(), steps.first()) {
+        (0, _) | (_, None) => String::new(),
+        (1, Some(step)) => format!(" {}", semilla_core::report::build_code_mark(*step)),
+        _ => " (with changed build code)".to_string(),
+    }
 }
 
 fn subgroup_summary(ctx: &Ctx, review: &ReviewFile, subgroup: &SubgroupRef) -> SubgroupSummary {
@@ -432,6 +515,7 @@ fn subgroup_summary(ctx: &Ctx, review: &ReviewFile, subgroup: &SubgroupRef) -> S
         why: subgroup.subgroup.why.clone(),
         edited: subgroup.subgroup.edited,
         synthetic: subgroup.synthetic,
+        mark: if folded { proofs_mark(views.iter().filter_map(|view| view.result.as_ref()).filter_map(|result| result.build_code)) } else { String::new() },
         folded,
         fold_reason,
         locations,
@@ -503,10 +587,12 @@ pub fn ordered_groups(ctx: &Ctx, review: &ReviewFile) -> Vec<GroupSummary> {
     for summary in &mut summaries {
         summary.depends_on = deps.get(&summary.id).map(|set| set.iter().cloned().collect()).unwrap_or_default();
     }
-    // Priority: the highest risk first, then the order of the change set. A group comes only
-    // after all the groups that it depends on. In a cycle, the priority decides.
+    // Priority: a group that changes build code first (design 28.3), then the highest risk,
+    // then the order of the change set. A group comes only after all the groups that it
+    // depends on. In a cycle, the priority decides.
+    let code: Vec<bool> = ctx.groups.iter().map(|group| group_facts(ctx, group).iter().any(|fact| fact.build_code_change)).collect();
     let mut priority: Vec<usize> = (0..summaries.len()).collect();
-    priority.sort_by(|a, b| summaries[*b].risk_score.cmp(&summaries[*a].risk_score).then(a.cmp(b)));
+    priority.sort_by(|a, b| code[*b].cmp(&code[*a]).then(summaries[*b].risk_score.cmp(&summaries[*a].risk_score)).then(a.cmp(b)));
     let mut placed: Vec<usize> = Vec::new();
     let mut done: BTreeSet<String> = BTreeSet::new();
     while placed.len() < summaries.len() {
@@ -554,10 +640,13 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
         3..=4 => 2,
         _ => 3,
     };
+    let kind = computed_kind(ctx, group, &claims);
+    let mark = proofs_mark(group_facts(ctx, group).iter().filter_map(|fact| fact.build_code).chain(claims.iter().filter_map(|claim| ctx.results.get(&claim.id)).filter_map(|result| result.build_code)));
     GroupSummary {
         id: group.id.clone(),
         title: group.title.clone(),
-        kind: computed_kind(ctx, group, &claims),
+        kind_mark: if matches!(kind, GroupKind::Refactor | GroupKind::Rename | GroupKind::Move) { mark.clone() } else { String::new() },
+        kind,
         why: group.why.clone(),
         steps: group.steps.clone(),
         risk,
@@ -566,6 +655,7 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
         depends_on: Vec::new(),
         // A4: a group is all neutral only if each claim is proved neutral and each fact of its
         // steps is "neutral (proved)". A pending fact is not neutral.
+        mark,
         all_neutral: {
             let facts = group_facts(ctx, group);
             (!claims.is_empty() || !facts.is_empty()) && uncovered.is_empty() && claims.iter().all(|claim| ctx.is_proved_neutral(claim)) && facts.iter().all(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight)

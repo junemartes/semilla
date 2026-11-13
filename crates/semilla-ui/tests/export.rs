@@ -28,6 +28,7 @@ fn empty_data() -> UiData {
             label: String::new(),
             status: Status::Same,
             class: None,
+            build_code: None,
             claims: Vec::new(),
             diff: None,
             steps: Vec::new(),

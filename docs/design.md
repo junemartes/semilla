@@ -1844,7 +1844,7 @@ Status: rules of the user (the brief of batch 5h). Claude decided the details th
 4. A result for a reviewer is each output of `review`, `ui`, `load`, `status <commit>`, and `verify`.
 5. A git note and a step ref are claims. Semilla computes each fact and each proof again.
 
-**Invariant I5.** No result for a reviewer depends on a file of the repository folder that is not a git object. A result comes only from git objects that Semilla reads as data, and from computation by tools outside the repository folder.
+**Invariant I5.** No result for a reviewer depends on the content of a file of the repository folder that is not a git object. The existence of a path is a limit that stays (27.12). A result comes only from git objects that Semilla reads as data, and from computation by tools outside the repository folder.
 
 ### 27.2 What a reviewer command reads and runs (A1)
 
@@ -1867,11 +1867,11 @@ The search order of the solver: `SEMILLA_Z3`; a `z3` next to the Semilla binary 
 ### 27.3 The cache folder (A2)
 
 1. The folder is `$SEMILLA_CACHE_DIR`, else `$XDG_CACHE_HOME/semilla`, else `~/.cache/semilla`. Each repository has one folder there. Its name is a hash of the absolute path of the repository.
-2. The content: `snapshots/<tree>`, `mir/<tree>/…`, `target/<name>`, `build/<name>`, `build/<name>-records`, `reports/<key>.json`, `queue/`, `worker.log`, `worker.lock`, `review.json`, and `tmp/`.
+2. The content: `snapshots/<tree>`, the folder sets `shared/<key>/` and `build-code/<key>/` (28.9; each has `mir/<tree>/…`, `target/<name>`, `build/<name>`, and `build/<name>-records`), `host/`, `reports/<key>.json`, `queue/`, `worker.log`, `worker.lock`, `review.json`, and `tmp/`.
 3. If Semilla cannot write the folder, it uses a temporary folder (no cache), and one note on stderr says so.
 4. `--fresh` (a global option) reads no cache: Semilla computes each record again in a temporary folder and removes the folder at the end. Use it when the agent could write outside the repository folder.
 5. `tag` stores its result in `reports/`. So `status <commit>` right after `tag` prints the result at once, with no new check. A stored result has a key of the tools (the Semilla binary, the driver, the solver): a result of other tools is not used.
-6. A record of the MIR cache is complete only with its `.complete` file. A record of a build with no sandbox has the file `.no-sandbox` with the cause.
+6. A record of the MIR cache is complete only with its `.complete` file. A record of a build with a missing limit of the sandbox has the file `.no-sandbox` with the line that names each missing limit.
 
 ### 27.4 Git reads data only (A3)
 
@@ -1892,13 +1892,15 @@ The search order of the solver: `SEMILLA_Z3`; a `z3` next to the Semilla binary 
 6. The allow list of files (`*.md`, `*.txt`, …) applies only to a file that no target, no module, and no build input names.
 7. If `cargo metadata` fails, the check stops with the error. Decision: no fallback to the manual discovery for a result. The index of the working tree (`semilla index`) keeps the manual discovery.
 
-### 27.6 The sandbox of a check build (A5)
+### 27.6 The sandbox of a check build (A5; batch 5v)
 
-1. Each `cargo` build of a check runs in a Landlock sandbox (`crates/semilla-normal/src/sandbox.rs`). The sandbox limits only writes. It needs Landlock version 3 (Linux 6.2), because that version can stop a truncate.
-2. The writable paths: the cargo target folder of the build (`<cache>/target/<name>`, with its `tmp/` as `TMPDIR`), the folder of the MIR records (`<cache>/build/<name>-records`), `/dev/null`, and the `Cargo.lock` of the build folder only when the tree has none.
-3. The cargo home folder is read-only: the smallest set of writable paths there is the empty set. So no download works in the sandbox. A dependency that is not in the cargo cache stops the build, and the error gives the hint.
-4. With no sandbox (no Landlock, another system, or `SEMILLA_NO_SANDBOX`), the build runs, and each result has the line "the build ran with no sandbox: a build script or a proc macro of this change set can change the result", with the cause. The MIR records keep the mark, so a later result that uses them has the line too.
-5. Limits. (a) The driver writes the MIR records in the sandbox, so build code of the change set can write a record of its own build. (b) The target folder and the records folder are for all trees of a repository, so build code of one tree can write data that a later check of another tree reads. Each change of a build script has a spotlight. A change of a proc macro of the workspace is a fact of its body, and a new dependency has a spotlight. So the reviewer sees the code that can do this. `--fresh` uses no data of an earlier build. A separate folder for each tree, or a record that the driver gives to Semilla through a pipe, closes the limit; it is not done.
+1. Each command of a check build runs in the sandbox (`crates/semilla-normal/src/sandbox.rs`): `cargo check`, `cargo metadata`, the MIR driver, `rustc`, each build script, each proc macro, and each child process. The sandbox has three limits: the write limit, the read limit (27.12), and the network limit (27.13). A process cannot remove a limit.
+2. The write limit and the read limit use Landlock. The write limit needs Landlock version 3 (Linux 6.2), because that version can stop a truncate. The network limit uses a seccomp filter. No limit needs a special right.
+3. The writable paths: the cargo target folder of the build (`<folder set>/target/<name>`, with its `tmp/` as `HOME` and `TMPDIR`), the folder of the MIR records (`<folder set>/build/<name>-records`), `/dev/null`, and the `Cargo.lock` of the build folder only when the tree has none.
+4. The cargo home folder is read-only: the smallest set of writable paths there is the empty set. So no download works in the sandbox. A dependency that is not in the cargo cache stops the build, and the error gives the hint.
+5. A limit can be missing: no Landlock, a different operating system, a kernel with no seccomp filter, or `SEMILLA_NO_SANDBOX`. Then the build of an agent command runs, and each result has the line `the build ran with no sandbox: the write limit, the read limit, and the network limit are missing (<cause>). A build script or a proc macro of this change set can change the result`. The line names each missing limit; with one or two missing limits it starts with `the build ran with a partial sandbox`. The MIR records keep the line, so a later result that uses them has the line too. A reviewer command follows 28.6.
+6. A sandbox that the machine can give, and that fails to start, stops the build. A build never runs with fewer limits than the output says.
+7. Limits that stay. (a) The driver writes the MIR records in the sandbox, so build code of the change set can write a record of its own build. Sections 28.8 and 28.9 limit this to the units of the same build and to builds with the same build code. (e) A build can test if a path exists and can read its size and its times (27.12). (b) A build can send a signal to a process of the user: a limit of that needs Landlock version 6. (c) A build can measure time and use the processor, so a covert channel through time stays. (d) A build reads the registry and the git folders of the cargo home. Semilla trusts their content.
 
 ### 27.7 Facts and spotlights (B1 to B4)
 
@@ -1949,9 +1951,87 @@ Status: rules of the user (the brief of batch 5k). Claude decided the details.
 
 The words of the agent are in quote marks in each output, with an escape for a quote mark in the words. The Markdown report, the HTML report, and the UI have one line near the top: "Text in quote marks is the text of the agent. Semilla does not check it."
 
+### 27.10 Batch 5v: the cause
+
+After batch 5m, a reviewer command runs build code of the agent with no approval. The sandbox is the only protection, and it had only the write limit. Probes on commit `56deba6` showed four defects:
+
+1. **A false `neutral` from the environment, with no build code.** A body has `match option_env!("PROBE_ENV") { Some(_) => a, None => a + 1 }`. The step changes the body to `a`. With `PROBE_ENV=1` in the environment of `semilla step`, the result was `neutral (proved N4)`. The cache gave the same proof to `status HEAD` with no variable. Two causes: the environment of the command reached the compiler (27.11), and the opaque rule did not stop the proof (27.14).
+2. **A false `neutral` from the environment through a build script.** A build script of the base writes a different file if `PROBE_ENV` is set. The cause is the same environment (27.11).
+3. **Build code read each file of the machine**: an untracked file of the repository folder (invariant I5 was false), `.git/config`, and the home folder (27.12).
+4. **Build code used the network.** A UDP packet of a build script arrived at a listener of the machine. A TCP connection did not: the Landlock rules of Semilla name no TCP port, and Landlock version 4 then stops each TCP `connect` and `bind`. Landlock has no rule for UDP (27.13).
+
+Each decision of 27.11 to 27.14 and of 28.6 to 28.10 is **Decided by Claude** (batch 5v).
+
+### 27.11 The fixed environment of a build (batch 5v, part A)
+
+**Decided by Claude.** Each command that Semilla starts for a build gets a new environment. The environment starts empty. Semilla sets each variable of this list, and no other variable of the Semilla command goes to the build:
+
+| Variable | Value | Why it cannot give a false result |
+|---|---|---|
+| `PATH` | `<toolchain>/bin:/usr/local/bin:/usr/bin:/bin` | The value is fixed. No folder of the repository is in it. |
+| `LD_LIBRARY_PATH` | `<toolchain>/lib` | The value is fixed. The driver needs it. |
+| `CARGO_HOME` | the cargo home of the user | The path is part of `settings_key`. |
+| `HOME`, `TMPDIR` | `<target folder>/tmp` | Semilla decides the value. The folder is a part of the folder set (28.9). |
+| `RUSTC_WORKSPACE_WRAPPER` | the MIR driver | The state of the driver binary is part of `settings_key`. |
+| `SEMILLA_MIR_LEVEL`, `SEMILLA_MIR_OUT`, `SEMILLA_MIR_RUN` | the level, the records folder, the run mark | Semilla sets them for the driver. A value of the command is ignored. |
+
+`RUSTUP_HOME`, `HOME`, and `SEMILLA_TOOLCHAIN` of the command select the toolchain folder. They do not go to the build. The name of the toolchain, its folder, and the state of its `bin/rustc` are part of `settings_key`. Semilla starts `cargo` and `rustc` from the toolchain folder with their full paths, so no `rustup` proxy runs and `RUSTUP_TOOLCHAIN` is not necessary. Cargo sets its own variables for a build script and for `rustc` (`OUT_DIR`, `CARGO_PKG_NAME`, `TARGET`): these come from the tree and the build folder.
+
+Each `SEMILLA_` variable that Semilla reads:
+
+| Variable | Effect | Rule |
+|---|---|---|
+| `SEMILLA_CACHE_DIR` | selects the cache folder | It cannot change a result: each record of a cache folder has its keys. A reviewer uses the cache folder of the reviewer. |
+| `SEMILLA_MIR_DRIVER` | selects the driver binary | Part of `settings_key` and `tools_key` (the path, the size, the time). The output has a warning if the binary is in the repository folder. |
+| `SEMILLA_TOOLCHAIN` | selects the toolchain | Part of `settings_key`. |
+| `SEMILLA_Z3` | selects the solver | Part of `tools_key`. |
+| `SEMILLA_NO_SANDBOX` | removes the three limits | Part of `settings_key`, so also of `tools_key`. Each output names the missing limits. A reviewer command does not run changed build code (28.6). |
+| `SEMILLA_NO_BODIES` | no phase 2 | The output says that the phase is `syntax`: no proof shows. |
+| `SEMILLA_NO_WORKER`, `SEMILLA_TIMING` | no background worker; time lines on standard error | They cannot change a result. |
+| `SEMILLA_MIR_LEVEL`, `SEMILLA_MIR_OUT`, `SEMILLA_MIR_RUN` | the input of the driver | Semilla sets them for each build. A value of the command is ignored. |
+| `SEMILLA_TRAIT_TABLE` | the driver prints the trait table | Only a test of the Semilla workspace uses it. No command reads its result. |
+| `SEMILLA_BIN_DIR` | selects the binaries of the mutant harness | Semilla does not read it. |
+
+### 27.12 The read limit (batch 5v, part C)
+
+**Decided by Claude.** A build in the sandbox reads only these paths:
+
+- the build folder of this build (the files of the tree), its target folder, and its records folder;
+- the toolchain folder;
+- `<cargo home>/registry` and `<cargo home>/git`;
+- each cargo configuration file that exists outside the tree: `.cargo/config.toml` and `.cargo/config` of each parent folder of the build folder, and `config.toml` and `config` of the cargo home. `settings_key` has the path and the content of each of them. A build reads no other cargo configuration file outside the tree;
+- the MIR driver binary;
+- the system paths of the compiler and the linker: `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc/ld.so.cache`, `/dev/urandom`, `/dev/random`, `/dev/zero`, and `/dev/null`.
+
+A build does not read: the repository folder (the working tree, `.git`, `.semilla`), the home folder outside this list, the credentials file of cargo, a different cache folder, a different folder set, `/tmp`, `/sys`, and `/proc`. A build does not need `/proc`: the fixture, the registry crates of the tests, and the crates of the mutant harness build with no read of it. So no build reads the environment of a process there.
+
+**The limit of the read limit. Decided by Claude.** Landlock has no rule for the system calls that read the data about a path (`stat`, `access`, `readlink`). So a build can test if a path of the machine exists, and it can read the size and the times of that path. It cannot open the file, and it cannot list a folder. A probe of the coordinator shows the effect: a build script of the base tests if an untracked file of the repository folder exists, by its absolute path, and writes different code for each case. The proof is then true only on a machine that has the file. Invariant I5 thus holds for the content of a file, not for its existence. The protection is the reading of the build code: the test is in a build script or a proc macro, and the base line (28) or the mark names that code. A full fix needs a mount namespace, and that needs a user namespace. Many systems do not permit a user namespace for a plain user (this machine does not). This is future work.
+
+A source file can name a file with an absolute path (`include_str!("/…/notes.txt")`, `#[path = "/…"]`). The build fails, and the error says: ``The file `…` is outside the build folder. A check build reads only the files of the tree, the toolchain, and the cargo registry.``
+
+### 27.13 The network limit (batch 5v, part D)
+
+**Decided by Claude.** The method is a seccomp filter that the child process loads before `cargo` starts. Each process of the build has the filter. The filter returns the error `EPERM` for these system calls:
+
+- `socket`, `connect`, `bind`, `listen`, `accept`, `accept4`: no TCP, no UDP, no raw socket, no netlink, and no UNIX socket with a path name or an abstract name;
+- `io_uring_setup`, `io_uring_enter`, `io_uring_register`: this interface does the calls above with no system call that a filter sees;
+- `shmget`, `msgget`, `semget`, `mq_open`, `add_key`, `request_key`, `keyctl`, `ptrace`, `process_vm_writev`: these reach a process of the user through a kernel object that has no file path;
+- `setsid`, `setpgid`: these move a process out of the process group of the build (28.10).
+
+`socketpair` continues only for the family `AF_UNIX`: the Rust standard library uses such a pair to start a process. The pair has no name, so it connects only processes of the build. The filter checks the architecture of each call: a call of a different architecture (the 32-bit entry and the x32 numbers on `x86_64`) gets `EPERM`. Semilla supports `x86_64` and `aarch64`; on a different architecture the network limit is missing, and the output says so. The child process also closes each open file of Semilla except the standard streams, so a build gets no socket of Semilla.
+
+### 27.14 A macro whose value the tree does not decide (batch 5v, part B)
+
+**Decided by Claude.** The value of `env!` and `option_env!` comes from the environment of the compiler. The values of `file!`, `line!`, `column!`, `module_path!`, `include_str!`, and `include_bytes!` come from the position of the code or from a file. `cfg!` of a condition that is not covered comes from the build configuration. A proof must not use such a value.
+
+1. The causes of defect 1. (a) The environment (27.11). (b) `option_env!` expands to a constant of the type `Option<&str>`. In MIR, the test of the variant (`match`, `if let`, `.is_some()`) reads the discriminant of an aggregate, and the opaque rule examined only constant operands. (c) The literal of `line!`, `column!`, and `file!` has the span of the macro call with no expansion data, so the rule did not see the macro.
+2. The rule now: each value of such a macro is an opaque value, also the variant of the `Option` of `option_env!`, also through a `const`, a `static`, or a function of the crate. A body that uses the value gets no proof. No name of `env!` or `option_env!` is free: with the fixed environment, a name that cargo sets from the tree still depends on the package, and a list of free names gives no proof that a user needs.
+3. `include!(concat!(env!("OUT_DIR"), "/x.rs"))` continues to work: the value selects a file at build time, and no body reads it.
+4. The outputs are those of a `cfg` condition that is not covered (8.2): the fact stays `to read`, and a `static` with such a value gets the build configuration spotlight. No new output form exists.
+
 ## 28. Batch 5i/5j: the build code rule
 
-Status: rules of the user (the briefs of batch 5i and 5j). Claude decided the details that the text marks as "decided by Claude".
+Status: rules of the user (the briefs of batch 5i, 5j, and 5m). Batch 5m changed the rule of 28.3 from "a reviewer command does not run changed build code" to "run and mark". Claude decided the details that the text marks as "decided by Claude".
 
 ### 28.1 The term
 
@@ -1985,27 +2065,110 @@ The assumption of rule (d): a file that no build code reads, and that no target 
 
 A trusted base (decided by Claude): the parent tree of the checked commit, the tree of a commit in the last 200 commits of `HEAD`, or the empty tree. Else each tree of the change set counts as a tree with changed build code. A limit that stays: a commit with bad build code that the agent puts below its change set is a trusted base; the base notice shows a commit with no check.
 
-### 28.3 Invariant I6, and the commands that run build code (A2, A3)
+### 28.3 The rule "run and mark", and invariant I6 (batch 5m)
 
-**Invariant I6.** No reviewer command runs build code that the change set changes, unless the reviewer allows it. No result without that permission shows a proof that used such build code.
+**Decided by the user.**
 
-- A tree with changed build code never uses the shared target folder or the shared records folder. It uses a separate folder set for the change set (the key is the base tree, with a mark). The sandbox write set of such a build is only that separate folder set. The record has a mark, and a stored result that used such a record has the mark too.
-- The agent commands (`step`, `tag`, `status` with no commit, the replay, `index`) run the changed build code in the sandbox, in the separate folders. The result is complete, and it has the line of A4.
-- The reviewer commands (`review`, `ui`, `load`, `status <commit>`, `verify`) do not build a tree with changed build code, and they read no marked record and no marked result. This is the default.
-- The option `--trust-build-code` (on `status`, `review`, `ui`, `verify`) allows it. Then the reviewer command builds the trees (or reads the marked records), and the result is complete, with the line of A4.
-- At the end of each check build, Semilla stops the process group of the build (the second barrier). The separate folders and the record marks are the main defense (decided by Claude: the process group kill drops the subreaper scan of batch 5h, which broke the parallel level builds).
+**Invariant I6.** No output shows a proof that used changed build code without the mark.
 
-### 28.4 The outputs (A4)
+1. Each command runs the build code of each step. The agent commands and the reviewer commands run changed build code in the sandbox, in step order. The default needs no option and no approval. The rule holds for each build configuration of the list (8.2): the build code of a step runs for each configuration, and the step has one mark.
+2. A step can mix build code and other code. `step` does not reject it. The agent guide advises a separate step. This is advice only.
+3. The step that changes build code shows that change first. In each reviewer output, the build code change of a step is its own section before the other facts of the step, with its spotlight and its diff.
+4. The result line keeps ` · build code changed from step N`.
+5. The mark. Each `proved` fact and each verified claim from step N on has the mark `(with the build code of step N)`. Each output form shows it. The counts say how many proofs have the mark.
+6. The careful option `--no-build-code` (on `status`, `review`, `ui`, `verify`). The command does not build a tree with changed build code, and it reads no marked record and no marked result. The steps from step N on are `not checked`, the result is `not complete`, and the exit code is 1. The option `--trust-build-code` is gone.
+7. No approval and no stored hash. Semilla has no state "the reviewer saw this build code".
 
-1. `step`, when the step changes build code, or an earlier step did: the full line in the step of the change (`! build code changed in step 3: crates/core/build.rs. It runs during the check and can change each result from step 3 on. A reviewer command checks these steps only with --trust-build-code.`), a short form in a later step.
+Why (the argument of the user). The steps have an order. So the tool can run the build code of an earlier step for the later steps, and it can say which results depend on it. A manual approval adds work for the reviewer. It adds no protection that the mark and the first-place section do not give: the sandbox already runs the same code for the agent commands, and the approval was one option that the reviewer gave without a check by the tool.
+
+The protection is the sandbox, not the rule. The sandbox stops a write outside the build folders. It does not make a proof independent of the build code: a build script can change each proof from its step on. The mark says so, and the reviewer reads the build code change first.
+
+What stays from batch 5j:
+
+- A tree with changed build code never uses the shared target folder or the shared records folder. It uses a separate folder set (the key was the base tree; since batch 5v the key is the build code of the tree, 28.9). The sandbox write set of such a build is only that separate folder set. The record has a mark, and a stored result that used such a record has the mark too (`reports/<key>.build-code.json`).
+- At the end of each check build, Semilla stops the process group of the build (the second barrier).
+- Rule (d) of 28.2: in a tree that has build code, each changed file outside the neutral allow list counts as changed build code. Its cost is now only the mark, not a stop.
+
+**Decided by Claude.**
+
+- Two modes: the default (run) and `--no-build-code`. The background queue and the stored results keep the two modes apart. A default command reads the marked result first.
+- The old option is a hidden option. The command prints one line on stderr and continues with the default: `The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.` The two options together are an error.
+- The mark is data, not only text: the fact, the claim result, and the node of the change tree each have the step of the build code. Each output form reads this field.
+- The places of the mark: the class label of a proved fact, the equal sites list, the note of a partial proof, each verified claim, the counts of proved facts and of verified and partial claims, "all neutral", the fold of a subgroup (`proved`), `computed neutral`, the group kind (`refactor`, `rename`, `move`), each `neutral` node of the change tree, and the `neutral` count of each parent node.
+- The count text is ` (M with the build code of step N)`. With more than one build code change in the change set, it is ` (M with changed build code)`.
+- A build code change fact is a fact whose file is a build code part of the step. Each such fact is in the section of rule 3. A code fact in a file of a host package is in the section too.
+- In the reports and the UI, the group with a build code change is the first group.
+- A machine with no sandbox, or with a limit of the sandbox missing. A reviewer command (each command that is not `step`, `undo`, `tag`, the replay, `index`, or `status` with no commit; the MCP tools `verify` and `results` with a commit) does not run changed build code there. Its mode becomes `--no-build-code`, and one line says why. Cause: on such a machine the sandbox gives no protection, and before batch 5m the reviewer had the protection of the old default. Batch 5v changed the exception (28.6): the variable `SEMILLA_NO_SANDBOX` does not make the command run the build code, because the agent can control the environment of a command. The option `--build-code-no-sandbox` does.
+- The test of I6 (`each_command_runs_changed_build_code_and_marks_each_proof`) reads each line of each text form. A line with the word `proved`, `verified`, or `neutral` must have the mark or belong to a step before the change. For the UI data, each object with the class `neutral` or the status `verified` of a later step must have a mark field. A second test reads the page script for each mark field. Limit: no test runs the page script in a browser.
+
+### 28.4 The outputs
+
+1. `step`, when the step changes build code, or an earlier step did: the full line in the step of the change (`! build code changed in step 3: crates/core/build.rs. It runs in the sandbox during each check, and it can change each result from step 3 on. Each proof that depends on it has the mark (with the build code of step 3).`), a short form in a later step.
 2. `tag`: the result line gets ` · build code changed from step 3`.
-3. A reviewer command with no permission: the steps before the first change have the full result. Each later step shows its phase 1 facts with the class `not checked` (never `neutral`), no proof, no affected bodies, and no verified claim (a claim shows as `not checked`). The facts of the build code change show with their spotlight, their reason, and their diff. The result word is `not complete`: `result: not complete · steps 0–2: … · steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). Read that change. Then run the command again with --trust-build-code.`. The Markdown report, the HTML report, and the UI show the same text at the top.
-4. A reviewer command with `--trust-build-code`: the complete result, and the line at the top of each output: `! this result ran the build code that the change set changes (--trust-build-code): crates/core/build.rs (step 3). That code can change each result from step 3 on.`.
-5. A change of a file of a host package gets the spotlight "build code", as a build script does, and it needs a reason.
+3. Each reviewer output starts with the line `! build code changed in step 3 (crates/core/build.rs). The check ran it in the sandbox. It can change each result from step 3 on. Read that change first. Each proof that depends on it has the mark (with the build code of step 3).`
+4. The section of the build code change. The terminal and the MCP tools: `! build code changed in this step; read this change first`, as the first line of the step. The reports and the UI: `Build code changes (N): read these changes first`, before `Derived facts`.
+5. The mark: `◆ f1 derived: … [neutral (proved)] (with the build code of step 3)` and `✓ c2 verified (mir) (with the build code of step 3)`. The result line: `4 facts: 2 proved neutral (1 with the build code of step 3), … · 2 claims: 2 verified (1 with the build code of step 3)`.
+6. With `--no-build-code`: the steps before the first change have the full result. Each later step shows its phase 1 facts with the class `not checked` (never `neutral`), no proof, no affected bodies, and no verified claim. The facts of the build code change show with their spotlight, their reason, and their diff. The result word is `not complete`: `result: not complete · steps 0–2: … · steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete).` The Markdown report, the HTML report, and the UI show the same text at the top. The exit code is 1 (like a pending result), for `status`, `review --md/--html`, and `verify`.
+7. A change of a file of a host package gets the spotlight "build code", as a build script does, and it needs a reason.
 
-The exit code of `not complete` is 1 (like a pending result), for `status`, `review --md/--html`, and `verify`.
+Case 7 (build code changes in step 1 and goes back in step 3): steps 1, 2, and 3 have the mark. The old side of step 3 has changed build code, so a proof of step 3 depends on it. Step 4 and the later steps have two trees with the build code of the base: no mark. The result line says ` · build code changed in steps 1–3`.
 
-Case 7 (build code changes in step 1 and goes back in step 3): a reviewer command with no permission does not check steps 1, 2, and 3. The old side of step 3 has changed build code, so step 3 is not sound without the permission. Step 4 and the later steps have two trees with the build code of the base: the full result. No span check in this batch.
+`status <commit>` right after `tag` prints the stored result at once, also for a change set with build code (27.3, item 5). The first line of `status` comes from the result that the command prints: a result that is there is `ready`. So a final result never shows together with the line `phase 2 runs in the background` or `the check runs now`.
+
+### 28.5 The base line (batch 5m, rule 9)
+
+The gap (**found by the user**): change set 1 adds a build script and is accepted. Change set 2 changes other code. The reviewer of change set 2 gets a full result with no mark, but each proof of change set 2 ran the build script of change set 1.
+
+The fix (**decided by the user**): when the base of a change set has build code that a recent commit added or changed, the output names it. No state is stored. The line is in the header of each reviewer output, next to the base line of 25.2. It is information for the reviewer: no approval follows from it.
+
+The details (**decided by Claude**):
+
+- The bound is 20 commits (first parents) before the change set. Semilla change sets and commits with no check count the same.
+- Semilla does one build code test (28.2) between the tree of the base and the tree of the commit 20 commits before it. Then git names the commits that changed these files (`git log --first-parent -- <files>`). This costs one test, not 20, and the cache keeps the result by the two trees. A change that a later commit reverted in the bound gives no line: the base does not have it.
+- The first commit of the history is the start of the project, not a change. Semilla does not examine it.
+- The line: ``! the base has build code that a recent commit changed: `abc1234` (crates/core/build.rs). Each proof of this change set ran this code. No mark shows this, because the change is before the base.`` The line shows at most three commits and three files for each commit, and the number of the others.
+- When the history has more commits than the bound, the output says so. With a finding: `Semilla examined only the 20 commits before this change set.` With no finding: `base build code: no change in the 20 commits before this change set (Semilla examines no more commits)`.
+- If the build code test fails for the old tree (for example, the tree is not a cargo workspace), the line says that Semilla cannot compare the trees.
+- The outputs: `status`, `tag`, the MCP tool `results`, the Markdown report, the HTML report, and the UI. `step` does not print it.
+
+
+### 28.6 A reviewer command and the sandbox (batch 5v, part D)
+
+**Decided by Claude.**
+
+1. A reviewer command (`status <commit>`, `review`, `verify`, `load`, `ui`) runs changed build code with no option only if the sandbox has its three limits.
+2. If a limit is missing, the reviewer command does not run changed build code. The result is that of `--no-build-code`: `not checked` from the step of the change on, the result word `not complete`, and the exit code 1. Standard error has the line `The build sandbox is not complete: <limits> are missing (<cause>). The command does not run changed build code. To run it with this sandbox, use the option --build-code-no-sandbox.`
+3. The option `--build-code-no-sandbox` runs the changed build code with the limits that the machine has. Each output then has the line of 27.6, item 5. A variable does not have this effect: the agent can control the environment of a command. The MCP tools have no such option.
+4. An agent command (`step`, `status` with no commit, `tag`) continues to run, and prints the line of 27.6, item 5.
+5. `SEMILLA_NO_SANDBOX` in an agent command gives no record that a reviewer command with the sandbox reads. The state of the sandbox is part of `settings_key`. The folder name of the records cache has `settings_key`, and `tools_key` of a stored report has it too. A reviewer command with the sandbox computes each record and each report again.
+
+### 28.7 The cost of the folder sets (batch 5v, part F)
+
+A first build of a new build code state is a full build of the workspace and its dependencies: no target folder of a different state helps. A change set that changes only the Rust code of targets pays this one time for each base with new build code. A change of a manifest, a lock file, or a file that is not Rust code in a base commit gives a new shared folder set. Semilla removes no old folder set: the disk use grows with each build code state. **Decided by Claude**: correct separation first; a cleanup command is future work.
+
+Measured in batch 5v (debug binaries, one command at a time). The fixture has no dependency: each step takes 0.6 s to 1.4 s, also with a new state. The crate bs58: the first step of a base takes 45 s, a step in a known state takes 4 s, and the first build script takes 39 s. A second build script on the same base costs 50 s for the step and the step after it; with one marked set for each base it cost 8 s. The cache folder of this run has 3.3 GB for three states (2.3 GB before).
+
+### 28.8 The records cache gets only the records of the units of a build (batch 5v, part F)
+
+**Decided by Claude.**
+
+1. The driver writes one record file for each unit of a build: `<crate>.<kind>.<hash>.jsonl`. Semilla computes the file name of each unit from the unit messages of cargo. The driver writes no record for a build script, and Semilla accepts no file name for one. A unit of a test build has two possible names: the kind is `test` with a test harness, and the crate types with `harness = false`. The messages of cargo do not say which one applies. If the folder has the two files for one unit, a program of the build made one of them: Semilla uses none of them, and the line of item 3 names the two.
+2. After a build, Semilla copies only these files to the records cache of the tree. It removes each other file of the records folder.
+3. If a removed file is not a record of an earlier build of the same folder, a program of the build made it. The output of each command that uses the records names the file: `! the build left a file in the records folder that is not a record of a build unit: …. Semilla does not use it`. A hidden character of the name shows as an escape.
+4. The limit of 27.6, item 7 (a) stays: build code can write the record file of a unit of its own build. Such build code is build code of the base, or it has the mark of 28.3.
+
+### 28.9 A folder set serves one build code state (batch 5v, part F)
+
+**Decided by Claude.** A folder set has the build folders, the target folders, the records folders, and the records cache (`build/`, `target/`, `mir/`). A build can write its target folder and its records folder, and a file stays there. So two builds share a folder set only if they run the same build code.
+
+1. **The shared folder set** serves the trees with the build code of a trusted base: `<cache>/shared/<digest>`. The digest is SHA-256 over each entry of the base tree (the path, the mode, the content hash) that rule (a) of 28.2 does not permit to change: each entry that is not a plain Rust source file of a target outside the host packages. Two base commits share the set only if they differ in such Rust files only. If Semilla cannot read the workspace or the dependency graph of the base, the key is `tree-<base tree>`.
+2. **The marked folder set** serves the trees with changed build code: `<cache>/build-code/<key>`. The key is SHA-256 over the base tree, each changed part of 28.2 (the path, the cause, and the entry of the path in the tree), and each manifest and lock file of the tree. The test of 28.2 names each changed build code file as a part, so two trees with one key have the same build code. The key is `tree-<tree>` if the base is not trusted, or if the test stopped at a configuration file (the list of the parts is then not complete).
+3. A step that `semilla undo` removes, a different change set on the same base, and a base commit that is no longer in the history leave their files in their own folder set. A build of a different build code state does not read that set: the read limit (27.12) permits only the folders of the build.
+4. A tree with no build code state is never built.
+
+### 28.10 No process of a build continues after the build (batch 5v, part F)
+
+**Decided by Claude.** Each build command starts in its own process group. When the command ends, Semilla sends `SIGKILL` to the group. The seccomp filter stops `setsid` and `setpgid`, so a process of the build cannot leave the group. A test starts two programs from a build script (one with `setsid`); no one of them runs after the step.
 
 ## 29. Batch 5n: the honest workflow on real crates
 

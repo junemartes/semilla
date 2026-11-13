@@ -33,8 +33,9 @@ pub struct Job {
     /// The change set of a session job. A commit job reads it from the commit note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changeset: Option<ChangeSet>,
-    /// Who asked for the check (design 28). A job of a reviewer command with no permission runs
-    /// no build code that the change set changes. An old job file has no mode: it is such a job.
+    /// The mode of the command that asked for the check (design 28). A job of a command with
+    /// `--no-build-code` runs no build code that the change set changes. A job file with no
+    /// mode has the default mode.
     #[serde(default)]
     pub mode: crate::buildcode::Mode,
 }
@@ -69,8 +70,8 @@ fn queue_dir(app: &App) -> PathBuf {
 }
 
 /// The file of a stored result. A result that ran build code that the change set changes has
-/// the mark `build-code` in its name (design 28): a reviewer command with no permission never
-/// reads that file.
+/// the mark `build-code` in its name (design 28): a command with `--no-build-code` never reads
+/// that file.
 fn report_file(app: &App, key: &str, marked: bool) -> PathBuf {
     app.repo.cache_dir().join("reports").join(format!("{key}{}.json", if marked { ".build-code" } else { "" }))
 }
@@ -148,7 +149,7 @@ pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
     let mode = app.mode;
     loop {
         let Some((path, job)) = jobs(app).into_iter().next() else { break };
-        // The job has the permission of the command that asked for it, not of this process.
+        // The job has the mode of the command that asked for it, not of this process.
         app.mode = job.mode;
         // The change set of a commit must belong to the commit (a copied note does not).
         let set = match &job.changeset {
@@ -206,8 +207,9 @@ pub fn stored(app: &App, key: &str) -> Option<StoredReport> {
 /// The stored results of a key that the command can read, in the order of use.
 fn candidates(app: &App, key: &str) -> Vec<StoredReport> {
     let allowed = app.mode.runs_build_code();
-    // A command with the permission reads the marked result first. A plain result serves it only
-    // if that result is complete.
+    // A command that runs build code reads the marked result first. A plain result serves it
+    // only if that result is complete. A command with `--no-build-code` reads only the plain
+    // result.
     let files = if allowed { vec![true, false] } else { vec![false] };
     files.into_iter().filter_map(|marked| {
         let text = std::fs::read_to_string(report_file(app, key, marked)).ok()?;
@@ -220,7 +222,7 @@ fn candidates(app: &App, key: &str) -> Vec<StoredReport> {
         if key != "session" && (stored.key != key || app.repo.commit_tree(key).ok().as_deref() != Some(stored.tree.as_str())) {
             return None;
         }
-        // I6: the content decides, not only the file name.
+        // The content decides, not only the file name.
         if is_marked(&stored.report) != marked || (allowed && stored.report.not_complete()) {
             return None;
         }

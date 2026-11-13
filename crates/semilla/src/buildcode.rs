@@ -22,6 +22,11 @@ use serde::{Deserialize, Serialize};
 /// The cause of a changed file of a host package.
 pub const HOST_FILE: &str = "a file of a host package (a proc macro crate, or a crate that a proc macro crate or a build script uses)";
 
+/// The cause of a changed configuration file, and of a file that a configuration file names.
+/// With one of these parts, the test stops: the list of the parts is then not complete.
+const CONFIG_FILE: &str = "a cargo or rustup configuration file";
+const CONFIG_NAME: &str = "a configuration file of the tree has this file name";
+
 /// One changed part of the build code: the path, and why the path is build code.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Part {
@@ -279,9 +284,9 @@ pub fn changed_build_code(base: &Side, tree: &Side, full: &mut dyn FnMut(&Path) 
     let config_texts = texts(&configs);
     for path in &changed {
         if is_config(path) {
-            parts.push(Part::file(path, "a cargo or rustup configuration file"));
+            parts.push(Part::file(path, CONFIG_FILE));
         } else if names(&config_texts, path) {
-            parts.push(Part::other(path, "a configuration file of the tree has this file name"));
+            parts.push(Part::other(path, CONFIG_NAME));
         }
     }
     if !parts.is_empty() {
@@ -429,6 +434,53 @@ pub fn changed_build_code(base: &Side, tree: &Side, full: &mut dyn FnMut(&Path) 
     Ok(parts)
 }
 
+/// The digest of the build code state of a tree (design 28.9, batch 5v). The input is each
+/// entry of the tree (the path, the mode, and the content hash) that the test above does not
+/// permit to change with rule (a): each entry that is not a Rust source file of a target
+/// outside the host packages. The build scripts, the files of the host packages, the manifests,
+/// the lock file, the configuration files, and each other file are in the digest. Two trees
+/// with the same digest have the same build code.
+pub fn state_digest(side: &Side, host: &HostInfo) -> String {
+    let mut host_files: BTreeSet<String> = BTreeSet::new();
+    for root in &host.roots {
+        host_files.extend(semilla_syntax::load::module_files(side.dir, &side.dir.join(root)));
+    }
+    let mut text = String::from("build code state 1\n");
+    for (path, entry) in &side.ws.files {
+        let plain = entry.mode == "100644" || entry.mode == "100755";
+        let owned = path.ends_with(".rs") && (side.ws.parsed_files.contains(path) || side.ws.code_files.contains_key(path));
+        let script = side.ws.code_files.get(path).is_some_and(|code| code.is_build_script());
+        let of_host = host.package_of(path).is_some_and(|(_, is_host)| is_host) || host_files.contains(path);
+        if plain && owned && !script && !of_host {
+            continue;
+        }
+        text.push_str(&format!("{path}\0{}\0{}\n", entry.mode, entry.hash));
+    }
+    semilla_normal::hash::sha(&text)[..32].to_string()
+}
+
+/// The key of the folder set of a tree with changed build code (design 28.9, batch 5v). Two
+/// trees have the same key only if they have the same base tree, the same changed parts with
+/// the same content, and the same manifests and lock files. Each changed build code file is a
+/// part, so the two trees have the same build code. The key is the tree itself (`strict`) if
+/// the base is not trusted, if Semilla cannot read the entries of the tree, or if the test
+/// stopped at a configuration file: the list of the parts is then not complete.
+pub fn marked_key(base: &str, tree: &str, parts: &[Part], files: Option<&BTreeMap<String, semilla_syntax::load::FileEntry>>, strict: bool) -> String {
+    let files = match files {
+        Some(files) if !strict && !parts.iter().any(|part| part.why == CONFIG_FILE || part.why == CONFIG_NAME) => files,
+        _ => return format!("tree-{tree}"),
+    };
+    let entry = |path: &str| files.get(path).map(|entry| format!("{}\0{}", entry.mode, entry.hash)).unwrap_or_else(|| "-".to_string());
+    let mut text = format!("changed build code 1\n{base}\n");
+    for part in parts {
+        text.push_str(&format!("{}\0{}\0{}\n", part.path, part.why, entry(&part.path)));
+    }
+    for path in files.keys().filter(|path| is_manifest_or_lock(path)) {
+        text.push_str(&format!("{path}\0{}\n", entry(path)));
+    }
+    semilla_normal::hash::sha(&text)[..32].to_string()
+}
+
 fn first_line(error: &anyhow::Error) -> String {
     let text = format!("{error:#}");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
@@ -448,35 +500,92 @@ fn feature_change(old: &[String], new: &[String]) -> String {
     added.into_iter().chain(removed).collect::<Vec<_>>().join(" ")
 }
 
-/// Who runs the command (design 28, invariant I6).
+/// What a command does with the build code that the change set changes (design 28).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    /// An agent command (`step`, `tag`, `status` with no commit, the replay). It runs the build
-    /// code that the change set changes, in the sandbox and in separate folders.
-    Agent,
-    /// A reviewer command with no permission (the default). It never runs build code that the
-    /// change set changes, and it reads no record and no result of such a run.
+    /// The default of each command. The command runs the changed build code in the sandbox and
+    /// in separate folders. Each proof that depends on it gets the mark (invariant I6).
     #[default]
-    Reviewer,
-    /// A reviewer command with `--trust-build-code`.
-    ReviewerTrust,
+    #[serde(alias = "agent", alias = "reviewer_trust")]
+    Run,
+    /// A command with `--no-build-code`. It never runs build code that the change set changes,
+    /// and it reads no record and no result of such a run.
+    #[serde(alias = "reviewer")]
+    NoBuildCode,
 }
 
 impl Mode {
     pub fn runs_build_code(self) -> bool {
-        self != Mode::Reviewer
+        self == Mode::Run
     }
 
     /// The suffix of a queue file of this mode. A job of one mode never replaces a job of
-    /// another mode.
+    /// the other mode.
     pub fn suffix(self) -> &'static str {
         match self {
-            Mode::Agent => ".agent",
-            Mode::Reviewer => "",
-            Mode::ReviewerTrust => ".trust",
+            Mode::Run => "",
+            Mode::NoBuildCode => ".no-build-code",
         }
     }
+}
+
+/// The bound of the base line (design 28.5): the number of commits before a change set that
+/// Semilla examines for a change of build code.
+pub const BASE_WALK: usize = 20;
+
+/// The line about the build code of the base (design 28.5). `commits` are the commits before the
+/// change set that changed build code, from the newest commit back, each with its files.
+/// `stopped` is true if the history has more commits than the bound. No line: no commit changed
+/// build code, and Semilla examined each commit after the first commit of the history.
+pub fn base_code_line(commits: &[(String, Vec<String>)], stopped: bool) -> Option<String> {
+    let list = |items: Vec<String>, sep: &str| {
+        let more = items.len().saturating_sub(3);
+        let mut text = items.into_iter().take(3).collect::<Vec<_>>().join(sep);
+        if more > 0 {
+            text.push_str(&format!("{sep}and {more} more"));
+        }
+        text
+    };
+    if commits.is_empty() {
+        return stopped.then(|| format!("base build code: no change in the {BASE_WALK} commits before this change set (Semilla examines no more commits)"));
+    }
+    let found = list(commits.iter().map(|(commit, files)| format!("`{commit}` ({})", list(files.clone(), ", "))).collect(), "; ");
+    let limit = if stopped { format!(" Semilla examined only the {BASE_WALK} commits before this change set.") } else { String::new() };
+    Some(format!("! the base has build code that a recent commit changed: {found}. Each proof of this change set ran this code. No mark shows this, because the change is before the base.{limit}"))
+}
+
+/// The option of a reviewer command that runs changed build code with a limit of the sandbox
+/// missing (design 28.2).
+pub const ANYWAY_OPTION: &str = "--build-code-no-sandbox";
+
+/// The mode of a reviewer command (design 28.2). The sandbox is the one protection for the
+/// default. A reviewer command runs the changed build code of a different person only with the
+/// full sandbox: the write limit, the read limit, and the network limit. With a limit missing
+/// (an old kernel, a different operating system, the variable `SEMILLA_NO_SANDBOX`), the mode is
+/// that of `--no-build-code`, and the line says why. The option [`ANYWAY_OPTION`] (`anyway`)
+/// runs the code with the limits that the machine has. A variable does not have that effect:
+/// the agent can control the environment of a command.
+pub fn sandbox_guard(mode: Mode, missing: Option<&semilla_normal::sandbox::Missing>, anyway: bool) -> (Mode, Option<String>) {
+    match missing {
+        Some(missing) if mode == Mode::Run && !anyway => {
+            let verb = if missing.limits.len() == 1 { "is" } else { "are" };
+            (
+                Mode::NoBuildCode,
+                Some(format!(
+                    "The build sandbox is not complete: {} {verb} missing ({}). The command does not run changed build code. To run it with this sandbox, use the option {ANYWAY_OPTION}.",
+                    missing.names(),
+                    missing.cause
+                )),
+            )
+        }
+        _ => (mode, None),
+    }
+}
+
+/// [`sandbox_guard`] with the state of this machine and this process.
+pub fn reviewer_mode(mode: Mode, anyway: bool) -> (Mode, Option<String>) {
+    sandbox_guard(mode, semilla_normal::sandbox::missing().as_ref(), anyway)
 }
 
 /// The build code state of one step.
@@ -503,12 +612,20 @@ impl StepCode {
 pub struct BuildCode {
     pub steps: Vec<StepCode>,
     /// The trees with changed build code. Only the separate folder set of the change set builds
-    /// them, and only with a permission.
+    /// them, and not for a command with `--no-build-code`.
     pub trees: BTreeSet<String>,
     /// The trees with the build code of the base. The shared folders build only these trees.
     pub clean: BTreeSet<String>,
-    /// The base tree of the change set: the key of the separate folder set.
+    /// The base tree of the change set.
     pub base: String,
+    /// The key of the shared folder set: the digest of the build code state of the base tree
+    /// ([`state_digest`]), or `tree-<base>` if Semilla cannot compute it.
+    #[serde(default)]
+    pub shared: String,
+    /// The key of the separate folder set of each tree with changed build code
+    /// ([`marked_key`]).
+    #[serde(default)]
+    pub keys: BTreeMap<String, String>,
 }
 
 impl BuildCode {
@@ -516,6 +633,14 @@ impl BuildCode {
     pub fn host_files(&self, step: &semilla_core::Step) -> Vec<(String, String)> {
         let Some(code) = self.steps.iter().find(|code| code.index == step.index) else { return Vec::new() };
         code.parts.iter().filter(|part| part.why == HOST_FILE).map(|part| (part.path.clone(), part.why.clone())).collect()
+    }
+
+    /// The paths of the build code that a step can change: the changed parts of its new tree
+    /// and of its old tree. A fact of the step for one of these files is a build code change.
+    pub fn change_paths(&self, step: usize) -> BTreeSet<String> {
+        let position = self.steps.iter().position(|code| code.index == step);
+        let previous = position.and_then(|position| position.checked_sub(1));
+        [position, previous].into_iter().flatten().flat_map(|position| self.steps[position].parts.iter().map(|part| part.path.clone())).collect()
     }
 
     /// The note for a result, or `None` if no step uses changed build code. Each run of steps
@@ -617,6 +742,52 @@ mod tests {
 
     fn changed(base: &Tree, tree: &Tree, mut full: impl FnMut(&std::path::Path) -> Result<HostInfo>) -> Vec<Part> {
         changed_build_code(&base.side(), &tree.side(), &mut full).expect("cargo reads the dependency graph")
+    }
+
+    // Batch 5v, part F: the digest of the build code state. A change of the Rust code of a
+    // target keeps the digest. A change of each other entry gives a new digest.
+    #[test]
+    fn the_state_digest_changes_with_each_entry_that_is_not_target_code() {
+        let tree = || plain_base().file("notes.txt", "a\n").script("p", "build.rs", "fn main() {}\n");
+        let host = root_host(false, Some("build.rs"), &[]);
+        let digest = |tree: &Tree, host: &HostInfo| state_digest(&tree.side(), host);
+        let first = digest(&tree(), &host);
+        assert_eq!(first.len(), 32);
+        assert_eq!(first, digest(&tree().rust("src/lib.rs", "pub fn f() -> u32 { 2 }\n"), &host), "target code is not build code");
+        assert_eq!(first, digest(&tree().rust("src/new.rs", "pub fn g() {}\n"), &host), "a new file of a target is not build code");
+        assert_ne!(first, digest(&tree().script("p", "build.rs", "fn main() { other(); }\n"), &host), "a build script");
+        assert_ne!(first, digest(&tree().file("notes.txt", "b\n"), &host), "a file that build code can read");
+        assert_ne!(first, digest(&tree().file("more.txt", "a\n"), &host), "a new file");
+        assert_ne!(first, digest(&tree().file("Cargo.toml", "[package]\nname='p'\nversion='2.0.0'\n"), &host), "a manifest");
+        assert_ne!(first, digest(&tree().file("stray.rs", "fn x() {}\n"), &host), "a Rust file that no target owns");
+        // The code of a host package (a proc macro) is build code.
+        assert_ne!(digest(&tree(), &root_host(true, None, &[])), digest(&tree().rust("src/lib.rs", "pub fn f() -> u32 { 2 }\n"), &root_host(true, None, &[])), "the code of a host package");
+        // A file mode is a part of the state.
+        let mut link = tree();
+        link.ws.files.get_mut("src/lib.rs").unwrap().mode = "120000".into();
+        assert_ne!(first, digest(&link, &host), "a link is not plain target code");
+    }
+
+    // Batch 5v, part F: the key of the folder set of a tree with changed build code.
+    #[test]
+    fn the_marked_key_has_the_content_of_each_changed_part() {
+        let tree = |script: &str| plain_base().script("p", "build.rs", script);
+        let part = |path: &str, why: &str| Part { path: path.into(), why: why.into(), plain: true };
+        let parts = vec![part("build.rs", "a build script")];
+        let key = |base: &str, name: &str, tree: &Tree, parts: &[Part], strict: bool| marked_key(base, name, parts, Some(&tree.ws.files), strict);
+        let first = key("b1", "t1", &tree("fn main() {}\n"), &parts, false);
+        assert_eq!(first.len(), 32);
+        // A different tree with the same build code has the same key.
+        assert_eq!(first, key("b1", "t2", &tree("fn main() {}\n").rust("src/lib.rs", "pub fn f() -> u32 { 2 }\n"), &parts, false));
+        // The content of a part, the base, the list of the parts, and a manifest change the key.
+        assert_ne!(first, key("b1", "t3", &tree("fn main() { other(); }\n"), &parts, false));
+        assert_ne!(first, key("b2", "t1", &tree("fn main() {}\n"), &parts, false));
+        assert_ne!(first, key("b1", "t1", &tree("fn main() {}\n").file("x.txt", "a\n"), &[parts[0].clone(), part("x.txt", "a file that build code can read")], false));
+        assert_ne!(first, key("b1", "t1", &tree("fn main() {}\n").file("Cargo.lock", "a\n"), &parts, false));
+        // The list of the parts is not complete after a configuration file: the key is the tree.
+        assert_eq!(key("b1", "t1", &tree("fn main() {}\n"), &[part(".cargo/config.toml", CONFIG_FILE)], false), "tree-t1");
+        assert_eq!(key("b1", "t1", &tree("fn main() {}\n"), &parts, true), "tree-t1");
+        assert_eq!(marked_key("b1", "t1", &parts, None, false), "tree-t1");
     }
 
     // Batch 5n, A6: a failed read of the dependency graph is not "build code changed". It is a
@@ -814,6 +985,48 @@ mod tests {
     }
 
     #[test]
+    fn the_base_line_names_the_commits_and_the_bound() {
+        // Design 28.5. No commit changed build code, and the walk got to the start: no line.
+        assert_eq!(base_code_line(&[], false), None);
+        // The walk stopped at the bound: the output says so, with a finding and with no finding.
+        assert_eq!(base_code_line(&[], true).unwrap(), "base build code: no change in the 20 commits before this change set (Semilla examines no more commits)");
+        let one = [("abc1234".to_string(), vec!["crates/core/build.rs".to_string()])];
+        assert_eq!(
+            base_code_line(&one, false).unwrap(),
+            "! the base has build code that a recent commit changed: `abc1234` (crates/core/build.rs). Each proof of this change set ran this code. No mark shows this, because the change is before the base."
+        );
+        assert!(base_code_line(&one, true).unwrap().ends_with("because the change is before the base. Semilla examined only the 20 commits before this change set."));
+        // A long list shows three entries and the number of the others.
+        let files: Vec<String> = (0..5).map(|n| format!("f{n}")).collect();
+        let many: Vec<(String, Vec<String>)> = (0..4).map(|n| (format!("c{n}"), files.clone())).collect();
+        let line = base_code_line(&many, false).unwrap();
+        assert!(line.contains("`c0` (f0, f1, f2, and 2 more); `c1` (") && line.contains("`c2` (f0, f1, f2, and 2 more); and 1 more. Each proof"), "{line}");
+    }
+
+    #[test]
+    fn a_reviewer_command_runs_no_changed_build_code_with_no_sandbox() {
+        use semilla_normal::sandbox::{Limit, Missing};
+        // Design 28.2. The full sandbox is the protection for the default.
+        assert_eq!(sandbox_guard(Mode::Run, None, false), (Mode::Run, None));
+        let all = Missing { limits: vec![Limit::Write, Limit::Read, Limit::Network], cause: "no Landlock".into() };
+        let (mode, line) = sandbox_guard(Mode::Run, Some(&all), false);
+        assert_eq!(mode, Mode::NoBuildCode);
+        assert_eq!(
+            line.unwrap(),
+            "The build sandbox is not complete: the write limit, the read limit, and the network limit are missing (no Landlock). The command does not run changed build code. To run it with this sandbox, use the option --build-code-no-sandbox."
+        );
+        // One missing limit is sufficient.
+        let one = Missing { limits: vec![Limit::Network], cause: "no seccomp".into() };
+        let (mode, line) = sandbox_guard(Mode::Run, Some(&one), false);
+        assert_eq!(mode, Mode::NoBuildCode);
+        assert!(line.unwrap().starts_with("The build sandbox is not complete: the network limit is missing (no seccomp)."));
+        // The option runs the code with the limits that the machine has.
+        assert_eq!(sandbox_guard(Mode::Run, Some(&all), true), (Mode::Run, None));
+        // The careful option needs no line.
+        assert_eq!(sandbox_guard(Mode::NoBuildCode, Some(&all), false), (Mode::NoBuildCode, None));
+    }
+
+    #[test]
     fn the_note_has_one_entry_for_each_run_of_steps() {
         let part = vec![Part::file("build.rs", "a file of a build script")];
         let step = |index: usize, before: bool, parts: &[Part]| StepCode { index, before, parts: parts.to_vec() };
@@ -830,7 +1043,15 @@ mod tests {
         assert_eq!(note.changes[0].span(), "from step 1 on");
         assert!(note.not_checked().is_empty());
         assert_eq!(note.tag_text(), "build code changed from step 1");
-        assert!(note.step_line(1).unwrap().starts_with("! build code changed in step 1: build.rs. It runs during the check and can change each result from step 1 on."));
+        assert!(note.step_line(1).unwrap().starts_with("! build code changed in step 1: build.rs. It runs in the sandbox during each check, and it can change each result from step 1 on."));
+        // The mark is one mark for the step: each step from step 1 on has the mark of step 1.
+        assert_eq!((note.mark_of(0), note.mark_of(1), note.mark_of(2)), (None, Some(1), Some(1)));
+        // A command that does not run the build code gives no mark.
+        assert_eq!(code.note(false).unwrap().mark_of(2), None);
+        // A fact for `build.rs` is a build code change in step 1, and in step 2 if step 2
+        // changes the file again. Step 0 has no build code change.
+        assert!(code.change_paths(0).is_empty());
+        assert!(code.change_paths(1).contains("build.rs") && code.change_paths(2).contains("build.rs"));
         assert!(note.step_line(2).unwrap().starts_with("! build code changed in step 1 (build.rs)"));
         assert_eq!(note.step_line(0), None);
         // A clean change set has no note.

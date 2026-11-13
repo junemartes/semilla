@@ -312,8 +312,9 @@ impl App {
         // The first step of a change set states its base commit after the result line (design
         // 25.2). A change set with no step: its base commit is HEAD.
         let base_line = if index == 0 { self.base_notice(&semilla_core::ChangeSet::default(), None).map(|notice| format!("{notice}\n")).unwrap_or_default() } else { String::new() };
-        // A build with no sandbox (design 27): each result says so.
-        let sandbox_line = crate::oracle::no_sandbox_warning().map(|warning| format!("  ! {warning}\n")).unwrap_or_default();
+        // A build with a limit of the sandbox missing (design 27), and a file of the records
+        // folder that is not a record (design 28.8): each result says so.
+        let sandbox_line: String = crate::oracle::build_warnings().iter().map(|warning| format!("  ! {warning}\n")).collect();
         // Build code that the change set changes (design 28): the step that changes it has the
         // full line, and each later step has the short form.
         let sandbox_line = format!("{sandbox_line}{}", result.report.build_code.as_ref().and_then(|note| note.step_line(index)).map(|line| format!("  {line}\n")).unwrap_or_default());

@@ -36,7 +36,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: Value) -> Claim {
 }
 
 fn result(claim: &str, step: usize, status: ClaimStatus, class: Option<Class>) -> ClaimResult {
-    ClaimResult { claim: claim.to_string(), step, status, class, effect: None, witness: None, hint: None, before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() }
+    ClaimResult { build_code: None, claim: claim.to_string(), step, status, class, effect: None, witness: None, hint: None, before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() }
 }
 
 fn verified(claim: &str, step: usize, proof: &str, class: Class) -> ClaimResult {
@@ -345,6 +345,7 @@ fn tree(id: &str, label: &str, status: Status) -> TreeNode {
         label: label.to_string(),
         status,
         class: None,
+        build_code: None,
         claims: Vec::new(),
         diff: None,
         steps: Vec::new(),

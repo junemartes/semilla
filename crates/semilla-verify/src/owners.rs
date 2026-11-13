@@ -232,7 +232,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             (format!("code that Semilla does not see: `{name}` ({side})"), "a MIR body with no source item (generated code): give the cause as the reason".to_string())
         };
         let class = if matches!(body.status, BodyStatus::Different { cfg_changed: false }) { Class::Logic } else { Class::ControlFlow };
-        report.facts.push(Fact {
+        report.facts.push(Fact { build_code: None, build_code_change: false,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -274,7 +274,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact {
+        report.facts.push(Fact { build_code: None, build_code_change: false,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),

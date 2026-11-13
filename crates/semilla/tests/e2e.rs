@@ -2034,14 +2034,15 @@ fn a_target_file_is_rust_code_whatever_its_name() {
     assert!(out.contains("spotlight: build script"), "{out}");
     let md = dir.path().join("c1.md");
     run(repo, &["status", "--wait", "600"], 0);
-    // The step changes build code. A reviewer command does not check it with no permission, but
-    // the report shows the change of the build script (design 28).
-    run(repo, &["review", "--md", md.to_str().unwrap()], 1);
+    // The step changes build code. A reviewer command runs it in the sandbox, and the report
+    // shows the change of the build script first (design 28).
+    run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains("Build code changes (1): read these changes first") && text.contains("build script") && text.contains("PWNED"), "{text}");
+    // With the careful option, the command does not run the build code.
+    run(repo, &["review", "--no-build-code", "--md", md.to_str().unwrap()], 1);
     let text = std::fs::read_to_string(&md).unwrap();
     assert!(text.contains("Not complete") && text.contains("build script") && text.contains("PWNED"), "{text}");
-    run(repo, &["review", "--trust-build-code", "--md", md.to_str().unwrap()], 0);
-    let text = std::fs::read_to_string(&md).unwrap();
-    assert!(text.contains("build script") && text.contains("PWNED"), "{text}");
 
     // The binary in `LICENSE.txt`: Semilla parses it, so a changed condition is a fact of the
     // code, not a file fact of a text file.
@@ -2200,22 +2201,23 @@ fn a_build_script_cannot_write_outside_its_build_folder() {
     );
     write(repo, "crates/shop-core/build.rs", &script);
     let reason = "crates/shop-core/build.rs:=the build needs a script";
-    let line = "the build ran with no sandbox: a build script or a proc macro of this change set can change the result";
+    let line = "the build ran with no sandbox: the write limit, the read limit, and the network limit are missing (the variable SEMILLA_NO_SANDBOX is set). A build script or a proc macro of this change set can change the result";
     let out = run(repo, &["step", "add a build script", "--reason", reason], 0);
-    if let Some(cause) = semilla_normal::sandbox::check() {
-        // A machine with no Landlock: the check works, and the result has the warning.
-        assert!(out.contains(line) && out.contains(&cause), "{out}");
+    if let Some(missing) = semilla_normal::sandbox::missing() {
+        // A machine with a missing limit: the check works, and the result names each missing limit.
+        assert!(out.contains(&missing.line()), "{out}");
         return;
     }
-    assert!(!out.contains("no sandbox"), "{out}");
+    assert!(!out.contains("sandbox:"), "{out}");
     assert!(!cache.join("planted.txt").exists(), "the build script wrote the cache folder of the user");
     assert!(!repo.join("planted.txt").exists(), "the build script wrote the repository");
-    let planted: Vec<PathBuf> = ["n0", "n2", "n3"].iter().map(|level| repo_cache(repo).join("build").join(level).join("crates/shop-core/src/planted.rs")).filter(|path| path.exists()).collect();
+    let planted = find_named(&repo_cache(repo), "planted.rs");
     assert!(planted.is_empty(), "the build script wrote the source files of the build: {planted:?}");
     let status = run(repo, &["status", "--wait"], 0);
-    assert!(!status.contains("no sandbox"), "{status}");
+    assert!(!status.contains("sandbox:"), "{status}");
 
-    // With no sandbox, the check still works. The step, the status, and the report have the line.
+    // With no sandbox, the check of an agent command still works. The step has the line, and
+    // the line names each missing limit (batch 5v, part D.2).
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
     let no_sandbox = |args: &[&str]| {
         let output = semilla_env(repo, args, &[("SEMILLA_NO_SANDBOX", "1")]);
@@ -2223,20 +2225,48 @@ fn a_build_script_cannot_write_outside_its_build_folder() {
         String::from_utf8_lossy(&output.stdout).into_owned()
     };
     let out = no_sandbox(&["step", "rename a local"]);
-    assert!(out.contains(&format!("! {line} (the variable SEMILLA_NO_SANDBOX is set)")), "{out}");
+    assert!(out.contains(&format!("! {line}")), "{out}");
     assert!(cache.join("planted.txt").exists(), "with no sandbox, the build script writes the cache folder");
-    // The records of this build keep the state: a later result with the sandbox has the line too.
-    let status = run(repo, &["status", "--wait"], 0);
+    let status = no_sandbox(&["status", "--wait"]);
     assert!(status.contains(line), "{status}");
+    // The state of the sandbox is a part of the key of each record (part D.4). A command with
+    // the sandbox reads no record of that build: it builds again, and its result has no line.
+    let status = run(repo, &["status", "--wait"], 0);
+    assert!(!status.contains("sandbox:") && status.contains("proved neutral"), "{status}");
     let (md, html) = (dir.path().join("report.md"), dir.path().join("report.html"));
-    // The change set changes build code: the reviewer gives the permission to run it.
-    run(repo, &["review", "--trust-build-code", "--md", md.to_str().unwrap()], 0);
-    run(repo, &["review", "--trust-build-code", "--html", html.to_str().unwrap()], 0);
+    let (_, out) = run_env(repo, &["review", "--md", md.to_str().unwrap()], &[]);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(!text.contains("sandbox:") && !text.contains("not checked"), "{out}\n{text}");
+    // The policy (part D.3). The change set changes build code. A reviewer command with a
+    // missing limit does not run it: each step is `not checked`, and the output says why.
+    let guard = "The build sandbox is not complete: the write limit, the read limit, and the network limit are missing (the variable SEMILLA_NO_SANDBOX is set). The command does not run changed build code. To run it with this sandbox, use the option --build-code-no-sandbox.";
+    let (_, out) = run_env(repo, &["review", "--md", md.to_str().unwrap()], &[("SEMILLA_NO_SANDBOX", "1")]);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(out.contains(guard), "{out}");
+    assert!(text.contains("not checked") && !text.contains(line), "{text}");
+    assert!(!text.contains("neutral (proved)"), "{text}");
+    // The explicit option runs the build code with the limits that the machine has. The report
+    // has the line.
+    let env = [("SEMILLA_NO_SANDBOX", "1")];
+    let (code, out) = run_env(repo, &["review", "--md", md.to_str().unwrap(), "--build-code-no-sandbox"], &env);
+    assert!(code == 0 && !out.contains(guard), "{out}");
+    let (code, out) = run_env(repo, &["review", "--html", html.to_str().unwrap(), "--build-code-no-sandbox"], &env);
+    assert_eq!(code, 0, "{out}");
     let (md, html) = (std::fs::read_to_string(md).unwrap(), std::fs::read_to_string(html).unwrap());
     // The line is at the top of each report: it is the first warning.
     let first_fact = |text: &str| text.find("spotlight (step 0)").unwrap_or(text.len());
-    assert!(md.find(line).is_some_and(|at| at < first_fact(&md)), "{md}");
+    assert!(md.find(&line.replace('_', "\\_")).is_some_and(|at| at < first_fact(&md)), "{md}");
     assert!(html.find(line).is_some_and(|at| at < first_fact(&html)), "the HTML report has the line at the top");
+
+    // The stored report of a commit has the state of the sandbox in its key (part D.4). The
+    // report of an agent command with no sandbox is not the report of a reviewer command with
+    // the sandbox: the reviewer command computes its result again.
+    commit_all(repo, "a build script");
+    no_sandbox(&["tag"]);
+    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "0", "--build-code-no-sandbox"], &env);
+    assert!(code == 0 && out.contains(": ready\n") && out.contains(line), "the stored report has the line: {out}");
+    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600"], &[]);
+    assert!(code == 0 && out.contains(": ready\n") && out.contains("proved neutral") && !out.contains("sandbox:"), "{out}");
 }
 
 #[test]
@@ -2307,9 +2337,11 @@ fn a_later_step_prints_the_phase_2_state_of_a_fast_step() {
 
 const BUILD_REASON: &str = "crates/shop-core/build.rs:=the build needs a script";
 
-/// A build script that writes a marker file. In the sandbox, the write has no effect.
+/// A build script that writes a marker file, and one more file for each profile. In the
+/// sandbox, the write has no effect.
 fn marker_build_script(marker: &Path) -> String {
-    format!("fn main() {{\n    println!(\"cargo:rerun-if-changed=build.rs\");\n    let _ = std::fs::write({marker:?}, \"the build script ran\");\n}}\n")
+    let profile = format!("{}.", marker.display());
+    format!("fn main() {{\n    println!(\"cargo:rerun-if-changed=build.rs\");\n    let _ = std::fs::write({marker:?}, \"the build script ran\");\n    let _ = std::fs::write(format!(\"{{}}{{}}\", {profile:?}, std::env::var(\"PROFILE\").unwrap()), \"\");\n}}\n")
 }
 
 fn commit_all(repo: &Path, message: &str) {
@@ -2325,6 +2357,11 @@ fn run_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
 
 /// Starts the UI with `args`, reads `/api/changeset`, and stops the UI.
 fn ui_changeset(repo: &Path, args: &[&str]) -> String {
+    ui_get(repo, args, &["/api/changeset"]).remove(0)
+}
+
+/// Starts the UI with `args`, reads each path of `paths`, and stops the UI.
+fn ui_get(repo: &Path, args: &[&str], paths: &[&str]) -> Vec<String> {
     let root = workspace_root();
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let mut child = Command::new(env!("CARGO_BIN_EXE_semilla"))
@@ -2336,24 +2373,26 @@ fn ui_changeset(repo: &Path, args: &[&str]) -> String {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let mut text = None;
+    let get = |path: &str| -> Option<String> {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ok()?;
+        let mut text = String::new();
+        stream.read_to_string(&mut text).ok()?;
+        Some(text)
+    };
+    let mut texts = Vec::new();
     for _ in 0..600 {
-        let get = || -> Option<String> {
-            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
-            write!(stream, "GET /api/changeset HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ok()?;
-            let mut text = String::new();
-            stream.read_to_string(&mut text).ok()?;
-            Some(text)
-        };
-        text = get();
-        if text.is_some() {
+        if let Some(text) = get(paths[0]) {
+            texts.push(text);
+            texts.extend(paths[1..].iter().map(|path| get(path).expect("the UI answers")));
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     child.kill().unwrap();
     child.wait().unwrap();
-    text.expect("the UI starts")
+    assert!(!texts.is_empty(), "the UI starts");
+    texts
 }
 
 /// Each file with the name `name` below `dir`.
@@ -2370,29 +2409,140 @@ fn find_named(dir: &Path, name: &str) -> Vec<PathBuf> {
     found
 }
 
-/// A session of three steps: step 0 is clean, step 1 adds a build script, step 2 changes code.
+const CLAIM: &str = "no-io shop_core::cart::Cart::total";
+const MARK_1: &str = "(with the build code of step 1)";
+const RAN_1: &str = "! build code changed in step 1 (crates/shop-core/build.rs). The check ran it in the sandbox. It can change each result from step 1 on. Read that change first. Each proof that depends on it has the mark (with the build code of step 1).";
+const SECTION: &str = "! build code changed in this step; read this change first";
+const RESULT_4: &str = "result: accepted · 4 steps · 4 facts: 2 proved neutral (1 with the build code of step 1), 2 to read (1 with a spotlight) · 2 claims: 2 verified (1 with the build code of step 1) · build code changed from step 1\n";
+
+/// A session of four steps. Step 0 is clean: it has a proof and a claim. Step 1 adds a build
+/// script. Step 2 changes logic. Step 3 has a proof and a claim.
 fn build_code_session(repo: &Path, marker: &Path) {
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
-    let out = run(repo, &["step", "rename a local"], 0);
+    let out = run(repo, &["step", "rename a local", "--claim", CLAIM], 0);
     assert!(!out.contains("build code"), "a clean step has no line about build code\n{out}");
     write(repo, "crates/shop-core/build.rs", &marker_build_script(marker));
     let out = run(repo, &["step", "add a build script", "--reason", BUILD_REASON], 0);
-    let full = "! build code changed in step 1: crates/shop-core/build.rs. It runs during the check and can change each result from step 1 on. A reviewer command checks these steps only with --trust-build-code.";
+    let full = "! build code changed in step 1: crates/shop-core/build.rs. It runs in the sandbox during each check, and it can change each result from step 1 on. Each proof that depends on it has the mark (with the build code of step 1).";
     assert!(out.contains(full), "{out}");
     write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
     let out = run(repo, &["step", "change the limit of the cart"], 0);
-    let short = "! build code changed in step 1 (crates/shop-core/build.rs): a reviewer command checks this step only with --trust-build-code.";
+    let short = "! build code changed in step 1 (crates/shop-core/build.rs): each proof of this step has the mark (with the build code of step 1).";
     assert!(out.contains(short) && !out.contains(full), "{out}");
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V1.replace("*x", "*item").replace("for x in", "for item in").replace("+= x", "+= item"));
+    let out = run(repo, &["step", "rename the loop variable", "--claim", CLAIM], 0);
+    assert!(out.contains(short), "{out}");
 }
 
-const NOT_CHECKED_1_2: &str = "steps 1–2 not checked: build code changed in step 1 (crates/shop-core/build.rs). Read that change. Then run the command again with --trust-build-code.";
-const TRUSTED_1: &str = "! this result ran the build code that the change set changes (--trust-build-code): crates/shop-core/build.rs (step 1). That code can change each result from step 1 on.";
+/// The steps that a line names: `step 3`, `step: 3`, `steps 0, 3`, `steps 1–3`.
+fn named_steps(line: &str) -> Vec<usize> {
+    let mut steps = Vec::new();
+    let mut rest = line;
+    while let Some(at) = rest.find("step") {
+        rest = &rest[at + 4..];
+        let list = rest.strip_prefix('s').unwrap_or(rest);
+        let list = list.strip_prefix(':').unwrap_or(list);
+        let Some(mut list) = list.strip_prefix(' ') else { continue };
+        loop {
+            let digits: String = list.chars().take_while(char::is_ascii_digit).collect();
+            let Ok(step) = digits.parse::<usize>() else { break };
+            steps.push(step);
+            list = &list[digits.len()..];
+            if let Some(end) = list.strip_prefix('–') {
+                let digits: String = end.chars().take_while(char::is_ascii_digit).collect();
+                steps.extend(step + 1..=digits.parse::<usize>().unwrap_or(step));
+                list = &end[digits.len()..];
+            }
+            match list.strip_prefix(", ") {
+                Some(next) => list = next,
+                None => break,
+            }
+        }
+    }
+    steps
+}
+
+/// The text of an HTML line with no tags.
+fn strip_tags(line: &str) -> String {
+    let mut text = String::new();
+    let mut tag = false;
+    for c in line.chars() {
+        match c {
+            '<' => tag = true,
+            '>' if tag => tag = false,
+            _ if !tag => text.push(c),
+            _ => {}
+        }
+    }
+    text
+}
+
+/// Invariant I6 for a text output (terminal, MCP, Markdown, HTML). A line shows a proof if it
+/// has one of the words `proved`, `verified`, or `neutral`. Such a line must have the mark of
+/// `first`, the first step with changed build code. The exceptions are a line that names only
+/// steps before `first`, and a line with no step in the block of a step before `first`.
+fn no_proof_without_mark(name: &str, text: &str, first: usize) {
+    let mark = format!("with the build code of step {first}");
+    let mut block: Option<usize> = None;
+    let mut proofs = 0;
+    for raw in text.lines() {
+        let plain = strip_tags(raw);
+        if raw.starts_with("step ") || raw.starts_with("### ") || raw.contains("class=\"group-head\"") {
+            block = named_steps(&plain.replace(&mark, "")).first().copied();
+        } else if raw.starts_with("result:") || raw.starts_with("## ") || raw.starts_with("<h2") {
+            block = None;
+        }
+        let line = plain.replace("0 proved neutral", "").replace("0 verified", "");
+        if !["proved", "verified", "neutral"].iter().any(|word| line.contains(word)) {
+            continue;
+        }
+        proofs += 1;
+        if line.contains(&mark) {
+            continue;
+        }
+        let named = named_steps(&line);
+        let clean = if named.is_empty() { block.is_some_and(|step| step < first) } else { named.iter().all(|step| *step < first) };
+        assert!(clean, "{name}: this line shows a proof that used changed build code, and it has no mark (I6)\n{raw}\n\n{text}");
+    }
+    assert!(proofs > 0, "{name}: the output shows no proof\n{text}");
+}
+
+/// Invariant I6 for the data of the UI. An object that shows a proof (the class `neutral` or
+/// the status `verified`) of a step from `first` on must have a mark.
+fn json_proofs_have_the_mark(name: &str, value: &serde_json::Value, first: u64, proofs: &mut usize) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let is = |key: &str, text: &str| map.get(key).and_then(Value::as_str) == Some(text);
+            let mut steps: Vec<u64> = map.get("step").and_then(Value::as_u64).into_iter().collect();
+            steps.extend(map.get("steps").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64));
+            if (is("class", "neutral") || is("status", "verified")) && steps.iter().any(|step| *step >= first) {
+                *proofs += 1;
+                let mark = map.get("mark").and_then(Value::as_str).is_some_and(|mark| mark.contains("with the build code of step")) || map.get("build_code").is_some_and(Value::is_u64);
+                assert!(mark, "{name}: this object shows a proof that used changed build code, and it has no mark (I6)\n{value}");
+            }
+            for child in map.values() {
+                json_proofs_have_the_mark(name, child, first, proofs);
+            }
+        }
+        Value::Array(list) => list.iter().for_each(|child| json_proofs_have_the_mark(name, child, first, proofs)),
+        _ => {}
+    }
+}
+
+/// The JSON body of an HTTP answer.
+fn json_body(answer: &str) -> serde_json::Value {
+    let body = answer.split("\r\n\r\n").nth(1).unwrap_or_default();
+    // The body can have the chunked form: take the text from the first brace to the last one.
+    let (start, end) = (body.find(['{', '[']).unwrap_or(0), body.rfind(['}', ']']).map_or(body.len(), |at| at + 1));
+    serde_json::from_str(&body[start..end]).unwrap_or_else(|error| panic!("{error}\n{answer}"))
+}
 
 #[test]
-fn a_reviewer_command_runs_no_build_code_that_the_change_set_changes() {
-    // Design 28, I6. The agent commands run the changed build code in the sandbox. A reviewer
-    // command with no permission does not build a tree with changed build code: the steps from
-    // the change on are `not checked`, and the result is `not complete` with the exit code 1.
+fn each_command_runs_changed_build_code_and_marks_each_proof() {
+    // Design 28, rules 1, 3, 4, 5, and invariant I6. Each command runs the changed build code
+    // in the sandbox. Each output form shows the build code change first, and each proof from
+    // that step on has the mark.
     if semilla_normal::sandbox::check().is_some() {
         return;
     }
@@ -2409,70 +2559,184 @@ fn a_reviewer_command_runs_no_build_code_that_the_change_set_changes() {
     assert!(!marks.is_empty() && marks.iter().all(|path| path.starts_with(cache.join("build-code"))), "{marks:?}");
     assert!(cache.join("reports/session.build-code.json").is_file(), "the stored result of the agent command has the mark");
 
-    // The reviewer commands on the session: the Markdown report, the HTML report, and the UI.
-    run(repo, &["status", "--wait", "600"], 0);
-    let (md, html) = (dir.path().join("r.md"), dir.path().join("r.html"));
-    let out = run(repo, &["review", "--md", md.to_str().unwrap()], 1);
-    assert!(out.contains("result: not complete") && out.contains(NOT_CHECKED_1_2), "{out}");
-    run(repo, &["review", "--html", html.to_str().unwrap()], 1);
-    let (md_text, html_text) = (std::fs::read_to_string(&md).unwrap(), std::fs::read_to_string(&html).unwrap());
-    let top = |text: &str| text.find(NOT_CHECKED_1_2).is_some_and(|at| at < text.find("step 0").unwrap_or(text.len()) + 200);
-    assert!(top(&md_text) && md_text.contains("**Not complete**") && md_text.contains("| Verdict | not complete |"), "{md_text}");
-    assert!(top(&html_text) && html_text.contains("Not complete"), "the HTML report has the text at the top");
-    // The facts of the build code change show with the spotlight, the reason, and the diff.
-    assert!(md_text.contains("derived \\[not checked\\]: crates/shop-core/build.rs: added; spotlight: build script") && md_text.contains("reason: \"the build needs a script\"") && md_text.contains("the build script ran"), "{md_text}");
-    let ui = ui_changeset(repo, &[]);
-    assert!(ui.contains(NOT_CHECKED_1_2) && ui.contains("\"not_complete\":true"), "{ui}");
-    // With the permission: the complete result, and the line at the top of each output.
-    let out = run(repo, &["review", "--trust-build-code", "--md", md.to_str().unwrap()], 0);
-    assert!(out.contains(TRUSTED_1), "{out}");
-    run(repo, &["review", "--trust-build-code", "--html", html.to_str().unwrap()], 0);
-    let (md_text, html_text) = (std::fs::read_to_string(&md).unwrap(), std::fs::read_to_string(&html).unwrap());
-    assert!(md_text.contains(TRUSTED_1) && md_text.contains("**Accepted**") && !md_text.contains("not checked"), "{md_text}");
-    assert!(html_text.contains(TRUSTED_1), "the HTML report has the line");
-    let ui = ui_changeset(repo, &["--trust-build-code"]);
-    assert!(ui.contains(TRUSTED_1) && ui.contains("\"not_complete\":false"), "{ui}");
+    // The terminal: `status`, `verify`, and the MCP tool `results`. No option is necessary.
+    let short = run(repo, &["status", "--wait", "600"], 0);
+    assert!(short.contains(RAN_1) && short.contains(RESULT_4), "{short}");
+    no_proof_without_mark("status", &short, 1);
+    let out = run(repo, &["status", "--verbose"], 0);
+    assert!(out.starts_with("session: ready\n") && out.contains(RAN_1) && out.contains(RESULT_4), "{out}");
+    no_proof_without_mark("status --verbose", &out, 1);
+    // Step 0 has no mark. Step 3 has the mark on the claim and on the proved fact.
+    let (step_0, later) = out.split_once("step 1  ").expect("the text of step 1");
+    assert!(step_0.contains("✓ c1 verified (mir)\n") && step_0.contains("[neutral (proved)]\n") && !step_0.split("step 0  ").nth(1).unwrap().contains(MARK_1), "{out}");
+    let step_3 = later.split_once("step 3  ").expect("the text of step 3").1;
+    assert!(step_3.contains(&format!("✓ c2 verified (mir) {MARK_1}\n")) && step_3.contains(&format!("[neutral (proved)] {MARK_1}\n")), "{out}");
+    // The build code change is the first section of step 1, with its spotlight and its diff.
+    assert!(later.starts_with(&format!("\"add a build script\"\n  {SECTION}\n  ◆ f1 derived: crates/shop-core/build.rs: added [other]\n      spotlight: build script")), "{out}");
+    assert!(later.contains("reason: \"the build needs a script\"") && later.contains("the build script ran"), "{out}");
+    let out = run(repo, &["verify"], 0);
+    assert!(out.contains(RAN_1) && out.contains(&format!("[neutral] {MARK_1}")), "{out}");
+    no_proof_without_mark("verify", &out, 1);
+    let answers = mcp_calls(repo, &[("results", serde_json::json!({"verbose": true, "wait": 600})), ("verify", serde_json::json!({}))]);
+    for (tool, (text, error)) in ["results", "verify"].iter().zip(&answers) {
+        assert!(!error && text.contains(RAN_1) && text.contains(SECTION) && text.contains(MARK_1), "{text}");
+        no_proof_without_mark(&format!("the MCP tool `{tool}`"), text, 1);
+    }
 
+    // The Markdown report (short and full) and the HTML report.
+    let (md, full, html) = (dir.path().join("r.md"), dir.path().join("full.md"), dir.path().join("r.html"));
+    let out = run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    assert!(out.contains(RAN_1), "{out}");
+    run(repo, &["review", "--full", "--md", full.to_str().unwrap()], 0);
+    run(repo, &["review", "--html", html.to_str().unwrap()], 0);
+    let texts = [("the Markdown report", &md), ("the full Markdown report", &full), ("the HTML report", &html)].map(|(name, path)| (name, std::fs::read_to_string(path).unwrap()));
+    for (name, text) in &texts {
+        // The scripts and the styles of the HTML report are not text of the report.
+        let text = text.split("<script").next().unwrap().rsplit("</style>").next().unwrap();
+        no_proof_without_mark(name, text, 1);
+        let first_group = text.find("step 0 ·").or(text.find(">step 0<")).expect("the group of step 0");
+        let section = text.find("Build code changes (1): read these changes first").unwrap_or(usize::MAX);
+        assert!(section < first_group && text.contains("the build script ran"), "{name}: the build code change comes first, with its diff\n{text}");
+        assert!(text.contains("2 proved neutral (1 with the build code of step 1)") && text.contains("2 verified (1 with the build code of step 1)"), "{name}: the counts\n{text}");
+    }
+    let md_text = &texts[0].1;
+    assert!(md_text.contains("\\! build code changed in step 1 (crates/shop-core/build.rs). The check ran it in the sandbox.") && md_text.contains("**Accepted**"), "{md_text}");
+    assert!(md_text.contains(&format!("- step 3: f1 derived \\[neutral (proved)\\] {MARK_1}: ")) && md_text.contains(&format!("  - verified (proof mir) {MARK_1} · ")), "{md_text}");
+    assert!(md_text.contains("- step 0: f1 derived \\[neutral (proved)\\]: ") && md_text.contains("  - verified (proof mir) · "), "{md_text}");
+    assert!(texts[1].1.contains(&format!("computed neutral {MARK_1}")) && texts[1].1.contains(&format!("[neutral] {MARK_1}   step 3")), "{}", texts[1].1);
+
+    // The data of the UI.
+    let answers = ui_get(repo, &[], &["/api/changeset", "/api/group/G4", "/api/tree", "/api/search?q=total"]);
+    let mut proofs = 0;
+    for answer in &answers {
+        json_proofs_have_the_mark("the UI data", &json_body(answer), 1, &mut proofs);
+    }
+    assert!(proofs >= 6, "the UI data shows the proofs of step 3: {proofs}");
+    let set = json_body(&answers[0]);
+    assert!(answers[0].contains(RAN_1) && answers[0].contains("\"not_complete\":false"), "{}", answers[0]);
+    assert_eq!(set["fact_counts"]["marked"], 1, "{set}");
+    assert_eq!(set["fact_counts"]["marked_text"], " (1 with the build code of step 1)", "{set}");
+    assert_eq!(set["counts"]["marked_text"], " (1 with the build code of step 1)", "{set}");
+    // The group of the build code change is the first group, and its fact has the flag.
+    assert_eq!(set["groups"][0]["steps"], serde_json::json!([1]), "{set}");
+    assert!(set["facts"].as_array().unwrap().iter().any(|fact| fact["step"] == 1 && fact["build_code_change"] == true), "{set}");
+
+    // Part B.1: `tag` stores its result, so `status <commit>` gives the result at once. It
+    // prints no line about a check in the background.
     commit_all(repo, "a build script");
     let out = run(repo, &["tag"], 0);
-    assert!(out.contains("result: accepted · 3 steps") && out.contains(" · build code changed from step 1\n"), "{out}");
+    assert!(out.contains(RESULT_4), "{out}");
+    let out = run(repo, &["status", "HEAD", "--wait", "0"], 0);
+    assert!(out.contains(": ready\n") && out.contains(RAN_1) && out.contains(RESULT_4), "{out}");
+    assert!(!out.contains("runs in the background") && !out.contains("the check runs now") && !out.contains("not checked"), "{out}");
 
-    // A reviewer with an empty cache folder and no sandbox: a build of the changed build code
-    // writes the marker file. The reviewer command with no permission does not write it.
+    // A reviewer with an empty cache folder and the sandbox: the command runs the changed build
+    // code with no option. The result is the same, and the sandbox stops the write of the script.
+    let fresh = dir.path().join("reviewer-cache-sandbox");
+    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600"], &[("SEMILLA_CACHE_DIR", fresh.to_str().unwrap())]);
+    assert!(code == 0 && out.contains(RESULT_4) && !out.contains("not checked") && !out.contains("sandbox:"), "{out}");
+    assert!(!marker.exists(), "the sandbox stops the write of the build script");
+
+    // A reviewer with an empty cache folder and no sandbox (batch 5v, part D.3): the command
+    // does not run the changed build code. The result is that of `--no-build-code`, and one
+    // line says why. The variable does not permit the run: the agent can set it.
     let fresh = dir.path().join("reviewer-cache");
     let env = [("SEMILLA_CACHE_DIR", fresh.to_str().unwrap()), ("SEMILLA_NO_SANDBOX", "1")];
     let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--verbose"], &env);
     assert_eq!(code, 1, "{out}");
-    assert!(!marker.exists(), "a reviewer command with no permission ran the changed build code\n{out}");
-    assert!(out.contains("result: not complete · step 0: ") && out.contains(NOT_CHECKED_1_2), "{out}");
-    // Step 0 has the full result. Each later step has its facts with the class `not checked`:
-    // no proof, no affected bodies, never `neutral`.
-    let (before, after) = out.split_once("step 1  ").expect("the text of step 1");
-    assert!(before.contains("[neutral (proved)]"), "{out}");
-    assert!(after.contains("crates/shop-core/build.rs: added [not checked]") && after.contains("spotlight: build script") && after.contains("reason: \"the build needs a script\""), "{out}");
-    let facts = after.split("result: ").next().unwrap();
-    assert!(!facts.contains("neutral") && !facts.contains("[logic]") && !facts.contains("affected bodies") && !facts.contains("proved"), "{out}");
-    let (code, out) = run_env(repo, &["verify", "--help"], &env);
-    assert!(code == 0 && out.contains("--trust-build-code"), "{out}");
-
-    // With the permission, the reviewer command runs the build code and gives the full result.
-    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--trust-build-code"], &env);
+    assert!(out.contains("result: not complete · step 0: ") && out.contains(NOT_CHECKED_1_3) && !out.contains(MARK_1), "{out}");
+    assert!(out.contains("The build sandbox is not complete: the write limit, the read limit, and the network limit are missing (the variable SEMILLA_NO_SANDBOX is set). The command does not run changed build code. To run it with this sandbox, use the option --build-code-no-sandbox.\n"), "{out}");
+    assert!(!marker.exists(), "a reviewer command with no sandbox ran the changed build code");
+    // The explicit option: the command runs the changed build code for each build
+    // configuration. The result is the same, and it has the line about the sandbox.
+    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--verbose", "--build-code-no-sandbox"], &env);
     assert_eq!(code, 0, "{out}");
-    assert!(marker.exists(), "with the permission and no sandbox, the build script runs");
-    assert!(out.contains(TRUSTED_1) && out.contains("result: accepted · 3 steps") && !out.contains("not checked"), "{out}");
+    assert!(out.contains("! the build ran with no sandbox: the write limit, the read limit, and the network limit are missing (the variable SEMILLA_NO_SANDBOX is set)"), "{out}");
+    assert!(out.contains(RAN_1) && out.contains(RESULT_4) && !out.contains("not checked"), "{out}");
+    // Part B.2: a final result has the first line `ready`, and no line about the background.
+    assert!(out.contains(": ready\n") && !out.contains("runs in the background") && !out.contains("the check runs now"), "{out}");
+    no_proof_without_mark("status HEAD", &out, 1);
+    assert!(marker.exists(), "with no sandbox, the build script runs");
+    for profile in ["debug", "release"] {
+        assert!(dir.path().join(format!("marker.txt.{profile}")).exists(), "the build script runs for the profile `{profile}`\n{out}");
+    }
+}
 
-    // The result with the permission has a mark. A command with no permission reads no marked
-    // result and no marked record: it gives `not complete` again.
-    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600"], &env);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.contains("result: not complete · step 0: ") && out.contains(NOT_CHECKED_1_2), "{out}");
+const NOT_CHECKED_1_3: &str = "steps 1–3 not checked: build code changed in step 1 (crates/shop-core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete).";
+
+#[test]
+fn the_careful_option_runs_no_changed_build_code() {
+    // Design 28, rule 6. With `--no-build-code`, a command does not build a tree with changed
+    // build code: the steps from the change on are `not checked`, and the result is
+    // `not complete` with the exit code 1. The old option `--trust-build-code` is gone.
+    if semilla_normal::sandbox::check().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let marker = dir.path().join("marker.txt");
+    build_code_session(repo, &marker);
+    run(repo, &["status", "--wait", "600"], 0);
+
+    // The reports and the UI on the session.
+    let (md, html) = (dir.path().join("r.md"), dir.path().join("r.html"));
+    let out = run(repo, &["review", "--no-build-code", "--md", md.to_str().unwrap()], 1);
+    assert!(out.contains("result: not complete") && out.contains(NOT_CHECKED_1_3), "{out}");
+    run(repo, &["review", "--no-build-code", "--html", html.to_str().unwrap()], 1);
+    let (md_text, html_text) = (std::fs::read_to_string(&md).unwrap(), std::fs::read_to_string(&html).unwrap());
+    let top = |text: &str| text.find(NOT_CHECKED_1_3).is_some_and(|at| at < text.find("step 0").unwrap_or(text.len()) + 200);
+    assert!(top(&md_text) && md_text.contains("**Not complete**") && md_text.contains("| Verdict | not complete |") && !md_text.contains(MARK_1), "{md_text}");
+    assert!(top(&html_text) && html_text.contains("Not complete"), "the HTML report has the text at the top");
+    // The facts of the build code change show with the spotlight, the reason, and the diff.
+    assert!(md_text.contains("derived \\[not checked\\]: crates/shop-core/build.rs: added; spotlight: build script") && md_text.contains("reason: \"the build needs a script\"") && md_text.contains("the build script ran"), "{md_text}");
+    let ui = ui_changeset(repo, &["--no-build-code"]);
+    assert!(ui.contains(NOT_CHECKED_1_3) && ui.contains("\"not_complete\":true"), "{ui}");
+
+    commit_all(repo, "a build script");
+    run(repo, &["tag"], 0);
+
+    // A reviewer with an empty cache folder and no sandbox: a build of the changed build code
+    // writes the marker file. The command with the careful option does not write it.
+    let fresh = dir.path().join("reviewer-cache");
+    let env = [("SEMILLA_CACHE_DIR", fresh.to_str().unwrap()), ("SEMILLA_NO_SANDBOX", "1")];
+    let careful = |name: &str| {
+        let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--verbose", "--no-build-code"], &env);
+        assert_eq!(code, 1, "{name}\n{out}");
+        assert!(out.contains("result: not complete · step 0: ") && out.contains(NOT_CHECKED_1_3) && !out.contains(MARK_1), "{name}\n{out}");
+        // Step 0 has the full result. Each later step has its facts with the class
+        // `not checked`: no proof, no affected bodies, never `neutral`.
+        let (before, after) = out.split_once("step 1  ").expect("the text of step 1");
+        assert!(before.contains("[neutral (proved)]") && before.contains("✓ c1 verified (mir)"), "{name}\n{out}");
+        assert!(after.contains("crates/shop-core/build.rs: added [not checked]") && after.contains("spotlight: build script") && after.contains("reason: \"the build needs a script\""), "{name}\n{out}");
+        let facts = after.split("result: ").next().unwrap();
+        assert!(!facts.contains("neutral") && !facts.contains("[logic]") && !facts.contains("affected bodies") && !facts.contains("proved") && !facts.contains("verified"), "{name}\n{out}");
+    };
+    careful("the first run");
+    assert!(!marker.exists(), "a command with --no-build-code ran the changed build code");
+
+    // The old option: one line says that the option is gone. The command gives the default result.
+    let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--trust-build-code", "--build-code-no-sandbox"], &env);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.\n"), "{out}");
+    assert!(marker.exists() && out.contains(RAN_1) && out.contains(RESULT_4), "{out}");
+    let (code, out) = run_env(repo, &["verify", "--help"], &env);
+    assert!(code == 0 && out.contains("--no-build-code") && !out.contains("--trust-build-code"), "{out}");
+    let (code, out) = run_env(repo, &["status", "HEAD", "--no-build-code", "--trust-build-code"], &env);
+    assert!(code == 2 && out.contains("cannot be used with"), "{out}");
+
+    // The default result has a mark. A command with the careful option reads no marked result
+    // and no marked record: it gives `not complete` again.
+    careful("after the default run");
+    // The agent commands have no such option: an agent command always runs the build code.
+    let (code, out) = run_env(repo, &["step", "x", "--no-build-code"], &env);
+    assert!(code == 2 && out.contains("unexpected argument"), "{out}");
 }
 
 #[test]
-fn build_code_that_goes_back_to_the_base_ends_the_steps_with_no_check() {
-    // Design 28, case 7. Step 1 adds a build script and step 3 removes it. The old side of
-    // step 3 has changed build code, so a reviewer command with no permission does not check
-    // steps 1, 2, and 3. Step 4 has two trees with the build code of the base: the full result.
+fn build_code_that_goes_back_to_the_base_ends_the_mark() {
+    // Design 28, case 7. Step 1 adds a build script and step 4 removes it. The old side of
+    // step 4 has changed build code, so steps 1, 2, 3, and 4 have the mark. Step 5 has two
+    // trees with the build code of the base: its proof has no mark.
     if semilla_normal::sandbox::check().is_some() {
         return;
     }
@@ -2482,26 +2746,168 @@ fn build_code_that_goes_back_to_the_base_ends_the_steps_with_no_check() {
     build_code_session(repo, &marker);
     std::fs::remove_file(repo.join("crates/shop-core/build.rs")).unwrap();
     let out = run(repo, &["step", "remove the build script", "--reason", "crates/shop-core/build.rs:=the build needs no script"], 0);
-    assert!(out.contains("! build code changed in step 1 (crates/shop-core/build.rs): a reviewer command checks this step only with --trust-build-code."), "{out}");
-    write(repo, "crates/shop-core/src/cart.rs", CART_V2);
-    let out = run(repo, &["step", "an empty cart has the total 0, and the limit is inclusive"], 0);
-    assert!(!out.contains("build code"), "step 4 has the build code of the base on the two sides\n{out}");
+    assert!(out.contains("! build code changed in step 1 (crates/shop-core/build.rs): each proof of this step has the mark (with the build code of step 1)."), "{out}");
+    let cart = std::fs::read_to_string(repo.join("crates/shop-core/src/cart.rs")).unwrap();
+    write(repo, "crates/shop-core/src/cart.rs", &cart.replace("sum", "acc"));
+    let out = run(repo, &["step", "rename the sum"], 0);
+    assert!(!out.contains("build code"), "step 5 has the build code of the base on the two sides\n{out}");
     commit_all(repo, "a build script comes and goes");
     let out = run(repo, &["tag"], 0);
-    assert!(out.contains("result: accepted · 5 steps") && out.contains(" · build code changed in steps 1–3\n"), "{out}");
-    let out = run(repo, &["status", "HEAD", "--wait", "600", "--verbose"], 1);
-    assert!(out.contains("result: not complete · steps 0, 4: ") && out.contains("steps 1–3 not checked: build code changed in step 1 (crates/shop-core/build.rs). Read that change. Then run the command again with --trust-build-code."), "{out}");
-    let step_4 = out.split_once("step 4  ").expect("the text of step 4").1;
-    assert!(step_4.contains("[control_flow]") && step_4.contains("affected bodies") && !step_4.split("result: ").next().unwrap().contains("not checked"), "{out}");
-    let out = run(repo, &["status", "HEAD", "--wait", "600", "--trust-build-code"], 0);
-    assert!(out.contains("(--trust-build-code): crates/shop-core/build.rs (step 1). That code can change each result in steps 1–3.") && out.contains("result: accepted · 5 steps"), "{out}");
+    assert!(out.contains("result: accepted · 6 steps") && out.contains(" · build code changed in steps 1–4\n"), "{out}");
+    let out = run(repo, &["status", "HEAD", "--verbose"], 0);
+    assert!(out.contains("! build code changed in step 1 (crates/shop-core/build.rs). The check ran it in the sandbox. It can change each result in steps 1–4."), "{out}");
+    assert!(out.contains("3 proved neutral (1 with the build code of step 1)"), "{out}");
+    let step_3 = out.split_once("step 3  ").expect("the text of step 3").1.split("step 4  ").next().unwrap();
+    assert!(step_3.contains(&format!("[neutral (proved)] {MARK_1}\n")), "{out}");
+    let step_5 = out.split_once("step 5  ").expect("the text of step 5").1.split("result: ").next().unwrap();
+    assert!(step_5.contains("[neutral (proved)]\n") && !step_5.contains("with the build code"), "{out}");
+    // With the careful option, steps 1–4 have no check. Step 5 has the full result.
+    let out = run(repo, &["status", "HEAD", "--wait", "600", "--verbose", "--no-build-code"], 1);
+    assert!(out.contains("result: not complete · steps 0, 5: ") && out.contains("steps 1–4 not checked: build code changed in step 1 (crates/shop-core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete)."), "{out}");
+    let step_5 = out.split_once("step 5  ").expect("the text of step 5").1.split("result: ").next().unwrap();
+    assert!(step_5.contains("[neutral (proved)]\n") && !step_5.contains("not checked"), "{out}");
+}
+
+#[test]
+fn a_step_can_mix_build_code_and_other_code() {
+    // Design 28, rule 2. `step` accepts a step that changes build code and other code. The
+    // build code change is the first section of the step, and the proof of the step has the
+    // mark of that step.
+    if semilla_normal::sandbox::check().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let marker = dir.path().join("marker.txt");
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    write(repo, "crates/shop-core/build.rs", &marker_build_script(&marker));
+    let out = run(repo, &["step", "rename a local, change the limit, add a build script", "--reason", BUILD_REASON], 0);
+    assert!(out.contains("! build code changed in step 0: crates/shop-core/build.rs. It runs in the sandbox during each check"), "{out}");
+    let out = run(repo, &["status", "--wait", "600", "--verbose"], 0);
+    // The section comes before each other fact of the step.
+    let section = out.find(SECTION).expect("the section");
+    let build = out.find("crates/shop-core/build.rs: added [other]").expect("the build code fact");
+    let (proof, logic) = (out.find("[neutral (proved)] (with the build code of step 0)\n").expect("the proof with the mark"), out.find("[logic]").expect("the logic fact"));
+    assert!(section < build && build < proof.min(logic), "{out}");
+    assert!(out.contains("1 proved neutral (1 with the build code of step 0)") && out.contains(" · build code changed from step 0\n"), "{out}");
+    no_proof_without_mark("status --verbose", &out, 0);
+    let md = dir.path().join("mix.md");
+    run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    let section = text.find("#### Build code changes (1): read these changes first").expect("the section");
+    assert!(section < text.find("#### Derived facts").expect("the other facts") && text.contains("\\[neutral (proved)\\] (with the build code of step 0)"), "{text}");
+    no_proof_without_mark("the Markdown report", &text, 0);
+}
+
+#[test]
+fn a_file_that_build_code_can_read_costs_only_the_mark() {
+    // Design 28, rule (d). The tree has a build script. A changed file outside the neutral
+    // allow list counts as changed build code, because the build script can read it. The cost
+    // is the mark: the result is complete, with the exit code 0.
+    if semilla_normal::sandbox::check().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/build.rs", "fn main() {\n    println!(\"cargo:rerun-if-changed=build.rs\");\n}\n");
+    write(repo, "crates/shop-core/rates.json", "{\"rate\": 1}\n");
+    commit_all(repo, "a build script and a data file");
+    write(repo, "crates/shop-core/rates.json", "{\"rate\": 2}\n");
+    let out = run(repo, &["step", "change the rate", "--reason", "crates/shop-core/rates.json:=the rate is 2 now"], 0);
+    assert!(out.contains("! build code changed in step 0: crates/shop-core/rates.json (the tree has a build script, and build code can read or run this file)."), "{out}");
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    run(repo, &["step", "rename a local"], 0);
+    commit_all(repo, "the rate and a rename");
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains("result: accepted · 2 steps") && out.contains("1 proved neutral (1 with the build code of step 0)") && out.contains(" · build code changed from step 0\n"), "{out}");
+    let out = run(repo, &["status", "HEAD", "--verbose"], 0);
+    assert!(out.contains("[neutral (proved)] (with the build code of step 0)\n") && !out.contains("not checked"), "{out}");
+    no_proof_without_mark("status HEAD", &out, 0);
+    // The careful option gives the result of batch 5j: no check from step 0 on.
+    let out = run(repo, &["status", "HEAD", "--wait", "600", "--no-build-code"], 1);
+    assert!(out.contains("steps 0–1 not checked: build code changed in step 0 (crates/shop-core/rates.json"), "{out}");
+}
+
+#[test]
+fn the_base_line_names_build_code_that_a_recent_commit_changed() {
+    // Design 28.5 (rule 9). The base of a change set can have build code that a commit shortly
+    // before it changed. The proofs of the change set ran that code, and they have no mark. The
+    // header of each reviewer output names the commit and the files. No state is stored.
+    if semilla_normal::sandbox::check().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let head = |repo: &Path| git(repo, &["rev-parse", "--short=7", "HEAD"]).trim().to_string();
+    let found = "! the base has build code that a recent commit changed: ";
+    let end = "Each proof of this change set ran this code. No mark shows this, because the change is before the base.";
+
+    // The base is the first commit of the history: no line.
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    run(repo, &["step", "rename a local"], 0);
+    commit_all(repo, "rename a local");
+    let out = run(repo, &["tag"], 0);
+    assert!(!out.contains("base build code") && !out.contains(found), "{out}");
+
+    // Commit A has no Semilla check: it adds a build script. Change set B changes the script.
+    write(repo, "crates/shop-core/build.rs", "fn main() {\n    println!(\"cargo:rerun-if-changed=build.rs\");\n}\n");
+    commit_all(repo, "add a build script with plain git");
+    let a = head(repo);
+    write(repo, "crates/shop-core/build.rs", "fn main() {\n    println!(\"cargo:rerun-if-changed=build.rs\");\n    println!(\"cargo:rustc-env=SHOP=1\");\n}\n");
+    run(repo, &["step", "set a variable in the build script", "--reason", BUILD_REASON], 0);
+    commit_all(repo, "set a variable");
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains(&format!("{found}`{a}` (crates/shop-core/build.rs). {end}\n")) || out.ends_with(&format!("{found}`{a}` (crates/shop-core/build.rs). {end}")), "{out}");
+    let b = head(repo);
+
+    // Change set C changes other code. Its result is complete and has no mark, but each proof
+    // ran the build script of A and B. Each reviewer output has the line near the base line.
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V1.replace("*x", "*item").replace("for x in", "for item in").replace("+= x", "+= item"));
+    run(repo, &["step", "rename the loop variable"], 0);
+    commit_all(repo, "rename the loop variable");
+    let line = format!("{found}`{b}` (crates/shop-core/build.rs); `{a}` (crates/shop-core/build.rs). {end}");
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains(&line), "{out}");
+    let out = run(repo, &["status", "HEAD", "--wait", "0"], 0);
+    assert!(out.contains(&format!("`: it has a Semilla check\n{line}\n")) && out.contains("1 proved neutral, 0 to read") && !out.contains("with the build code"), "{out}");
+    let (md, html) = (dir.path().join("c.md"), dir.path().join("c.html"));
+    run(repo, &["review", "HEAD", "--md", md.to_str().unwrap()], 0);
+    run(repo, &["review", "HEAD", "--html", html.to_str().unwrap()], 0);
+    let (md_text, html_text) = (std::fs::read_to_string(&md).unwrap(), std::fs::read_to_string(&html).unwrap());
+    let top = |text: &str, line: &str, summary: &str| text.find(line).is_some_and(|at| at < text.find(summary).unwrap_or(0));
+    assert!(top(&md_text, &format!("> \\{line}"), "## Summary"), "{md_text}");
+    assert!(top(&html_text, &format!("<p class=\"notice\">{line}</p>"), "<h2 id=\"summary\">"), "the HTML report has the line in its header");
+    let ui = json_body(&ui_changeset(repo, &[]));
+    assert!(ui["notices"].as_array().is_some_and(|notices| notices.iter().any(|notice| notice.as_str() == Some(line.as_str()))), "{ui}");
+    let answers = mcp_calls(repo, &[("results", serde_json::json!({"commit": "HEAD"}))]);
+    assert!(answers[0].0.contains(&line), "{}", answers[0].0);
+
+    // The bound. Semilla examines 20 commits before the change set. With 18 commits after C,
+    // the commit of B is in the bound and the commit of A is not: the line says so.
+    for n in 0..18 {
+        git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", &format!("empty {n}")]);
+    }
+    let cart = std::fs::read_to_string(repo.join("crates/shop-core/src/cart.rs")).unwrap();
+    write(repo, "crates/shop-core/src/cart.rs", &cart.replace("sum", "acc"));
+    run(repo, &["step", "rename the sum"], 0);
+    commit_all(repo, "rename the sum");
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains(&format!("{found}`{b}` (crates/shop-core/build.rs). {end} Semilla examined only the 20 commits before this change set.")), "{out}");
+    // One more change set: the commit of B is not in the bound. The output says where the
+    // examination stops.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "change the limit of the cart"], 0);
+    commit_all(repo, "change the limit");
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains("base build code: no change in the 20 commits before this change set (Semilla examines no more commits)") && !out.contains(found), "{out}");
 }
 
 #[test]
 fn a_file_of_a_host_package_is_build_code() {
     // Design 28, A4.5. The compiler runs the code of a proc macro crate during each build. A
     // change of a file of this crate gets the spotlight "build code" and needs a reason. The
-    // step also has the line of an agent command, and a reviewer command does not check it.
+    // step also has the line of the build code, and a reviewer command shows the change first.
     if semilla_normal::sandbox::check().is_some() {
         return;
     }
@@ -2526,16 +2932,23 @@ fn a_file_of_a_host_package_is_build_code() {
     assert!(out.contains(&format!("{file}: changed")) && out.contains("build code: this file is a file of a host package") && out.contains("needs a reason"), "{out}");
     let reason = format!("{file}:=the limit is 20 now");
     let out = run(repo, &["step", "change the limit", "--reason", &reason], 0);
-    assert!(out.contains(&format!("! build code changed in step 1: {file}. It runs during the check and can change each result from step 1 on.")), "{out}");
+    assert!(out.contains(&format!("! build code changed in step 1: {file}. It runs in the sandbox during each check, and it can change each result from step 1 on.")), "{out}");
     assert!(out.contains("spotlight: build code: this file is a file of a host package") && out.contains("reason: \"the limit is 20 now\""), "{out}");
 
-    // The report of a reviewer command shows the fact with the diff, and the step has no check.
+    // The report of a reviewer command shows the fact first, with the diff. The result is complete.
     run(repo, &["status", "--wait", "600"], 0);
     let md = dir.path().join("host.md");
-    run(repo, &["review", "--md", md.to_str().unwrap()], 1);
+    run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains(&format!("\\! build code changed in step 1 ({file}). The check ran it in the sandbox.")), "{text}");
+    // The section has the file fact and the code fact of the changed file.
+    let section = text.find("#### Build code changes (2): read these changes first").unwrap_or_else(|| panic!("the section\n{text}"));
+    assert!(section < text.find("step 0 ·").expect("the group of step 0"), "{text}");
+    assert!(text.contains("spotlight: build code: this file is a file of a host package") && text.contains("\"20\".parse()"), "{text}");
+    // With the careful option, the step has no check.
+    run(repo, &["review", "--no-build-code", "--md", md.to_str().unwrap()], 1);
     let text = std::fs::read_to_string(&md).unwrap();
     assert!(text.contains(&format!("step 1 not checked: build code changed in step 1 ({file})")), "{text}");
-    assert!(text.contains("spotlight: build code: this file is a file of a host package") && text.contains("\"20\".parse()"), "{text}");
 }
 
 #[test]
@@ -2554,7 +2967,428 @@ fn a_trailing_comment_is_a_comment_fact_not_a_doc_fact() {
     assert!(!out.contains("changed docs") && !out.contains("needs a reason"), "{out}");
 }
 
+/// A build script for the folder tests of design 28.9. It puts the marker `partf-<name>` into
+/// each folder above its output folder that it can write. If it finds the marker of a
+/// different script there, it writes `partf-seen.txt` into its output folder.
+fn folder_probe_script(name: &str) -> String {
+    r#"fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let mut seen = Vec::new();
+    for dir in out.ancestors().skip(1) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if file.starts_with("partf-") && file != "partf-NAME" {
+                seen.push(file);
+            }
+        }
+        let _ = std::fs::write(dir.join("partf-NAME"), "x");
+    }
+    if !seen.is_empty() {
+        std::fs::write(out.join("partf-seen.txt"), seen.join(",")).unwrap();
+    }
+}
+"#
+    .replace("NAME", name)
+}
+
+/// The folder set (`shared/<key>` or `build-code/<key>`) of a path of the cache folder.
+fn folder_set_of(cache: &Path, path: &Path) -> PathBuf {
+    path.strip_prefix(cache).unwrap().components().take(2).collect()
+}
+
+#[test]
+fn builds_share_a_folder_only_with_the_same_build_code() {
+    // Design 28.9, rule 1. A build can write its target folder, and a file stays there. Two
+    // builds share a folder set only if they run the same build code. The marker of one build
+    // script is thus never in a folder that a different build script can read.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    run(repo, &["step", "rename a local"], 0);
+    let cache = repo_cache(repo);
+    let sets = |kind: &str| std::fs::read_dir(cache.join(kind)).map(|list| list.flatten().count()).unwrap_or(0);
+    let sets_of = |marker: &str| find_named(&cache, marker).iter().map(|path| folder_set_of(&cache, path)).collect::<std::collections::BTreeSet<_>>();
+    let no_script_saw_a_marker = || assert_eq!(find_named(&cache, "partf-seen.txt"), Vec::<PathBuf>::new(), "a build script found the marker of a different build");
+
+    // The marked folder sets. Step 1 adds script A. Step 2 changes other code: it has the
+    // build code of step 1, and it uses the same folder set.
+    assert_eq!((sets("shared"), sets("build-code")), (1, 0));
+    write(repo, "crates/shop-core/build.rs", &folder_probe_script("a"));
+    run(repo, &["step", "add a build script", "--reason", BUILD_REASON], 0);
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "change the limit of the cart"], 0);
+    assert_eq!((sets("shared"), sets("build-code")), (1, 1), "the same build code uses one folder set");
+    let set_a = sets_of("partf-a");
+    assert_eq!(set_a.len(), 1, "{set_a:?}");
+    // The agent removes the two steps and adds a different script B on the same base. The
+    // build of B has its own folder set: it does not find a file of the build of A.
+    run(repo, &["undo"], 0);
+    run(repo, &["undo"], 0);
+    write(repo, "crates/shop-core/build.rs", &folder_probe_script("b"));
+    run(repo, &["step", "add a different build script", "--reason", BUILD_REASON], 0);
+    assert_eq!((sets("shared"), sets("build-code")), (1, 2), "different build code has a different folder set");
+    let set_b = sets_of("partf-b");
+    assert!(set_b.len() == 1 && set_b.is_disjoint(&set_a), "{set_a:?} {set_b:?}");
+    no_script_saw_a_marker();
+
+    // The shared folder sets. A base with script B, and then a base with script C: each base
+    // has a different shared folder set, and it is not the marked folder set of B.
+    commit_all(repo, "add a build script");
+    run(repo, &["tag"], 0);
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V1.replace("*x", "*item").replace("for x in", "for item in").replace("+= x", "+= item"));
+    run(repo, &["step", "rename the loop variable"], 0);
+    assert_eq!((sets("shared"), sets("build-code")), (2, 2), "a base with different build code has a different shared folder set");
+    let set_b = sets_of("partf-b");
+    assert!(set_b.len() == 2 && set_b.is_disjoint(&set_a), "{set_b:?}");
+    commit_all(repo, "rename the loop variable");
+    run(repo, &["tag"], 0);
+    write(repo, "crates/shop-core/build.rs", &folder_probe_script("c"));
+    commit_all(repo, "change the build script with plain git");
+    let cart = std::fs::read_to_string(repo.join("crates/shop-core/src/cart.rs")).unwrap();
+    write(repo, "crates/shop-core/src/cart.rs", &cart.replace("sum", "acc"));
+    run(repo, &["step", "rename the sum"], 0);
+    assert_eq!((sets("shared"), sets("build-code")), (3, 2));
+    let set_c = sets_of("partf-c");
+    assert!(set_c.len() == 1 && set_c.is_disjoint(&set_b) && set_c.is_disjoint(&set_a), "{set_c:?} {set_b:?}");
+    no_script_saw_a_marker();
+    // A base that changes only the Rust code of a target has the same build code: the change
+    // set on it uses the shared folder set of the base before it.
+    commit_all(repo, "rename the sum");
+    run(repo, &["tag"], 0);
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V0);
+    run(repo, &["step", "change the limit of the cart back"], 0);
+    assert_eq!((sets("shared"), sets("build-code")), (3, 2), "a base with the same build code uses the same shared folder set");
+    no_script_saw_a_marker();
+}
+
+#[test]
+fn the_records_cache_gets_only_the_records_of_the_units_of_the_build() {
+    // Design 28.8, rule 2. A build can write its records folder. A build script puts two files
+    // there: one with a plain name, and one with the name form of a record. Semilla copies no
+    // one of them to the records cache, and the output names each one.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let fake = "shop_core.lib.0123456789abcdef.jsonl";
+    let script = "fn main() {\n    println!(\"cargo:rerun-if-changed=build.rs\");\n    let records = std::path::PathBuf::from(std::env::var(\"SEMILLA_MIR_OUT\").unwrap());\n    std::fs::write(records.join(\"planted.txt\"), \"x\").unwrap();\n    std::fs::write(records.join(\"FAKE\"), \"{}\\n\").unwrap();\n}\n".replace("FAKE", fake);
+    write(repo, "crates/shop-core/build.rs", &script);
+    let out = run(repo, &["step", "add a build script", "--reason", BUILD_REASON], 0);
+    let line = format!("  ! the build left files in the records folder that are not a record of a build unit: `planted.txt`, `{fake}`. Semilla does not use them\n");
+    assert!(out.contains(&line), "{out}");
+    let cache = repo_cache(repo);
+    assert_eq!(find_named(&cache, "planted.txt"), Vec::<PathBuf>::new());
+    assert_eq!(find_named(&cache, fake), Vec::<PathBuf>::new());
+    // The result of a later command uses the same records: it has the same line.
+    let out = run(repo, &["status", "--wait", "600"], 0);
+    assert!(out.contains(line.trim()), "{out}");
+}
+
+#[test]
+fn a_target_with_no_test_harness_has_a_record() {
+    // Design 28.8. A bench target with `harness = false` builds with no `--test`, so the driver
+    // gives the kind `bin` to its record file. The file is a record of a unit of the build:
+    // Semilla uses it, and the output has no line about a file that is not a record.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let manifest = std::fs::read_to_string(repo.join("crates/shop-core/Cargo.toml")).unwrap();
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{manifest}\n[[bench]]\nname = \"speed\"\nharness = false\n"));
+    let bench = |local: &str| format!("fn sum(items: &[u32]) -> u32 {{\n    let {local} = items.iter().sum();\n    {local}\n}}\n\nfn main() {{\n    println!(\"{{}}\", sum(&[1, 2, 3]));\n}}\n");
+    write(repo, "crates/shop-core/benches/speed.rs", &bench("t"));
+    commit_all(repo, "add a bench target");
+    write(repo, "crates/shop-core/benches/speed.rs", &bench("total"));
+    let out = run(repo, &["step", "rename a local"], 0);
+    assert!(out.contains("`shop_core::speed::sum`: renamed local `t` → `total` (proved N0), 2 edit(s) [neutral (proved)]"), "{out}");
+    assert!(!out.contains("the build left"), "{out}");
+}
+
+#[test]
+fn no_process_of_a_build_continues_after_the_build() {
+    // Design 28.10, rule 3. A build script starts two programs and does not wait for them. One
+    // of them tries to leave the process group. Semilla stops each process of the build at the
+    // end of the build.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let script = r#"use std::process::{Command, Stdio};
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let out = std::env::var("OUT_DIR").unwrap();
+    let quiet = |command: &mut Command| command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().is_ok();
+    let plain = quiet(Command::new("sleep").arg("86399"));
+    let session = quiet(Command::new("setsid").args(["sleep", "86398"]));
+    std::fs::write(format!("{out}/partf-started.txt"), format!("{plain} {session}")).unwrap();
+}
+"#;
+    write(repo, "crates/shop-core/build.rs", script);
+    run(repo, &["step", "add a build script", "--reason", BUILD_REASON], 0);
+    run(repo, &["status", "--wait", "600"], 0);
+    let started = find_named(&repo_cache(repo), "partf-started.txt");
+    assert!(!started.is_empty(), "the build script ran");
+    assert!(started.iter().all(|path| std::fs::read_to_string(path).unwrap().starts_with("true ")), "the build script started a program");
+    let alive = || {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+            let line = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
+            let line = String::from_utf8_lossy(&line).replace('\0', " ");
+            if line == "sleep 86399 " || line == "sleep 86398 " {
+                found.push(line);
+            }
+        }
+        found
+    };
+    let mut left = alive();
+    for _ in 0..50 {
+        if left.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        left = alive();
+    }
+    assert!(left.is_empty(), "a process of the build continues: {left:?}");
+}
+
+#[test]
+fn a_build_gets_no_variable_no_program_and_no_file_of_the_agent() {
+    // Design 27.11 and 27.12 (batch 5v, parts A and C). The build script of the base records what
+    // it can get: a variable of the command, a program of a repository folder in `PATH`, and
+    // an open of a path outside the allow list. It records only `true` or `false`.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let script = r#"fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=PROBE_ENV");
+    let out = std::env::var("OUT_DIR").unwrap();
+    let open = |path: &str| std::fs::File::open(path).is_ok() || std::fs::read_dir(path).is_ok();
+    let lines = [
+        format!("variable {}", std::env::var("PROBE_ENV").is_ok()),
+        format!("program {}", std::process::Command::new("probe-tool").status().is_ok()),
+        format!("path {}", std::env::var("PATH").unwrap_or_default().contains("REPO")),
+        format!("ignored file {}", open("REPO/target/notes.txt")),
+        format!("working tree {}", open("REPO/Cargo.toml")),
+        format!("git folder {}", open("REPO/.git/config")),
+        format!("home folder {}", open("HOME")),
+        format!("cache folder {}", open("CACHE")),
+        format!("temporary folder {}", open("/tmp")),
+        format!("process folder {}", open("/proc/self/environ")),
+    ];
+    std::fs::write(format!("{out}/probe-ac.txt"), lines.join("\n")).unwrap();
+}
+"#
+    .replace("REPO", repo.to_str().unwrap())
+    .replace("HOME", &home)
+    .replace("CACHE", cache_dir(repo).to_str().unwrap());
+    write(repo, "crates/shop-core/build.rs", &script);
+    commit_all(repo, "add a build script with plain git");
+    write(repo, "target/notes.txt", "a file that git ignores\n");
+    write(repo, "target/bin/probe-tool", "#!/bin/sh\nexit 0\n");
+    std::fs::set_permissions(repo.join("target/bin/probe-tool"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", repo.join("target/bin").display(), std::env::var("PATH").unwrap());
+    assert!(Command::new("probe-tool").env("PATH", &path).status().is_ok_and(|status| status.success()), "the program runs with this PATH outside the build");
+
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    let (code, out) = run_env(repo, &["step", "rename a local"], &[("PROBE_ENV", "1"), ("PATH", &path)]);
+    assert!(code == 0 && out.contains("[neutral (proved)]") && !out.contains("sandbox:"), "{out}");
+    let probes = find_named(&repo_cache(repo), "probe-ac.txt");
+    assert!(!probes.is_empty(), "the build script ran");
+    for probe in probes {
+        let text = std::fs::read_to_string(&probe).unwrap();
+        assert_eq!(text.lines().count(), 10, "{text}");
+        for line in text.lines() {
+            assert!(line.ends_with(" false"), "the build got: {line}\n{text}");
+        }
+    }
+}
+
+#[test]
+fn a_build_does_not_read_the_credentials_file_of_cargo() {
+    // Design 27.12 (batch 5v, part C). The cargo home of this test is a new folder with a
+    // credentials file. A build reads the registry folder of the cargo home. It does not read
+    // the cargo home folder or the credentials file. The script records only `true` or `false`.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let home = dir.path().join("cargo-home");
+    std::fs::create_dir_all(home.join("registry")).unwrap();
+    std::fs::write(home.join("credentials.toml"), "# a test file\n").unwrap();
+    let script = r#"fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    let out = std::env::var("OUT_DIR").unwrap();
+    let open = |path: &str| std::fs::File::open(path).is_ok() || std::fs::read_dir(path).is_ok();
+    let lines = [
+        format!("registry {}", open("HOME/registry")),
+        format!("credentials {}", open("HOME/credentials.toml")),
+        format!("cargo home {}", std::fs::read_dir("HOME").is_ok()),
+    ];
+    std::fs::write(format!("{out}/probe-cred.txt"), lines.join("\n")).unwrap();
+}
+"#
+    .replace("HOME", home.to_str().unwrap());
+    write(repo, "crates/shop-core/build.rs", &script);
+    commit_all(repo, "add a build script with plain git");
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    let (code, out) = run_env(repo, &["step", "rename a local"], &[("CARGO_HOME", home.to_str().unwrap())]);
+    assert!(code == 0 && out.contains("[neutral (proved)]") && !out.contains("sandbox:"), "{out}");
+    let probes = find_named(&repo_cache(repo), "probe-cred.txt");
+    assert!(!probes.is_empty(), "the build script ran");
+    for probe in probes {
+        assert_eq!(std::fs::read_to_string(&probe).unwrap(), "registry true\ncredentials false\ncargo home false");
+    }
+}
+
+#[test]
+fn a_source_file_that_names_a_file_outside_the_build_folder_gets_a_clear_error() {
+    // Design 27.12 (batch 5v, part C). The code includes a file by an absolute path. The build
+    // cannot read the file: the error says that the file is outside the build folder.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "target/notes.txt", "a file that git ignores\n");
+    let notes = repo.join("target/notes.txt");
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V1}\npub const NOTES: &str = include_str!({:?});\n", notes.to_str().unwrap()));
+    let (code, out) = run_env(repo, &["step", "include the notes"], &[]);
+    let line = format!("The file `{}` is outside the build folder. A check build reads only the files of the tree, the toolchain, and the cargo registry.", notes.display());
+    assert!(out.contains(&line), "{code}\n{out}");
+    assert!(!out.contains("a file that git ignores"), "{out}");
+}
+
+#[test]
+fn a_registry_crate_with_a_build_script_and_a_proc_macro_builds_in_the_sandbox() {
+    // Design 27.12 (batch 5v, part C). `serde` and `proc-macro2` have a build script, and
+    // `serde_derive` is a proc macro. The build reads them from the registry of the cargo home.
+    // The test needs these crates in the cargo cache of the machine: it uses no network.
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let manifest = std::fs::read_to_string(repo.join("crates/shop-core/Cargo.toml")).unwrap();
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{manifest}\n[dependencies]\nserde = {{ version = \"1\", features = [\"derive\"] }}\n"));
+    let receipt = |local: &str| format!("{CART_V0}\n#[derive(serde::Serialize)]\npub struct Receipt {{\n    pub total: u32,\n}}\n\npub fn receipt(cart: &Cart) -> Receipt {{\n    let {local} = cart.total(10);\n    Receipt {{ total: {local} }}\n}}\n");
+    write(repo, "crates/shop-core/src/cart.rs", &receipt("t"));
+    let lock = Command::new("cargo").current_dir(repo).args(["generate-lockfile", "--offline"]).output().unwrap();
+    if !lock.status.success() {
+        eprintln!("no test: the cargo cache of this machine does not have serde\n{}", String::from_utf8_lossy(&lock.stderr));
+        return;
+    }
+    let text = std::fs::read_to_string(repo.join("Cargo.lock")).unwrap();
+    assert!(text.contains("name = \"serde_derive\"") && text.contains("name = \"proc-macro2\""), "{text}");
+    commit_all(repo, "use serde");
+    write(repo, "crates/shop-core/src/cart.rs", &receipt("sum"));
+    let out = run(repo, &["step", "rename a local"], 0);
+    assert!(out.contains("`shop_core::cart::receipt`: renamed local `t` → `sum` (proved N0), 2 edit(s) [neutral (proved)]"), "{out}");
+    assert!(!out.contains("sandbox:") && !out.contains("build failed"), "{out}");
+    // The build made the proc macro: the target folder has its library.
+    fn has_macro(dir: &Path) -> bool {
+        std::fs::read_dir(dir).into_iter().flatten().flatten().any(|entry| {
+            let path = entry.path();
+            if path.is_dir() && !path.is_symlink() { has_macro(&path) } else { entry.file_name().to_string_lossy().starts_with("libserde_derive-") }
+        })
+    }
+    assert!(has_macro(&repo_cache(repo)), "the build made the proc macro");
+}
+
 const FEES: &str = "pub mod cart;\n\npub const BASE_FEE: u64 = 25;\n\npub fn charge(amount: u64, rate: u64) -> u64 {\n    BASE_FEE + percent(amount, rate)\n}\n\npub fn percent(amount: u64, rate: u64) -> u64 {\n    amount * rate / 100\n}\n\npub fn scaled(amount: u64, rate: u64) -> u64 {\n    debug_assert!(rate <= 100);\n    amount * rate / 100\n}\n\npub fn withdraw(cents: u64, amount: u64) -> u64 {\n    let fee = charge(amount, 1);\n    let cost = amount + fee;\n    cents - cost\n}\n";
+
+/// The functions of the test of the opaque rule (batch 5v, part B). One kind of value: a name,
+/// the type, the macro call, the tests of the value that are true in the check build, and the
+/// arms of a `match` (the first arm is the arm of the check build).
+const MACRO_VALUES: [(&str, &str, &str, &[&str], &str); 9] = [
+    ("oe", "Option<&'static str>", "option_env!(\"SEMILLA_T_X\")", &["V.is_none()", "!V.is_some()", "V.unwrap_or(\"x\").len() == 1", "if let Some(_) = V { false } else { true }"], "None => a + 1, Some(_) => a"),
+    ("env", "&'static str", "env!(\"CARGO_MANIFEST_DIR\")", &["V.len() > 0"], "\"\" => a, _ => a + 1"),
+    ("cfg", "bool", "cfg!(semilla_t_none)", &["!V"], "false => a + 1, true => a"),
+    ("file", "&'static str", "file!()", &["V.len() > 0"], "\"\" => a, _ => a + 1"),
+    ("line", "u32", "line!()", &["V > 0"], "0 => a, _ => a + 1"),
+    ("column", "u32", "column!()", &["V > 0"], "0 => a, _ => a + 1"),
+    ("module", "&'static str", "module_path!()", &["V.len() > 0"], "\"\" => a, _ => a + 1"),
+    ("text", "&'static str", "include_str!(\"note.txt\")", &["V.len() == 4"], "\"\" => a, _ => a + 1"),
+    ("bytes", "&'static [u8]", "include_bytes!(\"note.txt\")", &["V.len() == 4"], "0 => a, _ => a + 1"),
+];
+
+/// The text of the functions of [`MACRO_VALUES`], and their names. With `folded`, each body is
+/// the value that the check build gives: `a + 1`.
+fn macro_value_functions(folded: bool) -> (String, Vec<String>) {
+    let mut text = String::from("#![allow(dead_code, unexpected_cfgs)]\n");
+    let mut names = Vec::new();
+    for (kind, ty, call, tests, arms) in MACRO_VALUES {
+        // The value comes from the macro call, a constant, a static, or a function of the crate.
+        for carrier in ["direct", "const", "static", "function"] {
+            let mut forms: Vec<String> = tests.iter().map(|test| format!("if {test} {{ a + 1 }} else {{ a }}")).collect();
+            // The type of the bytes is an array with a length: the `match` reads the length.
+            forms.push(format!("match {} {{ {arms} }}", if kind == "bytes" { "V.len()" } else { "V" }));
+            for (index, form) in forms.iter().enumerate() {
+                let name = format!("{kind}_{carrier}_{index}");
+                let value = match carrier {
+                    "direct" => call.to_string(),
+                    "const" => {
+                        text.push_str(&format!("const C_{}: {ty} = {call};\n", name.to_uppercase()));
+                        format!("C_{}", name.to_uppercase())
+                    }
+                    "static" => {
+                        text.push_str(&format!("static S_{}: {ty} = {call};\n", name.to_uppercase()));
+                        format!("S_{}", name.to_uppercase())
+                    }
+                    _ => {
+                        text.push_str(&format!("fn v_{name}() -> {ty} {{ {call} }}\n"));
+                        format!("v_{name}()")
+                    }
+                };
+                let body = if folded { "a + 1".to_string() } else { form.replace('V', &value) };
+                text.push_str(&format!("pub fn {name}(a: u64) -> u64 {{ {body} }}\n"));
+                names.push(name);
+            }
+        }
+    }
+    // The control: a constant of the tree. The proof of this fold is correct.
+    text.push_str("const OFF: bool = false;\n");
+    text.push_str(&format!("pub fn control(a: u64) -> u64 {{ {} }}\n", if folded { "a + 1" } else { "if OFF { a } else { a + 1 }" }));
+    (text, names)
+}
+
+#[test]
+fn no_proof_uses_the_value_of_a_macro_that_the_tree_does_not_decide() {
+    // Batch 5v, part B (defect 1). The check build gives one value for `option_env!`, `env!`,
+    // `cfg!`, a source position, and the content of a file. A different build can give a
+    // different value. Each function of the list becomes the value of the check build in one
+    // step. No proof says that the step is neutral.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let (before, names) = macro_value_functions(false);
+    let (after, _) = macro_value_functions(true);
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod values;\n");
+    write(repo, "crates/shop-core/src/note.txt", "note");
+    write(repo, "crates/shop-core/src/values.rs", &before);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "values"]);
+    write(repo, "crates/shop-core/src/values.rs", &after);
+    // The variable of the command does not reach the build (part A): the result is the same.
+    let output = semilla_env(repo, &["step", "fold", "--reason", "values::oe_direct_4=the test"], &[("SEMILLA_T_X", "1")]);
+    let out = String::from_utf8_lossy(&output.stdout).into_owned();
+    // The control is the one proof.
+    assert!(out.contains("`shop_core::values::control`: neutral rewrite (proved"), "{out}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(out.matches("neutral rewrite (proved").count(), 1, "{out}");
+    for name in &names {
+        assert!(out.contains(&format!("shop_core::values::{name}")), "the step shows `{name}`: {out}");
+    }
+    // The outputs are those of a `cfg` condition that is not covered: the spotlight and its line.
+    assert!(out.contains(CONFIG_SPOTLIGHT), "{out}");
+    assert!(out.contains("Uses: `option_env!(\"SEMILLA_T_X\")` in `shop_core::values::oe_direct_4`"), "{out}");
+}
 
 /// The spotlight text of a body that reads the build configuration (batch 5k, A1).
 const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on a build condition that Semilla did not check. A proof holds only in the checked configurations.";
@@ -3134,15 +3968,15 @@ fn the_text_of_the_agent_cannot_make_an_output_line() {
     let (code, out) = run_env(repo, &["tag"], &[]);
     assert_eq!(code, 0, "{out}");
     no_forged_line("tag", &out, 1);
-    // The reviewer commands, with and with no permission for the changed build code.
+    // The reviewer commands. They run the changed build code by default.
     let (_, out) = run_env(repo, &["status", "HEAD"], &[]);
     no_forged_line("status HEAD", &out, 1);
-    let (_, out) = run_env(repo, &["status", "HEAD", "--trust-build-code", "--verbose"], &[]);
-    no_forged_line("status HEAD --trust-build-code", &out, 1);
+    let (_, out) = run_env(repo, &["status", "HEAD", "--verbose"], &[]);
+    no_forged_line("status HEAD --verbose", &out, 1);
     assert!(out.contains("\"set the fee rate at build time\\nresult: accepted"), "{out}");
     assert!(out.contains("reason: \"set the fee rate at build time\\nresult: accepted"), "{out}");
     let md = dir.path().join("review.md");
-    let (_, out) = run_env(repo, &["review", "HEAD", "--trust-build-code", "--full", "--md", md.to_str().unwrap()], &[]);
+    let (_, out) = run_env(repo, &["review", "HEAD", "--full", "--md", md.to_str().unwrap()], &[]);
     no_forged_line("review --md", &out, 0);
     let text = std::fs::read_to_string(&md).unwrap();
     no_forged_line("the Markdown report", &text, 0);
@@ -3150,13 +3984,13 @@ fn the_text_of_the_agent_cannot_make_an_output_line() {
     // No line of the Markdown report starts with the words of the agent after the line break.
     assert!(!text.lines().any(|line| line.trim_start().starts_with("result")), "{text}");
     let html = dir.path().join("review.html");
-    let (_, out) = run_env(repo, &["review", "HEAD", "--trust-build-code", "--html", html.to_str().unwrap()], &[]);
+    let (_, out) = run_env(repo, &["review", "HEAD", "--html", html.to_str().unwrap()], &[]);
     no_forged_line("review --html", &out, 0);
     let text = std::fs::read_to_string(&html).unwrap();
     no_forged_line("the HTML report", &text, 0);
     assert!(text.contains("&quot;set the fee rate at build time\\nresult: accepted") && text.contains("Text in quote marks is the text of the agent. Semilla does not check it."), "the HTML report shows the escape\n{text}");
     // The UI data: JSON. Each hidden character is a JSON escape, and the UI shows it as an escape.
-    let ui = ui_changeset(repo, &["--trust-build-code"]);
+    let ui = ui_changeset(repo, &[]);
     let body = ui.split("\r\n\r\n").nth(1).unwrap_or_default();
     no_forged_line("the UI data", body, 0);
     assert!(body.contains("set the fee rate at build time\\nresult: accepted") && body.contains("\\u001b[8m") && body.contains("\\u202e"), "{body}");

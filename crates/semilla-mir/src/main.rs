@@ -336,12 +336,22 @@ fn wrapper_mode(args: &[String]) -> ExitCode {
     let level = std::env::var("SEMILLA_MIR_LEVEL").ok().and_then(|text| Level::parse(&text));
     let out = std::env::var_os("SEMILLA_MIR_OUT").map(PathBuf::from);
     match (level, out) {
-        (Some(level), Some(out)) if !is_probe(rustc_args) => {
+        (Some(level), Some(out)) if !is_probe(rustc_args) && !is_build_script(rustc_args) => {
             let file = out.join(output_file_name(rustc_args));
             run_compiler(level, rustc_args, Output::File(file))
         }
         _ => pass_through(real_rustc, rustc_args),
     }
+}
+
+/// Returns true for the compile of a build script: cargo gives the crate name
+/// `build_script_<file>` and the crate type `bin`. Semilla reads no record of a build script, so
+/// the driver writes none (batch 5v, part F): each record file is then the file of a unit that
+/// the messages of cargo name. A binary of the user with such a name gets no record: its facts
+/// stay facts to read.
+fn is_build_script(args: &[String]) -> bool {
+    let value = |key: &str| args.iter().position(|arg| arg == key).and_then(|index| args.get(index + 1)).map(String::as_str);
+    value("--crate-name").is_some_and(|name| name.starts_with("build_script_")) && value("--crate-type") == Some("bin")
 }
 
 /// Returns true for a rustc call that does not compile a crate: a version query, a `--print`

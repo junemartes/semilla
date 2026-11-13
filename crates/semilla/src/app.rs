@@ -68,16 +68,16 @@ pub struct App {
     workspaces: BTreeMap<String, Workspace>,
     /// For tests: skip the MIR body check.
     pub no_bodies: bool,
-    /// Who runs the command (design 28): an agent command runs the build code that the change
-    /// set changes; a reviewer command does it only with `--trust-build-code` (I6).
+    /// What the command does with the build code that the change set changes (design 28): it
+    /// runs it in the sandbox, or, with `--no-build-code`, it does not run it.
     pub mode: Mode,
     /// The base trees that a commit gives: the tree of the parent of a commit that this process
     /// checked against its note. The build code of such a tree is trusted.
     trusted_bases: std::cell::RefCell<BTreeSet<String>>,
 }
 
-/// Gives no body data for the steps that the command does not check (I6): these steps get the
-/// answers of phase 1.
+/// Gives no body data for the steps that the command does not check (`--no-build-code`): these
+/// steps get the answers of phase 1.
 struct Guard<'a> {
     inner: &'a dyn semilla_verify::BodyOracle,
     skip: &'a BTreeSet<usize>,
@@ -108,6 +108,27 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
         if self.skip.contains(&step.index) { Ok(false) } else { self.inner.set_selections(step, selections) }
     }
+}
+
+/// Puts the mark on each node of the change tree with the class `neutral` whose step used
+/// changed build code (design 28, invariant I6). The count of a parent node says how many of its
+/// `neutral` nodes have the mark. Returns that count.
+fn mark_tree(node: &mut TreeNode, note: &semilla_core::report::BuildCodeNote, lone: Option<usize>) -> usize {
+    let marked: usize = node.children.iter_mut().map(|child| mark_tree(child, note, lone)).sum();
+    let mark = if node.steps.is_empty() { lone.and_then(|step| note.mark_of(step)) } else { node.steps.iter().filter_map(|step| note.mark_of(*step)).min() };
+    if node.class == Some(Class::Neutral) {
+        node.build_code = mark;
+    }
+    if node.children.is_empty() {
+        // The same rule as the count of the tree: a node with no claim is not `neutral`.
+        let neutral = node.class == Some(Class::Neutral) && node.status != semilla_core::view::Status::Uncovered;
+        return usize::from(neutral && mark.is_some());
+    }
+    if let Some(summary) = node.summary.as_mut().filter(|_| marked > 0) {
+        let parts: Vec<String> = summary.split(" · ").map(|part| if part.ends_with(" neutral") { format!("{part}{}", note.count_text(marked)) } else { part.to_string() }).collect();
+        *summary = parts.join(" · ");
+    }
+    marked
 }
 
 /// Makes the report of a step a report with no check (design 28): each fact has the class
@@ -365,8 +386,54 @@ impl App {
         for step in &set.steps {
             code.steps.push(crate::buildcode::StepCode { index: step.index, before: code.trees.contains(&step.tree_before), parts: state.get(&step.tree_after).cloned().unwrap_or_default() });
         }
+        // The keys of the folder sets (design 28.9): builds share a folder that a build can
+        // write only if they have the same build code.
+        if trusted && !code.clean.is_empty() {
+            code.shared = self.shared_key(&base, &key);
+        }
+        for tree in code.trees.clone() {
+            let files = self.workspace(&tree).ok().map(|ws| ws.files.clone());
+            code.keys.insert(tree.clone(), crate::buildcode::marked_key(&base, &tree, &state[&tree], files.as_ref(), !trusted));
+        }
         crate::timing("the build code test", started);
         Ok(code)
+    }
+
+    /// The key of the shared folder set of a trusted base tree: the digest of its build code
+    /// state. The result is in the cache folder of the user, by the tree and the tools. If
+    /// Semilla cannot read the workspace or the dependency graph of the base, the key is the
+    /// base tree itself: then only the trees of change sets on this base share the folders.
+    fn shared_key(&mut self, base: &str, key: &str) -> String {
+        let folder = self.repo.cache_dir().join("host");
+        let file = folder.join(format!("{base}-{key}.state"));
+        let fallback = format!("tree-{base}");
+        if let Some(digest) = std::fs::read_to_string(&file).ok().filter(|text| *text == fallback || (text.len() == 32 && text.chars().all(|digit| digit.is_ascii_hexdigit()))) {
+            return digest;
+        }
+        let digest = (|| -> Result<String> {
+            let ws = self.workspace(base)?;
+            let dir = self.repo.materialize(base)?;
+            let graph = folder.join(format!("{base}-{key}.graph.json"));
+            let host = match std::fs::read_to_string(&graph).ok().and_then(|text| serde_json::from_str(&text).ok()) {
+                Some(host) => host,
+                None => {
+                    let metadata = semilla_normal::cargo::cargo_metadata_full(&dir, &self.repo.store.private_path("metadata"))?;
+                    let host = crate::buildcode::HostInfo::from_metadata(&metadata, std::fs::read_to_string(dir.join("Cargo.lock")).ok().as_deref())?;
+                    let temporary = self.repo.store.private_path("host");
+                    if std::fs::create_dir_all(&folder).is_ok() && std::fs::write(&temporary, serde_json::to_string(&host)?).is_ok() {
+                        let _ = std::fs::rename(&temporary, &graph);
+                    }
+                    host
+                }
+            };
+            Ok(crate::buildcode::state_digest(&crate::buildcode::Side { dir: &dir, ws: &ws }, &host))
+        })();
+        let digest = digest.unwrap_or(fallback);
+        let temporary = self.repo.store.private_path("host");
+        if std::fs::create_dir_all(&folder).is_ok() && std::fs::write(&temporary, &digest).is_ok() {
+            let _ = std::fs::rename(&temporary, &file);
+        }
+        digest
     }
 
     /// The changed build code parts of a tree against the base tree. The result is in the cache
@@ -428,13 +495,14 @@ impl App {
     }
 
     /// The first line of an output of a reviewer command for a change set that changes build
-    /// code: the result that is not complete, or the line of `--trust-build-code`.
+    /// code: the line that names the change and the mark, or the result that is not complete
+    /// (`--no-build-code`).
     pub fn build_code_notice(&self, report: &Report) -> Option<String> {
         let note = report.build_code.as_ref().filter(|note| !note.changes.is_empty())?;
         if !note.ran {
             return summary_line(report).lines().next().map(|line| format!("! {line}"));
         }
-        (self.mode == Mode::ReviewerTrust).then(|| note.trusted_line())
+        Some(note.ran_line())
     }
 
     // ----- the tag tools -----
@@ -710,16 +778,6 @@ impl App {
                 state = crate::background::wait(self, &key, &hash, timeout.saturating_sub(started.elapsed()))?;
             }
         }
-        // The first line: the state of the check of this key. The jobs of other keys are not
-        // the business of this result (trial 5: "queued; 1 job(s)" just after `tag`).
-        let mut text = match state {
-            crate::background::State::Ready => format!("{key}: ready\n"),
-            crate::background::State::Queued => format!("{key}: phase 2 runs in the background\n"),
-            _ => format!("{key}: {}\n", format!("{state:?}").to_lowercase()),
-        };
-        if let Some(notice) = self.base_notice(&set, commit.is_some().then_some(key.as_str())).filter(|_| !set.steps.is_empty()) {
-            put_line(&mut text, &format!("{notice}"));
-        }
         // Rule T6: no result comes from a git note or from a stored text. Phase 1 runs again now.
         // Phase 2 comes only from a report that this machine computed for this change set.
         let saved = self.no_bodies;
@@ -728,9 +786,27 @@ impl App {
         self.no_bodies = saved;
         let phase1 = phase1?;
         let stored = crate::background::stored_for(self, &key, &hash);
+        // The first line: the state of the check of this key. The jobs of other keys are not
+        // the business of this result (trial 5: "queued; 1 job(s)" just after `tag`). The line
+        // comes from the result that the command prints: a result that is there is `ready`,
+        // also when the worker stored it after the last look at the queue (batch 5m, B2).
+        let mut text = match state {
+            _ if stored.is_some() => format!("{key}: ready\n"),
+            crate::background::State::Queued => format!("{key}: phase 2 runs in the background\n"),
+            // The result went away after the last look (a change of the tools): no result.
+            crate::background::State::Ready => format!("{key}: missing\n"),
+            _ => format!("{key}: {}\n", format!("{state:?}").to_lowercase()),
+        };
+        if let Some(notice) = self.base_notice(&set, commit.is_some().then_some(key.as_str())).filter(|_| !set.steps.is_empty()) {
+            put_line(&mut text, &format!("{notice}"));
+        }
+        // The build code of the base comes next to the base line (design 28.5).
+        if let Some(notice) = self.base_build_code_notice(&set, commit.is_some().then_some(key.as_str())) {
+            put_line(&mut text, &notice);
+        }
         match stored {
             Some(stored) => {
-                // A4.4: a reviewer result that ran the changed build code says so first.
+                // Design 28.4: a result that ran the changed build code says so first.
                 if let Some(line) = self.build_code_notice(&stored.report).filter(|_| !stored.report.not_complete()) {
                     put_line(&mut text, &format!("{line}"));
                 }
@@ -920,6 +996,62 @@ impl App {
         Some(format!("base `{}`: no Semilla check (no checked commit before it)", short(&base)))
     }
 
+    /// The line about the build code of the base (design 28.5). The base of a change set can
+    /// have build code that a commit shortly before it added or changed. Each proof of the
+    /// change set ran that code, and no mark shows it. The answer comes from git at the time of
+    /// the call: Semilla compares the tree of the base with the tree of the commit
+    /// [`crate::buildcode::BASE_WALK`] commits before it (first parents), and git names the
+    /// commits that changed the files. No state is stored. The line is information only.
+    pub fn base_build_code_notice(&mut self, set: &ChangeSet, commit: Option<&str>) -> Option<String> {
+        if set.steps.is_empty() {
+            return None;
+        }
+        let base = match commit {
+            Some(commit) => self.repo.parent(commit).ok()??,
+            None => self.base_commit(&set.base_tree)?,
+        };
+        let bound = crate::buildcode::BASE_WALK;
+        let list = self.repo.git(&["rev-list", "--first-parent", "-n", &(bound + 1).to_string(), &base]).ok()?;
+        let chain: Vec<&str> = list.lines().collect();
+        // The first commit of the history is the start of the project, not a change.
+        let far = chain.last().copied().filter(|far| *far != base)?.to_string();
+        let stopped = chain.len() == bound + 1 && self.repo.parent(&far).ok().flatten().is_some();
+        let (far_tree, base_tree) = (self.repo.commit_tree(&far).ok()?, self.repo.commit_tree(&base).ok()?);
+        if far_tree == base_tree {
+            return crate::buildcode::base_code_line(&[], stopped);
+        }
+        let key = self.tools_key();
+        let parts = match self.tree_build_code(&far_tree, &base_tree, &key) {
+            Ok(parts) => parts,
+            Err(error) => {
+                let cause = error.to_string();
+                return Some(format!("base build code: Semilla cannot compare the base with the commit `{}` before it ({})", &far[..7.min(far.len())], cause.lines().next().unwrap_or_default()));
+            }
+        };
+        if parts.is_empty() {
+            return crate::buildcode::base_code_line(&[], stopped);
+        }
+        // Git names the commits that changed these files, from the newest commit back.
+        let paths: Vec<&str> = parts.iter().map(|part| part.path.as_str()).collect();
+        let range = format!("{far}..{base}");
+        let mut args = vec!["log", "--first-parent", "--format=%x00%h", "--name-only", &range, "--"];
+        args.extend(paths.iter().copied());
+        let log = self.repo.git(&args).unwrap_or_default();
+        let mut commits: Vec<(String, Vec<String>)> = Vec::new();
+        for record in log.split('\0').filter(|record| !record.trim().is_empty()) {
+            let mut lines = record.lines().map(str::trim).filter(|line| !line.is_empty());
+            let Some(hash) = lines.next() else { continue };
+            let files: Vec<String> = lines.filter(|line| paths.contains(line)).map(str::to_string).collect();
+            if !files.is_empty() {
+                commits.push((hash.to_string(), files));
+            }
+        }
+        if commits.is_empty() {
+            commits.push((format!("{}..{}", &far[..7.min(far.len())], &base[..7.min(base.len())]), paths.iter().map(|path| path.to_string()).collect()));
+        }
+        crate::buildcode::base_code_line(&commits, stopped)
+    }
+
     /// The anchor at a file position of the working tree, or of the "before" tree of the open
     /// step when `before` is true. Claims on existing code use the "before" anchors.
     /// Then it goes `up` levels up (for example from `cond/lhs` to `cond`).
@@ -1073,7 +1205,7 @@ impl App {
 
     /// Checks a change set, or one step of it, with the build code state of the full change set.
     fn check_set_with(&mut self, set: &ChangeSet, require_groups: bool, code: &BuildCode) -> Result<CheckResult> {
-        // I6: a command with no permission does not check a step that uses a tree with changed
+        // A command with `--no-build-code` does not check a step that uses a tree with changed
         // build code. Such a step gets its phase 1 facts, with no MIR data.
         let note = code.note(self.mode.runs_build_code());
         let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().collect();
@@ -1092,6 +1224,30 @@ impl App {
         for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)).filter(|step| skip.contains(&step.step)) {
             let change = note.as_ref().and_then(|note| note.changes.iter().find(|change| change.steps.contains(&step.step))).map(|change| change.step).unwrap_or(step.step);
             mark_not_checked(step, &format!("build code changed in step {change}"));
+        }
+        // I6: each proof of a step that used changed build code has the mark. The facts for a
+        // build code file of the step go first in each output.
+        for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)) {
+            let mark = note.as_ref().and_then(|note| note.mark_of(step.step));
+            let paths = code.change_paths(step.step);
+            for fact in &mut step.facts {
+                fact.build_code = mark;
+                fact.build_code_change = fact.file.as_ref().is_some_and(|file| paths.contains(file));
+            }
+            for claim in &mut step.claims {
+                claim.build_code = mark;
+            }
+            // A build code change shows its diff. A fact of an item has no content: the first
+            // such fact of a file gets the change of the file.
+            let Some(trees) = set.steps.iter().find(|change| change.index == step.step).and_then(|change| cache.get(&change.tree_before).zip(cache.get(&change.tree_after))) else { continue };
+            let mut seen: BTreeSet<String> = step.facts.iter().filter(|fact| fact.build_code_change && fact.content.is_some()).filter_map(|fact| fact.file.clone()).collect();
+            for fact in step.facts.iter_mut().filter(|fact| fact.build_code_change && fact.content.is_none()) {
+                let Some(file) = fact.file.clone().filter(|file| seen.insert(file.clone())) else { continue };
+                let text = |ws: &Workspace| ws.other_files.get(&file).or_else(|| ws.rust_files.get(&file)).cloned();
+                let size = |ws: &Workspace| ws.files.get(&file).map(|entry| entry.size);
+                let (old, new) = (text(trees.0), text(trees.1));
+                fact.content = Some(semilla_verify::files::content_change(old.as_deref(), new.as_deref(), size(trees.0), size(trees.1)));
+            }
         }
         report.build_code = note;
         report.configs = config_note(set, &log, &cache);
@@ -1112,9 +1268,10 @@ impl App {
         }
         report.phase = if self.no_bodies { "syntax".into() } else { "full".into() };
         report.finish();
-        // A build with no sandbox comes first: code of the change set could change the result.
-        if let Some(warning) = crate::oracle::no_sandbox_warning() {
-            report.warnings.insert(0, warning);
+        // A build with a limit of the sandbox missing comes first: code of the change set could
+        // change the result. A file of the records folder that is not a record comes next.
+        for (index, warning) in crate::oracle::build_warnings().into_iter().enumerate() {
+            report.warnings.insert(index, warning);
         }
         report.warnings.extend(self.tool_warnings());
         if !exprs.available() {
@@ -1124,7 +1281,15 @@ impl App {
         let (base, head) = (self.workspace(&set.base_tree).unwrap_or_default(), self.workspace(&set.head_tree).unwrap_or_default());
         let empty = semilla_syntax::Workspace::default();
         let step_trees: Vec<(&semilla_syntax::Workspace, &semilla_syntax::Workspace)> = set.steps.iter().map(|s| (cache.get(&s.tree_before).unwrap_or(&empty), cache.get(&s.tree_after).unwrap_or(&empty))).collect();
-        let tree = semilla_verify::views::change_tree_with(&outcomes, &head, &base, &step_trees);
+        let mut tree = semilla_verify::views::change_tree_with(&outcomes, &head, &base, &step_trees);
+        if let Some(note) = &report.build_code {
+            // The tree of one step has no step numbers on its nodes.
+            let lone = match set.steps.as_slice() {
+                [step] => Some(step.index),
+                _ => None,
+            };
+            mark_tree(&mut tree, note, lone);
+        }
         Ok(CheckResult { report, outcomes, text, tree })
     }
 
@@ -1300,7 +1465,7 @@ impl App {
             crate::background::enqueue(self, &job)?;
             crate::background::spawn_worker(self)?;
         }
-        let notice = self.base_notice(&set, Some(&commit)).map(|notice| format!("\n{notice}")).unwrap_or_default();
+        let notice: String = self.base_notice(&set, Some(&commit)).into_iter().chain(self.base_build_code_notice(&set, Some(&commit))).map(|notice| format!("\n{notice}")).collect();
         Ok(format!("{line}\ntagged {commit} with {} steps; the change set is closed{notice}", set.steps.len()))
     }
 
@@ -1316,8 +1481,8 @@ impl App {
     /// records of the tree are in the cache (design 10.2: full paths and signature badges).
     fn add_external_calls(&self, graph: &mut WorkspaceGraph, workspace: &Workspace, tree: &str, code: &BuildCode) {
         use semilla_core::view::{GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, Status};
-        // The folder set of the tree. A command with no permission reads no record of a tree
-        // with changed build code (I6).
+        // The folder set of the tree. A command with `--no-build-code` reads no record of a
+        // tree with changed build code.
         let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default() }).root(tree) else { return };
         let settings = semilla_normal::cargo::settings_key(&root.join("build"), semilla_normal::cargo::find_driver().ok().as_deref());
         let cache = root.join("mir").join(tree).join(format!("n0-s{settings}"));
@@ -1384,6 +1549,7 @@ impl App {
         // The build code line is the first line of each output of a reviewer (design 28).
         result.report.notices.extend(self.build_code_notice(&result.report));
         result.report.notices.extend(self.base_notice(&set, commit));
+        result.report.notices.extend(self.base_build_code_notice(&set, commit));
         // The checked configurations come next to the base line (batch 5s, B1).
         result.report.notices.extend(config_lines(&result.report));
         // Each group shows the engine suggestion of its subgroups. A stored layout has labels of
@@ -1508,7 +1674,9 @@ pub(crate) fn short_text(report: &Report) -> String {
         } else if report.phase == "syntax" {
             format!(" · {facts} fact{}", if facts == 1 { "" } else { "s" })
         } else {
-            format!(" · {facts} fact{}: {neutral} proved neutral, {} to read", if facts == 1 { "" } else { "s" }, facts - neutral)
+            // Design 28: the count says how many proofs used changed build code.
+            let marked = step.facts.iter().filter(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight && fact.build_code.is_some()).count();
+            format!(" · {facts} fact{}: {neutral} proved neutral{}, {} to read", if facts == 1 { "" } else { "s" }, report.marked_text(marked), facts - neutral)
         };
         let claims = match step.claims.len() {
             0 => String::new(),
@@ -1637,10 +1805,12 @@ pub(crate) fn summary_line(report: &Report) -> String {
         // Phase 1 has no MIR compare: it gives no class.
         format!("{facts} fact{}: {spotlight} with a spotlight (phase 2 gives the classes)", if facts == 1 { "" } else { "s" })
     } else {
-        format!("{facts} fact{}: {neutral} proved neutral, {} to read ({spotlight} with a spotlight)", if facts == 1 { "" } else { "s" }, facts - neutral)
+        format!("{facts} fact{}: {neutral} proved neutral{}, {} to read ({spotlight} with a spotlight)", if facts == 1 { "" } else { "s" }, report.marked_text(report.marked_count()), facts - neutral)
     };
     // The claims by result. A property claim that Semilla proves only in part is "partial".
     let mut results: Vec<(&str, usize)> = Vec::new();
+    // I6: the count of the proofs says how many used changed build code.
+    let mut marked: BTreeMap<&str, (usize, Vec<usize>)> = BTreeMap::new();
     for claim in checked.iter().flat_map(|s| &s.claims) {
         let name = match &claim.status {
             ClaimStatus::Verified { proof } if proof == "partial" => "partial",
@@ -1656,13 +1826,20 @@ pub(crate) fn summary_line(report: &Report) -> String {
             Some((_, count)) => *count += 1,
             None => results.push((name, 1)),
         }
+        if let Some(step) = claim.build_code.filter(|_| claim.status.is_verified()) {
+            let entry = marked.entry(name).or_default();
+            entry.0 += 1;
+            if !entry.1.contains(&step) {
+                entry.1.push(step);
+            }
+        }
     }
     let order = ["verified", "partial", "pending", "unproved", "refuted", "empty", "malformed", "not checked"];
     results.sort_by_key(|(name, _)| order.iter().position(|known| known == name));
     let total: usize = results.iter().map(|(_, count)| count).sum();
     let claims = match total {
         0 => "0 claims".to_string(),
-        _ => format!("{total} claim{}: {}", if total == 1 { "" } else { "s" }, results.iter().map(|(name, count)| format!("{count} {name}")).collect::<Vec<_>>().join(", ")),
+        _ => format!("{total} claim{}: {}", if total == 1 { "" } else { "s" }, results.iter().map(|(name, count)| format!("{count} {name}{}", marked.get(name).map(|(count, steps)| semilla_core::report::count_mark(*count, steps)).unwrap_or_default())).collect::<Vec<_>>().join(", ")),
     };
     let steps = report.steps.len();
     let mut text = match note {

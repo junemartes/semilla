@@ -31,8 +31,8 @@ pub enum ClaimStatus {
     Malformed { reason: String },
     /// The body proof waits for the background check (phase 2, design section 19).
     Pending { reason: String },
-    /// No check ran: the step uses build code that the change set changes, and the reviewer did
-    /// not allow it (invariant I6, design 28).
+    /// No check ran: the step uses build code that the change set changes, and the command had
+    /// `--no-build-code` (design 28).
     NotChecked { reason: String },
 }
 
@@ -103,6 +103,21 @@ pub struct ClaimResult {
     /// calls). The command to run again uses it. It is empty when Semilla has no such list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub complete_calls: Vec<String>,
+    /// The mark of design 28 (invariant I6): the check of this claim ran the build code that
+    /// step N changes. Each output shows [`build_code_mark`] with a verified claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_code: Option<usize>,
+}
+
+impl ClaimResult {
+    /// The mark for an output, with a space before it. It is empty for a claim with no proof,
+    /// and for a proof that used only the build code of the base.
+    pub fn mark(&self) -> String {
+        match self.build_code {
+            Some(step) if self.status.is_verified() => format!(" {}", build_code_mark(step)),
+            _ => String::new(),
+        }
+    }
 }
 
 /// A difference that no claim explains.
@@ -209,9 +224,39 @@ pub struct Fact {
     /// note asks for no reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The mark of design 28 (invariant I6): the check of this fact ran the build code that
+    /// step N changes. Each output shows [`build_code_mark`] with each proof of the fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_code: Option<usize>,
+    /// True if the fact is a change of build code (design 28). Each output shows such a fact
+    /// first in its step, with its diff.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub build_code_change: bool,
 }
 
 impl Fact {
+    /// True if the first line of the fact in an output shows a proof: the class `neutral
+    /// (proved)`, or a description with a proof (`renamed … (proved N1)`).
+    pub fn has_proof(&self) -> bool {
+        self.class == Some(Class::Neutral) || self.description.contains("(proved")
+    }
+
+    /// The mark for the first line of the fact in an output, with a space before it. It is
+    /// empty for a fact with no proof, and for a proof that used only the build code of the base.
+    pub fn mark(&self) -> String {
+        match self.build_code {
+            Some(step) if self.has_proof() => format!(" {}", build_code_mark(step)),
+            _ => String::new(),
+        }
+    }
+
+    /// The mark for a part of the fact that is a proof: the list of the bodies with an equal
+    /// MIR, and the note of a partial proof. It is empty for a proof that used only the build
+    /// code of the base.
+    pub fn part_mark(&self) -> String {
+        self.build_code.map(|step| format!(" {}", build_code_mark(step))).unwrap_or_default()
+    }
+
     /// True if the description names each place of a site group (a fold of equal type changes:
     /// "type `u32` → `u64` in 8 places: …"). A view does not show the sites of the group again.
     /// True for a fact of a doc comment change. A doc comment has no MIR: its class is `other`.
@@ -558,12 +603,30 @@ impl BuildCodeChange {
     }
 }
 
+/// The mark of a proof that used build code that step `step` changes (design 28, invariant I6).
+pub fn build_code_mark(step: usize) -> String {
+    format!("(with the build code of step {step})")
+}
+
+/// The part of a count of proofs that says how many have the mark, or an empty text. `steps`
+/// are the steps of the marks.
+pub fn count_mark(marked: usize, steps: &[usize]) -> String {
+    match (marked, steps) {
+        (0, _) => String::new(),
+        (_, [step]) => format!(" ({marked} with the build code of step {step})"),
+        _ => format!(" ({marked} with changed build code)"),
+    }
+}
+
+/// The title of the section of a step that shows the build code changes of the step.
+pub const BUILD_CODE_SECTION: &str = "build code changed in this step; read this change first";
+
 /// The build code state of a result (design 28, invariant I6).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BuildCodeNote {
     pub changes: Vec<BuildCodeChange>,
-    /// True if the check ran the changed build code (an agent command, or a reviewer command
-    /// with `--trust-build-code`). False: the steps of `changes` are not checked.
+    /// True if the check ran the changed build code in the sandbox (the default). False: the
+    /// command had `--no-build-code`, and the steps of `changes` are not checked.
     pub ran: bool,
 }
 
@@ -573,40 +636,64 @@ impl BuildCodeNote {
         if self.ran { Vec::new() } else { self.changes.iter().flat_map(|change| change.steps.iter().copied()).collect() }
     }
 
-    /// The line of an agent command for a step (A4.1): the full line in the step that changes
-    /// the build code, a short form in a later step. `None` if the step uses no changed build code.
+    /// The step whose build code change the check of `step` used, if the check ran it.
+    pub fn mark_of(&self, step: usize) -> Option<usize> {
+        if !self.ran {
+            return None;
+        }
+        self.changes.iter().find(|change| change.steps.contains(&step)).map(|change| change.step)
+    }
+
+    /// The line of `step` for a step: the full line in the step that changes the build code, a
+    /// short form in a later step. `None` if the step uses no changed build code.
     pub fn step_line(&self, step: usize) -> Option<String> {
         let change = self.changes.iter().find(|change| change.steps.contains(&step))?;
         Some(if change.step == step {
             format!(
-                "! build code changed in step {step}: {}. It runs during the check and can change each result {}. A reviewer command checks these steps only with --trust-build-code.",
+                "! build code changed in step {step}: {}. It runs in the sandbox during each check, and it can change each result {}. Each proof that depends on it has the mark {}.",
                 change.parts,
-                change.span()
+                change.span(),
+                build_code_mark(step)
             )
         } else {
-            format!("! build code changed in step {} ({}): a reviewer command checks this step only with --trust-build-code.", change.step, change.parts)
+            format!("! build code changed in step {} ({}): each proof of this step has the mark {}.", change.step, change.parts, build_code_mark(change.step))
         })
     }
 
-    /// The part of the result line of `tag` (A4.2), with no separator.
+    /// The part of the result line, with no separator.
     pub fn tag_text(&self) -> String {
         let spans: Vec<String> = self.changes.iter().map(|change| if change.to_end { format!("from step {}", change.step) } else { change.span() }).collect();
         format!("build code changed {}", spans.join(", "))
     }
 
-    /// The line at the top of a result that ran the changed build code with the permission of
-    /// the reviewer (A4.4).
-    pub fn trusted_line(&self) -> String {
-        let parts: Vec<String> = self.changes.iter().map(|change| format!("{} (step {})", change.parts, change.step)).collect();
+    /// The line at the top of a result that ran the changed build code.
+    pub fn ran_line(&self) -> String {
+        let parts: Vec<String> = self.changes.iter().map(|change| format!("step {} ({})", change.step, change.parts)).collect();
         let spans: Vec<String> = self.changes.iter().map(BuildCodeChange::span).collect();
-        format!("! this result ran the build code that the change set changes (--trust-build-code): {}. That code can change each result {}.", parts.join("; "), spans.join(", "))
+        let marks: Vec<String> = self.changes.iter().map(|change| build_code_mark(change.step)).collect();
+        format!(
+            "! build code changed in {}. The check ran it in the sandbox. It can change each result {}. Read that change first. Each proof that depends on it has the mark {}.",
+            parts.join("; "),
+            spans.join(", "),
+            marks.join(" or ")
+        )
     }
 
-    /// The text of a result that is not complete (A4.3), after the result of the checked steps.
+    /// The text of a result that is not complete, after the result of the checked steps.
     pub fn not_checked_text(&self) -> String {
         let causes: Vec<String> = self.changes.iter().map(|change| format!("build code changed in step {} ({})", change.step, change.parts)).collect();
-        let what = if self.changes.len() == 1 { "that change" } else { "these changes" };
-        format!("{} not checked: {}. Read {what}. Then run the command again with --trust-build-code.", step_ranges(&self.not_checked()), causes.join("; "))
+        format!("{} not checked: {}. The command does not run it (the option --no-build-code, or a build sandbox that is not complete).", step_ranges(&self.not_checked()), causes.join("; "))
+    }
+
+    /// The part of a count of proved facts that says how many have the mark, or an empty text.
+    pub fn count_text(&self, marked: usize) -> String {
+        if marked == 0 {
+            return String::new();
+        }
+        match self.changes.as_slice() {
+            [change] => format!(" ({marked} with the build code of step {})", change.step),
+            _ => format!(" ({marked} with changed build code)"),
+        }
     }
 }
 
@@ -628,7 +715,7 @@ pub fn step_ranges(steps: &[usize]) -> String {
 impl Report {
     /// Sets `accepted` and the totals from the step reports.
     pub fn finish(&mut self) {
-        // A result with a step that is not checked is not complete: it accepts nothing (I6).
+        // A result with a step that is not checked is not complete: it accepts nothing.
         self.accepted = self.organization.is_empty() && self.steps.iter().all(StepReport::accepted) && !self.not_complete();
         self.panic_delta = self.steps.iter().map(|step| step.panic_delta).sum();
         self.lines = LineCounts::default();
@@ -645,7 +732,7 @@ impl Report {
     }
 
     /// True if a step has no check, because it uses build code that the change set changes and
-    /// the reviewer did not allow it (design 28).
+    /// the command had `--no-build-code` (design 28).
     pub fn not_complete(&self) -> bool {
         self.build_code.as_ref().is_some_and(|note| !note.ran && !note.changes.is_empty())
     }
@@ -664,6 +751,17 @@ impl Report {
         let facts = || self.steps.iter().flat_map(|step| &step.facts);
         let neutral = facts().filter(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight).count();
         (facts().count(), neutral, facts().filter(|fact| fact.spotlight).count())
+    }
+
+    /// The count of the proved neutral facts that have the mark of changed build code (design
+    /// 28). A fact with a spotlight is a fact to read: it is not in this count.
+    pub fn marked_count(&self) -> usize {
+        self.steps.iter().flat_map(|step| &step.facts).filter(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight && fact.build_code.is_some()).count()
+    }
+
+    /// The text of [`BuildCodeNote::count_text`] for a count of marked facts.
+    pub fn marked_text(&self, marked: usize) -> String {
+        self.build_code.as_ref().map(|note| note.count_text(marked)).unwrap_or_default()
     }
 }
 
@@ -728,38 +826,77 @@ mod tests {
     }
 
     #[test]
-    fn the_build_code_lines_of_an_agent_command() {
-        // Design 28, A4.1 and A4.2: the full line in the step of the change, a short form later.
+    fn the_build_code_lines_of_the_step_command() {
+        // Design 28.4: the full line in the step of the change, a short form later.
         let note = BuildCodeNote { changes: vec![change(3, &[3, 4, 5, 6], true)], ran: true };
         assert_eq!(note.step_line(2), None);
         assert_eq!(
             note.step_line(3).unwrap(),
-            "! build code changed in step 3: crates/core/build.rs. It runs during the check and can change each result from step 3 on. A reviewer command checks these steps only with --trust-build-code."
+            "! build code changed in step 3: crates/core/build.rs. It runs in the sandbox during each check, and it can change each result from step 3 on. Each proof that depends on it has the mark (with the build code of step 3)."
         );
-        assert_eq!(note.step_line(5).unwrap(), "! build code changed in step 3 (crates/core/build.rs): a reviewer command checks this step only with --trust-build-code.");
+        assert_eq!(note.step_line(5).unwrap(), "! build code changed in step 3 (crates/core/build.rs): each proof of this step has the mark (with the build code of step 3).");
         assert_eq!(note.tag_text(), "build code changed from step 3");
         assert!(note.not_checked().is_empty());
+        assert_eq!((note.mark_of(2), note.mark_of(3), note.mark_of(6)), (None, Some(3), Some(3)));
+        assert_eq!(note.count_text(0), "");
+        assert_eq!(note.count_text(2), " (2 with the build code of step 3)");
+        // The count of the verified claims has the same text.
+        assert_eq!((count_mark(0, &[3]), count_mark(2, &[3]), count_mark(2, &[1, 3])), (String::new(), " (2 with the build code of step 3)".to_string(), " (2 with changed build code)".to_string()));
     }
 
     #[test]
-    fn the_build_code_lines_of_a_reviewer_command() {
-        // Design 28, A4.3 and A4.4.
+    fn the_build_code_lines_of_a_result() {
+        // Design 28.4: the result with `--no-build-code`, and the default result.
         let mut note = BuildCodeNote { changes: vec![change(3, &[3, 4, 5, 6], true)], ran: false };
         assert_eq!(note.not_checked(), vec![3, 4, 5, 6]);
-        assert_eq!(
-            note.not_checked_text(),
-            "steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). Read that change. Then run the command again with --trust-build-code."
-        );
+        assert_eq!(note.mark_of(4), None, "a step with no check has no proof and no mark");
+        assert_eq!(note.not_checked_text(), "steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete).");
         note.ran = true;
         assert_eq!(
-            note.trusted_line(),
-            "! this result ran the build code that the change set changes (--trust-build-code): crates/core/build.rs (step 3). That code can change each result from step 3 on."
+            note.ran_line(),
+            "! build code changed in step 3 (crates/core/build.rs). The check ran it in the sandbox. It can change each result from step 3 on. Read that change first. Each proof that depends on it has the mark (with the build code of step 3)."
         );
         // Case 7: the build code goes back to the base in step 3.
         let note = BuildCodeNote { changes: vec![change(1, &[1, 2, 3], false)], ran: false };
         assert_eq!(note.not_checked(), vec![1, 2, 3]);
         assert!(note.not_checked_text().starts_with("steps 1–3 not checked: build code changed in step 1 (crates/core/build.rs)."));
         assert_eq!(note.tag_text(), "build code changed in steps 1–3");
+        // Two changes: the count names no step.
+        let note = BuildCodeNote { changes: vec![change(1, &[1, 2], false), change(4, &[4], true)], ran: true };
+        assert_eq!((note.mark_of(2), note.mark_of(3), note.mark_of(4)), (Some(1), None, Some(4)));
+        assert_eq!(note.count_text(3), " (3 with changed build code)");
+    }
+
+    #[test]
+    fn the_mark_is_on_each_proof_of_a_fact_and_on_each_verified_claim() {
+        // Invariant I6: a proof that used changed build code has the mark.
+        let mut fact = Fact { class: Some(Class::Neutral), ..Default::default() };
+        assert_eq!((fact.mark(), fact.part_mark()), (String::new(), String::new()), "a proof with the build code of the base has no mark");
+        fact.build_code = Some(2);
+        assert_eq!(fact.mark(), " (with the build code of step 2)");
+        assert_eq!(fact.part_mark(), " (with the build code of step 2)");
+        // A fact that is not neutral has no proof in its first line. A proof in its text has the mark.
+        fact.class = Some(Class::Logic);
+        assert_eq!(fact.mark(), "");
+        fact.description = "renamed `a` → `b` (proved N1)".into();
+        assert_eq!(fact.mark(), " (with the build code of step 2)");
+        let mut claim = ClaimResult {
+            claim: "c1".into(),
+            step: 2,
+            status: ClaimStatus::Verified { proof: "mir".into() },
+            class: None,
+            effect: None,
+            witness: None,
+            hint: None,
+            before: None,
+            after: None,
+            affected: Vec::new(),
+            complete_calls: Vec::new(),
+            build_code: Some(2),
+        };
+        assert_eq!(claim.mark(), " (with the build code of step 2)");
+        claim.status = ClaimStatus::Unproved { reason: "no".into() };
+        assert_eq!(claim.mark(), "", "a claim with no proof has no mark");
     }
 
     #[test]
@@ -767,7 +904,7 @@ mod tests {
         let mut report = Report::default();
         assert!(!report.not_complete());
         report.build_code = Some(BuildCodeNote { changes: vec![change(0, &[0], true)], ran: true });
-        assert!(!report.not_complete(), "an agent result ran the build code: it is complete");
+        assert!(!report.not_complete(), "the result ran the build code: it is complete");
         report.build_code = Some(BuildCodeNote { changes: vec![change(0, &[0], true)], ran: false });
         assert!(report.not_complete());
         assert_eq!(step_ranges(&[0, 1, 2, 5]), "steps 0–2, 5");

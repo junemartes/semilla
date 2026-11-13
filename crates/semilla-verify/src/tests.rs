@@ -675,7 +675,7 @@ fn the_claim_list_of_a_rejected_step_has_a_short_cause() {
     // Brief 5g, item 4: the first lines of a rejected step have the full text of a failed claim.
     // The claim list has only the status and the short cause.
     use semilla_core::ClaimResult;
-    let result = |claim: &str, status: ClaimStatus| ClaimResult { claim: claim.into(), step: 0, status, class: None, effect: None, witness: None, hint: Some("the hint".into()), before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() };
+    let result = |claim: &str, status: ClaimStatus| ClaimResult { build_code: None, claim: claim.into(), step: 0, status, class: None, effect: None, witness: None, hint: Some("the hint".into()), before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() };
     let mut report = semilla_core::StepReport::default();
     report.claims = vec![
         result("c1", ClaimStatus::Refuted { reason: "external calls outside the list of `calls`: `std::fs::write` in `demo::save` (calls to `core` and `alloc` are always allowed)".into() }),

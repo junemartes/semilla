@@ -84,15 +84,19 @@
   const STATUS_ICONS = { verified: '✓', unproved: '?', refuted: '✗', empty: '∅', malformed: '!', pending: '…', not_checked: '–', no_result: '·' };
   const CLASS_LABELS = { neutral: 'neutral', logic: 'logic', control_flow: 'ctrl flow', other: 'other', not_checked: 'not checked' };
   // The class of a fact in a text line. A step with no check gives `not checked` (design 28).
+  // The title of a build code change of a step (design 28.3).
+  const BUILD_CODE_SECTION = 'build code changed in this step; read this change first';
   const factClass = (fact) => (fact.class === 'not_checked' ? 'not checked' : fact.class || 'class after phase 2');
 
   function marker(status) {
     return h('span', { class: 'marker m ' + (status || 'same'), title: status || '' }, MARKERS[status] || '·');
   }
 
-  function classChip(cls) {
+  // Design 28, I6: `buildCode` is the step whose build code change the proof of the class
+  // used. The chip then has the mark.
+  function classChip(cls, buildCode) {
     if (!cls) return null;
-    return h('span', { class: 'chip cls-' + cls }, CLASS_LABELS[cls] || cls);
+    return h('span', { class: 'chip cls-' + cls }, (CLASS_LABELS[cls] || cls) + (buildCode != null ? ' (with the build code of step ' + buildCode + ')' : ''));
   }
 
   // Shows `⟦old⟧→⟦new⟧` parts as a deletion and an insertion.
@@ -268,7 +272,7 @@
       h('b', null, cs.step_count), ' steps · ',
       h('b', null, c.claims), ' claims · ',
       h('b', null, cs.fact_counts.total), ' facts: ',
-      h('b', null, cs.fact_counts.neutral), ' proved neutral, ',
+      h('b', null, cs.fact_counts.neutral), ' proved neutral', cs.fact_counts.marked_text || '', ', ',
       h('b', null, cs.fact_counts.read), ' to read (',
       h('b', null, cs.fact_counts.spotlight), ' with a spotlight)',
       cs.fact_counts.not_checked ? ', ' + cs.fact_counts.not_checked + ' not checked' : '', ' · API: ',
@@ -281,8 +285,8 @@
         h('span', { class: 'chip ' + (cs.accepted ? 'ok' : cs.not_complete ? 'warn' : 'bad') }, cs.accepted ? 'accepted' : cs.not_complete ? 'not complete' : 'rejected'),
         h('span', { class: 'facts' }, facts),
         h('span', { class: 'facts' },
-          c.verified, ' verified',
-          c.partial ? ' · ' + c.partial + ' partial' : '',
+          c.verified, ' verified', c.marked_text || '',
+          c.partial ? ' · ' + c.partial + ' partial' + (c.partial_marked_text || '') : '',
           c.unproved ? ' · ' + c.unproved + ' unproved' : '',
           c.refuted ? ' · ' + c.refuted + ' refuted' : '',
           c.empty ? ' · ' + c.empty + ' empty' : '',
@@ -305,12 +309,14 @@
     if (cs.facts && cs.facts.length) {
       // The derived facts (design 22.5): Semilla computed them from the diff; no claim exists.
       const items = cs.facts.map((fact) => {
-        const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']: ' + fact.description];
+        const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']' + (fact.mark || '') + ': ' + fact.description];
         for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ')) parts.push(group.sites.length + ' site(s): ' + group.edit);
         if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
-        if (fact.note) parts.push('note: ' + fact.note);
+        if (fact.note) parts.push('note: ' + fact.note + (fact.part_mark || ''));
         if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
-        return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
+        // A build code change says so (design 28.3). The server puts it first in its step.
+        const first = fact.build_code_change ? h('b', null, BUILD_CODE_SECTION + ': ') : null;
+        return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', first, parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
       });
       root.appendChild(h('h3', {}, 'Derived facts'));
       root.appendChild(h('ul', { class: 'messages facts' }, items));
@@ -348,7 +354,7 @@
     });
     const strip = group.subgroups.map((sub) => sub.role_label + (sub.claims.length > 1 ? ' (' + sub.claims.length + ')' : '')).join(' · ');
     const right = [];
-    if (group.all_neutral) right.push(h('span', { class: 'chip ok' }, '✓ all neutral'));
+    if (group.all_neutral) right.push(h('span', { class: 'chip ok' }, '✓ all neutral' + (group.mark || '')));
     if (group.counts.uncovered) right.push(h('span', { class: 'chip bad' }, group.counts.uncovered + ' uncovered'));
     const failed = group.counts.claims - group.counts.verified - (group.counts.partial || 0);
     if (failed) right.push(h('span', { class: 'chip warn' }, failed + ' not verified'));
@@ -360,7 +366,7 @@
         h('span', { class: 'twisty' }),
         h('span', { class: 'gid' }, group.id),
         h('span', { class: 'steps' }, stepsLabel(group.steps)),
-        h('span', { class: 'kind' }, group.kind),
+        h('span', { class: 'kind' }, group.kind + (group.kind_mark || '')),
         h('span', { class: 'title' }, group.synthetic ? group.title : quoted(group.title)),
         h('span', { class: 'risk', title: 'risk: ' + (group.risk_reasons.join(', ') || 'none') }, 'risk ', riskDots(group.risk)),
         group.synthetic ? h('span', { class: 'chip warn' }, 'made by the UI') : null,
@@ -376,18 +382,22 @@
     body.appendChild(h('p', { class: 'why' }, facts.join(' · ')));
     if (group.split_hint) body.appendChild(h('p', { class: 'hint' }, '⚠ ', group.split_hint));
     // The derived facts of the steps of the group (design 22.5): as visible as its claims.
-    const groupFacts = (state.changeset.facts || []).filter((fact) => group.steps.includes(fact.step));
-    if (groupFacts.length) {
-      body.appendChild(h('h4', {}, 'Derived facts (' + groupFacts.length + ')'));
-      body.appendChild(h('ul', { class: 'messages facts' }, groupFacts.map((fact) => {
-        const parts = [fact.id + ' derived [' + factClass(fact) + ']: ' + fact.description];
+    // The build code changes come first, each with its diff (design 28.3).
+    const allFacts = (state.changeset.facts || []).filter((fact) => group.steps.includes(fact.step));
+    const factList = (title, facts) => {
+      if (!facts.length) return;
+      body.appendChild(h('h4', {}, title + ' (' + facts.length + ')'));
+      body.appendChild(h('ul', { class: 'messages facts' }, facts.map((fact) => {
+        const parts = ['step ' + fact.step + ': ' + fact.id + ' derived [' + factClass(fact) + ']' + (fact.mark || '') + ': ' + fact.description];
         for (const site of fact.sites || []) if (!fact.description.startsWith(site.edit + ' in ')) parts.push(site.sites.length + ' site(s): ' + site.edit);
         if (fact.affected && fact.affected.length) parts.push(fact.affected.length + ' affected: ' + fact.affected.join(', '));
-        if (fact.note) parts.push('note: ' + fact.note);
+        if (fact.note) parts.push('note: ' + fact.note + (fact.part_mark || ''));
         if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason: ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));
         return h('li', { class: fact.spotlight ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
       })));
-    }
+    };
+    factList('Build code changes: read these changes first', allFacts.filter((fact) => fact.build_code_change));
+    factList('Derived facts', allFacts.filter((fact) => !fact.build_code_change));
     if (group.uncovered.length) {
       body.appendChild(
         h('ul', { class: 'uncovered-list' },
@@ -415,7 +425,7 @@
     details.addEventListener('toggle', () => { state.openSubgroups[sub.id] = details.open; });
     const right = [];
     for (const badge of sub.badges) right.push(h('span', { class: 'chip' }, badge));
-    if (sub.folded) right.push(h('span', { class: 'chip ok' }, '✓ proved'));
+    if (sub.folded) right.push(h('span', { class: 'chip ok' }, '✓ proved' + (sub.mark || '')));
     if (sub.counts.unproved) right.push(h('span', { class: 'chip warn' }, sub.counts.unproved + ' unproved'));
     if (sub.counts.pending) right.push(h('span', { class: 'chip' }, sub.counts.pending + ' pending'));
     const bad = sub.counts.refuted + sub.counts.empty + sub.counts.malformed;
@@ -467,7 +477,9 @@
     return h('tr', null,
       h('td', { class: 'icon ' + claim.status, title: claim.status }, STATUS_ICONS[claim.status] || '·'),
       h('td', null,
-        h('span', { class: 'op' }, claim.op), ' ', anchor, ' ', classChip(claim.class),
+        h('span', { class: 'op' }, claim.op), ' ', anchor, ' ', classChip(claim.class, claim.mark && claim.result ? claim.result.build_code : null),
+        // The mark of a claim with no class label (I6).
+        !claim.class && claim.mark ? h('span', { class: 'chip' }, claim.mark.trim()) : null,
         claim.new_in_subgroup ? [' ', h('span', { class: 'chip new', title: 'The engine added this claim after the agent edited the subgroup.' }, 'new')] : null,
         h('div', { class: 'text' }, claim.summary),
         ba, details),
@@ -496,7 +508,7 @@
       marker(status),
       h('span', { class: 'label', title: node.id, onclick: (event) => { event.preventDefault(); openPanel(node.id); } }, diffText(node.label)),
       node.diff ? h('span', { class: 'diff' }, diffText(node.diff)) : null,
-      classChip(node.class),
+      classChip(node.class, node.build_code),
       node.summary ? h('span', { class: 'summary' }, node.summary) : null,
       (node.claims || []).length ? h('span', { class: 'claim-ref' }, node.claims.join(' ')) : null,
       (node.steps || []).length ? h('span', { class: 'summary' }, (node.steps.length === 1 ? 'step ' : 'steps ') + node.steps.join(', ')) : null,
@@ -1036,7 +1048,7 @@
     body.appendChild(h('h2', null, marker(info.status), ' ', info.label));
     body.appendChild(h('div', { class: 'mono note' }, info.id));
     body.appendChild(
-      h('div', { class: 'note' }, info.kind, info.status ? ' · ' + info.status : '', ' · module ', info.module, info.file ? ' · file ' + info.file : '', ' ', classChip(info.class)),
+      h('div', { class: 'note' }, info.kind, info.status ? ' · ' + info.status : '', ' · module ', info.module, info.file ? ' · file ' + info.file : '', ' ', classChip(info.class, info.build_code)),
     );
     const actions = [];
     if (info.flow) actions.push(h('button', { type: 'button', onclick: () => navigateFlow(id) }, 'Open flow view'));
@@ -1129,7 +1141,7 @@
       box.appendChild(
         h('div', { class: 'hit' + (index === 0 ? ' focus' : ''), onclick: () => pickHit(hit) },
           marker(hit.status || 'same'),
-          h('span', null, h('b', null, hit.label), ' ', classChip(hit.class)),
+          h('span', null, h('b', null, hit.label), ' ', classChip(hit.class, hit.build_code)),
           h('span', { class: 'meta' }, hit.kind, hit.claims.length ? ' · ' + hit.claims.join(' ') : '', hit.matched.length ? ' · ' + hit.matched.join(', ') : ''),
           h('span', { class: 'id' }, hit.id)),
       );

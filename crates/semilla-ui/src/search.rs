@@ -181,6 +181,8 @@ pub struct Hit {
     pub kind: String,
     pub status: Option<Status>,
     pub class: Option<Class>,
+    /// The step whose build code change the proof of the class used (design 28, I6).
+    pub build_code: Option<usize>,
     /// The claims on this node and inside it.
     pub claims: Vec<String>,
     pub score: u32,
@@ -207,6 +209,7 @@ struct Entity {
     kind: String,
     status: Option<Status>,
     class: Option<Class>,
+    build_code: Option<usize>,
     labels: Vec<String>,
     tree_claims: Vec<String>,
     badges: Vec<String>,
@@ -224,6 +227,7 @@ fn entities(ctx: &Ctx) -> BTreeMap<String, Entity> {
             kind: kind.to_string(),
             status: None,
             class: None,
+            build_code: None,
             labels: Vec::new(),
             tree_claims: Vec::new(),
             badges: Vec::new(),
@@ -246,7 +250,9 @@ fn entities(ctx: &Ctx) -> BTreeMap<String, Entity> {
     while let Some(node) = stack.pop() {
         let kind = if node.id.contains('/') { "statement" } else { "item" };
         let entity = add(&mut out, &node.id, &node.label, kind, Some(node.status));
-        entity.class = entity.class.or(node.class);
+        if entity.class.is_none() {
+            (entity.class, entity.build_code) = (node.class, node.build_code);
+        }
         if let Some(diff) = &node.diff {
             entity.labels.push(diff.clone());
         }
@@ -523,6 +529,7 @@ pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
                 kind: entity.kind,
                 status: entity.status,
                 class: entity.class,
+                build_code: entity.build_code,
                 claims: entity_claims,
                 score,
                 matched,

@@ -253,7 +253,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         equal_sites.dedup();
         let place = anchor.to_string();
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact {
+        facts.push(Fact { build_code: None, build_code_change: false,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),

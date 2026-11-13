@@ -413,7 +413,8 @@ fn the_settings_key_follows_the_outer_cargo_configuration() {
     std::fs::create_dir_all(dir.path().join("repo/.cargo")).unwrap();
     std::fs::write(dir.path().join("repo/.cargo/config.toml"), "[build]\nrustflags = [\"-Coverflow-checks=off\"]\n").unwrap();
     assert_ne!(cargo::settings_key(&build, None), before, "a parent cargo configuration is a build setting");
-    assert!(cargo::is_build_setting_env("RUSTFLAGS") && cargo::is_build_setting_env("CARGO_PROFILE_DEV_OVERFLOW_CHECKS") && !cargo::is_build_setting_env("CARGO_TARGET_DIR"));
+    // Each configuration file of the key is on the read list of the sandbox, and no other one.
+    assert_eq!(cargo::outer_configs(&build).iter().filter(|file| file.starts_with(dir.path())).count(), 1);
 }
 
 #[test]
@@ -507,6 +508,26 @@ fn a_variant_rename_sorts_the_switch_targets_again() {
     // `otherwise` stays last, and a switch with number targets keeps its order.
     assert_eq!(super::sort_variant_lists("switchInt(_2) -> [k::E::B: bb1, k::E::A: bb2, otherwise: bb3];"), "switchInt(_2) -> [k::E::A: bb2, k::E::B: bb1, otherwise: bb3];");
     assert_eq!(super::sort_variant_lists("switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];"), "switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];");
+}
+
+#[test]
+fn one_unit_gives_one_record_file() {
+    // Design 28.8. A unit of a test build has two possible names: the compiler gets `--test`
+    // only if the target has a test harness. A build unit of a different kind has one name.
+    let stdout = [
+        r#"{"reason":"compiler-artifact","target":{"name":"k-core","crate_types":["lib"]},"profile":{"test":false},"filenames":["/t/libk_core-0a.rmeta"]}"#,
+        r#"{"reason":"compiler-artifact","target":{"name":"k-core","crate_types":["lib"]},"profile":{"test":true},"filenames":["/t/libk_core-0b.rmeta"]}"#,
+        r#"{"reason":"compiler-artifact","target":{"name":"speed","crate_types":["bin"]},"profile":{"test":true},"filenames":["/t/libspeed-0c.rmeta"]}"#,
+        r#"{"reason":"compiler-artifact","target":{"name":"build-script-build","kind":["custom-build"],"crate_types":["bin"]},"profile":{"test":false},"filenames":["/t/build/k-core-0d/build-script-build"]}"#,
+    ]
+    .join("\n");
+    let names: Vec<String> = cargo::unit_files(&stdout).into_iter().collect();
+    assert_eq!(names, ["k_core.lib.0a.jsonl", "k_core.lib.0b.jsonl", "k_core.test.0b.jsonl", "speed.bin.0c.jsonl", "speed.test.0c.jsonl"]);
+    // The driver makes one file for each unit. Two files for one unit: Semilla uses none.
+    let files = ["k_core.lib.0a.jsonl", "k_core.test.0b.jsonl", "speed.bin.0c.jsonl", "speed.test.0c.jsonl"].map(str::to_string).to_vec();
+    let (single, double) = cargo::one_file_each(files);
+    assert_eq!(single, ["k_core.lib.0a.jsonl", "k_core.test.0b.jsonl"]);
+    assert_eq!(double, ["speed.bin.0c.jsonl", "speed.test.0c.jsonl"]);
 }
 
 #[test]

@@ -28,6 +28,11 @@
 //! configuration-free. A body with such a pattern gets a line `config pattern: ..` in its text,
 //! gets no term, and each switch on a value that the optimizer can know becomes opaque.
 //!
+//! A macro that is not on the allow list can also decide the variant of an enum value with no
+//! constant operand: `option_env!` gives `Some("..")` or `None` (batch 5v). The pass makes the
+//! result of each such statement opaque (`is_macro_variant`), and a constant with such a
+//! statement in its initializer is not configuration-free.
+//!
 //! The same rule applies to an operation that the target decides: an operation with a `usize`
 //! or `isize` result on values that can be constants, a direct call of an intrinsic
 //! (`size_of`, `transmute`), the length of a slice, and an unsize coercion of an array (the
@@ -200,6 +205,9 @@ fn builtin_name(tcx: TyCtxt<'_>, def_id: DefId, name: rustc_span::Symbol) -> Opt
 
 /// The first macro of the expansion of `span` that is not on the allow list.
 fn macro_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
+    if span.ctxt().is_root() {
+        return hidden_call(tcx, span);
+    }
     let mut span = span;
     let mut found: Option<String> = None;
     let mut quiet = false;
@@ -249,6 +257,32 @@ fn macro_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
         span = data.call_site;
     }
     found.map(|identity| Source::Macro { identity, quiet })
+}
+
+/// The source of a value whose span is a full macro call in the source text (batch 5v).
+/// `line!`, `column!`, and `file!` give a literal with the span of the outermost macro call,
+/// and that span has no expansion data. A proc macro can do the same with a span of its
+/// input. The source text of such a span is not the value. The use gets no spotlight, as for
+/// a macro of `NOT_CONFIG`.
+fn hidden_call(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
+    if span.is_dummy() {
+        return None;
+    }
+    let text = tcx.sess.source_map().span_to_snippet(span).ok()?;
+    is_call_text(&text).then(|| Source::Macro { identity: call_text(tcx, span, rustc_span::sym::line), quiet: true })
+}
+
+/// True if `text` has the form of one macro call: a path, `!`, and one group in delimiters.
+fn is_call_text(text: &str) -> bool {
+    let text = text.trim();
+    let Some((path, rest)) = text.split_once('!') else { return false };
+    let path = path.trim_end();
+    let is_path = !path.is_empty()
+        && !path.starts_with(|first: char| first.is_ascii_digit())
+        && path.chars().all(|part| part.is_alphanumeric() || part == '_' || part == ':' || part == '$');
+    let rest = rest.trim_start();
+    let group = [('(', ')'), ('[', ']'), ('{', '}')].iter().any(|(open, close)| rest.starts_with(*open) && rest.ends_with(*close));
+    is_path && group
 }
 
 fn is_proc_macro(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
@@ -1230,6 +1264,13 @@ fn body_is_free<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
                 _ => self.free = false,
             }
         }
+        fn visit_statement(&mut self, statement: &mir::Statement<'tcx>, location: Location) {
+            // The variant of an enum value that a macro decides (`option_env!`).
+            if is_macro_variant(self.tcx, statement) {
+                self.free = false;
+            }
+            self.super_statement(statement, location);
+        }
         fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, location: Location) {
             let allowed = match rvalue {
                 Rvalue::Use(..) | Rvalue::Repeat(..) | Rvalue::Ref(..) | Rvalue::RawPtr(..) | Rvalue::Aggregate(..) => true,
@@ -1266,6 +1307,16 @@ fn body_is_free<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
     let mut check = Check { tcx, body, free: true };
     check.visit_body(body);
     check.free
+}
+
+/// True if the statement makes a value of an enum, and a macro that is not on the allow list
+/// makes the statement (batch 5v). The macro decides the variant: `option_env!` gives `Some` or
+/// `None`, and a proc macro can give each variant. The variant is not a constant operand.
+fn is_macro_variant<'tcx>(tcx: TyCtxt<'tcx>, statement: &mir::Statement<'tcx>) -> bool {
+    let StatementKind::Assign(assign) = &statement.kind else { return false };
+    let Rvalue::Aggregate(kind, _) = &assign.1 else { return false };
+    let mir::AggregateKind::Adt(def_id, ..) = **kind else { return false };
+    tcx.adt_def(def_id).is_enum() && macro_source(tcx, statement.source_info.span).is_some()
 }
 
 /// The locals that can hold a value that the optimizer knows (see the module text). A local is
@@ -1554,6 +1605,26 @@ fn make_opaque<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId, body: &mut Body<'tcx>) 
                 break;
             }
         }
+    }
+
+    // Step 1b (batch 5v): each value of an enum that a macro makes, if the macro is not on the
+    // allow list. `option_env!` gives `Some("..")` or `None`. Step 1 makes the text opaque, but
+    // the variant is not an operand: a `match` on the value reads it. The result is opaque.
+    let mut index = 0;
+    while index < body.basic_blocks.len() {
+        let block = BasicBlock::from_usize(index);
+        index += 1;
+        let found = body.basic_blocks[block].statements.iter().position(|statement| is_macro_variant(tcx, statement));
+        let Some(at) = found else { continue };
+        let source_info = body.basic_blocks[block].statements[at].source_info;
+        let StatementKind::Assign(assign) = &body.basic_blocks[block].statements[at].kind else { unreachable!() };
+        let ty = assign.0.ty(&body.local_decls, tcx).ty;
+        let local = body.local_decls.push(LocalDecl::new(ty, source_info.span));
+        let StatementKind::Assign(assign) = &mut body.basic_blocks.as_mut()[block].statements[at].kind else { unreachable!() };
+        let destination = std::mem::replace(&mut assign.0, Place::from(local));
+        // The span of the call gives the source to the printer. The rest of the block goes to
+        // a new block. The loop reads it later.
+        pass.call(body, block, at + 1, Operand::Move(Place::from(local)), ty, destination, source_info.span);
     }
 
     // Step 2: each unsize coercion of an array. The length of the array type becomes a value

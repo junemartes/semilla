@@ -18,9 +18,9 @@ use crate::git::Repo;
 /// of the user, outside the repository folder (I5): the agent cannot write them.
 ///
 /// A tree with build code that the change set changes never uses these shared folders (design
-/// 28). It has a separate folder set, `build-code/<base tree>/`, with its own build folders,
-/// target folders, and records. Only a command with the permission builds such a tree or reads
-/// its records (I6).
+/// 28). It has a separate folder set, `build-code/<key>/`, with its own build folders,
+/// target folders, and records. A command with `--no-build-code` does not build such a tree and
+/// does not read its records.
 pub struct NormalOracle {
     pub repo: Repo,
     /// The build code state of each tree of the change set.
@@ -123,30 +123,62 @@ static METADATA: std::sync::Mutex<BTreeMap<String, Option<serde_json::Value>>> =
 /// holds the base tree of the change set.
 pub const BUILD_CODE_FILE: &str = ".build-code";
 
-/// The separate folder set of the trees with changed build code of the change sets on one base.
-pub fn build_code_root(repo: &Repo, base: &str) -> std::path::PathBuf {
-    repo.cache_dir().join("build-code").join(base)
+/// The folder set of the trees with one build code state (design 28.9, batch 5v). `marked` is
+/// true for the trees with changed build code. A build can write its target folder and its
+/// records folder, so two builds share a folder set only if they run the same build code.
+pub fn folder_set(repo: &Repo, marked: bool, key: &str) -> std::path::PathBuf {
+    repo.cache_dir().join(if marked { "build-code" } else { "shared" }).join(key)
 }
 
-/// Why a build of the records that this process used ran with no sandbox (design 27).
+/// The line for a build of the records that this process used, if the build ran with a limit
+/// of the sandbox missing (design 27).
 static NO_SANDBOX: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// The name of the file that marks the records of a build with no sandbox. The file holds the cause.
+/// The name of the file that marks the records of a build with a limit of the sandbox missing.
+/// The file holds the line that names each missing limit.
 const NO_SANDBOX_FILE: &str = ".no-sandbox";
 
-/// The warning for a result, if a build of its records ran with no sandbox: code of the change
-/// set (a build script, a proc macro) could write each file of the user in that build.
+/// The files that a build of the records of this process left in its records folder, and that
+/// are not the record file of a unit of that build (design 28.8).
+static OTHER_FILES: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// The name of the file that holds the names of [`OTHER_FILES`] for the records of one build.
+const OTHER_FILES_FILE: &str = ".other-files";
+
+/// The warning for a result, if a build of its records ran with a limit of the sandbox missing.
+/// The line names each missing limit.
 pub fn no_sandbox_warning() -> Option<String> {
-    let cause = NO_SANDBOX.lock().ok()?.clone()?;
-    Some(format!("{} ({cause})", semilla_normal::sandbox::NO_SANDBOX))
+    NO_SANDBOX.lock().ok()?.clone()
 }
 
-/// Reads the sandbox state of a records folder.
+/// The warning for a result, if a build of its records left a file in the records folder that
+/// is not the record file of a unit. Semilla does not copy such a file. The line names each.
+pub fn other_files_warning() -> Option<String> {
+    let files = OTHER_FILES.lock().ok()?;
+    if files.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = files.iter().map(|name| format!("`{name}`")).collect();
+    let (noun, verb) = if names.len() == 1 { ("a file", "is") } else { ("files", "are") };
+    Some(format!("the build left {noun} in the records folder that {verb} not a record of a build unit: {}. Semilla does not use {}", names.join(", "), if names.len() == 1 { "it" } else { "them" }))
+}
+
+/// The warnings of the builds of the records that this process used.
+pub fn build_warnings() -> Vec<String> {
+    no_sandbox_warning().into_iter().chain(other_files_warning()).collect()
+}
+
+/// Reads the sandbox state and the other files of a records folder.
 fn note_sandbox(cache: &std::path::Path) {
-    if let Ok(cause) = std::fs::read_to_string(cache.join(NO_SANDBOX_FILE))
+    if let Ok(line) = std::fs::read_to_string(cache.join(NO_SANDBOX_FILE))
         && let Ok(mut state) = NO_SANDBOX.lock()
     {
-        *state = Some(cause.trim().to_string());
+        *state = Some(line.trim().to_string());
+    }
+    if let Ok(names) = std::fs::read_to_string(cache.join(OTHER_FILES_FILE))
+        && let Ok(mut files) = OTHER_FILES.lock()
+    {
+        files.extend(names.lines().filter(|name| !name.is_empty()).map(str::to_string));
     }
 }
 
@@ -249,19 +281,21 @@ impl NormalOracle {
 
     /// The folder set of a tree, and true if it is the separate set of the changed build code.
     ///
-    /// The shared folders (the cache folder itself) serve only a tree with the build code of the
-    /// base. A tree with no state is never built.
+    /// The shared folders (`shared/<key>`) serve only a tree with the build code of the base.
+    /// The key is the digest of that build code. A tree with no state is never built.
     pub fn root(&self, tree: &str) -> Result<(std::path::PathBuf, bool)> {
         if self.code.clean.contains(tree) {
-            return Ok((self.repo.cache_dir(), false));
+            let key = if self.code.shared.is_empty() { format!("tree-{}", self.code.base) } else { self.code.shared.clone() };
+            return Ok((folder_set(&self.repo, false, &key), false));
         }
         if !self.code.trees.contains(tree) {
             anyhow::bail!("an internal error: tree {tree} has no build code state, so Semilla does not build it");
         }
         if !self.mode.runs_build_code() {
-            anyhow::bail!("tree {tree} has build code that the change set changes; a reviewer command builds it only with --trust-build-code (I6)");
+            anyhow::bail!("tree {tree} has build code that the change set changes; a command with --no-build-code does not build it");
         }
-        Ok((build_code_root(&self.repo, &self.code.base), true))
+        let key = self.code.keys.get(tree).cloned().unwrap_or_else(|| format!("tree-{tree}"));
+        Ok((folder_set(&self.repo, true, &key), true))
     }
 
     /// The records of a tree at a level, with the default features.
@@ -306,28 +340,34 @@ impl NormalOracle {
         std::fs::create_dir_all(root.join("target"))?;
         let started = std::time::Instant::now();
         self.repo.checkout_build(&build, tree)?;
-        if let Err(error) = semilla_normal::run_cargo_check_delta_config(&build, level, &records, &target, config) {
-            let text = format!("{error:#}");
-            if is_compile_error(&text) && !marked {
-                let _ = std::fs::remove_dir_all(&cache);
-                std::fs::create_dir_all(&cache)?;
-                std::fs::write(cache.join(FAILED_FILE), &text)?;
+        let built = match semilla_normal::run_cargo_check_delta_config(&build, level, &records, &target, config) {
+            Ok(built) => built,
+            Err(error) => {
+                let text = format!("{error:#}");
+                if is_compile_error(&text) && !marked {
+                    let _ = std::fs::remove_dir_all(&cache);
+                    std::fs::create_dir_all(&cache)?;
+                    std::fs::write(cache.join(FAILED_FILE), &text)?;
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
         let _ = std::fs::remove_dir_all(&cache);
         std::fs::create_dir_all(&cache)?;
-        for entry in std::fs::read_dir(&records)? {
-            let path = entry?.path();
-            if path.extension().is_some_and(|e| e == "jsonl") {
-                std::fs::copy(&path, cache.join(path.file_name().unwrap()))?;
-            }
+        // The cache gets only the record file of each unit of this build (design 28.8). Each
+        // other file of the records folder stays out, and the result names it. A program of
+        // the build decides the name: each hidden character becomes an escape.
+        for file in &built.records {
+            std::fs::copy(records.join(file), cache.join(file))?;
+        }
+        if !built.other.is_empty() {
+            std::fs::write(cache.join(OTHER_FILES_FILE), built.other.iter().map(|name| format!("{}\n", semilla_core::text::inline(name).replace('`', "'"))).collect::<String>())?;
         }
         // The sandbox state of the build stays with the records: a later result that uses them
         // shows the same warning.
-        if let Some(cause) = semilla_normal::sandbox::problem() {
-            std::fs::write(cache.join(NO_SANDBOX_FILE), cause)?;
+        if let Some(missing) = semilla_normal::sandbox::missing() {
+            std::fs::write(cache.join(NO_SANDBOX_FILE), missing.line())?;
         }
         if marked {
             std::fs::write(cache.join(BUILD_CODE_FILE), format!("{}\n", self.code.base))?;

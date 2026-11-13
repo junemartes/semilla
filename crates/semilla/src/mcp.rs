@@ -33,13 +33,16 @@ fn tools() -> Value {
 /// Runs one tool call.
 fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
     let text = |key: &str| args.get(key).and_then(Value::as_str);
-    // The tools are agent commands (design 28). The result of a tagged commit and `verify` are
-    // reviewer commands: they run no build code that the change set changes (I6).
-    app.mode = match name {
-        "verify" => crate::buildcode::Mode::Reviewer,
-        "results" if text("commit").is_some() => crate::buildcode::Mode::Reviewer,
-        _ => crate::buildcode::Mode::Agent,
+    // Each tool runs the build code that the change set changes, in the sandbox (design 28).
+    // Each proof that depends on it has the mark (I6). The result of a tagged commit and
+    // `verify` are reviewer commands: with a limit of the sandbox missing, they do not run it.
+    let (mode, guard) = match name {
+        "verify" => crate::buildcode::reviewer_mode(crate::buildcode::Mode::Run, false),
+        "results" if text("commit").is_some() => crate::buildcode::reviewer_mode(crate::buildcode::Mode::Run, false),
+        _ => (crate::buildcode::Mode::Run, None),
     };
+    app.mode = mode;
+    let guard = guard.map(|line| format!("{line}\n")).unwrap_or_default();
     match name {
         "ops" => {
             let ops: Vec<&semilla_core::ops::OpInfo> = semilla_core::ops::OPS.iter().filter(|op| crate::onestep::CLAIMS.contains(&op.name)).collect();
@@ -71,11 +74,12 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
         }
         "replay_end" => app.replay_end(),
         "replay_abort" => app.replay_abort(),
-        "results" => app.status(text("commit"), args.get("wait").and_then(Value::as_u64), args.get("verbose").and_then(Value::as_bool).unwrap_or(false)),
+        "results" => Ok(format!("{guard}{}", app.status(text("commit"), args.get("wait").and_then(Value::as_u64), args.get("verbose").and_then(Value::as_bool).unwrap_or(false))?)),
         "verify" => {
             let result = app.check(None, args.get("final").and_then(Value::as_bool).unwrap_or(false))?;
-            let configs: String = crate::app::config_lines(&result.report).into_iter().map(|line| format!("{line}\n")).collect();
-            Ok(format!("{configs}{}\n{}", result.text, result.tree.render()))
+            // The build code line of the result comes first (design 28.4), then the configurations.
+            let head: String = app.build_code_notice(&result.report).into_iter().chain(crate::app::config_lines(&result.report)).map(|line| format!("{line}\n")).collect();
+            Ok(format!("{guard}{head}{}\n{}", result.text, result.tree.render()))
         }
         "tag" => app.tag(text("commit").unwrap_or("HEAD")),
         other => anyhow::bail!("unknown tool `{other}`"),

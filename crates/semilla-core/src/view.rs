@@ -43,6 +43,10 @@ pub struct TreeNode {
     pub status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<Class>,
+    /// The step whose build code change the proof of the class `neutral` used (design 28,
+    /// invariant I6). `None`: the proof used only the build code of the base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_code: Option<usize>,
     /// The claim IDs on this node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claims: Vec<String>,
@@ -82,6 +86,9 @@ impl TreeNode {
         }
         if let Some(class) = self.class {
             out.push_str(&format!("   [{}]", serde_json::to_value(class).unwrap().as_str().unwrap()));
+            if let Some(step) = self.build_code {
+                out.push_str(&format!(" {}", crate::report::build_code_mark(step)));
+            }
         }
         if let Some(summary) = &self.summary {
             out.push_str(&format!("   ({})", crate::text::inline(summary)));
@@ -275,6 +282,7 @@ mod tests {
             label: "crate a".into(),
             status: Status::Changed,
             class: None,
+            build_code: None,
             claims: vec![],
             diff: None,
             steps: Vec::new(),
@@ -284,6 +292,7 @@ mod tests {
                 label: "fn f".into(),
                 status: Status::Added,
                 class: Some(Class::Logic),
+                build_code: None,
                 claims: vec!["c1".into()],
                 diff: None,
                 steps: Vec::new(),
@@ -294,5 +303,10 @@ mod tests {
         let text = tree.render();
         assert!(text.contains("~ crate a"));
         assert!(text.contains("└─ + fn f   [logic]"));
+        // Design 28, I6: a class with a proof that used changed build code has the mark.
+        let mut tree = tree;
+        tree.children[0].class = Some(Class::Neutral);
+        tree.children[0].build_code = Some(1);
+        assert!(tree.render().contains("└─ + fn f   [neutral] (with the build code of step 1)"));
     }
 }

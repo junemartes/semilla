@@ -22,7 +22,8 @@ use crate::paths::replace_functions;
 /// The input of the hash: the text and the local callees of a body, by name.
 pub type HashInput = BTreeMap<String, (String, Vec<String>)>;
 
-fn sha(text: &str) -> String {
+/// The SHA-256 digest of a text, in hexadecimal digits.
+pub fn sha(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

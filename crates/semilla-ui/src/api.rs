@@ -120,6 +120,7 @@ fn shallow(node: &TreeNode) -> Value {
         "status": node.status,
         "marker": node.status.marker(),
         "class": node.class,
+        "build_code": node.build_code,
         "claims": node.claims,
         "diff": node.diff,
         "summary": node.summary,
@@ -173,6 +174,8 @@ fn node_info(ctx: &Ctx, review: &ReviewFile, id: &str) -> ApiResult {
         "kind": kind,
         "status": graph_node.map(|node| node.status).or(tree_node.map(|node| node.status)),
         "class": tree_node.and_then(|node| node.class),
+        // Design 28, I6: the step whose build code change the proof of the class used.
+        "build_code": tree_node.and_then(|node| node.build_code),
         "graph": graph_node,
         "tree": tree_node.map(shallow),
         "claims": claims,

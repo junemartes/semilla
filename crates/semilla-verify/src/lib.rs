@@ -597,7 +597,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         if status.is_verified() && outcome.explains.is_empty() && !outcome.self_evident {
             status = ClaimStatus::Empty;
         }
-        report.claims.push(ClaimResult {
+        report.claims.push(ClaimResult { build_code: None,
             claim: claim.id.clone(),
             step: step.index,
             status,

@@ -62,8 +62,7 @@ fn the_table_of_known_traits_agrees_with_the_compiler() {
     let out = dir.path().join("out");
     std::fs::create_dir_all(&out).unwrap();
     // The build can write only its target folder and the folder of the records.
-    unsafe { std::env::set_var("SEMILLA_TRAIT_TABLE", std::fs::canonicalize(&out).unwrap()) };
-    semilla_normal::run_cargo_check(&root, "n0", &out, &dir.path().join("target")).unwrap();
+    semilla_normal::run_cargo_check_with_trait_table(&root, "n0", &out, &dir.path().join("target")).unwrap();
     let text = std::fs::read_to_string(out.join("trait_probe.json")).expect("the driver writes the trait table");
     let table: serde_json::Value = serde_json::from_str(&text).unwrap();
     let list = |value: &serde_json::Value| value.as_array().unwrap().iter().map(|item| item.as_str().unwrap().to_string()).collect::<Vec<_>>();

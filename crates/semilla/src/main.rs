@@ -44,6 +44,10 @@ struct Cli {
     /// when the agent could write outside the repository folder (the cache folder of the user).
     #[arg(long, global = true)]
     fresh: bool,
+    /// For a reviewer command on a machine with no full sandbox: run the build code that the
+    /// change set changes with the limits that the machine has. The default does not run it.
+    #[arg(long, global = true)]
+    build_code_no_sandbox: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -155,9 +159,12 @@ enum Command {
         /// Print the facts and the claims of each step.
         #[arg(long)]
         verbose: bool,
-        /// Allow the check to run the build code that the change set changes (a build script, a
-        /// proc macro crate, a cargo configuration file). Read that change first.
+        /// Do not run the build code that the change set changes (a build script, a proc macro
+        /// crate, a cargo configuration file). The steps from that change on get no check.
         #[arg(long)]
+        no_build_code: bool,
+        /// (removed) The command runs the build code by default.
+        #[arg(long, hide = true, conflicts_with = "no_build_code")]
         trust_build_code: bool,
     },
     /// Review the session or a tagged commit: the UI, or a standalone report.
@@ -179,9 +186,12 @@ enum Command {
         wait: u64,
         #[arg(long, default_value_t = 7878)]
         port: u16,
-        /// Allow the check to run the build code that the change set changes (a build script, a
-        /// proc macro crate, a cargo configuration file). Read that change first.
+        /// Do not run the build code that the change set changes (a build script, a proc macro
+        /// crate, a cargo configuration file). The steps from that change on get no check.
         #[arg(long)]
+        no_build_code: bool,
+        /// (removed) The command runs the build code by default.
+        #[arg(long, hide = true, conflicts_with = "no_build_code")]
         trust_build_code: bool,
     },
     /// Run the background jobs, then stop (normally started by a step and by `tag`).
@@ -195,9 +205,12 @@ enum Command {
         /// Print the report as JSON.
         #[arg(long)]
         json: bool,
-        /// Allow the check to run the build code that the change set changes (a build script, a
-        /// proc macro crate, a cargo configuration file). Read that change first.
+        /// Do not run the build code that the change set changes (a build script, a proc macro
+        /// crate, a cargo configuration file). The steps from that change on get no check.
         #[arg(long)]
+        no_build_code: bool,
+        /// (removed) The command runs the build code by default.
+        #[arg(long, hide = true, conflicts_with = "no_build_code")]
         trust_build_code: bool,
     },
     /// (old protocol, for the replay) Suggest claims for the uncovered changes of the last step.
@@ -238,9 +251,12 @@ enum Command {
     Ui {
         #[arg(long, default_value_t = 7878)]
         port: u16,
-        /// Allow the check to run the build code that the change set changes (a build script, a
-        /// proc macro crate, a cargo configuration file). Read that change first.
+        /// Do not run the build code that the change set changes (a build script, a proc macro
+        /// crate, a cargo configuration file). The steps from that change on get no check.
         #[arg(long)]
+        no_build_code: bool,
+        /// (removed) The command runs the build code by default.
+        #[arg(long, hide = true, conflicts_with = "no_build_code")]
         trust_build_code: bool,
     },
     /// Serve the agent tools over MCP (stdio).
@@ -352,18 +368,29 @@ fn phase1_ok(report: &semilla_core::Report) -> bool {
         })
 }
 
-/// Who runs a command (design 28). The agent commands are an allow list: each other command is
-/// a reviewer command, and it runs no build code that the change set changes (I6) unless it has
-/// `--trust-build-code`.
+/// What a command does with changed build code (design 28). Each command runs it in the
+/// sandbox. A command with `--no-build-code` does not run it.
 fn command_mode(command: &Command) -> buildcode::Mode {
     use buildcode::Mode;
     match command {
-        Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index => Mode::Agent,
-        // `status` with no commit shows the session of the agent.
-        Command::Status { commit: None, .. } => Mode::Agent,
-        Command::Status { trust_build_code: true, .. } | Command::Review { trust_build_code: true, .. } | Command::Ui { trust_build_code: true, .. } | Command::Verify { trust_build_code: true, .. } => Mode::ReviewerTrust,
-        _ => Mode::Reviewer,
+        Command::Status { no_build_code: true, .. } | Command::Review { no_build_code: true, .. } | Command::Ui { no_build_code: true, .. } | Command::Verify { no_build_code: true, .. } => Mode::NoBuildCode,
+        _ => Mode::Run,
     }
+}
+
+/// True for a command that shows the change set of a different person (design 28.2): each
+/// command that is not an agent command. `status` with no commit shows the session of the agent.
+/// The worker has the mode of its job.
+fn is_reviewer_command(command: &Command) -> bool {
+    !matches!(command, Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index | Command::Worker | Command::Status { commit: None, .. })
+}
+
+/// The line for the option `--trust-build-code`, which is gone (design 28.3).
+const OLD_OPTION_LINE: &str = "The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.";
+
+/// True if the command line has the old option.
+fn has_old_option(command: &Command) -> bool {
+    matches!(command, Command::Status { trust_build_code: true, .. } | Command::Review { trust_build_code: true, .. } | Command::Ui { trust_build_code: true, .. } | Command::Verify { trust_build_code: true, .. })
 }
 
 fn parse_class(text: &str) -> Result<Class> {
@@ -396,6 +423,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
     let mut app = App::open(&dir)?;
     app.mode = command_mode(&cli.command);
+    // A reviewer command runs changed build code only with the full sandbox, or with the option.
+    if is_reviewer_command(&cli.command) {
+        let (mode, line) = buildcode::reviewer_mode(app.mode, cli.build_code_no_sandbox);
+        app.mode = mode;
+        if let Some(line) = line {
+            eprintln!("{line}");
+        }
+    }
+    if has_old_option(&cli.command) {
+        eprintln!("{OLD_OPTION_LINE}");
+    }
     match cli.command {
         Command::Pair { action: PairAction::Refuse { old, new, reason } } => println!("{}", app.pair_refuse(&old, &new, Some(&reason))?),
         Command::Pair { action: PairAction::Unrefuse { old, new } } => println!("{}", app.pair_refuse(&old, &new, None)?),
@@ -550,8 +588,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             if json {
                 std::println!("{}", serde_json::to_string_pretty(&result.report)?);
             } else {
-                // The checked configurations come first (batch 5s, B1).
-                for line in crate::app::config_lines(&result.report) {
+                // The build code line of the result comes first (design 28.4), then the checked
+                // configurations (batch 5s, B1).
+                for line in app.build_code_notice(&result.report).into_iter().chain(crate::app::config_lines(&result.report)) {
                     println!("{line}");
                 }
                 println!("{}\n{}", result.text, result.tree.render());

@@ -90,7 +90,7 @@ async fn changeset_summary() {
     // Brief 5f, D1: no score. The summary has the fact counts.
     assert!(cs.get("coverage").is_none() && cs.get("score").is_none(), "{cs}");
     let (total, neutral, spotlight) = report.fact_counts();
-    assert_eq!(cs["fact_counts"], serde_json::json!({ "total": total, "neutral": neutral, "read": total - neutral, "spotlight": spotlight, "not_checked": 0 }));
+    assert_eq!(cs["fact_counts"], serde_json::json!({ "total": total, "neutral": neutral, "read": total - neutral, "spotlight": spotlight, "not_checked": 0, "marked": 0, "marked_text": "" }));
     assert_eq!(cs["accepted"], false);
     assert_eq!(cs["group_count"], 3);
     assert_eq!(cs["step_count"], 7);
@@ -651,6 +651,31 @@ fn page_script_has_no_syntax_errors() {
 }
 
 #[test]
+fn the_page_script_shows_each_build_code_mark() {
+    // Design 28, I6. The data of the UI has the mark of each proof (the e2e tests check the
+    // data). The page script must show each mark field. This test reads the text of the script.
+    let js = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.js"));
+    for field in [
+        "cs.fact_counts.marked_text",
+        "c.marked_text",
+        "c.partial_marked_text",
+        "fact.mark",
+        "fact.part_mark",
+        "fact.build_code_change",
+        "group.mark",
+        "group.kind_mark",
+        "sub.mark",
+        "claim.mark",
+        "node.build_code",
+        "info.build_code",
+        "hit.build_code",
+    ] {
+        assert!(js.contains(field), "the page script does not show `{field}`");
+    }
+    assert!(js.contains("' (with the build code of step ' + buildCode + ')'"), "the class label has the mark");
+}
+
+#[test]
 fn ui_data_json_round_trip() {
     let data = demo_data();
     let text = serde_json::to_string(&data).unwrap();
@@ -806,7 +831,7 @@ async fn a_property_claim_is_a_checked_fact() {
     let at = "shop_core::cart::Cart::total";
     data.changeset.steps[step].claims.push(semilla_core::Claim { id: "c99".into(), op: "no-unsafe".into(), at: at.parse().ok(), args: Default::default() });
     let report = data.report.steps.iter_mut().find(|s| s.step == step).unwrap();
-    report.claims.push(semilla_core::ClaimResult {
+    report.claims.push(semilla_core::ClaimResult { build_code: None,
         claim: "c99".into(),
         step,
         status: semilla_core::ClaimStatus::Verified { proof: "syntax".into() },

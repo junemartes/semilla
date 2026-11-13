@@ -322,7 +322,7 @@ impl<'a> Model<'a> {
                     format!("{}: {} with a spotlight; phase 2 gives the classes", facts.total, facts.spotlight)
                 } else {
                     let not_checked = if facts.not_checked > 0 { format!(", {} not checked", facts.not_checked) } else { String::new() };
-                    format!("{}: {} proved neutral, {} to read ({} with a spotlight){not_checked}", facts.total, facts.neutral, facts.read, facts.spotlight)
+                    format!("{}: {} proved neutral{}, {} to read ({} with a spotlight){not_checked}", facts.total, facts.neutral, facts.marked_text, facts.read, facts.spotlight)
                 }
             }),
             ("Phase", self.phase_label()),
@@ -378,6 +378,7 @@ impl<'a> Model<'a> {
                         .unwrap_or_default(),
                     declared: step.and_then(|step| step.class).or_else(|| report.and_then(|report| report.declared_class)),
                     computed: report.and_then(|report| report.computed_class),
+                    mark: self.data.report.build_code.as_ref().and_then(|note| note.mark_of(*index)).map(|step| format!(" {}", semilla_core::report::build_code_mark(step))).unwrap_or_default(),
                     claims: step.map(|step| step.claims.iter().map(|claim| claim.id.clone()).collect()).unwrap_or_default(),
                     errors: report.map(|report| report.errors.clone()).unwrap_or_default(),
                 }
@@ -467,12 +468,14 @@ impl<'a> Model<'a> {
 struct StatusText {
     name: String,
     detail: Option<String>,
+    /// The mark of changed build code for a verified claim (design 28, I6), or an empty text.
+    mark: String,
 }
 
 impl StatusText {
     fn of(view: &ClaimView) -> StatusText {
         let Some(result) = &view.result else {
-            return StatusText { name: "no result".to_string(), detail: None };
+            return StatusText { name: "no result".to_string(), detail: None, mark: String::new() };
         };
         let value = serde_json::to_value(&result.status).unwrap_or_default();
         let name = value.get("status").and_then(|name| name.as_str()).unwrap_or(view.status).to_string();
@@ -489,7 +492,7 @@ impl StatusText {
                 (!parts.is_empty()).then(|| parts.join("; "))
             }
         };
-        StatusText { name, detail }
+        StatusText { name, detail, mark: result.mark() }
     }
 
     /// The CSS class: the status name, or `other` for an unknown name.
@@ -516,8 +519,8 @@ impl StatusText {
     /// For example `verified (proof N1)` or `pending: waits for the MIR`.
     fn text(&self) -> String {
         match (&self.detail, self.name.as_str()) {
-            (None, _) => self.name.clone(),
-            (Some(detail), "verified") => format!("verified ({detail})"),
+            (None, _) => format!("{}{}", self.name, self.mark),
+            (Some(detail), "verified") => format!("verified ({detail}){}", self.mark),
             (Some(detail), _) => format!("{}: {detail}", self.name),
         }
     }
@@ -529,6 +532,9 @@ struct StepLine {
     intent: String,
     declared: Option<Class>,
     computed: Option<Class>,
+    /// The mark of changed build code for the computed class `neutral` (design 28, I6), with a
+    /// space before it, or an empty text.
+    mark: String,
     claims: Vec<String>,
     errors: Vec<String>,
 }
@@ -542,7 +548,8 @@ impl StepLine {
         }
         if let Some(computed) = self.computed {
             let mismatch = if self.declared.is_some_and(|declared| declared != computed) { " (mismatch)" } else { "" };
-            parts.push(format!("computed {}{mismatch}", class_label(Some(computed))));
+            let mark = if computed == Class::Neutral { self.mark.as_str() } else { "" };
+            parts.push(format!("computed {}{mark}{mismatch}", class_label(Some(computed))));
         }
         parts
     }
@@ -618,9 +625,11 @@ fn move_text(view: &ClaimView) -> Option<(String, String)> {
 
 /// The counts as text, for example `3 claims: 2 verified, 1 unproved`.
 fn counts_text(counts: &Counts) -> String {
+    // I6: a count of proofs says how many used changed build code.
+    let (verified, partial) = (format!("verified{}", counts.marked_text), format!("partial{}", counts.partial_marked_text));
     let parts: Vec<String> = [
-        (counts.verified, "verified"),
-        (counts.partial, "partial"),
+        (counts.verified, verified.as_str()),
+        (counts.partial, partial.as_str()),
         (counts.unproved, "unproved"),
         (counts.refuted, "refuted"),
         (counts.empty, "empty"),
@@ -702,7 +711,7 @@ fn group_meta(group: &GroupSummary) -> Vec<String> {
         meta.push(format!("uses {}", group.depends_on.join(", ")));
     }
     if group.all_neutral {
-        meta.push("all neutral".to_string());
+        meta.push(format!("all neutral{}", group.mark));
     }
     meta
 }
@@ -966,7 +975,7 @@ fn html_groups(out: &mut String, model: &Model) {
         let _ = writeln!(
             out,
             "<div class=\"group-head\"><span class=\"kind\">{}</span><code>{}</code> <span class=\"muted\">{}</span><h3>{}</h3><span class=\"risk\" title=\"{}\">{}</span></div>",
-            esc(&serde_name(&group.kind)),
+            esc(&format!("{}{}", serde_name(&group.kind), group.kind_mark)),
             esc(&group.id),
             esc(&steps_label(&group.steps)),
             esc(&agent_text(group, &group.title)),
@@ -977,8 +986,14 @@ fn html_groups(out: &mut String, model: &Model) {
             let _ = writeln!(out, "<p>{}</p>", esc(&agent_text(group, &group.why)));
         }
         let _ = writeln!(out, "<p class=\"muted\">{} · {}</p>", esc(&risk_text(group)), esc(&group_meta(group).join(" · ")));
+        // Design 28.3: the build code changes of the group come first, each with its diff.
+        let code = fact_items(model, Some(&group.steps), true, Some(true));
+        if !code.is_empty() {
+            let _ = writeln!(out, "<h4 class=\"build-code\">{}</h4>", esc(&build_code_title(code.len())));
+            html_fact_list(out, &code);
+        }
         html_steps(out, model, group);
-        let facts = fact_items_of(model, Some(&group.steps));
+        let facts = fact_items(model, Some(&group.steps), true, Some(false));
         if !facts.is_empty() {
             let _ = writeln!(out, "<h4>Derived facts ({})</h4>", facts.len());
             html_fact_list(out, &facts);
@@ -1273,17 +1288,26 @@ fn longest_run(text: &str, c: char) -> usize {
 /// One line for each derived fact (design 22.5): the class, the description, the forced edits,
 /// the affected bodies, the spotlight with its reason, and the content change of a file fact.
 fn fact_items_of(model: &Model, steps: Option<&[usize]>) -> Vec<(String, Option<String>)> {
-    fact_items(model, steps, true)
+    fact_items(model, steps, true, None)
+}
+
+/// The title of the list of the build code changes of a group (design 28.3). The list comes
+/// before the other facts of the group, and each item has its diff.
+fn build_code_title(count: usize) -> String {
+    format!("Build code changes ({count}): read these changes first")
 }
 
 /// The fact items of the full report (the content of each fact), or of the short report (a diff
-/// only for a fact that is not "neutral (proved)").
-fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool) -> Vec<(String, Option<String>)> {
+/// only for a fact that is not "neutral (proved)"). `code` selects the build code changes
+/// (`Some(true)`), the other facts (`Some(false)`), or each fact (`None`). A build code change
+/// has its diff in each report (design 28.3).
+fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<bool>) -> Vec<(String, Option<String>)> {
     model
         .summary
         .facts
         .iter()
         .filter(|view| steps.is_none_or(|steps| steps.contains(&view.step)))
+        .filter(|view| code.is_none_or(|code| code == view.fact.build_code_change))
         .map(|view| {
             let fact = &view.fact;
             let class = fact
@@ -1294,7 +1318,7 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool) -> Vec<(String
                     other => serde_name(&other),
                 })
                 .unwrap_or_else(|| "class after phase 2".into());
-            let mut text = format!("step {}: {} derived [{class}]: {}", view.step, fact.id, fact.description);
+            let mut text = format!("step {}: {} derived [{class}]{}: {}", view.step, fact.id, fact.mark(), fact.description);
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
                 text.push_str(&format!("; {} site(s): {} ({})", group.sites.len(), group.edit, group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")));
             }
@@ -1309,15 +1333,15 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool) -> Vec<(String
                 text.push_str(&format!("; {} affected bod{}: {}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
             }
             if !fact.equal_sites.is_empty() {
-                text.push_str(&format!("; {}: {}", semilla_core::report::EQUAL_SITES, list(&fact.equal_sites)));
+                text.push_str(&format!("; {}{}: {}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
             }
             if let Some(note) = &fact.note {
-                text.push_str(&format!("; note: {note}"));
+                text.push_str(&format!("; note: {note}{}", fact.part_mark()));
             }
             if let Some(why) = &fact.spotlight_why {
                 text.push_str(&format!("; spotlight: {why}; reason: {}", fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
             }
-            (text, if full { fact.content.clone() } else { model.fact_diff(view) })
+            (text, if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) })
         })
         .collect()
 }
@@ -1399,7 +1423,7 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
         out.push_str("No groups.\n\n");
     }
     for group in &model.summary.groups {
-        let _ = writeln!(out, "### {} · {} · {} · {}\n", code(&group.id), md(&steps_label(&group.steps)), md(&serde_name(&group.kind)), md(&agent_text(group, &group.title)));
+        let _ = writeln!(out, "### {} · {} · {} · {}\n", code(&group.id), md(&steps_label(&group.steps)), md(&format!("{}{}", serde_name(&group.kind), group.kind_mark)), md(&agent_text(group, &group.title)));
         if !group.why.is_empty() {
             let _ = writeln!(out, "{}\n", md(&agent_text(group, &group.why)));
         }
@@ -1407,11 +1431,17 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
         // The short report does not repeat the title of the group as the text of its one step.
         let steps = model.steps(group);
         let repeat = steps.len() == 1 && steps[0].intent == group.title && steps[0].errors.is_empty();
+        // Design 28.3: the build code changes of the group come first, each with its diff.
+        let code = fact_items(model, Some(&group.steps), full, Some(true));
+        if !code.is_empty() {
+            let _ = writeln!(out, "#### {}\n", build_code_title(code.len()));
+            md_fact_list(out, &code);
+        }
         if full || !repeat {
             md_steps(out, model, group);
         }
         // The facts of the steps of the group, as visible as its claims.
-        let facts = fact_items(model, Some(&group.steps), full);
+        let facts = fact_items(model, Some(&group.steps), full, Some(false));
         if !facts.is_empty() {
             let _ = writeln!(out, "#### Derived facts ({})\n", facts.len());
             md_fact_list(out, &facts);
@@ -1433,9 +1463,16 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
     // A step with no group: its facts show here, so that each fact shows one time.
     let grouped: BTreeSet<usize> = model.summary.groups.iter().flat_map(|group| group.steps.iter().copied()).collect();
     let free: Vec<usize> = model.report().steps.iter().map(|step| step.step).filter(|step| !grouped.contains(step)).collect();
-    let facts = fact_items(model, Some(&free), full);
+    let (code, facts) = (fact_items(model, Some(&free), full, Some(true)), fact_items(model, Some(&free), full, Some(false)));
+    if !code.is_empty() || !facts.is_empty() {
+        out.push_str("### Steps with no group\n\n");
+    }
+    if !code.is_empty() {
+        let _ = writeln!(out, "#### {}\n", build_code_title(code.len()));
+        md_fact_list(out, &code);
+    }
     if !facts.is_empty() {
-        let _ = writeln!(out, "### Steps with no group\n\n#### Derived facts ({})\n", facts.len());
+        let _ = writeln!(out, "#### Derived facts ({})\n", facts.len());
         md_fact_list(out, &facts);
     }
 }
