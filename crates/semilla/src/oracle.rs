@@ -846,6 +846,7 @@ impl NormalOracle {
                     drop_of: record.drop_of,
                     target: tag(record.target),
                     live: record.live_callees,
+                    sure: record.sure_callees,
                     param_types: record.param_types.into_iter().map(|t| (t.path, t.krate)).collect(),
                     const_types: record.const_types.into_iter().map(|t| (t.path, t.krate)).collect(),
                     casts: semilla_verify::discriminant_casts(&record.text),

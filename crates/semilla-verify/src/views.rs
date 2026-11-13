@@ -370,7 +370,20 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
         clear_steps(&mut root);
     }
     root.steps.clear();
+    literal_forms(&mut root);
     root
+}
+
+/// Adds the escape form after each literal and each name with a character outside ASCII in
+/// the texts of the change tree (batch 5w, part B): `"μs"` and `"µs"` look the same.
+fn literal_forms(node: &mut TreeNode) {
+    if !node.label.is_ascii() {
+        node.label = crate::facts::with_ascii_forms(&node.label);
+    }
+    if let Some(diff) = node.diff.as_mut().filter(|diff| !diff.replace(['⟦', '⟧', '→', '…'], "").is_ascii()) {
+        *diff = crate::facts::with_ascii_forms(diff);
+    }
+    node.children.iter_mut().for_each(literal_forms);
 }
 
 fn clear_steps(node: &mut TreeNode) {

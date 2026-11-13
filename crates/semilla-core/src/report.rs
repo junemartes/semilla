@@ -647,10 +647,21 @@ impl BuildCodeNote {
     /// The line of `step` for a step: the full line in the step that changes the build code, a
     /// short form in a later step. `None` if the step uses no changed build code.
     pub fn step_line(&self, step: usize) -> Option<String> {
+        self.step_line_with(step, None)
+    }
+
+    /// [`Self::step_line`] for a process whose builds have a missing limit of the sandbox
+    /// (batch 5w, D5). `missing` is the state, for example "the network limit is missing
+    /// (the cause)". The line then does not say that the code runs in the sandbox.
+    pub fn step_line_with(&self, step: usize, missing: Option<&str>) -> Option<String> {
         let change = self.changes.iter().find(|change| change.steps.contains(&step))?;
+        let runs = match missing {
+            None => "It runs in the sandbox during each check".to_string(),
+            Some(missing) => format!("This check ran it with a sandbox that is not complete: {missing}. It runs during each check"),
+        };
         Some(if change.step == step {
             format!(
-                "! build code changed in step {step}: {}. It runs in the sandbox during each check, and it can change each result {}. Each proof that depends on it has the mark {}.",
+                "! build code changed in step {step}: {}. {runs}, and it can change each result {}. Each proof that depends on it has the mark {}.",
                 change.parts,
                 change.span(),
                 build_code_mark(step)
@@ -668,11 +679,21 @@ impl BuildCodeNote {
 
     /// The line at the top of a result that ran the changed build code.
     pub fn ran_line(&self) -> String {
+        self.ran_line_with(None)
+    }
+
+    /// [`Self::ran_line`] for a process whose builds have a missing limit of the sandbox
+    /// (batch 5w, D5). The line then does not say "in the sandbox": it names the missing limits.
+    pub fn ran_line_with(&self, missing: Option<&str>) -> String {
+        let ran = match missing {
+            None => "The check ran it in the sandbox.".to_string(),
+            Some(missing) => format!("The check ran it with a sandbox that is not complete: {missing}."),
+        };
         let parts: Vec<String> = self.changes.iter().map(|change| format!("step {} ({})", change.step, change.parts)).collect();
         let spans: Vec<String> = self.changes.iter().map(BuildCodeChange::span).collect();
         let marks: Vec<String> = self.changes.iter().map(|change| build_code_mark(change.step)).collect();
         format!(
-            "! build code changed in {}. The check ran it in the sandbox. It can change each result {}. Read that change first. Each proof that depends on it has the mark {}.",
+            "! build code changed in {}. {ran} It can change each result {}. Read that change first. Each proof that depends on it has the mark {}.",
             parts.join("; "),
             spans.join(", "),
             marks.join(" or ")
@@ -852,6 +873,14 @@ mod tests {
         assert_eq!(note.mark_of(4), None, "a step with no check has no proof and no mark");
         assert_eq!(note.not_checked_text(), "steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete).");
         note.ran = true;
+        // Batch 5w, D5: with a missing limit, the two lines do not say "in the sandbox".
+        let missing = "the network limit is missing (a test)";
+        assert_eq!(
+            note.ran_line_with(Some(missing)),
+            "! build code changed in step 3 (crates/core/build.rs). The check ran it with a sandbox that is not complete: the network limit is missing (a test). It can change each result from step 3 on. Read that change first. Each proof that depends on it has the mark (with the build code of step 3)."
+        );
+        assert!(note.step_line_with(3, Some(missing)).unwrap().starts_with("! build code changed in step 3: crates/core/build.rs. This check ran it with a sandbox that is not complete: the network limit is missing (a test). It runs during each check, and it can change each result from step 3 on."));
+        assert_eq!(note.step_line_with(3, None), note.step_line(3));
         assert_eq!(
             note.ran_line(),
             "! build code changed in step 3 (crates/core/build.rs). The check ran it in the sandbox. It can change each result from step 3 on. Read that change first. Each proof that depends on it has the mark (with the build code of step 3)."

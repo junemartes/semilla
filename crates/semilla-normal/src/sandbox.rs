@@ -72,6 +72,11 @@ impl Missing {
         format!("the build ran with {kind} sandbox: {} {verb} missing ({}). A build script or a proc macro of this change set can change the result", self.names(), self.cause)
     }
 
+    /// The state in one clause: "the network limit is missing (the cause)" (batch 5w, D5).
+    pub fn state(&self) -> String {
+        format!("{} {} missing ({})", self.names(), if self.limits.len() == 1 { "is" } else { "are" }, self.cause)
+    }
+
     /// The short text of the state for a cache key.
     pub fn key(&self) -> String {
         self.limits.iter().map(|limit| limit.name()).collect::<Vec<_>>().join("+")

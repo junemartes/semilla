@@ -44,7 +44,7 @@ fn is_punct(tree: Option<&TokenTree>, c: char) -> bool {
 }
 
 /// The parts of a token list between the commas of the top level.
-fn parts(stream: TokenStream) -> Vec<Vec<TokenTree>> {
+pub(crate) fn parts(stream: TokenStream) -> Vec<Vec<TokenTree>> {
     let mut out: Vec<Vec<TokenTree>> = vec![Vec::new()];
     for tree in stream {
         if is_punct(Some(&tree), ',') {
@@ -208,6 +208,13 @@ fn scan(stream: TokenStream, out: &mut Vec<TokenStream>) {
             _ => {}
         }
     }
+}
+
+/// Each condition in a token list (the tokens between the parentheses of `cfg(…)`).
+pub(crate) fn conditions(stream: TokenStream) -> Vec<TokenStream> {
+    let mut out = Vec::new();
+    scan(stream, &mut out);
+    out
 }
 
 /// The units of one tree.

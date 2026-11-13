@@ -644,6 +644,27 @@ pub fn build_reader(before: &Workspace, after: &Workspace, file: &str) -> Option
     Some((reader, items))
 }
 
+/// The items that read `file` as Rust code with `include!` and a literal path, or `None` if no
+/// Rust file of the two trees has such a call (batch 5w, D3). The compiler reads such a file as
+/// code of the item, whatever the name of the file is. Semilla does not parse it.
+pub fn code_readers(before: &Workspace, after: &Workspace, file: &str) -> Option<BTreeSet<String>> {
+    fn reads(text: &str, path: &str, file: &str) -> bool {
+        text.match_indices("include").any(|(start, _)| {
+            if text[..start].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                return false;
+            }
+            // `include_str!` and `include_bytes!` read data, not code: the `!` must be the next token.
+            let Some(rest) = text[start + "include".len()..].trim_start().strip_prefix('!') else { return false };
+            let rest = rest.trim_start().trim_start_matches(['(', '[', '{']).trim_start();
+            let Some(relative) = rest.strip_prefix('"').and_then(|rest| rest.split('"').next()) else { return false };
+            let dir = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+            normalize(&if dir.is_empty() { relative.to_string() } else { format!("{dir}/{relative}") }) == file
+        })
+    }
+    [after, before].iter().find(|ws| ws.rust_files.iter().any(|(path, text)| reads(text, path, file)))?;
+    Some([after, before].iter().flat_map(|ws| ws.items.values()).filter(|item| reads(&item.text, &item.file, file)).map(|item| item.path.clone()).collect())
+}
+
 /// Removes the `.` and `..` parts of a relative path.
 fn normalize(path: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();

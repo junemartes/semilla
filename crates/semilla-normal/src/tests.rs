@@ -21,6 +21,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         impl_of: Vec::new(),
         drop_of: None,
         live_callees: None,
+        sure_callees: None,
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: Vec::new(),

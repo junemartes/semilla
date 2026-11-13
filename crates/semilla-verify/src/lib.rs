@@ -25,6 +25,7 @@ mod joint;
 mod opaque;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
+mod uncompiled;
 pub mod pattern;
 pub mod views;
 
@@ -148,6 +149,9 @@ pub struct BodyFacts {
     /// the constant conditions fold, through its closures (the def paths). `None` for a closure
     /// and when the driver does not give the fact.
     pub live: Option<Vec<String>>,
+    /// The functions that the body calls on each path from its start to a normal return (a
+    /// path that ends with a panic does not count). `None` as for `live`.
+    pub sure: Option<Vec<String>>,
 }
 
 /// The local types whose member order or layout a printed body depends on, with no name of the
@@ -250,6 +254,9 @@ pub struct ItemFacts {
     /// The bodies of the item that have a list of live callees: the body name, the target, and
     /// the list (see [`BodyFacts::live`]).
     pub live: Vec<(String, String, Vec<String>)>,
+    /// The bodies of the item that have a list of sure callees, as `live` (see
+    /// [`BodyFacts::sure`]).
+    pub sure: Vec<(String, String, Vec<String>)>,
 }
 
 /// The access to the normal forms. The real one runs the MIR driver on both snapshots.
@@ -890,12 +897,38 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         }
     }
 
+    // A file that `include!` reads is Rust code that Semilla does not parse, whatever its name
+    // is (batch 5w, D3). Its fact has a spotlight (the file rule). The fact lists the items that
+    // read the file and that a fact or a claim of this step shows: the file is code of them.
+    let mut carried: BTreeSet<String> = BTreeSet::new();
+    {
+        let shown: BTreeSet<String> = report
+            .facts
+            .iter()
+            .flat_map(|fact| fact.affected.iter().cloned().chain(fact.at.as_ref().map(|at| at.item.clone())))
+            .chain(report.claims.iter().flat_map(|claim| claim.affected.iter().cloned()))
+            .collect();
+        for fact in report.facts.iter_mut().filter(|fact| fact.at.is_none() && fact.spotlight) {
+            let Some(readers) = fact.file.as_deref().and_then(|file| owners::code_readers(input.before, input.after, file)) else { continue };
+            for reader in readers.iter().filter(|reader| shown.contains(*reader)) {
+                if !fact.affected.contains(reader) {
+                    fact.affected.push(reader.clone());
+                }
+            }
+            fact.affected.sort();
+            if !fact.affected.is_empty() && matches!(fact.class, None | Some(Class::Neutral) | Some(Class::Other)) {
+                fact.class = Some(Class::Logic);
+            }
+            carried.extend(readers);
+        }
+    }
+
     // A fact whose changed bodies read the build configuration (batch 5k, A1). The check holds
     // for the configurations that Semilla compiles, and not for each build: the fact needs a
     // reason, and it is not neutral (its body changed).
     for fact in report.facts.iter_mut() {
         let own = fact.at.as_ref().map(|at| at.item.clone());
-        let Some(text) = facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index) else { continue };
+        let Some(text) = facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index, &carried) else { continue };
         fact.spotlight_why = Some(match fact.spotlight_why.take() {
             Some(why) => format!("{why}; {text}"),
             None => text,
@@ -930,7 +963,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // The fact gets a note with the cause. The note changes no class and no decision.
     for fact in report.facts.iter_mut() {
         let own = fact.at.as_ref().map(|at| at.item.clone());
-        if facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index).is_some() {
+        if facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index, &carried).is_some() {
             continue;
         }
         let Some(note) = facts::stop_note(fact.affected.iter().chain(own.iter()), &body_index) else { continue };
@@ -942,7 +975,38 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 
     // A fact with a name that has characters outside ASCII (batch 5k, D7). The name can look
     // the same as a different name, so the fact shows the escape form and needs a reason.
-    for fact in report.facts.iter_mut() {
+    //
+    // A literal with a character outside ASCII (batch 5w, part B): each fact text shows the
+    // escape form after the literal. A changed literal with a new character outside ASCII
+    // needs a reason: the new character can look the same as the old one (`µ` and `μ`). A new
+    // literal in new code gets the escape form only.
+    let mut literals: Vec<Vec<facts::NewLiteral>> = report.facts.iter().map(|_| Vec::new()).collect();
+    let mut add_literals = |fact: usize, old: &str, new: &str| {
+        for literal in facts::new_literals(old, new) {
+            match literals[fact].iter_mut().find(|other| other.text == literal.text) {
+                Some(other) => other.chars.extend(literal.chars.into_iter().filter(|c| !other.chars.contains(c)).collect::<Vec<_>>()),
+                None => literals[fact].push(literal),
+            }
+        }
+    };
+    // The full text of each edit: a fact text can be cut before the changed character.
+    for (edit, fact) in edits.iter().zip(&fact_of) {
+        if let (Some(fact), Some(new)) = (fact.filter(|fact| *fact < report.facts.len()), edit.text_after.as_deref()) {
+            add_literals(fact, edit.text_before.as_deref().unwrap_or_default(), new);
+        }
+    }
+    for (index, fact) in report.facts.iter().enumerate() {
+        for text in std::iter::once(fact.description.as_str()).chain(fact.sites.iter().map(|group| group.edit.as_str())) {
+            if let Some((old, new)) = facts::change_sides(text) {
+                add_literals(index, old, new);
+            }
+        }
+        if let Some(content) = &fact.content {
+            let side = |mark: char| content.lines().filter(|line| line.starts_with(mark) && !line.starts_with("+++") && !line.starts_with("---")).map(|line| &line[1..]).collect::<Vec<_>>().join("\n");
+            add_literals(index, &side('-'), &side('+'));
+        }
+    }
+    for (fact, literals) in report.facts.iter_mut().zip(literals) {
         let added: String = fact.content.as_deref().unwrap_or_default().lines().filter(|line| line.starts_with('+')).collect::<Vec<_>>().join("\n");
         let mut names: Vec<String> = Vec::new();
         for text in std::iter::once(fact.description.as_str()).chain(fact.sites.iter().map(|group| group.edit.as_str())).chain(std::iter::once(added.as_str())) {
@@ -952,15 +1016,44 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 }
             }
         }
-        if names.is_empty() {
-            continue;
+        // The new literals that the fact text does not show get a note with the escape form.
+        let shown = |fact: &semilla_core::Fact, literal: &str| std::iter::once(fact.description.as_str()).chain(fact.sites.iter().map(|group| group.edit.as_str())).any(|text| facts::marks(text).iter().any(|mark| mark.literal && mark.text == literal));
+        // Each output shows a hidden character as its escape, so such a character gets no second form.
+        let plain = |text: &str| text.chars().all(|c| c.is_ascii() || semilla_core::text::is_hidden(c));
+        let form = |text: &str| match plain(text) {
+            true => format!("`{}`", semilla_syntax::tree::short(text, 60)),
+            false => format!("`{}` (`{}`)", semilla_syntax::tree::short(text, 60), semilla_syntax::tree::short(&semilla_core::text::ascii_form(text).unwrap_or_default(), 120)),
+        };
+        let quiet: Vec<String> = literals.iter().filter(|literal| literal.chars.is_empty() && !shown(fact, &literal.text)).map(|literal| form(&literal.text)).collect();
+        if !quiet.is_empty() {
+            let more = if quiet.len() > 5 { format!(", and {} more", quiet.len() - 5) } else { String::new() };
+            let note = format!("{} {}{more}", facts::NON_ASCII_NOTE, quiet.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
+            fact.note = Some(match fact.note.take() {
+                Some(old) => format!("{old}; {note}"),
+                None => note,
+            });
         }
         fact.description = facts::with_ascii_forms(&fact.description);
         for group in fact.sites.iter_mut() {
             group.edit = facts::with_ascii_forms(&group.edit);
         }
-        let list: Vec<String> = names.iter().map(|name| format!("`{name}` (`{}`)", semilla_core::text::ascii_form(name).unwrap_or_default())).collect();
-        let text = format!("{}: {}", facts::NON_ASCII, list.join(", "));
+        let mut causes = Vec::new();
+        if !names.is_empty() {
+            let list: Vec<String> = names.iter().map(|name| format!("`{name}` (`{}`)", semilla_core::text::ascii_form(name).unwrap_or_default())).collect();
+            causes.push(format!("{}: {}", facts::NON_ASCII, list.join(", ")));
+        }
+        let changed: Vec<String> = literals
+            .iter()
+            .filter(|literal| !literal.chars.is_empty())
+            .map(|literal| format!("{} in {}", literal.chars.iter().map(|c| form(&c.to_string())).collect::<Vec<_>>().join(", "), form(&literal.text)))
+            .collect();
+        if !changed.is_empty() {
+            causes.push(format!("{}: {}", facts::NON_ASCII_LITERAL, changed.join("; ")));
+        }
+        if causes.is_empty() {
+            continue;
+        }
+        let text = causes.join("; ");
         fact.spotlight_why = Some(match fact.spotlight_why.take() {
             Some(why) => format!("{why}; {text}"),
             None => text,
@@ -995,8 +1088,12 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         }
         keys
     };
+    // The fact of an `include!` file has the spotlight for the `include!` call of its readers
+    // (batch 5w, D3), so such an item gets no line here if `include!` is its only cause.
+    let only_include = |item: &String| carried.contains(item) && body_index.config(item).iter().all(|call| call.strip_suffix(srcconfig::UNSEEN) == Some("include!"));
     let config_lines: Vec<String> = config_items
         .iter()
+        .filter(|item| !only_include(item))
         .map(|item| match config_keys(item) {
             keys if keys.is_empty() || keys == [item.clone()] => format!("build configuration: {item}"),
             keys => format!("build configuration: {item} (the key of the reason: {})", keys.iter().map(|key| format!("`{key}`")).collect::<Vec<_>>().join(", ")),
@@ -1058,6 +1155,13 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     }
     report.api_level = Some(level.to_string());
     report.api_changes = api_changes;
+
+    // An edit in code that no checked configuration compiles has no proof (batch 5w, part A).
+    if body_index.available {
+        let truths = oracle.truths(step).unwrap_or_default();
+        let dead = uncompiled::dead_edits([input.before, input.after], &truths, &body_index);
+        uncompiled::apply(&dead, [input.before, input.after], step, &edits, &fact_of, &renames, &mut report);
+    }
 
     report.computed_class = report.claims.iter().filter_map(|claim| claim.class).chain(report.facts.iter().filter_map(|fact| fact.class)).max_by_key(|class| class_rank(*class));
     if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
@@ -1359,6 +1463,9 @@ fn item_facts(found: &[BodyFacts], after: &Workspace) -> BTreeMap<String, ItemFa
         entry.signature_changed |= body.signature_changed && !body.name.contains("::{");
         if let Some(live) = &body.live {
             entry.live.push((body.name.clone(), body.target.clone(), live.clone()));
+        }
+        if let Some(sure) = &body.sure {
+            entry.sure.push((body.name.clone(), body.target.clone(), sure.clone()));
         }
         entry.casts.extend(body.casts.iter().filter(|c| !entry.casts.contains(c)).cloned().collect::<Vec<_>>());
         entry.layouts.extend(body.layouts.iter().filter(|c| !entry.layouts.contains(c)).cloned().collect::<Vec<_>>());

@@ -561,6 +561,12 @@ pub fn printed_path(def_id: DefId) -> String {
 /// A value is known for a constant, and for a local with one write when that write assigns a
 /// known value. The rule is not complete: a block that this function gives can be dead.
 fn live_blocks(body: &Body) -> Vec<bool> {
+    flow(body).0
+}
+
+/// The live blocks (see [`live_blocks`]), and the normal successors of each live block: the
+/// successors after the constant conditions fold, with no unwind edge (batch 5w, part C).
+fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
     use rustc_public::mir::visit::PlaceContext;
     use rustc_public::mir::{BinOp, Operand, Place, UnOp};
     use rustc_public::ty::{ConstantKind, RigidTy, TyKind};
@@ -650,6 +656,7 @@ fn live_blocks(body: &Body) -> Vec<bool> {
         }
     }
     let mut live = vec![false; body.blocks.len()];
+    let mut next = vec![Vec::new(); body.blocks.len()];
     let mut todo = vec![0usize];
     while let Some(index) = todo.pop() {
         if index >= live.len() || live[index] {
@@ -659,13 +666,120 @@ fn live_blocks(body: &Body) -> Vec<bool> {
         let terminator = &body.blocks[index].terminator;
         match &terminator.kind {
             TerminatorKind::SwitchInt { discr, targets } => match operand(&known, discr) {
-                Some(value) => todo.push(targets.branches().find(|(guard, _)| *guard == value).map(|(_, target)| target).unwrap_or(targets.otherwise())),
-                None => todo.extend(terminator.successors()),
+                Some(value) => {
+                    let target = targets.branches().find(|(guard, _)| *guard == value).map(|(_, target)| target).unwrap_or(targets.otherwise());
+                    next[index].push(target);
+                    todo.push(target);
+                }
+                None => {
+                    next[index] = terminator.successors();
+                    todo.extend(terminator.successors());
+                }
             },
-            _ => todo.extend(terminator.successors()),
+            kind => {
+                next[index] = match kind {
+                    TerminatorKind::Goto { target } | TerminatorKind::Drop { target, .. } | TerminatorKind::Assert { target, .. } => vec![*target],
+                    TerminatorKind::Call { target, .. } | TerminatorKind::InlineAsm { destination: target, .. } => target.iter().copied().collect(),
+                    _ => Vec::new(),
+                };
+                todo.extend(terminator.successors());
+            }
         }
     }
-    live
+    (live, next)
+}
+
+/// The functions that a body calls on each path from its start to a normal return (batch 5w,
+/// part C): the names, as [`live_callees`] gives them. A path that ends with a panic does not
+/// count. If no path gets to a return, each path to an end of the body counts (a diverging
+/// call, an abort).
+///
+/// Only a call terminator with a constant callee counts. A direct call of a local closure
+/// gives the sure callees of the closure. A function that the body gives to a different
+/// function (`map(f)`) is not a sure callee: Semilla does not know that the function runs.
+pub fn sure_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> Option<Vec<String>> {
+    ty::tls::with(|tcx| {
+        let owner = rustc_internal::internal(tcx, owner);
+        // Only a function has the fact. The descriptor constant of a test has the name of the
+        // test function, and it has no call.
+        if !matches!(tcx.def_kind(owner), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
+            return None;
+        }
+        let mut open = HashSet::new();
+        Some(sure_walk(tcx, owner, body, bodies, &mut open).into_iter().collect())
+    })
+}
+
+fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>, open: &mut HashSet<DefId>) -> BTreeSet<String> {
+    use rustc_public::mir::Operand;
+
+    let typing = ty::TypingEnv::post_analysis(tcx, owner);
+    let (live, next) = flow(body);
+    // The blocks of each callee name.
+    let mut sites: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    for (index, block) in body.blocks.iter().enumerate() {
+        if !live[index] {
+            continue;
+        }
+        let TerminatorKind::Call { func: Operand::Constant(func), .. } = &block.terminator.kind else { continue };
+        let ty::FnDef(def_id, args) = rustc_internal::internal(tcx, func.const_.ty()).kind() else { continue };
+        let mut target = *def_id;
+        if matches!(tcx.def_kind(*def_id), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
+            let args = args.skip_binder();
+            let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
+            if let Ok(Ok(Some(instance))) = resolved {
+                if let ty::InstanceKind::Item(item) = instance.def {
+                    target = item;
+                }
+            }
+        }
+        let names: Vec<String> = if tcx.is_closure_like(target) {
+            // A direct call of a closure: the sure callees of the closure body.
+            match bodies.get(&rustc_internal::stable(target)).filter(|_| target.is_local() && open.insert(target)) {
+                Some(inner) => {
+                    let found = sure_walk(tcx, target, inner, bodies, open);
+                    open.remove(&target);
+                    found.into_iter().collect()
+                }
+                None => Vec::new(),
+            }
+        } else if target.is_local() {
+            vec![tcx.def_path_str(target)]
+        } else {
+            vec![real_path(tcx, target)]
+        };
+        for name in names {
+            sites.entry(name).or_default().push(index);
+        }
+    }
+    // The ends of the body: the return blocks, or each block with no successor if no return
+    // block can run. A `Resume` block is the end of a panic path.
+    let reach = |closed: &[usize]| -> Vec<bool> {
+        let mut seen = vec![false; body.blocks.len()];
+        let mut todo = vec![0usize];
+        while let Some(index) = todo.pop() {
+            if index >= seen.len() || seen[index] || closed.contains(&index) {
+                continue;
+            }
+            seen[index] = true;
+            todo.extend(next[index].iter().copied());
+        }
+        seen
+    };
+    let all = reach(&[]);
+    let is_end = |index: usize, kind: &TerminatorKind| all[index] && next[index].is_empty() && !matches!(kind, TerminatorKind::Resume);
+    let returns: Vec<usize> = body.blocks.iter().enumerate().filter(|(index, block)| all[*index] && matches!(block.terminator.kind, TerminatorKind::Return)).map(|(index, _)| index).collect();
+    let ends: Vec<usize> = if returns.is_empty() { body.blocks.iter().enumerate().filter(|(index, block)| is_end(*index, &block.terminator.kind)).map(|(index, _)| index).collect() } else { returns };
+    let mut sure = BTreeSet::new();
+    for (name, blocks) in sites {
+        // The call is sure if no end can run when the call blocks are closed. A call block
+        // that is an end (a diverging call) is closed too.
+        let open_ends = reach(&blocks);
+        if !ends.is_empty() && ends.iter().all(|end| !open_ends[*end]) {
+            sure.insert(name);
+        }
+    }
+    sure
 }
 
 /// The functions that a body can call from the blocks that its start block reaches (batch 5f,

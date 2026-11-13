@@ -1000,6 +1000,9 @@ pub fn neutral_kind(fact: &Fact) -> bool {
     }
 }
 
+/// The spotlight of a fact in a function with no body record.
+pub(crate) const INACTIVE: &str = "a fact in inactive code (no checked configuration compiles it)";
+
 /// The spotlight text of the build configuration (batch 5k, A1).
 pub(crate) const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on a build condition that Semilla did not check. A proof holds only in the checked configurations.";
 
@@ -1071,66 +1074,222 @@ pub(crate) const PROVED_IN: &str = "proved neutral in";
 /// The spotlight text of a name with characters outside ASCII (batch 5k, D7).
 pub(crate) const NON_ASCII: &str = "an identifier with characters outside ASCII";
 
-/// The identifiers with a character outside ASCII in a text with code (batch 5k, D7), with the
-/// byte range of each one. Such a name can look the same as a different name (`charge` and
-/// `сharge` with a Cyrillic first letter). The text of a string literal and of a line comment
-/// is not a name. A text that is not clear counts as a name: the reviewer then reads it.
-pub(crate) fn non_ascii_names(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+/// The spotlight text of a changed literal with a new character outside ASCII (batch 5w, part B).
+pub(crate) const NON_ASCII_LITERAL: &str = "a changed literal has a new character outside ASCII";
+
+/// The start of the note for a new literal with a character outside ASCII (batch 5w, part B).
+pub(crate) const NON_ASCII_NOTE: &str = "new literals with characters outside ASCII:";
+
+/// A part of a text with code: a literal, or a name with a character outside ASCII.
+pub(crate) struct Mark {
+    pub range: std::ops::Range<usize>,
+    pub text: String,
+    /// True for a string, a raw string, a byte string, or a char literal.
+    pub literal: bool,
+}
+
+/// The literals of a text with code, and its identifiers with a character outside ASCII
+/// (batch 5k, D7, and batch 5w, part B). A literal is a string, a raw string, a byte string, or
+/// a char. The text of a literal and of a line comment is not a name. A text that is not clear
+/// counts as a name: the reviewer then reads it.
+pub(crate) fn marks(text: &str) -> Vec<Mark> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let at = |index: usize| chars.get(index).map(|(_, c)| *c);
+    let offset = |index: usize| chars.get(index).map(|(offset, _)| *offset).unwrap_or(text.len());
     let mut found = Vec::new();
-    let mut chars = text.char_indices().peekable();
-    while let Some((start, c)) = chars.next() {
-        if c == '"' {
-            // A string literal: go to its end.
-            while let Some((_, c)) = chars.next() {
-                match c {
-                    '\\' => {
-                        chars.next();
-                    }
-                    '"' => break,
-                    _ => {}
-                }
-            }
-        } else if c == '/' && chars.peek().is_some_and(|(_, next)| *next == '/') {
-            while chars.peek().is_some_and(|(_, next)| *next != '\n') {
-                chars.next();
-            }
-        } else if c.is_alphanumeric() || c == '_' {
-            let mut end = start + c.len_utf8();
-            while let Some((index, next)) = chars.peek().copied().filter(|(_, next)| next.is_alphanumeric() || *next == '_') {
-                end = index + next.len_utf8();
-                chars.next();
-            }
-            if !text[start..end].is_ascii() {
-                found.push((start..end, text[start..end].to_string()));
+    let mut literal = |from: usize, to: usize| found.push(Mark { range: offset(from)..offset(to), text: text[offset(from)..offset(to)].to_string(), literal: true });
+    // The index after the end of a string that starts after the quote mark at `from - 1`.
+    let string_end = |from: usize| {
+        let mut index = from;
+        while let Some(c) = at(index) {
+            index += 1;
+            match c {
+                '\\' => index += 1,
+                '"' => break,
+                _ => {}
             }
         }
+        index.min(chars.len())
+    };
+    let mut names = Vec::new();
+    let mut index = 0;
+    while let Some(c) = at(index) {
+        if c == '"' {
+            let end = string_end(index + 1);
+            literal(index, end);
+            index = end;
+        } else if c == '\'' {
+            // A char literal: `'x'` or `'\…'`. A lifetime and an apostrophe have no end mark.
+            let end = match (at(index + 1), at(index + 2)) {
+                (Some('\\'), _) => (index + 3..index + 13).find(|end| at(*end) == Some('\'')).map(|end| end + 1),
+                (Some(inner), Some('\'')) if inner != '\'' => Some(index + 3),
+                _ => None,
+            };
+            match end {
+                Some(end) => {
+                    literal(index, end);
+                    index = end;
+                }
+                None => index += 1,
+            }
+        } else if c == '/' && at(index + 1) == Some('/') {
+            while at(index).is_some_and(|c| c != '\n') {
+                index += 1;
+            }
+        } else if c.is_alphanumeric() || c == '_' {
+            let mut end = index + 1;
+            while at(end).is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                end += 1;
+            }
+            let word = &text[offset(index)..offset(end)];
+            // A raw string: `r"…"`, `r#"…"#`, also with the prefix `b` or `c`.
+            let hashes = (end..).take_while(|at_hash| at(*at_hash) == Some('#')).count();
+            if matches!(word, "r" | "br" | "cr") && at(end + hashes) == Some('"') {
+                let close: String = std::iter::once('"').chain(std::iter::repeat_n('#', hashes)).collect();
+                let from = offset(end + hashes + 1);
+                let to = text[from..].find(&close).map(|found| from + found + close.len()).unwrap_or(text.len());
+                let stop = chars.partition_point(|(offset, _)| *offset < to);
+                literal(index, stop);
+                index = stop;
+                continue;
+            }
+            if !word.is_ascii() {
+                names.push(Mark { range: offset(index)..offset(end), text: word.to_string(), literal: false });
+            }
+            index = end;
+        } else {
+            index += 1;
+        }
     }
+    found.extend(names);
+    found.sort_by_key(|mark| mark.range.start);
     found
 }
 
-/// The text with the escape form after each name with characters outside ASCII: `сharge`
-/// becomes `сharge` (`\u{441}harge`). The form comes after the code span of the name.
+/// The identifiers with a character outside ASCII in a text with code (batch 5k, D7), with the
+/// byte range of each one. Such a name can look the same as a different name (`charge` and
+/// `сharge` with a Cyrillic first letter). The text of a literal is not a name (see [`marks`]).
+pub(crate) fn non_ascii_names(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    marks(text).into_iter().filter(|mark| !mark.literal).map(|mark| (mark.range, mark.text)).collect()
+}
+
+/// The text with the escape form after each name and each literal with characters outside
+/// ASCII: `сharge` becomes `сharge` (`\u{441}harge`), and `"μs"` becomes `"μs"` (`"\u{3bc}s"`).
+/// The form comes after the code span of the name or the literal.
 pub(crate) fn with_ascii_forms(text: &str) -> String {
     let mut out = text.to_string();
-    for (range, name) in non_ascii_names(text).into_iter().rev() {
-        let form = semilla_core::text::ascii_form(&name).unwrap_or_default();
+    for mark in marks(text).into_iter().rev() {
+        let Some(form) = semilla_core::text::ascii_form(&mark.text) else { continue };
+        // Each output shows a hidden character as its escape. A second form adds nothing.
+        if mark.text.chars().all(|c| c.is_ascii() || semilla_core::text::is_hidden(c)) {
+            continue;
+        }
         // Inside a code span: after the backtick that closes the span.
-        let inside = text[..range.start].matches('`').count() % 2 == 1;
-        let at = match text[range.end..].find('`').filter(|_| inside) {
-            Some(close) => range.end + close + 1,
-            None => range.end,
+        let inside = text[..mark.range.start].matches('`').count() % 2 == 1;
+        let at = match text[mark.range.end..].find('`').filter(|_| inside) {
+            Some(close) => mark.range.end + close + 1,
+            None => mark.range.end,
         };
         out.insert_str(at, &format!(" (`{form}`)"));
     }
     out
 }
 
-pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
+/// A literal of a new text that is not in the old text, with a character outside ASCII.
+#[derive(Debug, PartialEq)]
+pub(crate) struct NewLiteral {
+    pub text: String,
+    /// The characters outside ASCII that the old literal does not have at that place. Empty
+    /// if the old text has no literal for this one (a new literal in new code).
+    pub chars: Vec<char>,
+}
+
+/// The literals of `new` with a character outside ASCII that `old` does not have (batch 5w,
+/// part B). A literal of `new` that replaces a literal of `old` gets the characters outside
+/// ASCII that the old literal does not have at that place: a letter that looks the same as the
+/// old letter (`µ` U+00B5 and `μ` U+03BC) is such a character.
+///
+/// The old literal of a new literal is the literal with the longest common sequence of
+/// characters, from the literals of `old` that `new` does not have.
+pub(crate) fn new_literals(old: &str, new: &str) -> Vec<NewLiteral> {
+    let literals = |text: &str| -> Vec<String> { marks(text).into_iter().filter(|mark| mark.literal).map(|mark| mark.text).collect() };
+    let (mut old, new) = (literals(old), literals(new));
+    // The literals that are equal on the two sides are not a change.
+    let mut added = Vec::new();
+    for literal in new {
+        match old.iter().position(|other| *other == literal) {
+            Some(index) => {
+                old.remove(index);
+            }
+            None => added.push(literal),
+        }
+    }
+    // The characters of `new` outside ASCII that are not in the longest common sequence.
+    let extra = |old: &str, new: &str| -> (usize, Vec<char>) {
+        let (a, b): (Vec<char>, Vec<char>) = (old.chars().collect(), new.chars().collect());
+        if a.len().saturating_mul(b.len()) > 4_000_000 {
+            return (0, b.into_iter().filter(|c| !c.is_ascii()).collect());
+        }
+        let mut table = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+        for i in (0..a.len()).rev() {
+            for j in (0..b.len()).rev() {
+                table[i][j] = if a[i] == b[j] { table[i + 1][j + 1] + 1 } else { table[i + 1][j].max(table[i][j + 1]) };
+            }
+        }
+        let (mut i, mut j, mut found) = (0, 0, Vec::new());
+        while j < b.len() {
+            if i < a.len() && a[i] == b[j] {
+                i += 1;
+                j += 1;
+            } else if i < a.len() && table[i + 1][j] >= table[i][j + 1] {
+                i += 1;
+            } else {
+                if !b[j].is_ascii() {
+                    found.push(b[j]);
+                }
+                j += 1;
+            }
+        }
+        (table[0][0], found)
+    };
+    let mut found = Vec::new();
+    for literal in added.into_iter().filter(|literal| !literal.is_ascii()) {
+        // The best old literal. With two equal sequences, the one that gives more characters.
+        let chars = old.iter().map(|other| extra(other, &literal)).max_by(|a, b| a.0.cmp(&b.0).then(a.1.len().cmp(&b.1.len()))).map(|(_, chars)| chars).unwrap_or_default();
+        let mut unique = Vec::new();
+        for c in chars {
+            if !unique.contains(&c) {
+                unique.push(c);
+            }
+        }
+        if !found.iter().any(|other: &NewLiteral| other.text == literal) {
+            found.push(NewLiteral { text: literal, chars: unique });
+        }
+    }
+    found
+}
+
+/// The two sides of a text with a change (`OLD → NEW`): the text before the first arrow that
+/// is not in a literal, and the text after it.
+pub(crate) fn change_sides(text: &str) -> Option<(&str, &str)> {
+    let literals: Vec<std::ops::Range<usize>> = marks(text).into_iter().filter(|mark| mark.literal).map(|mark| mark.range).collect();
+    let at = text.match_indices(" → ").map(|(at, _)| at).find(|at| !literals.iter().any(|range| range.contains(at)))?;
+    Some((&text[..at], &text[at + " → ".len()..]))
+}
+
+///
+/// `carried` has the items whose `include!` file has a fact with a spotlight in this step
+/// (batch 5w, D3). That fact asks for the reason about the code that Semilla does not parse,
+/// so the `include!` call of such an item is not a second cause here.
+pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex, carried: &std::collections::BTreeSet<String>) -> Option<String> {
     let mut uses: Vec<String> = Vec::new();
     let mut seen = false;
     let mut gaps: Vec<String> = Vec::new();
     for item in items {
         for call in body_index.config(item) {
+            if carried.contains(item) && call.strip_suffix(crate::srcconfig::UNSEEN) == Some("include!") {
+                continue;
+            }
             // The state that no checked unit has (batch 5t, part B).
             if call.starts_with(crate::joint::GAP) {
                 if !gaps.contains(&call) {
@@ -1224,7 +1383,7 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
     if body_index.available {
         let function = after.items.get(&anchor.item).is_some_and(|item| item.kind == ItemKind::Fn && item.body.is_some());
         if function && !body_index.has_body(&anchor.item) {
-            return Some("a fact in inactive code (no checked configuration compiles it)".into());
+            return Some(INACTIVE.into());
         }
     }
     None

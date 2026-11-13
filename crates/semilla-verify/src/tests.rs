@@ -495,8 +495,9 @@ impl BodyOracle for FactBodies {
                     name: name.to_string(),
                     externals: calls.iter().filter(|c| !c.contains(' ')).map(|c| c.to_string()).collect(),
                     origins: calls.iter().filter_map(origin).collect(),
-                    callees: local(calls, &["live", "dead"]),
-                    live: Some(local(calls, &["live"])),
+                    callees: local(calls, &["live", "maybe", "dead"]),
+                    live: Some(local(calls, &["live", "maybe"])),
+                    sure: Some(local(calls, &["live"])),
                     ..Default::default()
                 })
                 .collect(),
@@ -553,7 +554,7 @@ fn property_claims_check_the_code_after_the_step() {
     assert_eq!(c5.status, ClaimStatus::Verified { proof: "partial".into() });
     assert!(c5.after.as_deref().is_some_and(|t| t.contains("only partly verified") && t.contains("std::iter::Iterator::sum")), "{c5:?}");
     assert_eq!(result(&report, "c7").status, ClaimStatus::Verified { proof: "mir".into() });
-    assert!(result(&report, "c7").after.as_deref().is_some_and(|t| t.contains("has a reachable call to `demo::wide`. Semilla does not run the test and does not check what the test asserts.")), "{:?}", result(&report, "c7"));
+    assert!(result(&report, "c7").after.as_deref().is_some_and(|t| t.contains("calls `demo::wide` on each path from its start to its normal return. Semilla does not run the test and does not check what the test asserts.")), "{:?}", result(&report, "c7"));
     assert!(result(&report, "c10").after.as_deref().is_some_and(|t| t.contains("examined: 2 local bodies (0 through trait impls, 0 drop bodies)")), "{:?}", result(&report, "c10"));
     assert_eq!(result(&report, "c9").status, ClaimStatus::Verified { proof: "mir".into() });
     let text = views::text_report(&[report.clone()]);
@@ -836,6 +837,10 @@ fn a_function_used_as_a_value_is_a_callee_of_a_property_claim() {
     let result = check(&after("return 0;"), &facts(vec![]), "no-panic");
     assert_eq!(result.status, ClaimStatus::Verified { proof: "partial".into() });
     assert!(result.after.as_deref().is_some_and(|t| t.contains("examined: 2 local bodies") && t.contains("not examined: a call through a function pointer")), "{result:?}");
+    // Batch 5w, D6: the source has `std::hint::black_box`. The MIR has the intrinsic. The
+    // scope text shows the name of the source.
+    let result = check(&after("return 0;"), &facts(vec!["std::intrinsics::black_box"]), "no-panic");
+    assert!(result.after.as_deref().is_some_and(|t| t.contains("`std::hint::black_box`") && !t.contains("intrinsics")), "{result:?}");
     // The same rule for `no-io`, `calls-only`, and `no-unsafe`.
     for op in ["no-io", "no-unsafe"] {
         let result = check(&after("return 0;"), &facts(vec![]), op);
@@ -1438,7 +1443,39 @@ fn tested_by_needs_a_call_in_code_that_can_run() {
     let report = run_facts(before, &after, claims(), &live);
     let c2 = report.claims.iter().find(|c| c.claim == "c2").unwrap();
     assert_eq!(c2.status, ClaimStatus::Verified { proof: "mir".into() });
-    assert_eq!(c2.after.as_deref(), Some("the test `demo::tests::t` has a reachable call to `demo::f`. Semilla does not run the test and does not check what the test asserts."));
+    assert_eq!(c2.after.as_deref(), Some("the test `demo::tests::t` calls `demo::f` on each path from its start to its normal return. Semilla does not run the test and does not check what the test asserts."));
+}
+
+#[test]
+fn tested_by_is_verified_only_if_each_run_of_the_test_has_the_call() {
+    // Batch 5w, part C (trial 7 on humantime): `if black_box(false) { f() }` in the test. The
+    // call can run for the compiler, but no run of the test has it. An entry `maybe X` is a
+    // reachable call of `X` that is not on each path to the normal return.
+    let before = "pub fn f() -> u32 {\n    1\n}\npub fn g() -> u32 {\n    f()\n}\n";
+    let after = format!("{before}#[cfg(test)]\nmod tests {{\n    #[test]\n    fn t() {{\n        if std::hint::black_box(false) {{\n            assert_eq!(super::g(), 1);\n        }}\n    }}\n}}\n");
+    let claims = || vec![claim("c1", "add-item", Some("demo::tests"), serde_json::json!({})), claim("c2", "tested-by", Some("demo::f"), serde_json::json!({"test": "t"}))];
+    let result = |facts: Vec<(&'static str, Vec<&'static str>)>| {
+        let report = run_facts(before, &after, claims(), &FactBodies(facts));
+        let c2 = report.claims.iter().find(|c| c.claim == "c2").unwrap().clone();
+        (c2.status, c2.after.unwrap_or_default(), report.accepted())
+    };
+    let partial = ClaimStatus::Verified { proof: "partial".into() };
+    let verified = ClaimStatus::Verified { proof: "mir".into() };
+    // The call is not on each path: `partial`, and the step is accepted.
+    let (status, text, accepted) = result(vec![("demo::f", vec![]), ("demo::tests::t", vec!["maybe demo::f"])]);
+    assert_eq!(status, partial);
+    assert!(accepted);
+    assert_eq!(text, "only partly verified: the test `demo::tests::t` has a reachable call to `demo::f`, but not on each path from its start to its normal return (the call is under a condition, in a loop, after an early return, or in a closure that a different function calls). Semilla did not prove that the test runs the call. Semilla does not run the test and does not check what the test asserts.");
+    // The same rule holds at each level: a sure call of a helper that has a sure call.
+    assert_eq!(result(vec![("demo::f", vec![]), ("demo::g", vec!["live demo::f"]), ("demo::tests::t", vec!["live demo::g"])]).0, verified);
+    assert_eq!(result(vec![("demo::f", vec![]), ("demo::g", vec!["maybe demo::f"]), ("demo::tests::t", vec!["live demo::g"])]).0, partial);
+    assert_eq!(result(vec![("demo::f", vec![]), ("demo::g", vec!["live demo::f"]), ("demo::tests::t", vec!["maybe demo::g"])]).0, partial);
+    // One sure path is sufficient: a second call under a condition changes nothing.
+    assert_eq!(result(vec![("demo::f", vec![]), ("demo::g", vec!["maybe demo::f"]), ("demo::tests::t", vec!["maybe demo::g", "live demo::f"])]).0, verified);
+    // A cycle of sure calls gives no proof.
+    assert_eq!(result(vec![("demo::f", vec![]), ("demo::g", vec!["live demo::g", "maybe demo::f"]), ("demo::tests::t", vec!["live demo::g"])]).0, partial);
+    // No reachable call: refuted, as before.
+    assert!(matches!(result(vec![("demo::f", vec![]), ("demo::tests::t", vec!["dead demo::f"])]).0, ClaimStatus::Refuted { .. }));
 }
 
 #[test]
@@ -2724,6 +2761,68 @@ fn an_identifier_with_a_character_outside_ascii_shows_its_escape_form() {
 }
 
 #[test]
+fn a_changed_literal_with_a_new_character_outside_ascii_needs_a_reason() {
+    // Batch 5w, part B (trial 7 on humantime): `"µs"` (U+00B5) became `"μs"` (U+03BC). The
+    // two texts look equal. The fact showed no escape form and had no spotlight.
+    use crate::facts::{change_sides, marks, new_literals, non_ascii_names, with_ascii_forms, NewLiteral, NON_ASCII, NON_ASCII_LITERAL, NON_ASCII_NOTE};
+    let literals = |text: &str| marks(text).into_iter().filter(|mark| mark.literal).map(|mark| mark.text).collect::<Vec<_>>();
+    assert_eq!(literals("f(\"a\\\"b\", 'x', '\\n', '\\u{3bc}', b\"q\", r#\"a \" b\"#, br\"z\") + g::<'a>(&'b str)"), ["\"a\\\"b\"", "'x'", "'\\n'", "'\\u{3bc}'", "\"q\"", "r#\"a \" b\"#", "br\"z\""]);
+    assert_eq!(literals("the test's call of `'\u{3bc}'`"), ["'\u{3bc}'"]);
+    assert!(non_ascii_names("match c { '\u{3bc}' => 1, _ => r\"\u{3bc}s\".len() }").is_empty(), "the text of a literal is not a name");
+    assert_eq!(with_ascii_forms("changed pattern `\"us\" | \"\u{b5}s\"` \u{2192} `\"us\" | \"\u{3bc}s\"` at `demo::f`"), "changed pattern `\"us\" | \"\u{b5}s\"` (`\"\\u{b5}s\"`) \u{2192} `\"us\" | \"\u{3bc}s\"` (`\"\\u{3bc}s\"`) at `demo::f`");
+    assert_eq!(with_ascii_forms("added the arm `'\u{3bc}' => 1`"), "added the arm `'\u{3bc}' => 1` (`'\\u{3bc}'`)");
+    assert_eq!(change_sides("value changed: \"a \u{2192} b\" \u{2192} \"c\""), Some(("value changed: \"a \u{2192} b\"", "\"c\"")));
+    let new = |text: &str, chars: &[char]| NewLiteral { text: text.to_string(), chars: chars.to_vec() };
+    assert_eq!(new_literals("\"usec\" | \"us\" | \"\u{b5}s\"", "\"usec\" | \"us\" | \"\u{3bc}s\""), [new("\"\u{3bc}s\"", &['\u{3bc}'])]);
+    assert_eq!(new_literals("\"ns\"", "\"n\u{455}\""), [new("\"n\u{455}\"", &['\u{455}'])]);
+    // The old literal has the character at that place: no new character.
+    assert_eq!(new_literals("\"caf\u{e9}\"", "\"caf\u{e9}s\""), [new("\"caf\u{e9}s\"", &[])]);
+    // The order of the literals changes nothing.
+    assert_eq!(new_literals("\"\u{b5}s\" | \"us\"", "\"us\" | \"\u{3bc}s\""), [new("\"\u{3bc}s\"", &['\u{3bc}'])]);
+    // A new literal with no old literal: no character list.
+    assert_eq!(new_literals("\"us\"", "\"us\" | \"\u{3bc}s\""), [new("\"\u{3bc}s\"", &[])]);
+    assert!(new_literals("\"\u{3bc}s\"", "\"\u{3bc}s\" | \"us\"").is_empty());
+
+    let why = |fact: &semilla_core::report::Fact| fact.spotlight_why.clone().unwrap_or_default();
+    let base = "pub const UNIT: &str = \"\u{b5}s\";\npub const MARK: char = 'u';\npub fn unit(text: &str) -> u32 {\n    match text {\n        \"usec\" | \"us\" | \"\u{b5}s\" => 1,\n        \"nsec\" | \"ns\" => 2,\n        _ => 0,\n    }\n}\n";
+    let check = |after: &str, literal: &str, c: char| {
+        let report = run_derived(base, after, &[]);
+        let marked: Vec<_> = report.facts.iter().filter(|fact| why(fact).contains(NON_ASCII_LITERAL)).collect();
+        assert_eq!(marked.len(), 1, "{:#?}", report.facts);
+        let form = semilla_core::text::ascii_form(literal).unwrap();
+        assert!(marked[0].spotlight && why(marked[0]).contains(&format!("{NON_ASCII_LITERAL}: `{c}` (`\\u{{{:x}}}`) in `{literal}` (`{form}`)", c as u32)), "{:#?}", marked[0]);
+        assert!(marked[0].description.contains(&format!("{literal}` (`{form}`)")) || marked[0].description.contains(&format!("{literal} (`{form}`)")), "{:#?}", marked[0]);
+        assert!(!report.accepted() && !why(marked[0]).contains(NON_ASCII), "{:#?}", report.facts);
+        // One reason makes the step accepted.
+        let (_d1, old) = load(base);
+        let (_d2, new) = load(after);
+        let mut step = step(vec![]);
+        step.reasons = [(marked[0].at.as_ref().unwrap().to_string(), "the Greek letter is the SI form".to_string())].into();
+        let report = verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &FakeBodies(Default::default()), &NoOracle, true).report;
+        assert!(report.accepted(), "{:#?}", report.facts);
+    };
+    // A pattern in a body, a second pattern with a Cyrillic letter, a constant value, a char.
+    check(&base.replace("\"us\" | \"\u{b5}s\"", "\"us\" | \"\u{3bc}s\""), "\"\u{3bc}s\"", '\u{3bc}');
+    check(&base.replace("\"nsec\" | \"ns\"", "\"nsec\" | \"n\u{455}\""), "\"n\u{455}\"", '\u{455}');
+    check(&base.replace("UNIT: &str = \"\u{b5}s\"", "UNIT: &str = \"\u{3bc}s\""), "\"\u{3bc}s\"", '\u{3bc}');
+    check(&base.replace("MARK: char = 'u'", "MARK: char = '\u{3bc}'"), "'\u{3bc}'", '\u{3bc}');
+    // A literal that keeps its characters outside ASCII: the escape form, and no spotlight.
+    let report = run_derived(base, &base.replace("UNIT: &str = \"\u{b5}s\"", "UNIT: &str = \"\u{b5}sec\""), &[]);
+    assert!(report.facts.iter().all(|fact| !fact.spotlight), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|fact| fact.description.contains("\"\u{b5}sec\" (`\"\\u{b5}sec\"`)")), "{:#?}", report.facts);
+    // A new literal in new code: a note with the escape form, no spotlight, also for a char.
+    let after = format!("{base}pub fn sign(c: char) -> &'static str {{\n    match c {{\n        '\u{3bc}' => \"\u{3bc}s\",\n        _ => \"s\",\n    }}\n}}\n");
+    let report = run_derived(base, &after, &[]);
+    assert!(report.accepted(), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|fact| !fact.spotlight), "{:#?}", report.facts);
+    let note = report.facts.iter().find_map(|fact| fact.note.clone()).unwrap_or_default();
+    assert_eq!(note, format!("{NON_ASCII_NOTE} `'\u{3bc}'` (`'\\u{{3bc}}'`), `\"\u{3bc}s\"` (`\"\\u{{3bc}}s\"`)"), "{:#?}", report.facts);
+    // An edit with ASCII literals only has no note and no spotlight.
+    let report = run_derived(base, &base.replace("\"nsec\" | \"ns\"", "\"nsec\" | \"nanos\""), &[]);
+    assert!(report.facts.iter().all(|fact| !fact.spotlight && fact.note.is_none() && !fact.description.contains("\\u{")), "{:#?}", report.facts);
+}
+
+#[test]
 fn a_std_type_of_a_call_names_the_call_and_not_a_drop() {
     // Batch 5k, D9 (trial 6): `*RATE` with `static RATE: LazyLock<u64>` is a call of
     // `Deref::deref` with the type `LazyLock`. The body drops no `LazyLock`.
@@ -3764,4 +3863,147 @@ fn a_removed_proof_with_no_spotlight_is_a_note() {
     assert!(report.facts.iter().all(|fact| fact.note.is_none()) && report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{report:#?}");
     let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &[], &[])]));
     assert!(report.facts.iter().all(|fact| fact.note.is_none() && fact.class != Some(Class::Neutral)), "{report:#?}");
+}
+
+/// A body oracle with the units of one checked configuration (batch 5w, part A).
+struct UnitBodies {
+    bodies: Vec<(String, BodyStatus)>,
+    /// The true `cfg` names of the unit, and the files that it reads.
+    cfg: Vec<&'static str>,
+    files: Vec<&'static str>,
+    known: bool,
+}
+
+impl BodyOracle for UnitBodies {
+    fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
+        Ok(self.bodies.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+    }
+    fn truths(&self, _: &Step) -> anyhow::Result<[Vec<ConfigTruth>; 2]> {
+        let unit = crate::Unit { target: "demo".into(), package: String::new(), cfg: self.cfg.iter().map(|name| name.to_string()).collect(), files: self.files.iter().map(|file| file.to_string()).collect(), root: "src/lib.rs".into() };
+        let truth = ConfigTruth { name: "dev".into(), units: if self.known { vec![unit] } else { Vec::new() }, known: self.known };
+        Ok([vec![truth.clone()], vec![truth]])
+    }
+}
+
+fn run_units(before: &[(&str, &str)], after: &[(&str, &str)], oracle: &UnitBodies, reasons: &[(&str, &str)]) -> StepReport {
+    let (_d1, old) = load_files(before);
+    let (_d2, new) = load_files(after);
+    let mut step = step(vec![]);
+    step.reasons = reasons.iter().map(|(key, text)| (key.to_string(), text.to_string())).collect();
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, oracle, &NoOracle, true).report
+}
+
+#[test]
+fn an_edit_in_code_that_no_checked_configuration_compiles_is_never_neutral() {
+    // Batch 5w, part A (trial 7 on humantime). A constant in a module with a false `cfg`
+    // condition got `neutral (proved)`: no body changed, and no rule asked if a checked
+    // configuration compiles the code. Each edit below is in such code.
+    let module = "#[cfg(windows)]\nmod m {\n    pub const LIMIT: u64 = 7;\n    pub static NAME: &str = \"small\";\n    pub type Word = u16;\n    pub fn twice(a: u64) -> u64 {\n        a * 2\n    }\n    pub struct Pair {\n        pub a: u32,\n    }\n    pub enum Kind {\n        One,\n    }\n    impl Pair {\n        pub fn sum(&self) -> u32 {\n            self.a + 1\n        }\n    }\n    use std::collections::BTreeMap;\n    macro_rules! double {\n        ($e:expr) => {\n            $e * 2\n        };\n    }\n    pub mod inner {\n        pub fn deep() -> u32 {\n            3\n        }\n    }\n}\npub struct Shape {\n    pub side: u32,\n    #[cfg(windows)]\n    pub extra: u32,\n}\n#[cfg(windows)]\nimpl Shape {\n    pub const SIDES: u32 = 4;\n}\n#[cfg(windows)]\npub trait Named {\n    const COUNT: u32 = 1;\n}\n#[cfg_attr(unix, cfg(windows))]\npub const BARE: u32 = 11;\npub fn live() -> u32 {\n    1\n}\n";
+    let manifest = ("Cargo.toml", MANIFEST);
+    let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs"], known: true };
+    let cases: &[(&str, &str, &str)] = &[
+        ("a constant value", "LIMIT: u64 = 7", "LIMIT: u64 = 8"),
+        ("a static value", "\"small\"", "\"tiny\""),
+        ("a type alias", "Word = u16", "Word = u8"),
+        ("a function body", "a * 2", "a * 3"),
+        ("a function signature", "twice(a: u64) -> u64", "twice(a: u64) -> u32"),
+        ("a struct field", "pub a: u32", "pub a: u64"),
+        ("an enum variant", "        One,\n", "        One,\n        Two,\n"),
+        ("an impl method", "self.a + 1", "self.a + 2"),
+        ("a `use` line", "use std::collections::BTreeMap;", "use std::collections::BTreeSet;"),
+        ("a `macro_rules!` definition", "$e * 2", "$e * 3"),
+        ("a nested module", "            3\n", "            4\n"),
+        ("a field with its own condition", "pub extra: u32", "pub extra: u64"),
+        ("a constant of an impl block with a condition", "SIDES: u32 = 4", "SIDES: u32 = 5"),
+        ("a constant of a trait with a condition", "COUNT: u32 = 1", "COUNT: u32 = 2"),
+        ("a `cfg` in a `cfg_attr`", "BARE: u32 = 11", "BARE: u32 = 12"),
+        ("an added item", "    pub type Word = u16;\n", "    pub type Word = u16;\n    pub const MORE: u64 = 9;\n"),
+        ("a removed item", "    pub static NAME: &str = \"small\";\n", ""),
+    ];
+    for (name, old, new) in cases {
+        assert!(module.contains(old), "{name}");
+        let after = module.replacen(old, new, 1);
+        let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
+        assert!(!report.facts.is_empty() && !report.accepted(), "{name}: {report:#?}");
+        assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{name}: {report:#?}");
+        let marked: Vec<&semilla_core::report::Fact> = report.facts.iter().filter(|fact| fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("build configuration: no checked configuration compiles the changed code (`#[cfg") && why.contains("(windows)") && why.contains("at src/lib.rs:"))).collect();
+        assert!(!marked.is_empty(), "{name}: {report:#?}");
+        // One reason for each fact is sufficient. The key is the key that the output shows.
+        let keys: Vec<String> = report.facts.iter().filter(|fact| fact.spotlight).map(|fact| fact.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| fact.part.clone())).collect();
+        let reasons: Vec<(&str, &str)> = keys.iter().map(|key| (key.as_str(), "the edit is for a different target")).collect();
+        let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &oracle, &reasons);
+        assert!(report.accepted() && report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{name}: {report:#?}");
+    }
+    // Negative: a comment has no token. The edit is free.
+    let after = module.replacen("    pub const LIMIT", "    // The limit.\n    pub const LIMIT", 1);
+    let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
+    assert!(report.accepted() && report.facts.iter().all(|fact| !fact.spotlight), "{report:#?}");
+    // Negative: the same edits with a condition that is true in the checked unit.
+    let live = module.replace("windows", "unix");
+    for (name, old, new) in cases {
+        let after = live.replacen(old, new, 1);
+        let report = run_units(&[manifest, ("src/lib.rs", &live)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
+        assert!(report.facts.iter().all(|fact| !fact.spotlight_why.as_deref().unwrap_or_default().contains("no checked configuration compiles the changed code")), "{name}: {report:#?}");
+    }
+    // Negative: an oracle with no configuration list gives no decision.
+    let after = module.replacen("LIMIT: u64 = 7", "LIMIT: u64 = 8", 1);
+    let report = run_derived(module, &after, &[("demo::live", equal("n0"))]);
+    assert!(report.facts.iter().all(|fact| !fact.spotlight), "{report:#?}");
+    // A configuration with no unit record: the careful rule. The constant has no body
+    // record, so the edit is dead.
+    let unknown = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec![], files: vec![], known: false };
+    let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &unknown, &[]);
+    assert!(!report.accepted() && report.facts.iter().all(|fact| fact.spotlight && fact.class != Some(Class::Neutral)), "{report:#?}");
+}
+
+#[test]
+fn an_edit_in_a_file_that_no_checked_unit_reads_is_never_neutral() {
+    // Batch 5w, part A. `#[cfg(windows)] mod win;`: the edit is in `win.rs`, and the
+    // attribute is in a different file. The record of the compiler has the files of each unit.
+    let manifest = ("Cargo.toml", MANIFEST);
+    let lib = ("src/lib.rs", "#[cfg(windows)]\nmod win;\n#[cfg(unix)]\nmod nix;\n");
+    let file = "pub const SEP: char = '/';\npub fn join(a: u32, b: u32) -> u32 {\n    a + b\n}\n";
+    let oracle = UnitBodies { bodies: vec![("demo::nix::join".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs", "src/nix.rs"], known: true };
+    for (old, new) in [("'/'", "':'"), ("a + b", "b + a")] {
+        let after = file.replace(old, new);
+        let report = run_units(&[manifest, lib, ("src/win.rs", file), ("src/nix.rs", file)], &[manifest, lib, ("src/win.rs", &after), ("src/nix.rs", file)], &oracle, &[]);
+        let fact = report.facts.first().unwrap_or_else(|| panic!("{report:#?}"));
+        assert!(!report.accepted() && fact.spotlight && fact.class != Some(Class::Neutral), "{report:#?}");
+        assert!(fact.spotlight_why.as_deref().unwrap().contains("no checked unit reads the file `src/win.rs`: `#[cfg(windows)]` at `demo::win`"), "{fact:#?}");
+        // Negative: the same edit in the file that the unit reads.
+        let report = run_units(&[manifest, lib, ("src/win.rs", file), ("src/nix.rs", file)], &[manifest, lib, ("src/win.rs", file), ("src/nix.rs", &after)], &oracle, &[]);
+        assert!(report.facts.iter().all(|fact| !fact.spotlight), "{report:#?}");
+    }
+}
+
+#[test]
+fn an_edit_in_a_macro_input_with_a_condition_is_never_neutral() {
+    // Batch 5w, part A. The syntax tree does not go into the input of a macro call. One
+    // condition that the checked units make true and false is the one free case.
+    let manifest = ("Cargo.toml", MANIFEST);
+    let source = "macro_rules! pick { ($($t:tt)*) => {}; }\npick! {\n    if #[cfg(windows)] {\n        pub const A: u32 = 1;\n    }\n}\npub fn live() -> u32 {\n    1\n}\n";
+    let after = source.replace("A: u32 = 1", "A: u32 = 2");
+    let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs"], known: true };
+    let report = run_units(&[manifest, ("src/lib.rs", source)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
+    let fact = report.facts.first().unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(!report.accepted() && fact.spotlight && fact.class != Some(Class::Neutral), "{report:#?}");
+    assert!(fact.spotlight_why.as_deref().unwrap().contains("Semilla cannot see if a checked configuration compiles the changed code (the input of `pick!` at src/lib.rs:2 has a `cfg` condition)"), "{fact:#?}");
+}
+
+#[test]
+fn an_identity_in_code_that_no_checked_configuration_compiles_has_no_proof() {
+    // Batch 5w, part A. A rename in dead code has no body evidence. The claimed identity is
+    // unproved. The derived identity does not show, and the facts have the spotlight.
+    let manifest = ("Cargo.toml", MANIFEST);
+    let source = "#[cfg(windows)]\nmod m {\n    pub fn twice(a: u64) -> u64 {\n        a * 2\n    }\n}\npub fn live() -> u32 {\n    1\n}\n";
+    let after = source.replace("twice", "thrice");
+    let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs"], known: true };
+    let report = run_units(&[manifest, ("src/lib.rs", source)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
+    assert!(!report.accepted() && !report.facts.is_empty(), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.spotlight && !fact.has_proof()), "{report:#?}");
+    let (_d1, old) = load_files(&[manifest, ("src/lib.rs", source)]);
+    let (_d2, new) = load_files(&[manifest, ("src/lib.rs", &after)]);
+    let step = step(vec![claim("c1", "rename", Some("demo::m::twice"), serde_json::json!({"to": "thrice"}))]);
+    let report = verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report;
+    assert!(matches!(&report.claims[0].status, ClaimStatus::Unproved { reason } if reason.contains("so the identity of `demo::m::twice` has no proof")), "{report:#?}");
 }

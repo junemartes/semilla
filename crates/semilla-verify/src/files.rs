@@ -437,7 +437,8 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
                 let content_changed = edit.kind != EditKind::FileChanged || entry(before) != entry(after) || old != new;
                 let exists = |ws: &Workspace| ws.files.contains_key(&file) || text(ws, &file).is_some();
                 let parsed = |ws: &Workspace| !exists(ws) || ws.parsed_files.contains(&file);
-                let rust = before.is_rust_file(&file) || after.is_rust_file(&file);
+                // A file that `include!` reads is Rust code, whatever its name is (batch 5w, D3).
+                let rust = before.is_rust_file(&file) || after.is_rust_file(&file) || crate::owners::code_readers(before, after, &file).is_some();
                 let why = file_spotlight(&file, note, content_changed, parsed(before) && parsed(after), rust, code_file(before, after, &file), || doc_include(before, after, &file));
                 let note = edit.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
                 fact(format!("{file}:"), format!("{file}: {what}{note}"), Class::Other, why);

@@ -1523,7 +1523,7 @@ The principle of 22.2 applies to the files with no parsed Rust code: the diff de
 11. **Allow list of files (batch 5d, I3).** A file fact has no spotlight only if no tool reads the file to build or to test: `*.md`, `*.txt`, `LICENSE*`, `COPYING*`, `NOTICE*`, `CHANGELOG*`, `AUTHORS*`, and images. A doc file that a `doc` attribute includes (`#![doc = include_str!(…)]`) is not on the list: its doc tests run. `.gitignore` and `.gitattributes` are not on the list: an ignored file is not in the tree of a step but cargo reads it, and a git filter changes a checkout. Each other file (CI files, scripts, `clippy.toml`, `rustfmt.toml`, `.env`, linker scripts, unknown files) needs a reason.
 12. **Content (batch 5d).** Each file fact holds the content change (`Fact.content`): a line diff of at most 40 lines, or "binary, N bytes". Each report shows it (Markdown, HTML, UI).
 13. **The build folder (batch 5d).** The MIR builds of the trees run in a folder outside the repository (`$TMPDIR/semilla-build/<hash of the root>`). Cargo reads each `.cargo/config` of the parent folders of a build. A build inside the repository read the `.cargo/config` of the working tree for each tree, so a new `.cargo/config` changed the builds of both sides of its step, and its effect on the MIR was not visible.
-14. **A file that a crate reads at build time (batch 5f).** A file that `include!`, `include_str!`, or `include_bytes!` reads is a build input, also when its name is on the allow list of rule 11 (`rate.txt`, `notes.md`, `logo.png`). Semilla finds the reader from two sources: the text of the items and of the Rust files (a literal path, or the file name in a computed path such as `concat!(env!("CARGO_MANIFEST_DIR"), "/terms.txt")`), and the file of a MIR span. It does not use the dep-info of the compiler.
+14. **A file that a crate reads at build time (batch 5f).** A file that `include!`, `include_str!`, or `include_bytes!` reads is a build input, also when its name is on the allow list of rule 11 (`rate.txt`, `notes.md`, `logo.png`). Semilla finds the reader from two sources: the text of the items and of the Rust files (a literal path, or the file name in a computed path such as `concat!(env!("CARGO_MANIFEST_DIR"), "/terms.txt")`), and the file of a MIR span. It does not use the dep-info of the compiler. Batch 5w: a file that `include!` reads is code that Semilla does not parse, and it needs a reason (30.4).
     - If the MIR of a body changes, the file fact has the class `logic` and the bodies under "affected bodies". No reason is necessary: the fact shows the cause and the effect.
     - If no body changes (a `#[doc = include_str!(…)]` file, or a reader that no checked configuration compiles), the fact has the class `other` and needs a reason. The text names the reader.
     - The fact holds the content change (rule 12).
@@ -1679,7 +1679,7 @@ result: accepted · 7 steps · 23 facts: 3 proved neutral, 20 to read (0 with a 
 - Each claim rejects an empty value and a partial value: `test=`, `to=`, `from=`, an empty anchor.
 - An empty intent and a reason with no text are errors. A reason whose anchor belongs to no fact of the step is not silent: the output names it, and the command to run again has the correct anchor. If the anchor is the MIR name of a body of a fact with a spotlight, the output gives the key of that fact (batch 5l). The line `! spotlight: build configuration: BODY` also gives the key.
 
-**`tested-by` (A2).** The claim needs a reachable call. The driver folds the constant conditions of the MIR of the test and gives the calls of the blocks that the start block reaches. A call in `if false { … }` refutes the claim: "the test `T` has a call to `F` only in code that cannot run". The verified text is: "the test `T` has a reachable call to `F`. Semilla does not run the test and does not check what the test asserts." A test name with no path resolves in the full workspace when it is unique. Limits: a call through a trait object or a function pointer is not followed, and a condition that does not fold counts as reachable.
+**`tested-by` (A2).** The claim needs a reachable call. The driver folds the constant conditions of the MIR of the test and gives the calls of the blocks that the start block reaches. A call in `if false { … }` refutes the claim: "the test `T` has a call to `F` only in code that cannot run". The verified text is: "the test `T` has a reachable call to `F`. Semilla does not run the test and does not check what the test asserts." A test name with no path resolves in the full workspace when it is unique. Limits: a call through a trait object or a function pointer is not followed, and a condition that does not fold counts as reachable. Batch 5w changed the result of a reachable call: `verified (mir)` needs the call on each path, and a reachable call that is not on each path gives `verified (partial)` (30.3).
 
 **Facts (part C).**
 - A new type is one fact: "added `T`". Its fields, variants, and derives are not facts of their own (C1).
@@ -2250,3 +2250,70 @@ See section 8.8.1.
 **The cases that stay.** The mark stays different from each other text if the driver cannot see the computation: a span with no origin, two different origins at one span, a promoted constant of a different body, an operand that is not a constant, and a promoted body that the printer cannot print or that has a failed read (`unknown_…`). The other calls of `print::unique` are marks of a failed read (a variant, a field, a layout, a cast, a statement that the printer cannot read). A correct body does not get them.
 
 **The result.** The first honest step is accepted with no reason on bit-vec, httpdate, bech32, and slab (nine edits; three of them prove `neutral`; six are plain facts of a compound assignment or a changed condition, with no indirect change).
+
+## 30. Batch 5w: the results of held-out trial 7
+
+Trial 7 was a held-out trial on `humantime` 2.3.0, a crate that the project did not use before. The agent of the trial had no knowledge of Semilla. The trial found the defects of this section. Each rule of this section is a decision of batch 5w. **Decided by Claude.**
+
+### 30.1 An edit in code that no checked configuration compiles is never `neutral` (part A)
+
+**The defect.** The constant `humantime::date::max::SECONDS` is in a module with `#[cfg(all(target_pointer_width = "32", …))]`. No checked configuration compiles the module. A change of the value got the fact "value of `…::SECONDS` changed … [neutral (proved)]", and the change set was accepted with "1 proved neutral, 0 to read".
+
+**The cause.** A type-level fact got the class `neutral` when no changed body used the entity (`facts.rs`: the list of the affected bodies was empty). No rule asked if a checked configuration compiles the edited tokens. "No body changed" is true for each edit in code that no checked configuration compiles, so it is not evidence there. The fact kinds with this defect: the value of a constant or a static, a type alias, a field, a variant, a `use` line, a macro definition, an added item, a removed item, and a rename.
+
+**The rule. Decided by Claude.** "No MIR change" is evidence only for code that a checked configuration compiles. The pass `uncompiled.rs` runs after the facts of a step:
+
+1. It compares the tokens of each Rust file on the two sides. A comment is not a token, so an edit of only a comment stays free. The tokens of a doc comment are not in the list: a doc comment keeps its rule.
+2. A changed token is dead on its side if no checked unit of that side compiles it. Case 1: no checked unit reads the file (`#[cfg(windows)] mod win;`, a `path` attribute under `cfg_attr`). Case 2: the token is in the range of a `cfg` attribute, and no unit that reads the file makes each condition around the token true. The range of an attribute is its syntax node: an item, a module, an `impl`, a trait, a function, a field, a variant, a block, a statement, an expression.
+3. The data are the unit records of the compiler (batch 5t): the files that each checked unit reads, and the `cfg` set of the unit. No name has a special rule.
+4. The fact with the smallest edit range around a dead token gets the spotlight "build configuration: no checked configuration compiles the changed code (`#[cfg(…)]` at FILE:LINE), so the edit has no proof". Its class is not `neutral`. A dead token with no fact gets a new fact. An identity claim on an item with a dead edit has no proof.
+5. The outputs are the forms that exist: a fact to read, the spotlight, and the reason key in the first output. An honest edit needs one reason.
+
+**Soundness.** The pass only adds a spotlight, and it only removes the class `neutral`. A token in the input of a macro call has no syntax tree. If the input has a `cfg` condition, the token is dead, unless the input has one condition and the checked units make it true and false. An empty list of configurations gives no decision: the oracle has no data. A configuration with no unit record uses the careful rule: a token in a `cfg` range is dead if its item has no body record.
+
+**What stays.** An item under a condition that is true in a checked configuration keeps its result (the test `a_cfg_attribute_in_a_changed_body_stops_the_proof`). Open: a rename in dead code needs two reasons (the two names); a target root with no `.rs` suffix has no unit record; an edit in a macro input with more than one condition needs a reason.
+
+### 30.2 A literal with a character outside ASCII (part B)
+
+**The defect.** A step changed `"µs"` (U+00B5) to `"μs"` (U+03BC) in a match arm. The fact showed two texts that look the same, with no escape form and no spotlight. A char literal `'μ'` got the identifier spotlight by accident: `non_ascii_names` skipped only string literals.
+
+**The rule. Decided by Claude.**
+
+1. Each fact text and each report text shows the escape form after a literal with a character outside ASCII (a string, a raw string, a byte string, a char): `` `"μs"` (`"\u{3bc}s"`) ``. The form alone needs no reason. The places: the fact text, the notes, the spotlight text, the change tree (the labels and the inline diffs), and the UI data.
+2. A fact that changes a literal (an old text and a new text) gets the spotlight "a changed literal has a new character outside ASCII" if the new literal has a character outside ASCII that the old literal does not have at that place. The text names each such character with its escape form. The fact needs a reason.
+3. The old literal of a new literal is the literal of the old text with the longest common sequence of characters. The check uses the full text of the edit, not the short text of the fact line.
+4. A new literal in new code (no old text) gets the note "new literals with characters outside ASCII: …" and no spotlight. A char literal is not an identifier: it does not get the identifier spotlight.
+5. A hidden character (a control, a bidirectional control, a zero-width character) shows as its escape one time, as before. A new hidden character in a changed literal gets the spotlight of rule 2.
+6. The identifier rule stays as it is.
+7. A Mermaid flow label, a source block, and a diff block stay as source text: the fact next to them has the form.
+
+### 30.3 `tested-by` is `verified` only if each run of the test calls the function (part C)
+
+**The defect.** The test `fn t() { if std::hint::black_box(false) { assert_eq!(split_nanos(…), …); } }` got `verified (mir)`. The test never calls the function. The old rule needed only a reachable call (section 25, A2), and a condition that does not fold counts as reachable.
+
+**The rule. Decided by Claude.**
+
+1. `verified (mir)`: each path of the test from its start to its normal return has the call. A path that ends with a panic does not count. A call through local functions counts if the same rule holds at each level.
+2. `verified (partial)`: the test has a reachable call, but not on each path (under a condition, in a loop body, after an early return, after a `?`, or in a closure that a different function calls). The scope text says: "Semilla did not prove that the test runs the call." A partial result does not reject the step, and the reviewer reads it.
+3. `refuted`: no reachable call, as before.
+
+**The method.** The driver gives the fact `sure_callees` for each function body at N0 (`reach.rs`). The graph is the live blocks after the constant conditions fold, with no unwind edge. The ends are the return blocks. If no return block can run, each block with no successor is an end (a `#[should_panic]` test, a diverging call). A callee is sure if no end can run when its call blocks are closed. Only a call with a constant callee counts. A direct call of a local closure gives the sure callees of the closure. A function that the body gives to a different function (`map(f)`) is not sure. A body name can exist in more than one target: a callee is sure only if each body with the name has the call.
+
+**The agent effort.** `partial` is the correct result for a test with the call in a loop. The guide says that an agent must not change an honest test to get `verified`.
+
+### 30.4 A file that `include!` reads is code (part D.3)
+
+**The defect.** A step added `src/NOTICE.txt` with Rust code, and `include!("NOTICE.txt")` in a function. The file fact was "added [other]" with no affected bodies. If the content was equal to the removed expression, the step needed a reason for "Uses: `include!`". If the content was different, the step needed no reason.
+
+**The cause.** The loader follows `include!` only in a target that it does not parse, and `NOTICE*` and `*.txt` are on the allow list of files.
+
+**The rule. Decided by Claude.** A file that `include!` reads with a literal path is Rust code that Semilla does not parse, with each name and each content. Its fact has the class `logic`, the readers under "affected bodies", and the file spotlight "Rust code that Semilla does not parse". One reason on the file is sufficient (`--reason 'src/NOTICE.txt:=…'`): the build configuration rule does not ask for a second reason for the `include!` call of a reader. This changes rule 14 of batch 5f for `include!`: a changed `rate.txt` that `include!` reads now needs a reason. `include_str!` and `include_bytes!` keep the rule of batch 5f: their file is data. Open: the cost of one reason for a data table that `include!` reads.
+
+### 30.5 Small changes (part D)
+
+- The base line shows a commit subject in quote marks, with an escape for each hidden character. The subject is text of the agent.
+- A claim accepts each anchor that Semilla prints: a space between `<` and `>` of an anchor does not split the argument (`<T as fmt::Display>::fmt`).
+- The status line of a step with no check says "N facts from the syntax only, not checked". A check joins the edits of a body, so its count can be smaller.
+- The section "Spotlight" of a report has one line with the two counts: the lines of the section name sensitive code that a step changed, and the summary counts the facts with a spotlight.
+- The header line of changed build code says "The check ran it with a sandbox that is not complete: …" when a limit of the sandbox is missing.
+- The scope text of `no-panic` shows `std::hint::black_box` for the intrinsic `std::intrinsics::black_box`.

@@ -161,7 +161,7 @@ ops! {
     "no-unsafe",              Item,       Property,    None, Core,     [],                "The local code that can run from the function has no unsafe code.";
     "no-io",                  Item,       Property,    None, Core,     [],                "The local code that can run from the function calls no I/O function (`core` and `alloc`: no I/O; `std`: an allow list of modules).";
     "calls-only",             Item,       Property,    None, Core,     ["calls"],         "Each call to another crate from the local code that can run is under a path in `calls` (full path segments). Calls to `core` and `alloc` are always allowed.";
-    "tested-by",              Item,       Property,    None, Core,     ["test"],          "The test `test` has a reachable call to the function (directly or through local calls).";
+    "tested-by",              Item,       Property,    None, Core,     ["test"],          "The test `test` calls the function on each path to its normal return (directly or through local calls). A reachable call that is not on each path gives `partial`.";
 }
 
 /// Finds an operation by name.

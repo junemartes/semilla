@@ -192,6 +192,10 @@ struct BodyRecord {
     /// its closures (see `reach::live_callees`). Not for a closure. At n0 only.
     #[serde(skip_serializing_if = "Option::is_none")]
     live_callees: Option<Vec<String>>,
+    /// The functions that the body calls on each path from its start to a normal return (see
+    /// `reach::sure_callees`). Not for a closure. At n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sure_callees: Option<Vec<String>>,
     /// The callees that the inline step put into the body, at each depth (batch 5l). At n3
     /// only. The compare drops the record if one of them is opaque.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -668,6 +672,7 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                     if level == Level::N0 {
                         add_reach(&mut found, *item, body);
                         found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
+                        found.sure_callees = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten();
                         // No list: the driver failed. The marker makes the body opaque.
                         found.adts = guarded(|| reach::adts(body)).unwrap_or_else(|| vec!["?".to_string()]);
                         // A type alias of a crate outside the workspace: an entry `alias PATH`.
@@ -803,6 +808,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         impl_of: Vec::new(),
         drop_of: None,
         live_callees: None,
+        sure_callees: None,
         inlined: Vec::new(),
         adts: Vec::new(),
         names: Vec::new(),
@@ -946,6 +952,7 @@ fn record(
         impl_of: Vec::new(),
         drop_of: None,
         live_callees: None,
+        sure_callees: None,
         inlined: Vec::new(),
         adts: Vec::new(),
         names: Vec::new(),

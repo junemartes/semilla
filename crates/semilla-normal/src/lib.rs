@@ -122,6 +122,10 @@ pub struct BodyRecord {
     /// closure).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_callees: Option<Vec<String>>,
+    /// The functions that the body calls on each path from its start to a normal return: the
+    /// names, as in `live_callees` (only at N0, not for a closure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sure_callees: Option<Vec<String>>,
     /// The types in the parameters of the body, through the fields of the types that are not
     /// of the standard library (only at N0). `dyn`, `fn`, and `param` are markers.
     #[serde(default)]

@@ -502,7 +502,9 @@ impl App {
         if !note.ran {
             return summary_line(report).lines().next().map(|line| format!("! {line}"));
         }
-        Some(note.ran_line())
+        // With a missing limit of the sandbox, the line does not say "in the sandbox".
+        let missing = semilla_normal::sandbox::missing().map(|missing| missing.state());
+        Some(note.ran_line_with(missing.as_deref()))
     }
 
     // ----- the tag tools -----
@@ -991,7 +993,8 @@ impl App {
                 let (count, verb) = if open.len() == 1 { ("1 commit".to_string(), "has") } else { (format!("{} commits", open.len()), "have") };
                 return Some(format!("! {count} before this change set {verb} no Semilla check: {}{more} (the last checked commit is `{}`)", open.iter().take(10).cloned().collect::<Vec<_>>().join(", "), short(hash)));
             }
-            open.push(format!("`{}` {subject}", short(hash)));
+            // The subject is text of the agent: quote marks, and an escape for each hidden character.
+            open.push(format!("`{}` {}", short(hash), semilla_core::text::quoted(subject)));
         }
         Some(format!("base `{}`: no Semilla check (no checked commit before it)", short(&base)))
     }
@@ -1670,7 +1673,10 @@ pub(crate) fn short_text(report: &Report) -> String {
         let detail = if facts == 0 {
             String::new()
         } else if not_checked.contains(&step.step) {
-            format!(" · {facts} fact{}, not checked", if facts == 1 { "" } else { "s" })
+            // A step with no check has the facts of the syntax only: one fact for each edit.
+            // A check can join the edits of a body in one fact, so this count can be larger
+            // than the count of the checked step (batch 5w, D4). The text says what it counts.
+            format!(" · {facts} fact{} from the syntax only, not checked", if facts == 1 { "" } else { "s" })
         } else if report.phase == "syntax" {
             format!(" · {facts} fact{}", if facts == 1 { "" } else { "s" })
         } else {

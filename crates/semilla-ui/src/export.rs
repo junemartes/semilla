@@ -878,6 +878,13 @@ fn script_safe(script: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
+/// The line under the title "Spotlight" (batch 5w, D4). The section and the summary count
+/// different things, so the line gives the two counts and says what each one is.
+fn spotlight_counts(lines: usize, facts: usize) -> String {
+    let (line_noun, fact_noun) = (if lines == 1 { "line names" } else { "lines name" }, if facts == 1 { "fact" } else { "facts" });
+    format!("{lines} {line_noun} sensitive code that a step changed. The summary counts a different thing: {facts} {fact_noun} with a spotlight. Each such fact shows its spotlight and its reason in its group.")
+}
+
 fn html_list(out: &mut String, class: &str, items: &[String]) {
     let _ = writeln!(out, "<ul class=\"{class}\">");
     for item in items {
@@ -948,6 +955,7 @@ fn html_summary(out: &mut String, model: &Model) {
     let spotlight = model.spotlight();
     if !spotlight.is_empty() {
         out.push_str("<h3>Spotlight</h3>\n");
+        let _ = writeln!(out, "<p class=\"note\">{}</p>", esc(&spotlight_counts(spotlight.len(), model.summary.fact_counts.spotlight)));
         let items: Vec<String> = spotlight.iter().map(|(step, text)| format!("step {step}: {text}")).collect();
         html_list(out, "spotlight", &items);
     }
@@ -1410,6 +1418,9 @@ fn md_summary(out: &mut String, model: &Model, full: bool) {
             continue;
         }
         let _ = writeln!(out, "### {title}\n");
+        if title == "Spotlight" {
+            let _ = writeln!(out, "{}\n", md(&spotlight_counts(items.len(), model.summary.fact_counts.spotlight)));
+        }
         for item in items {
             let _ = writeln!(out, "- {}", md_with_code(&item));
         }

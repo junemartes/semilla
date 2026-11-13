@@ -440,7 +440,7 @@ fn plan_flow() {
     let applied = run(repo, &["replay", "apply", "--full"], 0);
     assert!(applied.contains("renamed `demo::scale` → `demo::multiply` (proved N1: rename-map)"), "{applied}");
     assert!(applied.contains("verified (mir)"), "no-io uses the MIR: {applied}");
-    assert!(applied.contains("the test `demo::tests::t_wide` has a reachable call to `demo::sum_wide`"), "{applied}");
+    assert!(applied.contains("the test `demo::tests::t_wide` calls `demo::sum_wide` on each path from its start to its normal return"), "{applied}");
     assert!(applied.contains("the plan is accepted"), "{applied}");
     assert!(!applied.contains("pair:"), "an honest plan gives no pair warning: {applied}");
 
@@ -700,10 +700,12 @@ fn each_result_states_the_base_commit_and_its_check() {
     commit("tidy");
     let tidy = short("HEAD");
     write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "50"));
-    commit("tidy more");
+    // Batch 5w, D1: a commit subject is text of the agent. It shows in quote marks, and each
+    // hidden character shows as an escape.
+    commit("tidy \"more\"\u{1b}[8m");
     let more = short("HEAD");
     write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "60"));
-    let line = format!("! 2 commits before this change set have no Semilla check: `{more}` tidy more, `{tidy}` tidy (the last checked commit is `{checked}`)");
+    let line = format!("! 2 commits before this change set have no Semilla check: `{more}` \"tidy \\\"more\\\"\\u{{1b}}[8m\", `{tidy}` \"tidy\" (the last checked commit is `{checked}`)");
     let step = run(repo, &["step", "the honest step"], 0);
     assert!(step.contains(&line), "{step}");
     // The session status has the line before the commit also.
@@ -717,7 +719,9 @@ fn each_result_states_the_base_commit_and_its_check() {
     let md = repo.join(".semilla/review.md");
     run(repo, &["review", "HEAD", "--md", md.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&md).unwrap();
-    assert!(text.lines().take(6).any(|l| l.contains(&line)), "the line is at the top of the report: {text}");
+    // The Markdown report adds a backslash before each character that Markdown reads.
+    let md_line = format!("`{more}` \"tidy \\\\\"more\\\\\"\\\\u{{1b}}\\[8m\", `{tidy}` \"tidy\" (the last checked commit is `{checked}`)");
+    assert!(text.lines().take(6).any(|l| l.contains("2 commits before this change set have no Semilla check") && l.contains(&md_line)), "the line is at the top of the report: {text}");
     let html = repo.join(".semilla/review.html");
     run(repo, &["review", "HEAD", "--html", html.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&html).unwrap();
@@ -726,7 +730,7 @@ fn each_result_states_the_base_commit_and_its_check() {
     // commit before the change set has a check.
     git(repo, &["notes", "--ref=semilla", "remove", &checked]);
     let status = run(repo, &["status", "HEAD"], 0);
-    assert!(status.contains("! 3 commits before this change set have no Semilla check") && status.contains(&format!("`{checked}` raise the max again")), "{status}");
+    assert!(status.contains("! 3 commits before this change set have no Semilla check") && status.contains(&format!("`{checked}` \"raise the max again\"")), "{status}");
 }
 
 #[test]
@@ -834,13 +838,25 @@ fn a_file_that_a_crate_reads_at_build_time_is_a_build_input() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the readers"]);
 
-    // A text file, a binary file, an `include!` file, and a computed path: a fact of the class
-    // `logic` with the body that reads the file. No reason is necessary.
-    for (file, body) in [("crates/shop-core/src/notes.md", "shop_core::notes"), ("crates/shop-core/src/rate.txt", "shop_core::rate"), ("crates/shop-core/terms.txt", "shop_core::terms")] {
+    // A text file, a binary file, and a computed path: a fact of the class `logic` with the
+    // body that reads the file. No reason is necessary.
+    for (file, body) in [("crates/shop-core/src/notes.md", "shop_core::notes"), ("crates/shop-core/terms.txt", "shop_core::terms")] {
         let old = std::fs::read_to_string(repo.join(file)).unwrap();
-        write(repo, file, &old.replace("Notes", "Notes 2").replace("1", "5").replace("terms", "terms 2"));
+        write(repo, file, &old.replace("Notes", "Notes 2").replace("terms", "terms 2"));
         let out = run(repo, &["step", &format!("change {file}")], 0);
         assert!(out.contains(&format!("{file}: changed [logic]")) && out.contains(&format!("affected bodies: {body}")), "{out}");
+    }
+    // Batch 5w, D3: a file that `include!` reads is Rust code that Semilla does not parse,
+    // whatever its name is. The fact has the body that reads the file, and it needs a reason.
+    {
+        let file = "crates/shop-core/src/rate.txt";
+        let old = std::fs::read_to_string(repo.join(file)).unwrap();
+        write(repo, file, &old.replace("1", "5"));
+        let out = run(repo, &["step", "change the rate"], 1);
+        assert!(out.contains(&format!("{file}: changed [logic]")) && out.contains("affected bodies: shop_core::rate"), "{out}");
+        assert!(out.contains(&format!("✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason '{file}:=…'")), "{out}");
+        let out = run(repo, &["step", "change the rate", "--reason", &format!("{file}:=the new rate")], 0);
+        assert!(out.contains("accepted"), "{out}");
     }
     std::fs::write(repo.join("crates/shop-core/src/logo.png"), [0x89, b'P', b'N', b'G', 0, 1, 2, 0xfe, 7]).unwrap();
     let out = run(repo, &["step", "change the logo"], 0);
@@ -862,6 +878,38 @@ fn a_file_that_a_crate_reads_at_build_time_is_a_build_input() {
         let out = run(repo, &["step", &format!("change {file}"), "--reason", &format!("{file}:=the text is clearer")], 0);
         assert!(out.contains("accepted"), "{out}");
     }
+}
+
+#[test]
+fn an_include_file_is_code_with_each_name_and_each_content() {
+    // Batch 5w, D3 (trial 7 on humantime). A step moves an expression to a new file with a name
+    // of the allow list, and reads it with `include!`. The file fact was `added [other]` with no
+    // body. A file with the same content needed a reason (`Uses: include!`), and a file with a
+    // different content needed no reason. Now the two cases agree: the file fact has the body
+    // that reads the file, and it needs one reason.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\n\npub fn rate() -> u64 {\n    7\n}\n\npub fn fee() -> u64 {\n    3\n}\n");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "two functions"]);
+    let lib = std::fs::read_to_string(repo.join("crates/shop-core/src/lib.rs")).unwrap();
+    for (name, function, old, content, equal) in [("NOTICE.txt", "rate", "    7\n", "7\n", true), ("FEE.txt", "fee", "    3\n", "4\n", false)] {
+        let file = format!("crates/shop-core/src/{name}");
+        write(repo, &file, content);
+        let lib = std::fs::read_to_string(repo.join("crates/shop-core/src/lib.rs")).unwrap().replace(old, &format!("    include!(\"{name}\")\n"));
+        write(repo, "crates/shop-core/src/lib.rs", &lib);
+        let out = run(repo, &["step", &format!("move the value of {function}")], 1);
+        assert!(out.contains(&format!("{file}: added [logic]")) && out.contains(&format!("affected bodies: shop_core::{function}")), "{out}");
+        assert!(out.contains(&format!("✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason '{file}:=…'")), "{out}");
+        // One reason is sufficient in the two cases: the `include!` call is not a second cause.
+        assert!(!out.contains("Uses: `include!`") && !out.contains("! spotlight: build configuration"), "{out}");
+        assert_eq!(out.matches("--reason '").count(), 2, "one spotlight line and one `run again` line: {out}");
+        // With the same content, Semilla has no proof for the body, and a note says why.
+        assert_eq!(out.contains(&format!("note: no proof: `shop_core::{function}` uses `include!` (Semilla cannot see into it)")), equal, "{out}");
+        let out = run(repo, &["step", &format!("move the value of {function}"), "--reason", &format!("{file}:=the value is in a file now")], 0);
+        assert!(out.contains("accepted") && !out.contains("neutral (proved)"), "{out}");
+    }
+    assert!(lib.contains("    7\n"));
 }
 
 #[test]
@@ -1368,6 +1416,143 @@ mod reach {
 }
 "#;
 
+const SURE_CODE: &str = r#"
+pub fn one() -> u32 { 1 }
+
+#[cfg(test)]
+mod sure {
+    use super::*;
+
+    #[test]
+    fn guard() { if std::hint::black_box(false) { assert_eq!(one(), 9); } }
+
+    #[test]
+    fn literal() {
+        if false {
+            assert_eq!(one(), 9);
+        }
+    }
+
+    #[test]
+    fn early_return() {
+        if std::env::var("SHOP_SKIP").is_ok() {
+            return;
+        }
+        assert_eq!(one(), 1);
+    }
+
+    #[test]
+    fn in_a_loop() {
+        for n in 0..3u32 {
+            assert_eq!(one() + n, 1 + n);
+        }
+    }
+
+    #[test]
+    fn question_mark() -> Result<(), std::num::ParseIntError> {
+        let n: u32 = "1".parse()?;
+        assert_eq!(one(), n);
+        Ok(())
+    }
+
+    #[test]
+    fn two_lines() {
+        assert_eq!(one(), 1);
+        assert_eq!(one() + 1, 2);
+    }
+
+    #[test]
+    fn through_a_helper() {
+        assert_eq!(helper(), 1);
+    }
+
+    fn helper() -> u32 {
+        one()
+    }
+
+    #[test]
+    fn closure_with_no_call() {
+        let call = || one();
+        let _ = &call;
+        assert_eq!(1, 1);
+    }
+
+    #[test]
+    fn after_an_unwrap() {
+        let n: u32 = "1".parse().unwrap();
+        assert_eq!(one(), n);
+    }
+
+    #[test]
+    fn each_arm() {
+        let n = match std::hint::black_box(1u32) {
+            1 => one(),
+            _ => one() + 1,
+        };
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn then_a_panic() {
+        let n = one();
+        panic!("the value is {n}");
+    }
+
+    #[test]
+    fn helper_with_a_condition() {
+        assert_eq!(maybe(std::hint::black_box(true)), 1);
+    }
+
+    fn maybe(run: bool) -> u32 {
+        if run { one() } else { 0 }
+    }
+}
+"#;
+
+#[test]
+fn tested_by_is_verified_only_if_each_run_of_the_test_calls_the_function() {
+    // Batch 5w, part C (trial 7 on humantime): a test with the call in
+    // `if std::hint::black_box(false) { … }` got `verified`. The call is reachable for the
+    // compiler, but no run of the test has it.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{SURE_CODE}"));
+    let tests = ["guard", "literal", "early_return", "in_a_loop", "question_mark", "two_lines", "through_a_helper", "closure_with_no_call", "after_an_unwrap", "each_arm", "then_a_panic", "helper_with_a_condition"];
+    let step = |tests: &[&str], expect: i32| {
+        let mut args = vec!["step".to_string(), "add the tests".to_string(), "--reason".to_string(), "shop_core::cart::sure=one test must end with a panic".to_string()];
+        for test in tests {
+            args.extend(["--claim".to_string(), format!("tested-by shop_core::cart::one test={test}")]);
+        }
+        run(repo, &args.iter().map(String::as_str).collect::<Vec<_>>(), expect)
+    };
+    let text = step(&tests, 1);
+    let result = |text: &str, index: usize| {
+        if let Some(line) = text.lines().find(|line| line.trim_start().starts_with(&format!("✗ claim c{index} ("))) {
+            return line.to_string();
+        }
+        let start = format!("c{index} ");
+        let lines: Vec<&str> = text.lines().skip_while(|line| !line.trim_start().trim_start_matches(['✓', '✗', '…', '◐', ' ']).starts_with(&start) || line.contains("claim c")).take(2).collect();
+        lines.join(" ")
+    };
+    let partial = "but not on each path from its start to its normal return (the call is under a condition, in a loop, after an early return, or in a closure that a different function calls). Semilla did not prove that the test runs the call.";
+    for (index, test) in tests.iter().enumerate() {
+        let line = result(&text, index + 1);
+        match *test {
+            "literal" => assert!(line.contains("refuted") && line.contains("only in code that cannot run"), "{test}: {text}"),
+            "closure_with_no_call" => assert!(line.contains("refuted"), "{test}: {text}"),
+            "guard" | "early_return" | "in_a_loop" | "question_mark" | "helper_with_a_condition" => assert!(line.contains("partial") && !line.contains("verified (mir)") && line.contains(partial), "{test}: {text}"),
+            _ => assert!(line.contains("verified (mir)") && line.contains(&format!("the test `shop_core::cart::sure::{test}` calls `shop_core::cart::one` on each path from its start to its normal return.")), "{test}: {text}"),
+        }
+    }
+    // A `partial` claim does not reject the step, and the summary counts it as partial.
+    let text = step(&["guard", "two_lines"], 0);
+    assert!(text.contains("✓ c1 verified (partial)") && text.contains("✓ c2 verified (mir)"), "{text}");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-a", "-m", "add the tests"]);
+    let text = run(repo, &["tag"], 0);
+    assert!(text.contains("2 claims: 1 verified, 1 partial"), "{text}");
+}
+
 #[test]
 fn tested_by_needs_a_call_in_code_that_can_run() {
     // Trial 4, cheat C2: the test has the call in `if false { … }`.
@@ -1395,11 +1580,12 @@ fn tested_by_needs_a_call_in_code_that_can_run() {
     for (index, function) in [(1, "one"), (2, "two"), (3, "three"), (4, "four"), (5, "five")] {
         assert!(result(index).contains("refuted") && result(index).contains(&format!("has a call to `shop_core::cart::{function}` only in code that cannot run")), "c{index}: {text}");
     }
-    for (index, function) in [(6, "six"), (7, "seven")] {
-        assert!(result(index).contains("verified (mir)") && result(index).contains(&format!("has a reachable call to `shop_core::cart::{function}`. Semilla does not run the test and does not check what the test asserts.")), "c{index}: {text}");
-    }
+    // A direct call of a closure is a call of the test (batch 5w, part C).
+    assert!(result(6).contains("verified (mir)") && result(6).contains("calls `shop_core::cart::six` on each path from its start to its normal return. Semilla does not run the test and does not check what the test asserts."), "c6: {text}");
+    // The closure runs in `Iterator::sum`: Semilla does not prove that the call runs.
+    assert!(result(7).contains("partial") && result(7).contains("has a reachable call to `shop_core::cart::seven`, but not on each path"), "c7: {text}");
     // Trial 4, D10: a test name with no path resolves in the workspace. The test is in another crate.
-    assert!(result(8).contains("verified (mir)") && result(8).contains("the test `shop_app::tests::the_app_uses_one` has a reachable call to `shop_core::cart::one`"), "{text}");
+    assert!(result(8).contains("verified (mir)") && result(8).contains("the test `shop_app::tests::the_app_uses_one` calls `shop_core::cart::one` on each path"), "{text}");
     assert!(result(9).contains("refuted") && result(9).contains("does not call `shop_core::cart::two`"), "{text}");
 }
 
@@ -2048,7 +2234,11 @@ fn a_target_file_is_rust_code_whatever_its_name() {
     // code, not a file fact of a text file.
     let license = std::fs::read_to_string(repo.join("crates/shop-app/LICENSE.txt")).unwrap();
     write(repo, "crates/shop-app/LICENSE.txt", &license.replace("x < 10", "x <= 10"));
-    let out = run(repo, &["step", "reword the license"], 0);
+    // The driver records no unit for a root file with no `.rs` suffix. So no checked unit
+    // reads the file, and the edit has no body evidence: it needs a reason (batch 5w, part A).
+    let out = run(repo, &["step", "reword the license"], 1);
+    assert!(out.contains("no checked unit reads the file `crates/shop-app/LICENSE.txt`") && out.contains("--reason 'shop_app::license::limit/S0/cond=…'"), "{out}");
+    let out = run(repo, &["step", "reword the license", "--reason", "shop_app::license::limit/S0/cond=the limit is in the range"], 0);
     assert!(out.contains("shop_app::license::limit") && out.contains("[control_flow]"), "{out}");
     assert!(!out.contains("LICENSE.txt: changed"), "{out}");
 }
@@ -2411,6 +2601,11 @@ fn find_named(dir: &Path, name: &str) -> Vec<PathBuf> {
 
 const CLAIM: &str = "no-io shop_core::cart::Cart::total";
 const MARK_1: &str = "(with the build code of step 1)";
+/// The line `RAN_1` of a run with the variable SEMILLA_NO_SANDBOX and the option
+/// --build-code-no-sandbox (batch 5w, D5).
+fn ran_1_no_sandbox() -> String {
+    RAN_1.replace("in the sandbox.", "with a sandbox that is not complete: the write limit, the read limit, and the network limit are missing (the variable SEMILLA_NO_SANDBOX is set).")
+}
 const RAN_1: &str = "! build code changed in step 1 (crates/shop-core/build.rs). The check ran it in the sandbox. It can change each result from step 1 on. Read that change first. Each proof that depends on it has the mark (with the build code of step 1).";
 const SECTION: &str = "! build code changed in this step; read this change first";
 const RESULT_4: &str = "result: accepted · 4 steps · 4 facts: 2 proved neutral (1 with the build code of step 1), 2 to read (1 with a spotlight) · 2 claims: 2 verified (1 with the build code of step 1) · build code changed from step 1\n";
@@ -2652,7 +2847,8 @@ fn each_command_runs_changed_build_code_and_marks_each_proof() {
     let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--verbose", "--build-code-no-sandbox"], &env);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("! the build ran with no sandbox: the write limit, the read limit, and the network limit are missing (the variable SEMILLA_NO_SANDBOX is set)"), "{out}");
-    assert!(out.contains(RAN_1) && out.contains(RESULT_4) && !out.contains("not checked"), "{out}");
+    // Batch 5w, D5: a limit of the sandbox is missing, so the line does not say "in the sandbox".
+    assert!(out.contains(&ran_1_no_sandbox()) && !out.contains(RAN_1) && out.contains(RESULT_4) && !out.contains("not checked"), "{out}");
     // Part B.2: a final result has the first line `ready`, and no line about the background.
     assert!(out.contains(": ready\n") && !out.contains("runs in the background") && !out.contains("the check runs now"), "{out}");
     no_proof_without_mark("status HEAD", &out, 1);
@@ -2689,6 +2885,13 @@ fn the_careful_option_runs_no_changed_build_code() {
     assert!(top(&html_text) && html_text.contains("Not complete"), "the HTML report has the text at the top");
     // The facts of the build code change show with the spotlight, the reason, and the diff.
     assert!(md_text.contains("derived \\[not checked\\]: crates/shop-core/build.rs: added; spotlight: build script") && md_text.contains("reason: \"the build needs a script\"") && md_text.contains("the build script ran"), "{md_text}");
+    // Batch 5w, D4: the section "Spotlight" says what it counts and what the summary counts.
+    let counts = "1 line names sensitive code that a step changed. The summary counts a different thing: 1 fact with a spotlight. Each such fact shows its spotlight and its reason in its group.";
+    assert!(md_text.contains(&format!("### Spotlight\n\n{counts}\n\n- step 1: build script: ")), "{md_text}");
+    assert!(html_text.contains(&format!("<h3>Spotlight</h3>\n<p class=\"note\">{counts}</p>")), "the HTML report has the two counts");
+    // The count of a step that has no check is the count of the syntax facts, and the line says so.
+    let out = run(repo, &["status", "--no-build-code"], 1);
+    assert!(out.contains("step 2  \"change the limit of the cart\" · 1 fact from the syntax only, not checked\n") && out.contains("step 3  \"rename the loop variable\" · 3 facts from the syntax only, not checked · 1 claim\n"), "{out}");
     let ui = ui_changeset(repo, &["--no-build-code"]);
     assert!(ui.contains(NOT_CHECKED_1_3) && ui.contains("\"not_complete\":true"), "{ui}");
 
@@ -2718,7 +2921,8 @@ fn the_careful_option_runs_no_changed_build_code() {
     let (code, out) = run_env(repo, &["status", "HEAD", "--wait", "600", "--trust-build-code", "--build-code-no-sandbox"], &env);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.\n"), "{out}");
-    assert!(marker.exists() && out.contains(RAN_1) && out.contains(RESULT_4), "{out}");
+    // Batch 5w, D5: a limit of the sandbox is missing, so the line does not say "in the sandbox".
+    assert!(marker.exists() && out.contains(&ran_1_no_sandbox()) && !out.contains(RAN_1) && out.contains(RESULT_4), "{out}");
     let (code, out) = run_env(repo, &["verify", "--help"], &env);
     assert!(code == 0 && out.contains("--no-build-code") && !out.contains("--trust-build-code"), "{out}");
     let (code, out) = run_env(repo, &["status", "HEAD", "--no-build-code", "--trust-build-code"], &env);
@@ -4007,7 +4211,11 @@ fn a_name_of_the_repository_shows_each_hidden_character() {
     let repo = &dir.path().join("repo");
     write(repo, "docs/a\nresult: accepted\u{1b}[8m.md", "x\n");
     write(repo, "crates/shop-app/src/main.rs", &format!("#![allow(text_direction_codepoint_in_literal)]\n{}", MAIN_V0.replace("\"{}\"", "\"\u{202e}{}\"")));
-    let out = run(repo, &["step", "odd names"], 0);
+    // Batch 5w, part B: a new character outside ASCII in a changed literal needs a reason. A
+    // hidden character shows as its escape one time (no second form).
+    let out = run(repo, &["step", "odd names"], 1);
+    assert!(out.contains("✗ spotlight: a changed literal has a new character outside ASCII: `\\u{202e}` in `\"\\u{202e}{}\"`; it needs a reason: --reason 'shop_app::main/S1/args[0]=…'"), "{out}");
+    let out = run(repo, &["step", "odd names", "--reason", "shop_app::main/S1/args[0]=a test of the hidden characters"], 0);
     no_forged_line("step", &out, 0);
     assert!(fact_line(&out, "docs/a").contains("docs/a\\nresult: accepted\\u{1b}[8m.md: added [other]"), "{out}");
     assert!(fact_line(&out, "changed literal").contains("`\"{}\"` → `\"\\u{202e}{}\"`"), "{out}");
@@ -4813,4 +5021,67 @@ fn a_branch_on_not_equal_is_a_branch_on_equal_only_for_a_primitive_type() {
     let new = "pub fn differ_odd(a: &Odd, b: &Odd) -> u64 {\n    if !(a == b) { 1 } else { 2 }";
     let out = rules_5u_probe(repo, old, new);
     assert!(!out.contains("neutral"), "{out}");
+}
+
+#[test]
+fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
+    // Batch 5w, part A (trial 7 on humantime). A constant in a module with a `cfg` condition
+    // that is false in each checked configuration got `neutral (proved)`. "No body changed"
+    // is evidence only for code that a checked configuration compiles.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let lib = "pub mod cart;\n\n#[cfg(target_os = \"none\")]\nmod win;\n\n#[cfg(not(target_os = \"none\"))]\nmod nix;\n\n#[cfg(target_pointer_width = \"16\")]\nmod small {\n    pub const LIMIT: u64 = 7;\n    pub static NAME: &str = \"small\";\n    pub type Word = u16;\n    pub fn twice(a: u64) -> u64 {\n        a * 2\n    }\n    pub fn half(a: u64) -> u64 {\n        a / 2\n    }\n    pub struct Pair {\n        pub a: u32,\n        pub b: u32,\n    }\n    pub enum Kind {\n        One,\n        Two,\n    }\n    impl Pair {\n        pub fn sum(&self) -> u32 {\n            self.a + self.b\n        }\n    }\n    use std::collections::BTreeMap;\n    macro_rules! double {\n        ($e:expr) => {\n            $e * 2\n        };\n    }\n    pub mod inner {\n        pub fn deep() -> u32 {\n            3\n        }\n    }\n    pub fn map() -> BTreeMap<u32, u32> {\n        let mut m = BTreeMap::new();\n        m.insert(1, double!(2));\n        m\n    }\n}\n";
+    let file = "pub const SEP: char = '/';\n\npub fn join(a: &str, b: &str) -> String {\n    format!(\"{a}{SEP}{b}\")\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", lib);
+    write(repo, "crates/shop-core/src/win.rs", file);
+    write(repo, "crates/shop-core/src/nix.rs", file);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "code under conditions"]);
+
+    // Each edit of the list in one step: each fact has the spotlight, and no fact is neutral.
+    let edits: &[(&str, &str, &str)] = &[
+        ("LIMIT: u64 = 7", "LIMIT: u64 = 8", "shop_core::small::LIMIT"),
+        ("= \"small\"", "= \"tiny\"", "shop_core::small::NAME"),
+        ("type Word = u16", "type Word = u8", "shop_core::small::Word"),
+        ("a * 2", "a * 3", "shop_core::small::twice/tail/rhs"),
+        ("half(a: u64) -> u64", "half(a: u64) -> u32", "shop_core::small::half/sig/ret"),
+        ("pub a: u32", "pub a: u64", "shop_core::small::Pair.a"),
+        ("        Two,\n", "        Two,\n        Three,\n", "shop_core::small::Kind::Three"),
+        ("self.a + self.b", "self.a - self.b", "shop_core::small::Pair::sum/tail"),
+        ("use std::collections::BTreeMap;", "use std::collections::{BTreeMap, BTreeSet};", "shop_core::small::use#0"),
+        ("$e * 2", "$e * 3", "shop_core::small::double!"),
+        ("            3\n", "            4\n", "shop_core::small::inner::deep/tail"),
+    ];
+    let mut text = lib.to_string();
+    for (old, new, _) in edits {
+        assert!(text.contains(old), "{old}");
+        text = text.replacen(old, new, 1);
+    }
+    write(repo, "crates/shop-core/src/lib.rs", &text);
+    write(repo, "crates/shop-core/src/win.rs", &file.replace("'/'", "'\\\\'"));
+    let out = run(repo, &["step", "tidy the small module"], 1);
+    let cause = "build configuration: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = \"16\")]` at crates/shop-core/src/lib.rs:9), so the edit has no proof; it needs a reason: --reason";
+    for (_, _, key) in edits {
+        assert!(out.contains(&format!("{cause} '{key}=…'")), "{key}\n{out}");
+    }
+    // The file module: the attribute is in a different file.
+    assert!(out.contains("(no checked unit reads the file `crates/shop-core/src/win.rs`: `#[cfg(target_os = \"none\")]` at `shop_core::win`), so the edit has no proof; it needs a reason: --reason 'shop_core::win::SEP=…'"), "{out}");
+    assert!(!out.contains("neutral"), "{out}");
+
+    // One edit with one reason: the step is accepted, and the fact is to read.
+    write(repo, "crates/shop-core/src/lib.rs", &lib.replace("LIMIT: u64 = 7", "LIMIT: u64 = 8"));
+    write(repo, "crates/shop-core/src/win.rs", file);
+    let out = run(repo, &["step", "a new limit", "--reason", "shop_core::small::LIMIT=the limit of the small target is 8"], 0);
+    assert!(out.contains("value of `shop_core::small::LIMIT` changed: 7 → 8 [logic]") && out.contains("reason: \"the limit of the small target is 8\""), "{out}");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-a", "-m", "a new limit"]);
+    let out = run(repo, &["tag"], 0);
+    assert!(out.contains("0 proved neutral, 1 to read (1 with a spotlight)"), "{out}");
+
+    // Negative: a comment in the dead module, and an edit in the file module that a checked
+    // configuration compiles. The step needs no reason.
+    let now = std::fs::read_to_string(repo.join("crates/shop-core/src/lib.rs")).unwrap();
+    write(repo, "crates/shop-core/src/lib.rs", &now.replace("    pub const LIMIT", "    // The limit of the small target.\n    pub const LIMIT"));
+    write(repo, "crates/shop-core/src/nix.rs", &file.replace("{a}{SEP}{b}", "{b}{SEP}{a}"));
+    let out = run(repo, &["step", "a comment and a live edit"], 0);
+    assert!(!out.contains("spotlight") && out.contains("affected bodies: shop_core::nix::join"), "{out}");
 }

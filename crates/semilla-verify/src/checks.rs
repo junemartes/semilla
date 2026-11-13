@@ -1601,6 +1601,70 @@ fn live_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &st
     LiveCall::None
 }
 
+/// True if each run of the test item `test` that gets to its end calls the item `target`
+/// (batch 5w, part C). The driver gives the sure callees of each body: the calls on each path
+/// from the start of the body to a normal return. The same rule holds at each level: the test
+/// has a sure call to a local function, and that function has a sure call to the target.
+///
+/// A body name can exist in more than one target. A callee is sure only if each body with the
+/// name has the call.
+fn sure_call(facts: &BTreeMap<String, crate::ItemFacts>, test: &str, target: &str) -> bool {
+    let top = |item: &str, name: &str| facts.get(item).is_some_and(|f| !f.sure.iter().any(|(other, _, _)| name.starts_with(&format!("{other}::"))));
+    let mut bodies: BTreeMap<(&str, &str), Vec<&[String]>> = BTreeMap::new();
+    let mut items: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut targets: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (item, found) in facts {
+        for (name, target, sure) in &found.sure {
+            bodies.entry((target.as_str(), name.as_str())).or_default().push(sure.as_slice());
+            targets.entry(name.as_str()).or_default().insert(target.as_str());
+            if top(item, name) {
+                items.insert(name.as_str(), item.as_str());
+            }
+        }
+    }
+    struct Walk<'a> {
+        bodies: BTreeMap<(&'a str, &'a str), Vec<&'a [String]>>,
+        items: BTreeMap<&'a str, &'a str>,
+        targets: BTreeMap<&'a str, BTreeSet<&'a str>>,
+        target: &'a str,
+        open: BTreeSet<(&'a str, &'a str)>,
+    }
+    impl<'a> Walk<'a> {
+        fn sure(&mut self, at: (&'a str, &'a str)) -> bool {
+            // A cycle of calls gives no proof.
+            if !self.open.insert(at) {
+                return false;
+            }
+            let lists = self.bodies.get(&at).cloned().unwrap_or_default();
+            let callees: Vec<&'a str> = match lists.split_first() {
+                Some((first, rest)) => first.iter().filter(|callee| rest.iter().all(|list| list.contains(callee))).map(String::as_str).collect(),
+                None => Vec::new(),
+            };
+            let mut found = false;
+            for callee in callees {
+                if callee == self.target || self.items.get(callee) == Some(&self.target) {
+                    found = true;
+                } else if self.bodies.contains_key(&(at.0, callee)) {
+                    found = self.sure((at.0, callee));
+                } else {
+                    // A function of a different target: each body with the name.
+                    let others: Vec<&'a str> = self.targets.get(callee).into_iter().flatten().copied().collect();
+                    found = !others.is_empty() && others.into_iter().all(|other| self.sure((other, callee)));
+                }
+                if found {
+                    break;
+                }
+            }
+            self.open.remove(&at);
+            found
+        }
+    }
+    let Some(start) = facts.get(test) else { return false };
+    let starts: Vec<(&str, &str)> = start.sure.iter().filter(|(name, _, _)| top(test, name)).map(|(name, target, _)| (target.as_str(), name.as_str())).collect();
+    let mut walk = Walk { bodies, items, targets, target, open: BTreeSet::new() };
+    !starts.is_empty() && starts.into_iter().all(|at| walk.sure(at))
+}
+
 /// The property claims (design section 21.4): facts about the code after the step.
 fn check_property(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
@@ -1670,7 +1734,14 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                 return Outcome::refuted(format!("implicit panic sites: {}{note}", list(&sites)));
             }
             // A function of another crate can panic. Semilla does not examine it.
-            let externals: Vec<String> = scope.externals.keys().cloned().collect();
+            // The source has the name `std::hint::black_box`. The MIR has the intrinsic that
+            // the function calls. The text shows the name of the source (batch 5w, D6).
+            let source_name = |path: &String| match path.as_str() {
+                "std::intrinsics::black_box" => "std::hint::black_box".to_string(),
+                "core::intrinsics::black_box" => "core::hint::black_box".to_string(),
+                _ => path.clone(),
+            };
+            let externals: Vec<String> = scope.externals.keys().map(source_name).collect::<BTreeSet<_>>().into_iter().collect();
             let mut more = Vec::new();
             if !externals.is_empty() {
                 more.push(format!("{} call(s) to other crates, and they can panic: {}", externals.len(), quoted(&externals)));
@@ -1728,9 +1799,17 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                 return Outcome::new(ClaimStatus::Pending { reason: "the reachable calls of the test come from the MIR in the background check (phase 2)".into() });
             };
             match live_call(facts, &path, &at.item) {
-                LiveCall::Found => {
+                // 5w, part C: `verified` only if each path of the test from its start to its
+                // normal return has the call. A call under a condition, in a loop, or after
+                // an early return is a reachable call that a run of the test can miss.
+                LiveCall::Found if sure_call(facts, &path, &at.item) => {
                     let mut outcome = Outcome::verified("mir", Vec::new());
-                    outcome.after = Some(format!("the test `{path}` has a reachable call to `{}`. Semilla does not run the test and does not check what the test asserts.", at.item));
+                    outcome.after = Some(format!("the test `{path}` calls `{}` on each path from its start to its normal return. Semilla does not run the test and does not check what the test asserts.", at.item));
+                    return outcome;
+                }
+                LiveCall::Found => {
+                    let mut outcome = Outcome::verified("partial", Vec::new());
+                    outcome.after = Some(format!("only partly verified: the test `{path}` has a reachable call to `{}`, but not on each path from its start to its normal return (the call is under a condition, in a loop, after an early return, or in a closure that a different function calls). Semilla did not prove that the test runs the call. Semilla does not run the test and does not check what the test asserts.", at.item));
                     return outcome;
                 }
                 LiveCall::NoTest => Outcome::refuted(format!("the compiler gives no body for the test `{path}` (a condition such as `#[cfg(…)]` can remove it), so Semilla cannot show a reachable call to `{}`", at.item)),

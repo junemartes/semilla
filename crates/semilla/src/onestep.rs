@@ -106,11 +106,22 @@ fn with_complete_calls(written: &str, complete: &[String]) -> (String, Vec<Strin
 
 /// Splits a claim text into words. A word in double quotes can hold spaces. Inside a JSON list
 /// or object (`calls=["core::","std::"]`), the quotes stay, so that the value parses as JSON.
+///
+/// The anchor of an impl item has spaces between angle brackets (`a::<T as fmt::Display>::fmt`).
+/// Semilla prints this anchor with no quotes, so a claim accepts it with no quotes (batch 5w,
+/// D2): a space between `<` and its `>` does not end the word. The `<` must be at the start of
+/// a word, or after `::`, `=`, or a different `<`. If a `<` has no `>`, this rule does not apply.
 fn split_words(text: &str) -> Vec<String> {
+    split_words_with(text, true).unwrap_or_else(|| split_words_with(text, false).unwrap_or_default())
+}
+
+/// `None` if `angles` is set and an angle bracket stays open at the end of the text.
+fn split_words_with(text: &str, angles: bool) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut current = String::new();
     let mut quoted = false;
     let mut depth = 0usize;
+    let mut angle = 0usize;
     for c in text.chars() {
         match c {
             '[' | '{' if !quoted => {
@@ -127,7 +138,15 @@ fn split_words(text: &str) -> Vec<String> {
                     current.push(c);
                 }
             }
-            c if c.is_whitespace() && !quoted => {
+            '<' if angles && !quoted && (angle > 0 || current.is_empty() || current.ends_with("::") || current.ends_with('=')) => {
+                angle += 1;
+                current.push(c);
+            }
+            '>' if angle > 0 && !quoted && !current.ends_with('-') => {
+                angle -= 1;
+                current.push(c);
+            }
+            c if c.is_whitespace() && !quoted && angle == 0 => {
                 if !current.is_empty() {
                     words.push(std::mem::take(&mut current));
                 }
@@ -135,10 +154,13 @@ fn split_words(text: &str) -> Vec<String> {
             c => current.push(c),
         }
     }
+    if angle > 0 {
+        return None;
+    }
     if !current.is_empty() {
         words.push(current);
     }
-    words
+    Some(words)
 }
 
 /// A position `FILE.rs:LINE[:COLUMN]`, or `None`.
@@ -317,7 +339,7 @@ impl App {
         let sandbox_line: String = crate::oracle::build_warnings().iter().map(|warning| format!("  ! {warning}\n")).collect();
         // Build code that the change set changes (design 28): the step that changes it has the
         // full line, and each later step has the short form.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.build_code.as_ref().and_then(|note| note.step_line(index)).map(|line| format!("  {line}\n")).unwrap_or_default());
+        let sandbox_line = format!("{sandbox_line}{}", result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("  {line}\n")).unwrap_or_default());
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
         let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("  {line}\n")).collect::<String>());
@@ -555,5 +577,26 @@ impl App {
             "step {} {} is removed; the working tree keeps its changes\nto also restore the files of the step before: `git restore --source={} --worktree -- .` (a file that the step added stays: remove it by hand)\ndo not use `git checkout .`: it goes back to HEAD, not to the last step",
             step.index, semilla_core::text::quoted(&step.intent), step.tree_before
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_words;
+
+    #[test]
+    fn a_claim_accepts_each_anchor_that_semilla_prints() {
+        // Batch 5w, D2: the anchor of an impl item has spaces between angle brackets.
+        let words = split_words("tested-by humantime::duration::<FormattedDuration as fmt::Display>::fmt test=t_fmt");
+        assert_eq!(words, ["tested-by", "humantime::duration::<FormattedDuration as fmt::Display>::fmt", "test=t_fmt"]);
+        assert_eq!(split_words("no-panic <Unit as FromStr>::from_str/S0/arm[1].pat"), ["no-panic", "<Unit as FromStr>::from_str/S0/arm[1].pat"]);
+        assert_eq!(split_words("calls-only a::<W<T> as From<Vec<T>>>::from calls=[\"core::\",\"std::\"]"), ["calls-only", "a::<W<T> as From<Vec<T>>>::from", "calls=[\"core::\",\"std::\"]"]);
+        assert_eq!(split_words("tested-by a::f test=<T as Checks>::t_f"), ["tested-by", "a::f", "test=<T as Checks>::t_f"]);
+        // The quotes work as before.
+        assert_eq!(split_words("no-panic \"a::<T as B>::f\""), ["no-panic", "a::<T as B>::f"]);
+        // A `<` with no `>` does not join the words.
+        assert_eq!(split_words("pure a::<T as B key=1"), ["pure", "a::<T", "as", "B", "key=1"]);
+        // A `<` in the middle of a word is not the start of an impl anchor.
+        assert_eq!(split_words("pure a::f note=x<y z"), ["pure", "a::f", "note=x<y", "z"]);
     }
 }

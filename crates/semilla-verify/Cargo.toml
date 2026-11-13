@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 toml = "0.8"
 anyhow = "1"
-proc-macro2 = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 semilla-core = { path = "../semilla-core" }
 semilla-syntax = { path = "../semilla-syntax" }
