@@ -396,9 +396,24 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
     let first = input.step.claims.len();
     let report = &mut outcome.report;
     let mut identity_facts = Vec::new();
-    for (pair, claim) in map.iter().zip(claims) {
+    for (index, (pair, claim)) in map.iter().zip(claims).enumerate() {
         let result = report.claims.iter().find(|r| r.claim == claim.id).cloned();
         let Some(result) = result else { continue };
+        // The `use` lines that the identity explains (batch 6a, B1). They are no facts to read.
+        // The count is the larger of the removed lines and the added lines of each module.
+        let mut lines: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+        for (edit, _) in outcome.edits.iter().zip(&outcome.owners).filter(|(edit, owner)| **owner == Some(first + index) && (edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use"))) {
+            if let Some(anchor) = edit.before.as_ref().or(edit.after.as_ref()) {
+                let entry = lines.entry(owner(&anchor.item)).or_default();
+                if edit.before.is_some() {
+                    entry.0 += 1;
+                } else {
+                    entry.1 += 1;
+                }
+            }
+        }
+        let lines: usize = lines.values().map(|(removed, added)| (*removed).max(*added)).sum();
+        let with_lines = if lines == 0 { String::new() } else { format!(", with {lines} `use` line(s)") };
         let proof = match &result.status {
             ClaimStatus::Verified { proof } => proof.clone(),
             _ => String::new(),
@@ -409,7 +424,7 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
             at: Some(Anchor::item(&pair.old)),
             file: input.before.items.get(&pair.old).map(|item| item.file.clone()),
             part: "identity".into(),
-            description: format!("{verb} `{}` → `{}` (proved {proof})", pair.old, pair.new),
+            description: format!("{verb} `{}` → `{}` (proved {proof}){with_lines}", pair.old, pair.new),
             status: "derived".into(),
             class: Some(Class::Neutral),
             affected: result.affected.clone(),

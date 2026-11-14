@@ -113,6 +113,17 @@ impl Store {
         self.temporary
     }
 
+    /// The folder of the records that have a key from content only, for all the folders of
+    /// this user (batch 6a, B3). The cache folder of a repository has the path of the repository
+    /// in its name, so a copy of the repository at a different path does not find its records.
+    /// `None` if this process has no cache that stays.
+    pub fn content_dir(&self, name: &str) -> Option<PathBuf> {
+        if self.temporary {
+            return None;
+        }
+        Some(self.dir.parent()?.join("by-content").join(name))
+    }
+
     /// A path in the cache folder that only this process uses (an index file, a note text).
     pub fn private_path(&self, name: &str) -> PathBuf {
         use std::sync::atomic::AtomicUsize;

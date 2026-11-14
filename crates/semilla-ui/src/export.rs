@@ -451,7 +451,9 @@ impl<'a> Model<'a> {
         match (pair, &fact.content) {
             (Some(pair), content) if part || pair.before.is_none() || pair.after.is_none() => {
                 let short = lines(&pair.before) <= 1 && lines(&pair.after) <= 1 && content.is_none() && !fact.description.contains('…');
-                (!short).then(|| diff_text(&dedent(pair.before.as_deref().unwrap_or("")), &dedent(pair.after.as_deref().unwrap_or(""))))
+                // A diff block is never empty (batch 6a, A2): the content of the fact is
+                // the block if the diff of the sources has no line.
+                (!short).then(|| diff_text(&dedent(pair.before.as_deref().unwrap_or("")), &dedent(pair.after.as_deref().unwrap_or("")))).filter(|diff| !diff.trim().is_empty()).or_else(|| content.clone())
             }
             (_, Some(content)) => Some(content.clone()),
             _ => None,

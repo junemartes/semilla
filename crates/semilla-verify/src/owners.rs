@@ -45,6 +45,9 @@ pub struct Input<'a> {
     /// The index of the first identity claim.
     pub identity_claim: Option<usize>,
     pub callees: Option<&'a BTreeMap<String, ItemFacts>>,
+    /// The def path of each `#[test]` function before the step and after it (batch 6a, B2).
+    /// `None`: the oracle does not know the tests.
+    pub tests: Option<&'a [BTreeSet<String>; 2]>,
 }
 
 /// The owner of one changed body.
@@ -160,6 +163,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         }
     }
 
+    // The bodies that a macro call makes (batch 6a, B2).
+    let pending = macro_bodies(input, report, pending, &mut owned);
+
     // A build input fact that can reach the crate of the body is the cause (brief 5f, B2). With
     // more than one such fact, the body goes under each of them.
     let inputs = build_inputs(input, report);
@@ -250,6 +256,129 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             note: None,
         });
     }
+}
+
+/// The cause of a body that a `macro_rules!` macro makes (batch 6a, B2).
+enum MacroCause {
+    /// The fact of a macro call that the step adds, removes, or changes, and the name of the
+    /// function that the call makes.
+    Call(usize, String),
+    /// The fact of a changed macro definition.
+    Definition(usize),
+}
+
+/// True for the item of a `macro_rules!` definition.
+pub(crate) fn is_macro_definition(item: &semilla_syntax::Item) -> bool {
+    item.kind == semilla_syntax::ItemKind::Macro && item.source.contains("macro_rules!")
+}
+
+/// Finds the macro that makes a body with no source item, and the fact that is the cause.
+///
+/// - The span of the body is in the text of a `macro_rules!` definition.
+/// - A call of this macro in a module of the body has the name of the function in its text.
+/// - A call with a fact of this step (added, removed, or changed; also the fact of an added or
+///   removed module that has the call) is the cause.
+/// - If no call has a fact, a changed definition is the cause.
+fn macro_cause(input: &Input, report: &StepReport, body: &BodyComparison, name: &str) -> Option<MacroCause> {
+    let (file, line) = body.span.as_ref()?;
+    let (ws, other) = if body.status == BodyStatus::BeforeOnly { (input.before, input.after) } else { (input.after, input.before) };
+    let definition = ws.items.values().find(|item| is_macro_definition(item) && item.file == *file && (item.line_start..=item.line_end).contains(line))?;
+    let macro_name = definition.path.rsplit("::").next()?.split('!').next()?;
+    // The function of the body: the name with no closure part.
+    let function = name.split("::{").next()?;
+    let ident = function.rsplit("::").next()?;
+    let has_ident = |text: &str| text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == ident);
+    let is_call = |item: &&semilla_syntax::Item| {
+        let last = item.path.rsplit("::").next().unwrap_or("");
+        let module = item.path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
+        item.kind == semilla_syntax::ItemKind::Macro && !is_macro_definition(item) && last.split('!').next() == Some(macro_name) && function.starts_with(&format!("{module}::")) && has_ident(&item.source)
+    };
+    let fact_of = |item: &semilla_syntax::Item| {
+        report.facts.iter().position(|fact| {
+            let Some(at) = fact.at.as_ref().map(|at| at.item.as_str()) else { return false };
+            let whole = fact.description.starts_with("added `") || fact.description.starts_with("removed `");
+            fact.part == "edit" && (at == item.path || (whole && item.path.starts_with(&format!("{at}::"))))
+        })
+    };
+    if let Some(index) = ws.items.values().filter(is_call).find_map(fact_of) {
+        return Some(MacroCause::Call(index, ident.to_string()));
+    }
+    let changed = other.items.get(&definition.path).is_none_or(|old| old.source != definition.source);
+    let index = report.facts.iter().position(|fact| fact.at.as_ref().is_some_and(|at| at.item == definition.path))?;
+    changed.then_some(MacroCause::Definition(index))
+}
+
+/// Gives the bodies that a macro call makes to the fact of the call, or to the fact of the
+/// changed macro definition (batch 6a, B2). Returns the bodies with no such cause.
+///
+/// - A call that the step adds, removes, or changes: the fact of the call lists the bodies.
+///   The bodies get no fact and no spotlight of their own.
+/// - A changed definition: one fact and one spotlight for the macro. The text gives the count
+///   of the bodies, the bodies that no longer exist, and the tests that no longer exist.
+fn macro_bodies<'a>(input: &Input, report: &mut StepReport, pending: Vec<(&'a BodyComparison, String)>, owned: &mut BTreeMap<String, Owner>) -> Vec<(&'a BodyComparison, String)> {
+    let mut rest = Vec::new();
+    let mut made: BTreeMap<usize, (BTreeSet<String>, bool)> = BTreeMap::new();
+    let mut definitions: BTreeMap<usize, usize> = BTreeMap::new();
+    for (body, name) in pending {
+        match macro_cause(input, report, body, &name) {
+            Some(MacroCause::Call(index, function)) => {
+                record(report, Owner::Fact(index), &name);
+                let entry = made.entry(index).or_default();
+                entry.0.insert(function);
+                entry.1 |= body.status == BodyStatus::BeforeOnly;
+                owned.insert(name, Owner::Fact(index));
+            }
+            Some(MacroCause::Definition(index)) => {
+                record(report, Owner::Fact(index), &name);
+                *definitions.entry(index).or_default() += 1;
+                owned.insert(name, Owner::Fact(index));
+            }
+            None => rest.push((body, name)),
+        }
+    }
+    let list = |names: &BTreeSet<String>| {
+        let mut text = names.iter().take(5).map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+        if names.len() > 5 {
+            text.push_str(&format!(", and {} more", names.len() - 5));
+        }
+        text
+    };
+    for (index, (names, removed)) in made {
+        if let Some(fact) = report.facts.get_mut(index) {
+            fact.description.push_str(&format!(" ({}: {})", if removed { "made" } else { "makes" }, list(&names)));
+        }
+    }
+    for (index, count) in definitions {
+        let Some(fact) = report.facts.get(index) else { continue };
+        // The functions of the fact: the bodies with no closure part.
+        let functions: BTreeSet<String> = fact.affected.iter().filter_map(|name| name.split("::{").next()).map(str::to_string).collect();
+        let short = |names: Vec<&String>| names.into_iter().map(|name| name.rsplit("::").next().unwrap_or(name).to_string()).collect::<BTreeSet<String>>();
+        let gone = short(input.bodies.iter().filter(|body| body.status == BodyStatus::BeforeOnly && functions.contains(&body.name)).map(|body| &body.name).collect());
+        let mut why = format!("a changed macro: the MIR of {count} {} that the macro makes changed with no edit of the text of a call", if count == 1 { "body" } else { "bodies" });
+        if !gone.is_empty() {
+            why.push_str(&format!("; {} of the bodies no longer exist: {}", gone.len(), list(&gone)));
+        }
+        if let Some([before, after]) = input.tests {
+            let lost = short(functions.iter().filter(|name| before.contains(*name) && !after.contains(*name)).collect());
+            let new = short(functions.iter().filter(|name| !before.contains(*name) && after.contains(*name)).collect());
+            if !lost.is_empty() {
+                why.push_str(&format!("; {} test(s) no longer exist: {}", lost.len(), list(&lost)));
+            }
+            if !new.is_empty() {
+                why.push_str(&format!("; {} new test(s): {}", new.len(), list(&new)));
+            }
+        }
+        let Some(fact) = report.facts.get_mut(index) else { continue };
+        fact.spotlight_why = Some(match fact.spotlight_why.take() {
+            Some(known) => format!("{known}; {why}"),
+            None => why,
+        });
+        if !fact.spotlight {
+            fact.spotlight = true;
+            fact.reason = input.step.reasons.get(&fact.reason_place()).cloned();
+        }
+    }
+    rest
 }
 
 /// Invariant I4: the compiler and the syntax tree must read the same code. A changed body whose
@@ -369,7 +498,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
     // 0. The compiler reads the body from a changed file that the loader does not parse (a file
     //    that `include!` reads): the file fact owns it.
     if let Some((file, _)) = &body.span {
-        if let Some(index) = report.facts.iter().position(|fact| fact.file.as_deref() == Some(file.as_str()) && fact.at.is_none()) {
+        if let Some(index) = report.facts.iter().position(|fact| fact.file.as_deref() == Some(file.as_str()) && fact.at.is_none() && !crate::files::is_mode_fact(input.before, input.after, fact)) {
             return Some(Owner::Fact(index));
         }
     }
@@ -410,7 +539,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
     // 2. An included file that changed: `include_str!`, `include_bytes!`, `include!`.
     if let Some(item) = item {
         for file in included_files(&item.text, &item.file) {
-            if let Some(index) = report.facts.iter().position(|fact| fact.file.as_deref() == Some(file.as_str()) && fact.part != "indirect change") {
+            if let Some(index) = report.facts.iter().position(|fact| fact.file.as_deref() == Some(file.as_str()) && fact.part != "indirect change" && !crate::files::is_mode_fact(input.before, input.after, fact)) {
                 return Some(Owner::Fact(index));
             }
             if let Some(index) = input.edits.iter().position(|edit| edit.file.as_deref() == Some(file.as_str())) {
@@ -419,7 +548,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
         }
         // A computed path (`concat!(env!("CARGO_MANIFEST_DIR"), "/notes.md")`) that has the name of
         // a changed file.
-        if let Some(index) = report.facts.iter().position(|fact| fact.at.is_none() && fact.part != "indirect change" && fact.file.as_deref().is_some_and(|file| !file.ends_with(".rs") && reads_file(&item.text, &item.file, file))) {
+        if let Some(index) = report.facts.iter().position(|fact| fact.at.is_none() && fact.part != "indirect change" && !crate::files::is_mode_fact(input.before, input.after, fact) && fact.file.as_deref().is_some_and(|file| !file.ends_with(".rs") && reads_file(&item.text, &item.file, file))) {
             return Some(Owner::Fact(index));
         }
     }
@@ -557,6 +686,10 @@ fn build_inputs(input: &Input, report: &StepReport) -> Vec<(usize, Option<BTreeS
     let mut out = Vec::new();
     for (index, fact) in report.facts.iter().enumerate() {
         let Some(file) = fact.file.as_deref().filter(|_| fact.at.is_none() && fact.part != "indirect change") else { continue };
+        // A file mode changes no body (batch 6a, B4).
+        if crate::files::is_mode_fact(input.before, input.after, fact) {
+            continue;
+        }
         let name = file.rsplit('/').next().unwrap_or(file);
         if crate::files::is_manifest(file) {
             if fact.class == Some(Class::Neutral) || !crate::files::is_build_key(&fact.part) {

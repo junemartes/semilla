@@ -2531,3 +2531,129 @@ Each one: **Decided by Claude.**
 - **A doc comment edit and the build configuration rule (C4.3).** An edit only in the doc comments before an item is not a code edit for the rule of `srcconfig`, unless the item has an attribute that Semilla cannot see into. The cause of the "indirect change" fact was this rule, not the MIR: the records of the two trees were equal.
 - **The configurations of a reviewer output (C4.4).** The cause: the list had only a configuration that each compared step has. Now a configuration of only some steps is in the list with its steps ("only in step N"). One more line names each configuration that is not in the list because its features are the same as those of a checked configuration.
 - **The hint of `status <commit>` (C4.5).** The hint is `semilla status <commit> --verbose`.
+
+## 33. Batch 6a: the results of held-out trial 9
+
+Trial 9 on `heck` 0.5.0 (private modules, `pub use` lines in the crate root, tests from a `macro_rules!` macro) showed facts with the class `neutral (proved)` for changes that a different crate can see, facts with two equal sides, and the cost of an honest move and of a new test line. Each rule of this section is a decision of batch 6a. **Decided by Claude.**
+
+### 33.1 A declaration change of a reachable item is never `neutral (proved)` (part A1)
+
+**The cause (trial 9).** A proof of `neutral` compares the MIR of the bodies of the crate. A bound is not in the MIR of a body: `impl<T: AsRef<str>> Display for AsSnakeCase<T>` with a new clause `where T: Copy` has the same bodies, and a different crate with a type that is not `Copy` no longer compiles. The fact said `neutral (proved)`, and the API level said `patch`. The same was true for `?Sized` that goes, a new supertrait, and a `where` clause on a trait method.
+
+**The rule. Decided by Claude.**
+
+1. A change of a bound (the generics, a `where` clause, the supertraits) is never `neutral`. With no changed body, its class is `logic`. This applies to each item, also a private one: the MIR of the bodies does not prove what the type checker accepts.
+2. Each other declaration change (see the table) of an item that a different crate can use is not `neutral`: with no changed body, its class is `logic`.
+3. "An item that a different crate can use" has the rule of batch 5x (`api_reach`): a `pub` path from the root of a library, or a `pub use` line that names the item. A method of a trait or of an impl has the reach of its trait, or of its type and trait. If Semilla cannot resolve a name of an impl header, the answer is "possibly", and the rule applies.
+4. The fact says why: "(the public API can change: a `pub use` line names `AsSnakeCase`)". The change is in "Public API changes", and the API level is `major`.
+5. A rename and a move keep their proof. A `private` → `pub(crate)` change stays `neutral`. A doc comment change keeps the class `other`.
+
+**The audit.** "Equal MIR" is the answer to this question: does an equal MIR of the bodies of the crate prove that a different crate sees no change?
+
+| Fact kind | Before, with no changed body | Equal MIR is a proof | Now |
+|---|---|---|---|
+| visibility | the rule of batch 5x | no | no change: `other` + API text when the reach changes |
+| generics, `where` clause, supertraits | `neutral (proved)` | no | always `logic`; API text and `major` when reachable |
+| parameter, parameter order, return type, qualifiers | `neutral (proved)` | no | reachable: `logic` + API text, `major` |
+| type of a field, a const, a static; value of a const; discriminant | `neutral (proved)` | no | reachable: `logic` + API text, `major` |
+| member added or removed, tuple fields | `neutral (proved)` | no | reachable: `logic` + API text, `major` |
+| member order | `logic` | no | no change |
+| trait impl added or removed | `logic` | no | no change (the header now has the type of the source, 33.5) |
+| derive added or removed | `other` | no | no change in the class (see the open items) |
+| doc comment | `other` | yes (no code) | no change; `doc(test(…))` has the rule of 33.3 |
+| lint levels, tool attributes, `inline`, `cold` | `neutral (proved)` | yes | no change |
+| `must_use`, `deprecated` | `neutral (proved)` | no (a different crate gets a different warning) | reachable: `other` with a text, no reason |
+| `use` line | `logic` | no | `logic`; a `pub use` line gives the public names (33.4) |
+| added or removed item | `logic` | no | no change |
+| rename, move | proof with the rename map + a "public API" fact | yes, for the code; the API fact is separate | no change |
+| parameter rename, neutral body rewrite | proof of the body | yes | no change |
+| file "format only" | `neutral` | yes | no change |
+| visibility or attribute of an associated constant or type of an impl | no fact | no | `other` + API text, `major` when reachable (33.10) |
+| visibility or attribute of a `use` line | no fact | no | "changed `use` line", `logic`, with the public names (33.10) |
+| each other changed token of a declaration | no fact | no | the net fact, `other` (33.10) |
+
+The mutant run on other crates (236 declaration mutants) agrees with the table. A new bound on a trait impl, a struct, an inherent impl, a function, or a method was `neutral (proved)` in 29 of 33 mutants. A new member of a `where` clause was `neutral (proved)` in 36 of 38. Rule 1 makes each of them a fact to read. A changed qualifier (`const`, `unsafe`, `async`, `extern "…"`) of a reachable function is the "qualifiers" row (case A7): `pub const fn decode` → `pub fn decode` is `logic` with the API text, and the API level is `major`.
+
+**A limit. Decided by Claude.** Semilla does not compare the set of the bounds. A change of only the order of the bounds (`A + B` → `B + A`), and a bound that moves between the parameter list and the `where` clause, are facts to read. This is safe, and it costs one fact to read.
+
+### 33.2 The two sides of a fact are never equal (part A2)
+
+**The cause (trial 9).** Each side of a long text was cut at the same length, so the two sides of a fact with a change at the end were equal.
+
+**The rule. Decided by Claude.** One function (`edits::sides`) makes the two sides of each fact text. It removes the common start and the common end at token borders, keeps some context, and marks each cut with `…`. A list (attributes, bounds, where predicates) shows only the change: "added `X`", "removed `Y`", "changed `A` → `B`". A doc comment with no text on one side is "added docs `…`" or "removed docs `…`". A final check compares the two sides of each text with an arrow: equal sides get the full text. The `diff` block of a fact with a change is never empty.
+
+### 33.3 `doc(test(…))` is code, and the audit of the free attributes (part A3)
+
+**The cause (trial 9).** `#![doc(test(attr(cfg(any()))))]` adds an attribute to each doc test of the crate, and no doc test runs. The fact had the class `other` and no reason, as a doc comment.
+
+**The rule. Decided by Claude.** A changed `doc(test(…))` attribute has the class `logic` and a spotlight: "a changed `doc(test(…))` attribute: it changes each doc test of the crate". In the `doc` family, only an allow list is free. Each other key needs a reason.
+
+| Attribute | Can it change code, tests, or the build | Now |
+|---|---|---|
+| doc text (`///`, `#[doc = "…"]`) | no (a code block is a doc test with its own `logic` fact) | free, `other` |
+| `doc(hidden)`, `doc(alias)`, `doc(inline)`, `doc(no_inline)`, `doc(cfg)`, `doc(html_…)` | no: only the doc pages | free, `other` |
+| `doc(test(…))` | yes: each doc test of the crate | `logic` + reason |
+| each other `doc(KEY)` | not known | reason |
+| `doc = include_str!(…)` | yes: the doc tests of the file | "doc test … added", `logic` (the rule of batch 5h) |
+| `allow`, `warn`, `deny`, `forbid`, `expect`, `clippy::`, `diagnostic::`, `rustfmt::` | no for the code. A lint level can stop a build, and each checked configuration builds | free |
+| `inline`, `cold` | no for the result of the code | free |
+| `must_use`, `deprecated` | a warning in a different crate | free; reachable item: `other` with a text |
+| `derive` | yes: the fact names the trait, and the derived bodies are under it | no reason (no change) |
+| `cfg_attr`, `non_exhaustive`, `automatically_derived`, `test`, `ignore`, `should_panic`, `cfg`, `path`, `repr`, each other attribute | yes | reason (no change) |
+
+### 33.4 A `use` fact shows its text and the public names (part A4)
+
+**The cause (trial 9).** A `use` fact was "added `heck::use#8`": the key is a count, and it says nothing. A `pub use` line that made `ToPascalCase` a name of a different trait showed no API change.
+
+**The rule. Decided by Claude.**
+
+1. A `use` fact shows the text of the line: "added `use` line: `…`", "removed `use` line: `…`", "changed `use` line: `A` → `B`". A removed and an added line of one module are one changed line when they have the same visibility and the same path before the braces.
+2. A `pub use` line of a library, in the crate root or in a module that a different crate can use, gives each public name that changes: "added the public name `M::N` (`target`)", "removed the public name …", "the public name `M::N` now is `new` (before: `old`)". A glob says "glob" and names the module. A removed name and a name with a new target are `major`; a new name is `minor`. The list "Public API changes" has each change one time.
+3. A `pub(crate) use` line gives no public name: by the rule of 33.1, a different crate cannot use it.
+4. Two `use` items give no pair warning.
+
+### 33.5 The header of a trait impl (part A5)
+
+**The rule. Decided by Claude.** The fact of a trait impl shows the self type as the source writes it: "trait impl `<AsKebabCase<&str> as Render>` added". The keys of the items and of the reasons have no change.
+
+### 33.6 A move keeps its proof when the `use` lines change (part B1)
+
+**The cause (trial 9).** The honest move of `transform` to a new module changed `use crate::{lowercase, transform};` in 9 files. The rule of batch 5x permitted only a `use` line with the same shape, so the move showed as 16 facts with no proof.
+
+**The rule. Decided by Claude.** The identity check compares, for each module, the set of the names that the private `use` lines import: the name, the full path of its target after the rename map, and the glob mark. If each module has the same set before and after, the `use` edits are forced edits of the move. A line can change, split, join, or go. The fact says "…, with N `use` line(s)". These stay facts to read, or stop the proof: an import of a different item with the same name, a new name, a new glob import, a `pub use` or a `pub(crate) use` line, a line with an attribute, and a body edit of the moved item. The MIR compare with the rename map stays the proof of each body.
+
+### 33.7 A body from a macro call goes under its cause (part B2)
+
+**The cause (trial 9).** One new line `t!(test26: …)` gave two facts "code that Semilla does not see", and each asked for a reason. A change of the macro `t!` gave one fact and one reason for each of its 24 bodies.
+
+**The rule. Decided by Claude.**
+
+1. The MIR span of a body from a `macro_rules!` macro is in the macro definition. If a call of that macro in the module of the body has the name of the body as a word, and the call has a fact, the body goes under that fact: "added `m::t!#25` (makes: `test26`)". The body gets no fact and no spotlight of its own.
+2. A changed macro definition is one fact with one spotlight for the bodies of its calls: the count of the bodies, the bodies that no longer exist, and the tests that no longer exist. One reason is necessary, with the key of the macro.
+3. The test list comes from the compiler records of the two trees (the test descriptors), not from the text. So `#[test]` that goes from the macro is rejected with no reason, and the text says "24 test(s) no longer exist".
+
+### 33.8 A copy of the repository finds the result of its base (part B3)
+
+**The cause (trial 9).** The cache folder of a repository has the hash of the folder path in its name. The stored result of a commit (`reports/<commit>.json`) is in that folder. A copy of the repository at a different path has a different folder, so the base line said "this machine did not compute the full result" for a result that this machine did compute.
+
+**The rule. Decided by Claude.** When Semilla stores the full result of a commit, it also writes a content record in `<user cache>/by-content/commit-results/`. The key of the record is the commit, the hash of the change set of the note, and the tools key. The record has these three values, the result (`accepted` or `rejected`), and the mark `complete` or `partial`. It has no report. `commit_check` reads the record when the folder of the repository has no stored result. The mode rule is the rule of the stored reports: a command that runs build code reads the marked record first and does not use a partial record. The rule of batch 5y stays: a note with a different content, a different tools key, a different cache folder, or `--fresh` gives no record, and the base keeps the line "it has Semilla data, but this machine did not compute the full result".
+
+### 33.9 Small changes (part B4)
+
+Each one: **Decided by Claude.**
+
+- **`status <commit>` with no note.** The error has the hint of `review`: "commit … has no semilla note; tag it first".
+- **A file that the code reads at build time.** A use of `include_str!`, `include_bytes!`, or `include!` is not a build condition. The spotlight says "a file that the code reads at build time: `PATH` (`include_str!` in `ITEM`)". The reason stays necessary.
+- **A move into a new `pub` module.** This move gets no proof (a known limit: the new public module is a public API change, and the rule of batch 5x takes only a module that is not `pub`). If the new module is the only other change of the step, the note gives this cause and no advice to split the step. The pair warning gives the same cause.
+- **A file mode change.** A file mode changes no body. The mode fact is not the cause of a changed body, also when the body is in that file. Before, the mode fact of a Rust file took the bodies of a changed macro of the file, and the reason for the mode was the only reason of the step.
+
+### 33.10 A net for a changed source text with no fact (part A6)
+
+**The cause (the mutant run).** 106 of 236 declaration mutants gave no fact to read. Three forms gave no fact at all, and the step was accepted with an empty list: `pub const BITCOIN` → `pub(crate) const BITCOIN` in an impl, `pub use alphabet::Alphabet;` → `use alphabet::Alphabet;`, and a new `#[deprecated]` on an associated constant. The diff compares the parts that it knows. An associated constant is a line of the member list of its impl, and that line had no visibility and no attributes. The `use` lines were compared with no visibility.
+
+**The rule. Decided by Claude.**
+
+1. **The kinds.** The visibility and the attributes of a `use` line are parts of the line: a change gives "changed `use` line: `pub use a::B;` → `use a::B;`: removed the public name …" (`logic`, the rule of 33.4). The visibility and the attributes of an associated constant or type of an impl give a fact at the impl: "visibility of the associated constant `BITCOIN` in `m::impl Alphabet`: `pub` → `pub (crate)`", "attributes of the associated constant `BITCOIN` in …: added `# [deprecated]`". The class is `other`. If a different crate can use the impl, the fact has the API text, and the API level is `major`.
+2. **The net.** For each item pair, Semilla compares the tokens of the two source texts (`semilla-syntax/src/net.rs`). The tokens of a nested item (a method, a field, a variant) belong to the nested item. Each changed token range must be in the text of an edit of the pair. If one is not, the pair gets the fact "changed source text with no other fact, in `ITEM`: `old` → `new`". The class is `other`, also for a private item: Semilla does not know what the text changes. It has the API text and the level `major` if a different crate can use the item. The fact needs no reason.
+3. **The limits of the net.** A comment, a doc text, and a comma are no tokens for the net (a doc text has its own fact for an item; a doc text of an associated constant has no fact). The body of a function is not in the net: the statement diff compares each node of it. The inner attributes of a file have their own compare. A `use` line has the set compare of rule 1.
+4. The test of the net uses `default fn` in an impl: no fact kind knows this word.

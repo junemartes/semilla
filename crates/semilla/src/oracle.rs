@@ -840,6 +840,18 @@ impl BodyOracle for NormalOracle {
         Ok([&step.tree_before, &step.tree_after].map(|tree| checked.iter().map(|config| self.truth(tree, config)).collect()))
     }
 
+    fn tests(&self, step: &Step) -> Result<Option<[std::collections::BTreeSet<String>; 2]>> {
+        // A `#[test]` function has a constant with its name and the type `test::TestDescAndFn`
+        // (batch 6a, B2). The N0 records of each checked configuration have it.
+        let mut sides = [std::collections::BTreeSet::new(), std::collections::BTreeSet::new()];
+        for config in self.checked(step)? {
+            for (side, tree) in sides.iter_mut().zip([&step.tree_before, &step.tree_after]) {
+                side.extend(self.records_with(tree, "n0", &config)?.into_iter().filter(|record| record.text.starts_with("fn _() -> test::TestDescAndFn")).map(|record| record.name));
+            }
+        }
+        Ok(Some(sides))
+    }
+
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
         // The facts of each checked configuration (batch 5s, A5). The verifier joins the facts
         // of the bodies of an item, so a property claim must hold in each configuration.

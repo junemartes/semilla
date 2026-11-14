@@ -3276,7 +3276,7 @@ fn a_trailing_comment_is_a_comment_fact_not_a_doc_fact() {
     write(repo, "crates/shop-core/src/cart.rs", &text.replace("pub struct Cart {", "pub struct Cart { // the basket"));
     let out = run(repo, &["step", "note the cart"], 0);
     assert!(out.contains("added comment `// the basket` [other]"), "{out}");
-    assert!(!out.contains("changed docs") && !out.contains("needs a reason"), "{out}");
+    assert!(!out.contains("changed docs") && !out.contains("added docs") && !out.contains("removed docs") && !out.contains("needs a reason"), "{out}");
 }
 
 /// A build script for the folder tests of design 28.9. It puts the marker `partf-<name>` into
@@ -5659,4 +5659,76 @@ fn a_doc_test_fence_change_gives_no_indirect_fact() {
     let (code, out) = run_env(repo, &["step", "a different check"], &[]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("build configuration") && out.contains("needs a reason"), "{out}");
+}
+
+/// Batch 6a, B3 (trial 9): the cache folder of a repository has the path of the repository in
+/// its name. A copy of a tagged repository at a different path, with the same cache folder of
+/// the user, finds the result of its base by content: the commit, the note, and the tools. A
+/// base that this machine did not check keeps the line of batch 5y.
+#[test]
+fn a_copy_at_a_different_path_finds_the_result_of_its_base() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "raise the max"], 0);
+    commit_all(repo, "raise the max");
+    run(repo, &["tag"], 0);
+    let good = git(repo, &["rev-parse", "--short=7", "HEAD"]);
+    // The copy has the same parent folder, so it has the same cache folder of the user.
+    let copy = &dir.path().join("copy");
+    assert!(Command::new("cp").arg("-r").arg(repo).arg(copy).status().unwrap().success());
+    write(copy, "crates/shop-app/src/main.rs", &MAIN_V1.replace("20", "30"));
+    let checked = format!("base `{good}`: it has a Semilla check");
+    let data_only = format!("base `{good}`: it has Semilla data, but this machine did not compute the full result. Run `semilla status {good}`");
+    let step = run(copy, &["step", "raise the max again"], 0);
+    assert!(step.contains(&checked) && !step.contains("did not compute"), "{step}");
+    // The copy has its own cache folder: two folders with a `repository` file.
+    let folders = std::fs::read_dir(cache_dir(repo)).unwrap().flatten().filter(|entry| entry.path().join("repository").is_file()).count();
+    assert_eq!(folders, 2, "the copy has a different cache folder");
+    // A machine with a different cache did not compute the result: the line of batch 5y stays.
+    let other_cache = dir.path().join("other-cache");
+    let (_, out) = run_env(copy, &["status", "--no-wait"], &[("SEMILLA_CACHE_DIR", other_cache.to_str().unwrap())]);
+    assert!(out.contains(&data_only) && !out.contains(&checked), "{out}");
+    // `--fresh` reads no cache.
+    let (_, out) = run_env(copy, &["status", "--no-wait", "--fresh"], &[]);
+    assert!(out.contains(&data_only) && !out.contains(&checked), "{out}");
+    // A note with a different content is not the note that this machine did check.
+    let note = git(copy, &["notes", "--ref=semilla", "show", "HEAD"]);
+    let mut changed: serde_json::Value = serde_json::from_str(&note).unwrap();
+    changed["steps"][0]["intent"] = serde_json::Value::String("a different text".to_string());
+    let file = dir.path().join("changed-note.json");
+    std::fs::write(&file, changed.to_string()).unwrap();
+    git(copy, &["notes", "--ref=semilla", "add", "-f", "-F", file.to_str().unwrap(), "HEAD"]);
+    let (_, out) = run_env(copy, &["status", "--no-wait"], &[]);
+    assert!(!out.contains(&checked), "a changed note has no result of this machine\n{out}");
+    assert!(out.contains(&data_only), "{out}");
+}
+
+/// Batch 6a, B4 (trial 9): a file mode changes no body. The fact of a mode change of a Rust
+/// file showed the bodies of a changed macro of the file as its affected bodies, and the reason
+/// for the mode was the only reason that the step asked for.
+#[test]
+fn a_file_mode_change_has_no_affected_bodies() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/made.rs";
+    let made = "macro_rules! make {\n    ($name:ident, $n:expr) => {\n        pub fn $name(x: u32) -> u32 {\n            x + $n\n        }\n    };\n}\nmake!(one, 1);\nmake!(two, 2);\n";
+    write(repo, file, made);
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod made;\n");
+    commit_all(repo, "a macro");
+    // `status` of a commit with no note gives the hint of `review` (batch 6a, B4).
+    let (code, out) = run_env(repo, &["status", "HEAD"], &[]);
+    assert!(code != 0 && out.contains("has no semilla note; tag it first"), "{code}\n{out}");
+    git(repo, &["update-index", "--chmod=+x", file]);
+    std::fs::set_permissions(repo.join(file), std::fs::Permissions::from_mode(0o755)).unwrap();
+    write(repo, file, &made.replace("x + $n", "x * $n"));
+    let (code, out) = run_env(repo, &["step", "multiply"], &[]);
+    assert_eq!(code, 1, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    let mode = lines.iter().position(|line| line.contains(&format!("{file}: changed (mode 100644 → 100755) [other]"))).unwrap_or_else(|| panic!("the mode fact has the class `other`\n{out}"));
+    assert!(!lines[mode + 1].contains("affected bodies"), "a mode changes no body\n{out}");
+    assert!(out.contains("a changed macro: the MIR of 2 bodies that the macro makes changed with no edit of the text of a call"), "{out}");
+    // The mode and the macro each need a reason.
+    assert!(out.contains(&format!("--reason '{file}:=<why>'")) && out.contains("--reason 'shop_core::made::make!#0=<why>'"), "{out}");
 }

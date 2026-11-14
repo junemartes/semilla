@@ -632,6 +632,68 @@ fn edits_inside(context: &Context, region: &Anchor, use_after: bool) -> Vec<usiz
         .collect()
 }
 
+/// The names that the private `use` lines of a module import (batch 6a, B1): the name, the
+/// full path of the target, and the glob mark. `None` if a line does not parse.
+///
+/// - Only a private `use` line with no attribute counts. Each other line keeps its own fact.
+/// - `crate`, `self`, and `super` at the start of a path become the full path.
+/// - With `renames`, a path of an old item (or a path in it) becomes the path of the new item.
+pub(crate) fn module_imports(workspace: &Workspace, module: &str, renames: Option<&Renames>) -> Option<BTreeSet<(String, String, bool)>> {
+    let mut out = BTreeSet::new();
+    for item in workspace.items.values().filter(|item| item.kind == semilla_syntax::ItemKind::Use && parent(&item.path) == module && item.vis.is_empty() && item.attrs.is_empty()) {
+        for (name, mut target, glob) in use_line_names(workspace, item)? {
+            if let Some(renames) = renames {
+                let moved = renames.items.iter().filter(|(old, new)| old != new).find(|(old, _)| target == **old || target.strip_prefix(old.as_str()).is_some_and(|tail| tail.starts_with("::")));
+                if let Some((old, new)) = moved {
+                    target = format!("{new}{}", &target[old.len()..]);
+                }
+            }
+            out.insert((name, target, glob));
+        }
+    }
+    Some(out)
+}
+
+/// The names that one `use` line gives (batch 6a, A4 and B1): the name (`*` for a glob), the
+/// full path of the target, and the glob mark. `None` if the line does not parse.
+///
+/// - `crate`, `self`, and `super` at the start of a path become the full path.
+/// - A path that starts with an item of the module of the line gets the path of the module.
+/// - Each other path stays as it is in the text (a different crate).
+pub(crate) fn use_line_names(workspace: &Workspace, item: &semilla_syntax::Item) -> Option<Vec<(String, String, bool)>> {
+    let module = parent(&item.path);
+    let parsed = syn::parse_str::<syn::ItemUse>(&item.signature).or_else(|_| syn::parse_str::<syn::ItemUse>(&item.source)).ok()?;
+    let mut leaves = Vec::new();
+    crate::use_leaves(&parsed.tree, &[], &mut leaves);
+    let mut out = Vec::new();
+    for (segments, alias, glob) in leaves {
+        let mut base: Vec<&str> = Vec::new();
+        let mut rest = segments.as_slice();
+        match rest.first().map(String::as_str) {
+            Some("crate") => {
+                base.push(module.split("::").next().unwrap_or(module));
+                rest = &rest[1..];
+            }
+            Some("self") | Some("super") => {
+                base = module.split("::").collect();
+                if rest[0] == "self" {
+                    rest = &rest[1..];
+                }
+                while rest.first().is_some_and(|segment| segment == "super") {
+                    base.pop()?;
+                    rest = &rest[1..];
+                }
+            }
+            Some(first) if parsed.leading_colon.is_none() && workspace.items.contains_key(&format!("{module}::{first}")) => base = module.split("::").collect(),
+            _ => {}
+        }
+        let target = base.iter().copied().chain(rest.iter().map(String::as_str)).collect::<Vec<_>>().join("::");
+        let name = if glob { "*".to_string() } else { alias.unwrap_or_else(|| segments.last().cloned().unwrap_or_default()) };
+        out.push((name, target, glob));
+    }
+    Some(out)
+}
+
 fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
     let to = full_path(&at.item, claim.arg_str("to").unwrap());
@@ -648,6 +710,17 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     // reports that body. A `pub use` line is API, so it needs its own claim.
     let (old_name, new_name) = (last_segment(&at.item), last_segment(&to));
     let modules = [parent(&at.item), parent(&to)];
+    // Batch 6a, B1: the claim also explains each private `use` edit of a module that imports
+    // the same names after the step. The old paths go through the map of the step (old path →
+    // new path). So a `use` line can change, split, or join, and a line can go or come.
+    let use_modules: BTreeSet<&str> = context.edits.iter().filter(|edit| edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use")).filter_map(|edit| edit.item().map(parent)).collect();
+    let same_imports: BTreeSet<&str> = use_modules
+        .into_iter()
+        .filter(|module| {
+            let old = module_imports(context.before, module, Some(context.renames));
+            old.is_some() && old == module_imports(context.after, module, None)
+        })
+        .collect();
     let explains: Vec<usize> = context
         .edits
         .iter()
@@ -661,7 +734,9 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
                 let private = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.vis.is_empty()));
                 let module = edit.item().map(parent);
                 let in_module = claim.op == "move-item" && module.is_some_and(|m| modules.contains(&m));
-                private(&edit.before, context.before) && private(&edit.after, context.after) && (names_item || in_module)
+                let plain = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.attrs.is_empty()));
+                let same = module.is_some_and(|m| same_imports.contains(m)) && plain(&edit.before, context.before) && plain(&edit.after, context.after);
+                private(&edit.before, context.before) && private(&edit.after, context.after) && (names_item || in_module || same)
             } else {
                 is_path && names_item
             }

@@ -228,6 +228,7 @@ impl Renames {
 pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edit> {
     let mut edits = Vec::new();
     let mut matched_after = BTreeSet::new();
+    let mut net_files = (crate::net::Files::default(), crate::net::Files::default());
 
     let (before_uses, after_uses) = (uses_by_module(before), uses_by_module(after));
     for (path, item) in before.items.iter().filter(|(_, item)| item.kind != ItemKind::Use) {
@@ -235,7 +236,11 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
         match after.items.get(&target) {
             Some(other) if other.kind == item.kind => {
                 matched_after.insert(target.clone());
+                let start = edits.len();
                 diff_item(item, other, renames, &mut edits);
+                // The net: a changed token that no edit of the pair has (batch 6a, A6).
+                let open = crate::net::uncovered(&mut net_files, before, after, item, other, renames, &edits[start..]);
+                edits.extend(open);
             }
             _ => edits.push(item_edit(EditKind::ItemRemoved, Some(item), None)),
         }
@@ -251,10 +256,13 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
     for module in modules {
         let old = before_uses.get(module).cloned().unwrap_or_default();
         let new = after_uses.get(module).cloned().unwrap_or_default();
-        for item in old.iter().filter(|item| !new.iter().any(|other| other.signature == renames.apply(&item.path, &item.signature))) {
+        // The visibility and the attributes are parts of a `use` line (batch 6a, A6): `pub use`
+        // that changes to `use` removes a public name.
+        let head = |item: &Item| (item.vis.replace(' ', ""), item.attrs.clone());
+        for item in old.iter().filter(|item| !new.iter().any(|other| head(other) == head(item) && other.signature == renames.apply(&item.path, &item.signature))) {
             edits.push(item_edit(EditKind::ItemRemoved, Some(item), None));
         }
-        for item in new.iter().filter(|item| !old.iter().any(|other| renames.apply(&other.path, &other.signature) == item.signature)) {
+        for item in new.iter().filter(|item| !old.iter().any(|other| head(other) == head(item) && renames.apply(&other.path, &other.signature) == item.signature)) {
             edits.push(item_edit(EditKind::ItemAdded, None, Some(item)));
         }
     }
@@ -811,7 +819,7 @@ fn detect_moves(edits: &mut Vec<Edit>) {
 }
 
 /// The longest common subsequence of two lists, as index pairs.
-fn lcs<T>(a: &[T], b: &[T], equal: impl Fn(&T, &T) -> bool) -> Vec<(usize, usize)> {
+pub(crate) fn lcs<T>(a: &[T], b: &[T], equal: impl Fn(&T, &T) -> bool) -> Vec<(usize, usize)> {
     let (n, m) = (a.len(), b.len());
     let mut table = vec![vec![0usize; m + 1]; n + 1];
     for i in (0..n).rev() {

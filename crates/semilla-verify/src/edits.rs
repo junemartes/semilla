@@ -8,7 +8,7 @@
 //!   "BODY: neutral rewrite (proved Nk)". Without phase 2 data, the class is `None` (pending),
 //!   never neutral.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::{Anchor, Claim, Class, Fact};
 use semilla_syntax::tree::{display_tokens, one_line};
@@ -73,6 +73,15 @@ pub fn display_text(edit: &Edit) -> String {
     }
     if let Some(moved) = moved_text(edit) {
         return format!("moved {}: {moved}", edit.node_after.or(edit.node_before).unwrap_or("code"));
+    }
+    // A doc comment with no text on one side: the words of each other doc fact (batch 6a, A2).
+    if edit.kind == EditKind::Docs && what == "changed docs" {
+        let empty = |text: &Option<String>| text.as_deref().is_none_or(|text| text.trim().is_empty());
+        match (empty(&edit.text_before), empty(&edit.text_after)) {
+            (true, false) => return format!("added docs `{new}`{location}"),
+            (false, true) => return format!("removed docs `{old}`{location}"),
+            _ => {}
+        }
     }
     format!("{what} {sides}{location}")
 }
@@ -146,7 +155,43 @@ pub(crate) fn short_texts(old: String, new: String) -> (String, String) {
     }
     let (a, b) = (cut_tokens(&old), cut_tokens(&new));
     let (marks_a, marks_b) = changed_tokens(&a, &b);
-    (cut_equal(&a, &marks_a), cut_equal(&b, &marks_b))
+    let (short_old, short_new) = (cut_equal(&a, &marks_a), cut_equal(&b, &marks_b));
+    // The last check (batch 6a, A2): two different texts never show as two equal sides. If a
+    // cut hides the difference, the full texts show.
+    if short_old == short_new && old != new {
+        return (old, new);
+    }
+    (short_old, short_new)
+}
+
+/// The two sides of an "old → new" fact text (batch 6a, A2). Each fact text with two sides
+/// uses this function: the attributes, the generics, the where clause, the signature parts,
+/// the `use` lines, the docs, and the values. Each side is on one line. A cut keeps each
+/// part that differs, with some context, and each cut has the mark `…`.
+pub(crate) fn sides(old: &str, new: &str) -> (String, String) {
+    short_texts(one_line(old), one_line(new))
+}
+
+/// The text "`OLD` → `NEW`" of two sides: see [`sides`].
+pub(crate) fn sides_text(old: &str, new: &str) -> String {
+    let (old, new) = sides(old, new);
+    format!("`{old}` → `{new}`")
+}
+
+/// The full text of the two sides of a pair for the diff block of a report, or `None` if the
+/// sides are equal.
+pub(crate) fn pair_content(old: &str, new: &str) -> Option<String> {
+    let (old, new) = (one_line(old), one_line(new));
+    (old != new).then(|| {
+        let mut lines = Vec::new();
+        if !old.is_empty() {
+            lines.push(format!("- {old}"));
+        }
+        if !new.is_empty() {
+            lines.push(format!("+ {new}"));
+        }
+        lines.join("\n")
+    })
 }
 
 /// The tokens for a cut: the display tokens, but each word of a comment is one token. Then a
@@ -301,6 +346,31 @@ fn inserted(edit: &Edit) -> Option<String> {
     (prefix + suffix == a.len() && b.len() > a.len()).then(|| short(&Some(b[prefix..b.len() - suffix].join(" ")), &None))
 }
 
+/// The path of a `use` line before its last part (batch 6a, A4): `crate :: a ::` for
+/// `use crate::a::{b, c};` and for `use crate::a::b;`. Two lines with the same text here are
+/// the two sides of a changed line.
+fn use_prefix(signature: &str) -> String {
+    // The token `use`, not the letters: an attribute can have them (`unused_imports`).
+    let tokens: Vec<&str> = signature.split_whitespace().collect();
+    let start = tokens.iter().position(|token| *token == "use").map(|at| at + 1).unwrap_or(0);
+    let text: String = tokens[start..].concat();
+    let text = text.as_str();
+    match text.split_once('{') {
+        Some((prefix, _)) => prefix.to_string(),
+        None => text.rsplit_once("::").map(|(prefix, _)| format!("{prefix}::")).unwrap_or_default(),
+    }
+}
+
+/// The text of the public name changes of a `use` fact, or an empty text for a line that
+/// gives no public name.
+fn names_text(names: Option<Vec<crate::NameChange>>) -> String {
+    match names {
+        None => String::new(),
+        Some(names) if names.is_empty() => " (the public names are the same)".into(),
+        Some(names) => format!(": {}", names.iter().map(|change| change.text.clone()).collect::<Vec<_>>().join("; ")),
+    }
+}
+
 /// The class of an edit fact from the body status and the op class. `None` before phase 2.
 fn class(context: &Context, item: &str, op_class: Option<Class>) -> Option<Class> {
     if !context.bodies.available {
@@ -354,6 +424,68 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 ..fact_base()
             });
         }
+    }
+
+    // The `use` lines (batch 6a, A4). A changed line is the pair of a removed line and an
+    // added line of one module with the same visibility and the same path before the braces.
+    // Each other line is a removed line or an added line. A fact has the text of its line. A
+    // `pub use` line that a different crate can use also gives the public names.
+    let is_use = |edit: &Edit| matches!(edit.kind, EditKind::ItemRemoved | EditKind::ItemAdded) && (edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use"));
+    let use_item = |edit: &Edit| -> Option<&semilla_syntax::Item> {
+        match edit.kind {
+            EditKind::ItemRemoved => context.before.items.get(&edit.before.as_ref()?.item),
+            _ => context.after.items.get(&edit.after.as_ref()?.item),
+        }
+    };
+    let line_text = |edit: &Edit| one_line(edit.source_before.as_deref().or(edit.source_after.as_deref()).unwrap_or("")).trim().to_string();
+    let use_edits: Vec<usize> = (0..edits.len()).filter(|&i| free(fact_of, i) && is_use(&edits[i]) && item_of(&edits[i]).is_some()).collect();
+    let mut paired: BTreeSet<usize> = BTreeSet::new();
+    for &index in use_edits.iter().filter(|&&i| edits[i].kind == EditKind::ItemRemoved) {
+        let edit = &edits[index];
+        let item = item_of(edit).unwrap_or_default();
+        let module = item.rsplit_once("::").map(|(owner, _)| owner.to_string()).unwrap_or_default();
+        let key = use_item(edit).map(|item| (item.vis.replace(' ', ""), use_prefix(&item.signature)));
+        let same_module = |j: usize| edits[j].kind == EditKind::ItemAdded && !paired.contains(&j) && free(fact_of, j) && item_of(&edits[j]).is_some_and(|other| other.rsplit_once("::").map(|(owner, _)| owner) == Some(module.as_str()));
+        // The same line with a different visibility or attribute is one changed line (batch 6a, A6).
+        let signature = use_item(edit).map(|item| item.signature.clone());
+        let added = use_edits.iter().copied().find(|&j| same_module(j) && signature.is_some() && use_item(&edits[j]).map(|item| item.signature.clone()) == signature).or_else(|| {
+            use_edits.iter().copied().find(|&j| same_module(j) && key.is_some() && use_item(&edits[j]).map(|item| (item.vis.replace(' ', ""), use_prefix(&item.signature))) == key)
+        });
+        let names = crate::pub_use_changes(context.before, context.after, edit.before.as_ref().map(|a| a.item.as_str()), added.and_then(|j| edits[j].after.as_ref()).map(|a| a.item.as_str()));
+        let (description, indexes) = match added {
+            Some(added) => {
+                paired.insert(added);
+                (format!("changed `use` line: {}", sides_text(&line_text(edit), &line_text(&edits[added]))), vec![index, added])
+            }
+            None => (format!("removed `use` line: `{}`", semilla_syntax::tree::short(&line_text(edit), 100)), vec![index]),
+        };
+        let at = added.and_then(|j| item_of(&edits[j])).unwrap_or(item.clone());
+        push(facts, fact_of, &indexes, Fact {
+            at: Some(Anchor::item(&at)),
+            file: edit.file.clone(),
+            part: "edit".into(),
+            description: format!("{description}{}", names_text(names)),
+            class: class(context, &at, Some(Class::Logic)),
+            reason: context.step.reasons.get(&at).cloned(),
+            ..fact_base()
+        });
+    }
+    for &index in use_edits.iter().filter(|&&i| edits[i].kind == EditKind::ItemAdded) {
+        if !free(fact_of, index) {
+            continue;
+        }
+        let edit = &edits[index];
+        let item = item_of(edit).unwrap_or_default();
+        let names = crate::pub_use_changes(context.before, context.after, None, edit.after.as_ref().map(|a| a.item.as_str()));
+        push(facts, fact_of, &[index], Fact {
+            at: Some(Anchor::item(&item)),
+            file: edit.file.clone(),
+            part: "edit".into(),
+            description: format!("added `use` line: `{}`{}", semilla_syntax::tree::short(&line_text(edit), 100), names_text(names)),
+            class: class(context, &item, Some(Class::Logic)),
+            reason: context.step.reasons.get(&item).cloned(),
+            ..fact_base()
+        });
     }
 
     // 2. Each other free edit: the shape of an old op, else the general fact.
@@ -448,6 +580,9 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 let mut text = match operand_note(edit) {
                     Some(note) => note.to_string(),
                     None if moved_text(edit).is_some() => format!("{}: {text}", words(op)),
+                    // A doc comment with no text on one side (batch 6a, A2).
+                    None if op == "edit-doc" && edit.text_before.as_deref().is_none_or(|side| side.trim().is_empty()) => format!("added docs `{}`", short_pair(edit).1),
+                    None if op == "edit-doc" && edit.text_after.as_deref().is_none_or(|side| side.trim().is_empty()) => format!("removed docs `{}`", short_pair(edit).0),
                     None => format!("{} {text}", words(op)),
                 };
                 // The effect is a hint, and the text says so (design 8.8.1).
@@ -486,6 +621,9 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 // `replace-expression`.
                 None if matches!(node, "binary" | "unary") => format!("changed expression `{old}` → `{new}`"),
                 // A doc comment of a renamed or moved item: the words of each other doc fact.
+                // A side with no text is no side (batch 6a, A2).
+                None if edit.kind == EditKind::Docs && edit.text_before.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("added docs `{new}`"),
+                None if edit.kind == EditKind::Docs && edit.text_after.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("removed docs `{old}`"),
                 None if edit.kind == EditKind::Docs => format!("changed docs `{old}` → `{new}`"),
                 None => format!("changed {node}: `{old}` → `{new}`"),
             }
@@ -531,6 +669,8 @@ fn push(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>], indexes: &[usize],
 /// fact with another change (a new name, two different type changes, a text with a cut).
 fn type_change(fact: &Fact) -> Option<(String, String, Vec<String>)> {
     let at = fact.at.as_ref()?;
+    // The note of a public API change is not a part of the type change (batch 6a, A1).
+    let fact = &Fact { description: api_note(&fact.description).0.to_string(), ..fact.clone() };
     // The two sides of "`old` → `new`". A side with a backtick is not one text; a side with a
     // cut (`…`) can hide a difference.
     let pair = |text: &str| -> Option<(String, String)> {
@@ -576,6 +716,15 @@ fn type_change(fact: &Fact) -> Option<(String, String, Vec<String>)> {
     }
 }
 
+/// The text of a fact without the note "(the public API can change: …)" at its end, and the
+/// note (batch 6a, A1).
+pub(crate) fn api_note(description: &str) -> (&str, Option<&str>) {
+    match description.rfind(" (the public API can change: ") {
+        Some(at) if description.ends_with(')') => (&description[..at], Some(&description[at..])),
+        _ => (description, None),
+    }
+}
+
 /// Splits a type list at the commas outside brackets (`<>`, `()`, `[]`). An arrow (`->`) is not
 /// a bracket.
 fn split_types(text: &str) -> Vec<String> {
@@ -616,7 +765,8 @@ pub fn fold(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>]) {
         let class = format!("{:?} {:?}", fact.class, fact.note);
         if let Some((old, new, _)) = type_change(fact) {
             let text = format!("type `{old}` → `{new}`");
-            return Some((format!("type {class} {text}"), text));
+            // Facts with different API notes stay apart (batch 6a, A1).
+            return Some((format!("type {class} {text} {}", api_note(&fact.description).1.unwrap_or("")), text));
         }
         let at = fact.at.as_ref()?;
         match fact.part.as_str() {
@@ -651,8 +801,9 @@ pub fn fold(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>]) {
         let what = if k.starts_with("body") { "bodies" } else { "site(s)" };
         // A type fold names each place: the fold does not hide a site.
         let places: Vec<String> = if k.starts_with("type ") { members.iter().filter_map(|&i| type_change(&facts[i])).flat_map(|(_, _, places)| places).collect() } else { Vec::new() };
+        let note = if places.is_empty() { String::new() } else { api_note(&facts[first].description).1.unwrap_or("").to_string() };
         let fact = &mut facts[first];
-        fact.description = if places.is_empty() { format!("{} {what}: {text}", members.len()) } else { format!("{text} in {} places: {}", places.len(), places.join(", ")) };
+        fact.description = if places.is_empty() { format!("{} {what}: {text}", members.len()) } else { format!("{text} in {} places: {}{note}", places.len(), places.join(", ")) };
         fact.sites = vec![semilla_core::SiteGroup { edit: text.clone(), sites: anchors }];
         fact.affected = affected;
         for &other in &members[1..] {

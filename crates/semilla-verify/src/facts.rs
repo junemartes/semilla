@@ -91,6 +91,11 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 if let (Some(arguments), Some(end)) = (crate::trait_arguments(item), name.rfind('>')) {
                     name.insert_str(end, &format!("<{}>", arguments.replace(',', ", ")));
                 }
+                // Batch 6a, A5: the text shows the self type as the source has it
+                // (`AsKebabCase<&str>`). The key of the item stays as it is.
+                if let (Some(self_type), Some(end)) = (crate::self_type_text(item), name.find(" as ").filter(|_| name.starts_with('<'))) {
+                    name.replace_range(1..end, &self_type);
+                }
                 add(key, Anchor::item(&item.path), index, format!("trait impl `{name}` {verb}"), &mut keys);
             }
             _ => {}
@@ -121,7 +126,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         let edit = &edits[index];
         let Some(anchor) = edit.anchor().cloned() else { continue };
         let item = after.items.get(&anchor.item).or_else(|| before.items.get(&anchor.item));
-        let old_new = || format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after));
+        let old_new = || crate::edits::sides_text(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""));
         let found: Option<(Key, String)> = match edit.kind {
             EditKind::Visibility => {
                 // An empty visibility shows as `private` (batch 5x).
@@ -144,9 +149,27 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                         "generics" => "generics",
                         "where" => "where clause",
                         "qualifiers" => "qualifiers",
+                        "text" => SOURCE_TEXT,
                         _ => part,
                     };
-                    Some(((anchor.to_string(), name.to_string()), parameter_description(&anchor, name, edit)))
+                    // The net (batch 6a, A6): a changed text that no other fact shows.
+                    let text = if part == "text" {
+                        match &edit.attr_after {
+                            // A part of an associated constant or type of an impl.
+                            Some(label) => {
+                                let side = |text: &Option<String>| text.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
+                                let visibility = label.starts_with("visibility");
+                                let change = match (side(&edit.text_before), side(&edit.text_after)) {
+                                    (None, Some(new)) if !visibility => format!("added `{}`", semilla_syntax::tree::one_line(&new)),
+                                    (Some(old), None) if !visibility => format!("removed `{}`", semilla_syntax::tree::one_line(&old)),
+                                    (old, new) => format!("`{}` → `{}`", old.unwrap_or_else(|| "private".into()), new.unwrap_or_else(|| "private".into())),
+                                };
+                                format!("{label} in `{}`: {change}", anchor.item)
+                            }
+                            None => format!("changed source text with no other fact, in `{}`: {}", anchor.item, old_new()),
+                        }
+                    } else { parameter_description(&anchor, name, edit) };
+                    Some(((anchor.to_string(), name.to_string()), text))
                 }
                 None => signature_part(edit).map(|part| {
                     let key = match tuple_owner(&anchor.item, item.map(|i| i.kind).unwrap_or(ItemKind::Other)) {
@@ -268,13 +291,32 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         equal_sites.sort();
         equal_sites.dedup();
         let place = anchor.to_string();
+        // A declaration change and the code of a different crate (batch 6a, A1). An equal MIR
+        // of the workspace proves nothing about a crate that Semilla does not compile. A new
+        // or removed member changes the API of its owner type.
+        let api_item = if key.1.starts_with("member ") { owner_of(&key.0) } else { anchor.item.clone() };
+        let (declaration_read, declaration_note) = crate::declaration_api_change(&key.1, &api_item, before, after);
+        // A changed `must_use` or `deprecated` attribute changes the warnings of a different
+        // crate that uses the item. The MIR of the workspace does not show this (batch 6a, A1).
+        let warning_attribute = key.1 == "attribute"
+            && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
+            && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
         facts.push(Fact { build_code: None, build_code_change: false, reason_key: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
             part: key.1.clone(),
-            description: if descriptions.is_empty() { format!("{} of `{}`", key.1, key.0) } else { descriptions.join("; ") },
+            description: {
+                let text = if descriptions.is_empty() { format!("{} of `{}`", key.1, key.0) } else { descriptions.join("; ") };
+                // The note shows for each bound change, and for each other declaration change
+                // that no changed body makes a fact to read.
+                match &declaration_note {
+                    Some(note) if matches!(key.1.as_str(), "generics" | "where clause") || affected.is_empty() => format!("{text} ({note})"),
+                    _ if warning_attribute => format!("{text} (a different crate that uses the item can get a different warning)"),
+                    _ => text,
+                }
+            },
             status: "derived".into(),
             // A member order is never neutral: it has effects outside the MIR records (the drop
             // order of the fields, the derive output order, the discriminant values of an enum).
@@ -284,8 +326,13 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 None
             } else if !affected.is_empty() || key.1 == "member order" {
                 Some(Class::Logic)
-            } else if api_keys.contains(key) {
+            } else if api_keys.contains(key) || warning_attribute || key.1 == SOURCE_TEXT {
                 Some(Class::Other)
+            } else if declaration_read {
+                // A bound change, or a declaration change of an item that a different crate
+                // can use: a fact to read, with the class of a declaration change that
+                // changes a body (batch 6a, A1).
+                Some(Class::Logic)
             } else {
                 Some(Class::Neutral)
             },
@@ -294,7 +341,9 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             spotlight_why,
             reason: step.reasons.get(&place).cloned(),
             sites: groups,
-            content: None,
+            // The full sides of a text with a cut, for the diff block of the report (batch
+            // 6a, A2). A doc test fact has its own content.
+            content: descriptions.iter().any(|text| text.contains('…')).then(|| edit_indexes.iter().filter_map(|&i| crate::edits::pair_content(edits[i].text_before.as_deref().unwrap_or(""), edits[i].text_after.as_deref().unwrap_or(""))).collect::<Vec<_>>().join("\n")).filter(|content| !content.is_empty()),
             equal_sites,
             note: None,
         });
@@ -676,6 +725,10 @@ fn members_fact(edit: &Edit, anchor: &Anchor, item: Option<&semilla_syntax::Item
     None
 }
 
+/// The part name of the net fact (batch 6a, A6): a changed source text that no other fact
+/// shows. The class is `other`: Semilla does not know what the text changes.
+pub(crate) const SOURCE_TEXT: &str = "source text";
+
 /// The part of a signature edit that is a fact, or `None` for a change that needs a claim (a
 /// const or static value, a `macro_rules!` body, a changed field kind of a struct or a variant).
 pub fn signature_part(edit: &Edit) -> Option<&'static str> {
@@ -690,6 +743,7 @@ pub fn signature_part(edit: &Edit) -> Option<&'static str> {
             "generics" => "generics",
             "where" => "where clause",
             "qualifiers" => "qualifiers",
+            "text" => SOURCE_TEXT,
             _ => return None,
         });
     }
@@ -811,12 +865,123 @@ pub fn is_fact_edit(edit: &Edit) -> bool {
 }
 
 fn parameter_description(anchor: &Anchor, part: &str, edit: &Edit) -> String {
-    let what = match (&edit.text_before, &edit.text_after) {
-        (None, Some(new)) => format!("added: `{new}`"),
-        (Some(old), None) => format!("removed: `{old}`"),
-        _ => format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+    // A side with no text is no side (batch 6a, A2): the text says "added" or "removed".
+    let side = |text: &Option<String>| text.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
+    let what = match (side(&edit.text_before), side(&edit.text_after)) {
+        (None, Some(new)) => format!("added: `{}`", semilla_syntax::tree::one_line(&new)),
+        (Some(old), None) => format!("removed: `{}`", semilla_syntax::tree::one_line(&old)),
+        (old, new) => list_change(&where_predicates(old.as_deref().unwrap_or("")), &where_predicates(new.as_deref().unwrap_or("")))
+            .filter(|_| part == "where clause")
+            .unwrap_or_else(|| crate::edits::sides_text(old.as_deref().unwrap_or(""), new.as_deref().unwrap_or(""))),
     };
     format!("{part} of `{}` {what}", anchor.item)
+}
+
+/// The predicates of a where clause text, one for each entry. An empty list if the text is
+/// not a where clause.
+fn where_predicates(text: &str) -> Vec<String> {
+    let text = semilla_syntax::tree::one_line(text);
+    let Some(rest) = text.trim().strip_prefix("where") else { return Vec::new() };
+    let mut out = vec![String::new()];
+    let mut depth = 0i32;
+    let mut last = ' ';
+    for ch in rest.chars() {
+        match ch {
+            '<' | '(' | '[' | '{' => depth += 1,
+            '>' if last != '-' && last != '=' => depth -= 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(String::new());
+                last = ch;
+                continue;
+            }
+            _ => {}
+        }
+        if !ch.is_whitespace() {
+            last = ch;
+        }
+        out.last_mut().unwrap().push(ch);
+    }
+    out.into_iter().map(|entry| entry.trim().to_string()).filter(|entry| !entry.is_empty()).collect()
+}
+
+/// The text of a change of a list (batch 6a, A2): "added `X`", "removed `Y`", and
+/// "changed `A` → `B`". `None` if a list is empty or the lists are equal.
+///
+/// - The entries that only one side has are the change. The entries in the two sides do not show.
+/// - The same count of removed entries and added entries makes pairs in the order of the text.
+/// - A long entry shows cut. The cut of a pair keeps the part that differs.
+fn list_change(old: &[String], new: &[String]) -> Option<String> {
+    if old.is_empty() || new.is_empty() {
+        return None;
+    }
+    let mut rest = new.to_vec();
+    let mut removed = Vec::new();
+    for entry in old {
+        match rest.iter().position(|other| other == entry) {
+            Some(at) => {
+                rest.remove(at);
+            }
+            None => removed.push(entry.clone()),
+        }
+    }
+    let added = rest;
+    if added.is_empty() && removed.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if added.len() == removed.len() {
+        for (old, new) in removed.iter().zip(&added) {
+            parts.push(format!("changed {}", crate::edits::sides_text(old, new)));
+        }
+    } else {
+        // A cut entry must not look the same as an entry of the other side.
+        let cut = |entry: &String, others: &[String]| {
+            let short = semilla_syntax::tree::short(entry, 60);
+            if others.iter().any(|other| semilla_syntax::tree::short(other, 60) == short) { semilla_syntax::tree::one_line(entry) } else { short }
+        };
+        parts.extend(added.iter().map(|entry| format!("added `{}`", cut(entry, &removed))));
+        parts.extend(removed.iter().map(|entry| format!("removed `{}`", cut(entry, &added))));
+    }
+    Some(parts.join(", "))
+}
+
+/// Splits an attribute text into the attributes and keeps the text of each attribute. A `#`
+/// or a `]` in a string literal is text.
+fn attribute_texts(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0i32, None);
+    let mut index = 0;
+    while index < chars.len() {
+        match chars[index] {
+            '"' => {
+                index += 1;
+                while index < chars.len() && chars[index] != '"' {
+                    if chars[index] == '\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            '#' if depth == 0 => {
+                start.get_or_insert(index);
+            }
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(from) = start.take() {
+                        let text: String = chars[from..=index.min(chars.len() - 1)].iter().collect();
+                        out.push(semilla_syntax::tree::one_line(&text));
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    out
 }
 
 /// The description of an attribute fact. A derive fact names the traits.
@@ -840,7 +1005,14 @@ fn attribute_description(item: &str, edit: &Edit) -> String {
         parts.push(format!("derive removed: {}", removed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
     }
     if parts.is_empty() {
-        format!("attributes of `{item}`: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after))
+        // The attributes that changed, not the full list (batch 6a, A2).
+        let (old, new) = (edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""));
+        let change = match (attribute_texts(old), attribute_texts(new)) {
+            (old, new) if old.is_empty() && !new.is_empty() => Some(new.iter().map(|entry| format!("added `{}`", semilla_syntax::tree::short(entry, 60))).collect::<Vec<_>>().join(", ")),
+            (old, new) if new.is_empty() && !old.is_empty() => Some(old.iter().map(|entry| format!("removed `{}`", semilla_syntax::tree::short(entry, 60))).collect::<Vec<_>>().join(", ")),
+            (old, new) => list_change(&old, &new),
+        };
+        format!("attributes of `{item}`: {}", change.unwrap_or_else(|| crate::edits::sides_text(old, new)))
     } else {
         format!("attributes of `{item}`: {}", parts.join("; "))
     }
@@ -879,8 +1051,64 @@ fn attribute_name(text: &str) -> Option<String> {
     let end = inner.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':' || c == ' ')).unwrap_or(inner.len());
     let name: String = inner[..end].split_whitespace().collect();
     let name = name.trim_start_matches("::").to_string();
+    if name == "doc" {
+        return Some(doc_attribute_name(inner[end..].trim()));
+    }
     (!name.is_empty()).then_some(name)
 }
+
+/// The keys of `doc(…)` that change only the doc pages (batch 6a, A3; the table of design 33.3).
+const DOC_PAGE_KEYS: &[&str] = &["hidden", "alias", "inline", "no_inline", "cfg"];
+
+/// The name of a `doc` attribute from the text after the word `doc` (batch 6a, A3). Only doc
+/// text is a doc comment.
+///
+/// - `doc = "literal"`: `doc` (doc text).
+/// - `doc(hidden)` and each other key that changes only the doc pages (also `html_…`): `doc`.
+/// - `doc(test(…))`: `doc(test)`. It changes each doc test of the crate.
+/// - `doc = macro!(…)`: `doc = macro`. The macro can add doc tests.
+/// - Each other key: `doc(KEY)`. Semilla does not know it, so it is not harmless.
+fn doc_attribute_name(rest: &str) -> String {
+    if let Some(value) = rest.strip_prefix('=') {
+        let value = value.trim_start();
+        let literal = value.starts_with('"') || value.starts_with("r\"") || value.starts_with("r#");
+        return if literal { "doc".into() } else { "doc = macro".into() };
+    }
+    let Some(inner) = rest.strip_prefix('(') else { return "doc".into() };
+    let mut keys = Vec::new();
+    let (mut depth, mut word, mut start) = (0i32, String::new(), true);
+    for ch in inner.chars() {
+        match ch {
+            '"' => break,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => start = true,
+            _ => {}
+        }
+        if depth < 0 {
+            break;
+        }
+        if depth == 0 && start && (ch.is_alphanumeric() || ch == '_') {
+            word.push(ch);
+        } else if !word.is_empty() {
+            keys.push(std::mem::take(&mut word));
+            start = false;
+        }
+    }
+    if !word.is_empty() {
+        keys.push(word);
+    }
+    if keys.iter().any(|key| key == "test") {
+        return "doc(test)".into();
+    }
+    match keys.iter().find(|key| !DOC_PAGE_KEYS.contains(&key.as_str()) && !key.starts_with("html_")) {
+        Some(key) => format!("doc({key})"),
+        None => "doc".into(),
+    }
+}
+
+/// The spotlight of a changed `doc(test(…))` attribute (batch 6a, A3).
+pub(crate) const DOC_TEST_SPOTLIGHT: &str = "a changed `doc(test(…))` attribute: it changes each doc test of the crate";
 
 /// Splits an attribute text into the attributes, with no white space. One line can hold more than
 /// one attribute: `# [test] # [ignore]`.
@@ -1386,6 +1614,7 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
     let mut uses: Vec<String> = Vec::new();
     let mut seen = false;
     let mut gaps: Vec<String> = Vec::new();
+    let mut files: Vec<String> = Vec::new();
     for item in items {
         for call in body_index.config(item) {
             if carried.contains(item) && call.strip_suffix(crate::srcconfig::UNSEEN) == Some("include!") {
@@ -1402,6 +1631,14 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
             let text = match call.strip_suffix(crate::srcconfig::UNSEEN) {
                 Some(call) => format!("`{call}` in `{item}` (Semilla cannot see into it)"),
                 None => {
+                    // A file that the code reads at build time is not a build condition (batch
+                    // 6a, B4): the text names the file.
+                    if let Some(file) = include_text(&call, item) {
+                        if !files.contains(&file) {
+                            files.push(file);
+                        }
+                        continue;
+                    }
                     seen = true;
                     // An entry that names an item has its own code marks (batch 5l).
                     let named = call.starts_with('`') || call.starts_with("static `");
@@ -1413,8 +1650,15 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
             }
         }
     }
+    let files = if files.is_empty() {
+        None
+    } else {
+        let more = if files.len() > 3 { format!(" and {} more", files.len() - 3) } else { String::new() };
+        files.truncate(3);
+        Some(format!("{INCLUDE_SPOTLIGHT}{}{more}", files.join(", ")))
+    };
     if uses.is_empty() && gaps.is_empty() {
-        return None;
+        return files;
     }
     let more = if uses.len() > 3 { format!(" and {} more", uses.len() - 3) } else { String::new() };
     uses.truncate(3);
@@ -1426,7 +1670,27 @@ pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body
         Some(gap) => format!("; {gap}"),
         None => String::new(),
     };
-    Some(format!("{start}{uses}{gap}"))
+    let files = files.map(|files| format!("; {files}")).unwrap_or_default();
+    Some(format!("{start}{uses}{gap}{files}"))
+}
+
+/// The start of the spotlight text of a file that the code reads at build time (batch 6a, B4).
+pub(crate) const INCLUDE_SPOTLIGHT: &str = "a file that the code reads at build time: ";
+
+/// True if each use of the item that gets the spotlight is a read of a file at build time.
+pub(crate) fn reads_only_files(body_index: &BodyIndex, item: &str) -> bool {
+    let calls = body_index.config(item);
+    !calls.is_empty() && calls.iter().all(|call| include_text(call, item).is_some())
+}
+
+/// The text of a use of `include_str!`, `include_bytes!`, or `include!` for the spotlight:
+/// "`PATH` (`include_str!` in `ITEM`)". `None` for each other use. A path that is not one
+/// literal shows as its source text.
+fn include_text(call: &str, item: &str) -> Option<String> {
+    let name = ["include_str!", "include_bytes!", "include!"].into_iter().find(|name| call.starts_with(&format!("{name}(")))?;
+    let argument = call[name.len() + 1..].strip_suffix(')').unwrap_or(&call[name.len() + 1..]).trim();
+    let literal = argument.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')).filter(|path| !path.contains('"'));
+    Some(format!("`{}` (`{name}` in `{item}`)", literal.unwrap_or(argument)))
 }
 
 /// Why a fact needs the reviewer's attention (design 22.5, rule 4), or `None`.
@@ -1477,6 +1741,9 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
             names.dedup();
             let cfg = names.iter().any(|name| name == "cfg" || name == "cfg_attr");
             let text = names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+            if names.iter().any(|name| name == "doc(test)") {
+                return Some(if names.len() == 1 { DOC_TEST_SPOTLIGHT.to_string() } else { format!("{DOC_TEST_SPOTLIGHT}; more changed attributes: {text}") });
+            }
             return Some(if cfg { format!("a changed `cfg` attribute ({text})") } else { format!("a changed attribute that can change the behavior: {text}") });
         }
     }

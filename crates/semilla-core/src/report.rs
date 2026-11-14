@@ -279,7 +279,7 @@ impl Fact {
     /// "type `u32` → `u64` in 8 places: …"). A view does not show the sites of the group again.
     /// True for a fact of a doc comment change. A doc comment has no MIR: its class is `other`.
     pub fn is_doc(&self) -> bool {
-        self.class == Some(Class::Other) && self.part == "edit" && self.description.starts_with("changed docs")
+        self.class == Some(Class::Other) && self.part == "edit" && ["changed docs", "added docs", "removed docs"].iter().any(|start| self.description.starts_with(start))
     }
 
     /// True for the fact of a proved rename or move that changes the public API (design 31.8).

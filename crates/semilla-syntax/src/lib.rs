@@ -12,6 +12,7 @@ pub mod doc;
 pub mod flow;
 pub mod graph;
 pub mod load;
+mod net;
 pub mod tree;
 
 pub use diff::{Edit, EditKind, Renames, diff};

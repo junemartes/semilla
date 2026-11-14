@@ -191,12 +191,60 @@ pub(crate) fn store(app: &App, stored: &StoredReport) -> Result<()> {
     std::fs::create_dir_all(file.parent().unwrap())?;
     std::fs::write(&file, serde_json::to_string_pretty(stored)?)?;
     if stored.key != "session" {
+        store_content(app, stored);
         let note = app.repo.store.private_path("report-note");
         std::fs::write(&note, serde_json::to_string_pretty(stored)?)?;
         app.repo.git(&["notes", "--ref=semilla-report", "add", "-f", "-F", &note.to_string_lossy(), &stored.key])?;
         let _ = std::fs::remove_file(note);
     }
     Ok(())
+}
+
+/// The file of the content record of a commit result (batch 6a, B3). The key has only content:
+/// the commit, the hash of the change set of the note, and the tools. It has no folder path.
+fn content_file(app: &App, commit: &str, hash: &str, tools: &str, marked: bool) -> Option<PathBuf> {
+    let key = crate::store::stable_hash(content_head(commit, hash, tools).as_bytes());
+    let mark = if marked { ".build-code" } else { "" };
+    Some(app.repo.store.content_dir("commit-results")?.join(format!("{key:016x}{mark}")))
+}
+
+/// The first lines of a content record. A read compares them, so a hash collision gives no result.
+fn content_head(commit: &str, hash: &str, tools: &str) -> String {
+    format!("{commit}\n{hash}\n{tools}\n")
+}
+
+/// Writes the content record of a full result of a commit. The record has the result and the
+/// complete mark, not the report: a copy of the repository at a different path reads only that
+/// this machine did compute the full result.
+fn store_content(app: &App, stored: &StoredReport) {
+    let Some(file) = content_file(app, &stored.key, &stored.hash, &stored.tools, is_marked(&stored.report)) else { return };
+    let result = if stored.report.accepted { "accepted" } else { "rejected" };
+    let complete = if stored.report.not_complete() { "partial" } else { "complete" };
+    let _ = std::fs::create_dir_all(file.parent().unwrap_or(&file));
+    let _ = std::fs::write(&file, format!("{}{result}\n{complete}\n", content_head(&stored.key, &stored.hash, &stored.tools)));
+}
+
+/// The full result that this machine did compute for a commit and a change set hash, in a
+/// folder of any path: `Some(true)` for an accepted result. The mode rule is the rule of
+/// [`candidates`]. The commit hash gives the tree, so the record needs no tree check.
+pub fn content_result(app: &App, commit: &str, hash: &str) -> Option<bool> {
+    let allowed = app.mode.runs_build_code();
+    let files = if allowed { vec![true, false] } else { vec![false] };
+    let head = content_head(commit, hash, &app.tools_key());
+    files.into_iter().find_map(|marked| {
+        let text = std::fs::read_to_string(content_file(app, commit, hash, &app.tools_key(), marked)?).ok()?;
+        let mut lines = text.strip_prefix(&head)?.lines();
+        let accepted = match lines.next()? {
+            "accepted" => true,
+            "rejected" => false,
+            _ => return None,
+        };
+        match lines.next()? {
+            "complete" => Some(accepted),
+            "partial" if !allowed => Some(accepted),
+            _ => None,
+        }
+    })
 }
 
 /// The stored report of a key, if one exists.

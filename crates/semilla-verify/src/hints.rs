@@ -11,10 +11,12 @@ use crate::checks;
 /// A one-line description of an edit.
 pub fn describe(edit: &Edit) -> String {
     let short = |text: &Option<String>| text.as_deref().map(|t| semilla_syntax::tree::short(t, 60)).unwrap_or_default();
+    // The two sides of a change: the one function of batch 6a, A2.
+    let pair = || crate::edits::sides_text(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""));
     match edit.kind {
         EditKind::ItemAdded => format!("new {} `{}`", edit.attr_after.as_deref().unwrap_or("item"), edit.after.as_ref().map(|a| a.item.as_str()).unwrap_or("")),
         EditKind::ItemRemoved => format!("removed {} `{}`", edit.attr_before.as_deref().unwrap_or("item"), edit.before.as_ref().map(|a| a.item.as_str()).unwrap_or("")),
-        EditKind::Visibility => format!("visibility: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+        EditKind::Visibility => format!("visibility: {}", pair()),
         EditKind::Signature => match edit.node_after.or(edit.node_before) {
             Some("param") => {
                 let role = edit.anchor().and_then(|a| a.path.last()).map(|s| s.to_string()).unwrap_or_default();
@@ -22,16 +24,16 @@ pub fn describe(edit: &Edit) -> String {
                 match (&edit.text_before, &edit.text_after) {
                     (None, Some(new)) => format!("parameter `{name}` added: `{}`", short(&Some(new.clone()))),
                     (Some(old), None) => format!("parameter `{name}` removed: `{}`", short(&Some(old.clone()))),
-                    _ => format!("parameter `{name}` changed: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+                    _ => format!("parameter `{name}` changed: {}", pair()),
                 }
             }
-            Some("params") => format!("parameter order: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-            Some("ret") => format!("return type: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-            Some("generics") => format!("generics: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-            Some("where") => format!("`where` clause: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
-            Some("qualifiers") => format!("qualifiers: `{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            Some("params") => format!("parameter order: {}", pair()),
+            Some("ret") => format!("return type: {}", pair()),
+            Some("generics") => format!("generics: {}", pair()),
+            Some("where") => format!("`where` clause: {}", pair()),
+            Some("qualifiers") => format!("qualifiers: {}", pair()),
             // The view of the line is "signature" already.
-            _ => format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+            _ => format!("{}", pair()),
         },
         EditKind::Docs if crate::facts::doc_test_change(edit).is_some() => "doc test changed (a code block in a doc comment)".to_string(),
         EditKind::Docs => "doc comments changed".to_string(),
@@ -42,7 +44,7 @@ pub fn describe(edit: &Edit) -> String {
         EditKind::Inserted => format!("new statement: `{}`", short(&edit.text_after)),
         EditKind::Deleted => format!("removed statement: `{}`", short(&edit.text_before)),
         EditKind::Moved => format!("moved statement: `{}`", short(&edit.text_before)),
-        EditKind::Modified | EditKind::Replaced => format!("`{}` → `{}`", short(&edit.text_before), short(&edit.text_after)),
+        EditKind::Modified | EditKind::Replaced => format!("{}", pair()),
         EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => {
             let what = match edit.kind {
                 EditKind::FileAdded => "new",

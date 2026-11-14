@@ -133,6 +133,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.skip.contains(&step.index) { Ok(Default::default()) } else { self.inner.truths(step) }
     }
 
+    fn tests(&self, step: &Step) -> Result<Option<[std::collections::BTreeSet<String>; 2]>> {
+        if self.skip.contains(&step.index) { Ok(None) } else { self.inner.tests(step) }
+    }
+
     fn build_code_files(&self, step: &Step) -> Vec<(String, String)> {
         self.code.host_files(step)
     }
@@ -793,7 +797,7 @@ impl App {
         let (key, set) = match commit {
             Some(commit) => {
                 let commit = self.repo.git(&["rev-parse", commit])?;
-                let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note"))?;
+                let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note; tag it first"))?;
                 let set: ChangeSet = serde_json::from_str(&note)?;
                 if let Err(error) = self.check_binding(&commit, &set) {
                     let error = error.to_string();
@@ -1088,6 +1092,12 @@ impl App {
         let Some((note, set)) = self.note_set(commit) else { return CommitCheck::None };
         if let Some(stored) = crate::background::stored_for(self, commit, &crate::background::changeset_hash(&set)) {
             return if stored.report.accepted { CommitCheck::Accepted } else { CommitCheck::Rejected };
+        }
+        // A copy of the repository at a different path has a different cache folder (batch 6a,
+        // B3; trial 9). The content record says if this machine did compute the full result for
+        // this commit, this note, and these tools. No record: the rule of batch 5y stays.
+        if let Some(accepted) = crate::background::content_result(self, commit, &crate::background::changeset_hash(&set)) {
+            return if accepted { CommitCheck::Accepted } else { CommitCheck::Rejected };
         }
         let key = crate::store::stable_hash(format!("{commit}\0{note}\0{}", self.tools_key()).as_bytes());
         let file = self.repo.cache_dir().join("commit-check").join(format!("{key:016x}"));

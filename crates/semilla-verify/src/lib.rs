@@ -294,6 +294,12 @@ pub trait BodyOracle {
         Ok(Default::default())
     }
 
+    /// The def path of each `#[test]` function in the tree before the step and in the tree
+    /// after it (batch 6a, B2). `None`: the oracle does not know the tests.
+    fn tests(&self, _step: &Step) -> anyhow::Result<Option<[BTreeSet<String>; 2]>> {
+        Ok(None)
+    }
+
     /// The MIR facts of the bodies after a step. `None` when the MIR is not available (phase 1).
     fn facts(&self, _step: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(None)
@@ -506,6 +512,19 @@ pub(crate) fn trait_arguments(item: &semilla_syntax::Item) -> Option<String> {
     let start = header.rmatch_indices(last).map(|(at, _)| at).find(|at| !header[..*at].ends_with(word) && header[at + last.len()..].trim_start().starts_with('<'))?;
     let arguments = header[start + last.len()..].trim_start().strip_prefix('<')?.strip_suffix('>')?;
     Some(arguments.chars().filter(|c| !c.is_whitespace()).collect())
+}
+
+/// The self type in the header of an impl as the source has it (batch 6a, A5):
+/// `AsKebabCase<&str>` for `impl Render for AsKebabCase<&str>`. `None` if the header does not
+/// parse.
+pub(crate) fn self_type_text(item: &semilla_syntax::Item) -> Option<String> {
+    use quote::ToTokens;
+    let parsed = syn::parse_str::<syn::ItemImpl>(&item.signature).ok()?;
+    let mut text = parsed.self_ty.to_token_stream().to_string();
+    for (from, to) in [(" :: ", "::"), (":: ", "::"), (" < ", "<"), ("< ", "<"), (" >", ">"), ("& ", "&"), (" ,", ","), ("( ", "("), (" )", ")"), ("[ ", "["), (" ]", "]"), (" ;", ";")] {
+        text = text.replace(from, to);
+    }
+    Some(text)
 }
 
 /// Batch 5y, B1 (trial 8): the items of a trait impl that the name `name` can mean. An agent
@@ -998,7 +1017,15 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let identity_owned: BTreeSet<String> = if identity_verified { identity_derived.clone() } else { BTreeSet::new() };
     let rename_targets: BTreeSet<String> = renames.items.values().cloned().collect();
     let identity_claim = step.claims.iter().position(is_identity);
+    // The tests of the two trees (batch 6a, B2): only for a step with an edit of a macro
+    // definition. A failure of the oracle gives no data, and the text then names no test.
+    let macro_edit = edits.iter().any(|edit| {
+        let item = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().and_then(|a| ws.items.get(&a.item)).is_some_and(owners::is_macro_definition);
+        item(&edit.before, input.before) || item(&edit.after, input.after)
+    });
+    let tests = if macro_edit && body_index.available { oracle.tests(step).ok().flatten() } else { None };
     let owner_input = owners::Input {
+        tests: tests.as_ref(),
         step,
         edits: &edits,
         owners: &owners,
@@ -1033,7 +1060,9 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
             } else if fact.class == Some(Class::Neutral) && !facts::neutral_kind(fact) {
                 // A member order changes the drop order, the derive output order, and the
                 // discriminant values of an enum: effects outside the MIR records (batch 5e).
-                fact.class = Some(if fact.part.starts_with("trait impl") || fact.part == "member order" { Class::Logic } else { Class::Other });
+                // A `doc(test(…))` attribute changes the code of each doc test (batch 6a, A3).
+                let doc_test = fact.spotlight_why.as_deref().is_some_and(|why| why.starts_with(facts::DOC_TEST_SPOTLIGHT));
+                fact.class = Some(if fact.part.starts_with("trait impl") || fact.part == "member order" || doc_test { Class::Logic } else { Class::Other });
             }
         }
     }
@@ -1302,9 +1331,13 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let config_lines: Vec<String> = config_items
         .iter()
         .filter(|item| !only_include(item))
-        .map(|item| match config_keys(item) {
-            keys if keys.is_empty() || keys == [item.clone()] => format!("build configuration: {item}"),
-            keys => format!("build configuration: {item} (the key of the reason: {})", keys.iter().map(|key| format!("`{key}`")).collect::<Vec<_>>().join(", ")),
+        .map(|item| {
+            // A file that the code reads at build time is not a build condition (batch 6a, B4).
+            let start = if facts::reads_only_files(&body_index, item) { "a file that the code reads at build time" } else { "build configuration" };
+            match config_keys(item) {
+                keys if keys.is_empty() || keys == [item.clone()] => format!("{start}: {item}"),
+                keys => format!("{start}: {item} (the key of the reason: {})", keys.iter().map(|key| format!("`{key}`")).collect::<Vec<_>>().join(", ")),
+            }
         })
         .collect();
     report.spotlight.extend(config_lines);
@@ -1768,6 +1801,21 @@ fn identity_step(
             Some(hint),
         ));
     }
+    // Batch 6a, B4 (trial 9): the only other change is a new `pub` module that has only the
+    // items of the move. The advice "split the step" is wrong: a new step gives the same result.
+    // The real cause is the new public module.
+    let others: Vec<&Edit> = edits.iter().zip(owners.iter()).enumerate().filter(|(index, (edit, owner))| owner.is_none() && !allowed(*index, edit)).map(|(_, (edit, _))| edit).collect();
+    let public_module = match others.as_slice() {
+        [edit] if edit.kind == EditKind::ItemAdded && other_claim.is_none() => edit.after.as_ref().filter(|a| a.path.is_empty()).and_then(|a| after.items.get(&a.item)).filter(|module| {
+            let mut private = (*module).clone();
+            private.vis = String::new();
+            visibility_rank(&module.vis) > 2 && new_module_of_move(&private, renames, before, after)
+        }),
+        _ => None,
+    };
+    if let Some(module) = public_module {
+        return Some((ClaimStatus::Unproved { reason: format!("the new module `{}` is `pub`, so the move changes the public API. Semilla gives no proof for a move into a new public module: this is a known limit", module.path) }, None));
+    }
     if let Some(what) = other_claim.or(other_edit) {
         return split(what);
     }
@@ -1930,7 +1978,8 @@ pub fn pair_warnings_with(set: &ChangeSet, report: &Report, items: &BTreeMap<Str
         let old = *old;
         for (added_id, new) in &added_items {
             let new = *new;
-            if old.kind != new.kind || old.path == new.path {
+            // Two `use` lines are no pair (batch 6a, A4): a `use` line has no name of its own.
+            if old.kind != new.kind || old.path == new.path || old.kind == semilla_syntax::ItemKind::Use {
                 continue;
             }
             let similarity = hints::similarity(old, new);
@@ -2055,7 +2104,7 @@ fn in_library(workspace: &Workspace, item: &semilla_syntax::Item) -> bool {
 }
 
 /// The leaves of a `use` tree: the path of each leaf, the name that it gives, and the glob mark.
-fn use_leaves(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
+pub(crate) fn use_leaves(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
     let with = |ident: &syn::Ident| -> Vec<String> { if ident == "self" && !prefix.is_empty() { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() } };
     match tree {
         syn::UseTree::Path(path) => use_leaves(&path.tree, &with(&path.ident), out),
@@ -2188,6 +2237,167 @@ fn member_reach(workspace: &Workspace, path: &str) -> Reach {
     }
 }
 
+/// The answer to "can a different crate use this declaration?" (batch 6a, A1). It is
+/// `member_reach` for an item with a visibility. An impl block and a method of a trait impl
+/// have no visibility: the trait and the self type of the header give the answer.
+pub(crate) fn declaration_reach(workspace: &Workspace, path: &str) -> Reach {
+    use semilla_syntax::ItemKind;
+    if let Some(item) = workspace.items.get(path).filter(|item| item.kind == ItemKind::Impl) {
+        return impl_reach(workspace, item);
+    }
+    // A method of a trait impl: `m::<T as Trait>::f` belongs to `m::impl <T as Trait>`.
+    if let Some((module, rest)) = path.split_once("::<") {
+        if let Some(at) = rest.rfind(">::") {
+            return match workspace.items.get(&format!("{module}::impl <{}>", &rest[..at])) {
+                Some(owner) => impl_reach(workspace, owner),
+                None if workspace.items.get(path).is_some_and(|item| item.test) => Reach::No,
+                None => Reach::Maybe("Semilla did not find the impl block of the method".into()),
+            };
+        }
+    }
+    member_reach(workspace, path)
+}
+
+/// Decides if a different crate can use an impl block (batch 6a, A1): it can, if it can name
+/// the trait or the self type. A name that is not a type or a trait of the crate (a trait of a
+/// different crate, a generic parameter, `&str`) gives "possibly": Semilla cannot decide.
+fn impl_reach(workspace: &Workspace, item: &semilla_syntax::Item) -> Reach {
+    use semilla_syntax::ItemKind;
+    if item.test || !in_library(workspace, item) {
+        return Reach::No;
+    }
+    let Ok(parsed) = syn::parse_str::<syn::ItemImpl>(&item.signature) else {
+        return Reach::Maybe("Semilla cannot read the header of the impl block".into());
+    };
+    let text = |tokens: proc_macro2::TokenStream| tokens.to_string().split_whitespace().collect::<String>();
+    let last = |path: &syn::Path| path.segments.last().map(|segment| segment.ident.to_string());
+    let mut names: Vec<(Option<String>, String)> = Vec::new();
+    if let Some((_, path, _)) = &parsed.trait_ {
+        names.push((last(path), text(quote::quote!(#path))));
+    }
+    let self_ty = &parsed.self_ty;
+    let self_name = match &*parsed.self_ty {
+        syn::Type::Path(ty) if ty.qself.is_none() => last(&ty.path),
+        _ => None,
+    };
+    names.push((self_name, text(quote::quote!(#self_ty))));
+    let (mut maybe, mut unknown): (Option<String>, Option<String>) = (None, None);
+    for (name, shown) in names {
+        let found: Vec<&semilla_syntax::Item> = match &name {
+            Some(name) => workspace
+                .items
+                .values()
+                .filter(|other| other.crate_name == item.crate_name && matches!(other.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Trait | ItemKind::Type | ItemKind::Other))
+                .filter(|other| other.path.rsplit("::").next().is_some_and(|own| own.split('#').next() == Some(name.as_str())))
+                .collect(),
+            None => Vec::new(),
+        };
+        if found.is_empty() {
+            unknown.get_or_insert(format!("`{shown}` is not an item of the crate, and a different crate can name it"));
+            continue;
+        }
+        for other in found {
+            match api_reach(workspace, &other.path) {
+                Reach::Yes => return Reach::Yes,
+                Reach::Maybe(cause) => {
+                    maybe.get_or_insert(cause);
+                }
+                Reach::No => {}
+            }
+        }
+    }
+    // The cause of an item of the crate is the better text.
+    maybe.or(unknown).map_or(Reach::No, Reach::Maybe)
+}
+
+/// The fact kinds of a declaration for which an equal MIR of the workspace proves nothing
+/// about a different crate (batch 6a, A1; the audit table of design 33.1).
+fn declaration_part(part: &str) -> bool {
+    matches!(part, "generics" | "where clause" | "parameter" | "parameter order" | "return type" | "qualifiers" | "source text" | "type" | "value" | "type and value" | "discriminant" | "member added" | "member removed" | "tuple fields")
+}
+
+/// The effect of a declaration change outside the bodies of the workspace (batch 6a, A1).
+///
+/// - `read`: the fact is a fact to read, also with no changed body. This is true for each
+///   change of the generic parameters, the bounds, the where clause, and the supertrait list,
+///   and for each declaration part of an item that a different crate can use.
+/// - The text is the note for the fact, or `None` if no different crate can use the item.
+///
+/// Semilla does not decide if a bound is weaker or stronger, so the text says "can change".
+pub(crate) fn declaration_api_change(part: &str, item: &str, before: &Workspace, after: &Workspace) -> (bool, Option<String>) {
+    if !declaration_part(part) {
+        return (false, None);
+    }
+    let bounds = matches!(part, "generics" | "where clause");
+    let note = match (declaration_reach(before, item), declaration_reach(after, item)) {
+        (Reach::No, Reach::No) => None,
+        (Reach::Yes, _) | (_, Reach::Yes) => Some("the public API can change: a different crate can use the item".to_string()),
+        (Reach::Maybe(cause), _) | (_, Reach::Maybe(cause)) => Some(format!("the public API can change: {cause}")),
+    };
+    (bounds || note.is_some(), note)
+}
+
+/// One change of a public name from a `pub use` line (batch 6a, A4).
+pub(crate) struct NameChange {
+    pub text: String,
+    /// True if code of a different crate can stop to compile or get a different item.
+    pub breaking: bool,
+}
+
+/// The public names that the `pub use` lines of a module give: the name and the target. The
+/// key of a glob line is `*` and the target.
+fn public_names(workspace: &Workspace, module: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for item in workspace.items.values().filter(|item| item.kind == semilla_syntax::ItemKind::Use && item.vis.replace(' ', "") == "pub" && item.path.rsplit_once("::").is_some_and(|(owner, _)| owner == module)) {
+        for (name, target, glob) in checks::use_line_names(workspace, item).unwrap_or_default() {
+            out.insert(if glob { format!("*{target}") } else { name }, target);
+        }
+    }
+    out
+}
+
+/// The changes of the public names that a removed line (`old`) and an added line (`new`) of a
+/// module make (batch 6a, A4). `None` if no line is a `pub use` line that a different crate
+/// can use.
+///
+/// - The line must be `pub`. A `pub(crate) use` line gives no name to a different crate.
+/// - The module must be the crate root, or a different crate can possibly name it (the rule
+///   of batch 5x, `api_reach`).
+/// - The names come from each `pub use` line of the module. So a name that goes from one
+///   line to a different line with the same target is no change.
+pub(crate) fn pub_use_changes(before: &Workspace, after: &Workspace, old: Option<&str>, new: Option<&str>) -> Option<Vec<NameChange>> {
+    let public = |workspace: &Workspace, path: &str| -> Option<Vec<(String, String, bool)>> {
+        let item = workspace.items.get(path)?;
+        let module = path.rsplit_once("::").map(|(owner, _)| owner)?;
+        let reach = !item.test && in_library(workspace, item) && (!module.contains("::") || api_reach(workspace, module) != Reach::No);
+        (item.kind == semilla_syntax::ItemKind::Use && item.vis.replace(' ', "") == "pub" && reach).then(|| checks::use_line_names(workspace, item).unwrap_or_default())
+    };
+    let (old_names, new_names) = (old.and_then(|path| public(before, path)), new.and_then(|path| public(after, path)));
+    if old_names.is_none() && new_names.is_none() {
+        return None;
+    }
+    let module = old.or(new)?.rsplit_once("::").map(|(owner, _)| owner)?;
+    let (names_before, names_after) = (public_names(before, module), public_names(after, module));
+    let mut changes = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (name, target, glob) in old_names.into_iter().flatten().chain(new_names.into_iter().flatten()) {
+        let key = if glob { format!("*{target}") } else { name.clone() };
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let change = match (names_before.get(&key), names_after.get(&key)) {
+            (None, Some(_)) if glob => Some(NameChange { text: format!("added a glob: each public name of `{target}` now is a public name of `{module}`"), breaking: false }),
+            (Some(_), None) if glob => Some(NameChange { text: format!("removed a glob: the public names of `{target}` are no longer public names of `{module}`"), breaking: true }),
+            (None, Some(new)) => Some(NameChange { text: format!("added the public name `{module}::{name}` (`{new}`)"), breaking: false }),
+            (Some(old), None) => Some(NameChange { text: format!("removed the public name `{module}::{name}` (`{old}`)"), breaking: true }),
+            (Some(old), Some(new)) if old != new => Some(NameChange { text: format!("the public name `{module}::{name}` now is `{new}` (before: `{old}`)"), breaking: true }),
+            _ => None,
+        };
+        changes.extend(change);
+    }
+    Some(changes)
+}
+
 /// True if a `pub use` line of the crate of `path` can give the last name of `path`: a line
 /// with that name, or a glob line.
 fn pub_use_gives(workspace: &Workspace, path: &str) -> bool {
@@ -2267,10 +2477,26 @@ pub fn api_level(edits: &[Edit], before: &Workspace, after: &Workspace) -> (&'st
         if !path_only {
             continue;
         }
+        // A `use` line (batch 6a, A4): the public names, not the key of the line.
+        if matches!(edit.kind, EditKind::ItemRemoved | EditKind::ItemAdded) && (edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use")) {
+            let changes = pub_use_changes(before, after, edit.before.as_ref().map(|a| a.item.as_str()), edit.after.as_ref().map(|a| a.item.as_str()));
+            for change in changes.into_iter().flatten() {
+                let list = if change.breaking { &mut major } else { &mut minor };
+                if !list.contains(&change.text) {
+                    list.push(change.text);
+                }
+            }
+            continue;
+        }
         match edit.kind {
             EditKind::ItemRemoved if old.is_some() => major.push(format!("removed `{}`", old.unwrap())),
             EditKind::ItemAdded if new.is_some() => minor.push(format!("added `{}`", new.unwrap())),
             EditKind::Signature if old.is_some() || new.is_some() => major.push(format!("signature of `{}`", old.or(new).unwrap())),
+            // An impl block and a method of a trait impl have no visibility (batch 6a, A1): a
+            // changed header or a changed bound can change the public API.
+            EditKind::Signature if facts::signature_part(edit).is_some() && (edit.before.as_ref().is_some_and(|a| declaration_reach(before, &a.item) != Reach::No) || edit.after.as_ref().is_some_and(|a| declaration_reach(after, &a.item) != Reach::No)) => {
+                major.push(format!("signature of `{}` (the public API can change)", edit.anchor().map(|a| a.item.clone()).unwrap_or_default()))
+            }
             EditKind::Visibility if old.is_some() => major.push(format!("visibility of `{}`", old.unwrap())),
             EditKind::Visibility if new.is_some() => minor.push(format!("`{}` is now public", new.unwrap())),
             EditKind::Members if old.is_some() => {

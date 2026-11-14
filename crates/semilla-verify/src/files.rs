@@ -377,6 +377,22 @@ pub(crate) fn file_spotlight(file: &str, note: &str, content_changed: bool, pars
     (!causes.is_empty()).then(|| causes.join("; "))
 }
 
+/// True for the fact of a file mode change with no content change (batch 6a, B4; trial 9). A
+/// file mode changes no body, so this fact is not the cause of a changed body.
+pub(crate) fn is_mode_fact(before: &Workspace, after: &Workspace, fact: &Fact) -> bool {
+    let Some(file) = fact.file.as_deref() else { return false };
+    if fact.at.is_some() || fact.part != format!("{file}:") || !fact.description.starts_with(&format!("{file}: changed (mode ")) {
+        return false;
+    }
+    let text = |ws: &Workspace| ws.other_files.get(file).or_else(|| ws.rust_files.get(file)).cloned();
+    let (old, new) = (text(before), text(after));
+    let entry = |ws: &Workspace| ws.files.get(file).map(|entry| entry.hash.clone());
+    // A manifest with a key change has a fact for each key: its mode fact has only the mode.
+    // A Rust file that the loader parses has a fact for each changed item.
+    let parsed = before.parsed_files.contains(file) && after.parsed_files.contains(file);
+    (entry(before) == entry(after) && old == new) || parsed || (is_manifest(file) && key_changes(file, old.as_deref(), new.as_deref()).is_some())
+}
+
 /// The facts of the file edits that no claim explains. Returns the facts and, for each edit index,
 /// the index of its first fact in the returned list.
 pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], before: &Workspace, after: &Workspace) -> (Vec<Fact>, BTreeMap<usize, usize>) {
