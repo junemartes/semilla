@@ -25,6 +25,8 @@ extern crate rustc_attr_ir;
 extern crate rustc_crate_store;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
+extern crate rustc_ast;
+extern crate rustc_ast_pretty;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_infer;
@@ -39,6 +41,7 @@ extern crate rustc_trait_selection;
 mod config;
 mod harness;
 mod inline;
+mod made;
 mod normalize;
 mod print;
 mod reach;
@@ -151,6 +154,10 @@ struct BodyRecord {
     /// line lists the build rules that changed the term.
     term: Option<String>,
     span: Option<SpanInfo>,
+    /// For a body from a macro: the file, the line, and the column of the outermost macro call
+    /// (see `made::place`; batch 6b, part 2). At n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    site: Option<(String, usize, usize)>,
     /// The compiled target: `<crate>.<kind>.<metadata hash>` in wrapper mode (the same for both
     /// versions of a workspace), empty in command mode. A body name can exist in more than one
     /// target (a lib and its test build), and each target has its own body.
@@ -434,7 +441,7 @@ fn run_compiler(level: Level, rustc_args: &[String], output: Output) -> ExitCode
     // Keep the values of the build that cargo asked for (from the profile of the tree).
     full_args.extend(inherited_checks(rustc_args));
 
-    let mut callbacks = Callbacks { level, output, error: None };
+    let mut callbacks = Callbacks { level, output, error: None, made: None };
     let result = rustc_driver::catch_fatal_errors(|| {
         rustc_driver::compiler_entrypoint(&full_args, &mut callbacks)
     });
@@ -452,6 +459,9 @@ struct Callbacks {
     level: Level,
     output: Output,
     error: Option<String>,
+    /// The items after the macro expansion (batch 6b, part 2). `None`: the driver cannot list
+    /// them.
+    made: Option<Vec<(Option<rustc_span::def_id::LocalDefId>, made::MadeItem)>>,
 }
 
 impl rustc_driver::Callbacks for Callbacks {
@@ -468,6 +478,18 @@ impl rustc_driver::Callbacks for Callbacks {
                 ));
             }
         }));
+    }
+
+    fn after_expansion<'tcx>(
+        &mut self,
+        _compiler: &interface::Compiler,
+        tcx: TyCtxt<'tcx>,
+    ) -> Compilation {
+        // The list is large, and Semilla reads it only from the N0 records.
+        if self.level == Level::N0 {
+            self.made = guarded(|| made::collect(tcx));
+        }
+        Compilation::Continue
     }
 
     fn after_analysis<'tcx>(
@@ -495,7 +517,8 @@ impl rustc_driver::Callbacks for Callbacks {
         };
         // The first line is the record of the compile unit (batch 5t, part A).
         let mut text = String::new();
-        let unit = UnitLine { unit: unit_record(tcx, &target) };
+        let mut unit = UnitLine { unit: unit_record(tcx, &target) };
+        unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
         text.push_str(&serde_json::to_string(&unit).expect("a unit record is valid JSON"));
         text.push('\n');
         for record in &records {
@@ -540,6 +563,9 @@ struct UnitRecord {
     root: String,
     /// The target triple.
     triple: String,
+    /// Each item of the expanded code, with the place of the macro call that makes it (batch
+    /// 6b, part 2). `None`: the driver cannot list the items.
+    made: Option<Vec<made::MadeItem>>,
 }
 
 /// The line of a unit record in the output.
@@ -550,7 +576,7 @@ struct UnitLine {
 
 /// A path without `.` and `..` parts, relative to the current folder if it is below it. Cargo
 /// starts the compiler in the workspace root for a package of the workspace.
-fn workspace_path(path: &std::path::Path) -> String {
+pub(crate) fn workspace_path(path: &std::path::Path) -> String {
     let current = std::env::current_dir().unwrap_or_default();
     let full = if path.is_absolute() { path.to_path_buf() } else { current.join(path) };
     let mut clean = PathBuf::new();
@@ -600,6 +626,7 @@ fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
         files: files.into_iter().collect(),
         root,
         triple: tcx.sess.opts.target_triple.to_string(),
+        made: None,
     }
 }
 
@@ -666,6 +693,9 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                 return guarded(|| harness_record(name.clone(), body, level, target)).or_else(|| Some(failed_record(name, level, target)));
             }
             let name = item.name();
+            // The descriptor of a `#[test]` function: its text names the crate `test` by one path
+            // in each tree.
+            let test_crate = guarded(|| test_crate_path(*item)).flatten();
             guarded(|| {
                 // The printer reads the constants of this body.
                 let _reader = rustc_middle::ty::tls::with(|tcx| config::Reader::set(rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local()));
@@ -753,9 +783,57 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                 Some(found)
             })
             .unwrap_or_else(|| Some(failed_record(name, level, target)))
+            .map(|mut found| {
+                if let Some(path) = &test_crate {
+                    let (from, to) = (format!("{path}::"), "test::");
+                    found.text = found.text.replace(&from, to);
+                    found.shape = found.shape.replace(&from, to);
+                    found.term = found.term.map(|term| term.replace(&from, to));
+                }
+                found
+            })
         })
         .chain(literal)
         .collect()
+}
+
+/// For the item that `#[test]` makes for a test function (the test descriptor): the path
+/// that the printer gives to the crate `test`, if it is not `test`.
+///
+/// The printer names a crate through an `extern crate` item of the local crate, if the crate
+/// root has one. `#[test]` adds `extern crate test;` next to each test function. So a test
+/// function in the crate root (the usual form of a file in `tests/`) changes the path of each
+/// descriptor type from `test::TestDesc` to `<crate>::test::TestDesc`. The reader finds the
+/// source position in a descriptor by the path `test::TestDesc`, and with the other path the
+/// line of each test was a part of the compare: a new test above gave a changed MIR text for
+/// each test below it (batch 6b, part 1, case 4). The record has the plain path in each case.
+///
+/// The identity comes from the compiler: a `static` or a `const` whose type is `TestDescAndFn`
+/// of the crate `test`. A type of the user with this name is in a different crate.
+fn test_crate_path(item: CrateItem) -> Option<String> {
+    use rustc_hir::def::DefKind;
+    rustc_middle::ty::tls::with(|tcx| {
+        let def = rustc_public::rustc_internal::internal(tcx, item.def_id());
+        // The compiler of today makes a `static`. An older compiler made a `const`.
+        if !matches!(tcx.def_kind(def), DefKind::Static { .. } | DefKind::Const) {
+            return None;
+        }
+        let rustc_middle::ty::Adt(adt, _) = tcx.type_of(def).instantiate_identity().skip_norm_wip().kind() else { return None };
+        let krate = adt.did().krate;
+        if krate == rustc_span::def_id::LOCAL_CRATE || tcx.crate_name(krate) != rustc_span::sym::test || tcx.item_name(adt.did()).as_str() != "TestDescAndFn" {
+            return None;
+        }
+        let path = tcx.def_path_str(krate.as_def_id());
+        (path != "test").then_some(path)
+    })
+}
+
+/// The place of the outermost macro call of a body from a macro expansion.
+fn body_site(body: &Body) -> Option<(String, usize, usize)> {
+    rustc_middle::ty::tls::with(|tcx| {
+        let span = rustc_public::rustc_internal::internal(tcx, body.span);
+        if span.from_expansion() { made::place(tcx, span) } else { None }
+    })
 }
 
 /// The record of a constant with no MIR body whose value comes from the build configuration.
@@ -806,6 +884,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         loop_free: false,
         term: None,
         span: None,
+        site: None,
         target: target.to_string(),
         externals: Vec::new(),
         // A property claim must not read a body with no record as examined.
@@ -944,6 +1023,7 @@ fn record(
         loop_free,
         term,
         span,
+        site: if level == Level::N0 { guarded(|| body_site(body)).flatten() } else { None },
         target: target.to_string(),
         externals: if level == Level::N0 {
             guarded(|| external_calls(&canonical)).unwrap_or_default()

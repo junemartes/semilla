@@ -274,8 +274,8 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     let order = pair_edits.iter().any(|edit| edit.node_before == Some("params"));
     let covered = |tokens: &[Token], (from, to): (usize, usize), item: &Item, text_of: &dyn Fn(&Edit) -> Option<&String>| {
         let run = compact(&join(&tokens[head + from..head + to]));
-        // A plain comment is no token: only an attribute line of a comment edit (`#[doc(hidden)]`)
-        // is text of the item.
+        // A plain comment is no token: only an attribute line of a comment edit is text of the
+        // item. (`#[doc(hidden)]` is an attribute edit since batch 6b, part 1.)
         let text = |edit: &Edit| -> Option<String> {
             let text = text_of(edit)?;
             Some(if edit.kind == EditKind::Comment { text.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>().join("\n") } else { text.clone() })
@@ -287,5 +287,61 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     if !old_open && !new_open {
         return None;
     }
+    // The compare above uses one alignment of the tokens. With a token run that the item has two
+    // times (a bound that moves), a different alignment of the same length is correct.
+    if !order && renamed == old_texts && explained(&compact(&join(&old)), &compact(&join(&new)), pair_edits) {
+        return None;
+    }
     Some(text_edit(before, after, join(&old), join(&new), new.get(head).map(|token| token.at.0).unwrap_or(after.line_start)))
+}
+
+/// The answer to "do the texts of the edits make the new text from the old text?". Each edit
+/// replaces one occurrence of its old text with one occurrence of its new text. The texts
+/// have no white space and no commas. The search can skip an edit (a body edit has no text
+/// here). A mark replaces each text, thus two edits cannot use the same tokens.
+fn explained(old: &str, new: &str, edits: &[Edit]) -> bool {
+    let texts: Vec<(String, String)> = edits
+        .iter()
+        .map(|edit| {
+            let text = |text: &Option<String>| {
+                let text = text.as_deref().unwrap_or("");
+                compact(&if edit.kind == EditKind::Comment { text.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>().join("\n") } else { text.to_string() })
+            };
+            (text(&edit.text_before), text(&edit.text_after))
+        })
+        .filter(|(a, b)| a != b)
+        .collect();
+    if texts.len() > 6 || old.contains(['\u{0}', '\u{1}']) || new.contains(['\u{0}', '\u{1}']) {
+        return false;
+    }
+    fn places(text: &str, part: &str) -> Vec<Option<usize>> {
+        if part.is_empty() { vec![None] } else { text.match_indices(part).map(|(at, _)| Some(at)).collect() }
+    }
+    fn put(text: &str, at: Option<usize>, length: usize, mark: &str) -> String {
+        match at {
+            Some(at) => format!("{}{mark}{}", &text[..at], &text[at + length..]),
+            None => text.to_string(),
+        }
+    }
+    fn search(old: &str, new: &str, texts: &[(String, String)], index: usize, budget: &mut usize) -> bool {
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        let Some((a, b)) = texts.get(index) else {
+            let plain = |text: &str| text.split('\u{0}').collect::<String>();
+            return plain(old) == plain(new);
+        };
+        // An edit with one text only (an added or a removed part) leaves a mark with no name.
+        let mark = if a.is_empty() || b.is_empty() { "\u{0}".to_string() } else { format!("\u{1}{index}\u{1}") };
+        for at_old in places(old, a) {
+            for at_new in places(new, b) {
+                if search(&put(old, at_old, a.len(), &mark), &put(new, at_new, b.len(), &mark), texts, index + 1, budget) {
+                    return true;
+                }
+            }
+        }
+        search(old, new, texts, index + 1, budget)
+    }
+    search(old, new, &texts, 0, &mut 4000)
 }

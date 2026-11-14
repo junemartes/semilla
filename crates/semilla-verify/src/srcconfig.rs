@@ -452,6 +452,116 @@ fn changed(old: Vec<TokenTree>, new: Vec<TokenTree>) -> (Vec<TokenTree>, Vec<Tok
     (old[start..old_end + tail].to_vec(), new[start..new_end + tail].to_vec(), start == 0)
 }
 
+/// True for an attribute that does not change the code of the body of its item in a build
+/// configuration (batch 6b, part 1; design 34.1): a doc comment, `doc(hidden)`, `must_use`, and
+/// `deprecated`. `content` is the token stream in the brackets.
+fn free_declaration_attribute(content: TokenStream) -> bool {
+    let trees: Vec<TokenTree> = content.into_iter().collect();
+    let Some(TokenTree::Ident(name)) = trees.first() else { return false };
+    let equal = matches!(trees.get(1), Some(TokenTree::Punct(p)) if p.as_char() == '=');
+    let group = |text: Option<&str>| matches!(trees.get(1), Some(TokenTree::Group(g)) if trees.len() == 2 && g.delimiter() == Delimiter::Parenthesis && text.is_none_or(|text| compact(&g.stream().to_string()) == text));
+    match name.to_string().as_str() {
+        "doc" => equal || group(Some("hidden")),
+        "must_use" => trees.len() == 1 || equal,
+        "deprecated" => trees.len() == 1 || equal || group(None),
+        _ => false,
+    }
+}
+
+/// The text of the tokens of an item without the free parts of its declaration (batch 6b,
+/// part 1): the attributes of [`free_declaration_attribute`] before the item, and the
+/// visibility of the item. Each other attribute stays. The parts of a nested item (a field, a
+/// method) stay.
+fn without_free_parts(stream: TokenStream) -> String {
+    let tokens: Vec<TokenTree> = stream.into_iter().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index + 1 < tokens.len() {
+        let (TokenTree::Punct(mark), TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        if mark.as_char() != '#' || group.delimiter() != Delimiter::Bracket {
+            break;
+        }
+        if !free_declaration_attribute(group.stream()) {
+            kept.push(format!("# {group}"));
+        }
+        index += 2;
+    }
+    // The visibility: `pub`, `pub(crate)`, `pub(super)`, `pub(self)`, `pub(in path)`. A group
+    // with a different first word is not a part of the visibility (a tuple field: `pub (u8, u8)`).
+    if matches!(tokens.get(index), Some(TokenTree::Ident(word)) if word == "pub") {
+        index += 1;
+        let scope = |group: &proc_macro2::Group| group.delimiter() == Delimiter::Parenthesis && matches!(group.stream().into_iter().next(), Some(TokenTree::Ident(word)) if ["crate", "super", "self", "in"].contains(&word.to_string().as_str()));
+        if matches!(tokens.get(index), Some(TokenTree::Group(group)) if scope(group)) {
+            index += 1;
+        }
+    }
+    kept.extend(tokens[index..].iter().map(|token| token.to_string()));
+    kept.join(" ")
+}
+
+/// True if an attribute before the item can read the tokens of the item: an attribute macro,
+/// or a `cfg_attr` with a content that Semilla does not know. A built-in attribute, a lint
+/// level, a `cfg`, and a `cfg_attr` with a content of the allow list or a `derive` do not read
+/// the visibility or the attributes of the item.
+fn has_token_reader(stream: TokenStream) -> bool {
+    let tokens: Vec<TokenTree> = stream.into_iter().collect();
+    let mut index = 0;
+    while index + 1 < tokens.len() {
+        let (TokenTree::Punct(mark), TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        if mark.as_char() != '#' || group.delimiter() != Delimiter::Bracket {
+            break;
+        }
+        let name = attribute_name(group.stream());
+        let known = match name.as_str() {
+            "cfg" => true,
+            "cfg_attr" => matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Free | crate::opaque::Attr::Covered | crate::opaque::Attr::Derive(_))),
+            name => ATTR_FREE.contains(&name) || crate::facts::is_lint_tool(name),
+        };
+        if !known {
+            return true;
+        }
+        index += 2;
+    }
+    false
+}
+
+/// True if the texts of the two sides of an item differ only in the free parts of the
+/// declaration (batch 6b, part 1; design 34.1): the visibility, a doc comment, `doc(hidden)`,
+/// `must_use`, and `deprecated`. The compiler gets the same code for the body in each build
+/// configuration, so such a change is not a text edit of the body for the rules of the build
+/// configuration (`Opaque::apply` and [`apply`] use this one function).
+///
+/// The answer is "no" if an attribute macro can read the tokens: an attribute that Semilla
+/// does not know on the item, or on an item around it (an `impl` block, a trait, a module).
+pub(crate) fn free_parts_only(old: &Item, new: &Item, before: &Workspace, after: &Workspace) -> bool {
+    let (Ok(old_stream), Ok(new_stream)) = (old.text.parse::<TokenStream>(), new.text.parse::<TokenStream>()) else { return false };
+    if has_token_reader(old_stream.clone()) || has_token_reader(new_stream.clone()) {
+        return false;
+    }
+    if around_reader(old, before) || around_reader(new, after) {
+        return false;
+    }
+    without_free_parts(old_stream) == without_free_parts(new_stream)
+}
+
+/// True if an item around the item (an `impl` block, a trait, a module) has an attribute that
+/// can read the tokens of the item.
+fn around_reader(item: &Item, workspace: &Workspace) -> bool {
+    workspace.items.values().any(|other| {
+        other.path != item.path
+            && other.file == item.file
+            && (other.line_start, other.col_start) <= (item.line_start, item.col_start)
+            && (item.line_end, item.col_end) <= (other.line_end, other.col_end)
+            && other.text.parse::<TokenStream>().map_or(true, has_token_reader)
+    })
+}
+
+/// True if an attribute macro can read the tokens of the item: an attribute that Semilla does
+/// not know on the item, or on an item around it. A text that Semilla cannot read gives "yes".
+pub(crate) fn token_reader(item: &Item, workspace: &Workspace) -> bool {
+    item.text.parse::<TokenStream>().map_or(true, has_token_reader) || around_reader(item, workspace)
+}
+
 /// The text of the tokens of an item without the doc comments in the attributes before the
 /// item (`/// text` is the attribute `#[doc = "text"]`). Each other attribute stays.
 fn without_item_docs(stream: TokenStream) -> String {
@@ -524,6 +634,11 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
                     // keeps the rule of an edit.
                     let no_attribute = found.unseen.iter().all(|text| !text.starts_with('#'));
                     if no_attribute && without_item_docs(old_stream.clone()) == without_item_docs(new_stream.clone()) {
+                        return None;
+                    }
+                    // Batch 6b, part 1: the same rule for the visibility and for the attributes
+                    // `doc(hidden)`, `must_use`, and `deprecated` of the item.
+                    if free_parts_only(old, new, before, after) {
                         return None;
                     }
                     let (old_part, new_part, start) = changed(old_stream.into_iter().collect(), new_stream.into_iter().collect());

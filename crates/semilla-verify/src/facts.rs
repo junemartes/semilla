@@ -86,16 +86,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             ItemKind::Impl if item.path.contains(" as ") => {
                 let key = (item.path.clone(), format!("trait impl {verb}"));
                 fact_key[index] = Some(key.clone());
-                // 5y, B1: the text shows the generic arguments of the trait (`From<DecodeError>`).
-                let mut name = item.path.rsplit("::impl ").next().unwrap_or(&item.path).to_string();
-                if let (Some(arguments), Some(end)) = (crate::trait_arguments(item), name.rfind('>')) {
-                    name.insert_str(end, &format!("<{}>", arguments.replace(',', ", ")));
-                }
-                // Batch 6a, A5: the text shows the self type as the source has it
-                // (`AsKebabCase<&str>`). The key of the item stays as it is.
-                if let (Some(self_type), Some(end)) = (crate::self_type_text(item), name.find(" as ").filter(|_| name.starts_with('<'))) {
-                    name.replace_range(1..end, &self_type);
-                }
+                let name = trait_impl_name(item);
                 add(key, Anchor::item(&item.path), index, format!("trait impl `{name}` {verb}"), &mut keys);
             }
             _ => {}
@@ -128,6 +119,12 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         let item = after.items.get(&anchor.item).or_else(|| before.items.get(&anchor.item));
         let old_new = || crate::edits::sides_text(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""));
         let found: Option<(Key, String)> = match edit.kind {
+            // The bounds with an equal set of predicates (batch 6b, part 3): one fact for the
+            // item. The edit of the parameter list and the edit of the `where` clause of a
+            // function have the same key.
+            EditKind::Signature if bounds_form(edit, before, after).is_some() => {
+                bounds_form(edit, before, after).map(|form| ((anchor.item.clone(), crate::bounds::PART.to_string()), format!("bounds of `{}`: {form}", anchor.item)))
+            }
             EditKind::Visibility => {
                 // An empty visibility shows as `private` (batch 5x).
                 let side = |text: &Option<String>| if text.as_deref().is_none_or(|text| text.trim().is_empty()) { "private".to_string() } else { short(text) };
@@ -187,7 +184,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         };
         if let Some((key, description)) = found {
             fact_key[index] = Some(key.clone());
-            let anchor = if key.1 == "tuple fields" { Anchor::item(&key.0) } else { anchor };
+            let anchor = if key.1 == "tuple fields" || key.1 == crate::bounds::PART { Anchor::item(&key.0) } else { anchor };
             let description = if key.1 == "tuple fields" { tuple_description(&key.0, before, after) } else { description };
             add(key, anchor, index, description, &mut keys);
         }
@@ -729,6 +726,18 @@ fn members_fact(edit: &Edit, anchor: &Anchor, item: Option<&semilla_syntax::Item
 /// shows. The class is `other`: Semilla does not know what the text changes.
 pub(crate) const SOURCE_TEXT: &str = "source text";
 
+/// For an edit of the generics, the bounds, or the `where` clause of a declaration: the text
+/// of the change if the set of the predicates is equal and each other part of the declaration
+/// is equal (batch 6b, part 3; the rule is in `bounds.rs`). `None` for each other edit. An
+/// item with a new name in the same step has no such text.
+pub(crate) fn bounds_form(edit: &Edit, before: &Workspace, after: &Workspace) -> Option<&'static str> {
+    if !matches!(signature_part(edit), Some("generics" | "where clause")) {
+        return None;
+    }
+    let path = &edit.anchor()?.item;
+    crate::bounds::same_set(before.items.get(path)?, after.items.get(path)?, before, after)
+}
+
 /// The part of a signature edit that is a fact, or `None` for a change that needs a claim (a
 /// const or static value, a `macro_rules!` body, a changed field kind of a struct or a variant).
 pub fn signature_part(edit: &Edit) -> Option<&'static str> {
@@ -1018,6 +1027,22 @@ fn attribute_description(item: &str, edit: &Edit) -> String {
     }
 }
 
+/// The text of a trait impl for a fact and for the list of the public API changes:
+/// `<AsKebabCase<&str> as PartialEq>`.
+pub(crate) fn trait_impl_name(item: &semilla_syntax::Item) -> String {
+    // 5y, B1: the text shows the generic arguments of the trait (`From<DecodeError>`).
+    let mut name = item.path.rsplit("::impl ").next().unwrap_or(&item.path).to_string();
+    if let (Some(arguments), Some(end)) = (crate::trait_arguments(item), name.rfind('>')) {
+        name.insert_str(end, &format!("<{}>", arguments.replace(',', ", ")));
+    }
+    // Batch 6a, A5: the text shows the self type as the source has it (`AsKebabCase<&str>`).
+    // The key of the item stays as it is.
+    if let (Some(self_type), Some(end)) = (crate::self_type_text(item), name.find(" as ").filter(|_| name.starts_with('<'))) {
+        name.replace_range(1..end, &self_type);
+    }
+    name
+}
+
 /// For a new trait impl `module::impl <Type as Trait>`: the type and the trait, if the type
 /// derived the trait before the step and does not derive it after the step.
 fn replaced_derive(impl_path: &str, before: &Workspace, after: &Workspace) -> Option<(String, String)> {
@@ -1266,8 +1291,13 @@ pub fn positional_sites(entity: &str, after: &Workspace, callees: Option<&BTreeM
 /// add test code. Each other attribute needs a reason, also an attribute that Semilla does not
 /// know (invariant I3).
 pub fn new_item_attributes(item: &semilla_syntax::Item) -> Vec<String> {
+    new_attributes(&item.attrs)
+}
+
+/// [`new_item_attributes`] for the attribute texts of an item.
+pub(crate) fn new_attributes(attrs: &[String]) -> Vec<String> {
     let mut names = Vec::new();
-    for attribute in item.attrs.iter().flat_map(|text| split_attributes(text)) {
+    for attribute in attrs.iter().flat_map(|text| split_attributes(text)) {
         if attribute == "#[test]" || attribute == "#[cfg(test)]" {
             continue;
         }
@@ -1278,7 +1308,7 @@ pub fn new_item_attributes(item: &semilla_syntax::Item) -> Vec<String> {
         }
     }
     // An attribute text that the split does not read is unknown.
-    if names.is_empty() && item.attrs.iter().any(|text| split_attributes(text).is_empty() && !text.trim().is_empty()) {
+    if names.is_empty() && attrs.iter().any(|text| split_attributes(text).is_empty() && !text.trim().is_empty()) {
         names.push("unknown".into());
     }
     names

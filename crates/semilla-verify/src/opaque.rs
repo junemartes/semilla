@@ -163,7 +163,7 @@ fn trait_names(name: &str) -> Option<&'static [&'static str]> {
 
 /// True for a `derive` of the allow list. Each other `derive` in a `cfg_attr` makes its item
 /// an item under `cfg`: a macro that Semilla does not know can make each kind of code.
-fn derive_known(name: &str) -> bool {
+pub(crate) fn derive_known(name: &str) -> bool {
     KNOWN_TRAITS.iter().any(|row| row.derive && row.name == name)
 }
 
@@ -2767,6 +2767,14 @@ impl<'a> Opaque<'a> {
             let Some(new) = after.items.get(&path) else { continue };
             let old = before.items.get(old_of.get(&path).copied().unwrap_or(&path));
             if old.is_some_and(|old| old.text == new.text || same_text(&old.text, &new.text, &pairs)) {
+                continue;
+            }
+            // Batch 6b, part 1: a change of only the visibility, a doc comment, `doc(hidden)`,
+            // `must_use`, or `deprecated` is not a text edit of the body. The compiler gets the
+            // same code for the body in each configuration. Before, this change stopped the
+            // proof of a body that uses code under `cfg`, and the body got the fact "indirect
+            // change, cause not known".
+            if old.is_some_and(|old| crate::srcconfig::free_parts_only(old, new, before, after)) {
                 continue;
             }
             let new_names = self.hard_names(1, new);

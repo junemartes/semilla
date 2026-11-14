@@ -615,7 +615,9 @@ fn sibling_names(item: &syn::Item) -> Vec<String> {
         syn::Item::Const(value) => vec![value.ident.to_string()],
         syn::Item::Static(value) => vec![value.ident.to_string()],
         syn::Item::Type(value) => vec![value.ident.to_string()],
-        syn::Item::Macro(value) => vec![format!("{}!", value.ident.as_ref().map(|ident| ident.to_string()).unwrap_or_else(|| tokens(&value.mac.path)))],
+        // A macro definition (`macro_rules! name`). A macro call is not a twin of a definition
+        // (batch 6b, part 2): the loader gives each call its own number.
+        syn::Item::Macro(value) => value.ident.as_ref().map(|ident| format!("{ident}!")).into_iter().collect(),
         other => other_name(other).into_iter().collect(),
     }
 }
@@ -715,6 +717,7 @@ impl Loader<'_> {
         let mut use_index = 0;
         let mut other_index = 0;
         let mut twins = Twins::new(items);
+        let mut call_index: BTreeMap<String, usize> = BTreeMap::new();
         for item in items {
             match item {
                 syn::Item::Mod(item_mod) => {
@@ -834,8 +837,21 @@ impl Loader<'_> {
                     self.add(path, ItemKind::Use, item, &item_use.vis, &item_use.attrs, None, Vec::new(), file, source, test);
                 }
                 syn::Item::Macro(item_macro) => {
-                    let name = item_macro.ident.as_ref().map(|ident| ident.to_string()).unwrap_or_else(|| tokens(&item_macro.mac.path));
-                    let path = format!("{module}::{}", twins.name(&format!("{name}!")));
+                    // A definition keeps the plain name `name!`, with a twin suffix only if the
+                    // module has two definitions of the name. A call always has a number:
+                    // `name!#N`, in source order. So a new call at the end changes no other
+                    // name (batch 6b, part 2). With two or more definitions, the numbers of the
+                    // calls start after the numbers of the definitions.
+                    let path = match &item_macro.ident {
+                        Some(ident) => format!("{module}::{}", twins.name(&format!("{ident}!"))),
+                        None => {
+                            let name = format!("{}!", tokens(&item_macro.mac.path));
+                            let definitions = twins.count.get(&name).copied().filter(|count| *count >= 2).unwrap_or(0);
+                            let index = call_index.entry(name.clone()).or_insert(definitions);
+                            *index += 1;
+                            format!("{module}::{name}#{}", *index - 1)
+                        }
+                    };
                     self.add(path, ItemKind::Macro, item, &syn::Visibility::Inherited, &item_macro.attrs, None, Vec::new(), file, source, test);
                 }
                 other => {
@@ -907,9 +923,13 @@ impl Loader<'_> {
             },
             _ => tokens(attr),
         };
-        let mut docs: Vec<String> = attrs.iter().filter(|attr| attr.path().is_ident("doc")).map(doc_line).collect();
+        // Only doc text is a doc line: `/// text` and `#[doc = …]`. A `#[doc(KEY)]` attribute
+        // (`doc(hidden)`, `doc(alias = "…")`) is an attribute (batch 6b, part 1). Before, it was
+        // a line of the docs, and a change of it showed as a changed comment.
+        let doc_text = |attr: &syn::Attribute| attr.path().is_ident("doc") && matches!(attr.meta, syn::Meta::NameValue(_));
+        let mut docs: Vec<String> = attrs.iter().filter(|attr| doc_text(attr)).map(doc_line).collect();
         docs.extend(plain_comments(&text_source));
-        let attrs = attrs.iter().filter(|attr| !attr.path().is_ident("doc")).map(tokens).collect();
+        let attrs = attrs.iter().filter(|attr| !doc_text(attr)).map(tokens).collect();
         let item = Item {
             path: path.clone(),
             kind,
@@ -1129,6 +1149,22 @@ mod tests {
         let full = dir.join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(full, text).unwrap();
+    }
+
+    #[test]
+    fn a_macro_definition_keeps_its_name_and_each_call_has_an_index() {
+        // Batch 6b, part 2: the first call of `same!` had the key of the definition with the
+        // suffix `#1`. A new call then looked like a second definition.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n");
+        write(root, "src/lib.rs", "macro_rules! same { () => {}; }\nsame!();\nsame!();\nthing!();\nmod m {\n    #[cfg(unix)]\n    macro_rules! t { () => {}; }\n    #[cfg(not(unix))]\n    macro_rules! t { () => {}; }\n    t!();\n}\n");
+        let ws = Workspace::load(root).unwrap();
+        let macros: Vec<&str> = ws.items.values().filter(|item| item.kind == ItemKind::Macro).map(|item| item.path.as_str()).collect();
+        // Two definitions with one name are twins. The index of a call starts after them.
+        assert_eq!(macros, ["demo::m::t!#0", "demo::m::t!#1", "demo::m::t!#2", "demo::same!", "demo::same!#0", "demo::same!#1", "demo::thing!#0"]);
+        assert!(ws.items["demo::same!"].source.starts_with("macro_rules!") && ws.items["demo::same!#1"].line_start == 3);
+        assert!(!ws.items["demo::m::t!#2"].source.contains("macro_rules"), "the third item is the call");
     }
 
     #[test]

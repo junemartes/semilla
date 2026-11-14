@@ -1874,7 +1874,7 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }];
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
-    let input = owners::Input { tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, callees: None };
+    let input = owners::Input { made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, callees: None };
     let mut report = StepReport::default();
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
     // A neutral fact is not an owner.
@@ -5064,8 +5064,32 @@ fn a_move_keeps_its_proof_when_the_use_lines_change() {
     assert!(clean(&report), "{report:#?}");
 }
 
-/// A body oracle with fixed comparisons (with spans) and with the tests of the two trees.
-struct MacroBodies(Vec<BodyComparison>, [BTreeSet<String>; 2]);
+/// A body oracle with fixed comparisons (with spans), with the tests of the two trees, and with
+/// the expanded code of the two trees.
+struct MacroBodies(Vec<BodyComparison>, [BTreeSet<String>; 2], Option<[crate::made::Made; 2]>);
+
+/// One macro call of a test tree: the start of the text of the call, the module of the call,
+/// the items that the call makes (the expanded text, and true for an item that a different
+/// crate can reach), and the bodies that the call makes.
+type MadeCall<'a> = (&'a str, &'a str, &'a [(&'a str, bool)], &'a [&'a str]);
+
+/// The expanded code of `src/lib.rs` of a test tree, in the form of the compiler data. A call
+/// that the source does not have gives no data.
+fn made_data(source: &str, calls: &[MadeCall]) -> crate::made::Made {
+    let mut made = crate::made::Made::default();
+    for (needle, module, items, bodies) in calls {
+        let Some(at) = source.find(needle) else { continue };
+        let line = source[..at].matches('\n').count() + 1;
+        let col = source[..at].rsplit('\n').next().unwrap().chars().count();
+        for (text, public) in *items {
+            made.items.push(crate::made::MadeItem { file: "src/lib.rs".into(), line, col, module: module.to_string(), text: text.to_string(), test: text.starts_with("#[test]"), public: *public });
+        }
+        for body in *bodies {
+            made.sites.insert(body.to_string(), ("src/lib.rs".into(), line, col));
+        }
+    }
+    made
+}
 
 impl BodyOracle for MacroBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
@@ -5074,6 +5098,10 @@ impl BodyOracle for MacroBodies {
 
     fn tests(&self, _: &Step) -> anyhow::Result<Option<[BTreeSet<String>; 2]>> {
         Ok(Some(self.1.clone()))
+    }
+
+    fn made(&self, _: &Step) -> anyhow::Result<Option<[crate::made::Made; 2]>> {
+        Ok(self.2.clone())
     }
 }
 
@@ -5085,37 +5113,51 @@ fn a_body_of_a_macro_call_goes_under_the_fact_of_the_call() {
     let names = |list: &[&str]| list.iter().map(|name| format!("demo::tests::{name}")).collect::<BTreeSet<String>>();
     // The span of a body from a macro is in the definition of the macro.
     let made = |name: &str, status: BodyStatus| body(&format!("demo::tests::{name}"), "src/lib.rs", 9, status);
+    // The compiler data: each call `t!(testN: …)` makes the test function `testN`.
+    let data = |source: &str| {
+        let mut calls: Vec<(String, String, String)> = Vec::new();
+        for n in 1..=3 {
+            calls.push((format!("t!(test{n}:"), format!("#[test] fn test{n}() {{ }}"), format!("demo::tests::test{n}")));
+        }
+        let closures: Vec<String> = calls.iter().map(|call| format!("{}::{{closure#0}}", call.2)).collect();
+        let items: Vec<[(&str, bool); 1]> = calls.iter().map(|call| [(call.1.as_str(), false)]).collect();
+        let bodies: Vec<[&str; 2]> = calls.iter().zip(&closures).map(|(call, closure)| [call.2.as_str(), closure.as_str()]).collect();
+        let list: Vec<MadeCall> = calls.iter().enumerate().map(|(index, call)| (call.0.as_str(), "tests", &items[index][..], &bodies[index][..])).collect();
+        made_data(source, &list)
+    };
+    let both = |before: &str, after: &str| Some([data(before), data(after)]);
     // 1. A new call: the fact of the call lists the body. No spotlight.
     let after = BASE.replace("    t!(test2: \"B\" => \"b\");\n", "    t!(test2: \"B\" => \"b\");\n    t!(test3: \"C\" => \"c\");\n");
-    let oracle = MacroBodies(vec![made("test3", BodyStatus::AfterOnly), made("test3::{closure#0}", BodyStatus::AfterOnly)], [names(&["test1", "test2"]), names(&["test1", "test2", "test3"])]);
+    let oracle = MacroBodies(vec![made("test3", BodyStatus::AfterOnly), made("test3::{closure#0}", BodyStatus::AfterOnly)], [names(&["test1", "test2"]), names(&["test1", "test2", "test3"])], both(BASE, &after));
     let report = run_derived_with(BASE, &after, &oracle);
-    assert_eq!(descriptions(&report), ["added `demo::tests::t!#3` (makes: `test3`)"], "{report:#?}");
+    assert_eq!(descriptions(&report), ["added macro call `t!(test3: \"C\" => \"c\")` (makes: `test3`)"], "{report:#?}");
     assert!(report.accepted() && !report.facts[0].spotlight && report.facts[0].class == Some(Class::Logic), "{report:#?}");
     assert_eq!(report.facts[0].affected, ["demo::tests::test3", "demo::tests::test3::{closure#0}"]);
     // A removed call: the same rule.
-    let oracle = MacroBodies(vec![made("test3", BodyStatus::BeforeOnly), made("test3::{closure#0}", BodyStatus::BeforeOnly)], [names(&["test1", "test2", "test3"]), names(&["test1", "test2"])]);
+    let oracle = MacroBodies(vec![made("test3", BodyStatus::BeforeOnly), made("test3::{closure#0}", BodyStatus::BeforeOnly)], [names(&["test1", "test2", "test3"]), names(&["test1", "test2"])], both(&after, BASE));
     let report = run_derived_with(&after, BASE, &oracle);
-    assert_eq!(descriptions(&report), ["removed `demo::tests::t!#3` (made: `test3`)"], "{report:#?}");
+    assert_eq!(descriptions(&report), ["removed macro call `t!(test3: \"C\" => \"c\")` (made: `test3`)"], "{report:#?}");
     assert!(report.accepted() && report.facts.iter().all(|fact| !fact.spotlight), "{report:#?}");
     // 2. A changed call: the fact of the call covers the body.
-    let oracle = MacroBodies(vec![made("test2", different(false))], [names(&["test1", "test2"]), names(&["test1", "test2"])]);
+    let oracle = MacroBodies(vec![made("test2", different(false))], [names(&["test1", "test2"]), names(&["test1", "test2"])], both(BASE, BASE));
     let report = run_derived_with(BASE, &BASE.replace("\"B\" => \"b\"", "\"B\" => \"c\""), &oracle);
     assert_eq!(report.facts.len(), 1, "{report:#?}");
+    assert_eq!(report.facts[0].description, "changed macro call `t!(test2: \"B\" => \"b\")` → `t!(test2: \"B\" => \"c\")` (makes: `test2`)");
     assert!(report.accepted() && !report.facts[0].spotlight && report.facts[0].affected == ["demo::tests::test2"], "{report:#?}");
     assert!(report.facts[0].description.ends_with("(makes: `test2`)"), "{report:#?}");
     // A new module with a new macro and new calls needs no reason.
     let (head, module) = BASE.split_at(BASE.find("#[cfg(test)]").unwrap());
-    let oracle = MacroBodies(vec![made("test1", BodyStatus::AfterOnly), made("test2", BodyStatus::AfterOnly)], [BTreeSet::new(), names(&["test1", "test2"])]);
+    let oracle = MacroBodies(vec![made("test1", BodyStatus::AfterOnly), made("test2", BodyStatus::AfterOnly)], [BTreeSet::new(), names(&["test1", "test2"])], both(head, BASE));
     let report = run_derived_with(head, &format!("{head}{module}"), &oracle);
     assert!(report.accepted() && report.facts.iter().all(|fact| !fact.spotlight), "{report:#?}");
     assert!(!descriptions(&report).iter().any(|text| text.contains("does not see")), "{report:#?}");
     // 3. A changed definition: one fact and one spotlight. The text names the lost tests.
     let after = BASE.replace("            #[test]\n", "");
-    let oracle = MacroBodies(vec![body("demo::tests::test1", "src/lib.rs", 8, different(true)), body("demo::tests::test2", "src/lib.rs", 8, different(true))], [names(&["test1", "test2"]), BTreeSet::new()]);
+    let oracle = MacroBodies(vec![body("demo::tests::test1", "src/lib.rs", 8, different(true)), body("demo::tests::test2", "src/lib.rs", 8, different(true))], [names(&["test1", "test2"]), BTreeSet::new()], both(BASE, &after));
     let report = run_derived_with(BASE, &after, &oracle);
     assert_eq!(report.facts.len(), 1, "{report:#?}");
     let fact = &report.facts[0];
-    assert!(!report.accepted() && fact.spotlight && fact.description.starts_with("changed macro or signature"), "{report:#?}");
+    assert!(!report.accepted() && fact.spotlight && fact.description.starts_with("changed macro `t`: "), "{report:#?}");
     assert_eq!(fact.spotlight_why.as_deref(), Some("a changed macro: the MIR of 2 bodies that the macro makes changed with no edit of the text of a call; 2 test(s) no longer exist: `test1`, `test2`"), "{fact:#?}");
     // One reason with the key of the macro is sufficient.
     let (_d1, old) = load(BASE);
@@ -5125,7 +5167,7 @@ fn a_body_of_a_macro_call_goes_under_the_fact_of_the_call() {
     let report = crate::verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report;
     assert!(report.accepted() && report.facts.len() == 1, "{report:#?}");
     // A body with no macro call that has a fact keeps the old rule: a fact with a spotlight.
-    let oracle = MacroBodies(vec![made("test9", BodyStatus::AfterOnly)], [names(&["test1", "test2"]), names(&["test1", "test2"])]);
+    let oracle = MacroBodies(vec![made("test9", BodyStatus::AfterOnly)], [names(&["test1", "test2"]), names(&["test1", "test2"])], both(BASE, BASE));
     let report = run_derived_with(BASE, &BASE.replace("text.to_lowercase()", "text.to_uppercase()"), &oracle);
     assert!(!report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("code that Semilla does not see: `demo::tests::test9`")), "{report:#?}");
 }
@@ -5252,4 +5294,421 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     // An attribute of the `doc` family has its own fact: the net adds no second fact.
     let (text, _, _) = one("pub struct Table(pub u8);", "#[doc(hidden)]\npub struct Table(pub u8);");
     assert!(!text.starts_with("changed source text") && text.contains("# [doc (hidden)]"), "{text}");
+}
+
+/// Batch 6b, part 1: a method that uses code under `cfg`. A text edit of its item stops the
+/// proof of its body.
+const UNDER_CFG: &str = "#[cfg(unix)]\npub type Word = u64;\n#[cfg(not(unix))]\npub type Word = u32;\nfn width() -> Word { 8 }\npub const BASE: Word = 2;\npub struct S;\nimpl S {\n    /// The size.\n    #[inline]\n    pub fn size(&self) -> Word {\n        // a note\n        (|| width() + BASE)()\n    }\n}\n";
+
+/// The bodies of `UNDER_CFG`: the method and its closure, with one status.
+/// The first test below makes sure that an edit of the body stops the proof with this source.
+fn under_cfg_bodies(status: BodyStatus) -> Comparisons {
+    let body = |name: &str| BodyComparison { name: name.into(), span: Some(("src/lib.rs".into(), 11)), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    Comparisons(vec![body("demo::S::size"), body("demo::S::size::{closure#0}")])
+}
+
+#[test]
+fn a_free_declaration_change_does_not_stop_the_proof_of_the_body() {
+    // Batch 6b, part 1. The visibility, a doc comment, `doc(hidden)`, `must_use`, and
+    // `deprecated` do not change the code of the body. Before, such a change was a text edit
+    // of the item, the proof of a body that uses code under `cfg` stopped, and the body got
+    // the fact "indirect change, cause not known" (two times: the method and its closure).
+    let cases = [
+        ("    pub fn size", "    pub(crate) fn size", "visibility of `demo::S::size`: `pub` → `pub (crate)`"),
+        ("    #[inline]\n", "    #[inline]\n    #[doc(hidden)]\n", "attributes of `demo::S::size`: added `# [doc (hidden)]`"),
+        ("    #[inline]\n", "    #[must_use]\n    #[inline]\n", "attributes of `demo::S::size`: added `# [must_use]`"),
+        ("    #[inline]\n", "    #[inline]\n    #[deprecated(note = \"old\")]\n", "attributes of `demo::S::size`: added `# [deprecated (note = \"old\")]`"),
+        ("    /// The size.\n", "    /// The size in bytes.\n", "changed docs"),
+    ];
+    // The control: an edit of the body stops the proof (the type `Word` is under `cfg`).
+    let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace("width() + BASE", "BASE + width()"), &under_cfg_bodies(equal("n0")));
+    assert!(report.facts.iter().any(|fact| fact.class == Some(Class::ControlFlow) && fact.affected.iter().any(|body| body == "demo::S::size")), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{:#?}", report.facts);
+    for (old, new, text) in cases {
+        let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace(old, new), &under_cfg_bodies(equal("n0")));
+        assert!(unknown_causes(&report).is_empty(), "{new}: {:#?}", report.facts);
+        assert_eq!(report.facts.len(), 1, "{new}: one change gives one fact: {:#?}", report.facts);
+        let fact = &report.facts[0];
+        assert!(fact.description.starts_with(text), "{new}: {fact:#?}");
+        assert!(fact.note.is_none() && !fact.spotlight && fact.affected.is_empty() && fact.part != "comment", "{new}: {fact:#?}");
+        assert!(report.accepted(), "{new}: {report:#?}");
+    }
+}
+
+#[test]
+fn an_attribute_that_can_change_the_body_stops_the_proof_as_before() {
+    // Batch 6b, part 1, item 3. Each attribute outside the list of the free parts stays a text
+    // edit of the item: the proof of a body that uses code under `cfg` stops.
+    for attribute in ["#[track_caller]", "#[cold]", "#[cfg(feature = \"x\")]", "#[target_feature(enable = \"avx2\")]", "#[doc(alias = \"len\")]", "#[other::thing]"] {
+        let after = UNDER_CFG.replace("    #[inline]\n", &format!("    #[inline]\n    {attribute}\n"));
+        let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(equal("n0")));
+        let stopped = report.facts.iter().any(|fact| fact.affected.iter().any(|body| body == "demo::S::size") || fact.note.as_deref().is_some_and(|note| note.starts_with("no proof: `demo::S::size`")));
+        assert!(stopped, "{attribute}: {:#?}", report.facts);
+        // The body is under a fact that is not neutral (the attribute fact or "indirect change").
+        assert!(report.facts.iter().any(|fact| fact.class != Some(Class::Neutral) && fact.class != Some(Class::Other) && (fact.affected.iter().any(|body| body == "demo::S::size") || fact.at.as_ref().is_some_and(|at| at.item == "demo::S::size"))), "{attribute}: {:#?}", report.facts);
+    }
+    // A removed `inline` is in the same rule.
+    let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace("    #[inline]\n", ""), &under_cfg_bodies(equal("n0")));
+    assert!(report.facts.iter().any(|fact| fact.affected.iter().any(|body| body == "demo::S::size") || fact.note.as_deref().is_some_and(|note| note.starts_with("no proof: `demo::S::size`"))), "{:#?}", report.facts);
+    // An attribute macro on the item or on the `impl` block can read the visibility: the
+    // visibility change stays a text edit.
+    for (place, with_macro) in [("    #[inline]\n", "    #[inline]\n    #[other::thing]\n"), ("impl S {", "#[other::thing]\nimpl S {")] {
+        let before = UNDER_CFG.replace(place, with_macro);
+        let report = run_derived_with(&before, &before.replace("    pub fn size", "    pub(crate) fn size"), &under_cfg_bodies(equal("n0")));
+        assert!(!report.accepted() || report.facts.iter().any(|fact| fact.note.as_deref().is_some_and(|note| note.starts_with("no proof: `demo::S::size`"))), "{with_macro}: {:#?}", report.facts);
+    }
+}
+
+#[test]
+fn a_real_indirect_change_next_to_a_free_declaration_change_keeps_the_spotlight() {
+    // Batch 6b, part 1, item 5. The MIR of the method is different, and the step has only a
+    // free declaration change of the method: the cause is not known. One item gives one fact.
+    for (old, new) in [("    #[inline]\n", "    #[inline]\n    #[doc(hidden)]\n"), ("    pub fn size", "    pub(crate) fn size"), ("    #[inline]\n", "    #[inline]\n    #[must_use]\n")] {
+        let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace(old, new), &under_cfg_bodies(different(false)));
+        assert_eq!(unknown_causes(&report), ["demo::S::size"], "{new}: {:#?}", report.facts);
+        let fact = report.facts.iter().find(|fact| fact.part == "indirect change").unwrap();
+        assert!(fact.spotlight && fact.reason.is_none() && !report.accepted(), "{new}: {fact:#?}");
+    }
+    // A changed constant that the method reads is the cause: the body goes under its fact.
+    let after = UNDER_CFG.replace("    #[inline]\n", "    #[inline]\n    #[doc(hidden)]\n").replace("BASE: Word = 2", "BASE: Word = 3");
+    let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(different(false)));
+    let cause = report.facts.iter().find(|fact| fact.affected.iter().any(|body| body == "demo::S::size")).unwrap_or_else(|| panic!("{:#?}", report.facts));
+    assert!(cause.description.contains("BASE") && cause.class.is_some_and(|class| class != Class::Neutral && class != Class::Other), "{cause:#?}");
+    assert!(report.facts.iter().any(|fact| fact.description == "attributes of `demo::S::size`: added `# [doc (hidden)]`" && fact.affected.is_empty()), "{:#?}", report.facts);
+    // A visibility change together with an edit of the body: the body edit is a fact to read.
+    let after = UNDER_CFG.replace("    pub fn size", "    pub(crate) fn size").replace("width() + BASE", "width() * BASE");
+    let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(different(false)));
+    let edit = report.facts.iter().find(|fact| fact.affected.iter().any(|body| body == "demo::S::size")).unwrap_or_else(|| panic!("{:#?}", report.facts));
+    assert!(edit.description.contains("changed operator") && edit.class == Some(Class::Logic), "{edit:#?}");
+    assert!(report.facts.iter().any(|fact| fact.description.starts_with("visibility of `demo::S::size`")), "{:#?}", report.facts);
+    // The same edit with an equal MIR in the checked configuration: the body uses code under
+    // `cfg`, so the proof stops, and the fact is not neutral.
+    let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(equal("n0")));
+    assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{:#?}", report.facts);
+}
+
+/// The source of the macro tests of batch 6b: a public type with one trait impl.
+const KEBAB: &str = "use std::fmt;\npub struct AsKebabCase<T>(pub T);\nimpl<T: AsRef<str>> fmt::Display for AsKebabCase<T> {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        f.write_str(self.0.as_ref())\n    }\n}\n";
+const SAME: &str = "macro_rules! same {\n    ($t:ty) => {\n        impl PartialEq for AsKebabCase<$t> {\n            fn eq(&self, other: &Self) -> bool {\n                self.0 == other.0\n            }\n        }\n    };\n}\n";
+
+/// The compiler data of a tree with calls of `same!`: each call makes one impl with one body.
+fn same_data(source: &str) -> crate::made::Made {
+    let mut calls: Vec<(String, String, String)> = Vec::new();
+    for ty in ["&str", "String"] {
+        calls.push((format!("same!({ty});"), format!("impl PartialEq for AsKebabCase<{ty}> {{\n    fn eq(&self, other: &Self) -> bool {{ self.0 == other.0 }}\n}}"), format!("<demo::AsKebabCase<{ty}> as core::cmp::PartialEq>::eq")));
+    }
+    let items: Vec<[(&str, bool); 1]> = calls.iter().map(|call| [(call.1.as_str(), true)]).collect();
+    let bodies: Vec<[&str; 1]> = calls.iter().map(|call| [call.2.as_str()]).collect();
+    let list: Vec<MadeCall> = calls.iter().enumerate().map(|(index, call)| (call.0.as_str(), "", &items[index][..], &bodies[index][..])).collect();
+    made_data(source, &list)
+}
+
+/// Batch 6b, part 2 (trial 10): the fact of a macro call lists the items that the call makes.
+/// The data comes from the compiler. The public API list has an item that a different crate
+/// can use. The affected bodies are only the bodies that the step changes.
+#[test]
+fn a_macro_call_fact_lists_the_items_that_the_call_makes() {
+    let eq = |ty: &str, status: BodyStatus| body(&format!("<demo::AsKebabCase<{ty}> as core::cmp::PartialEq>::eq"), "src/lib.rs", 11, status);
+    let none = || [BTreeSet::new(), BTreeSet::new()];
+    let both = |before: &str, after: &str| Some([same_data(before), same_data(after)]);
+    // 1. One step adds the definition and the call.
+    let with_str = format!("{KEBAB}{SAME}same!(&str);\n");
+    let report = run_derived_with(KEBAB, &with_str, &MacroBodies(vec![eq("&str", BodyStatus::AfterOnly)], none(), both(KEBAB, &with_str)));
+    assert_eq!(descriptions(&report), ["added macro `same`", "added macro call `same!(&str)` (makes: `impl PartialEq for AsKebabCase<&str>`)"], "{report:#?}");
+    assert!(report.accepted() && report.facts.iter().all(|fact| !fact.spotlight && fact.class == Some(Class::Logic)), "{report:#?}");
+    // The body of the made impl is under the fact of the call. The step does not change `fmt`.
+    assert!(report.facts[0].affected.is_empty(), "{report:#?}");
+    assert_eq!(report.facts[1].affected, ["<demo::AsKebabCase<&str> as core::cmp::PartialEq>::eq"], "{report:#?}");
+    // The API rule of the same impl with no macro: a new trait impl of a public type.
+    assert_eq!(report.api_level.as_deref(), Some("minor"), "{report:#?}");
+    assert_eq!(report.api_changes, ["added `impl PartialEq for AsKebabCase<&str>` (the macro call `same!(&str)` makes it)"], "{report:#?}");
+    let direct = format!("{KEBAB}impl PartialEq for AsKebabCase<&str> {{\n    fn eq(&self, other: &Self) -> bool {{\n        self.0 == other.0\n    }}\n}}\n");
+    let report = run_derived(KEBAB, &direct, &[]);
+    assert_eq!(report.api_level.as_deref(), Some("minor"), "{report:#?}");
+    assert_eq!(report.api_changes, ["added trait impl `<AsKebabCase<&str> as PartialEq>`"], "{report:#?}");
+    let report = run_derived(&direct, KEBAB, &[]);
+    assert_eq!((report.api_level.as_deref(), &report.api_changes[..]), (Some("major"), &["removed trait impl `<AsKebabCase<&str> as PartialEq>`".to_string()][..]), "{report:#?}");
+    // 2. A changed call: the fact shows the two calls and the two lists.
+    let with_string = format!("{KEBAB}{SAME}same!(String);\n");
+    let oracle = MacroBodies(vec![eq("&str", BodyStatus::BeforeOnly), eq("String", BodyStatus::AfterOnly)], none(), both(&with_str, &with_string));
+    let report = run_derived_with(&with_str, &with_string, &oracle);
+    assert_eq!(descriptions(&report), ["changed macro call `same!(&str)` → `same!(String)` (made: `impl PartialEq for AsKebabCase<&str>`; makes: `impl PartialEq for AsKebabCase<String>`)"], "{report:#?}");
+    assert!(report.accepted() && !report.facts[0].spotlight, "{report:#?}");
+    assert_eq!(report.facts[0].affected, ["<demo::AsKebabCase<&str> as core::cmp::PartialEq>::eq", "<demo::AsKebabCase<String> as core::cmp::PartialEq>::eq"], "{report:#?}");
+    assert_eq!(report.api_level.as_deref(), Some("major"), "{report:#?}");
+    assert_eq!(report.api_changes, ["removed `impl PartialEq for AsKebabCase<&str>` (the macro call `same!(&str)` made it)", "added `impl PartialEq for AsKebabCase<String>` (the macro call `same!(String)` makes it)"], "{report:#?}");
+    // 3. A removed call.
+    let no_call = format!("{KEBAB}{SAME}");
+    let report = run_derived_with(&with_str, &no_call, &MacroBodies(vec![eq("&str", BodyStatus::BeforeOnly)], none(), both(&with_str, &no_call)));
+    assert_eq!(descriptions(&report), ["removed macro call `same!(&str)` (made: `impl PartialEq for AsKebabCase<&str>`)"], "{report:#?}");
+    assert_eq!(report.api_level.as_deref(), Some("major"), "{report:#?}");
+    // 4. A second call: the names of the calls have an index, and each fact has its own body.
+    let two = format!("{KEBAB}{SAME}same!(&str);\nsame!(String);\n");
+    let report = run_derived_with(&with_str, &two, &MacroBodies(vec![eq("String", BodyStatus::AfterOnly)], none(), both(&with_str, &two)));
+    assert_eq!(descriptions(&report), ["added macro call `same!(String)` (makes: `impl PartialEq for AsKebabCase<String>`)"], "{report:#?}");
+    assert_eq!(report.facts[0].at.as_ref().map(|at| at.item.as_str()), Some("demo::same!#1"), "{report:#?}");
+    // 5. A changed definition with no changed call keeps the rule of batch 6a.
+    let changed = with_str.replace("self.0 == other.0", "self.0 != other.0");
+    let report = run_derived_with(&with_str, &changed, &MacroBodies(vec![eq("&str", different(false))], none(), both(&with_str, &changed)));
+    assert_eq!(report.facts.len(), 1, "{report:#?}");
+    assert!(!report.accepted() && report.facts[0].spotlight && report.facts[0].description.starts_with("changed macro `same`: "), "{report:#?}");
+}
+
+/// Batch 6b, part 2: an item that a macro call makes follows the rules of the same item with
+/// no macro. If Semilla cannot list the items, the fact says so and the API level is `major`.
+#[test]
+fn a_made_item_follows_the_rules_of_an_item_with_no_macro() {
+    const BASE: &str = "pub struct Guard;\npub fn keep() {}\nmacro_rules! make {\n    ($($t:tt)*) => {\n        $($t)*\n    };\n}\n";
+    let none = || [BTreeSet::new(), BTreeSet::new()];
+    // One call `make! { … }` at the end of the file makes the items of `items`.
+    let run = |items: &[(&str, bool)], bodies: &[&str], reason: Option<&str>| {
+        let after = format!("{BASE}make! {{ {} }}\n", items.iter().map(|item| item.0.replace("#[test] ", "#[test]\n")).collect::<Vec<_>>().join(" "));
+        let made = Some([crate::made::Made::default(), made_data(&after, &[("make! {", "", items, bodies)])]);
+        // The body of `keep` is equal: the body check has data in each case.
+        let mut list: Vec<BodyComparison> = bodies.iter().map(|name| body(name, "src/lib.rs", 5, BodyStatus::AfterOnly)).collect();
+        list.push(body("demo::keep", "src/lib.rs", 2, equal("n0")));
+        let oracle = MacroBodies(list, none(), made);
+        let (_d1, old) = load(BASE);
+        let (_d2, new) = load(&after);
+        let mut step = step(Vec::new());
+        if let Some(reason) = reason {
+            step.reasons.insert("demo::make!#0".into(), reason.into());
+        }
+        crate::verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report
+    };
+    // A public function that a different crate can use: a line in the public API list.
+    let report = run(&[("pub fn made_one() -> u32 { 1 }", true)], &["demo::made_one"], None);
+    assert!(report.facts[0].description.ends_with("(makes: `pub fn made_one`)"), "{report:#?}");
+    assert!(report.accepted() && !report.facts[0].spotlight && report.facts[0].affected == ["demo::made_one"], "{report:#?}");
+    assert_eq!(report.api_level.as_deref(), Some("minor"), "{report:#?}");
+    assert!(report.api_changes[0].starts_with("added `pub fn made_one` (the macro call `make! {"), "{report:#?}");
+    // The compiler says that no different crate can use the function: no API line.
+    let report = run(&[("pub fn made_one() -> u32 { 1 }", false)], &["demo::made_one"], None);
+    assert!(report.accepted() && report.api_level.as_deref() == Some("patch") && report.api_changes.is_empty(), "{report:#?}");
+    // A test function: the text of batch 6a stays.
+    let report = run(&[("#[test] fn test26() { }", false)], &["demo::test26"], None);
+    assert!(report.facts[0].description.ends_with("(makes: `test26`)"), "{report:#?}");
+    assert!(report.accepted() && !report.facts[0].spotlight && report.api_level.as_deref() == Some("patch"), "{report:#?}");
+    // Each item kind is in the list.
+    let report = run(&[("pub struct Made;", true), ("pub(crate) const LIMIT: u32 = 1;", false), ("impl Guard { pub fn get(&self) -> u32 { 1 } }", true), ("pub use std::fmt::Debug;", true)], &["demo::Guard::get"], None);
+    assert!(report.facts[0].description.ends_with("(makes: `impl Guard`, `pub struct Made`, `pub use std::fmt::Debug`, `pub(crate) const LIMIT`)"), "{report:#?}");
+    assert!(report.accepted() && report.api_level.as_deref() == Some("minor") && report.api_changes.len() == 3, "{report:#?}");
+    // An impl of `Drop`: the compiler calls it with no call in the text. The fact needs a reason.
+    let drop_impl = [("impl Drop for Guard { fn drop(&mut self) { } }", true)];
+    let report = run(&drop_impl, &["<demo::Guard as core::ops::Drop>::drop"], None);
+    assert!(report.facts[0].description.ends_with("(makes: `impl Drop for Guard`)"), "{report:#?}");
+    assert!(!report.accepted() && report.facts[0].spotlight && report.facts[0].spotlight_why.as_deref().is_some_and(|why| why.starts_with("an implicit call: the macro call `make! {") && why.contains("makes `impl Drop for Guard`")), "{report:#?}");
+    assert!(report.spotlight.iter().any(|line| line.starts_with("implicit call: demo::make!#0 (")), "{report:#?}");
+    let report = run(&drop_impl, &["<demo::Guard as core::ops::Drop>::drop"], Some("the guard writes a log line"));
+    assert!(report.accepted() && report.facts[0].reason.is_some(), "{report:#?}");
+    // An `unsafe impl`: a line in the spotlight list of the step.
+    let report = run(&[("unsafe impl Send for Guard { }", true)], &[], None);
+    assert!(report.spotlight.iter().any(|line| line.starts_with("unsafe code: demo::make!#0 (the macro call `make! {") && line.ends_with("makes `unsafe impl Send for Guard`)")), "{report:#?}");
+    // An attribute that can change the behavior: the rule of a new item.
+    let report = run(&[("#[no_mangle] pub extern \"C\" fn made_fn() { }", true)], &["demo::made_fn"], None);
+    assert!(!report.accepted() && report.facts[0].spotlight_why.as_deref().is_some_and(|why| why.starts_with("a new item with an attribute that can change the behavior: `no_mangle` on `pub fn made_fn`, which the macro call")), "{report:#?}");
+    // An impl of a derive has the attributes of the compiler: no spotlight.
+    let report = run(&[("#[automatically_derived] impl ::core::clone::Clone for Guard { #[inline] fn clone(&self) -> Guard { Guard } }", true)], &[], None);
+    assert!(report.accepted() && !report.facts[0].spotlight, "{report:#?}");
+    // A text that Semilla cannot read: the fact says so, and the API level is `major`.
+    let report = run(&[("fn broken(a b) { }", false)], &[], None);
+    assert!(report.facts[0].description.ends_with("(makes items that Semilla cannot list)"), "{report:#?}");
+    assert!(!report.accepted() && report.facts[0].spotlight_why.as_deref().is_some_and(|why| why.contains("makes items that Semilla cannot list")), "{report:#?}");
+    assert_eq!(report.api_level.as_deref(), Some("major"), "{report:#?}");
+    assert!(report.api_changes[0].ends_with("it makes items that Semilla cannot list (the public API can change)"), "{report:#?}");
+    // The oracle gives no compiler data: the same rule.
+    let after = format!("{BASE}make! {{ pub fn made_one() -> u32 {{ 1 }} }}\n");
+    let report = run_derived_with(BASE, &after, &MacroBodies(vec![body("demo::made_one", "src/lib.rs", 5, BodyStatus::AfterOnly)], none(), None));
+    assert!(report.facts[0].description.ends_with("(makes items that Semilla cannot list)") && !report.accepted() && report.api_level.as_deref() == Some("major"), "{report:#?}");
+    // A call that makes no item.
+    let report = run(&[], &[], None);
+    assert!(report.facts[0].description.ends_with("(makes no item in the checked configurations)") && report.accepted() && report.api_level.as_deref() == Some("patch"), "{report:#?}");
+}
+
+/// Batch 6b, part 2: a macro call in a function body is a statement or an expression of the
+/// body, not an item. The rule for it does not change: the edit is an edit of the body.
+#[test]
+fn a_macro_call_in_a_function_body_keeps_its_rule() {
+    let before = "macro_rules! table { ($($x:expr),*) => { [$($x),*] }; }\npub fn f() -> [u32; 2] {\n    table!(1, 2)\n}\n";
+    let after = before.replace("table!(1, 2)", "table!(1, 3)");
+    let bodies = || vec![body("demo::f", "src/lib.rs", 2, different(false))];
+    let none = || [BTreeSet::new(), BTreeSet::new()];
+    let with_data = run_derived_with(before, &after, &MacroBodies(bodies(), none(), Some([crate::made::Made::default(), crate::made::Made::default()])));
+    let with_no_data = run_derived_with(before, &after, &MacroBodies(bodies(), none(), None));
+    assert_eq!(descriptions(&with_data), descriptions(&with_no_data));
+    assert_eq!(with_data.uncovered.len(), with_no_data.uncovered.len());
+    assert!(!descriptions(&with_data).iter().any(|text| text.contains("macro call `")), "{with_data:#?}");
+    assert!(with_data.facts.iter().any(|fact| fact.affected == ["demo::f"]), "{with_data:#?}");
+    assert_eq!(with_data.api_level, with_no_data.api_level);
+}
+
+const BOUNDS: &str = "use std::fmt::{self, Debug, Display};\npub trait Snake: ToOwned + Debug {\n    fn snake<T: Clone + Debug>(&self, t: T) -> T;\n    fn each<I>(&self, it: I) -> usize\n    where\n        I: Iterator,\n        I::Item: Debug;\n}\npub trait Walk: Iterator\nwhere\n    Self::Item: Debug,\n{\n}\npub trait Keep {\n    type It: Debug;\n}\npub struct Show<T: AsRef<str> + Clone>(pub T);\npub enum Pick<A: Clone + Debug, B = u8> {\n    One(A),\n    Two(B),\n}\nimpl<T: AsRef<str> + Clone> Show<T> {\n    pub fn get<U: Debug + Clone>(&self, u: U) -> U {\n        u\n    }\n}\nimpl<T: AsRef<str> + Clone> Display for Show<T> {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        f.write_str(self.0.as_ref())\n    }\n}\npub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {\n    drop(b);\n    a\n}\npub fn lives<'a, 'b: 'a, T: 'a + ?Sized>(x: &'a T, y: &'b u8) -> &'a T {\n    drop(y);\n    x\n}\npub fn calls<F>(f: F)\nwhere\n    F: for<'a> Fn(&'a u8) + Clone,\n{\n    f(&1)\n}\npub fn dynamic(x: &(dyn Debug + Send)) {\n    drop(x)\n}\npub fn takes(x: impl Debug) {\n    drop(x)\n}\npub fn gives() -> impl Debug + Clone {\n    1u8\n}\npub fn walk<F, G>(s: &str, mut f: F, mut g: G, n: &mut fmt::Formatter) -> fmt::Result\nwhere\n    F: FnMut(&str, &mut fmt::Formatter) -> fmt::Result,\n    G: FnMut(&mut fmt::Formatter) -> fmt::Result,\n{\n    f(s, n)?;\n    g(n)\n}\n";
+
+fn bounds_bodies() -> Vec<(&'static str, BodyStatus)> {
+    ["demo::limit", "demo::lives", "demo::calls", "demo::walk", "demo::dynamic", "demo::takes", "demo::gives", "demo::<Show as Display>::fmt", "demo::Show::get"].into_iter().map(|name| (name, equal("n0"))).collect()
+}
+
+/// Batch 6b, part 3: a change of the bounds with an equal set of predicates, and with each
+/// other part of the declaration equal, is neutral if each body has an equal MIR.
+#[test]
+fn a_bound_change_with_an_equal_set_of_predicates_is_neutral() {
+    // (the old text, the new text, the fact text)
+    let cases = [
+        // A function: the order, and the move to the `where` clause.
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<A: Debug + Clone, B: Debug>(a: A, b: B) -> A {", "bounds of `demo::limit`: order only"),
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<A, B>(a: A, b: B) -> A\nwhere\n    A: Clone + Debug,\n    B: Debug,\n{", "bounds of `demo::limit`: moved to the `where` clause"),
+        // A method.
+        ("pub fn get<U: Debug + Clone>(&self, u: U) -> U {", "pub fn get<U: Clone + Debug>(&self, u: U) -> U {", "bounds of `demo::Show::get`: order only"),
+        ("pub fn get<U: Debug + Clone>(&self, u: U) -> U {", "pub fn get<U>(&self, u: U) -> U\n    where\n        U: Debug,\n        U: Clone,\n    {", "bounds of `demo::Show::get`: moved to the `where` clause"),
+        // A struct and an enum.
+        ("pub struct Show<T: AsRef<str> + Clone>(pub T);", "pub struct Show<T: Clone + AsRef<str>>(pub T);", "bounds of `demo::Show`: order only"),
+        ("pub struct Show<T: AsRef<str> + Clone>(pub T);", "pub struct Show<T>(pub T)\nwhere\n    T: AsRef<str> + Clone;", "bounds of `demo::Show`: moved to the `where` clause"),
+        ("pub enum Pick<A: Clone + Debug, B = u8> {", "pub enum Pick<A: Debug + Clone, B = u8> {", "bounds of `demo::Pick`: order only"),
+        // An impl and a trait impl.
+        ("impl<T: AsRef<str> + Clone> Show<T> {", "impl<T: Clone + AsRef<str>> Show<T> {", "bounds of `demo::impl Show`: order only"),
+        ("impl<T: AsRef<str> + Clone> Show<T> {", "impl<T> Show<T>\nwhere\n    T: AsRef<str> + Clone,\n{", "bounds of `demo::impl Show`: moved to the `where` clause"),
+        ("impl<T: AsRef<str> + Clone> Display for Show<T> {", "impl<T: Clone + AsRef<str>> Display for Show<T> {", "bounds of `demo::impl <Show as Display>`: order only"),
+        ("impl<T: AsRef<str> + Clone> Display for Show<T> {", "impl<T> Display for Show<T>\nwhere\n    T: AsRef<str>,\n    T: Clone,\n{", "bounds of `demo::impl <Show as Display>`: moved to the `where` clause"),
+        // A trait method.
+        ("fn snake<T: Clone + Debug>(&self, t: T) -> T;", "fn snake<T: Debug + Clone>(&self, t: T) -> T;", "bounds of `demo::Snake::snake`: order only"),
+        ("fn snake<T: Clone + Debug>(&self, t: T) -> T;", "fn snake<T>(&self, t: T) -> T\n    where\n        T: Clone + Debug;", "bounds of `demo::Snake::snake`: moved to the `where` clause"),
+        // The order of the predicates of a `where` clause, and a move out of the clause.
+        ("        I: Iterator,\n        I::Item: Debug;", "        I::Item: Debug,\n        I: Iterator;", "bounds of `demo::Snake::each`: order only"),
+        ("fn each<I>(&self, it: I) -> usize\n    where\n        I: Iterator,\n        I::Item: Debug;", "fn each<I: Iterator>(&self, it: I) -> usize\n    where\n        I::Item: Debug;", "bounds of `demo::Snake::each`: moved out of the `where` clause"),
+        // A lifetime bound, `?Sized`, and a `for<'a>` binder stay a part of the bound.
+        ("pub fn lives<'a, 'b: 'a, T: 'a + ?Sized>(x: &'a T, y: &'b u8) -> &'a T {", "pub fn lives<'a, 'b, T: ?Sized + 'a>(x: &'a T, y: &'b u8) -> &'a T\nwhere\n    'b: 'a,\n{", "bounds of `demo::lives`: moved to the `where` clause"),
+        ("    F: for<'a> Fn(&'a u8) + Clone,", "    F: Clone + for<'a> Fn(&'a u8),", "bounds of `demo::calls`: order only"),
+        // One of two bounds with the same tokens at the end goes out of the clause. The net of
+        // the changed text must not make a second fact.
+        ("pub fn walk<F, G>(s: &str, mut f: F, mut g: G, n: &mut fmt::Formatter) -> fmt::Result\nwhere\n    F: FnMut(&str, &mut fmt::Formatter) -> fmt::Result,\n", "pub fn walk<F: FnMut(&str, &mut fmt::Formatter) -> fmt::Result, G>(s: &str, mut f: F, mut g: G, n: &mut fmt::Formatter) -> fmt::Result\nwhere\n", "bounds of `demo::walk`: moved out of the `where` clause"),
+        // The same predicate two times: the set is equal.
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<A: Clone + Debug, B: Debug + Debug>(a: A, b: B) -> A {", "bounds of `demo::limit`: a duplicate bound only"),
+    ];
+    for (old, new, text) in cases {
+        assert!(BOUNDS.contains(old), "{old}");
+        let changed = BOUNDS.replace(old, new);
+        let report = run_derived(BOUNDS, &changed, &bounds_bodies());
+        assert_eq!(descriptions(&report), [text], "{new}");
+        assert_eq!(report.facts[0].class, Some(Class::Neutral), "{new}: {:#?}", report.facts[0]);
+        assert!(!report.facts[0].spotlight && report.facts[0].part == "bounds", "{new}: {:#?}", report.facts[0]);
+        // The order and the place of a bound are not a part of the public API.
+        let ((_d1, before), (_d2, after)) = (load(BOUNDS), load(&changed));
+        let level = crate::api_level(&semilla_syntax::diff(&before, &after, &semilla_syntax::Renames::default()), &before, &after);
+        assert_eq!(level, ("patch", Vec::new()), "{new}");
+        // The same change of an item that no different crate can use.
+        let (private, changed) = (BOUNDS.replace("pub ", ""), changed.replace("pub ", ""));
+        let report = run_derived(&private, &changed, &bounds_bodies());
+        assert_eq!(descriptions(&report), [text], "{new}");
+        assert_eq!(report.facts[0].class, Some(Class::Neutral), "{new}: {:#?}", report.facts[0]);
+    }
+}
+
+/// Batch 6b, part 3: each change that is not only the order or the place of a bound stays a
+/// fact to read, also with an equal MIR of each body.
+#[test]
+fn a_bound_change_with_a_different_set_or_a_different_rest_stays_a_fact_to_read() {
+    // (the old text, the new text)
+    let cases = [
+        // The order of the generic parameters: the arguments go by position.
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<B: Debug, A: Clone + Debug>(a: A, b: B) -> A {"),
+        // A default of a parameter.
+        ("pub enum Pick<A: Clone + Debug, B = u8> {", "pub enum Pick<A: Debug + Clone, B = u16> {"),
+        // An `impl Trait` argument and a parameter with a name.
+        ("pub fn takes(x: impl Debug) {", "pub fn takes<T: Debug>(x: T) {"),
+        // A bound on an associated type goes into the header of the trait, and out of it.
+        ("pub trait Walk: Iterator\nwhere\n    Self::Item: Debug,\n{", "pub trait Walk: Iterator<Item: Debug> {"),
+        ("pub trait Keep {\n    type It: Debug;", "pub trait Keep\nwhere\n    Self::It: Debug,\n{\n    type It;"),
+        // The order of the supertraits, and a supertrait that goes to the `where` clause.
+        ("pub trait Snake: ToOwned + Debug {", "pub trait Snake: Debug + ToOwned {"),
+        ("pub trait Snake: ToOwned + Debug {", "pub trait Snake\nwhere\n    Self: ToOwned + Debug,\n{"),
+        // A bound in `dyn A + B`, and a bound in a type of the signature.
+        ("pub fn dynamic(x: &(dyn Debug + Send)) {", "pub fn dynamic(x: &(dyn Send + Debug)) {"),
+        ("pub fn gives() -> impl Debug + Clone {", "pub fn gives() -> impl Clone + Debug {"),
+        // A different order and one new bound. A removed bound.
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<A: Debug + Clone + Send, B: Debug>(a: A, b: B) -> A {"),
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<A: Debug, B: Debug>(a: A, b: B) -> A\nwhere\n    A: Debug,\n{"),
+        // There is no name resolution: a different path is a different bound.
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "pub fn limit<A: Clone + Debug, B: fmt::Debug>(a: A, b: B) -> A {"),
+        // A `for<'a>` binder that goes from the bound to the bounded type.
+        ("    F: for<'a> Fn(&'a u8) + Clone,", "    for<'a> F: Fn(&'a u8) + Clone,"),
+        // A predicate with no bound, removed (`where T:` says that the type is well formed).
+        ("pub fn takes(x: impl Debug) {", "pub fn takes(x: impl Debug)\nwhere\n    Vec<u8>:,\n{"),
+        // A macro that can read the tokens: a `derive` that is not of the standard library,
+        // and an attribute macro.
+        ("pub struct Show<T: AsRef<str> + Clone>(pub T);", "#[derive(Custom)]\npub struct Show<T: Clone + AsRef<str>>(pub T);"),
+        ("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {", "#[other::rewrite]\npub fn limit<A: Debug + Clone, B: Debug>(a: A, b: B) -> A {"),
+    ];
+    for (old, new) in cases {
+        assert!(BOUNDS.contains(old), "{old}");
+        let changed = BOUNDS.replace(old, new);
+        let report = run_derived(BOUNDS, &changed, &bounds_bodies());
+        assert!(!report.facts.is_empty() && !report.facts.iter().any(|fact| fact.part == "bounds"), "{new}: {:#?}", descriptions(&report));
+        assert!(!report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{new}: {:#?}", report.facts);
+        let ((_d1, before), (_d2, after)) = (load(BOUNDS), load(&changed));
+        let level = crate::api_level(&semilla_syntax::diff(&before, &after, &semilla_syntax::Renames::default()), &before, &after);
+        assert_eq!(level.0, "major", "{new}: {level:?}");
+    }
+    // The macro that reads the tokens is there on the two sides.
+    let base = BOUNDS.replace("pub struct Show<", "#[derive(Clone, Custom)]\npub struct Show<");
+    let report = run_derived(&base, &base.replace("<T: AsRef<str> + Clone>(pub T);", "<T: Clone + AsRef<str>>(pub T);"), &bounds_bodies());
+    assert_eq!(report.facts[0].class, Some(Class::Logic), "{:#?}", report.facts);
+    // A `derive` of the standard library keeps the rule.
+    let base = BOUNDS.replace("pub struct Show<", "#[derive(Clone, Debug)]\npub struct Show<");
+    let report = run_derived(&base, &base.replace("<T: AsRef<str> + Clone>(pub T);", "<T: Clone + AsRef<str>>(pub T);"), &bounds_bodies());
+    assert_eq!((descriptions(&report), report.facts[0].class), (vec!["bounds of `demo::Show`: order only".to_string()], Some(Class::Neutral)), "{:#?}", report.facts);
+}
+
+/// Batch 6b, part 3: a different order of the bounds and an edit of the body in one step. The
+/// fact of the body stays a fact to read, and no fact of the step is neutral.
+#[test]
+fn a_bound_order_change_with_a_body_edit_keeps_the_body_fact() {
+    let changed = BOUNDS.replace("pub fn limit<A: Clone + Debug, B: Debug>(a: A, b: B) -> A {\n    drop(b);\n    a\n}", "pub fn limit<A: Debug + Clone, B: Debug>(a: A, b: B) -> A {\n    drop(b);\n    a.clone()\n}");
+    assert_ne!(changed, BOUNDS);
+    let bodies: Vec<(&str, BodyStatus)> = bounds_bodies().into_iter().map(|(name, status)| if name == "demo::limit" { (name, different(false)) } else { (name, status) }).collect();
+    let report = run_derived(BOUNDS, &changed, &bodies);
+    assert!(descriptions(&report).iter().any(|text| text == "bounds of `demo::limit`: order only"), "{:#?}", descriptions(&report));
+    assert!(report.facts.iter().any(|fact| fact.part != "bounds" && fact.affected.iter().any(|body| body == "demo::limit")), "{:#?}", report.facts);
+    assert!(!report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{:#?}", report.facts);
+}
+
+/// Batch 6b, part 4: `no-panic` names an index site "index panic sites", not "explicit panic
+/// sites". A step with the two kinds names each kind.
+#[test]
+fn no_panic_names_an_index_site_and_an_explicit_site_with_different_words() {
+    let check = |body: &str| {
+        let source = format!("pub fn pick(list: &[u8], at: usize, more: Option<u8>) -> u8 {{\n    {body}\n}}\n");
+        let (_d1, old) = load(&source);
+        let (_d2, new) = load(&source);
+        let step = step(vec![claim("c1", "no-panic", Some("demo::pick"), serde_json::json!({}))]);
+        match verify_step(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle).report.claims[0].status.clone() {
+            ClaimStatus::Refuted { reason } => reason,
+            other => panic!("{other:?}"),
+        }
+    };
+    let reason = check("list[at]");
+    assert!(reason.starts_with("index panic sites (an index out of bounds): demo::pick/") && !reason.contains("explicit"), "{reason}");
+    let reason = check("more.unwrap()");
+    assert!(reason.starts_with("explicit panic sites: demo::pick/") && !reason.contains("index"), "{reason}");
+    let reason = check("list[at] + more.unwrap()");
+    assert!(reason.starts_with("explicit panic sites: demo::pick/") && reason.contains("; index panic sites (an index out of bounds): demo::pick/"), "{reason}");
+}
+
+/// Batch 6b, part 4: a new `derive` on a type that a different crate can use adds its impls to
+/// the public API changes. A removed `derive` says that the public API can change.
+#[test]
+fn a_changed_derive_list_of_a_public_type_is_a_public_api_change() {
+    let level = |old: &str, new: &str| {
+        let ((_d1, before), (_d2, after)) = (load(old), load(new));
+        let (level, lines) = crate::api_level(&semilla_syntax::diff(&before, &after, &semilla_syntax::Renames::default()), &before, &after);
+        (level, lines)
+    };
+    let plain = "pub struct AsSnakeCase(pub u8);\n";
+    let more = "#[derive(Clone, Copy, core::fmt::Debug)]\npub struct AsSnakeCase(pub u8);\n";
+    assert_eq!(level(plain, more), ("minor", vec!["`AsSnakeCase` now has `Clone`, `Copy`, `Debug`".to_string()]));
+    assert_eq!(level(more, plain), ("major", vec!["`AsSnakeCase` no longer has `Clone`, `Copy`, `Debug` (the public API can change)".to_string()]));
+    let other = "#[derive(Clone, PartialEq)]\npub struct AsSnakeCase(pub u8);\n";
+    assert_eq!(level(more, other), ("major", vec!["`AsSnakeCase` no longer has `Copy`, `Debug` (the public API can change)".to_string(), "`AsSnakeCase` now has `PartialEq`".to_string()]));
+    // A type that no different crate can use, and an attribute that is not a `derive`.
+    assert_eq!(level(&plain.replace("pub struct", "struct"), &more.replace("pub struct", "struct")), ("patch", Vec::new()));
+    assert_eq!(level(more, &more.replace("#[derive", "#[repr(transparent)]\n#[derive")), ("patch", Vec::new()));
 }

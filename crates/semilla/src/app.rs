@@ -137,6 +137,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.skip.contains(&step.index) { Ok(None) } else { self.inner.tests(step) }
     }
 
+    fn made(&self, step: &Step) -> Result<Option<[semilla_verify::made::Made; 2]>> {
+        if self.skip.contains(&step.index) { Ok(None) } else { self.inner.made(step) }
+    }
+
     fn build_code_files(&self, step: &Step) -> Vec<(String, String)> {
         self.code.host_files(step)
     }

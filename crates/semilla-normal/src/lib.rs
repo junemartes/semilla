@@ -247,6 +247,79 @@ struct UnitLine {
     unit: UnitRecord,
 }
 
+/// One item of the expanded code, from the compiler (batch 6b, part 2). The driver writes the
+/// list in the unit record at N0.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct MadeItem {
+    /// The file of the place, relative to the workspace root.
+    pub file: String,
+    /// The line (from 1) and the column (from 0, in characters) of the place: the start of the
+    /// outermost macro call, or the start of the item for an item with no macro.
+    pub line: usize,
+    pub col: usize,
+    /// The module path of the item in the crate (empty for the crate root).
+    #[serde(default)]
+    pub module: String,
+    /// The source text of the item after the expansion. A module has no content.
+    pub text: String,
+    /// True if the span of the item comes from a macro expansion.
+    #[serde(default)]
+    pub expanded: bool,
+    /// True if the item is a `#[test]` function.
+    #[serde(default)]
+    pub test: bool,
+    /// True if a different crate can reach the item, by the compiler.
+    #[serde(default)]
+    pub public: bool,
+}
+
+/// The expanded code of the units of one tree (batch 6b, part 2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Made {
+    /// Each item after the macro expansion.
+    pub items: BTreeSet<MadeItem>,
+    /// The name of a body from a macro → the file, the line, and the column of the outermost
+    /// macro call.
+    pub sites: BTreeMap<String, (String, usize, usize)>,
+}
+
+#[derive(Deserialize)]
+struct MadeUnit {
+    made: Option<Vec<MadeItem>>,
+}
+
+#[derive(Deserialize)]
+struct MadeLine {
+    unit: MadeUnit,
+}
+
+#[derive(Deserialize)]
+struct SiteLine {
+    name: String,
+    #[serde(default)]
+    site: Option<(String, usize, usize)>,
+}
+
+/// Reads the expanded items and the macro call sites from each `*.jsonl` file of an N0 folder
+/// into `made`. False: a file has no list of the items, so the items are not known.
+pub fn read_made(dir: &Path, made: &mut Made) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    let files: Vec<_> = entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else { return false };
+        let Some(line) = text.lines().find(|line| line.starts_with(UNIT_LINE)) else { return false };
+        let Some(items) = serde_json::from_str::<MadeLine>(line).ok().and_then(|line| line.unit.made) else { return false };
+        made.items.extend(items);
+        // The text search is a fast filter: most bodies have no site.
+        for line in text.lines().filter(|line| !line.starts_with(UNIT_LINE) && line.contains("\"site\":")) {
+            if let Ok(SiteLine { name, site: Some(site) }) = serde_json::from_str::<SiteLine>(line) {
+                made.sites.insert(name, site);
+            }
+        }
+    }
+    true
+}
+
 /// The start of the line of a unit record.
 const UNIT_LINE: &str = "{\"unit\":";
 

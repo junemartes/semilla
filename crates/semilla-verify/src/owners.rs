@@ -48,6 +48,10 @@ pub struct Input<'a> {
     /// The def path of each `#[test]` function before the step and after it (batch 6a, B2).
     /// `None`: the oracle does not know the tests.
     pub tests: Option<&'a [BTreeSet<String>; 2]>,
+    /// The expanded code before the step and after it (batch 6b, part 2). `None`: not known.
+    pub made: Option<&'a [crate::made::Made; 2]>,
+    /// The facts of the macro calls whose text lists the made items already.
+    pub made_listed: &'a BTreeSet<usize>,
 }
 
 /// The owner of one changed body.
@@ -93,6 +97,13 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         let name = item.clone().unwrap_or_else(|| body.name.clone());
+        // A body that a changed macro call makes belongs to the fact of the call (batch 6b,
+        // part 2), also if the step changes the macro definition that has the text of the body.
+        if let Some(index) = site_call(input, body, &name).flatten().and_then(|call| call_fact(report, call)).filter(|index| input.made_listed.contains(index)) {
+            record(report, Owner::Fact(index), &name);
+            owned.insert(name, Owner::Fact(index));
+            continue;
+        }
         let mut found = text_owners(input, body, &name);
         // An associated constant has no item of its own: an edit of its text is an edit of the
         // impl or of the trait that has it.
@@ -218,7 +229,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         }
     }
 
-    // No known cause: a new fact with the spotlight.
+    // No known cause: a new fact with the spotlight. Two bodies of one item (a function and
+    // its closure) give one fact (batch 6b, part 1): before, each body gave the same fact again.
+    let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
     for (body, name) in pending {
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
@@ -238,6 +251,14 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             (format!("code that Semilla does not see: `{name}` ({side})"), "a MIR body with no source item (generated code): give the cause as the reason".to_string())
         };
         let class = if matches!(body.status, BodyStatus::Different { cfg_changed: false }) { Class::Logic } else { Class::ControlFlow };
+        if let Some(fact) = unknown.get(&description).and_then(|index| report.facts.get_mut(*index)) {
+            // The fact keeps the class that asks for more care.
+            if class == Class::ControlFlow {
+                fact.class = Some(class);
+            }
+            continue;
+        }
+        unknown.insert(description.clone(), report.facts.len());
         report.facts.push(Fact { build_code: None, build_code_change: false, reason_key: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
@@ -272,6 +293,25 @@ pub(crate) fn is_macro_definition(item: &semilla_syntax::Item) -> bool {
     item.kind == semilla_syntax::ItemKind::Macro && item.source.contains("macro_rules!")
 }
 
+/// The fact of a macro call item: the fact of the call, or the fact of an added or removed
+/// module that has the call.
+fn call_fact(report: &StepReport, item: &semilla_syntax::Item) -> Option<usize> {
+    report.facts.iter().position(|fact| {
+        let Some(at) = fact.at.as_ref().map(|at| at.item.as_str()) else { return false };
+        let whole = fact.description.starts_with("added `") || fact.description.starts_with("removed `");
+        fact.part == "edit" && (at == item.path || (whole && item.path.starts_with(&format!("{at}::"))))
+    })
+}
+
+/// The macro call item that makes a body, by the place of the call from the compiler (batch
+/// 6b, part 2). `None`: the compiler gives no place. `Some(None)`: no call item is at the place.
+fn site_call<'a>(input: &'a Input, body: &BodyComparison, name: &str) -> Option<Option<&'a semilla_syntax::Item>> {
+    let (ws, side) = if body.status == BodyStatus::BeforeOnly { (input.before, 0) } else { (input.after, 1) };
+    let made = input.made?;
+    let (file, line, col) = made[side].sites.get(&body.name).or_else(|| made[side].sites.get(name))?;
+    Some(ws.items.values().filter(|item| crate::made::is_call(item) && crate::made::in_range(item, (file, *line, *col))).min_by_key(|item| item.line_end - item.line_start))
+}
+
 /// Finds the macro that makes a body with no source item, and the fact that is the cause.
 ///
 /// - The span of the body is in the text of a `macro_rules!` definition.
@@ -282,25 +322,26 @@ pub(crate) fn is_macro_definition(item: &semilla_syntax::Item) -> bool {
 fn macro_cause(input: &Input, report: &StepReport, body: &BodyComparison, name: &str) -> Option<MacroCause> {
     let (file, line) = body.span.as_ref()?;
     let (ws, other) = if body.status == BodyStatus::BeforeOnly { (input.before, input.after) } else { (input.after, input.before) };
-    let definition = ws.items.values().find(|item| is_macro_definition(item) && item.file == *file && (item.line_start..=item.line_end).contains(line))?;
-    let macro_name = definition.path.rsplit("::").next()?.split('!').next()?;
     // The function of the body: the name with no closure part.
     let function = name.split("::{").next()?;
     let ident = function.rsplit("::").next()?;
+    let fact_of = |item: &semilla_syntax::Item| call_fact(report, item);
+    // The compiler gives the place of the macro call of the body (batch 6b, part 2): the call
+    // item at this place is the call, with no search for the name in the text.
+    let site_call = site_call(input, body, name);
+    if let Some(index) = site_call.flatten().and_then(fact_of) {
+        return Some(MacroCause::Call(index, ident.to_string()));
+    }
+    let definition = ws.items.values().find(|item| is_macro_definition(item) && item.file == *file && (item.line_start..=item.line_end).contains(line))?;
+    let macro_name = definition.path.rsplit("::").next()?.split('!').next()?;
     let has_ident = |text: &str| text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == ident);
     let is_call = |item: &&semilla_syntax::Item| {
         let last = item.path.rsplit("::").next().unwrap_or("");
         let module = item.path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
         item.kind == semilla_syntax::ItemKind::Macro && !is_macro_definition(item) && last.split('!').next() == Some(macro_name) && function.starts_with(&format!("{module}::")) && has_ident(&item.source)
     };
-    let fact_of = |item: &semilla_syntax::Item| {
-        report.facts.iter().position(|fact| {
-            let Some(at) = fact.at.as_ref().map(|at| at.item.as_str()) else { return false };
-            let whole = fact.description.starts_with("added `") || fact.description.starts_with("removed `");
-            fact.part == "edit" && (at == item.path || (whole && item.path.starts_with(&format!("{at}::"))))
-        })
-    };
-    if let Some(index) = ws.items.values().filter(is_call).find_map(fact_of) {
+    // With no place from the compiler, the text of the call gives the call (batch 6a, B2).
+    if site_call.is_none() && let Some(index) = ws.items.values().filter(is_call).find_map(fact_of) {
         return Some(MacroCause::Call(index, ident.to_string()));
     }
     let changed = other.items.get(&definition.path).is_none_or(|old| old.source != definition.source);
@@ -344,6 +385,10 @@ fn macro_bodies<'a>(input: &Input, report: &mut StepReport, pending: Vec<(&'a Bo
         text
     };
     for (index, (names, removed)) in made {
+        // The text of the fact of a call lists the items already (batch 6b, part 2).
+        if input.made_listed.contains(&index) {
+            continue;
+        }
         if let Some(fact) = report.facts.get_mut(index) {
             fact.description.push_str(&format!(" ({}: {})", if removed { "made" } else { "makes" }, list(&names)));
         }

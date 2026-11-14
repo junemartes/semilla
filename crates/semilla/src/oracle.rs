@@ -852,6 +852,25 @@ impl BodyOracle for NormalOracle {
         Ok(Some(sides))
     }
 
+    fn made(&self, step: &Step) -> Result<Option<[semilla_verify::made::Made; 2]>> {
+        // The unit records of the N0 build of each checked configuration have the items of
+        // the expanded code, and the body records have the macro call sites (batch 6b, part 2).
+        let mut sides = [semilla_normal::Made::default(), semilla_normal::Made::default()];
+        for config in self.checked(step)? {
+            for (side, tree) in sides.iter_mut().zip([&step.tree_before, &step.tree_after]) {
+                self.records_or_build(tree, "n0", &config, false)?;
+                let (_, cache, _, _) = self.cache_folder(tree, "n0", &config)?;
+                if !semilla_normal::read_made(&cache, side) {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(sides.map(|side| semilla_verify::made::Made {
+            items: side.items.into_iter().map(|item| semilla_verify::made::MadeItem { file: item.file, line: item.line, col: item.col, module: item.module, text: item.text, test: item.test, public: item.public }).collect(),
+            sites: side.sites,
+        })))
+    }
+
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
         // The facts of each checked configuration (batch 5s, A5). The verifier joins the facts
         // of the bodies of an item, so a property claim must hold in each configuration.

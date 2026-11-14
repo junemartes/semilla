@@ -2657,3 +2657,64 @@ Each one: **Decided by Claude.**
 2. **The net.** For each item pair, Semilla compares the tokens of the two source texts (`semilla-syntax/src/net.rs`). The tokens of a nested item (a method, a field, a variant) belong to the nested item. Each changed token range must be in the text of an edit of the pair. If one is not, the pair gets the fact "changed source text with no other fact, in `ITEM`: `old` → `new`". The class is `other`, also for a private item: Semilla does not know what the text changes. It has the API text and the level `major` if a different crate can use the item. The fact needs no reason.
 3. **The limits of the net.** A comment, a doc text, and a comma are no tokens for the net (a doc text has its own fact for an item; a doc text of an associated constant has no fact). The body of a function is not in the net: the statement diff compares each node of it. The inner attributes of a file have their own compare. A `use` line has the set compare of rule 1.
 4. The test of the net uses `default fn` in an impl: no fact kind knows this word.
+
+## 34. Batch 6b: the results of the mutant run and of held-out trial 10
+
+Each rule of this section: **Decided by Claude.**
+
+### 34.1 The free parts of a declaration are not a text edit of the body (part 1)
+
+**The cause (the mutant run, 18 rows; trial 10, the crate `semver`).** A step changed only the visibility or one attribute of a method (`pub` → `pub(crate)`, a new `#[must_use]`, `#[deprecated]`, or `#[doc(hidden)]`), or only a doc comment. The step got the declaration fact and a second fact: "indirect change, cause not known: `ITEM` (the MIR changed, but the text did not)". The step was rejected.
+
+The text of an item (`Item.text`) has the visibility and the attributes. The two rules of the build configuration (`Opaque::apply` and `srcconfig::apply`) took a change of that text as a text edit of the body. If the body uses code that a `cfg` attribute can change, a text edit of the body stops its proof. Then the body had no proof and no text change of its code, and the owner rule gave the "indirect change" fact.
+
+**The rule.**
+
+1. The free parts of a declaration are: the visibility, a doc comment, `#[doc(hidden)]`, `#[must_use]`, and `#[deprecated]`. The compiler gets the same code for the body with each value of these parts, in each build configuration.
+2. If the two texts of an item differ only in the free parts, the change is not a text edit of the body for the two rules (`srcconfig::free_parts_only`; the two rules use this one function). The MIR compare of the body stays: a changed MIR with no cause stays a rejected step.
+3. `#[doc(hidden)]` and each other `#[doc(KEY)]` attribute are attributes, not doc lines. The fact is "attributes of `ITEM`: added `# [doc (hidden)]`" (`other`). Before, the fact was "changed comment".
+
+**The limits.** The answer is "not free" if an attribute macro can read the tokens: an attribute that Semilla does not know on the item or on an item around it (an `impl` block, a trait, a module). Each other attribute (`inline`, `track_caller`, `cfg`, a lint level) is not a free part.
+
+**The test descriptor (trial 10, case 4).** A new test function at the top of a file in `tests/` gave an "indirect change" fact for each test below it (18 facts in `semver`). The attribute `#[test]` makes a `static` with the type `test::TestDescAndFn` for each test. The MIR of this item has the source line of the test (`start_line`). The reader of the records removes the source positions of a descriptor, and it finds a descriptor by the text `test::TestDesc`. For a test at the root of a test crate, the compiler printed the path `<crate>::test::TestDesc` (through the `extern crate test;` line that the compiler adds). The reader did not find the text, and a line shift changed the record.
+
+The rule: the driver finds a descriptor from the compiler data (a `static` or a `const` with the type `TestDescAndFn` of the crate `test`). It writes the plain path `test::` in the record of that item. The source positions of a descriptor are then never a part of the compare. The body of each test has its own record, and that compare does not change. A new `#[should_panic]` stays a rejected step ("a changed attribute that can change the behavior").
+
+### 34.2 A macro call fact lists the items that the call makes (part 2)
+
+**The cause.** A new call `same!(&str);` of a `macro_rules!` macro made a trait impl. The fact was "added `heck::kebab::same!#1`", the report had no public API line, and the API level was `patch`. The first call of a macro had the key of the definition with the suffix `#1`, so a new call looked like a second definition.
+
+**The rule.**
+
+1. **The names.** A macro definition has the plain name `m::name!`. Each macro call has a number in source order: `m::name!#N`. A new call at the end changes no other name. The reason key of a changed definition is the plain name: `--reason 'k::tests::t!=<why>'`.
+2. **The made items come from the compiler.** The driver writes each item of the expanded code with the place of the outermost macro call (`semilla-mir/src/made.rs`). Semilla puts an item under a call if the place is in the source range of the call. Semilla does not expand a macro.
+3. **The text.** "added macro call `same!(&str)` (makes: `impl PartialEq for AsKebabCase<&str>`)", "removed macro call `…` (made: …)", "changed macro call `old` → `new` (…)". A definition gives "added macro `same`".
+4. **The rules of an item with no macro apply to a made item.** The public API (a made item that a different crate can use gives a line under "Public API changes": "added `…` (the macro call `…` makes it)"), a new attribute that can change the behavior, unsafe code, and an implicit call (`Drop`, `Deref`) with its spotlight. "Public" is the effective visibility from the compiler. A trait impl has no visibility: a different crate can use it if it can name the trait and the type. An added impl is `minor`, a removed impl is `major`.
+5. **No list.** If the driver cannot give the expanded code, the fact says "makes items that Semilla cannot list". The fact is in the spotlight, and the API level of a call in library code is `major`.
+
+**The limits.** The list has the items, not the statements of a body. A procedural macro of a different crate keeps the rules of the build configuration.
+
+### 34.3 A normal form for the bounds of a declaration (part 3)
+
+**The cause (the mutant run).** After batch 6a (33.1), each change of the generics or of the `where` clause is a fact to read. This is correct for a real change. A different order of two bounds (`T: A + B` → `T: B + A`) and a move of a bound to the `where` clause (`<T: A>` → `<T> where T: A`) do not change the set of the bounds. The 14 controls of these two forms were `neutral (proved)` at the commit `d6ef7e4`, and they were 14 facts to read after batch 6a.
+
+**The rule.**
+
+1. **The form.** Semilla makes the set of the predicates of a declaration (`semilla-verify/src/bounds.rs`). One predicate is a pair: the bounded type or lifetime, and one bound. `A + B` gives two pairs. `?Sized` and a `for<'a>` binder stay a part of their bound. A `for<'a>` binder before the bounded type stays a part of the bounded text. A predicate with no bound (`where Vec<T>:`) is a pair with an empty bound. The compare uses the token text. There is no name resolution: `fmt::Debug` and `Debug` are different bounds.
+2. **The declarations.** A function, a method, a trait method, a struct, an enum, a union, a trait, an impl, and a trait impl.
+3. **The proof.** If the two sets are equal, and each other part of the declaration is equal (the declaration without its bounds, token by token), and each body of the workspace has an equal MIR, the fact is `neutral (proved)`. The declaration gets one fact: "bounds of `ITEM`: order only", "bounds of `ITEM`: moved to the `where` clause", "… moved out of the `where` clause", "… moved between the parameter list and the `where` clause", or "… a duplicate bound only". The API level ignores this change.
+4. **With a changed body.** The fact follows the rule of each declaration fact: with an affected body it is `logic`, and the fact of the body stays a fact to read.
+5. **These changes stay a fact to read (`logic`):** the order of the generic parameters (the arguments go by position); a changed default; `impl Trait` in a parameter and a parameter with a name; a bound on an associated type that goes into or out of the header of a trait; the order of the supertraits and a supertrait that goes to `where Self:` (a supertrait is not in the set); a bound in `dyn A + B` or in a type of the signature (`-> impl A + B`); a new or removed bound, also together with a different order.
+6. **A macro that reads the tokens.** There is no neutral result if an attribute macro, a `cfg_attr`, or a `derive` that is not of the standard library is on the item or around it. Such a macro gets the tokens in the source order and can give different code.
+
+**Why an equal set is safe for a different crate.** The compiler makes one predicate list from the two places and proves each predicate. The order of the predicates can change the type inference in the bodies of the item: the MIR compare of each body covers this. For a different crate, the public contract is the set. No case was found where an equal set changes the meaning for a different crate, other than a macro that reads the tokens (rule 6).
+
+**The limits.** An item with a new name in the same step has no form. A type alias has no form. The class of `dyn A + B` → `dyn B + A` in a private item comes from the rule of 33.1, not from this rule.
+
+**The net (33.10) and a moved bound.** The net compared the tokens with one alignment. With a token run that the declaration has two times (the same bound text in the parameter list and in the `where` clause), a different alignment of the same length is correct, and the net gave a second fact "changed source text with no other fact". The net now has a second check: if the texts of the edits make the new token text from the old token text (each edit replaces one occurrence), each changed token is in an edit, and there is no net fact. The first check stays.
+
+### 34.4 Small changes (part 4)
+
+- **A changed `derive` list of a type that a different crate can use.** Each new name is a new trait impl. "Public API changes" has the line "`AsSnakeCase` now has `Clone`, `Copy`, `Debug`", and the API level is `minor`. A removed name gives "`AsSnakeCase` no longer has `Debug` (the public API can change)", and the API level is `major`. The compare uses the last segment of each path in the `derive` attributes. A `derive` in a `cfg_attr` is not in the list.
+- **`no-panic`.** An index (`a[i]`) is not an explicit panic: the panic comes from the bounds check. The text has two names: "explicit panic sites: …" (`unwrap`, `expect`, a panic macro) and "index panic sites (an index out of bounds): …". The rule does not change: each of these sites refutes the claim.
+- **Not done in this batch:** "the same diff as fN" for the same code in two facts; the old name in the change tree after a rename; the "member order" fact for an enum in a function body.

@@ -5730,5 +5730,79 @@ fn a_file_mode_change_has_no_affected_bodies() {
     assert!(!lines[mode + 1].contains("affected bodies"), "a mode changes no body\n{out}");
     assert!(out.contains("a changed macro: the MIR of 2 bodies that the macro makes changed with no edit of the text of a call"), "{out}");
     // The mode and the macro each need a reason.
-    assert!(out.contains(&format!("--reason '{file}:=<why>'")) && out.contains("--reason 'shop_core::made::make!#0=<why>'"), "{out}");
+    assert!(out.contains(&format!("--reason '{file}:=<why>'")) && out.contains("--reason 'shop_core::made::make!=<why>'"), "{out}");
+}
+
+/// Batch 6b, part 2 (trial 10): the fact of a macro call lists the items that the call makes,
+/// from the data of the compiler. A made item follows the rules of the same item with no macro.
+#[test]
+fn a_macro_call_fact_lists_the_items_that_the_call_makes() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/cart.rs";
+    let same = "\nmacro_rules! same {\n    ($t:ty) => {\n        impl PartialEq for $t {\n            fn eq(&self, other: &Self) -> bool {\n                self.items == other.items\n            }\n        }\n    };\n}\n";
+    write(repo, file, &format!("{CART_V0}{same}"));
+    let out = run(repo, &["step", "add a macro"], 0);
+    assert!(out.contains("derived: added macro `same` [logic]"), "{out}");
+    // A call that makes a trait impl of a public type.
+    let with_call = format!("{CART_V0}{same}same!(Cart);\n");
+    write(repo, file, &with_call);
+    let out = run(repo, &["step", "call the macro"], 0);
+    assert!(out.contains("derived: added macro call `same!(Cart)` (makes: `impl PartialEq for Cart`) [logic]"), "{out}");
+    let bodies = out.lines().find(|line| line.contains("affected bodies:")).unwrap_or_default();
+    assert!(bodies.contains("PartialEq>::eq") && !bodies.contains("total"), "only the bodies that the step changes\n{out}");
+    assert!(!out.contains("needs a reason") && !out.contains("indirect change") && !out.contains("does not see"), "{out}");
+    // A call that makes a test function, and a call that makes a public function.
+    let tests = "\nmacro_rules! getter {\n    ($name:ident, $n:expr) => {\n        pub fn $name() -> u32 {\n            $n\n        }\n    };\n}\ngetter!(made_one, 1);\n\n#[cfg(test)]\nmod tests {\n    macro_rules! t {\n        ($name:ident) => {\n            #[test]\n            fn $name() {\n                assert_eq!(super::made_one(), 1);\n            }\n        };\n    }\n    t!(test26);\n}\n";
+    let with_tests = format!("{with_call}{tests}");
+    write(repo, file, &with_tests.replace("    t!(test26);\n", ""));
+    let out = run(repo, &["step", "a function from a macro"], 0);
+    assert!(out.contains("added macro call `getter!(made_one, 1)` (makes: `pub fn made_one`) [logic]"), "{out}");
+    write(repo, file, &with_tests);
+    let out = run(repo, &["step", "a test from a macro"], 0);
+    assert!(out.contains("derived: added macro call `t!(test26)` (makes: `test26`) [logic]"), "{out}");
+    assert!(!out.contains("needs a reason") && !out.contains("indirect change") && !out.contains("does not see"), "{out}");
+    // A call that makes an impl of `Drop`: the rule of the direct impl. The fact needs a reason.
+    let on_drop = "\nmacro_rules! on_drop {\n    ($t:ty) => {\n        impl Drop for $t {\n            fn drop(&mut self) {}\n        }\n    };\n}\non_drop!(Cart);\n";
+    write(repo, file, &format!("{with_tests}{on_drop}"));
+    let out = run(repo, &["step", "a drop impl from a macro"], 1);
+    assert!(out.contains("added macro call `on_drop!(Cart)` (makes: `impl Drop for Cart`)"), "{out}");
+    assert!(out.contains("✗ spotlight: an implicit call: the macro call `on_drop!(Cart)` makes `impl Drop for Cart`") && out.contains("--reason 'shop_core::cart::on_drop!#0=…'"), "{out}");
+    write(repo, file, &with_tests);
+    // The report: the made items are in the list of the public API changes.
+    let md = repo.join(".semilla/review.md");
+    run(repo, &["status", "--wait", "600"], 0);
+    run(repo, &["review", "--full", "--md", md.to_str().unwrap()], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains("added `impl PartialEq for Cart` (the macro call `same!(Cart)` makes it)"), "{text}");
+    assert!(text.contains("added `pub fn made_one` (the macro call `getter!(made_one, 1)` makes it)"), "{text}");
+    assert!(text.contains("| API level | minor |"), "{text}");
+}
+
+/// Batch 6b, part 1, case 4: a new test function above other test functions in the root of a
+/// test file. The line of each test below it changes. The descriptor of a test has its source
+/// position, and the position is not behavior: the step has only the fact of the new test.
+#[test]
+fn a_new_test_above_other_tests_in_a_test_file_gives_one_fact() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/tests/req.rs";
+    let helper = "#[track_caller]\nfn check(n: u32) {\n    assert!(n > 0);\n}\n";
+    let old_tests = "\n#[test]\nfn test_one() {\n    check(1);\n}\n\n#[test]\nfn test_two() {\n    check(2);\n}\n";
+    write(repo, file, &format!("{helper}{old_tests}"));
+    run(repo, &["step", "a test file", "--reason", "shop_core::req::check=the panic location of the caller"], 0);
+    let new_test = "\n#[test]\nfn test_new() {\n    check(3);\n}\n";
+    write(repo, file, &format!("{helper}{new_test}{old_tests}"));
+    let out = run(repo, &["step", "a new test above"], 0);
+    assert!(out.contains("derived: added `shop_core::req::test_new` [logic]"), "{out}");
+    assert_eq!(out.matches("derived:").count(), 1, "one fact\n{out}");
+    assert!(!out.contains("indirect change") && !out.contains("needs a reason"), "{out}");
+    // A real change of a test below the new lines stays a fact of that test.
+    write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)")));
+    let out = run(repo, &["step", "a changed test"], 0);
+    assert!(out.contains("shop_core::req::test_two") && out.matches("derived:").count() == 1, "{out}");
+    // A changed attribute of a test is a part of the descriptor: the fact stays.
+    write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)").replace("#[test]\nfn test_one", "#[test]\n#[should_panic]\nfn test_one")));
+    let out = run(repo, &["step", "a test that must panic"], 1);
+    assert!(out.contains("a changed attribute that can change the behavior: `should_panic`") && out.contains("affected bodies: shop_core::req::test_one"), "{out}");
 }

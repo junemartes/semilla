@@ -102,7 +102,11 @@ impl BodyIndex {
         for body in bodies {
             index.statuses.insert(body.name.clone(), body.status.clone());
             // A body that exists only before has its span in the "before" tree.
-            let item = if body.status == BodyStatus::BeforeOnly { find_item(body, before).or_else(|| find_item(body, after)) } else { find_item(body, after).or_else(|| find_item(body, before)) };
+            // The span is a place in the tree of the body. In the other tree, only the name
+            // can find the item (batch 6b, part 2): a line of a body from a macro in the new
+            // tree can be a line of a different function in the old tree.
+            let other = |workspace: &Workspace| find_item_by(&body.name, None, workspace);
+            let item = if body.status == BodyStatus::BeforeOnly { find_item(body, before).or_else(|| other(after)) } else { find_item(body, after).or_else(|| other(before)) };
             let uses_config = !body.config.is_empty() && !matches!(body.status, BodyStatus::Equal { .. });
             if uses_config {
                 index.config.entry(body.name.clone()).or_default().extend(body.config.iter().cloned());
@@ -1672,6 +1676,20 @@ pub fn item_panic_sites(item: &semilla_syntax::Item) -> Vec<String> {
     sites
 }
 
+/// The index sites of one item (`a[i]`): a part of [`item_panic_sites`] with its own name in
+/// the text of `no-panic`.
+fn item_index_sites(item: &semilla_syntax::Item) -> Vec<String> {
+    let mut sites = Vec::new();
+    let Some(body) = &item.body else { return sites };
+    let mut path = Vec::new();
+    body.walk(&mut path, &mut |roles, node| {
+        if node.kind == "index" {
+            sites.push(format!("{}/{}", item.path, roles.join("/")));
+        }
+    });
+    sites
+}
+
 /// The answer of [`live_call`].
 enum LiveCall {
     /// A block that the test can reach has a call path to the function.
@@ -1911,8 +1929,19 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
         "no-panic" => {
             let sites_in = |items: &BTreeSet<String>| -> Vec<String> { items.iter().filter_map(|path| context.after.items.get(path)).flat_map(item_panic_sites).collect() };
             let explicit = sites_in(found.as_ref().map(|(_, scope)| &scope.items).unwrap_or(&reached));
+            let index_sites: BTreeSet<String> = found.as_ref().map(|(_, scope)| &scope.items).unwrap_or(&reached).iter().filter_map(|path| context.after.items.get(path)).flat_map(item_index_sites).collect();
             if !explicit.is_empty() {
-                return Outcome::refuted(format!("explicit panic sites: {}", list(&explicit)));
+                // An index is not an explicit panic: the panic comes from the bounds check
+                // (batch 6b, part 4). The text names the two kinds.
+                let (index, plain): (Vec<String>, Vec<String>) = explicit.into_iter().partition(|site| index_sites.contains(site));
+                let mut parts = Vec::new();
+                if !plain.is_empty() {
+                    parts.push(format!("explicit panic sites: {}", list(&plain)));
+                }
+                if !index.is_empty() {
+                    parts.push(format!("index panic sites (an index out of bounds): {}", list(&index)));
+                }
+                return Outcome::refuted(parts.join("; "));
             }
             // The implicit panic sites are MIR `Assert` terminators: a division, an index, an
             // overflow check. They come from phase 2.

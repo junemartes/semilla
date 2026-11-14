@@ -21,7 +21,9 @@ pub mod identity;
 pub mod organize;
 pub mod owners;
 pub mod scope;
+mod bounds;
 mod joint;
+pub mod made;
 mod opaque;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
@@ -297,6 +299,13 @@ pub trait BodyOracle {
     /// The def path of each `#[test]` function in the tree before the step and in the tree
     /// after it (batch 6a, B2). `None`: the oracle does not know the tests.
     fn tests(&self, _step: &Step) -> anyhow::Result<Option<[BTreeSet<String>; 2]>> {
+        Ok(None)
+    }
+
+    /// The expanded code of the tree before the step and of the tree after it (batch 6b, part
+    /// 2): each item after the macro expansion, and the macro call site of each body from a
+    /// macro. `None`: the oracle cannot list the items.
+    fn made(&self, _step: &Step) -> anyhow::Result<Option<[made::Made; 2]>> {
         Ok(None)
     }
 
@@ -1024,7 +1033,18 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         item(&edit.before, input.before) || item(&edit.after, input.after)
     });
     let tests = if macro_edit && body_index.available { oracle.tests(step).ok().flatten() } else { None };
+    // The items that a changed macro call makes (batch 6b, part 2): only for a step with an
+    // edit of a macro item or of a module. A failure of the oracle gives no data, and the text
+    // then says that Semilla cannot list the items.
+    let made_edit = edits.iter().any(|edit| {
+        let item = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().and_then(|a| ws.items.get(&a.item)).is_some_and(|item| matches!(item.kind, semilla_syntax::ItemKind::Macro | semilla_syntax::ItemKind::Mod));
+        item(&edit.before, input.before) || item(&edit.after, input.after)
+    });
+    let made = if made_edit && body_index.available { oracle.made(step).ok().flatten() } else { None };
+    let made_outcome = made::apply(step, &edits, &fact_of, input.before, input.after, made.as_ref(), &mut report);
     let owner_input = owners::Input {
+        made: made.as_ref(),
+        made_listed: &made_outcome.listed,
         tests: tests.as_ref(),
         step,
         edits: &edits,
@@ -1306,6 +1326,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 
     report.panic_delta = panic_sites(input.after) - panic_sites(input.before);
     report.spotlight = spotlight(&edits, input.before, input.after);
+    report.spotlight.extend(made_outcome.spotlight.iter().filter(|line| !report.spotlight.contains(line)).cloned().collect::<Vec<_>>());
     // Each changed body that reads the build configuration (batch 5k, A1).
     let config_items: BTreeSet<String> = body_index.config_names().map(|name| body_index.item_of_name(name).unwrap_or_else(|| name.clone())).collect();
     // The name of a body is not always the key of a reason (batch 5l, B3): the body of an
@@ -1394,6 +1415,14 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     }
     report.lines = line_counts(step, &edits, &owners);
     let (mut level, mut api_changes) = api_level(&edits, input.before, input.after);
+    // The items that a changed macro call makes follow the rule of an item with no macro
+    // (batch 6b, part 2).
+    if !made_outcome.major.is_empty() {
+        level = "major";
+    } else if !made_outcome.minor.is_empty() && level == "patch" {
+        level = "minor";
+    }
+    api_changes.extend(made_outcome.major.iter().chain(&made_outcome.minor).filter(|line| !api_changes.contains(line)).cloned().collect::<Vec<_>>());
     // A rename or a move of a public item changes the public API too: the diff applies the name
     // map first, so it gives no edit for it.
     for claim in step.claims.iter().filter(|c| is_identity(c)) {
@@ -1754,9 +1783,9 @@ fn identity_step(
     // own fact (a doc fact has the class `other`). A parameter rename is allowed only when its
     // body is equal (N0 or N1): a parameter name is a local in the MIR.
     // A doc test change is not a plain doc change (brief 5h, B1): it stops the identity.
-    // An attribute of the `doc` family with no literal text (`#[doc(hidden)]`) is in the
-    // comment edit of its item. It is not a plain doc comment: it stops the identity (batch 5x,
-    // round 2).
+    // An attribute of the `doc` family with no literal text (`#[doc(hidden)]`) is an attribute
+    // edit of its item (batch 6b, part 1). It is not a plain doc comment: it stops the identity
+    // (batch 5x, round 2). The line filter stays for an attribute line in a comment edit.
     let attribute_lines = |text: &Option<String>| -> Vec<String> { text.as_deref().unwrap_or("").lines().filter(|line| line.starts_with('#')).map(str::to_string).collect() };
     let allowed = |index: usize, edit: &Edit| {
         (edit.kind == EditKind::Comment && attribute_lines(&edit.text_before) == attribute_lines(&edit.text_after))
@@ -2096,7 +2125,7 @@ pub(crate) enum Reach {
 /// True if the file of an item can be a part of a library: a different crate can use a library
 /// only. A binary, a test, an example, and a bench have no API. A file with no known target
 /// counts as a library file.
-fn in_library(workspace: &Workspace, item: &semilla_syntax::Item) -> bool {
+pub(crate) fn in_library(workspace: &Workspace, item: &semilla_syntax::Item) -> bool {
     let mut roots = BTreeMap::new();
     srcconfig::file_roots(workspace, &mut roots);
     let Some(roots) = roots.get(&item.file) else { return true };
@@ -2488,6 +2517,47 @@ pub fn api_level(edits: &[Edit], before: &Workspace, after: &Workspace) -> (&'st
             }
             continue;
         }
+        // A trait impl has no visibility (batch 6b, part 2): a different crate can use it if it
+        // can name the trait or the self type. A new impl is a new part of the public API, and
+        // a removed impl breaks the code that uses it.
+        if matches!(edit.kind, EditKind::ItemRemoved | EditKind::ItemAdded) {
+            let (ws, anchor) = if edit.kind == EditKind::ItemAdded { (after, &edit.after) } else { (before, &edit.before) };
+            let item = anchor.as_ref().and_then(|a| ws.items.get(&a.item)).filter(|item| item.kind == semilla_syntax::ItemKind::Impl && item.path.contains(" as "));
+            if let Some(item) = item.filter(|item| impl_reach(ws, item) != Reach::No) {
+                let name = facts::trait_impl_name(item);
+                match edit.kind {
+                    EditKind::ItemAdded => minor.push(format!("added trait impl `{name}`")),
+                    _ => major.push(format!("removed trait impl `{name}`")),
+                }
+                continue;
+            }
+        }
+        // The bounds of a declaration with an equal set of predicates (batch 6b, part 3): the
+        // order of the bounds and the place of a bound are not a part of the public API.
+        if facts::bounds_form(edit, before, after).is_some() {
+            continue;
+        }
+        // A changed `derive` list of a type that a different crate can use (batch 6b, part 4):
+        // each new name is a new trait impl, and a removed name removes an impl.
+        if edit.kind == EditKind::Attrs {
+            let side = |ws: &Workspace, anchor: &Option<Anchor>| -> Option<(String, Vec<String>)> {
+                let item = ws.items.get(&anchor.as_ref()?.item)?;
+                let is_type = matches!(item.kind, semilla_syntax::ItemKind::Struct | semilla_syntax::ItemKind::Enum);
+                (is_type && declaration_reach(ws, &item.path) != Reach::No).then(|| (item.path.rsplit("::").next().unwrap_or("").to_string(), derive_names(&item.attrs)))
+            };
+            if let (Some((_, was)), Some((name, now))) = (side(before, &edit.before), side(after, &edit.after)) {
+                let list = |names: Vec<&String>| names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+                let (added, removed): (Vec<&String>, Vec<&String>) = (now.iter().filter(|n| !was.contains(n)).collect(), was.iter().filter(|n| !now.contains(n)).collect());
+                let lines = [(!added.is_empty()).then(|| (false, format!("`{name}` now has {}", list(added)))), (!removed.is_empty()).then(|| (true, format!("`{name}` no longer has {} (the public API can change)", list(removed))))];
+                for (breaking, line) in lines.into_iter().flatten() {
+                    let target = if breaking { &mut major } else { &mut minor };
+                    if !target.contains(&line) {
+                        target.push(line);
+                    }
+                }
+            }
+            continue;
+        }
         match edit.kind {
             EditKind::ItemRemoved if old.is_some() => major.push(format!("removed `{}`", old.unwrap())),
             EditKind::ItemAdded if new.is_some() => minor.push(format!("added `{}`", new.unwrap())),
@@ -2514,6 +2584,22 @@ pub fn api_level(edits: &[Edit], before: &Workspace, after: &Workspace) -> (&'st
     let level = if !major.is_empty() { "major" } else if !minor.is_empty() { "minor" } else { "patch" };
     major.extend(minor);
     (level, major)
+}
+
+/// The names in the `derive` attributes of an item, in source order: the last segment of each
+/// path. A `derive` in a `cfg_attr` is not in the list.
+fn derive_names(attrs: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    for attr in attrs {
+        let text: String = attr.chars().filter(|c| !c.is_whitespace()).collect();
+        let Some(inner) = text.strip_prefix("#[derive(").and_then(|rest| rest.strip_suffix(")]")) else { continue };
+        for name in inner.split(',').filter_map(|path| path.rsplit("::").next()).filter(|name| !name.is_empty()) {
+            if !names.iter().any(|known| known == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// The edits that always need the reviewer's attention (design 5.5).
