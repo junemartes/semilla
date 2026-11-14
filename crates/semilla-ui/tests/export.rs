@@ -27,7 +27,8 @@ fn empty_data() -> UiData {
             id: String::new(),
             label: String::new(),
             status: Status::Same,
-            class: None,
+            category: None,
+            compare: None,
             build_code: None,
             claims: Vec::new(),
             diff: None,
@@ -136,7 +137,7 @@ fn both_formats_show_all_parts() {
     let tree_line = data.tree.render().lines().nth(1).unwrap().to_string();
     assert!(markdown.contains(&tree_line));
     assert!(html.contains(&html_text(&tree_line)));
-    for text in ["Rejected", "Facts", "API level", "Panic delta", "Warnings", "Steps", "An internal error: "] {
+    for text in ["rejected", "Facts", "API level", "Panic delta", "Warnings", "Steps", "An internal error: "] {
         assert!(html.contains(text), "HTML: no {text}");
         assert!(markdown.contains(text), "Markdown: no {text}");
     }
@@ -179,25 +180,26 @@ fn steps_show_their_intents_and_claims() {
 }
 
 #[test]
-fn folded_subgroups_show_renames_and_new_code() {
+fn subgroups_show_renames_and_new_code() {
     let data = demo_data();
     let html = render_html(&data);
     let markdown = render_markdown(&data, true);
-    // G1 Mechanical (folded): the renames, with the texts of the claim results.
-    assert!(markdown.contains("  - `c1` `rename`: `fn sum(&self)` → `fn total(&self)` · verified (proof "), "{markdown}");
+    // Design 35.7: a subgroup with a claim is open. G1 Mechanical: the renames, with the texts
+    // of the claim results.
+    assert!(markdown.contains(" · category: rename · step: 1 · file: `shop_core/src/cart.rs`\n  - rename: `fn sum(&self)` → `fn total(&self)`"), "{markdown}");
     // C12: a move shows its source and its target.
     assert!(markdown.contains("`c7` `move-item`: `shop_core::cart::line_total` → `shop_core::billing::line_total`") || markdown.contains("`move-item` at `shop_core::cart::line_total` → `shop_core::billing::line_total`"), "{markdown}");
     assert!(html.contains("<code>shop_core::cart::line_total</code> → <code>shop_core::billing::line_total</code>"), "{html}");
     let renames = subgroup_element(&html, "G1:mechanical");
-    assert!(!renames[..renames.find('>').unwrap()].contains(" open"));
+    assert!(renames[..renames.find('>').unwrap()].contains(" open"));
     assert!(renames.contains("<code>fn sum(&amp;self)</code> → <code>fn total(&amp;self)</code>"));
-    // G3 Mechanical (folded): the extracted function. A later move-item moved it to billing.
+    // G3 Mechanical: the extracted function. A later move-item moved it to billing.
     let line_total = data.sources["shop_core::billing::line_total"].after.clone().unwrap();
     let first = line_total.lines().next().unwrap();
-    assert!(markdown.contains("  - `c6` `extract-function`\n    - new function: `shop_core::billing::line_total`\n"), "{markdown}");
-    assert!(markdown.contains(&format!("      ```rust\n      {first}\n")));
+    assert!(markdown.contains("  - new function: `shop_core::billing::line_total`\n"), "{markdown}");
+    assert!(markdown.contains(&format!("    ```rust\n    {first}\n")));
     let extract = subgroup_element(&html, "G3:mechanical");
-    assert!(!extract[..extract.find('>').unwrap()].contains(" open"));
+    assert!(extract[..extract.find('>').unwrap()].contains(" open"));
     assert!(extract.contains("new function <code>shop_core::billing::line_total</code>"));
     assert!(extract.contains(&html_text(first)));
     // An added item in an open subgroup shows its source too, unless the claim diff shows it.
@@ -210,46 +212,76 @@ fn folded_subgroups_show_renames_and_new_code() {
 }
 
 #[test]
-fn the_facts_give_the_risk_and_the_neutral_label() {
-    // Trial 3, D9: a group with a `control_flow` step had "risk 0/3 · all neutral".
+fn the_facts_give_the_risk_and_the_equal_label() {
+    // Trial 3, D9: a group with a `control_flow` step had "risk 0/3 · all neutral". Design
+    // 35.7: the categories and the compare results of the facts give the risk.
+    use semilla_core::{Category, Compare};
     let mut data = demo_data();
     for step in data.report.steps.iter_mut().filter(|step| step.step == 6 || step.step == 7) {
         step.uncovered.clear();
         step.api_level = None;
-        for claim in &mut step.claims {
-            claim.class = Some(semilla_core::Class::Neutral);
-        }
     }
-    let fact = |class: Option<semilla_core::Class>| semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: "x".into(), status: "derived".into(), class, ..Default::default() };
+    let fact = |category, compare| semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: "x".into(), status: "derived".into(), category, compare, ..Default::default() };
     let g2 = |data: &semilla_ui::UiData| {
         let ctx = Ctx::new(data.clone());
         changeset(&ctx, &ReviewFile::default()).groups.into_iter().find(|group| group.id == "G2").unwrap()
     };
-    let neutral = g2(&data);
-    for (class, risk) in [(Some(semilla_core::Class::ControlFlow), 2), (Some(semilla_core::Class::Logic), 1), (None, 1)] {
+    let base = g2(&data);
+    // A group with no fact does not have the label.
+    assert!(!base.all_equal);
+    for (category, compare, risk) in [
+        (Category::ControlFlow, Compare::CodeDifferent, 2),
+        (Category::Logic, Compare::CodeDifferent, 1),
+        (Category::Logic, Compare::NoCompare, 1),
+        (Category::Logic, Compare::Pending, 1),
+        (Category::Logic, Compare::NotChecked, 1),
+        // The mismatch mark: 1 point for the different code, and 2 points for the mark.
+        (Category::Rename, Compare::CodeDifferent, 3),
+    ] {
         let mut data = data.clone();
-        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact(class));
+        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact(category, compare));
         let group = g2(&data);
-        assert!(!group.all_neutral, "{class:?}");
-        assert!(group.risk_score >= neutral.risk_score + risk, "{class:?}: {:?}", group.risk_reasons);
+        assert!(!group.all_equal, "{category:?} {compare:?}");
+        assert_eq!(group.risk_score, base.risk_score + risk, "{category:?} {compare:?}: {:?}", group.risk_reasons);
     }
+    // A fact with equal code, and a fact with no code, add no point.
+    for (category, compare) in [(Category::Logic, Compare::CodeEqual), (Category::ControlFlow, Compare::CodeEqual), (Category::Docs, Compare::NoCode)] {
+        let mut data = data.clone();
+        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact(category, compare));
+        let group = g2(&data);
+        assert_eq!(group.risk_score, base.risk_score, "{category:?} {compare:?}");
+        assert!(group.all_equal, "{category:?} {compare:?}");
+        assert!(render_markdown(&data, false).contains("each fact: code equal or no code"));
+    }
+    // A spotlight fact with equal code does not have the label.
     let mut data = data.clone();
-    data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact(Some(semilla_core::Class::Neutral)));
-    assert_eq!(g2(&data).risk_score, neutral.risk_score);
+    data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(semilla_core::Fact { spotlight: true, ..fact(Category::Attribute, Compare::CodeEqual) });
+    assert!(!g2(&data).all_equal);
+    assert_eq!(g2(&data).risk_score, base.risk_score + 1);
 }
 
 #[test]
-fn neutral_rewrites_have_low_risk() {
-    // G2 has the stored kind `api`. Make all its claims proved neutral, and remove its uncovered
+fn a_claim_adds_no_risk_and_a_fact_with_different_code_does() {
+    // G2 has the stored kind `api`. Make each of its claims a rename, and remove its uncovered
     // change. The stored kind is a label of the agent: it gives no dot (batch 5k, A3). The API
-    // level of the report gives the dot.
+    // level of the report gives the dot. Design 35.7: a verified claim adds no point.
     let mut data = demo_data();
     for step in data.report.steps.iter_mut().filter(|step| step.step == 6 || step.step == 7) {
         step.uncovered.clear();
         for claim in &mut step.claims {
-            claim.class = Some(semilla_core::Class::Neutral);
+            claim.category = Some(semilla_core::Category::Rename);
         }
     }
+    // G1 has a control flow fact with different code.
+    data.report.steps.iter_mut().find(|step| step.step == 2).unwrap().facts.push(semilla_core::Fact {
+        id: "f1".into(),
+        part: "edit".into(),
+        description: "added statement `if self.items.is_empty() { … }`".into(),
+        status: "derived".into(),
+        category: semilla_core::Category::ControlFlow,
+        compare: semilla_core::Compare::CodeDifferent,
+        ..Default::default()
+    });
     let stored = changeset(&Ctx::new(data.clone()), &ReviewFile::default());
     let g2 = stored.groups.iter().find(|group| group.id == "G2").unwrap();
     assert!(!g2.risk_reasons.contains(&"public API".to_string()), "{:?}", g2.risk_reasons);
@@ -260,7 +292,7 @@ fn neutral_rewrites_have_low_risk() {
     assert_eq!(g2.risk, 1, "the public API alone gives one dot: {:?}", g2.risk_reasons);
     assert_eq!(g2.risk_reasons, ["public API"]);
     let g1 = summary.groups.iter().find(|group| group.id == "G1").unwrap();
-    assert!(g1.risk > g2.risk, "a real control flow change ranks above neutral rewrites");
+    assert!(g1.risk_score > g2.risk_score, "a control flow fact with different code ranks above verified claims");
     assert_eq!(summary.groups[0].id, "G1");
 
     // Pending claims give a reason, but no points.
@@ -276,7 +308,9 @@ fn neutral_rewrites_have_low_risk() {
 
 #[test]
 fn folded_subgroups_are_collapsed() {
-    let data = demo_data();
+    // Design 35.7: only a subgroup with no claim is folded.
+    let mut data = demo_data();
+    data.changeset.subgroups.iter_mut().find(|sub| sub.title == "Quantity limit").unwrap().claims.clear();
     let html = render_html(&data);
     let markdown = render_markdown(&data, true);
     let ctx = Ctx::new(data);
@@ -370,7 +404,7 @@ fn pending_and_phase_appear() {
     let html = render_html(&data);
     let markdown = render_markdown(&data, true);
     for text in
-        ["Phase 1 only: the body proofs are pending.", "pending: the MIR check waits", "Pending claims", "unsafe block in shop_core::cart"]
+        ["Phase 1 only: each compare result is pending.", "pending: the MIR check waits", "Pending claims", "unsafe block in shop_core::cart"]
     {
         assert!(html.contains(text), "HTML: no {text}");
         assert!(markdown.contains(&md_text(text)), "Markdown: no {text}");
@@ -436,16 +470,17 @@ fn reports_show_the_derived_facts() {
         part: "parameter".into(),
         description: "parameter of `shop::fee` added: `cap : Option < u32 >`".into(),
         status: "derived".into(),
-        class: Some(semilla_core::Class::Logic),
+        category: semilla_core::Category::Declaration,
+        compare: semilla_core::Compare::CodeDifferent,
         affected: vec!["shop::fee".into()],
         sites: vec![semilla_core::SiteGroup { edit: "add the argument `None`".into(), sites: vec!["shop::a/tail".parse().unwrap()] }],
         ..Default::default()
     });
     let markdown = render_markdown(&data, true);
     assert!(markdown.contains("### Derived facts"), "{markdown}");
-    assert!(markdown.contains("f1 derived \\[logic\\]") && markdown.contains("1 site(s): add the argument `None`") && markdown.contains("1 affected body"), "{markdown}");
+    assert!(markdown.contains("f1 derived: parameter of `shop::fee` added: `cap : Option < u32 >` \\[declaration · code different\\]") && markdown.contains("1 site(s): add the argument `None`") && markdown.contains("1 affected body"), "{markdown}");
     let html = render_html(&data);
-    assert!(html.contains("<h3>Derived facts</h3>") && html.contains("f1 derived [logic]"));
+    assert!(html.contains("<h3>Derived facts</h3>") && html.contains("f1 derived: parameter of `shop::fee` added: `cap : Option &lt; u32 &gt;` [declaration · code different]"));
     // The fact is also inside the section of the group that has its step.
     let group = data.changeset.groups.iter().find(|g| g.steps.contains(&data.report.steps[0].step)).unwrap();
     let section = markdown.split(&format!("### `{}`", group.id)).nth(1).unwrap();
@@ -466,7 +501,8 @@ fn reports_show_the_content_of_a_file_fact() {
         part: ".cargo/config:target.x.runner".into(),
         description: ".cargo/config: target.x.runner added (\"true\")".into(),
         status: "derived".into(),
-        class: Some(semilla_core::Class::Other),
+        category: semilla_core::Category::File,
+        compare: semilla_core::Compare::NoCode,
         content: Some("+ [target.x]\n+ runner = \"true\"".into()),
         ..Default::default()
     });
@@ -476,8 +512,8 @@ fn reports_show_the_content_of_a_file_fact() {
     assert!(html.contains("<pre class=\"diff\">+ [target.x]\n+ runner = &quot;true&quot;</pre>"), "{html}");
 }
 
-fn fact(id: &str, at: &str, class: semilla_core::Class, description: &str) -> semilla_core::Fact {
-    semilla_core::Fact { id: id.into(), at: Some(at.parse().unwrap()), part: "edit".into(), description: description.into(), status: "derived".into(), class: Some(class), ..Default::default() }
+fn fact(id: &str, at: &str, compare: semilla_core::Compare, description: &str) -> semilla_core::Fact {
+    semilla_core::Fact { id: id.into(), at: Some(at.parse().unwrap()), part: "edit".into(), description: description.into(), status: "derived".into(), category: semilla_core::Category::Logic, compare, ..Default::default() }
 }
 
 #[test]
@@ -487,8 +523,8 @@ fn the_short_report_shows_each_fact_one_time() {
     let step = data.report.steps[0].step;
     let function = data.flows[0].function.clone();
     assert!(data.flows.len() >= 2, "the demo data has two flow views");
-    data.report.steps[0].facts.push(fact("f1", &format!("{function}/S0"), semilla_core::Class::Logic, "changed statement `let total = …`"));
-    data.report.steps[0].facts.push(fact("f2", "shop_core::helper/S0", semilla_core::Class::Neutral, "changed statement `let name = …`"));
+    data.report.steps[0].facts.push(fact("f1", &format!("{function}/S0"), semilla_core::Compare::CodeDifferent, "changed statement `let total = …`"));
+    data.report.steps[0].facts.push(fact("f2", "shop_core::helper/S0", semilla_core::Compare::CodeEqual, "changed statement `let name = …`"));
     let pair = |old: &str, new: &str| semilla_ui::SourcePair { before: Some(old.into()), after: Some(new.into()) };
     data.fact_sources.insert(format!("{step}:{function}/S0"), pair("let total =\n    old_sum(items);", "let total =\n    new_sum(items);"));
     data.fact_sources.insert(format!("{step}:shop_core::helper/S0"), pair("let name =\n    NEUTRAL_OLD;", "let name =\n    NEUTRAL_NEW;"));
@@ -499,9 +535,13 @@ fn the_short_report_shows_each_fact_one_time() {
     assert_eq!(short.matches("f2 derived").count(), 1, "{short}");
     assert!(!short.contains("\n### Derived facts") && !full.contains("\n### Derived facts"), "{short}");
     assert_eq!(full.matches("f1 derived").count(), 1, "{full}");
-    // A source diff only for a fact that is not "neutral (proved)".
-    assert!(short.contains("new_sum(items)") && !short.contains("NEUTRAL_NEW"), "{short}");
-    // A flow view only for the body of the logic fact, one time.
+    // Design 35.7: no compare result hides a fact or its source diff.
+    assert!(short.contains("new_sum(items)") && short.contains("NEUTRAL_NEW"), "{short}");
+    assert!(short.contains("\\[logic · code different\\]") && short.contains("\\[logic · code equal\\]"), "{short}");
+    // The order in a group: `code different` comes before `code equal`.
+    assert!(short.find("f1 derived").unwrap() < short.find("f2 derived").unwrap(), "{short}");
+    // A flow view for the body of a logic fact, one time. The demo data has no flow view of
+    // `shop_core::helper`.
     assert_eq!(short.matches("```mermaid").count(), 1, "{short}");
     assert_eq!(short.matches(&format!("\n### `{function}`\n")).count(), 1, "{short}");
     assert_eq!(full.matches("```mermaid").count(), data.flows.len(), "{full}");
@@ -510,7 +550,8 @@ fn the_short_report_shows_each_fact_one_time() {
     assert!(short.contains("`semilla review --md FILE --full`"), "{short}");
     assert!(full.contains("## Change tree") && full.contains("## Sources"), "{full}");
     assert!(short.lines().count() < full.lines().count());
-    // No fact of the class `control_flow` or `logic`: no flow view.
+    // No fact of the category `value`, `logic`, or `control flow` in a body with a flow view:
+    // no flow view.
     data.report.steps[0].facts.remove(0);
     assert!(!render_markdown(&data, false).contains("```mermaid"));
 }
@@ -556,7 +597,7 @@ fn the_line_count_shows_only_for_a_change_set_with_no_fact() {
     data.report.lines.fine = 7;
     assert!(render_markdown(&data, true).contains("Changed lines") && render_html(&data).contains("Changed lines"));
     assert_eq!(changeset(&Ctx::new(data.clone()), &ReviewFile::default()).lines_text, "lines: 7 fine-grained (100%), 0 new, 0 removed, 0 rewritten");
-    data.report.steps[0].facts.push(fact("f1", "shop_core::helper/S0", semilla_core::Class::Logic, "changed statement"));
+    data.report.steps[0].facts.push(fact("f1", "shop_core::helper/S0", semilla_core::Compare::CodeDifferent, "changed statement"));
     assert!(!render_markdown(&data, true).contains("Changed lines") && !render_html(&data).contains("Changed lines"));
     assert_eq!(changeset(&Ctx::new(data.clone()), &ReviewFile::default()).lines_text, "");
 }
@@ -573,7 +614,7 @@ fn a_partial_claim_is_not_counted_as_verified() {
     let markdown = semilla_ui::export::render_markdown(&data, false);
     let count = |text: &str, word: &str| -> usize {
         // The number before the word in the summary line (`… claims: 5 verified, 1 partial`).
-        let line = text.lines().find(|line| line.starts_with("**")).unwrap_or_default();
+        let line = text.lines().find(|line| line.starts_with("result: ")).unwrap_or_default();
         line.split(&format!(" {word}")).next().and_then(|head| head.rsplit([' ', ':']).next()).and_then(|number| number.parse().ok()).unwrap_or(0)
     };
     assert_eq!(count(&markdown, "partial"), 1, "{markdown}");
@@ -589,13 +630,13 @@ fn a_long_list_of_bodies_is_short_in_the_short_report() {
     // list of more than 8 bodies. The report with `--full` has each body.
     let mut data = demo_data();
     let bodies: Vec<String> = (0..21).map(|index| format!("demo::body_{index:02}")).collect();
-    let fact = semilla_core::Fact { id: "f9".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), class: Some(semilla_core::Class::Logic), affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
+    let fact = semilla_core::Fact { id: "f9".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), category: semilla_core::Category::Declaration, compare: semilla_core::Compare::CodeDifferent, affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
     data.report.steps[0].facts.push(fact);
     let line = |text: &str| text.lines().find(|line| line.contains("f9 derived")).unwrap_or_default().to_string();
     let short = line(&semilla_ui::export::render_markdown(&data, false));
     // Batch 5x, part E: a list of more than 8 bodies shows the count and the scope.
     assert!(short.contains("; 21 affected bodies of the crate `demo` (the names: `--full`)") && !short.contains("demo::body_08"), "{short}");
-    assert!(short.contains("bodies with a changed call site and no change of behavior (proved): `demo::body_00`") && short.contains("`demo::body_07`"), "{short}");
+    assert!(short.contains("bodies with a changed call site and equal compiled code: `demo::body_00`") && short.contains("`demo::body_07`"), "{short}");
     let full = line(&semilla_ui::export::render_markdown(&data, true));
     assert!(bodies.iter().all(|body| full.contains(&format!("`{body}`"))) && !full.contains(" more"), "{full}");
 }
@@ -624,7 +665,7 @@ fn a_folded_fact_shows_its_text_one_time() {
     let sites: Vec<semilla_core::Anchor> = ["demo::a", "demo::b", "demo::c"].iter().map(|item| semilla_core::Anchor::item(*item)).collect();
     let edit = "changed path `old` → `new`";
     let group = semilla_core::report::SiteGroup { edit: edit.into(), sites };
-    let fact = semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: format!("3 site(s): {edit}"), status: "derived".into(), class: Some(semilla_core::Class::Logic), sites: vec![group.clone()], ..Default::default() };
+    let fact = semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: format!("3 site(s): {edit}"), status: "derived".into(), category: semilla_core::Category::Logic, compare: semilla_core::Compare::CodeDifferent, sites: vec![group.clone()], ..Default::default() };
     assert!(fact.folds(&group));
     data.report.steps[0].facts.push(fact);
     let line = |data: &semilla_ui::UiData| semilla_ui::export::render_markdown(data, false).lines().find(|line| line.contains("f9 derived")).unwrap_or_default().to_string();

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Class, Fact};
+use semilla_core::{Category, Fact};
 use semilla_syntax::{Edit, EditKind, Workspace};
 
 /// One changed key of a manifest.
@@ -409,7 +409,7 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
         let (old, new) = (text(before, &file), text(after, &file));
         let size = |ws: &Workspace| ws.files.get(&file).map(|entry| entry.size).or_else(|| text(ws, &file).map(|t| t.len() as u64));
         let content = content_change(old.as_deref(), new.as_deref(), size(before), size(after));
-        let mut fact = |place: String, description: String, class: Class, why: Option<String>| {
+        let mut fact = |place: String, description: String, why: Option<String>| {
             let reason = step.reasons.get(&place).cloned();
             facts.push(Fact {
                 id: String::new(),
@@ -418,7 +418,11 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
                 part: place.clone(),
                 description,
                 status: "derived".into(),
-                class: Some(class),
+                category: match &why {
+                    Some(why) if why.contains("build script: this file is code of") => Category::BuildCode,
+                    _ if is_manifest(&file) => Category::Manifest,
+                    _ => Category::File,
+                },
                 spotlight: why.is_some(),
                 spotlight_why: why,
                 reason,
@@ -432,15 +436,15 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
         // The keys of a manifest that is a usual file. A mode change does not stop the comparison.
         let changes = if is_manifest(&file) && (note.is_empty() || mode_only) { key_changes(&file, old.as_deref(), new.as_deref()) } else { None };
         match changes {
-            Some(changes) if changes.is_empty() && !mode_only => fact(format!("{file}:"), format!("{file}: format only"), Class::Neutral, None),
+            Some(changes) if changes.is_empty() && !mode_only => fact(format!("{file}:"), format!("{file}: format only"), None),
             Some(changes) => {
                 let manifest = new.as_deref().or(old.as_deref()).and_then(|text| parse_table(&file, text));
                 for change in &changes {
                     let why = spotlight(&file, change, &changes, manifest.as_ref()).map(str::to_string);
-                    fact(format!("{file}:{}", change.key), describe(&file, change), Class::Other, why);
+                    fact(format!("{file}:{}", change.key), describe(&file, change), why);
                 }
                 if mode_only {
-                    fact(format!("{file}:"), format!("{file}: changed ({note})"), Class::Other, Some(MODE_WHY.to_string()));
+                    fact(format!("{file}:"), format!("{file}: changed ({note})"), Some(MODE_WHY.to_string()));
                 }
             }
             None => {
@@ -457,7 +461,7 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
                 let rust = before.is_rust_file(&file) || after.is_rust_file(&file) || crate::owners::code_readers(before, after, &file).is_some();
                 let why = file_spotlight(&file, note, content_changed, parsed(before) && parsed(after), rust, code_file(before, after, &file), || doc_include(before, after, &file));
                 let note = edit.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
-                fact(format!("{file}:"), format!("{file}: {what}{note}"), Class::Other, why);
+                fact(format!("{file}:"), format!("{file}: {what}{note}"), why);
             }
         }
         owner.insert(index, first);

@@ -4,7 +4,8 @@
 //! |---|---|
 //! | `total` | fuzzy search on symbol names |
 //! | `"qty <= max"` | text search on labels and source |
-//! | `changed:`, `class:logic`, `step:3`, `group:G2` | filters by diff status |
+//! | `changed:`, `step:3`, `group:G2` | filters by diff status, step, and group |
+//! | `category:logic`, `compare:code-equal` | filters by the category and the compare result of a fact (design 35) |
 //! | `kind:panic`, `kind:unsafe`, `kind:err` | panic sites, `unsafe` blocks, error exits |
 //! | `callers:Cart::total`, `callees:…` | graph neighbors |
 //! | `path:main -> Cart::total` | call paths |
@@ -15,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use semilla_core::Class;
+use semilla_core::{Category, Compare};
 use semilla_core::view::Status;
 
 use crate::ctx::{Ctx, contains, item_of, last_segment};
@@ -41,7 +42,8 @@ pub enum Term {
     Text(String),
     /// `changed:` with an optional node kind, for example `changed:fn`.
     Changed(Option<String>),
-    Class(Class),
+    Category(Category),
+    Compare(Compare),
     Step(usize),
     Group(String),
     Kind(SiteKind),
@@ -60,7 +62,7 @@ pub struct Query {
     pub errors: Vec<String>,
 }
 
-const KEYS: &[&str] = &["changed", "class", "step", "group", "kind", "callers", "callees", "path"];
+const KEYS: &[&str] = &["changed", "category", "compare", "step", "group", "kind", "callers", "callees", "path"];
 
 /// Parses a query. Unknown `key:` prefixes are plain words, so `Cart::total` is a symbol.
 pub fn parse(text: &str) -> Query {
@@ -117,9 +119,13 @@ pub fn parse(text: &str) -> Query {
                 }
             }
             "changed" => query.terms.push(Term::Changed((!value.is_empty()).then_some(value))),
-            "class" => match parse_class(&value) {
-                Some(class) => query.terms.push(Term::Class(class)),
-                None => query.errors.push(format!("unknown class `{value}`: use neutral, logic, ctrl_flow, or other")),
+            "category" => match Category::from_name(&name_text(&value)) {
+                Some(category) => query.terms.push(Term::Category(category)),
+                None => query.errors.push(format!("unknown category `{value}`: use {}", Category::ALL.iter().map(|category| category.name().replace(' ', "-")).collect::<Vec<_>>().join(", "))),
+            },
+            "compare" => match Compare::from_name(&name_text(&value)) {
+                Some(compare) => query.terms.push(Term::Compare(compare)),
+                None => query.errors.push(format!("unknown compare result `{value}`: use {}", Compare::ALL.iter().map(|compare| compare.name().replace(' ', "-")).collect::<Vec<_>>().join(", "))),
             },
             "step" => match value.parse() {
                 Ok(step) => query.terms.push(Term::Step(step)),
@@ -162,14 +168,10 @@ fn unquote(text: &str) -> String {
     text.trim().trim_matches('"').trim().to_string()
 }
 
-fn parse_class(text: &str) -> Option<Class> {
-    match text.to_ascii_lowercase().replace(['-', ' '], "_").as_str() {
-        "neutral" => Some(Class::Neutral),
-        "logic" => Some(Class::Logic),
-        "control_flow" | "ctrl_flow" | "ctrl" | "controlflow" | "cf" => Some(Class::ControlFlow),
-        "other" => Some(Class::Other),
-        _ => None,
-    }
+/// The name of a category or of a compare result from a query value. A query value has no
+/// space, so `-` and `_` stand for the space: `compare:code-equal`.
+fn name_text(text: &str) -> String {
+    text.to_ascii_lowercase().replace(['-', '_'], " ")
 }
 
 /// One search result: a node of the graph, the change tree, a flow view, or the sources.
@@ -180,8 +182,9 @@ pub struct Hit {
     /// The graph node kind (`function`, `crate`, …), or `statement` or `item` for tree nodes.
     pub kind: String,
     pub status: Option<Status>,
-    pub class: Option<Class>,
-    /// The step whose build code change the proof of the class used (design 28, I6).
+    pub category: Option<Category>,
+    pub compare: Option<Compare>,
+    /// The step whose build code change the compare used (design 28, I6).
     pub build_code: Option<usize>,
     /// The claims on this node and inside it.
     pub claims: Vec<String>,
@@ -208,7 +211,8 @@ struct Entity {
     label: String,
     kind: String,
     status: Option<Status>,
-    class: Option<Class>,
+    category: Option<Category>,
+    compare: Option<Compare>,
     build_code: Option<usize>,
     labels: Vec<String>,
     tree_claims: Vec<String>,
@@ -226,7 +230,8 @@ fn entities(ctx: &Ctx) -> BTreeMap<String, Entity> {
             label: label.to_string(),
             kind: kind.to_string(),
             status: None,
-            class: None,
+            category: None,
+            compare: None,
             build_code: None,
             labels: Vec::new(),
             tree_claims: Vec::new(),
@@ -250,8 +255,8 @@ fn entities(ctx: &Ctx) -> BTreeMap<String, Entity> {
     while let Some(node) = stack.pop() {
         let kind = if node.id.contains('/') { "statement" } else { "item" };
         let entity = add(&mut out, &node.id, &node.label, kind, Some(node.status));
-        if entity.class.is_none() {
-            (entity.class, entity.build_code) = (node.class, node.build_code);
+        if entity.category.is_none() {
+            (entity.category, entity.compare, entity.build_code) = (node.category, node.compare, node.build_code);
         }
         if let Some(diff) = &node.diff {
             entity.labels.push(diff.clone());
@@ -419,9 +424,9 @@ pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
 
     let mut hits = Vec::new();
     if !only_paths && !query.terms.is_empty() {
-        let claims: Vec<(String, String, usize, Option<Class>)> = ctx
+        let claims: Vec<(String, String, usize, Option<Category>)> = ctx
             .all_claims()
-            .filter_map(|(step, claim)| claim.at.as_ref().map(|at| (claim.id.clone(), at.to_string(), step.index, ctx.claim_class(claim))))
+            .filter_map(|(step, claim)| claim.at.as_ref().map(|at| (claim.id.clone(), at.to_string(), step.index, ctx.claim_category(claim))))
             .collect();
         for entity in entities(ctx).into_values() {
             if let Some(allowed) = &allowed
@@ -430,14 +435,14 @@ pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
                 continue;
             }
             let mut entity_claims: Vec<String> = entity.tree_claims.clone();
-            let mut classes: Vec<Option<Class>> = entity.class.into_iter().map(Some).collect();
+            let mut categories: Vec<Option<Category>> = entity.category.into_iter().map(Some).collect();
             let mut steps = BTreeSet::new();
-            for (id, anchor, step, class) in &claims {
+            for (id, anchor, step, category) in &claims {
                 if contains(&entity.id, anchor) || entity_claims.contains(id) {
                     if !entity_claims.contains(id) {
                         entity_claims.push(id.clone());
                     }
-                    classes.push(*class);
+                    categories.push(*category);
                     steps.insert(*step);
                 }
             }
@@ -486,7 +491,8 @@ pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
                         let is_changed = changed(entity.status) || !entity_claims.is_empty();
                         is_changed && kind.as_deref().is_none_or(|kind| kind_matches(kind, &entity.kind))
                     }
-                    Term::Class(class) => classes.contains(&Some(*class)),
+                    Term::Category(category) => categories.contains(&Some(*category)),
+                    Term::Compare(compare) => entity.compare == Some(*compare),
                     Term::Step(step) => steps.contains(step),
                     Term::Group(group) => {
                         steps.iter().any(|step| ctx.step_group.get(step).is_some_and(|owner| owner.eq_ignore_ascii_case(group)))
@@ -528,7 +534,8 @@ pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
                 label: entity.label,
                 kind: entity.kind,
                 status: entity.status,
-                class: entity.class,
+                category: entity.category,
+                compare: entity.compare,
                 build_code: entity.build_code,
                 claims: entity_claims,
                 score,
@@ -577,14 +584,15 @@ mod tests {
 
     #[test]
     fn parse_terms() {
-        let query = parse(r#"total "qty <= max" class:logic step:3 group:G2 kind:panic callers:Cart::total changed:"#);
+        let query = parse(r#"total "qty <= max" category:control-flow compare:code_equal step:3 group:G2 kind:panic callers:Cart::total changed:"#);
         assert!(query.errors.is_empty(), "{:?}", query.errors);
         assert_eq!(
             query.terms,
             vec![
                 Term::Fuzzy("total".into()),
                 Term::Text("qty <= max".into()),
-                Term::Class(Class::Logic),
+                Term::Category(Category::ControlFlow),
+                Term::Compare(Compare::CodeEqual),
                 Term::Step(3),
                 Term::Group("G2".into()),
                 Term::Kind(SiteKind::Panic),
@@ -599,7 +607,10 @@ mod tests {
         assert_eq!(parse("Cart::total").terms, vec![Term::Fuzzy("Cart::total".into())]);
         assert_eq!(parse("path:main -> Cart::total").terms, vec![Term::Path { from: "main".into(), to: "Cart::total".into() }]);
         assert!(!parse("path:main").errors.is_empty());
-        assert!(!parse("class:huge").errors.is_empty());
+        assert!(!parse("category:huge").errors.is_empty());
+        assert!(!parse("compare:neutral").errors.is_empty());
+        // The key `class` is gone (design 35): it is a symbol search now.
+        assert_eq!(parse("class:logic").terms, vec![Term::Fuzzy("class:logic".into())]);
         assert!(!parse("step:x").errors.is_empty());
         assert!(!parse("kind:leak").errors.is_empty());
     }

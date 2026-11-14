@@ -199,13 +199,12 @@ fn outcome(status: ClaimStatus, explains: Vec<usize>) -> Outcome {
     Outcome {
         status,
         explains,
-        class: None,
+        category: None,
         effect: None,
         witness: None,
         hint: None,
         before: None,
         after: None,
-        needs_body_proof: false,
         self_evident: false,
         complete_calls: Vec::new(),
     }

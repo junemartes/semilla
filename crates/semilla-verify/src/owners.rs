@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Anchor, Class, ClaimStatus, Fact, Step, StepReport};
+use semilla_core::{Anchor, Category, ClaimStatus, Fact, Step, StepReport};
 use semilla_syntax::{Edit, EditKind, ItemKind, Workspace};
 
 use crate::checks::BodyIndex;
@@ -93,10 +93,18 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     let assoc: BTreeMap<String, (String, String)> = changed(input.bodies).filter(|body| input.body_index.item_of(body).is_none()).filter_map(|body| Some((body.name.clone(), assoc_const(input, body)?))).collect();
     for body in changed(input.bodies) {
         let item = input.body_index.item_of(body);
-        if is_harness(body) || input.identity_owned.contains(&body.name) {
+        if is_harness(body) {
             continue;
         }
         let name = item.clone().unwrap_or_else(|| body.name.clone());
+        // A derived body that shows the name of a renamed type (design 35): the identity owns
+        // it. The identity fact lists it, so the fact has the result `code different`.
+        if input.identity_owned.contains(&body.name) {
+            if let Some(claim) = input.identity_claim {
+                record(report, Owner::Claim(claim), &name);
+            }
+            continue;
+        }
         // A body that a changed macro call makes belongs to the fact of the call (batch 6b,
         // part 2), also if the step changes the macro definition that has the text of the body.
         if let Some(index) = site_call(input, body, &name).flatten().and_then(|call| call_fact(report, call)).filter(|index| input.made_listed.contains(index)) {
@@ -250,12 +258,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         } else {
             (format!("code that Semilla does not see: `{name}` ({side})"), "a MIR body with no source item (generated code): give the cause as the reason".to_string())
         };
-        let class = if matches!(body.status, BodyStatus::Different { cfg_changed: false }) { Class::Logic } else { Class::ControlFlow };
-        if let Some(fact) = unknown.get(&description).and_then(|index| report.facts.get_mut(*index)) {
-            // The fact keeps the class that asks for more care.
-            if class == Class::ControlFlow {
-                fact.class = Some(class);
-            }
+        if unknown.contains_key(&description) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
@@ -266,7 +269,8 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             part: "indirect change".into(),
             description,
             status: "derived".into(),
-            class: Some(class),
+            category: Category::Indirect,
+            compare: Default::default(),
             affected: vec![name.clone()],
             spotlight: true,
             spotlight_why: Some(why),
@@ -455,7 +459,8 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
             part: "source file".into(),
             description: format!("the compiler reads this item from another file: `{name}` ({file})"),
             status: "derived".into(),
-            class: Some(Class::Logic),
+            category: Category::File,
+            compare: Default::default(),
             affected: vec![name.clone()],
             spotlight: true,
             spotlight_why: Some(why),
@@ -629,7 +634,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
     // 5. A package key fact owns the bodies that read the package data with `env!`. The other
     //    build inputs come after the evidence, with their reach (`build_inputs`).
     let reads_package = text.contains("CARGO_PKG_");
-    let manifest = report.facts.iter().position(|fact| fact.file.as_deref().is_some_and(crate::files::is_manifest) && fact.class != Some(Class::Neutral) && reads_package && fact.description.contains("package."));
+    let manifest = report.facts.iter().position(|fact| fact.file.as_deref().is_some_and(crate::files::is_manifest) && !fact.description.ends_with(": format only") && reads_package && fact.description.contains("package."));
     manifest.map(Owner::Fact)
 }
 
@@ -737,7 +742,7 @@ fn build_inputs(input: &Input, report: &StepReport) -> Vec<(usize, Option<BTreeS
         }
         let name = file.rsplit('/').next().unwrap_or(file);
         if crate::files::is_manifest(file) {
-            if fact.class == Some(Class::Neutral) || !crate::files::is_build_key(&fact.part) {
+            if fact.description.ends_with(": format only") || !crate::files::is_build_key(&fact.part) {
                 continue;
             }
             match package(file).filter(|_| name == "Cargo.toml") {
@@ -859,9 +864,8 @@ fn normalize(path: &str) -> String {
 }
 
 /// The final assertion (invariant I1): each changed body has an owner in the report. An owner is
-/// a fact or a claim that lists the body in its `affected` list and has a class that is not
-/// neutral (a claim that is not verified also rejects the step), an uncovered entry, or a
-/// verified identity claim that records the derived body. Returns the bodies with no owner.
+/// a fact or a claim that lists the body in its `affected` list, an uncovered entry, or a
+/// rejected claim. Returns the bodies with no owner.
 pub fn check(input: &Input, report: &StepReport) -> Vec<String> {
     let mut missing = Vec::new();
     for body in changed(input.bodies) {
@@ -870,8 +874,8 @@ pub fn check(input: &Input, report: &StepReport) -> Vec<String> {
             continue;
         }
         let name = item.unwrap_or_else(|| body.name.clone());
-        let by_fact = report.facts.iter().any(|fact| fact.affected.contains(&name) && fact.class.is_some_and(|class| class != Class::Neutral));
-        let by_claim = report.claims.iter().any(|claim| claim.affected.contains(&name) && (!claim.status.is_verified() || claim.class != Some(Class::Neutral)));
+        let by_fact = report.facts.iter().any(|fact| fact.affected.contains(&name));
+        let by_claim = report.claims.iter().any(|claim| claim.affected.contains(&name));
         // An uncovered entry, an error, or an unverified claim rejects the step.
         let rejected = !report.uncovered.is_empty() || report.claims.iter().any(|claim| matches!(claim.status, ClaimStatus::Refuted { .. } | ClaimStatus::Malformed { .. }));
         if !(by_fact || by_claim || rejected) {

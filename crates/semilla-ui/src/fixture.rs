@@ -5,7 +5,7 @@
 //!
 //! - G1 `fix`: return 0 for an empty cart, with two renames and a new test.
 //! - G2 `api`: return `Result` from `Cart::total`, with one uncovered difference.
-//! - G3 `refactor`: extract the price of a line into a `billing` module, with one unproved claim.
+//! - G3 `refactor`: extract the price of a line into a `billing` module, with one refuted claim.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +16,7 @@ use semilla_core::view::{
     FlowEdge, FlowGraph, FlowKind, FlowNode, GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, Status, TreeNode, WorkspaceGraph,
 };
 use semilla_core::{
-    ChangeSet, Claim, ClaimResult, ClaimStatus, Class, Group, GroupKind, Report, Role, Step, StepReport, Subgroup, Uncovered, View,
+    Category, ChangeSet, Claim, ClaimResult, ClaimStatus, Compare, Group, GroupKind, Report, Role, Step, StepReport, Subgroup, Uncovered, View,
 };
 
 use crate::{SourcePair, UiData};
@@ -35,12 +35,12 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: Value) -> Claim {
     }
 }
 
-fn result(claim: &str, step: usize, status: ClaimStatus, class: Option<Class>) -> ClaimResult {
-    ClaimResult { build_code: None, claim: claim.to_string(), step, status, class, effect: None, witness: None, hint: None, before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() }
+fn result(claim: &str, step: usize, status: ClaimStatus, category: Option<Category>) -> ClaimResult {
+    ClaimResult { build_code: None, claim: claim.to_string(), step, status, category, effect: None, witness: None, hint: None, before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() }
 }
 
-fn verified(claim: &str, step: usize, proof: &str, class: Class) -> ClaimResult {
-    result(claim, step, ClaimStatus::Verified { proof: proof.to_string() }, Some(class))
+fn verified(claim: &str, step: usize, proof: &str, category: Category) -> ClaimResult {
+    result(claim, step, ClaimStatus::Verified { proof: proof.to_string() }, Some(category))
 }
 
 fn texts(mut result: ClaimResult, before: &str, after: &str) -> ClaimResult {
@@ -49,11 +49,10 @@ fn texts(mut result: ClaimResult, before: &str, after: &str) -> ClaimResult {
     result
 }
 
-fn step(index: usize, intent: &str, class: Option<Class>, claims: Vec<Claim>) -> Step {
+fn step(index: usize, intent: &str, claims: Vec<Claim>) -> Step {
     Step {
         index,
         intent: intent.to_string(),
-        class,
         claims,
         tree_before: format!("{:040x}", index * 0x1111),
         tree_after: format!("{:040x}", (index + 1) * 0x1111),
@@ -82,7 +81,6 @@ pub fn demo_changeset() -> ChangeSet {
         step(
             1,
             "Rename Cart::sum to Cart::total and Cart::count to Cart::len",
-            Some(Class::Neutral),
             vec![
                 claim("c1", "rename", Some("shop_core::cart::Cart::sum"), json!({ "to": "total" })),
                 claim("c2", "rename", Some("shop_core::cart::Cart::count"), json!({ "to": "len" })),
@@ -91,7 +89,6 @@ pub fn demo_changeset() -> ChangeSet {
         step(
             2,
             "Return 0 for an empty cart",
-            Some(Class::ControlFlow),
             vec![
                 claim("c3", "add-if", Some(&format!("{TOTAL}/S0")), json!({ "cond": "self.items.is_empty()", "then": "return 0;" })),
                 claim("c4", "change-operator", Some(&format!("{TOTAL}/S1.0/cond")), json!({ "from": ">", "to": ">=" })),
@@ -100,19 +97,16 @@ pub fn demo_changeset() -> ChangeSet {
         step(
             3,
             "Test the empty cart",
-            None,
             vec![claim("c5", "add-item", Some("shop_core::cart::tests::empty_cart_total"), json!({ "kind": "fn", "test": true }))],
         ),
         step(
             4,
             "Extract the price of a line",
-            Some(Class::Neutral),
             vec![claim("c6", "extract-function", Some(&format!("{TOTAL}/S2.1")), json!({ "new": "shop_core::cart::line_total" }))],
         ),
         step(
             5,
             "Move line_total to the billing module",
-            Some(Class::Neutral),
             vec![
                 claim("c7", "move-item", Some("shop_core::cart::line_total"), json!({ "to": "shop_core::billing::line_total" })),
                 claim("c8", "invert-if", Some("shop_core::billing::line_total/S0"), json!({})),
@@ -121,7 +115,6 @@ pub fn demo_changeset() -> ChangeSet {
         step(
             6,
             "Return Result from Cart::total",
-            Some(Class::ControlFlow),
             vec![
                 claim("c9", "add-item", Some("shop_core::cart::CartError"), json!({ "kind": "enum" })),
                 claim("c10", "change-signature", Some(TOTAL), json!({ "from": "-> u32", "to": "-> Result<u32, CartError>" })),
@@ -135,7 +128,6 @@ pub fn demo_changeset() -> ChangeSet {
         step(
             7,
             "Update the callers of Cart::total",
-            Some(Class::Logic),
             vec![
                 claim(
                     "c16",
@@ -194,7 +186,7 @@ pub fn demo_changeset() -> ChangeSet {
         subgroup("G2", Role::Config, "Dependency for the error type", &["c15"], false, ""),
         subgroup("G2", Role::Propagation, "Call sites", &["c16", "c17"], false, ""),
         subgroup("G3", Role::Mechanical, "Extract and move line_total", &["c6", "c7"], false, ""),
-        subgroup("G3", Role::Custom, "Discount check", &["c8"], true, "The agent says that the inverted check is neutral."),
+        subgroup("G3", Role::Custom, "Discount check", &["c8"], true, "The agent says that the inverted check changes no result."),
     ];
     let mut subgroups = subgroups;
     for sub in &mut subgroups {
@@ -220,11 +212,11 @@ pub fn demo_changeset() -> ChangeSet {
 
 /// Builds the verification report for [`demo_changeset`].
 pub fn demo_report() -> Report {
-    let mut c4 = texts(verified("c4", 2, "smt", Class::Logic), "item.qty > MAX_QTY", "item.qty >= MAX_QTY");
+    let mut c4 = texts(verified("c4", 2, "smt", Category::Logic), "item.qty > MAX_QTY", "item.qty >= MAX_QTY");
     c4.effect = Some(Effect::Widen);
     c4.witness = Some("item.qty = 100, MAX_QTY = 100".into());
     let mut c8 = texts(
-        result("c8", 5, ClaimStatus::Unproved { reason: "N0 to N4 do not make the MIR equal: the branches compare a float.".into() }, None),
+        result("c8", 5, ClaimStatus::Refuted { reason: "the MIR is different: the branches compare a float.".into() }, None),
         "if item.discount == 0.0 { base } else { base - item.discount }",
         "if item.discount != 0.0 { base - item.discount } else { base }",
     );
@@ -233,29 +225,23 @@ pub fn demo_report() -> Report {
         StepReport {
             step: 1,
             intent: "Rename Cart::sum to Cart::total and Cart::count to Cart::len".into(),
-            declared_class: Some(Class::Neutral),
-            computed_class: Some(Class::Neutral),
             claims: vec![
-                texts(verified("c1", 1, "N1", Class::Neutral), "fn sum(&self)", "fn total(&self)"),
-                texts(verified("c2", 1, "N1", Class::Neutral), "fn count(&self)", "fn len(&self)"),
+                texts(verified("c1", 1, "N1", Category::Rename), "fn sum(&self)", "fn total(&self)"),
+                texts(verified("c2", 1, "N1", Category::Rename), "fn count(&self)", "fn len(&self)"),
             ],
             ..Default::default()
         },
         StepReport {
             step: 2,
             intent: "Return 0 for an empty cart".into(),
-            declared_class: Some(Class::ControlFlow),
-            computed_class: Some(Class::ControlFlow),
-            claims: vec![texts(verified("c3", 2, "shape", Class::ControlFlow), "", "if self.items.is_empty() {\n    return 0;\n}"), c4],
+            claims: vec![texts(verified("c3", 2, "shape", Category::ControlFlow), "", "if self.items.is_empty() {\n    return 0;\n}"), c4],
             ..Default::default()
         },
         StepReport {
             step: 3,
             intent: "Test the empty cart".into(),
-            declared_class: None,
-            computed_class: Some(Class::Logic),
             claims: vec![texts(
-                verified("c5", 3, "shape", Class::Logic),
+                verified("c5", 3, "shape", Category::Logic),
                 "",
                 "#[test]\nfn empty_cart_total() {\n    assert_eq!(Cart::default().total(), Ok(0));\n}",
             )],
@@ -264,36 +250,30 @@ pub fn demo_report() -> Report {
         StepReport {
             step: 4,
             intent: "Extract the price of a line".into(),
-            declared_class: Some(Class::Neutral),
-            computed_class: Some(Class::Neutral),
-            claims: vec![texts(verified("c6", 4, "N1", Class::Neutral), "sum += item.price * item.qty;", "sum += line_total(item);")],
+            claims: vec![texts(verified("c6", 4, "N1", Category::Logic), "sum += item.price * item.qty;", "sum += line_total(item);")],
             ..Default::default()
         },
         StepReport {
             step: 5,
             intent: "Move line_total to the billing module".into(),
-            declared_class: Some(Class::Neutral),
-            computed_class: None,
-            claims: vec![texts(verified("c7", 5, "N1", Class::Neutral), "cart::line_total", "billing::line_total"), c8],
+            claims: vec![texts(verified("c7", 5, "N1", Category::Move), "cart::line_total", "billing::line_total"), c8],
             ..Default::default()
         },
         StepReport {
             step: 6,
             intent: "Return Result from Cart::total".into(),
-            declared_class: Some(Class::ControlFlow),
-            computed_class: Some(Class::ControlFlow),
             claims: vec![
                 texts(
-                    verified("c9", 6, "shape", Class::Logic),
+                    verified("c9", 6, "shape", Category::Logic),
                     "",
                     "#[derive(Debug, PartialEq, thiserror::Error)]\npub enum CartError {\n    #[error(\"quantity {0} is over the limit\")]\n    TooMany(u32),\n}",
                 ),
-                texts(verified("c10", 6, "shape", Class::Logic), "-> u32", "-> Result<u32, CartError>"),
-                texts(verified("c11", 6, "shape", Class::Logic), "sum", "Ok(sum)"),
-                texts(verified("c12", 6, "shape", Class::Logic), "return 0;", "return Ok(0);"),
-                texts(verified("c13", 6, "shape", Class::ControlFlow), "continue;", ""),
-                texts(verified("c14", 6, "shape", Class::ControlFlow), "", "return Err(CartError::TooMany(item.qty));"),
-                texts(verified("c15", 6, "file", Class::Other), "", "thiserror = \"2.0\""),
+                texts(verified("c10", 6, "shape", Category::Logic), "-> u32", "-> Result<u32, CartError>"),
+                texts(verified("c11", 6, "shape", Category::Logic), "sum", "Ok(sum)"),
+                texts(verified("c12", 6, "shape", Category::Logic), "return 0;", "return Ok(0);"),
+                texts(verified("c13", 6, "shape", Category::ControlFlow), "continue;", ""),
+                texts(verified("c14", 6, "shape", Category::ControlFlow), "", "return Err(CartError::TooMany(item.qty));"),
+                texts(verified("c15", 6, "file", Category::Manifest), "", "thiserror = \"2.0\""),
             ],
             ..Default::default()
         },
@@ -302,13 +282,11 @@ pub fn demo_report() -> Report {
             // Removed: the unwrap in shop_cli::run and the expect in legacy_total.
             panic_delta: -2,
             intent: "Update the callers of Cart::total".into(),
-            declared_class: Some(Class::Logic),
-            computed_class: Some(Class::Logic),
             claims: vec![
-                texts(verified("c16", 7, "shape", Class::Logic), "cart.total()", "cart.total()?"),
-                texts(verified("c17", 7, "free", Class::Logic), "load_cart(&path).unwrap()", "load_cart(&path)?"),
+                texts(verified("c16", 7, "shape", Category::Logic), "cart.total()", "cart.total()?"),
+                texts(verified("c17", 7, "free", Category::Logic), "load_cart(&path).unwrap()", "load_cart(&path)?"),
                 texts(
-                    verified("c18", 7, "shape", Class::Logic),
+                    verified("c18", 7, "shape", Category::Logic),
                     "pub fn legacy_total(cart: &Cart) -> u32 {\n    cart.total().checked_add(0).expect(\"total\")\n}",
                     "",
                 ),
@@ -327,7 +305,7 @@ pub fn demo_report() -> Report {
     let mut report = Report {
         steps,
         organization: Vec::new(),
-        warnings: vec!["G3 is a refactor group, but claim c8 is not proved neutral.".into()],
+        warnings: vec!["G3: the claim c8 is refuted.".into()],
         panic_delta: 0,
         api_level: None,
         accepted: false,
@@ -344,7 +322,8 @@ fn tree(id: &str, label: &str, status: Status) -> TreeNode {
         id: id.to_string(),
         label: label.to_string(),
         status,
-        class: None,
+        category: None,
+        compare: None,
         build_code: None,
         claims: Vec::new(),
         diff: None,
@@ -355,7 +334,7 @@ fn tree(id: &str, label: &str, status: Status) -> TreeNode {
 }
 
 trait TreeExt {
-    fn class(self, class: Class) -> Self;
+    fn mark(self, category: Category, compare: Compare) -> Self;
     fn claims(self, claims: &[&str]) -> Self;
     fn diff(self, diff: &str) -> Self;
     fn summary(self, summary: &str) -> Self;
@@ -363,8 +342,8 @@ trait TreeExt {
 }
 
 impl TreeExt for TreeNode {
-    fn class(mut self, class: Class) -> Self {
-        self.class = Some(class);
+    fn mark(mut self, category: Category, compare: Compare) -> Self {
+        (self.category, self.compare) = (Some(category), Some(compare));
         self
     }
     fn claims(mut self, claims: &[&str]) -> Self {
@@ -393,34 +372,34 @@ pub fn demo_tree() -> TreeNode {
         .summary("3 ctrl flow · 5 logic · 1 extract · 1 rename")
         .children(vec![
             tree(&t("signature"), "signature", Status::Changed)
-                .class(Class::Logic)
+                .mark(Category::Logic, Compare::CodeDifferent)
                 .claims(&["c10"])
                 .diff("⟦-> u32⟧→⟦-> Result<u32, CartError>⟧"),
-            tree(&t("S0"), "if self.items.is_empty() { return Ok(0) }", Status::Added).class(Class::ControlFlow).claims(&["c3", "c12"]),
+            tree(&t("S0"), "if self.items.is_empty() { return Ok(0) }", Status::Added).mark(Category::ControlFlow, Compare::CodeDifferent).claims(&["c3", "c12"]),
             tree(&t("S1"), "let mut sum = 0;", Status::Same),
             tree(&t("S2"), "for item in &self.items", Status::Changed).summary("2 ctrl flow · 1 logic · 1 extract").children(vec![
-                tree(&t("S2/body/S0"), "if item.qty >= MAX_QTY …", Status::Changed).class(Class::ControlFlow).children(vec![
+                tree(&t("S2/body/S0"), "if item.qty >= MAX_QTY …", Status::Changed).mark(Category::ControlFlow, Compare::CodeDifferent).children(vec![
                     tree(&t("S2/body/S0/cond"), "cond", Status::Changed)
-                        .class(Class::Logic)
+                        .mark(Category::Logic, Compare::CodeDifferent)
                         .claims(&["c4"])
                         .diff("item.qty ⟦>⟧→⟦>=⟧ MAX_QTY"),
-                    tree(&t("S2/body/S0/then/S0"), "continue;", Status::Removed).class(Class::ControlFlow).claims(&["c13"]),
+                    tree(&t("S2/body/S0/then/S0"), "continue;", Status::Removed).mark(Category::ControlFlow, Compare::CodeDifferent).claims(&["c13"]),
                     tree(&t("S2/body/S0/then/S1"), "return Err(CartError::TooMany(item.qty));", Status::Added)
-                        .class(Class::ControlFlow)
+                        .mark(Category::ControlFlow, Compare::CodeDifferent)
                         .claims(&["c14"]),
                 ]),
                 tree(&t("S2/body/S1"), "sum += item.price * item.qty  →  line_total(item)", Status::Extracted)
-                    .class(Class::Neutral)
+                    .mark(Category::Logic, Compare::CodeEqual)
                     .claims(&["c6"]),
             ]),
-            tree(&t("tail"), "tail", Status::Changed).class(Class::Logic).claims(&["c11"]).diff("⟦sum⟧→⟦Ok(sum)⟧"),
+            tree(&t("tail"), "tail", Status::Changed).mark(Category::Logic, Compare::CodeDifferent).claims(&["c11"]).diff("⟦sum⟧→⟦Ok(sum)⟧"),
         ]);
-    let cart = tree("shop_core::cart", "mod cart", Status::Changed).summary("3 ctrl flow · 7 logic · 3 neutral").children(vec![
+    let cart = tree("shop_core::cart", "mod cart", Status::Changed).summary("10 code different · 3 code equal").children(vec![
         total,
-        tree("shop_core::cart::Cart::len", "fn Cart::count → Cart::len", Status::Moved).class(Class::Neutral).claims(&["c2"]),
-        tree("shop_core::cart::CartError", "enum CartError", Status::Added).class(Class::Logic).claims(&["c9"]),
+        tree("shop_core::cart::Cart::len", "fn Cart::count → Cart::len", Status::Moved).mark(Category::Rename, Compare::CodeEqual).claims(&["c2"]),
+        tree("shop_core::cart::CartError", "enum CartError", Status::Added).mark(Category::Logic, Compare::CodeDifferent).claims(&["c9"]),
         tree("shop_core::cart::tests", "mod tests", Status::Changed).summary("1 new test").children(vec![
-            tree("shop_core::cart::tests::empty_cart_total", "fn empty_cart_total", Status::Added).class(Class::Logic).claims(&["c5"]),
+            tree("shop_core::cart::tests::empty_cart_total", "fn empty_cart_total", Status::Added).mark(Category::Logic, Compare::CodeDifferent).claims(&["c5"]),
             tree("shop_core::cart::tests::len_counts_items", "fn len_counts_items", Status::Same),
         ]),
         tree("shop_core::cart::Cart", "struct Cart", Status::Same),
@@ -428,9 +407,9 @@ pub fn demo_tree() -> TreeNode {
     ]);
     let billing = tree("shop_core::billing", "mod billing", Status::Added).children(vec![
         tree("shop_core::billing::line_total", "fn line_total   ⤴ from Cart::total", Status::Extracted)
-            .class(Class::Neutral)
+            .mark(Category::Move, Compare::CodeEqual)
             .claims(&["c7"])
-            .summary("1 unproved")
+            .summary("1 other")
             .children(vec![
                 tree("shop_core::billing::line_total/S0", "if item.discount …", Status::Changed)
                     .claims(&["c8"])
@@ -441,27 +420,27 @@ pub fn demo_tree() -> TreeNode {
         tree("shop_core::report::summary", "fn summary", Status::Uncovered).children(vec![
             tree("shop_core::report::summary/S0", "let total = …", Status::Uncovered).diff("⟦cart.total()⟧→⟦cart.total().unwrap_or(0)⟧"),
         ]),
-        tree("shop_core::report::legacy_total", "fn legacy_total", Status::Removed).class(Class::Logic).claims(&["c18"]),
+        tree("shop_core::report::legacy_total", "fn legacy_total", Status::Removed).mark(Category::Logic, Compare::CodeDifferent).claims(&["c18"]),
         tree("shop_core::report::format_line", "fn format_line", Status::Same),
     ]);
     let core = tree("shop_core", "crate shop_core", Status::Changed)
-        .summary("3 ctrl flow · 8 logic · 3 neutral · 1 other · 1 uncovered")
+        .summary("11 code different · 3 code equal · 1 no code · 1 uncovered")
         .children(vec![
             cart,
             billing,
             report,
             tree("shop_core/Cargo.toml", "Cargo.toml", Status::Changed)
-                .class(Class::Other)
+                .mark(Category::Manifest, Compare::NoCode)
                 .claims(&["c15"])
                 .diff("⟦⟧→⟦thiserror = \"2.0\"⟧"),
         ]);
     let cli = tree("shop_cli", "crate shop_cli", Status::Changed).summary("2 logic").children(vec![
         tree("shop_cli::run", "fn run", Status::Changed).summary("2 logic").children(vec![
             tree("shop_cli::run/S0", "let cart = …", Status::Changed)
-                .class(Class::Logic)
+                .mark(Category::Logic, Compare::CodeDifferent)
                 .claims(&["c17"])
                 .diff("load_cart(&path)⟦.unwrap()⟧→⟦?⟧"),
-            tree("shop_cli::run/S1", "let total = …", Status::Changed).class(Class::Logic).claims(&["c16"]).diff("cart.total()⟦⟧→⟦?⟧"),
+            tree("shop_cli::run/S1", "let total = …", Status::Changed).mark(Category::Logic, Compare::CodeDifferent).claims(&["c16"]).diff("cart.total()⟦⟧→⟦?⟧"),
             tree("shop_cli::run/S2", "println!(\"{}\", report::summary(&cart))", Status::Same),
         ]),
         tree("shop_cli::main", "fn main", Status::Same),

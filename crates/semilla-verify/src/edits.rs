@@ -4,13 +4,13 @@
 //! - The shape rules of the hints and the checkers of the old ops are the machinery. The fact text
 //!   uses the words of the op: "added early exit `…`", "changed literal `200` → `170`".
 //! - An edit with no exact shape gets the general fact "changed NODE: `A` → `B`".
-//! - The class comes from the proofs. The edits of a body with an equal MIR fold under one fact:
-//!   "BODY: neutral rewrite (proved Nk)". Without phase 2 data, the class is `None` (pending),
-//!   never neutral.
+//! - Each edit is its own fact with its text and its category (design 35). The compare result
+//!   comes later, from the MIR compare. An equal compare never hides the text of an edit.
+//! - Only a rename of a local variable folds the edits of its body under one fact.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Anchor, Claim, Class, Fact};
+use semilla_core::{Anchor, Category, Claim, Fact};
 use semilla_syntax::tree::{display_tokens, one_line};
 use semilla_syntax::{Edit, EditKind};
 
@@ -371,17 +371,15 @@ fn names_text(names: Option<Vec<crate::NameChange>>) -> String {
     }
 }
 
-/// The class of an edit fact from the body status and the op class. `None` before phase 2.
-fn class(context: &Context, item: &str, op_class: Option<Class>) -> Option<Class> {
-    if !context.bodies.available {
-        return None;
-    }
-    match context.bodies.status(item) {
-        Some(BodyStatus::Different { cfg_changed: true }) => Some(op_class.filter(|c| *c == Class::ControlFlow).unwrap_or(Class::ControlFlow)),
-        Some(BodyStatus::Different { .. } | BodyStatus::AfterOnly | BodyStatus::BeforeOnly) => Some(op_class.filter(|c| *c != Class::Neutral && *c != Class::Other).unwrap_or(Class::Logic)),
-        Some(BodyStatus::Equal { .. }) => Some(Class::Neutral),
-        // An item with no MIR body (a struct, a doc line): the class of the op, never neutral.
-        None => Some(op_class.filter(|c| *c != Class::Neutral).unwrap_or(Class::Logic)),
+/// The category of an edit fact from the category of its op and the body status (design 35).
+/// An op with no fixed category, and a `logic` op, give `control flow` if the control flow
+/// graph of the body changes. Each other op keeps its category.
+fn category(context: &Context, item: &str, op: Option<Category>) -> Category {
+    let graph_changed = matches!(context.bodies.status(item), Some(BodyStatus::Different { cfg_changed: true }));
+    match op {
+        Some(Category::Logic) | None if graph_changed => Category::ControlFlow,
+        Some(category) => category,
+        None => Category::Logic,
     }
 }
 
@@ -391,39 +389,39 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
     let free = |fact_of: &[Option<usize>], index: usize| owners[index].is_none() && fact_of[index].is_none();
     let item_of = |edit: &Edit| edit.anchor().map(|a| a.item.clone()).or_else(|| edit.item().map(str::to_string));
 
-    // 1. A body with an equal MIR: its edits fold under one neutral fact.
+    // 1. A rename of a local variable: the edits of the body fold under one fact. The text of
+    // the item changes only by the new names, so the fact text shows each edit (design 35).
     let mut by_item: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for index in (0..edits.len()).filter(|&i| free(fact_of, i)) {
         if let Some(item) = item_of(&edits[index]) {
             by_item.entry(item).or_default().push(index);
         }
     }
-    if context.bodies.available {
-        for (item, indexes) in &by_item {
-            let Some(BodyStatus::Equal { level, proof }) = context.bodies.status(item) else { continue };
-            // Only body edits fold: a doc or an item edit keeps its own fact.
-            let body: Vec<usize> = indexes.iter().copied().filter(|&i| matches!(edits[i].kind, EditKind::Replaced | EditKind::Modified | EditKind::Inserted | EditKind::Deleted | EditKind::Moved)).collect();
-            if body.is_empty() {
-                continue;
-            }
-            let mut name = level.to_uppercase();
-            if !proof.is_empty() {
-                name = format!("{name}: {}", proof.join(", "));
-            }
-            let renamed = crate::hints::likely_local_renames(&body.iter().map(|&i| edits[i].clone()).collect::<Vec<_>>(), context.before, context.after);
-            let what = match renamed.iter().find(|(owner, _, _)| owner == item) {
-                Some((_, old, new)) => format!("renamed local `{old}` → `{new}`"),
-                None => "neutral rewrite".to_string(),
-            };
-            push(facts, fact_of, &body, Fact {
-                at: Some(Anchor::item(item)),
-                file: edits[body[0]].file.clone(),
-                part: "body".into(),
-                description: format!("`{item}`: {what} (proved {name}), {} edit(s)", body.len()),
-                class: Some(Class::Neutral),
-                ..fact_base()
-            });
+    for (item, indexes) in &by_item {
+        // Only body edits fold: a doc or an item edit keeps its own fact.
+        let body: Vec<usize> = indexes.iter().copied().filter(|&i| matches!(edits[i].kind, EditKind::Replaced | EditKind::Modified | EditKind::Inserted | EditKind::Deleted | EditKind::Moved)).collect();
+        if body.is_empty() {
+            continue;
         }
+        let renamed = crate::hints::likely_local_renames(&body.iter().map(|&i| edits[i].clone()).collect::<Vec<_>>(), context.before, context.after);
+        // The pattern `_` is not a local: `let _h = f();` → `let _ = f();` moves a drop. Such an
+        // edit keeps its own fact ("changed pattern").
+        if renamed.iter().any(|(owner, old, new)| owner == item && (old == "_" || new == "_")) {
+            continue;
+        }
+        let pairs: Vec<String> = renamed.iter().filter(|(owner, _, _)| owner == item).map(|(_, old, new)| format!("`{old}` → `{new}`")).collect();
+        if pairs.is_empty() {
+            continue;
+        }
+        let what = if pairs.len() == 1 { "renamed local" } else { "renamed locals" };
+        push(facts, fact_of, &body, Fact {
+            at: Some(Anchor::item(item)),
+            file: edits[body[0]].file.clone(),
+            part: "body".into(),
+            description: format!("`{item}`: {what} {}, {} edit(s)", pairs.join(", "), body.len()),
+            category: Category::Rename,
+            ..fact_base()
+        });
     }
 
     // The `use` lines (batch 6a, A4). A changed line is the pair of a removed line and an
@@ -465,7 +463,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             file: edit.file.clone(),
             part: "edit".into(),
             description: format!("{description}{}", names_text(names)),
-            class: class(context, &at, Some(Class::Logic)),
+            category: Category::Import,
             reason: context.step.reasons.get(&at).cloned(),
             ..fact_base()
         });
@@ -482,7 +480,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             file: edit.file.clone(),
             part: "edit".into(),
             description: format!("added `use` line: `{}`{}", semilla_syntax::tree::short(&line_text(edit), 100), names_text(names)),
-            class: class(context, &item, Some(Class::Logic)),
+            category: Category::Import,
             reason: context.step.reasons.get(&item).cloned(),
             ..fact_base()
         });
@@ -500,13 +498,15 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             let added = (0..edits.len()).find(|&j| j != index && free(fact_of, j) && edits[j].kind == EditKind::ItemAdded && edits[j].item() == Some(item.as_str()));
             if let Some(added) = added {
                 let full = |text: &Option<String>| one_line(&text.clone().unwrap_or_default());
-                let what = if edit.attr_before.as_deref() == Some("use") || item.contains("::use#") { "`use` line" } else { "item" };
+                let is_use = edit.attr_before.as_deref() == Some("use") || item.contains("::use#");
+                let what = if is_use { "`use` line" } else { "item" };
+                let is_macro = [context.before, context.after].iter().any(|ws| ws.items.get(&item).is_some_and(|found| found.kind == semilla_syntax::ItemKind::Macro));
                 push(facts, fact_of, &[index, added], Fact {
                     at: Some(Anchor::item(&item)),
                     file: edits[added].file.clone(),
                     part: "edit".into(),
                     description: format!("changed {what}: `{}` → `{}`", full(&edit.source_before).trim(), full(&edits[added].source_after).trim()),
-                    class: class(context, &item, Some(Class::Logic)),
+                    category: if is_use { Category::Import } else if is_macro { Category::Macro } else { Category::Text },
                     reason: context.step.reasons.get(&item).cloned(),
                     ..fact_base()
                 });
@@ -514,7 +514,8 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             }
         }
         // A doc test is code (brief 5h, B1): `cargo test` compiles and runs each code block of a
-        // doc comment. The fact has the class `logic` and the diff of the full doc lines.
+        // doc comment. The fact has the category `docs`, the words "doc test" in its text, and
+        // the diff of the full doc lines.
         if let Some((description, content)) = crate::facts::doc_test_fact(&item, edit) {
             push(facts, fact_of, &[index], Fact {
                 at: Some(Anchor::item(&item)),
@@ -522,14 +523,14 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 part: "doc test".into(),
                 description,
                 content: Some(content),
-                class: Some(Class::Logic),
+                category: Category::Docs,
                 reason: context.step.reasons.get(&item).cloned(),
                 ..fact_base()
             });
             continue;
         }
         // A plain `//` or `/* */` comment changed (Part B of batch 5j). A comment is not a doc:
-        // the fact says "changed comment", class `other`, and it needs no reason.
+        // the fact says "changed comment", category `docs`, and it needs no reason.
         if edit.kind == EditKind::Comment {
             let (old, new) = short_pair(edit);
             let text = match (edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or("")) {
@@ -543,7 +544,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 part: "comment".into(),
                 description: text,
                 content: Some(crate::files::content_change(edit.text_before.as_deref(), edit.text_after.as_deref(), None, None)),
-                class: Some(Class::Other),
+                category: Category::Docs,
                 reason: edit.anchor().and_then(|a| context.step.reasons.get(&a.item).cloned()),
                 ..fact_base()
             });
@@ -553,7 +554,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         let anchor = if edit.kind == EditKind::Inserted { edit.after.clone() } else { edit.before.clone().or(edit.after.clone()) };
         let mut explained = vec![index];
         let mut description = None;
-        let mut op_class = None;
+        let mut op_category = None;
         if !op.contains(' ') && semilla_core::ops::op(op).is_some() {
             let mut claim = Claim { id: "derived".into(), op: op.to_string(), at: anchor.clone(), args: Default::default() };
             if matches!(op, "add-early-exit" | "add-if") {
@@ -564,7 +565,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             let outcome = checks::check(context, &claim);
             if outcome.status.is_verified() && outcome.explains.contains(&index) {
                 explained = outcome.explains.iter().copied().filter(|&i| free(fact_of, i)).collect();
-                op_class = outcome.class;
+                op_category = outcome.category;
                 let text = match (edit.kind, &edit.text_before, &edit.text_after) {
                     (EditKind::ItemAdded | EditKind::ItemRemoved, _, _) => format!("`{item}`"),
                     (_, Some(_), Some(_)) if matches!(op, "add-arm" | "add-alternative") && inserted(edit).is_some() => format!("`{}`", inserted(edit).unwrap_or_default()),
@@ -604,7 +605,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 let outcome = checks::check(context, &claim);
                 if outcome.status.is_verified() && outcome.explains.contains(&index) {
                     explained = outcome.explains.iter().copied().filter(|&i| free(fact_of, i)).collect();
-                    op_class = outcome.class;
+                    op_category = outcome.category;
                     let (old, new) = short_pair(edit);
                     description = Some(format!("removed `if`, kept the `{keep}` branch: `{old}` → `{new}`"));
                     break;
@@ -631,15 +632,15 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         let place = anchor.clone().map(|a| a.to_string()).unwrap_or_else(|| item.clone());
         // The text of a move has its two places.
         let location = anchor.as_ref().filter(|a| !a.path.is_empty() && moved_text(edit).is_none()).map(|a| format!(" at `{a}`")).unwrap_or_default();
-        // C1: a doc edit has no MIR: its class is `other`, also in a body that changed.
-        let class = if matches!(edit.kind, EditKind::Docs | EditKind::Comment) { Some(Class::Other) } else { class(context, &item, op_class) };
+        // C1: a doc edit has no MIR: its category is `docs`, also in a body that changed.
+        let category = if matches!(edit.kind, EditKind::Docs | EditKind::Comment) { Category::Docs } else { category(context, &item, op_category) };
         push(facts, fact_of, &explained, Fact {
             at: anchor.clone().or_else(|| Some(Anchor::item(&item))),
             file: edit.file.clone(),
             part: "edit".into(),
             description: format!("{description}{location}"),
             content: long_content(edit),
-            class,
+            category,
             reason: context.step.reasons.get(&place).cloned(),
             ..fact_base()
         });
@@ -750,11 +751,11 @@ fn split_types(text: &str) -> Vec<String> {
 }
 
 /// Folds equal facts into one fact (design 24.2, the short output). Two edit facts fold when they
-/// have the same text (without the place), the same class, and no spotlight. Two neutral body
-/// facts fold when they have the same proof text. Two type facts fold when they have the same
+/// have the same text (without the place), the same category, the same compare result, and no
+/// spotlight. Two body facts fold when they have the same text. Two type facts fold when they have the same
 /// type change (trial 4, C5): "type `u32` → `u64` in 8 places: …". The places go to the `sites`
 /// of the fact, and the text of a type fold names each place. A fact with a different text or a
-/// different class never folds.
+/// different category or compare result never folds.
 pub fn fold(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>]) {
     let key = |fact: &Fact| -> Option<(String, String)> {
         if fact.spotlight || fact.reason.is_some() || !fact.sites.is_empty() {
@@ -762,7 +763,7 @@ pub fn fold(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>]) {
         }
         // Facts with different notes stay apart: the note of one fact is not true for the
         // bodies of a different fact (batch 5u, part A).
-        let class = format!("{:?} {:?}", fact.class, fact.note);
+        let class = format!("{:?} {:?} {:?}", fact.category, fact.compare, fact.note);
         if let Some((old, new, _)) = type_change(fact) {
             let text = format!("type `{old}` → `{new}`");
             // Facts with different API notes stay apart (batch 6a, A1).

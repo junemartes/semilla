@@ -30,7 +30,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use semilla_core::{Class, GroupKind, Subgroup};
+use semilla_core::{GroupKind, Subgroup};
 
 use crate::app::App;
 
@@ -66,7 +66,7 @@ enum Command {
         #[command(subcommand)]
         action: PairAction,
     },
-    /// Check and store one step: `semilla step "<intent>" [--group T] [--claim '…'] [--reason 'ANCHOR=TEXT'] [--class C]`.
+    /// Check and store one step: `semilla step "<intent>" [--group T] [--claim '…'] [--reason 'ANCHOR=TEXT']`.
     ///
     /// The first argument is always the intent. `step` has no subcommand (batch 5g): each word is
     /// a valid intent, also `edit` or `end`.
@@ -83,9 +83,6 @@ enum Command {
         /// The reason for a fact in the spotlight: `ANCHOR=TEXT`.
         #[arg(long = "reason")]
         reasons: Vec<String>,
-        /// A declared class (neutral, logic, control_flow, other).
-        #[arg(long)]
-        class: Option<String>,
         /// Also print the change tree.
         #[arg(long)]
         tree: bool,
@@ -135,12 +132,12 @@ enum Command {
         up: usize,
     },
     /// (old protocol, for the replay) Verify one step (default: the last or open step). Without `--full`, only phase 1 runs:
-    /// the syntax checks; the body proofs are pending and run in the background.
+    /// the syntax checks; the compare results are pending and the MIR checks run in the background.
     #[command(hide = true)]
     Check {
         #[arg(long)]
         step: Option<usize>,
-        /// Also run phase 2 now (the MIR body proofs).
+        /// Also run phase 2 now (the MIR checks).
         #[arg(long)]
         full: bool,
     },
@@ -303,7 +300,7 @@ enum ReplayAction {
     Apply {
         /// The plan file (default `.semilla/plan.json`).
         plan: Option<PathBuf>,
-        /// Also run phase 2 now (the MIR body proofs), and wait for it.
+        /// Also run phase 2 now (the MIR checks), and wait for it.
         #[arg(long)]
         full: bool,
     },
@@ -319,22 +316,15 @@ enum ReplayAction {
 #[derive(Subcommand)]
 enum StepAction {
     /// Start a step.
-    Begin {
-        intent: String,
-        #[arg(long)]
-        class: Option<String>,
-    },
+    Begin { intent: String },
     /// End the open step.
     End,
     /// Open the last step again, to fix its claims.
     Reopen,
-    /// Change the intent or the declared class of the open step.
+    /// Change the intent of the open step.
     Edit {
         #[arg(long)]
         intent: Option<String>,
-        /// A class, or `none` to remove the declared class.
-        #[arg(long)]
-        class: Option<String>,
     },
     /// Remove the open step when it has no change, or the last step when it is empty.
     Drop,
@@ -424,10 +414,6 @@ fn has_old_option(command: &Command) -> bool {
     matches!(command, Command::Status { trust_build_code: true, .. } | Command::Review { trust_build_code: true, .. } | Command::Ui { trust_build_code: true, .. } | Command::Verify { trust_build_code: true, .. })
 }
 
-fn parse_class(text: &str) -> Result<Class> {
-    serde_json::from_value(serde_json::Value::String(text.to_string())).with_context(|| format!("`{text}` is not a class (neutral, logic, control_flow, other)"))
-}
-
 /// Removes each folder of `PATH` that is relative or in the repository folder. Semilla starts
 /// `git`, `cargo`, and `rustc` by name. The agent controls the repository folder, so a program
 /// there is never one of these tools (invariant I5).
@@ -496,9 +482,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, reasons, class, tree, fast } => {
+        Command::Step { intent, group, claims, reasons, tree, fast } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, class: class.as_deref().map(parse_class).transpose()?, tree, fast };
+            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             if !stored {
@@ -507,17 +493,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Undo => println!("{}", app.undo()?),
-        Command::OldStep { action: StepAction::Begin { intent, class } } => println!("{}", app.step_begin(&intent, class.as_deref().map(parse_class).transpose()?)?),
+        Command::OldStep { action: StepAction::Begin { intent } } => println!("{}", app.step_begin(&intent)?),
         Command::OldStep { action: StepAction::End } => println!("{}", app.step_end()?),
         Command::OldStep { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
-        Command::OldStep { action: StepAction::Edit { intent, class } } => {
-            let class = match class.as_deref() {
-                None => None,
-                Some("none") => Some(None),
-                Some(text) => Some(Some(parse_class(text)?)),
-            };
-            println!("{}", app.step_edit(intent.as_deref(), class)?);
-        }
+        Command::OldStep { action: StepAction::Edit { intent } } => println!("{}", app.step_edit(intent.as_deref())?),
         Command::OldStep { action: StepAction::Drop } => println!("{}", app.step_drop()?),
         Command::Claim { op, at, args } => {
             let mut map = serde_json::Map::new();
@@ -694,8 +673,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Ops { name: Some(name) } => {
             let op = semilla_core::ops::op(&name).with_context(|| format!("unknown operation `{name}`"))?;
             println!("{}: {}", op.name, op.summary);
-            println!("  level: {}   kind: {}   class: {}   role: {}", format!("{:?}", op.level).to_lowercase(), format!("{:?}", op.kind).to_lowercase(),
-                op.class.map(|c| serde_json::to_value(c).unwrap().as_str().unwrap().to_string()).unwrap_or("computed from the MIR".into()),
+            println!("  level: {}   kind: {}   category: {}   role: {}", format!("{:?}", op.level).to_lowercase(), format!("{:?}", op.kind).to_lowercase(),
+                op.category.map(|category| category.name()).unwrap_or("none"),
                 serde_json::to_value(op.role).unwrap().as_str().unwrap());
             println!("  needs: {}", if op.args.is_empty() { "an anchor only".to_string() } else { format!("an anchor, and {}", op.args.join(", ")) });
             let optional: Vec<&str> = app::optional_args(op.name).into_iter().filter(|arg| !op.args.contains(arg)).collect();

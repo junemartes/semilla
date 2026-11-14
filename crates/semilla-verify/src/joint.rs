@@ -371,9 +371,9 @@ impl Joint<'_> {
     /// feature selections that Semilla added for this step.
     fn text(&self, name: &str, gap: &Gap, added: &[Selection]) -> String {
         match gap {
-            Gap::NoAtom | Gap::NoUnit => format!("{GAP}Semilla cannot find the build conditions of this proof"),
-            Gap::Many(count) => format!("{GAP}this proof uses {count} build conditions (the limit is {LIMIT})"),
-            Gap::Outside => format!("{GAP}this proof uses a build condition of a different crate, or of a file that a different crate also reads"),
+            Gap::NoAtom | Gap::NoUnit => format!("{GAP}Semilla cannot find the build conditions of this compare"),
+            Gap::Many(count) => format!("{GAP}this compare uses {count} build conditions (the limit is {LIMIT})"),
+            Gap::Outside => format!("{GAP}this compare uses a build condition of a different crate, or of a file that a different crate also reads"),
             Gap::Valuation(valuation) => {
                 let state: Vec<String> = valuation.iter().map(|(atom, value)| format!("{} {}", show(atom), if *value { "on" } else { "off" })).collect();
                 let selection = self.selection(name, valuation);

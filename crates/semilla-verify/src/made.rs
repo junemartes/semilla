@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Anchor, Class, Step, StepReport};
+use semilla_core::{Anchor, Category, Step, StepReport};
 use semilla_syntax::{Edit, EditKind, Item, ItemKind, Workspace};
 
 /// One item of the expanded code, from the compiler.
@@ -386,7 +386,7 @@ pub(crate) fn apply(step: &Step, edits: &[Edit], fact_of: &[Option<usize>], befo
                     part: "macro call".into(),
                     description: format!("items of the macro call `{name}`"),
                     status: "derived".into(),
-                    class: Some(Class::Logic),
+                    category: Category::Macro,
                     spotlight: true,
                     spotlight_why: Some(why),
                     reason: step.reasons.get(&call.path).cloned(),

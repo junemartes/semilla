@@ -33,7 +33,10 @@ use crate::checks::BodyIndex;
 use crate::ConfigTruth;
 
 /// The start of the text of the spotlight.
-pub(crate) const START: &str = "build configuration: ";
+pub(crate) const START: &str = "inactive code: ";
+
+/// The start of the note of a fact with the result `no compare`.
+pub(crate) const NO_COMPARE: &str = "no compare:";
 
 /// The clause for code that no checked configuration compiles.
 const NOT_COMPILED: &str = "no checked configuration compiles the changed code";
@@ -444,7 +447,7 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
 
 /// The text of the spotlight for a list of causes.
 pub(crate) fn spotlight_text(causes: &[String]) -> String {
-    format!("{START}{}, so the edit has no proof", causes.join("; "))
+    format!("{START}{}, so Semilla did not compare the edit", causes.join("; "))
 }
 
 /// The file and the line range of an anchor in a tree.
@@ -467,7 +470,7 @@ fn span_of(workspace: &Workspace, anchor: &semilla_core::Anchor) -> Option<(Stri
 ///    not neutral.
 /// 3. A dead line with no fact gets a new fact.
 pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::Step, edits: &[semilla_syntax::Edit], fact_of: &[Option<usize>], renames: &semilla_syntax::Renames, report: &mut semilla_core::StepReport) {
-    use semilla_core::{Anchor, Class, ClaimStatus};
+    use semilla_core::{Anchor, Category, ClaimStatus, Compare};
     if dead.is_empty() {
         return;
     }
@@ -479,7 +482,7 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
         let found = span_of(sides[0], &Anchor::item(&at.item)).and_then(|span| hit(0, &span)).or_else(|| span_of(sides[1], &Anchor::item(&new)).and_then(|span| hit(1, &span)));
         let Some(found) = found else { continue };
         for result in report.claims.iter_mut().filter(|result| result.claim == claim.id && result.status.is_verified()) {
-            result.status = ClaimStatus::Unproved { reason: format!("{}, so the identity of `{}` has no proof", found.cause, at.item) };
+            result.status = ClaimStatus::Refuted { reason: format!("{}, so Semilla cannot compare the code of `{}`", found.cause, at.item) };
             result.hint = Some("Remove the claim. Semilla derives the facts of the edit. They need a reason.".into());
         }
     }
@@ -539,14 +542,21 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
         fact.spotlight_why = Some(match fact.spotlight_why.take() {
             // The old text of a fact in a function with no body record says less.
             Some(why) if why == crate::facts::INACTIVE => text,
-            // The spotlight of a `cfg` attribute in a changed body names the condition.
-            Some(why) if why.starts_with(crate::facts::CONFIG_SPOTLIGHT) => why,
             Some(why) => format!("{why}; {text}"),
             None => text,
         });
         fact.spotlight = true;
-        if matches!(fact.class, Some(Class::Neutral) | Some(Class::Other)) {
-            fact.class = Some(Class::Logic);
+        // The compare has no data for this code (design 35). A fact with a changed body keeps
+        // its result.
+        if fact.affected.is_empty() {
+            fact.compare = Compare::NoCompare;
+            let place = fact.at.as_ref().map(|at| at.item.clone()).or_else(|| fact.file.clone()).unwrap_or_default();
+            let note = format!("{NO_COMPARE} no checked configuration compiles `{place}`");
+            fact.note = Some(match fact.note.take() {
+                Some(old) if old.contains(&note) => old,
+                Some(old) => format!("{old}; {note}"),
+                None => note,
+            });
         }
         if fact.reason.is_none() {
             fact.reason = reason_of(fact);
@@ -567,7 +577,9 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
                 None => "an edit in code that no checked configuration compiles".into(),
             },
             status: "derived".into(),
-            class: Some(Class::Logic),
+            category: Category::Text,
+            compare: Compare::NoCompare,
+            note: Some(format!("{NO_COMPARE} no checked configuration compiles `{}`", item.clone().unwrap_or_else(|| file.clone()))),
             spotlight: true,
             spotlight_why: Some(spotlight_text(&list)),
             ..Default::default()

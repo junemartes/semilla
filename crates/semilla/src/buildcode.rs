@@ -552,7 +552,7 @@ pub fn base_code_line(commits: &[(String, Vec<String>)], stopped: bool) -> Optio
     }
     let found = list(commits.iter().map(|(commit, files)| format!("`{commit}` ({})", list(files.clone(), ", "))).collect(), "; ");
     let limit = if stopped { format!(" Semilla examined only the {BASE_WALK} commits before this change set.") } else { String::new() };
-    Some(format!("! the base has build code that a recent commit changed: {found}. Each proof of this change set ran this code. No mark shows this, because the change is before the base.{limit}"))
+    Some(format!("! the base has build code that a recent commit changed: {found}. Each check of this change set ran this code. No mark shows this, because the change is before the base.{limit}"))
 }
 
 /// The option of a reviewer command that runs changed build code with a limit of the sandbox
@@ -993,14 +993,14 @@ mod tests {
         let one = [("abc1234".to_string(), vec!["crates/core/build.rs".to_string()])];
         assert_eq!(
             base_code_line(&one, false).unwrap(),
-            "! the base has build code that a recent commit changed: `abc1234` (crates/core/build.rs). Each proof of this change set ran this code. No mark shows this, because the change is before the base."
+            "! the base has build code that a recent commit changed: `abc1234` (crates/core/build.rs). Each check of this change set ran this code. No mark shows this, because the change is before the base."
         );
         assert!(base_code_line(&one, true).unwrap().ends_with("because the change is before the base. Semilla examined only the 20 commits before this change set."));
         // A long list shows three entries and the number of the others.
         let files: Vec<String> = (0..5).map(|n| format!("f{n}")).collect();
         let many: Vec<(String, Vec<String>)> = (0..4).map(|n| (format!("c{n}"), files.clone())).collect();
         let line = base_code_line(&many, false).unwrap();
-        assert!(line.contains("`c0` (f0, f1, f2, and 2 more); `c1` (") && line.contains("`c2` (f0, f1, f2, and 2 more); and 1 more. Each proof"), "{line}");
+        assert!(line.contains("`c0` (f0, f1, f2, and 2 more); `c1` (") && line.contains("`c2` (f0, f1, f2, and 2 more); and 1 more. Each check"), "{line}");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use semilla_core::view::{FlowGraph, TreeNode, WorkspaceGraph};
-use semilla_core::{Anchor, ChangeSet, ClaimStatus, Class, Claim, Group, GroupKind, Report, Step, Subgroup};
+use semilla_core::{Anchor, ChangeSet, ClaimStatus, Claim, Compare, Group, GroupKind, Report, Step, Subgroup};
 use semilla_syntax::Workspace;
 use semilla_verify::{Options, StepOutcome};
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,6 @@ use crate::oracle::{NormalOracle, SmtOracle};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OpenStep {
     pub intent: String,
-    pub class: Option<Class>,
     pub tree_before: String,
     pub claims: Vec<Claim>,
     /// The reasons for the spotlight facts, by the anchor of the fact (`semilla reason`).
@@ -32,11 +31,6 @@ pub struct OpenStep {
 }
 
 pub use semilla_core::ops::optional_args;
-
-/// The text of a class, as the CLI reads it.
-pub fn class_text(class: Class) -> String {
-    serde_json::to_value(class).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
-}
 
 /// The work in progress.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -150,47 +144,46 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     }
 }
 
-/// Puts the mark on each node of the change tree with the class `neutral` whose step used
+/// Puts the mark on each node of the change tree with the result `code equal` whose step used
 /// changed build code (design 28, invariant I6). The count of a parent node says how many of its
-/// `neutral` nodes have the mark. Returns that count.
+/// `code equal` nodes have the mark. Returns that count.
 fn mark_tree(node: &mut TreeNode, note: &semilla_core::report::BuildCodeNote, lone: Option<usize>) -> usize {
     let marked: usize = node.children.iter_mut().map(|child| mark_tree(child, note, lone)).sum();
     let mark = if node.steps.is_empty() { lone.and_then(|step| note.mark_of(step)) } else { node.steps.iter().filter_map(|step| note.mark_of(*step)).min() };
-    if node.class == Some(Class::Neutral) {
+    if node.compare == Some(Compare::CodeEqual) {
         node.build_code = mark;
     }
     if node.children.is_empty() {
-        // The same rule as the count of the tree: a node with no claim is not `neutral`.
-        let neutral = node.class == Some(Class::Neutral) && node.status != semilla_core::view::Status::Uncovered;
-        return usize::from(neutral && mark.is_some());
+        // The same rule as the count of the tree: an uncovered node has no compare result.
+        let equal = node.compare == Some(Compare::CodeEqual) && node.status != semilla_core::view::Status::Uncovered;
+        return usize::from(equal && mark.is_some());
     }
     if let Some(summary) = node.summary.as_mut().filter(|_| marked > 0) {
-        let parts: Vec<String> = summary.split(" · ").map(|part| if part.ends_with(" neutral") { format!("{part}{}", note.count_text(marked)) } else { part.to_string() }).collect();
+        let parts: Vec<String> = summary.split(" · ").map(|part| if part.ends_with(" code equal") { format!("{part}{}", note.count_text(marked)) } else { part.to_string() }).collect();
         *summary = parts.join(" · ");
     }
     marked
 }
 
-/// Makes the report of a step a report with no check (design 28): each fact has the class
-/// `not checked`, and no claim is verified. A problem that needs no build stays (a claim with
+/// Makes the report of a step a report with no check (design 28): each fact has the compare
+/// result `not checked`, and no claim is verified. A problem that needs no build stays (a claim with
 /// bad syntax, a spotlight with no reason).
 fn mark_not_checked(step: &mut semilla_core::report::StepReport, reason: &str) {
     for fact in &mut step.facts {
-        fact.class = Some(Class::NotChecked);
+        fact.compare = Compare::NotChecked;
         fact.affected.clear();
         fact.equal_sites.clear();
     }
     for claim in &mut step.claims {
         if claim.status.is_verified() || claim.status.is_pending() {
             claim.status = ClaimStatus::NotChecked { reason: reason.to_string() };
-            claim.class = None;
+            claim.category = None;
             claim.effect = None;
             claim.witness = None;
             claim.affected.clear();
             claim.complete_calls.clear();
         }
     }
-    step.computed_class = None;
 }
 
 /// True if a step has a problem that is not a missing check: an error, a change with no fact, a
@@ -260,9 +253,6 @@ pub(crate) fn redo_route(set: &ChangeSet, report: &semilla_core::report::StepRep
                 let place = fact.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| fact.part.clone());
                 parts.push(format!("--reason {}", quote(&format!("{place}=<why>"))));
             }
-        }
-        if let Some(class) = step.class {
-            parts.push(format!("--class {}", class_text(class)));
         }
         put_line(&mut text, &format!("  git restore --source={} --worktree -- . && {}", step.tree_after, parts.join(" ")));
     }
@@ -584,7 +574,7 @@ impl App {
     // ----- the tag tools -----
 
     /// Starts a step. The current working tree is the "before" tree.
-    pub fn step_begin(&mut self, intent: &str, class: Option<Class>) -> Result<String> {
+    pub fn step_begin(&mut self, intent: &str) -> Result<String> {
         if intent.trim().is_empty() {
             bail!("the intent has no text. The reviewer reads the intent: say what the step does");
         }
@@ -616,7 +606,7 @@ impl App {
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
         }
-        session.open = Some(OpenStep { intent: intent.to_string(), class, tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new() });
+        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new() });
         self.save_session(&session)?;
         let mut text = format!("step {} started at tree {tree}", session.changeset.steps.len());
         if session.changeset.steps.is_empty() {
@@ -692,18 +682,14 @@ impl App {
         self.save_session(&session)
     }
 
-    /// Changes the intent or the declared class of the open step. `class` is `Some(None)` to
-    /// remove the declared class.
-    pub fn step_edit(&mut self, intent: Option<&str>, class: Option<Option<Class>>) -> Result<String> {
+    /// Changes the intent of the open step.
+    pub fn step_edit(&mut self, intent: Option<&str>) -> Result<String> {
         let mut session = self.load_session()?;
         let open = session.open.as_mut().context("no step of the old protocol is open; `semilla old-step reopen` opens the last step")?;
         if let Some(intent) = intent {
             open.intent = intent.to_string();
         }
-        if let Some(class) = class {
-            open.class = class;
-        }
-        let text = format!("the open step: intent {}, class {}", semilla_core::text::quoted(&open.intent), open.class.map(semilla_verify::class_name).unwrap_or("not declared"));
+        let text = format!("the open step: intent {}", semilla_core::text::quoted(&open.intent));
         self.save_session(&session)?;
         Ok(text)
     }
@@ -760,7 +746,7 @@ impl App {
             group.steps.retain(|index| *index != step.index);
         }
         let claims = step.claims.len();
-        session.open = Some(OpenStep { intent: step.intent, class: step.class, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons });
+        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons });
         self.save_session(&session)?;
         Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla old-step end`", step.index))
     }
@@ -776,7 +762,7 @@ impl App {
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
         let index = session.changeset.steps.len();
-        session.changeset.steps.push(Step { index, intent: open.intent, class: open.class, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons });
+        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         if queue {
@@ -1276,7 +1262,7 @@ impl App {
         if let Some(open) = session.open {
             let tree = self.repo.write_tree()?;
             let index = set.steps.len();
-            set.steps.push(Step { index, intent: open.intent, class: open.class, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons });
+            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons });
             set.head_tree = tree;
         }
         Ok(set)
@@ -1476,7 +1462,7 @@ impl App {
         crate::oracle::READ_TIME.print("read the records of a cache folder");
         crate::oracle::MARK_TIME.print("give the records to the build configuration rules");
         crate::oracle::N0_TIME.print("compare the bodies at N0");
-        crate::oracle::DEEP_TIME.print("compare the bodies (N0 to N4)");
+        crate::oracle::DEEP_TIME.print("compare the bodies (N2 to N4: not in use)");
         // The test rule of `tests` groups needs the test items of all trees.
         let test_items: BTreeSet<String> = cache.values().flat_map(|ws| ws.items.values().filter(|i| i.test).map(|i| i.path.clone())).collect();
         semilla_verify::organize::check_test_groups(set, &test_items, &mut report);
@@ -1487,7 +1473,7 @@ impl App {
             if pair.reviewer.as_deref() == Some("accepted") {
                 // "Own step" is not a route when the step of the pair has no other change.
                 report.organization.push(match &pair.stopped {
-                    Some(cause) => format!("the reviewer accepted the pair warning `{}`: its step has no other change, and Semilla has no proof that it is one item ({cause}). Change the code that stops the proof, or ask the reviewer to dismiss the warning", pair.key()),
+                    Some(cause) => format!("the reviewer accepted the pair warning `{}`: its step has no other change, and Semilla cannot derive that it is one item ({cause}). Change the code that stops the derivation, or ask the reviewer to dismiss the warning", pair.key()),
                     None => format!("the reviewer accepted the pair warning `{}`: make it one changed item: put the rename or the move in its own step with no other change, then change the body in the next step", pair.key()),
                 });
             }
@@ -1942,7 +1928,6 @@ pub(crate) fn short_text(report: &Report) -> String {
     let not_checked = report.build_code.as_ref().map(|note| note.not_checked()).unwrap_or_default();
     for step in &report.steps {
         let facts = step.facts.len();
-        let neutral = step.facts.iter().filter(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight).count();
         let detail = if facts == 0 {
             String::new()
         } else if not_checked.contains(&step.step) {
@@ -1950,12 +1935,11 @@ pub(crate) fn short_text(report: &Report) -> String {
             // A check can join the edits of a body in one fact, so this count can be larger
             // than the count of the checked step (batch 5w, D4). The text says what it counts.
             format!(" · {facts} fact{} from the syntax only, not checked", if facts == 1 { "" } else { "s" })
-        } else if report.phase == "syntax" {
-            format!(" · {facts} fact{}", if facts == 1 { "" } else { "s" })
         } else {
-            // Design 28: the count says how many proofs used changed build code.
-            let marked = step.facts.iter().filter(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight && fact.build_code.is_some()).count();
-            format!(" · {facts} fact{}: {neutral} proved neutral{}, {} to read", if facts == 1 { "" } else { "s" }, report.marked_text(marked), facts - neutral)
+            // Design 35.6: the count of each compare result. Design 28: the count of `code
+            // equal` says how many compares used changed build code.
+            let marked = step.facts.iter().filter(|fact| fact.compare == Compare::CodeEqual && fact.build_code.is_some()).count();
+            format!(" · {}", semilla_core::report::FactCounts::of(step.facts.iter()).text(&report.marked_text(marked)))
         };
         let claims = match step.claims.len() {
             0 => String::new(),
@@ -2070,22 +2054,15 @@ pub(crate) fn summary_line(report: &Report) -> String {
     } else if report.accepted {
         "accepted".to_string()
     } else if phase1_ok && report.pending > 0 && !report.not_complete() {
-        format!("phase 1 ok, {} body proof(s) pending", report.pending)
+        format!("phase 1 ok, {} check(s) pending", report.pending)
     } else if phase1_ok && !report.not_complete() {
         "phase 1 ok".to_string()
     } else {
         "rejected".to_string()
     };
-    let all = || checked.iter().flat_map(|step| &step.facts);
-    let (facts, neutral, spotlight) = (all().count(), all().filter(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight).count(), all().filter(|fact| fact.spotlight).count());
-    let facts = if facts == 0 {
-        "0 facts".to_string()
-    } else if report.phase == "syntax" {
-        // Phase 1 has no MIR compare: it gives no class.
-        format!("{facts} fact{}: {spotlight} with a spotlight (phase 2 gives the classes)", if facts == 1 { "" } else { "s" })
-    } else {
-        format!("{facts} fact{}: {neutral} proved neutral{}, {} to read ({spotlight} with a spotlight)", if facts == 1 { "" } else { "s" }, report.marked_text(report.marked_count()), facts - neutral)
-    };
+    // Design 35.6: the count of each compare result. A step with no check has the result
+    // `not checked` for each fact.
+    let facts = report.facts_text();
     // The claims by result. A property claim that Semilla proves only in part is "partial".
     let mut results: Vec<(&str, usize)> = Vec::new();
     // I6: the count of the proofs says how many used changed build code.
@@ -2094,7 +2071,6 @@ pub(crate) fn summary_line(report: &Report) -> String {
         let name = match &claim.status {
             ClaimStatus::Verified { proof } if proof == "partial" => "partial",
             ClaimStatus::Verified { .. } => "verified",
-            ClaimStatus::Unproved { .. } => "unproved",
             ClaimStatus::Refuted { .. } => "refuted",
             ClaimStatus::Empty => "empty",
             ClaimStatus::Malformed { .. } => "malformed",
@@ -2113,7 +2089,7 @@ pub(crate) fn summary_line(report: &Report) -> String {
             }
         }
     }
-    let order = ["verified", "partial", "pending", "unproved", "refuted", "empty", "malformed", "not checked"];
+    let order = ["verified", "partial", "pending", "refuted", "empty", "malformed", "not checked"];
     results.sort_by_key(|(name, _)| order.iter().position(|known| known == name));
     let total: usize = results.iter().map(|(_, count)| count).sum();
     let claims = match total {
@@ -2125,6 +2101,8 @@ pub(crate) fn summary_line(report: &Report) -> String {
         // A4.3: the result of the checked steps, then the steps with no check and the cause.
         Some(note) if !note.ran => {
             let numbers: Vec<usize> = checked.iter().map(|step| step.step).collect();
+            // The counts of the checked steps only. The line names the other steps.
+            let facts = semilla_core::report::FactCounts::of(checked.iter().flat_map(|step| &step.facts)).text("");
             let done = if numbers.is_empty() { String::new() } else { format!(" · {}: {facts} · {claims}", semilla_core::report::step_ranges(&numbers)) };
             format!("result: {verdict}{done} · {}", note.not_checked_text())
         }

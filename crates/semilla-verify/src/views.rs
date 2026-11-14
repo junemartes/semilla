@@ -4,7 +4,24 @@
 use std::collections::BTreeMap;
 
 use semilla_core::view::{FlowGraph, Status, TreeNode, WorkspaceGraph};
-use semilla_core::{text, Class, ClaimStatus, StepReport};
+use semilla_core::{text, Category, ClaimStatus, Compare, StepReport};
+
+/// The category and the compare result of an edit or of a tree node (design 35).
+pub type Mark = (Option<Category>, Option<Compare>);
+
+/// Joins two marks. The category with the highest weight stays. The compare result that comes
+/// first in the report order stays.
+pub fn merge_marks(old: Mark, new: Mark) -> Mark {
+    let category = match (old.0, new.0) {
+        (Some(a), Some(b)) => Some(if b.weight() > a.weight() { b } else { a }),
+        (a, b) => a.or(b),
+    };
+    let compare = match (old.1, new.1) {
+        (Some(a), Some(b)) => Some(if b.order() < a.order() { b } else { a }),
+        (a, b) => a.or(b),
+    };
+    (category, compare)
+}
 use semilla_syntax::{Edit, EditKind, Renames, Workspace};
 
 use crate::StepOutcome;
@@ -34,7 +51,8 @@ pub struct FinalEdit {
     pub steps: Vec<usize>,
     /// The claims and the facts that own the edit.
     pub owners: Vec<String>,
-    pub class: Option<Class>,
+    /// The category and the compare result of the owners.
+    pub mark: Mark,
     /// False if a step edit of this edit has no claim and no fact.
     pub covered: bool,
 }
@@ -109,7 +127,7 @@ struct StepEdit<'a> {
     position: usize,
     step: usize,
     owner: Option<String>,
-    class: Option<Class>,
+    mark: Mark,
     head: Option<String>,
     base: Option<String>,
 }
@@ -118,15 +136,15 @@ fn step_edits(outcomes: &[StepOutcome]) -> Vec<StepEdit<'_>> {
     let names = Names(outcomes.iter().map(|outcome| &outcome.renames.items).collect());
     let mut all = Vec::new();
     for (position, outcome) in outcomes.iter().enumerate() {
-        let mut classes: BTreeMap<String, Option<Class>> = outcome.report.claims.iter().map(|c| (c.claim.clone(), c.class)).collect();
-        classes.extend(outcome.report.facts.iter().map(|f| (f.id.clone(), f.class)));
+        let mut marks: BTreeMap<String, Mark> = outcome.report.claims.iter().map(|c| (c.claim.clone(), (c.category, None))).collect();
+        marks.extend(outcome.report.facts.iter().map(|f| (f.id.clone(), (Some(f.category), Some(f.compare)))));
         for (index, edit) in outcome.edits.iter().enumerate() {
             // A fact owns its edits like a claim: the tree shows the fact ID (`f1`).
             let owner = outcome.owners[index].map(|claim| outcome_claim_id(outcome, claim)).or_else(|| fact_id(outcome, index));
-            let class = owner.as_ref().and_then(|id| classes.get(id).copied().flatten());
+            let mark = owner.as_ref().and_then(|id| marks.get(id).copied()).unwrap_or_default();
             let head = edit.after.as_ref().map(|anchor| names.forward(&anchor.item, position + 1));
             let base = edit.before.as_ref().and_then(|anchor| names.backward(&anchor.item, position));
-            all.push(StepEdit { edit, position, step: outcome.report.step, owner, class, head, base });
+            all.push(StepEdit { edit, position, step: outcome.report.step, owner, mark, head, base });
         }
     }
     all
@@ -175,7 +193,7 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
     let steps = step_edits(outcomes);
     // One step: its edits are the diff, with the exact owners.
     if outcomes.len() <= 1 {
-        let finals = steps.iter().map(|step| FinalEdit { edit: step.edit.clone(), steps: Vec::new(), owners: step.owner.clone().into_iter().collect(), class: step.class, covered: step.owner.is_some() }).collect();
+        let finals = steps.iter().map(|step| FinalEdit { edit: step.edit.clone(), steps: Vec::new(), owners: step.owner.clone().into_iter().collect(), mark: step.mark, covered: step.owner.is_some() }).collect();
         return (finals, Vec::new());
     }
     let (renames, _) = composed_renames(outcomes);
@@ -188,7 +206,7 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
         numbers.sort_unstable();
         numbers.dedup();
         let mut owners: Vec<String> = Vec::new();
-        let mut class: Option<Class> = None;
+        let mut mark: Mark = (None, None);
         for &index in &makers {
             shown[index] = true;
             if let Some(owner) = &steps[index].owner {
@@ -196,12 +214,10 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
                     owners.push(owner.clone());
                 }
             }
-            if class.is_none_or(|old| steps[index].class.is_some_and(|new| crate::class_rank(new) > crate::class_rank(old))) {
-                class = steps[index].class.or(class);
-            }
+            mark = merge_marks(mark, steps[index].mark);
         }
         let covered = if makers.is_empty() { all_covered } else { makers.iter().all(|&index| steps[index].owner.is_some()) };
-        finals.push(FinalEdit { edit, steps: numbers, owners, class, covered });
+        finals.push(FinalEdit { edit, steps: numbers, owners, mark, covered });
     }
     // An uncovered edit of a step stays in view, also if a later step removed it.
     let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
@@ -216,7 +232,7 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
 }
 
 fn new_node(id: &str, label: &str) -> TreeNode {
-    TreeNode { id: id.into(), label: label.into(), status: Status::Changed, class: None, build_code: None, claims: Vec::new(), diff: None, steps: Vec::new(), summary: None, children: Vec::new() }
+    TreeNode { id: id.into(), label: label.into(), status: Status::Changed, category: None, compare: None, build_code: None, claims: Vec::new(), diff: None, steps: Vec::new(), summary: None, children: Vec::new() }
 }
 
 /// Builds the change tree: one diff from the base tree (`before`) to the head tree (`after`), with
@@ -271,7 +287,7 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
         let mut owners = f.owners.clone();
         let mut numbers = f.steps.clone();
         let mut covered = f.covered;
-        let mut class = f.class;
+        let mut mark = f.mark;
         if let Some(added) = pair {
             owners.extend(added.owners.iter().filter(|owner| !f.owners.contains(owner)).cloned());
             numbers.extend(added.steps.iter().copied());
@@ -279,9 +295,7 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
             numbers.dedup();
             if many {
                 covered &= added.covered;
-                if class.is_none_or(|old| added.class.is_some_and(|new| crate::class_rank(new) > crate::class_rank(old))) {
-                    class = added.class.or(class);
-                }
+                mark = merge_marks(mark, added.mark);
             }
         }
         let status = match (edit.kind, &edit.text_before, &edit.text_after) {
@@ -313,7 +327,7 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
         };
         let Some(anchor) = edit.anchor() else {
             let file = edit.file.clone().unwrap_or_default();
-            insert(&mut root, &[("files".into(), "files".into()), (file.clone(), file)], status, class, &owners, &numbers, diff);
+            insert(&mut root, &[("files".into(), "files".into()), (file.clone(), file)], status, mark, &owners, &numbers, diff);
             continue;
         };
         let mut path = anchor_path(anchor, if edit.after.is_some() { after } else { before }, after, before, "");
@@ -322,7 +336,7 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
                 last.1 = format!("{} → {}", old.rsplit("::").next().unwrap_or(&old), last.1);
             }
         }
-        insert(&mut root, &path, status, class, &owners, &numbers, diff);
+        insert(&mut root, &path, status, mark, &owners, &numbers, diff);
     }
     // Renames give no edit (the diff applies them first), so they get their own nodes.
     let no_steps = Vec::new();
@@ -335,14 +349,14 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
             last.1 = format!("{} → {}", old.rsplit("::").next().unwrap_or(old), last.1);
         }
         let numbers = if many { rename_steps.get(old).unwrap_or(&no_steps) } else { &no_steps };
-        insert(&mut root, &path, Status::Moved, Some(Class::Neutral), &[], numbers, None);
+        insert(&mut root, &path, Status::Moved, (Some(if old.rsplit_once("::").map(|(p, _)| p) == new.rsplit_once("::").map(|(p, _)| p) { Category::Rename } else { Category::Move }), None), &[], numbers, None);
     }
     for (scope, old, new) in &renames.idents {
         if let Some(item) = scope {
             let item = renames.items.get(item).unwrap_or(item);
             let mut path = item_path(item, after, before);
             path.push((format!("{item}/rename:{old}"), format!("local {old} → {new}")));
-            insert(&mut root, &path, Status::Moved, Some(Class::Neutral), &[], &[], None);
+            insert(&mut root, &path, Status::Moved, (Some(Category::Rename), None), &[], &[], None);
         }
     }
     // An uncovered edit that the final diff does not show: a node of its own step (`…/S1@3`).
@@ -363,7 +377,7 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
                 vec![("files".into(), "files".into()), (format!("{file}{suffix}"), file)]
             }
         };
-        insert(&mut root, &path, Status::Uncovered, None, &[], &[outcome.report.step], None);
+        insert(&mut root, &path, Status::Uncovered, (None, None), &[], &[outcome.report.step], None);
     }
     summarize(&mut root);
     if !many {
@@ -408,7 +422,7 @@ fn short(text: &str) -> String {
     semilla_syntax::tree::short(text, 50)
 }
 
-fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, class: Option<Class>, claims: &[String], steps: &[usize], diff: Option<String>) {
+fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, mark: Mark, claims: &[String], steps: &[usize], diff: Option<String>) {
     let mut node = root;
     for (depth, (id, label)) in path.iter().enumerate() {
         let position = match node.children.iter().position(|child| &child.id == id) {
@@ -424,9 +438,7 @@ fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, class:
             if node.status == Status::Changed || status == Status::Uncovered {
                 node.status = status;
             }
-            if node.class.is_none_or(|old| class.is_some_and(|new| crate::class_rank(new) > crate::class_rank(old))) {
-                node.class = class.or(node.class);
-            }
+            (node.category, node.compare) = merge_marks((node.category, node.compare), mark);
             for claim in claims {
                 if !node.claims.contains(claim) {
                     node.claims.push(claim.clone());
@@ -445,7 +457,7 @@ fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, class:
     }
 }
 
-/// Adds the class counts and the step numbers of the descendants to each node with children.
+/// Adds the counts of the compare results and the step numbers of the descendants to each node with children.
 fn summarize(node: &mut TreeNode) -> BTreeMap<&'static str, usize> {
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     for index in 0..node.children.len() {
@@ -460,11 +472,9 @@ fn summarize(node: &mut TreeNode) -> BTreeMap<&'static str, usize> {
     }
     node.steps.sort_unstable();
     if node.children.is_empty() {
-        let key = match (node.status, node.class) {
+        let key = match (node.status, node.compare) {
             (Status::Uncovered, _) => "uncovered",
-            (_, Some(Class::ControlFlow)) => "ctrl flow",
-            (_, Some(Class::Logic)) => "logic",
-            (_, Some(Class::Neutral)) => "neutral",
+            (_, Some(compare)) => compare.name(),
             _ => "other",
         };
         *counts.entry(key).or_default() += 1;
@@ -611,7 +621,6 @@ pub fn text_report(steps: &[StepReport]) -> String {
 pub fn short_cause(status: &ClaimStatus) -> String {
     let (word, reason) = match status {
         ClaimStatus::Verified { proof } => return format!("verified ({proof})"),
-        ClaimStatus::Unproved { reason } => ("unproved", reason.as_str()),
         ClaimStatus::Refuted { reason } => ("refuted", reason.as_str()),
         ClaimStatus::Malformed { reason } => ("malformed", reason.as_str()),
         ClaimStatus::Pending { reason } => ("pending", reason.as_str()),
@@ -660,12 +669,7 @@ pub fn body_list(items: &[String], names: bool) -> String {
 /// change, design 28.3).
 fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool, names: bool) {
     use text::put_line as put;
-        let class = match (fact.class, fact.affected.is_empty()) {
-            (Some(Class::Neutral), _) => " [neutral (proved)]".to_string(),
-            (Some(class), _) => format!(" [{}]", crate::class_name(class)),
-            (None, _) => " [pending]".to_string(),
-        };
-        put(out, &format!("  ◆ {} derived: {}{class}{}", fact.id, fact.description, fact.mark()));
+        put(out, &format!("  ◆ {} derived: {} [{}]{}", fact.id, fact.description, fact.label(), fact.mark()));
         for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
             if matches!(fact.part.as_str(), "edit" | "body") {
                 // A fold of equal facts: the bodies, with the count of sites in each.
@@ -690,7 +694,9 @@ fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool, nam
             }
         }
         if !fact.affected.is_empty() {
-            put(out, &format!("      affected bodies: {}", body_list(&fact.affected, names)));
+            // The mismatch mark (design 35.2) replaces the list name. It asks for no reason.
+            let name = if fact.mismatch() { semilla_core::report::MISMATCH } else { "affected bodies:" };
+            put(out, &format!("      {name} {}", body_list(&fact.affected, names)));
         }
         if !fact.equal_sites.is_empty() {
             put(out, &format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
@@ -741,7 +747,6 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         for claim in &step.claims {
             let mark = match &claim.status {
                 ClaimStatus::Verified { .. } => "✓",
-                ClaimStatus::Unproved { .. } => "?",
                 ClaimStatus::Pending { .. } => "…",
                 ClaimStatus::NotChecked { .. } => "–",
                 _ => "✗",
@@ -751,7 +756,7 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
                 continue;
             }
             let detail = claim.status.text();
-            let class = claim.class.map(|c| format!(" [{}]", crate::class_name(c))).unwrap_or_default();
+            let class = claim.category.map(|c| format!(" [{}]", c.name())).unwrap_or_default();
             let effect = claim.effect.map(|e| format!(" effect hint: {e:?}").to_lowercase()).unwrap_or_default();
             let witness = claim.witness.as_ref().map(|w| format!(" (example: {w})")).unwrap_or_default();
             put(&mut out, &format!("  {mark} {} {detail}{}{class}{effect}{witness}", claim.claim, claim.mark()));

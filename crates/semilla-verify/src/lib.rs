@@ -34,7 +34,10 @@ pub mod views;
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::report::Effect;
-use semilla_core::{Anchor, ChangeSet, Class, ClaimResult, ClaimStatus, Report, Step, StepReport, Uncovered};
+use semilla_core::{Anchor, Category, ChangeSet, ClaimResult, ClaimStatus, Compare, Report, Step, StepReport, Uncovered};
+
+/// The start of the reason when the derivation of a rename or a move stops for a second change.
+pub(crate) const OTHER_CHANGE: &str = "the step has a second change: ";
 use semilla_syntax::{Edit, Workspace};
 
 /// The MIR status of one body (design section 8.2).
@@ -684,7 +687,7 @@ fn item_reasons(input: &StepInput, report: &mut StepReport) {
 pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, derived_identity: bool) -> StepOutcome {
     let step = input.step;
     let oracle = bodies;
-    let mut report = StepReport { step: step.index, intent: step.intent.clone(), declared_class: step.class, ..Default::default() };
+    let mut report = StepReport { step: step.index, intent: step.intent.clone(), ..Default::default() };
 
     // 1. The renames from the identity claims, then the syntax edits.
     let mut renames = checks::renames(step, input.before);
@@ -711,6 +714,9 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let mut selections: Vec<Selection> = Vec::new();
     let can_add = bodies.set_selections(step, &[]).unwrap_or(false);
     let mut scope: Option<cfgcond::Scope> = None;
+    // The compare result of each body with no rule of the build configuration (design 35): the
+    // MIR level N0 after the rename and move map (N1), in the checked configurations.
+    let raw: std::cell::RefCell<Vec<(String, BodyStatus)>> = std::cell::RefCell::new(Vec::new());
     let settled = loop {
         let truths = bodies.truths(step).unwrap_or_default();
         let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
@@ -724,6 +730,9 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
             cfgcond::with_mode(mode, || {
                 let opaque = joint::Recorder::new(opaque::Opaque::new(input.before, input.after));
                 let mut bodies = bodies.compare_with(step, &renames.items, &added, &opaque)?;
+                if matches!(mode, cfgcond::Mode::Plain) {
+                    *raw.borrow_mut() = bodies.iter().map(|body| (body.name.clone(), body.status.clone())).collect();
+                }
                 // A call `cfg!(P)` with a covered condition: its value is opaque in each proof, and
                 // each checked configuration has a proof.
                 for body in bodies.iter_mut() {
@@ -742,7 +751,14 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         let settled = run(&cfgcond::Mode::Plain).and_then(|(plain, seen)| {
             let joint = joint::Joint { sides: [input.before, input.after], truths: &truths, bodies: &seen, renames: &renames.items };
             let property = step.claims.iter().any(|claim| semilla_core::ops::op(&claim.op).is_some_and(|info| info.kind == semilla_core::OpKind::Property));
-            joint.settle(plain, &atoms, property, &selections, &|mode| run(mode).map(|(bodies, _)| bodies))
+            // The joint check stays for each step (design 35.5): an equal compare that uses
+            // two or more conditions gets the configurations of the joint states (batch 5u).
+            // The added configurations are checked configurations. A state that Semilla
+            // cannot add gives a note under the fact.
+            let kept = raw.borrow().clone();
+            let result = joint.settle(plain, &atoms, property, &selections, &|mode| run(mode).map(|(bodies, _)| bodies));
+            *raw.borrow_mut() = kept;
+            result
         });
         let (bodies_now, wanted) = match settled {
             Ok(result) => result,
@@ -760,13 +776,31 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
             Err(error) => break Err(error),
         }
     };
-    let bodies = match settled {
+    let mut build_failed = false;
+    let mut bodies = match settled {
         Ok(bodies) => bodies,
         Err(error) => {
             report.errors.push(format!("the body check failed: {error:#}"));
+            build_failed = true;
             Vec::new()
         }
     };
+    // The rules of the build configuration change no compare result (design 35). Each body gets
+    // its raw status again. The data of the rules (`config`, `stopped`) stays for the notes.
+    // An equal result above N1 is not a result of this compare.
+    {
+        let raw = raw.borrow();
+        let same = raw.len() == bodies.len() && raw.iter().zip(&bodies).all(|((name, _), body)| *name == body.name);
+        for (index, body) in bodies.iter_mut().enumerate() {
+            let status = if same { Some(&raw[index].1) } else { raw.iter().find(|(name, _)| *name == body.name).map(|(_, status)| status) };
+            if let Some(status) = status {
+                body.status = status.clone();
+            }
+            if matches!(&body.status, BodyStatus::Equal { level, .. } if level != "n0" && level != "n1") {
+                body.status = BodyStatus::Different { cfg_changed: false };
+            }
+        }
+    }
     let body_index = checks::BodyIndex::new(&bodies, input.after, input.before);
 
     // The data of the property claims: the local calls (syntax), and the MIR facts (phase 2).
@@ -814,28 +848,12 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let mut identity_reason = None;
     let identity_status = identity_step(step, &results, &edits, &mut owners, &bodies, &body_index, &renames, input.before, input.after, &mut identity_derived, derived_identity.then_some(&mut identity_reason));
 
-    // A neutral claim must have a body proof for its whole function. Other non-neutral claims in
-    // the same function make that impossible.
-    let non_neutral_items: BTreeSet<String> = results
-        .iter()
-        .filter(|(_, outcome)| outcome.class.is_some_and(|class| class != Class::Neutral))
-        .filter_map(|(claim, _)| claim.at.as_ref().map(|anchor| anchor.item.clone()))
-        .collect();
-
     for (claim, outcome) in &results {
         let mut status = outcome.status.clone();
         let mut hint = outcome.hint.clone();
         if let Some((identity, identity_hint)) = identity_status.as_ref().filter(|_| is_identity(claim) && outcome.status.is_verified()) {
             status = identity.clone();
             hint = identity_hint.clone();
-        }
-        if outcome.class == Some(Class::Neutral) && outcome.needs_body_proof {
-            if let Some(item) = claim.at.as_ref().map(|anchor| anchor.item.as_str()) {
-                if non_neutral_items.contains(item) && status.is_verified() {
-                    status = ClaimStatus::Unproved { reason: "other claims change the same function in this step".into() };
-                    hint = Some("Put the neutral claims of this function in their own step.".into());
-                }
-            }
         }
         if status.is_verified() && outcome.explains.is_empty() && !outcome.self_evident {
             status = ClaimStatus::Empty;
@@ -844,7 +862,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
             claim: claim.id.clone(),
             step: step.index,
             status,
-            class: outcome.class,
+            category: outcome.category,
             effect: outcome.effect,
             witness: outcome.witness.clone(),
             hint,
@@ -922,7 +940,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
             part: place.clone(),
             description: format!("{file}: {what}"),
             status: "derived".into(),
-            class: Some(Class::Other),
+            category: Category::BuildCode,
             spotlight: true,
             spotlight_why: Some(format!("build code: this file is {why}. The compiler runs this code during each build, and it can change the code and the result of the build")),
             reason: step.reasons.get(&place).cloned(),
@@ -968,7 +986,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                     part: "attribute".into(),
                     description: format!("attributes of the new item `{item}`"),
                     status: "derived".into(),
-                    class: Some(Class::Logic),
+                    category: Category::Attribute,
                     spotlight: true,
                     spotlight_why: Some(why),
                     reason: step.reasons.get(&item).cloned(),
@@ -1007,7 +1025,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 uncovered.hint = Some(if parent(&old_name) == parent(&new_name) {
                     format!("rename (it looks like a rename of `{old_name}` to `{new_name}`)")
                 } else {
-                    format!("move-item (it looks like a move of `{old_name}` to `{new_name}`: anchor `{old_name}`, to={new_name}; a move gets its proof in a step with no other change)")
+                    format!("move-item (it looks like a move of `{old_name}` to `{new_name}`: anchor `{old_name}`, to={new_name}; Semilla derives a move only in a step with no other change)")
                 });
             }
         }
@@ -1062,43 +1080,8 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     };
     owners::assign(&owner_input, &mut report);
     owners::source_files(&owner_input, &mut report);
-    // The class of a fact comes from the bodies that it owns. A fact with no changed body is
-    // neutral only when its kind cannot change the behavior outside the MIR (invariant I3).
-    if body_index.available {
-        for fact in report.facts.iter_mut() {
-            if !fact.affected.is_empty() {
-                // A fact that changes a body changes the logic (a data file, a manifest key).
-                if matches!(fact.class, None | Some(Class::Neutral) | Some(Class::Other)) {
-                    // A proved rewrite of an item whose text is an input of other bodies (a
-                    // file that `include_bytes!` reads): the text says why the fact is not
-                    // neutral (batch 5n, A4).
-                    if fact.class == Some(Class::Neutral) && fact.description.contains("neutral rewrite (proved") {
-                        fact.description.push_str("; the edit changed other bodies (the affected bodies), so the fact is not neutral");
-                    }
-                    fact.class = Some(Class::Logic);
-                }
-            } else if fact.class == Some(Class::Neutral) && !facts::neutral_kind(fact) {
-                // A member order changes the drop order, the derive output order, and the
-                // discriminant values of an enum: effects outside the MIR records (batch 5e).
-                // A `doc(test(…))` attribute changes the code of each doc test (batch 6a, A3).
-                let doc_test = fact.spotlight_why.as_deref().is_some_and(|why| why.starts_with(facts::DOC_TEST_SPOTLIGHT));
-                fact.class = Some(if fact.part.starts_with("trait impl") || fact.part == "member order" || doc_test { Class::Logic } else { Class::Other });
-            }
-        }
-    }
-
-    // Phase 1 has no MIR records, so the class of a file fact is not known (brief 5h, C2): a build
-    // script or a macro can read each file, and only the comparison of the bodies shows the
-    // effect. The fact shows as `[pending]` until phase 2 gives the class.
-    if !body_index.available {
-        for fact in report.facts.iter_mut().filter(|fact| fact.at.is_none() && fact.file.is_some() && fact.class == Some(Class::Other)) {
-            fact.class = None;
-        }
-    }
-
     // A file that a crate reads at build time is a build input, also when its name is on the file
-    // allow list (brief 5f, A6). With a changed body, the fact has the class `logic` and its
-    // affected bodies. With no changed body, the effect is outside the bodies that Semilla
+    // allow list (brief 5f, A6). With a changed body, the fact has its affected bodies. With no changed body, the effect is outside the bodies that Semilla
     // compares (docs, doc tests, attributes, code that no checked configuration compiles), so the
     // fact needs a reason.
     if body_index.available {
@@ -1116,7 +1099,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 
     // The order of generic parameters (brief 5h, B4). Generic arguments go by position, so a site
     // with explicit arguments keeps its text and its MIR text, and it changes its meaning. The
-    // fact lists each item that names the changed item, and it is never neutral.
+    // fact lists each item that names the changed item.
     for (index, edit) in edits.iter().enumerate().filter(|(_, edit)| facts::generic_order_changed(edit)) {
         let Some(anchor) = edit.anchor() else { continue };
         let sites = facts::positional_sites(&anchor.item, input.after, call_facts.as_ref());
@@ -1133,7 +1116,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                     part: "generics".into(),
                     description: format!("order of the generic parameters of `{}`", anchor.item),
                     status: "derived".into(),
-                    class: body_index.available.then_some(Class::Logic),
+                    category: Category::Declaration,
                     ..Default::default()
                 });
                 report.facts.len() - 1
@@ -1149,9 +1132,6 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
             }
         }
         fact.affected.sort();
-        if matches!(fact.class, Some(Class::Neutral) | Some(Class::Other)) {
-            fact.class = Some(Class::Logic);
-        }
     }
 
     // A file that `include!` reads is Rust code that Semilla does not parse, whatever its name
@@ -1173,27 +1153,20 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 }
             }
             fact.affected.sort();
-            if !fact.affected.is_empty() && matches!(fact.class, None | Some(Class::Neutral) | Some(Class::Other)) {
-                fact.class = Some(Class::Logic);
-            }
             carried.extend(readers);
         }
     }
 
-    // A fact whose changed bodies read the build configuration (batch 5k, A1). The check holds
-    // for the configurations that Semilla compiles, and not for each build: the fact needs a
-    // reason, and it is not neutral (its body changed).
+    // A fact whose bodies read a file at build time (batch 6a, B4): the fact needs a reason.
+    // A use of the build configuration gives no spotlight (design 35): see the note below.
     for fact in report.facts.iter_mut() {
         let own = fact.at.as_ref().map(|at| at.item.clone());
-        let Some(text) = facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index, &carried) else { continue };
+        let Some(text) = facts::file_spotlight(fact.affected.iter().chain(own.iter()).filter(|item| !carried.contains(*item)), &body_index) else { continue };
         fact.spotlight_why = Some(match fact.spotlight_why.take() {
             Some(why) => format!("{why}; {text}"),
             None => text,
         });
         fact.spotlight = true;
-        if matches!(fact.class, Some(Class::Neutral) | Some(Class::Other)) {
-            fact.class = Some(Class::Logic);
-        }
         if fact.reason.is_none() {
             fact.reason = match &fact.at {
                 Some(at) => step.reasons.get(&at.to_string()).or_else(|| step.reasons.get(&at.item)).cloned(),
@@ -1202,28 +1175,20 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         }
     }
 
-    // A fact whose changed bodies have a proof in only some of the checked configurations
-    // (batch 5u, part A). The fact gets a note, and it needs no reason. Soundness: the combined
-    // status of such a body is not `Equal`, so no rule makes the fact neutral from the body.
-    // The guard below keeps this true for a fact that is neutral from a different cause.
+    // A fact whose bodies have equal compiled code in only some of the checked configurations
+    // (batch 5u, part A). The fact gets a note, and it needs no reason.
     for fact in report.facts.iter_mut() {
         let own = fact.at.as_ref().map(|at| at.item.clone());
         let Some(note) = facts::config_note(fact.affected.iter().chain(own.iter()), &body_index) else { continue };
         fact.note = Some(note);
-        if fact.class == Some(Class::Neutral) {
-            fact.class = Some(Class::Logic);
-        }
     }
 
-    // A fact with a body whose proof Semilla removed because of a build condition, and with no
-    // spotlight for it (batch 5u): the edit does not touch the code that reads the condition.
-    // The fact gets a note with the cause. The note changes no class and no decision.
+    // A fact with a body that has code under a build condition that Semilla did not check
+    // (design 35): `cfg!`, a `cfg` attribute, `option_env!`, or a macro that Semilla cannot
+    // see into. The fact gets a note. The note asks for no reason, and it changes no result.
     for fact in report.facts.iter_mut() {
         let own = fact.at.as_ref().map(|at| at.item.clone());
-        if facts::config_spotlight(fact.affected.iter().chain(own.iter()), &body_index, &carried).is_some() {
-            continue;
-        }
-        let Some(note) = facts::stop_note(fact.affected.iter().chain(own.iter()), &body_index) else { continue };
+        let Some(note) = facts::stop_note(fact.affected.iter().chain(own.iter()), &body_index, &carried) else { continue };
         fact.note = Some(match fact.note.take() {
             Some(old) => format!("{old}; {note}"),
             None => note,
@@ -1327,14 +1292,15 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     report.panic_delta = panic_sites(input.after) - panic_sites(input.before);
     report.spotlight = spotlight(&edits, input.before, input.after);
     report.spotlight.extend(made_outcome.spotlight.iter().filter(|line| !report.spotlight.contains(line)).cloned().collect::<Vec<_>>());
-    // Each changed body that reads the build configuration (batch 5k, A1).
+    // Each body that reads a file at build time (batch 6a, B4). A use of the build
+    // configuration gives no line (design 35).
     let config_items: BTreeSet<String> = body_index.config_names().map(|name| body_index.item_of_name(name).unwrap_or_else(|| name.clone())).collect();
     // The name of a body is not always the key of a reason (batch 5l, B3): the body of an
     // associated constant of a trait impl has the MIR name `<T as Trait>::C`, and the fact is
     // at the impl. The line gives each key that is not the name.
     let config_keys = |item: &String| -> Vec<String> {
         let mut keys: Vec<String> = Vec::new();
-        for fact in report.facts.iter().filter(|fact| fact.spotlight_why.as_deref().is_some_and(|why| why.contains(" Uses: "))) {
+        for fact in report.facts.iter().filter(|fact| fact.spotlight_why.as_deref().is_some_and(|why| why.contains(facts::INCLUDE_SPOTLIGHT))) {
             let own = fact.at.as_ref().map(|at| &at.item);
             let names = |name: &String| name == item || body_index.item_of_name(name).as_ref() == Some(item);
             if own == Some(item) || fact.affected.iter().any(names) {
@@ -1346,19 +1312,12 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         }
         keys
     };
-    // The fact of an `include!` file has the spotlight for the `include!` call of its readers
-    // (batch 5w, D3), so such an item gets no line here if `include!` is its only cause.
-    let only_include = |item: &String| carried.contains(item) && body_index.config(item).iter().all(|call| call.strip_suffix(srcconfig::UNSEEN) == Some("include!"));
     let config_lines: Vec<String> = config_items
         .iter()
-        .filter(|item| !only_include(item))
-        .map(|item| {
-            // A file that the code reads at build time is not a build condition (batch 6a, B4).
-            let start = if facts::reads_only_files(&body_index, item) { "a file that the code reads at build time" } else { "build configuration" };
-            match config_keys(item) {
-                keys if keys.is_empty() || keys == [item.clone()] => format!("{start}: {item}"),
-                keys => format!("{start}: {item} (the key of the reason: {})", keys.iter().map(|key| format!("`{key}`")).collect::<Vec<_>>().join(", ")),
-            }
+        .filter(|item| !carried.contains(*item) && facts::reads_files(&body_index, item))
+        .map(|item| match config_keys(item) {
+            keys if keys.is_empty() || keys == [item.clone()] => format!("a file that the code reads at build time: {item}"),
+            keys => format!("a file that the code reads at build time: {item} (the key of the reason: {})", keys.iter().map(|key| format!("`{key}`")).collect::<Vec<_>>().join(", ")),
         })
         .collect();
     report.spotlight.extend(config_lines);
@@ -1436,14 +1395,15 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     report.api_level = Some(level.to_string());
     report.api_changes = api_changes;
 
-    // An edit in code that no checked configuration compiles has no proof (batch 5w, part A).
+    // The compare result of each fact (design 35).
+    set_compare(&mut report, &body_index, input.before, input.after, build_failed);
+
+    // An edit in code that no checked configuration compiles has no compare (batch 5w, part A).
     if body_index.available {
         let truths = oracle.truths(step).unwrap_or_default();
         let dead = uncompiled::dead_edits([input.before, input.after], &truths, &body_index);
         uncompiled::apply(&dead, [input.before, input.after], step, &edits, &fact_of, &renames, &mut report);
     }
-
-    step_class(step, &mut report);
 
     // The final assertion (invariant I1): no path removes a changed body from the report.
     for name in owners::check(&owner_input, &report) {
@@ -1472,21 +1432,83 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, selections }
 }
 
-/// Computes the class of a step from its claims and its facts. A declared class that is
-/// different gives an error. A second call replaces the error of the first call.
-fn step_class(step: &Step, report: &mut StepReport) {
-    const ERROR: &str = "the step declares the class `";
-    report.errors.retain(|error| !error.starts_with(ERROR));
-    report.computed_class = report.claims.iter().filter_map(|claim| claim.class).chain(report.facts.iter().filter_map(|fact| fact.class)).max_by_key(|class| class_rank(*class));
-    if let (Some(declared), Some(computed)) = (step.class, report.computed_class) {
-        if declared != computed {
-            // Name the facts and the claims that give the class (M4).
-            let mut causes: Vec<String> = report.facts.iter().filter(|f| f.class == Some(computed)).map(|f| format!("the fact \"{}\"", f.description)).collect();
-            causes.extend(report.claims.iter().filter(|c| c.class == Some(computed)).map(|c| format!("the claim {}", c.claim)));
-            let more = if causes.len() > 3 { format!(", and {} more", causes.len() - 3) } else { String::new() };
-            causes.truncate(3);
-            report.errors.push(format!("{ERROR}{}`, but {} give(s) the class `{}`{more}", class_name(declared), causes.join(", "), class_name(computed)));
+/// Sets the compare result of each fact (design 35, "Decided by Claude").
+///
+/// 1. A fact with the result `not checked` keeps it.
+/// 2. A doc test: `no compare`. Semilla does not compile a doc test.
+/// 3. A failed build: `no compare`, with the cause.
+/// 4. Phase 1 has no MIR: `pending`. A doc text, a comment, and a format change of a manifest
+///    have no code: `no code`.
+/// 5. A fact with a changed body (`affected`): `code different`.
+/// 6. A fact in a function that no checked configuration compiles: `no compare`.
+/// 7. A doc text, a comment, a manifest key, and a file with no changed body: `no code`.
+/// 8. Each other fact: `code equal`.
+fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, build_failed: bool) {
+    let note = |fact: &mut semilla_core::Fact, text: String| {
+        fact.note = Some(match fact.note.take() {
+            Some(old) if old.contains(&text) => old,
+            Some(old) => format!("{old}; {text}"),
+            None => text,
+        });
+    };
+    for fact in report.facts.iter_mut() {
+        if fact.compare == Compare::NotChecked {
+            continue;
         }
+        let no_code = match fact.category {
+            Category::Docs => fact.part != "doc test",
+            Category::Manifest | Category::File | Category::BuildCode => true,
+            _ => false,
+        };
+        // A doc test, and a `doc(test(…))` attribute that changes each doc test of the crate.
+        let doc_test = fact.part == "doc test" || fact.spotlight_why.as_deref().is_some_and(|why| why.starts_with(facts::DOC_TEST_SPOTLIGHT));
+        if doc_test {
+            fact.compare = Compare::NoCompare;
+            note(fact, format!("{} Semilla does not compile a doc test", uncompiled::NO_COMPARE));
+            continue;
+        }
+        if !body_index.available {
+            if build_failed {
+                fact.compare = Compare::NoCompare;
+                note(fact, format!("{} the build failed", uncompiled::NO_COMPARE));
+            } else {
+                // A manifest key and a file can change a body: only phase 2 knows.
+                let format_only = fact.category == Category::Manifest && fact.description.ends_with(": format only");
+                fact.compare = if fact.category == Category::Docs || format_only { Compare::NoCode } else { Compare::Pending };
+            }
+            continue;
+        }
+        if !fact.affected.is_empty() {
+            fact.compare = Compare::CodeDifferent;
+            continue;
+        }
+        // A member order has effects that no MIR body shows (batch 5e): the drop order, the
+        // output order of a derive, the discriminant values. Equal bodies are not a result.
+        if fact.part == "member order" {
+            fact.compare = Compare::NoCompare;
+            note(fact, format!("{} the MIR bodies do not show each effect of a member order", uncompiled::NO_COMPARE));
+            continue;
+        }
+        // A fact in a function that no checked configuration compiles. The functions of a fact:
+        // the item of the fact, and each function in the lines of the item (an impl, a module).
+        let functions = |ws: &Workspace, item: &str| -> Vec<String> {
+            let Some(outer) = ws.items.get(item) else { return Vec::new() };
+            let inside = |inner: &&semilla_syntax::Item| inner.kind == semilla_syntax::ItemKind::Fn && inner.body.is_some() && inner.file == outer.file && inner.line_start >= outer.line_start && inner.line_end <= outer.line_end;
+            ws.items.values().filter(inside).map(|inner| inner.path.clone()).collect()
+        };
+        let inactive = fact.at.as_ref().filter(|_| !no_code).and_then(|at| {
+            let mut found = functions(after, &at.item);
+            found.extend(functions(before, &at.item));
+            found.into_iter().find(|function| !body_index.has_body(function))
+        });
+        if let Some(item) = inactive {
+            fact.compare = Compare::NoCompare;
+            note(fact, format!("{} no checked configuration compiles `{item}`", uncompiled::NO_COMPARE));
+            continue;
+        }
+        // An added or a removed item with no body (a type, a trait) has no compiled code.
+        let no_body = matches!(fact.category, Category::Added | Category::Removed);
+        fact.compare = if no_code || no_body { Compare::NoCode } else { Compare::CodeEqual };
     }
 }
 
@@ -1520,31 +1542,6 @@ fn visibility_rank(vis: &str) -> u8 {
         "pub(crate)" => 2,
         _ => 1,
     }
-}
-
-/// The cause of a stopped proof of one body, from the uses that the code knows (batch 5x,
-/// part C): "`write!` in `k::f` (Semilla cannot see into it)". `None` with no known cause.
-fn stop_cause(body: &BodyComparison) -> Option<String> {
-    // The forms of the entries are the forms of `config_spotlight`.
-    let name = &body.name;
-    let show = |text: &String| match text.strip_suffix(srcconfig::UNSEEN) {
-        Some(call) => format!("`{call}` in `{name}` (Semilla cannot see into it)"),
-        // A full sentence (a macro call with a name of the rename in its tokens).
-        None if text.ends_with(')') && text.starts_with('`') => text.clone(),
-        None if text.starts_with('`') || text.starts_with("static `") || text.starts_with("code that") => format!("{text} in `{name}`"),
-        None => format!("`{text}` in `{name}`"),
-    };
-    let mut causes: Vec<String> = Vec::new();
-    for text in body.stopped.iter().chain(&body.config).map(show) {
-        if !causes.contains(&text) {
-            causes.push(text);
-        }
-    }
-    if causes.is_empty() {
-        return None;
-    }
-    let more = if causes.len() > 3 { format!(", and {} more", causes.len() - 3) } else { String::new() };
-    Some(format!("{}{more}", causes.into_iter().take(3).collect::<Vec<_>>().join(", ")))
 }
 
 /// True if a token text has one of the names in a string literal or in the tokens of a macro
@@ -1667,9 +1664,8 @@ fn identity_step(
     let &first = identity.first()?;
     let split = |what: String| {
         Some((
-            ClaimStatus::Unproved { reason: format!("an identity step must be neutral, but {what}: split the step") },
-            // The reason ends with "split the step": the hint does not say it again (D10).
-            Some("Put each rename and each move in its own step, with no other change. Then make the other changes in the next step.".to_string()),
+            ClaimStatus::Refuted { reason: format!("{OTHER_CHANGE}{what}") },
+            None,
         ))
     };
     // A move keeps the `cfg` conditions on the path of the item (batch 5x, part B): a module
@@ -1680,7 +1676,7 @@ fn identity_step(
         if old_conditions != new_conditions {
             let list = |conditions: &BTreeSet<String>| if conditions.is_empty() { "none".to_string() } else { conditions.iter().map(|text| format!("`{text}`")).collect::<Vec<_>>().join(", ") };
             return Some((
-                ClaimStatus::Unproved { reason: format!("the move of `{old}` changes the `cfg` conditions on its path (before: {}; after: {}): the item is not in the same builds", list(&old_conditions), list(&new_conditions)) },
+                ClaimStatus::Refuted { reason: format!("the move of `{old}` changes the `cfg` conditions on its path (before: {}; after: {}): the item is not in the same builds", list(&old_conditions), list(&new_conditions)) },
                 Some("Move the item to a module with the same `cfg` conditions. Or remove the identity claim: the items show as removed and added, with the changes as facts.".to_string()),
             ));
         }
@@ -1776,11 +1772,11 @@ fn identity_step(
         owners[index] = results.iter().position(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified() && claim.arg_str("to").is_some_and(|to| to.strip_prefix(module.path.as_str()).is_some_and(|rest| rest.starts_with("::") && !rest[2..].contains("::"))));
     }
     if !body_index.available {
-        return Some((ClaimStatus::Pending { reason: "the MIR proof of the identity step runs in the background check (phase 2)".into() }, None));
+        return Some((ClaimStatus::Pending { reason: "the compare of the rename or the move runs in the background check (phase 2)".into() }, None));
     }
     let other_claim = results.iter().find(|(claim, _)| !is_identity(claim) && claim.op != "edit-doc").map(|(claim, _)| format!("the step also has the claim {} (`{}`)", claim.id, claim.op));
     // B5: a doc change and a rename of a parameter do not stop the identity. Each one stays its
-    // own fact (a doc fact has the class `other`). A parameter rename is allowed only when its
+    // own fact (a doc fact has the category `docs`). A parameter rename is allowed only when its
     // body is equal (N0 or N1): a parameter name is a local in the MIR.
     // A doc test change is not a plain doc change (brief 5h, B1): it stops the identity.
     // An attribute of the `doc` family with no literal text (`#[doc(hidden)]`) is an attribute
@@ -1795,26 +1791,11 @@ fn identity_step(
     };
     let other_edit = edits.iter().zip(owners.iter()).enumerate().find(|(index, (edit, owner))| owner.is_none() && !allowed(*index, edit)).map(|(_, (edit, _))| format!("the step also has the change {}", edit.anchor().map(|a| format!("at `{a}`")).or_else(|| edit.file.clone()).unwrap_or_default()));
     if let Some(name) = bad.first() {
-        // The cause that the code knows (batch 5x, part C): the uses that stopped the proof.
-        let cause = bodies.iter().find(|body| body.name == *name).and_then(stop_cause);
         // "Split the step" is a route only when the step has a second change.
         if other_claim.is_some() || other_edit.is_some() {
-            // A body with code for a different build configuration: its MIR can be equal.
-            if !body_index.config(name).is_empty() {
-                return split(format!("`{name}` has code that depends on the build configuration"));
-            }
-            if let Some(cause) = cause {
-                return split(format!("`{name}` has no proof: {cause}"));
-            }
             return split(format!("the MIR of `{name}` changed"));
         }
         let remove = "Remove the identity claim: the items show as removed and added, with the changes as facts.";
-        if let Some(cause) = cause {
-            return Some((
-                ClaimStatus::Unproved { reason: format!("no proof for `{name}`: {cause}") },
-                Some(format!("Semilla cannot prove an identity step with this code in `{name}`. {remove}")),
-            ));
-        }
         // The old name in a string or in a macro call: only then the hint can be true.
         let olds: BTreeSet<String> = renames.items.iter().filter_map(|(old, new)| (checks::last_segment(old) != checks::last_segment(new)).then(|| checks::last_segment(old).to_string())).collect();
         let item = body_index.item_of_name(name).unwrap_or_else(|| name.to_string());
@@ -1826,7 +1807,7 @@ fn identity_step(
             remove.to_string()
         };
         return Some((
-            ClaimStatus::Unproved { reason: format!("the MIR of `{name}` changes with the identity claim, and `{name}` has no text edit and is not a derived body: the step is not neutral for it") },
+            ClaimStatus::Refuted { reason: format!("the MIR of `{name}` changes with the rename or the move, and `{name}` has no text edit and is not a derived body") },
             Some(hint),
         ));
     }
@@ -1843,7 +1824,7 @@ fn identity_step(
         _ => None,
     };
     if let Some(module) = public_module {
-        return Some((ClaimStatus::Unproved { reason: format!("the new module `{}` is `pub`, so the move changes the public API. Semilla gives no proof for a move into a new public module: this is a known limit", module.path) }, None));
+        return Some((ClaimStatus::Refuted { reason: format!("the new module `{}` is `pub`, so the move changes the public API. Semilla does not derive a move into a new public module: this is a known limit", module.path) }, None));
     }
     if let Some(what) = other_claim.or(other_edit) {
         return split(what);
@@ -1860,33 +1841,17 @@ fn identity_step(
             *out = Some(format!("the derived output of {list} changes with the rename"));
         } else if !step.reasons.contains_key(&anchor) {
             return Some((
-                ClaimStatus::Unproved { reason: format!("the derived output of {list} changes with the rename; give a reason with `--reason '{anchor}=<why>'`") },
+                ClaimStatus::Refuted { reason: format!("the derived output of {list} changes with the rename; give a reason with `--reason '{anchor}=<why>'`") },
                 Some("A derived trait other than `Debug` (for example serde) can change a data format. Say why the change is correct.".into()),
             ));
         }
     }
-    // The proof: the highest level, with the substitutions that the bodies at that level need.
-    let level = bodies.iter().filter_map(|body| match &body.status {
-        BodyStatus::Equal { level, .. } => Some(level.clone()),
-        _ => None,
-    });
-    let level = level.max().unwrap_or_else(|| "n0".into());
-    let mut rules: Vec<String> = Vec::new();
-    for body in bodies {
-        if let BodyStatus::Equal { level: found, proof } = &body.status {
-            if *found == level {
-                rules.extend(proof.iter().filter(|rule| !rules.contains(rule)).cloned().collect::<Vec<_>>());
-            }
-        }
-    }
-    let mut proof = level.to_uppercase();
-    if !rules.is_empty() {
-        proof = format!("{proof}: {}", rules.join(", "));
-    }
+    // The derivation holds. The text names the derived bodies that show the name.
+    let mut proof = "compare".to_string();
     if !derived.is_empty() {
         let list = derived.iter().map(|(t, ty)| format!("{t} for {ty}")).collect::<Vec<_>>().join(", ");
         let count = derived.len();
-        proof = format!("{proof}; neutral, but {count} derived {} the name ({list})", if count == 1 { "body shows" } else { "bodies show" });
+        proof = format!("{proof}; {count} derived {} the name ({list})", if count == 1 { "body shows" } else { "bodies show" });
     }
     let _ = step;
     Some((ClaimStatus::Verified { proof }, None))
@@ -2456,7 +2421,7 @@ pub(crate) fn identity_api_change(old: &str, new: &str, before: &Workspace, afte
 
 /// Adds one fact for each proved rename or move that changes the public API (batch 5x, round
 /// 3; design 31.8). The pair is the top item of a derived identity fact or of a verified
-/// identity claim. The fact has the class `other`: it is a fact to read, and it stops no proof.
+/// identity claim. The fact has the category of its identity fact and the result `no code`.
 fn identity_api_facts(input: &StepInput, outcome: &mut StepOutcome) {
     let report = &mut outcome.report;
     let mut olds: Vec<String> = report.facts.iter().filter(|fact| fact.part == "identity").filter_map(|fact| fact.at.as_ref()).map(|at| at.item.clone()).collect();
@@ -2464,7 +2429,6 @@ fn identity_api_facts(input: &StepInput, outcome: &mut StepOutcome) {
         let verified = report.claims.iter().any(|result| result.claim == claim.id && result.status.is_verified());
         olds.extend(claim.at.iter().filter(|_| verified).map(|at| at.item.clone()));
     }
-    let count = report.facts.len();
     for old in olds {
         let Some(new) = outcome.renames.items.get(&old) else { continue };
         let Some(description) = identity_api_change(&old, new, input.before, input.after) else { continue };
@@ -2480,12 +2444,10 @@ fn identity_api_facts(input: &StepInput, outcome: &mut StepOutcome) {
             part: "public api".into(),
             description,
             status: "derived".into(),
-            class: Some(Class::Other),
+            category: if old.rsplit_once("::").map(|(parent, _)| parent) == new.rsplit_once("::").map(|(parent, _)| parent) { Category::Rename } else { Category::Move },
+            compare: Compare::NoCode,
             ..Default::default()
         });
-    }
-    if report.facts.len() > count {
-        step_class(input.step, report);
     }
 }
 
@@ -2663,27 +2625,7 @@ fn in_unsafe(edit: &Edit, before: &Workspace, after: &Workspace) -> bool {
     check(edit.before.as_ref(), before) || check(edit.after.as_ref(), after)
 }
 
-/// The rank of a class: a step has the highest class of its claims.
-pub fn class_rank(class: Class) -> u8 {
-    match class {
-        Class::Neutral => 0,
-        Class::Other => 1,
-        Class::Logic => 2,
-        Class::ControlFlow => 3,
-        // No check: the rank of the highest class, so that it never hides below a real class.
-        Class::NotChecked => 4,
-    }
-}
 
-pub fn class_name(class: Class) -> &'static str {
-    match class {
-        Class::Neutral => "neutral",
-        Class::Logic => "logic",
-        Class::ControlFlow => "control_flow",
-        Class::Other => "other",
-        Class::NotChecked => "not checked",
-    }
-}
 
 /// The options of a change set check.
 #[derive(Clone, Copy, Debug, Default)]
@@ -2813,7 +2755,7 @@ pub fn verify_changeset(
 /// The cause in the note of a derived rename or move that has no proof, when its step has no
 /// other change (`identity::derive`). `None` for each other note.
 fn stopped_pair(note: &str, old: &str, new: &str) -> Option<String> {
-    let (pairs, rest) = note.split_once(" show(s) as removed and added: no proof of the ")?;
+    let (pairs, rest) = note.split_once(" show(s) as removed and added: Semilla does not derive the ")?;
     let cause = rest.split_once(" (")?.1.strip_suffix(')')?;
     pairs.contains(&format!("`{old}` → `{new}`")).then(|| cause.to_string())
 }

@@ -19,9 +19,9 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use semilla_core::view::FlowGraph;
-use semilla_core::{text, Class, Report, Uncovered};
+use semilla_core::{text, Category, Report, Uncovered};
 
-use crate::ctx::{Ctx, class_label, contains, item_of};
+use crate::ctx::{Ctx, category_label, contains, item_of};
 use crate::review::ReviewFile;
 use crate::summary::{self, ChangeSetSummary, ClaimView, Counts, GroupSummary, SubgroupSummary};
 use crate::{SourcePair, UiData};
@@ -102,13 +102,13 @@ details.subgroup > summary { list-style: none; }
 ul.claims { list-style: none; padding: 0; margin: 0.5rem 0 0; }
 li.claim { border-left: 3px solid var(--border); padding: 0.25rem 0 0.25rem 0.6rem; margin: 0.5rem 0; }
 li.claim.verified { border-color: var(--added); }
-li.claim.unproved, li.claim.pending { border-color: var(--changed); }
+li.claim.pending { border-color: var(--changed); }
 li.claim.refuted, li.claim.empty, li.claim.malformed { border-color: var(--removed); }
 .claim-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.5rem; }
 .claim-meta { font-size: 0.85rem; color: var(--muted); }
 .icon { font-weight: 700; }
 .verified .icon { color: var(--added); }
-.unproved .icon, .pending .icon { color: var(--changed); }
+.pending .icon { color: var(--changed); }
 .refuted .icon, .empty .icon, .malformed .icon { color: var(--removed); }
 .hint { font-size: 0.88rem; }
 ul.steps { margin: 0.35rem 0; padding-left: 1.2rem; font-size: 0.9rem; }
@@ -170,8 +170,8 @@ pub fn render_html(data: &UiData) -> String {
 /// Renders the report as Markdown.
 ///
 /// The default report is short (brief 5f, D2): the summary table, then the groups with each fact
-/// one time. A fact that is not "neutral (proved)" has its source diff. A body with a fact of
-/// the class `control_flow` or `logic` has its flow view, one time.
+/// one time, in the order of design 35.7. No compare result hides a fact or its diff. A body
+/// with a fact of the category `value`, `logic`, or `control flow` has its flow view, one time.
 ///
 /// The full report (`full`) has the same content as [`render_html`]: it adds the public API
 /// changes, the change tree, the other flow views, and all sources.
@@ -297,7 +297,7 @@ impl<'a> Model<'a> {
 
     /// A notice for a phase 1 report.
     fn phase_notice(&self) -> Option<&'static str> {
-        (self.report().phase == "syntax").then_some("Phase 1 only: the body proofs are pending.")
+        (self.report().phase == "syntax").then_some("Phase 1 only: each compare result is pending.")
     }
 
     fn phase_label(&self) -> String {
@@ -315,16 +315,8 @@ impl<'a> Model<'a> {
         let report = self.report();
         let api = if report.api_level.is_some() { summary.api_level.to_string() } else { format!("{} (estimate)", summary.api_level) };
         let mut facts = vec![
-            ("Verdict", (if summary.not_complete { "not complete" } else if summary.accepted { "accepted" } else { "rejected" }).to_string()),
-            ("Facts", {
-                let facts = &summary.fact_counts;
-                if report.phase == "syntax" {
-                    format!("{}: {} with a spotlight; phase 2 gives the classes", facts.total, facts.spotlight)
-                } else {
-                    let not_checked = if facts.not_checked > 0 { format!(", {} not checked", facts.not_checked) } else { String::new() };
-                    format!("{}: {} proved neutral{}, {} to read ({} with a spotlight){not_checked}", facts.total, facts.neutral, facts.marked_text, facts.read, facts.spotlight)
-                }
-            }),
+            ("Result", (if summary.not_complete { "not complete" } else if summary.accepted { "accepted" } else { "rejected" }).to_string()),
+            ("Facts", summary.fact_counts.text.clone()),
             ("Phase", self.phase_label()),
             ("Groups", summary.groups.len().to_string()),
             ("Steps", summary.step_count.to_string()),
@@ -376,9 +368,6 @@ impl<'a> Model<'a> {
                         .filter(|intent| !intent.is_empty())
                         .or_else(|| report.map(|report| report.intent.clone()))
                         .unwrap_or_default(),
-                    declared: step.and_then(|step| step.class).or_else(|| report.and_then(|report| report.declared_class)),
-                    computed: report.and_then(|report| report.computed_class),
-                    mark: self.data.report.build_code.as_ref().and_then(|note| note.mark_of(*index)).map(|step| format!(" {}", semilla_core::report::build_code_mark(step))).unwrap_or_default(),
                     claims: step.map(|step| step.claims.iter().map(|claim| claim.id.clone()).collect()).unwrap_or_default(),
                     errors: report.map(|report| report.errors.clone()).unwrap_or_default(),
                 }
@@ -416,14 +405,15 @@ impl<'a> Model<'a> {
         &self.data.flows[self.flows[position]]
     }
 
-    /// The positions of the flow views of the short report: each body with a fact of the class
-    /// `control_flow` or `logic`, one time.
+    /// The positions of the flow views of the short report: each body with a fact of the
+    /// category `value`, `logic`, or `control flow`, one time. The compare result does not
+    /// count (design 35.7).
     fn fact_flows(&self) -> Vec<usize> {
         let bodies: BTreeSet<&str> = self
             .summary
             .facts
             .iter()
-            .filter(|view| matches!(view.fact.class, Some(semilla_core::Class::ControlFlow | semilla_core::Class::Logic)))
+            .filter(|view| matches!(view.fact.category, Category::Value | Category::Logic | Category::ControlFlow))
             .filter_map(|view| view.fact.at.as_ref().map(|at| at.item.as_str()))
             .collect();
         let mut seen: BTreeSet<&str> = BTreeSet::new();
@@ -435,14 +425,15 @@ impl<'a> Model<'a> {
 
     /// The diff of a fact for the short report, or `None`.
     ///
-    /// - A fact that is "neutral (proved)" has no diff.
+    /// - No compare result hides a diff (design 35.7).
+    /// - A derived rename or move has no diff: its text gives the change in full.
     /// - A new item, a removed item, and a part of a body show the source of the step.
     /// - A change of an item that stays (its docs, its signature) shows the content of the fact:
     ///   the source of the full item has too many lines.
     /// - A change of one line that the description gives in full has no diff.
     fn fact_diff(&self, view: &crate::summary::FactView) -> Option<String> {
         let fact = &view.fact;
-        if fact.class == Some(semilla_core::Class::Neutral) {
+        if fact.part == "identity" {
             return None;
         }
         let pair = fact.at.as_ref().and_then(|at| self.data.fact_sources.get(&format!("{}:{at}", view.step))).filter(|pair| pair.before != pair.after);
@@ -500,7 +491,7 @@ impl StatusText {
     /// The CSS class: the status name, or `other` for an unknown name.
     fn css(&self) -> &str {
         match self.name.as_str() {
-            "verified" | "unproved" | "refuted" | "empty" | "malformed" | "pending" => &self.name,
+            "verified" | "refuted" | "empty" | "malformed" | "pending" => &self.name,
             _ => "other",
         }
     }
@@ -508,7 +499,6 @@ impl StatusText {
     fn icon(&self) -> &'static str {
         match self.name.as_str() {
             "verified" => "✓",
-            "unproved" => "?",
             "refuted" => "✗",
             "empty" => "∅",
             "malformed" => "!",
@@ -532,29 +522,8 @@ impl StatusText {
 struct StepLine {
     index: usize,
     intent: String,
-    declared: Option<Class>,
-    computed: Option<Class>,
-    /// The mark of changed build code for the computed class `neutral` (design 28, I6), with a
-    /// space before it, or an empty text.
-    mark: String,
     claims: Vec<String>,
     errors: Vec<String>,
-}
-
-impl StepLine {
-    /// The classes, for example `declared logic · computed ctrl flow (mismatch)`.
-    fn classes(&self) -> Vec<String> {
-        let mut parts = Vec::new();
-        if let Some(declared) = self.declared {
-            parts.push(format!("declared {}", class_label(Some(declared))));
-        }
-        if let Some(computed) = self.computed {
-            let mismatch = if self.declared.is_some_and(|declared| declared != computed) { " (mismatch)" } else { "" };
-            let mark = if computed == Class::Neutral { self.mark.as_str() } else { "" };
-            parts.push(format!("computed {}{mark}{mismatch}", class_label(Some(computed))));
-        }
-        parts
-    }
 }
 
 /// The code that a claim adds, with its source key.
@@ -625,14 +594,39 @@ fn move_text(view: &ClaimView) -> Option<(String, String)> {
     Some((view.at.clone()?, view.args.get("to")?.as_str()?.to_string()))
 }
 
-/// The counts as text, for example `3 claims: 2 verified, 1 unproved`.
+/// The result word of the change set. A step with no check gives `not complete` (design 28):
+/// the first notice gives the steps and the cause.
+fn result_word(summary: &crate::summary::ChangeSetSummary) -> &'static str {
+    if summary.accepted {
+        "accepted"
+    } else if summary.not_complete {
+        "not complete"
+    } else {
+        "rejected"
+    }
+}
+
+/// The result line of the summary (design 35.6), with the same parts as the result line of
+/// `semilla tag`: the result word, the steps, the facts by compare result, the claims.
+fn result_line(model: &Model) -> String {
+    let summary = &model.summary;
+    let steps = if summary.step_count == 1 { "1 step".to_string() } else { format!("{} steps", summary.step_count) };
+    format!("result: {} · {steps} · {} · {}", result_word(summary), summary.fact_counts.text, counts_text(&summary.counts))
+}
+
+/// True if a notice of the report has the line of the scope of the compare results (it comes
+/// with the list of the checked configurations).
+fn config_scope_shown(report: &Report) -> bool {
+    report.notices.iter().any(|notice| notice.contains(semilla_core::report::CONFIG_SCOPE))
+}
+
+/// The counts as text, for example `3 claims: 2 verified, 1 refuted`.
 fn counts_text(counts: &Counts) -> String {
     // I6: a count of proofs says how many used changed build code.
     let (verified, partial) = (format!("verified{}", counts.marked_text), format!("partial{}", counts.partial_marked_text));
     let parts: Vec<String> = [
         (counts.verified, verified.as_str()),
         (counts.partial, partial.as_str()),
-        (counts.unproved, "unproved"),
         (counts.refuted, "refuted"),
         (counts.empty, "empty"),
         (counts.malformed, "malformed"),
@@ -712,8 +706,8 @@ fn group_meta(group: &GroupSummary) -> Vec<String> {
     if !group.depends_on.is_empty() {
         meta.push(format!("uses {}", group.depends_on.join(", ")));
     }
-    if group.all_neutral {
-        meta.push(format!("all neutral{}", group.mark));
+    if group.all_equal {
+        meta.push(format!("{}{}", crate::summary::ALL_EQUAL, group.mark));
     }
     meta
 }
@@ -738,10 +732,10 @@ fn subgroup_marks(sub: &SubgroupSummary) -> Vec<String> {
     marks
 }
 
-/// The claim details as `(label, value)`: the class, the step, the effect, the witness, the file.
+/// The claim details as `(label, value)`: the category, the step, the effect, the witness, the file.
 fn claim_meta(view: &ClaimView) -> Vec<(&'static str, String)> {
-    let class = if view.property { "property".to_string() } else { class_label(view.class).to_string() };
-    let mut meta = vec![("class", class)];
+    let category = if view.property { "property".to_string() } else { category_label(view.category).to_string() };
+    let mut meta = vec![("category", category)];
     if let Some(step) = view.step {
         meta.push(("step", step.to_string()));
     }
@@ -919,17 +913,26 @@ fn html_summary(out: &mut String, model: &Model) {
         let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(notice));
     }
     out.push_str("<h2 id=\"summary\">Summary</h2>\n");
-    let (class, verdict) = if summary.accepted {
-        ("ok", "Accepted")
-    } else if summary.not_complete {
-        // A step has no check (design 28). The first notice gives the steps and the cause.
-        ("warn", "Not complete")
-    } else {
-        ("bad", "Rejected")
+    let verdict = result_word(summary);
+    let class = match verdict {
+        "accepted" => "ok",
+        "not complete" => "warn",
+        _ => "bad",
     };
-    let _ = writeln!(out, "<p class=\"verdict\"><span class=\"chip {class}\">{verdict}</span> {}</p>", esc(&counts_text(&summary.counts)));
+    let line = result_line(model);
+    let _ = writeln!(out, "<p class=\"verdict\">result: <span class=\"chip {class}\">{verdict}</span>{}</p>", esc(line.trim_start_matches(&format!("result: {verdict}"))));
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(notice));
+    }
+    if !config_scope_shown(report) {
+        let _ = writeln!(out, "<p class=\"note\">{}</p>", esc(semilla_core::report::CONFIG_SCOPE));
+    }
+    if !summary.fact_counts.category.is_empty() {
+        out.push_str("<table class=\"categories\">\n<tr><th>Category</th><th>Facts</th></tr>\n");
+        for row in &summary.fact_counts.category {
+            let _ = writeln!(out, "<tr><td>{}</td><td>{}</td></tr>", esc(row.name), row.count);
+        }
+        out.push_str("</table>\n");
     }
     out.push_str("<dl class=\"facts\">\n");
     for (label, value) in model.facts() {
@@ -1033,10 +1036,6 @@ fn html_steps(out: &mut String, model: &Model, group: &GroupSummary) {
     out.push_str("<ul class=\"steps\">\n");
     for step in &steps {
         let _ = write!(out, "<li data-step=\"{}\">step {}: {}", step.index, step.index, esc(&text::quoted(&step.intent)));
-        let classes = step.classes();
-        if !classes.is_empty() {
-            let _ = write!(out, " <span class=\"muted\">· {}</span>", esc(&classes.join(" · ")));
-        }
         if !step.claims.is_empty() {
             let links: Vec<String> = step.claims.iter().map(|id| format!("<a href=\"#claim-{0}\"><code>{0}</code></a>", esc(id))).collect();
             let _ = write!(out, " — {}", links.join(", "));
@@ -1295,7 +1294,8 @@ fn longest_run(text: &str, c: char) -> usize {
     best
 }
 
-/// One line for each derived fact (design 22.5): the class, the description, the forced edits,
+/// One line for each derived fact (design 22.5, 35): the description, the category and the
+/// compare result, the forced edits,
 /// the affected bodies, the spotlight with its reason, and the content change of a file fact.
 fn fact_items_of(model: &Model, steps: Option<&[usize]>) -> Vec<(String, Option<String>)> {
     fact_items(model, steps, true, None)
@@ -1307,28 +1307,26 @@ fn build_code_title(count: usize) -> String {
     format!("Build code changes ({count}): read these changes first")
 }
 
-/// The fact items of the full report (the content of each fact), or of the short report (a diff
-/// only for a fact that is not "neutral (proved)"). `code` selects the build code changes
+/// The fact items of the full report (the content of each fact), or of the short report (the
+/// diff of [`Model::fact_diff`]). The order is the order of design 35.7: the spotlight facts,
+/// the facts with the mismatch mark, then the compare results. `code` selects the build code changes
 /// (`Some(true)`), the other facts (`Some(false)`), or each fact (`None`). A build code change
 /// has its diff in each report (design 28.3).
 fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<bool>) -> Vec<(String, Option<String>)> {
-    let items: Vec<(usize, &str, String, Option<String>)> = model
+    let mut views: Vec<&crate::summary::FactView> = model
         .summary
         .facts
         .iter()
         .filter(|view| steps.is_none_or(|steps| steps.contains(&view.step)))
         .filter(|view| code.is_none_or(|code| code == view.fact.build_code_change))
+        .collect();
+    // A stable sort: the order of today stays inside one result.
+    views.sort_by_key(|view| view.fact.order());
+    let items: Vec<(usize, &str, String, Option<String>)> = views
+        .into_iter()
         .map(|view| {
             let fact = &view.fact;
-            let class = fact
-                .class
-                .map(|c| match c {
-                    semilla_core::Class::Neutral => "neutral (proved)".to_string(),
-                    semilla_core::Class::NotChecked => "not checked".to_string(),
-                    other => serde_name(&other),
-                })
-                .unwrap_or_else(|| "class after phase 2".into());
-            let mut text = format!("step {}: {} derived [{class}]{}: {}", view.step, fact.id, fact.mark(), fact.description);
+            let mut text = format!("step {}: {} derived: {} [{}]{}", view.step, fact.id, fact.description, fact.label(), fact.mark());
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
                 let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
                 // A folded fact has the count and the text in its description: only the anchors
@@ -1348,7 +1346,11 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
                     format!(" of {} (the names: `--full`)", semilla_core::report::list_scope(bodies))
                 }
             };
-            if !fact.affected.is_empty() {
+            // Design 35.2: the mismatch mark. The text of the change gives no cause for
+            // different compiled code.
+            if fact.mismatch() {
+                text.push_str(&format!("; {}{}", semilla_core::report::MISMATCH.trim_end_matches(':'), if fact.affected.is_empty() { String::new() } else { list(&fact.affected) }));
+            } else if !fact.affected.is_empty() {
                 text.push_str(&format!("; {} affected bod{}{}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
             }
             if !fact.equal_sites.is_empty() {
@@ -1425,17 +1427,20 @@ fn md_summary(out: &mut String, model: &Model, full: bool) {
         let _ = writeln!(out, "> {}\n", md_with_code(notice));
     }
     out.push_str("## Summary\n\n");
-    let verdict = if summary.accepted {
-        "**Accepted**"
-    } else if summary.not_complete {
-        // A step has no check (design 28). The first notice gives the steps and the cause.
-        "**Not complete**"
-    } else {
-        "**Rejected**"
-    };
-    let _ = writeln!(out, "{verdict} · {}\n", md(&counts_text(&summary.counts)));
+    let verdict = result_word(summary);
+    let _ = writeln!(out, "{}\n", md(&result_line(model)).replacen(&format!("result: {verdict}"), &format!("result: **{verdict}**"), 1));
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "> **{}**\n", md(notice));
+    }
+    if !config_scope_shown(report) {
+        let _ = writeln!(out, "{}\n", md(semilla_core::report::CONFIG_SCOPE));
+    }
+    if !summary.fact_counts.category.is_empty() {
+        out.push_str("| Category | Facts |\n|---|---|\n");
+        for row in &summary.fact_counts.category {
+            let _ = writeln!(out, "| {} | {} |", md(row.name), row.count);
+        }
+        out.push('\n');
     }
     out.push_str("| Fact | Value |\n|---|---|\n");
     for (label, value) in model.facts() {
@@ -1538,10 +1543,6 @@ fn md_steps(out: &mut String, model: &Model, group: &GroupSummary) {
             let ids: Vec<String> = step.claims.iter().map(|id| code(id)).collect();
             let _ = write!(line, " — {}", ids.join(", "));
         }
-        let classes = step.classes();
-        if !classes.is_empty() {
-            let _ = write!(line, " · {}", md(&classes.join(" · ")));
-        }
         let _ = writeln!(out, "{line}");
         for error in &step.errors {
             let _ = writeln!(out, "  - error: {}", md_with_code(error));
@@ -1560,7 +1561,7 @@ fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
     let marks = subgroup_marks(sub);
     let marks = if marks.is_empty() { String::new() } else { format!(" · _{}_", md(&marks.join(" · "))) };
     if sub.folded {
-        // A folded subgroup is one line with the counts and the claim IDs.
+        // A folded subgroup is one line with the counts. It has no claim (design 35.7).
         let ids: Vec<String> = sub.claims.iter().map(|view| code(&view.id)).collect();
         let ids = if ids.is_empty() { String::new() } else { format!(" — {}", ids.join(", ")) };
         let _ = writeln!(
@@ -1571,23 +1572,6 @@ fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
             md(&counts_text(&sub.counts)),
             md(&sub.fold_reason)
         );
-        // The renames, the moves, and the new code stay visible in a folded subgroup, with the
-        // status and its proof text (C6: the same notes as the HTML report; C12: a move shows its
-        // source and its target).
-        for view in &sub.claims {
-            let status = StatusText::of(view).text();
-            if let Some((before, after)) = rename_text(view) {
-                let _ = writeln!(out, "  - {} {}: {} → {} · {}", code(&view.id), code(&view.op), code(&before), code(&after), md(&status));
-            } else if let Some((from, to)) = move_text(view) {
-                let _ = writeln!(out, "  - {} {}: {} → {} · {}", code(&view.id), code(&view.op), code(&from), code(&to), md(&status));
-            } else if model.new_code(view).is_none() {
-                let _ = writeln!(out, "  - {} {}{} · {}", code(&view.id), code(&view.op), view.at.as_deref().map(|at| format!(" {}", code(at))).unwrap_or_default(), md(&status));
-            }
-            if let Some(new) = model.new_code(view) {
-                let _ = writeln!(out, "  - {} {}", code(&view.id), code(&view.op));
-                md_new_code(out, &new, "    ");
-            }
-        }
         out.push('\n');
         return;
     }

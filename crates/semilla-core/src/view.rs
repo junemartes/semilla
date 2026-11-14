@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ops::Class;
+use crate::ops::{Category, Compare};
 
 /// The status of a node or an edge in a diff view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,9 +42,13 @@ pub struct TreeNode {
     pub label: String,
     pub status: Status,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<Class>,
-    /// The step whose build code change the proof of the class `neutral` used (design 28,
-    /// invariant I6). `None`: the proof used only the build code of the base.
+    pub category: Option<Category>,
+    /// The compare result of the facts of the node (design 35). With many facts, the node
+    /// shows the result that is first in the order of the review report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compare: Option<Compare>,
+    /// The step whose build code change the compare with the result `code equal` used (design
+    /// 28, invariant I6). `None`: the compare used only the build code of the base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_code: Option<usize>,
     /// The claim IDs on this node.
@@ -53,7 +57,7 @@ pub struct TreeNode {
     /// The diff of a changed leaf, as `⟦old⟧→⟦new⟧` text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
-    /// A summary for changed ancestors, for example `1 ctrl flow · 2 logic`.
+    /// A summary for changed ancestors, for example `2 code different · 1 code equal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// The numbers of the steps that made the change of this node. Empty for a change set of one
@@ -84,9 +88,12 @@ impl TreeNode {
             out.push_str("   ");
             out.push_str(&crate::text::inline(diff));
         }
-        if let Some(class) = self.class {
-            out.push_str(&format!("   [{}]", serde_json::to_value(class).unwrap().as_str().unwrap()));
-            if let Some(step) = self.build_code {
+        if let Some(category) = self.category {
+            match self.compare {
+                Some(compare) => out.push_str(&format!("   [{} · {}]", category.name(), compare.name())),
+                None => out.push_str(&format!("   [{}]", category.name())),
+            }
+            if let Some(step) = self.build_code.filter(|_| self.compare == Some(Compare::CodeEqual)) {
                 out.push_str(&format!(" {}", crate::report::build_code_mark(step)));
             }
         }
@@ -281,7 +288,8 @@ mod tests {
             id: "a".into(),
             label: "crate a".into(),
             status: Status::Changed,
-            class: None,
+            category: None,
+            compare: None,
             build_code: None,
             claims: vec![],
             diff: None,
@@ -291,7 +299,8 @@ mod tests {
                 id: "a::f".into(),
                 label: "fn f".into(),
                 status: Status::Added,
-                class: Some(Class::Logic),
+                category: Some(Category::Logic),
+                compare: None,
                 build_code: None,
                 claims: vec!["c1".into()],
                 diff: None,
@@ -303,10 +312,12 @@ mod tests {
         let text = tree.render();
         assert!(text.contains("~ crate a"));
         assert!(text.contains("└─ + fn f   [logic]"));
-        // Design 28, I6: a class with a proof that used changed build code has the mark.
+        // Design 28, I6: a result `code equal` that used changed build code has the mark.
         let mut tree = tree;
-        tree.children[0].class = Some(Class::Neutral);
+        tree.children[0].compare = Some(Compare::CodeEqual);
         tree.children[0].build_code = Some(1);
-        assert!(tree.render().contains("└─ + fn f   [neutral] (with the build code of step 1)"));
+        assert!(tree.render().contains("└─ + fn f   [logic · code equal] (with the build code of step 1)"));
+        tree.children[0].compare = Some(Compare::CodeDifferent);
+        assert!(tree.render().contains("└─ + fn f   [logic · code different]\n"), "{}", tree.render());
     }
 }

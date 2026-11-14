@@ -1,5 +1,5 @@
 //! One command for each step (design 24.3):
-//! `semilla step "<intent>" [--group T] [--claim '…']… [--reason 'ANCHOR=TEXT']… [--class C]`.
+//! `semilla step "<intent>" [--group T] [--claim '…']… [--reason 'ANCHOR=TEXT']…`.
 //!
 //! "Before" is the head tree of the last step (or `HEAD` for the first step). "After" is the
 //! working tree. The command derives the facts, checks the explicit claims, and stores the step
@@ -9,15 +9,20 @@ use semilla_core::text::put_line;
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
-use semilla_core::{Anchor, Claim, Class, GroupKind};
+use semilla_core::{Anchor, Claim, GroupKind};
 
 use crate::app::{App, OpenStep, Session};
 
-/// The claims that stay (design 24.2, rule 5). Each other op is retired as a claim.
-pub const CLAIMS: &[&str] = &["rename", "move-item", "rewrite-pattern", "no-panic", "no-unsafe", "no-io", "calls-only", "tested-by"];
+/// The claims that stay (design 24.2, rule 5, and design 35.3). Each other op is retired as a
+/// claim.
+pub const CLAIMS: &[&str] = &["rewrite-pattern", "no-panic", "no-unsafe", "no-io", "calls-only", "tested-by"];
 
 /// The message for an op that is retired as a claim, or `None`.
 pub fn retired_claim(op: &str) -> Option<String> {
+    // Design 35.3: Semilla derives each rename and each move. A claim cannot add to the fact.
+    if matches!(op, "rename" | "move-item") {
+        return Some(format!("the claim `{op}` is gone: Semilla derives each rename and each move as a fact, with the compare result of the compiled code; remove the claim (the claims that stay: {})", CLAIMS.join(", ")));
+    }
     (!CLAIMS.contains(&op) && semilla_core::ops::op(op).is_some()).then(|| format!("the claim `{op}` is retired: Semilla derives this change as a fact; remove the claim (the claims that stay: {})", CLAIMS.join(", ")))
 }
 
@@ -30,7 +35,6 @@ pub struct StepRequest {
     pub claims: Vec<String>,
     /// Each reason as `ANCHOR=TEXT`.
     pub reasons: Vec<String>,
-    pub class: Option<Class>,
     pub tree: bool,
     /// Phase 1 only; phase 2 runs in the background (B1).
     pub fast: bool,
@@ -49,9 +53,6 @@ impl StepRequest {
         }
         for reason in self.reasons.iter().chain(extra) {
             parts.push(format!("--reason {}", quote(reason)));
-        }
-        if let Some(class) = self.class {
-            parts.push(format!("--class {}", crate::app::class_text(class)));
         }
         if self.fast {
             parts.push("--fast".into());
@@ -272,13 +273,13 @@ impl App {
         }
 
         // B1: phase 2 runs in the command, so the result is final: phase 2 can reject a step (an
-        // indirect change with no known cause). With `--fast`, phase 2 runs now only when a claim,
-        // a declared class, or an identity candidate needs it.
-        let mut full = !request.fast || request.class.is_some() || claims.iter().any(|c| semilla_core::ops::op(&c.op).is_some_and(|i| i.kind == semilla_core::OpKind::Property) || matches!(c.op.as_str(), "rename" | "move-item"));
+        // indirect change with no known cause). With `--fast`, phase 2 runs now only when a
+        // property claim or an identity candidate needs it.
+        let mut full = !request.fast || claims.iter().any(|c| semilla_core::ops::op(&c.op).is_some_and(|i| i.kind == semilla_core::OpKind::Property));
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), class: request.class, tree_before: before.clone(), claims, reasons });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -287,7 +288,7 @@ impl App {
         let no_bodies = self.no_bodies;
         self.no_bodies = no_bodies || !full;
         let mut result = self.check(Some(index), false);
-        // A candidate pair for a derived identity: only phase 2 can prove it (design 24.2, rule 4).
+        // A candidate pair for a derived identity: only phase 2 can derive it (design 24.2, rule 4).
         if !full && !no_bodies && result.as_ref().is_ok_and(|r| r.report.steps.first().is_some_and(|s| s.identity_candidates)) {
             full = true;
             self.no_bodies = false;
@@ -376,7 +377,7 @@ impl App {
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
         let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("  {line}\n")).collect::<String>());
-        // A configuration that Semilla added for a proof of this step (batch 5u, part C): one line.
+        // A configuration that Semilla added for a joint state of this step (batch 5u, part C): one line.
         let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("  {line}\n")).collect::<String>());
         if !accepted {
             // Nothing is stored. The reasons first, then the command to run again.
@@ -409,13 +410,12 @@ impl App {
             for (_, key, _) in &unused {
                 put_line(&mut text, &unused_line(key));
             }
-            // The command to run again (M3): with the missing reasons, without the false claims,
-            // and with the computed class. A cause that only a code change can fix omits it.
+            // The command to run again (M3): with the missing reasons, and without the false
+            // claims. A cause that only a code change can fix omits it.
             let mut corrected = request.clone();
             corrected.reasons.retain(|reason| !unused.iter().any(|(text, _, _)| text == reason));
             let mut missing = Vec::new();
             let mut blocked = Vec::new();
-            let mut split = false;
             // The `calls-only` claims that the command changes: the claim, and the new entries.
             let mut widened: Vec<(String, Vec<String>)> = Vec::new();
             for fact in report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()) {
@@ -432,7 +432,6 @@ impl App {
                 let written = claim_texts.iter().find(|(id, _)| *id == claim.claim).map(|(_, text)| text.clone());
                 let label = written.as_ref().map(|w| format!(" (`{w}`)")).unwrap_or_default();
                 put_line(&mut text, &format!("  ✗ claim {}{label} is {}{}", claim.claim, claim.status.text(), claim.hint.as_ref().map(|h| format!("; {h}")).unwrap_or_default()));
-                split |= matches!(&claim.status, semilla_core::ClaimStatus::Unproved { reason } if reason.contains("split the step"));
                 match written {
                     // A `calls-only` claim with missing entries: the command has the claim with
                     // the complete list (design 26.3). This changes the claim, and the text says so.
@@ -450,11 +449,7 @@ impl App {
             for error in &report.errors {
                 // The body below shows each error one time. The top summary does not repeat it
                 // (Part B item 4 of batch 5j).
-                if error.starts_with("the step declares the class") {
-                    corrected.class = report.computed_class;
-                } else {
-                    blocked.push(error.clone());
-                }
+                blocked.push(error.clone());
             }
             for uncovered in &report.uncovered {
                 put_line(&mut text, &format!("  ✗ internal: no fact for {}", uncovered.description));
@@ -472,7 +467,6 @@ impl App {
                     (true, true) => " (without the claim that failed, and with the complete list of `calls`)",
                     (true, false) => " (without the claim that failed)",
                     (false, true) => " (with the complete list of `calls`)",
-                    (false, false) if corrected.class != request.class => " (with the computed class)",
                     (false, false) => "",
                 };
                 for (claim, added) in &widened {
@@ -481,9 +475,6 @@ impl App {
                         "the command below changes the claim {claim}: it adds {} to `calls`. Use it only if the function must make these calls. If not, change the code.\n",
                         entries.join(", ")
                     ));
-                }
-                if split {
-                    text.push_str("the other route: keep the claim, put the identity change in its own step (a code change), and make the other changes in the next step\n");
                 }
                 put_line(&mut text, &format!("run again{what}: {}", corrected.command(&missing)));
                 again = Some(corrected.command(&missing));
@@ -499,7 +490,7 @@ impl App {
                 causes.push(format!("{} spotlight{} with no reason", missing.len(), if missing.len() == 1 { "" } else { "s" }));
             }
             if failed > 0 {
-                causes.push(format!("{failed} claim{} with no proof", if failed == 1 { "" } else { "s" }));
+                causes.push(format!("{failed} claim{} not verified", if failed == 1 { "" } else { "s" }));
             }
             if let Some(error) = blocked.iter().find(|error| !error.starts_with("claim ")) {
                 causes.push(error.lines().next().unwrap_or("").chars().take(200).collect());
@@ -515,13 +506,10 @@ impl App {
         let stored = self.step_end_with(false)?;
         let title = request.group.clone().unwrap_or_else(|| request.intent.clone());
         let mut session = self.load_session()?;
-        // The kind comes from the facts and the proofs (phase 2). In phase 1 a class is pending, so
-        // the kind is `behavior`, and the review computes it again from the full report.
-        let claimed = session.changeset.steps[index].claims.iter().find(|c| matches!(c.op.as_str(), "rename" | "move-item")).map(|c| if c.op == "move-item" { GroupKind::Move } else { GroupKind::Rename });
-        let step_kind = semilla_verify::organize::derived_kind(&[&report]).map(|kind| match (kind, claimed) {
-            (GroupKind::Refactor, Some(identity)) if report.claims.iter().all(|c| c.class == Some(semilla_core::Class::Neutral)) && report.facts.is_empty() => identity,
-            (kind, _) => kind,
-        }).unwrap_or(GroupKind::Behavior);
+        // The kind comes from the facts and the compare results (phase 2). In phase 1 a compare
+        // result is pending, so the kind is `behavior`, and the review computes it again from the
+        // full report.
+        let step_kind = semilla_verify::organize::derived_kind(&[&report]).unwrap_or(GroupKind::Behavior);
         let found = session.changeset.groups.iter().find(|g| g.title == title).cloned();
         let (id, kind, why, mut steps) = match found {
             Some(group) => (group.id, semilla_verify::organize::merge_kinds(group.kind, step_kind), group.why, group.steps),

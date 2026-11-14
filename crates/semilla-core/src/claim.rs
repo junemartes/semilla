@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::anchor::Anchor;
-use crate::ops::Class;
 
 /// One semantic change that the agent declares.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -44,9 +43,6 @@ impl Claim {
 pub struct Step {
     pub index: usize,
     pub intent: String,
-    /// The class that the agent declares. `None` lets the verifier report the computed class.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<Class>,
     pub claims: Vec<Claim>,
     /// The git tree before the step.
     pub tree_before: String,
@@ -198,7 +194,6 @@ mod tests {
         let step = Step {
             index: 0,
             intent: String::new(),
-            class: None,
             claims: vec![Claim { id: "c2".into(), op: "rename".into(), at: None, args: Default::default() }],
             tree_before: String::new(),
             tree_after: String::new(),

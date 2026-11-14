@@ -89,14 +89,20 @@ async fn changeset_summary() {
     let report = demo_data().report;
     // Brief 5f, D1: no score. The summary has the fact counts.
     assert!(cs.get("coverage").is_none() && cs.get("score").is_none(), "{cs}");
-    let (total, neutral, spotlight) = report.fact_counts();
-    assert_eq!(cs["fact_counts"], serde_json::json!({ "total": total, "neutral": neutral, "read": total - neutral, "spotlight": spotlight, "not_checked": 0, "marked": 0, "marked_text": "" }));
+    // Design 35.6: the counts of the compare results and of the categories.
+    let counts = report.fact_counts();
+    assert_eq!(cs["fact_counts"]["total"], counts.total);
+    assert_eq!(cs["fact_counts"]["text"], report.facts_text());
+    assert_eq!(cs["fact_counts"]["compare"].as_array().unwrap().len(), counts.compare.len());
+    assert_eq!(cs["fact_counts"]["category"].as_array().unwrap().len(), counts.category.len());
+    assert!(cs["fact_counts"].get("neutral").is_none() && cs["fact_counts"].get("read").is_none(), "{cs}");
     assert_eq!(cs["accepted"], false);
     assert_eq!(cs["group_count"], 3);
     assert_eq!(cs["step_count"], 7);
     assert_eq!(cs["counts"]["claims"], 18);
     assert_eq!(cs["counts"]["verified"], 17);
-    assert_eq!(cs["counts"]["unproved"], 1);
+    assert_eq!(cs["counts"]["refuted"], 1);
+    assert!(cs["counts"].get("unproved").is_none());
     assert_eq!(cs["counts"]["uncovered"], 1);
     assert_eq!(cs["counts"]["reviewed"], 0);
     assert_eq!(cs["api_level"], "major");
@@ -116,8 +122,11 @@ async fn groups_by_risk_then_dependency() {
     let g2 = group(&cs, "G2");
     let g3 = group(&cs, "G3");
     assert!(g2["risk_score"].as_u64() > g1["risk_score"].as_u64());
-    assert!(g1["risk_score"].as_u64() > g3["risk_score"].as_u64());
-    assert_eq!(g2["risk"], 3);
+    // Design 35.7: the verified claims of G1 add no point. The refuted claim of G3 adds 2.
+    assert_eq!(g1["risk_score"], 0);
+    assert_eq!(g3["risk_score"], 2);
+    assert_eq!(g2["risk_score"], 3);
+    assert_eq!(g2["risk"], 2);
     assert_eq!(g2["depends_on"], serde_json::json!(["G1"]));
     assert_eq!(g3["depends_on"], serde_json::json!(["G1"]));
     assert!(g2["risk_reasons"].as_array().unwrap().iter().any(|reason| reason == "public API"));
@@ -138,7 +147,7 @@ async fn subgroups_in_role_order() {
     let claim = &core["claims"][0];
     assert_eq!(claim["id"], "c3");
     assert_eq!(claim["status"], "verified");
-    assert_eq!(claim["class"], "control_flow");
+    assert_eq!(claim["category"], "control_flow");
     assert_eq!(claim["result"]["proof"], "shape");
     assert_eq!(claim["flow"], TOTAL);
     assert_eq!(claim["review"], "not_reviewed");
@@ -151,20 +160,18 @@ async fn fold_state_follows_contents() {
     let g1 = group(&cs, "G1");
     let g2 = group(&cs, "G2");
     let g3 = group(&cs, "G3");
-    // Proved neutral claims: folded.
-    assert_eq!(subgroup(g1, "Renames")["folded"], true);
-    assert_eq!(subgroup(g3, "Extract and move line_total")["folded"], true);
-    // A logic claim opens the subgroup, also for a role that is folded by default.
+    // Design 35.7: a subgroup with a claim is open. No result folds a claim.
+    assert_eq!(subgroup(g1, "Renames")["folded"], false);
+    assert_eq!(subgroup(g3, "Extract and move line_total")["folded"], false);
     assert_eq!(subgroup(g1, "Quantity limit")["folded"], false);
     assert_eq!(subgroup(g2, "Call sites")["folded"], false);
-    // An unproved claim opens the subgroup.
     assert_eq!(subgroup(g3, "Discount check")["folded"], false);
     // Badges for custom subgroups, and the agent marker.
     assert_eq!(subgroup(g1, "Quantity limit")["badges"], serde_json::json!(["1 logic"]));
     assert_eq!(subgroup(g1, "Quantity limit")["edited"], true);
     assert_eq!(subgroup(g3, "Discount check")["badges"], serde_json::json!(["1 unknown"]));
     assert_eq!(subgroup(g1, "Renames")["badges"], serde_json::json!([]));
-    assert_eq!(group(&cs, "G3")["all_neutral"], false);
+    assert_eq!(group(&cs, "G3")["all_equal"], false);
     // The location strip.
     assert_eq!(subgroup(g2, "Call sites")["locations"], serde_json::json!(["shop_cli/src/main.rs"]));
     assert_eq!(subgroup(g1, "Renames")["locations"], serde_json::json!(["shop_core/src/cart.rs"]));
@@ -202,9 +209,12 @@ async fn fold_state_ignores_the_label() {
     let g1 = group(&cs, "G1");
     let renames = subgroup(g1, "Renames");
     assert_eq!(renames["folded"], false);
-    assert!(renames["label_mismatch"].is_string());
+    // Design 35.7: the role is a label with no rule. A subgroup with a claim is open.
+    assert!(renames["label_mismatch"].is_null(), "{renames}");
     let core = subgroup(g1, "Return early for an empty cart");
-    assert_eq!(core["folded"], true, "{core}");
+    assert_eq!(core["folded"], false, "{core}");
+    // A subgroup with no claim is folded.
+    assert_eq!(subgroup(g1, "Quantity limit")["folded"], true);
     // c3 has no subgroup now: the UI puts it into a synthetic subgroup.
     let loose = g1["subgroups"].as_array().unwrap().iter().find(|sub| sub["synthetic"] == true).expect("a synthetic subgroup");
     assert_eq!(ids(&loose["claims"]), ["c3"]);
@@ -396,11 +406,12 @@ async fn search_filters() {
     assert!(!changed.contains(&"shop_cli::main".to_string()));
     assert!(!changed.contains(&"shop_core::cart".to_string()));
 
-    let control = hit_ids(&search(&app, "class:ctrl_flow").await);
+    let control = hit_ids(&search(&app, "category:control-flow").await);
     assert!(control.contains(&TOTAL.to_string()));
     assert!(!control.contains(&"shop_cli::run".to_string()));
-    let neutral = hit_ids(&search(&app, "class:neutral changed:fn").await);
-    assert!(neutral.contains(&"shop_core::cart::Cart::len".to_string()));
+    let equal = hit_ids(&search(&app, "compare:code-equal changed:fn").await);
+    assert!(equal.contains(&"shop_core::cart::Cart::len".to_string()));
+    assert!(!equal.contains(&TOTAL.to_string()));
 
     let step = hit_ids(&search(&app, "step:7").await);
     assert!(step.contains(&"shop_cli::run".to_string()));
@@ -454,7 +465,7 @@ async fn search_graph_terms() {
 #[tokio::test]
 async fn search_errors() {
     let app = app();
-    for query in ["class:huge", "step:x", "kind:leak", "path:main", "callers:no_such_fn", "\"open quote"] {
+    for query in ["category:huge", "compare:neutral", "step:x", "kind:leak", "path:main", "callers:no_such_fn", "\"open quote"] {
         let result = search(&app, query).await;
         assert!(!result["query"]["errors"].as_array().unwrap().is_empty(), "no error for {query}");
     }
@@ -656,7 +667,7 @@ fn the_page_script_shows_each_build_code_mark() {
     // data). The page script must show each mark field. This test reads the text of the script.
     let js = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.js"));
     for field in [
-        "cs.fact_counts.marked_text",
+        "cs.fact_counts.text",
         "c.marked_text",
         "c.partial_marked_text",
         "fact.mark",
@@ -664,7 +675,6 @@ fn the_page_script_shows_each_build_code_mark() {
         "fact.build_code_change",
         "group.mark",
         "group.kind_mark",
-        "sub.mark",
         "claim.mark",
         "node.build_code",
         "info.build_code",
@@ -672,7 +682,7 @@ fn the_page_script_shows_each_build_code_mark() {
     ] {
         assert!(js.contains(field), "the page script does not show `{field}`");
     }
-    assert!(js.contains("' (with the build code of step ' + buildCode + ')'"), "the class label has the mark");
+    assert!(js.contains("' (with the build code of step ' + buildCode + ')'"), "the fact label has the mark");
 }
 
 #[test]
@@ -836,7 +846,7 @@ async fn a_property_claim_is_a_checked_fact() {
         claim: "c99".into(),
         step,
         status: semilla_core::ClaimStatus::Verified { proof: "syntax".into() },
-        class: None,
+        category: None,
         effect: None,
         witness: None,
         hint: None,

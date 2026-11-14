@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::ops::{self, OpKind, OpLevel};
 use semilla_core::report::Effect;
-use semilla_core::{Anchor, Class, Claim, ClaimStatus, Segment, Step};
+use semilla_core::{Anchor, Category, Claim, ClaimStatus, Segment, Step};
 use semilla_syntax::{Edit, EditKind, Node, Renames, Resolved, Workspace};
 
 use crate::{BodyComparison, BodyStatus, ExprOracle};
@@ -39,14 +39,12 @@ pub struct Outcome {
     pub status: ClaimStatus,
     /// The indexes of the edits that the claim explains.
     pub explains: Vec<usize>,
-    pub class: Option<Class>,
+    pub category: Option<Category>,
     pub effect: Option<Effect>,
     pub witness: Option<String>,
     pub hint: Option<String>,
     pub before: Option<String>,
     pub after: Option<String>,
-    /// True if the claim needs a body proof of its whole function (neutral claims).
-    pub needs_body_proof: bool,
     /// True if the claim is valid without an edit (a rename that the diff applied first).
     pub self_evident: bool,
     /// For a refuted `calls-only` claim: the complete list of `calls` that makes the claim true.
@@ -55,7 +53,7 @@ pub struct Outcome {
 
 impl Outcome {
     fn new(status: ClaimStatus) -> Outcome {
-        Outcome { status, explains: Vec::new(), class: None, effect: None, witness: None, hint: None, before: None, after: None, needs_body_proof: false, self_evident: false, complete_calls: Vec::new() }
+        Outcome { status, explains: Vec::new(), category: None, effect: None, witness: None, hint: None, before: None, after: None, self_evident: false, complete_calls: Vec::new() }
     }
 
     fn malformed(reason: impl Into<String>) -> Outcome {
@@ -107,7 +105,10 @@ impl BodyIndex {
             // tree can be a line of a different function in the old tree.
             let other = |workspace: &Workspace| find_item_by(&body.name, None, workspace);
             let item = if body.status == BodyStatus::BeforeOnly { find_item(body, before).or_else(|| other(after)) } else { find_item(body, after).or_else(|| other(before)) };
-            let uses_config = !body.config.is_empty() && !matches!(body.status, BodyStatus::Equal { .. });
+            // The rules of the build configuration change no status (design 35). A body with a
+            // cause in `stopped` is a body with a text edit: its uses go to the notes.
+            let stopped = !body.stopped.is_empty();
+            let uses_config = !body.config.is_empty() && (stopped || !matches!(body.status, BodyStatus::Equal { .. }));
             if uses_config {
                 index.config.entry(body.name.clone()).or_default().extend(body.config.iter().cloned());
             }
@@ -123,7 +124,7 @@ impl BodyIndex {
                     }
                 }
             }
-            if !body.stopped.is_empty() && !matches!(body.status, BodyStatus::Equal { .. }) {
+            if stopped {
                 for key in std::iter::once(&body.name).chain(item.iter()) {
                     let list = index.stopped.entry(key.clone()).or_default();
                     list.extend(body.stopped.iter().filter(|text| !list.contains(text)).cloned().collect::<Vec<_>>());
@@ -167,6 +168,11 @@ impl BodyIndex {
     /// The causes of a removed proof of a body of an item (or a MIR name) (batch 5u).
     pub fn stopped(&self, name: &str) -> &[String] {
         self.stopped.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The item paths of the bodies with a cause in `stopped`.
+    pub fn stopped_items(&self) -> impl Iterator<Item = &String> {
+        self.stopped.keys().filter(|name| self.by_item.contains_key(*name))
     }
 
     /// Each changed body that reads the build configuration (the item path and the MIR name
@@ -502,7 +508,7 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
     if info.kind == OpKind::Property {
         let mut outcome = check_property(context, claim);
         outcome.self_evident = true;
-        outcome.class = None;
+        outcome.category = None;
         return outcome;
     }
 
@@ -544,72 +550,26 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
         other => Outcome::malformed(format!("the verifier has no checker for `{other}`")),
     };
 
-    if outcome.class.is_none() {
-        outcome.class = info.class.or_else(|| computed_class(context, claim));
-    }
-    if info.class == Some(Class::Neutral) {
-        outcome.needs_body_proof = true;
-    }
-    if info.kind == OpKind::Free && outcome.status.is_verified() && outcome.class == Some(Class::Neutral) && claim.op != "rewrite-item" {
-        outcome.hint = Some("This free edit is neutral. An exact neutral op gives a stronger claim.".into());
+    if outcome.category.is_none() {
+        // A changed control flow graph wins over the `logic` category of the op (as for a fact).
+        outcome.category = match info.category {
+            Some(Category::Logic) | None => computed_category(context, claim).or(info.category),
+            other => other,
+        };
     }
     outcome
 }
 
-/// The class from the MIR of the claim's function.
-fn computed_class(context: &Context, claim: &Claim) -> Option<Class> {
+/// The category of a body edit that no op decides: `control flow` if the control flow graph of
+/// the function changes, else `logic`.
+fn computed_category(context: &Context, claim: &Claim) -> Option<Category> {
     let item = claim.at.as_ref()?.item.as_str();
-    match context.bodies.status(item)? {
-        BodyStatus::Equal { .. } => Some(Class::Neutral),
-        BodyStatus::Different { cfg_changed: true } => Some(Class::ControlFlow),
-        _ => Some(Class::Logic),
-    }
-}
-
-/// The body proof of a neutral claim on its function.
-fn body_proof(context: &Context, item: &str, mut outcome: Outcome) -> Outcome {
-    if !outcome.status.is_verified() {
-        return outcome;
-    }
-    outcome.class = Some(Class::Neutral);
     match context.bodies.status(item) {
-        Some(BodyStatus::Equal { level, proof }) => {
-            let mut text = level.to_uppercase();
-            if !proof.is_empty() {
-                text = format!("{text}: {}", proof.join(", "));
-            }
-            outcome.status = ClaimStatus::Verified { proof: text };
-        }
-        // A changed control flow graph is not evidence of a behavior change (an extracted call
-        // adds a block), so it gives "unproved", not "refuted".
-        Some(BodyStatus::Different { cfg_changed }) => {
-            let reason = if cfg_changed { "no normal form makes the bodies equal (the control flow graph differs)" } else { "no normal form makes the bodies equal" };
-            outcome.status = ClaimStatus::Unproved { reason: reason.into() };
-            outcome.hint = Some("Tag the change as logic, or use smaller neutral steps.".into());
-        }
-        Some(_) => {
-            outcome.status = ClaimStatus::Unproved { reason: "no normal form makes the bodies equal".into() };
-            outcome.hint = Some("Tag the change as logic, or use smaller neutral steps.".into());
-        }
-        None if !context.bodies.available => {
-            outcome.status = ClaimStatus::Pending { reason: "the body proof runs in the background check (phase 2)".into() };
-        }
-        // A function without a MIR body: no checked configuration compiles it (an inactive `cfg`).
-        // Nothing proves its body, so the claim is unproved.
-        None if is_function(context, item) => {
-            outcome.status = ClaimStatus::Unproved { reason: format!("no MIR body for `{item}`: no checked configuration compiles it (an inactive `cfg`?)") };
-            outcome.hint = Some("Add a feature set that compiles the function (design 8.12), or tag the change as logic.".into());
-        }
-        None => {
-            // No body: a non-function item. The syntax check is the proof.
-        }
+        Some(BodyStatus::Different { cfg_changed: true }) => Some(Category::ControlFlow),
+        Some(_) => Some(Category::Logic),
+        None if !context.bodies.available => Some(Category::Logic),
+        None => None,
     }
-    outcome
-}
-
-/// True if the item is a function on either side of the step.
-fn is_function(context: &Context, item: &str) -> bool {
-    [context.after, context.before].iter().any(|ws| ws.items.get(item).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Fn && item.body.is_some()))
 }
 
 fn texts(context: &Context, indexes: &[usize], mut outcome: Outcome) -> Outcome {
@@ -751,8 +711,8 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     outcome.self_evident = true;
     outcome.before = Some(at.item.clone());
     outcome.after = Some(to.clone());
-    // The proof is the MIR compare of the whole workspace (design 22.4). The step check makes it.
-    outcome.class = Some(Class::Neutral);
+    // The compare of the whole workspace decides the result (design 35). The step check makes it.
+    outcome.category = Some(Category::Rename);
     outcome
 }
 
@@ -773,7 +733,7 @@ fn check_rename_local(context: &Context, claim: &Claim) -> Outcome {
     outcome.self_evident = true;
     outcome.before = Some(old);
     outcome.after = Some(to.to_string());
-    body_proof(context, &at.item, outcome)
+    outcome
 }
 
 fn check_item_edit(context: &Context, claim: &Claim, kind: EditKind, added: bool) -> Outcome {
@@ -800,7 +760,7 @@ fn check_item_edit(context: &Context, claim: &Claim, kind: EditKind, added: bool
     ordered.sort_by_key(|&i| context.edits[i].kind != kind);
     let outcome = Outcome::verified("shape", explains);
     let mut outcome = texts(context, &ordered, outcome);
-    outcome.class = Some(Class::Logic);
+    outcome.category = Some(if added { Category::Added } else { Category::Removed });
     outcome
 }
 
@@ -820,8 +780,8 @@ fn check_signature(context: &Context, claim: &Claim) -> Outcome {
     }
     // A doc test is code (brief 5h, B1): `edit-doc` explains a change of the doc text only.
     if explains.iter().any(|&index| crate::facts::doc_test_change(&context.edits[index]).is_some()) {
-        let mut outcome = Outcome::new(ClaimStatus::Unproved { reason: format!("the doc change of `{}` adds, changes, or removes a code block: `cargo test` runs it as a doc test, so it is code", at.item) });
-        outcome.hint = Some("Remove the claim `edit-doc`. Semilla shows the change as the fact \"doc test of … added\" (or \"changed\", \"removed\") with the class `logic`.".into());
+        let mut outcome = Outcome::refuted(format!("the doc change of `{}` adds, changes, or removes a code block: `cargo test` runs it as a doc test, so it is code", at.item));
+        outcome.hint = Some("Remove the claim `edit-doc`. Semilla shows the change as the fact \"doc test of … added\" (or \"changed\", \"removed\").".into());
         return outcome;
     }
     let outcome = Outcome::verified("shape", explains.clone());
@@ -867,7 +827,7 @@ fn check_across(context: &Context, claim: &Claim) -> Outcome {
     }
     explains.extend(region);
     let outcome = texts(context, &explains.clone(), Outcome::verified("shape", explains));
-    body_proof(context, &at.item, outcome)
+    outcome
 }
 
 /// The edits in a statement region: `count` statements from the anchor, in the same block, on
@@ -1210,7 +1170,7 @@ fn check_neutral_region(context: &Context, claim: &Claim) -> Outcome {
         }
     }
     let outcome = texts(context, &explains.clone(), Outcome::verified("shape", explains));
-    body_proof(context, &at.item, outcome)
+    outcome
 }
 
 /// Expression ops that match one edit at the anchor (or one level below it).
@@ -1296,9 +1256,9 @@ fn add_effect(context: &Context, at: &Anchor, outcome: &mut Outcome) {
         // does not show: only the MIR proves that a body has no change. `unrelated` does not
         // show: it can be an equivalence that the solver cannot see (method calls, floats).
         match check.effect {
-            Effect::Equivalent => outcome.class = Some(Class::Neutral),
+            Effect::Equivalent => {}
             Effect::Narrow | Effect::Widen | Effect::Negate => {
-                outcome.class = Some(Class::ControlFlow);
+                outcome.category = Some(Category::ControlFlow);
                 outcome.effect = Some(check.effect);
                 outcome.witness = check.witness;
             }
@@ -1430,11 +1390,7 @@ fn check_swap(context: &Context, claim: &Claim) -> Outcome {
     let mut outcome = texts(context, &explains.clone(), Outcome::verified("shape", explains));
     outcome.before = Some(before.text.clone());
     outcome.after = Some(after.text.clone());
-    let types = local_types(context.before, &at.item);
-    if context.exprs.equivalent(&before.text, &after.text, &types) == Some(true) {
-        outcome.class = Some(Class::Neutral);
-        outcome.status = ClaimStatus::Verified { proof: "smt".into() };
-    }
+    // The solver does not run here (design 35): the MIR compare gives the result of the fact.
     outcome
 }
 
@@ -1626,17 +1582,16 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
         // With `new`, the name map pairs the old and the new item. Equal text means a pure move or
         // rename, which is an identity claim, not a rewrite.
         if new != at.item {
-            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Remove the claim, or claim `move-item` (another module or crate) or `rename`. A step with no other change gets the proof.", at.item));
+            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Remove the claim. Semilla derives a move or a rename in a step with no other change.", at.item));
         }
         return outcome;
     }
     let mut outcome = Outcome::verified("rewrite", explains);
     outcome.before = Some(old_item.source.clone());
     outcome.after = Some(new_item.source.clone());
-    outcome.class = match context.bodies.status(&new).or_else(|| context.bodies.status(&at.item)) {
-        Some(BodyStatus::Equal { .. }) => Some(Class::Neutral),
-        Some(BodyStatus::Different { cfg_changed: true }) => Some(Class::ControlFlow),
-        Some(_) => Some(Class::Logic),
+    outcome.category = match context.bodies.status(&new).or_else(|| context.bodies.status(&at.item)) {
+        Some(BodyStatus::Different { cfg_changed: true }) => Some(Category::ControlFlow),
+        Some(_) => Some(Category::Logic),
         None => None,
     };
     outcome

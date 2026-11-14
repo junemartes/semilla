@@ -562,6 +562,9 @@ impl NormalOracle {
     }
 
     /// Compares the bodies of one configuration at N2 and N3 (with N4), after `compare_n0`.
+    /// Design 35.4: the compare of a fact is the level N0 with the rename and move map. No
+    /// code calls this function now.
+    #[allow(dead_code)]
     fn compare_deep(&self, step: &Step, added: &[String], state: &mut SetState) -> Result<()> {
         let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], &state.config)?;
         state.before.extend(old);
@@ -634,7 +637,8 @@ struct SetState {
 }
 
 impl SetState {
-    /// True if a body is not equal at N0.
+    /// True if a body is not equal at N0. No code calls this function now (design 35.4).
+    #[allow(dead_code)]
     fn needs_deep(&self) -> bool {
         self.comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. }))
     }
@@ -747,30 +751,12 @@ impl BodyOracle for NormalOracle {
 
     fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<BodyComparison>> {
         let checked = self.checked(step)?;
-        // N0 for each configuration. Then N2 and N3 for each configuration with a body that is
-        // not equal at N0: these builds run in parallel.
+        // N0 for each configuration, with the rename and move map (N1). Design 35.4: this is the
+        // compare of a fact. The levels N2, N3, and N4 do not run.
         let mut states = Vec::new();
         for (index, config) in checked.iter().enumerate() {
             states.push(self.compare_n0(step, renames, added, config, index, opaque)?);
         }
-        let deep: Vec<Result<()>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = states
-                .iter()
-                .filter(|state| state.needs_deep())
-                .filter(|state| state.done.is_none())
-                .flat_map(|state| ["n2", "n3"].map(|level| (state, level)))
-                .map(|(state, level)| {
-                    scope.spawn(move || {
-                        // Only the builds: `compare_deep` reads the records (batch 5x, part F).
-                        self.records_or_build(&step.tree_before, level, &state.config, false)?;
-                        self.records_or_build(&step.tree_after, level, &state.config, false)?;
-                        Ok(())
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
-        });
-        deep.into_iter().collect::<Result<Vec<()>>>()?;
         let mut spans = BTreeMap::new();
         let mut combined: BTreeMap<String, BodyStatus> = BTreeMap::new();
         // The configurations of each body: those that compile it, and those where it is not equal.
@@ -781,9 +767,6 @@ impl BodyOracle for NormalOracle {
             let own = match state.done.take() {
                 Some(own) => own,
                 None => {
-                    if state.needs_deep() {
-                        self.compare_deep(step, added, &mut state)?;
-                    }
                     let mut own = BTreeMap::new();
                     state.spans(&mut own);
                     let key: CompareKey = (

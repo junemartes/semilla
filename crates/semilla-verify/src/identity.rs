@@ -4,8 +4,8 @@
 //! entity of the same kind. A rename keeps the owner and changes the name. A move keeps the name
 //! and changes the owner. Semilla makes each name map of the pairs into `rename` and `move-item`
 //! claims, and checks the step with them. This is the same check as for a claimed identity
-//! (design 22.4). If exactly one map passes, the step gets the fact "renamed `A` → `B` (proved Nk)"
-//! or "moved `A` → `B` (proved Nk)", and the forced edits fold under it.
+//! (design 22.4). If exactly one map passes, the step gets the fact "renamed `A` → `B`" or
+//! "moved `A` → `B`" with its compare result (design 35), and the forced edits fold under it.
 //!
 //! Limits: at most 4 removed and 4 added entities of one kind in one owner, and at most
 //! [`MAX_MAPS`] maps. Above a limit, or when more than one map passes, Semilla derives nothing and
@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Anchor, Claim, ClaimStatus, Class, Fact};
+use semilla_core::{Anchor, Category, Claim, ClaimStatus, Compare, Fact};
 use semilla_syntax::{EditKind, ItemKind, Workspace};
 
 use crate::{BodyOracle, ExprOracle, StepInput, StepOutcome};
@@ -165,7 +165,7 @@ fn pairs_of(before: &Workspace, after: &Workspace, removed: &[(&str, ItemKind)],
         let over = r > MAX_GROUP || a > MAX_GROUP;
         if over {
             let place = if owner(path).is_empty() { "the crate root".to_string() } else { format!("`{}`", owner(path)) };
-            notes.insert(format!("{r} removed and {a} added {}(s) in {place}: Semilla derives no rename or move above {MAX_GROUP}; claim it with `--claim 'rename OLD to=NEW'` or `--claim 'move-item OLD to=NEW'`", kind_name(kind)));
+            notes.insert(format!("{r} removed and {a} added {}(s) in {place}: Semilla derives no rename or move above {MAX_GROUP}, so the items show as removed and added", kind_name(kind)));
         }
         over
     };
@@ -264,7 +264,7 @@ fn passes(outcome: &StepOutcome, claims: &[Claim]) -> Result<(), String> {
     for claim in claims {
         match report.claims.iter().find(|r| r.claim == claim.id).map(|r| &r.status) {
             Some(status) if status.is_verified() => {}
-            Some(ClaimStatus::Unproved { reason } | ClaimStatus::Refuted { reason } | ClaimStatus::Malformed { reason } | ClaimStatus::Pending { reason }) => return Err(reason.clone()),
+            Some(ClaimStatus::Refuted { reason } | ClaimStatus::Malformed { reason } | ClaimStatus::Pending { reason }) => return Err(reason.clone()),
             Some(other) => return Err(other.text()),
             None => return Err("no result".into()),
         }
@@ -292,7 +292,7 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
     };
     // Phase 1 has no MIR: the proof waits for phase 2.
     if plain.bodies.is_empty() {
-        plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the proof", pair_text(&maps[0])));
+        plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the derivation", pair_text(&maps[0])));
         return plain;
     }
     let mut passed = Vec::new();
@@ -309,7 +309,7 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
     }
     if passed.len() > 1 {
         let list = passed.iter().map(|(map, _, _)| format!("({})", pair_text(map))).collect::<Vec<_>>().join(" or ");
-        plain.report.notes.push(format!("more than one name map passes: {list}; Semilla derives no rename or move. Claim the one that you mean with `--claim 'rename OLD to=NEW'`"));
+        plain.report.notes.push(format!("more than one name map passes: {list}; Semilla derives no rename or move, so the items show as removed and added"));
         return plain;
     }
     let Some((map, claims, outcome)) = passed.pop() else {
@@ -345,7 +345,8 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                     if known.iter().any(|k| k.ends_with(&text)) {
                         continue;
                     }
-                    // A doc test is code (brief 5h, B1): the class is `logic`, with the diff.
+                    // A doc test is code (brief 5h, B1). Semilla does not compile it: the fact
+                    // has no compare, with the cause.
                     let doc_test = edit.anchor().and_then(|anchor| crate::facts::doc_test_fact(&anchor.item, edit));
                     extra.push(Fact {
                         at: edit.anchor().cloned(),
@@ -354,7 +355,9 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                         description: format!("`{}` differs from the removed `{}`: {text}", name(&pair.new), name(&pair.old)),
                         status: "derived".into(),
                         content: doc_test.as_ref().map(|(_, content)| content.clone()),
-                        class: Some(if changed || doc_test.is_some() { Class::Logic } else { Class::Other }),
+                        category: if doc_test.is_some() { Category::Docs } else { edit_category(edit) },
+                        compare: if doc_test.is_some() { Compare::NoCompare } else if changed { Compare::CodeDifferent } else { Compare::CodeEqual },
+                        note: doc_test.as_ref().map(|_| format!("{} Semilla does not compile a doc test", crate::uncompiled::NO_COMPARE)),
                         affected: if changed { vec![pair.new.clone()] } else { Vec::new() },
                         ..Default::default()
                     });
@@ -372,22 +375,33 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                 // The pair is not an identity. The note names the difference of the pair, not
                 // the first changed body of the step.
                 let more = if differences.len() > 3 { format!(", and {} more", differences.len() - 3) } else { String::new() };
-                plain.report.notes.push(format!("{} show(s) as removed and added: the pair has a difference: {}{more}. A {what} with no other change in its step gets a proof", pair_text(map), differences.iter().take(3).cloned().collect::<Vec<_>>().join("; ")));
+                plain.report.notes.push(format!("{} show(s) as removed and added: the pair has a difference: {}{more}. Semilla derives a {what} only in a step with no other change", pair_text(map), differences.iter().take(3).cloned().collect::<Vec<_>>().join("; ")));
             } else if only_permitted && !mir_differs.is_empty() {
                 // Each text difference of the pair is a permitted one. The cause is in the MIR:
                 // for example, the item reads `module_path!()` or `line!()`.
                 let names: Vec<String> = mir_differs.iter().take(3).map(|name| format!("`{name}`")).collect();
-                plain.report.notes.push(format!("{} show(s) as removed and added: the MIR of the item differs after the {what} ({}). The text of the pair has no difference that stops a proof. A possible cause: the item reads its place (`module_path!()`, `line!()`, `file!()`)", pair_text(map), names.join(", ")));
-            } else if reason.contains("split the step") {
-                let other = reason.strip_prefix("an identity step must be neutral, but ").and_then(|r| r.strip_suffix(": split the step")).unwrap_or("the step has other changes");
-                plain.report.notes.push(format!("{} show(s) as removed and added: {other}. Put the {what} in its own step to get a proof", pair_text(map)));
+                plain.report.notes.push(format!("{} show(s) as removed and added: the MIR of the item differs after the {what} ({}). The text of the pair has no difference that stops the derivation. A possible cause: the item reads its place (`module_path!()`, `line!()`, `file!()`)", pair_text(map), names.join(", ")));
+            } else if let Some(other) = reason.strip_prefix(crate::OTHER_CHANGE) {
+                plain.report.notes.push(format!("{} show(s) as removed and added: {other}. Semilla derives a {what} only in a step with no other change", pair_text(map)));
             } else {
-                plain.report.notes.push(format!("{} show(s) as removed and added: no proof of the {what} ({reason})", pair_text(map)));
+                plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the {what} ({reason})", pair_text(map)));
             }
         }
         return plain;
     };
     convert(input, &map, &claims, outcome)
+}
+
+/// The category of the fact for one difference of a pair, from the kind of the edit.
+fn edit_category(edit: &semilla_syntax::Edit) -> Category {
+    match edit.kind {
+        EditKind::Visibility => Category::Visibility,
+        EditKind::Docs | EditKind::Comment => Category::Docs,
+        EditKind::Attrs => Category::Attribute,
+        EditKind::Signature | EditKind::Members => Category::Declaration,
+        EditKind::Inserted | EditKind::Deleted | EditKind::Moved | EditKind::Modified | EditKind::Replaced => Category::Logic,
+        _ => Category::Text,
+    }
 }
 
 /// Makes the results of the derived claims into facts. The edits and the bodies of each claim go
@@ -396,6 +410,10 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
     let first = input.step.claims.len();
     let report = &mut outcome.report;
     let mut identity_facts = Vec::new();
+    // A rename or a move changes the text of each body that has the name. Each such body gives
+    // its conditions to the note of the first fact of the rename or the move (design 35).
+    let body_index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
+    let mut note = crate::facts::stop_note(body_index.stopped_items(), &body_index, &Default::default());
     for (index, (pair, claim)) in map.iter().zip(claims).enumerate() {
         let result = report.claims.iter().find(|r| r.claim == claim.id).cloned();
         let Some(result) = result else { continue };
@@ -414,23 +432,22 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
         }
         let lines: usize = lines.values().map(|(removed, added)| (*removed).max(*added)).sum();
         let with_lines = if lines == 0 { String::new() } else { format!(", with {lines} `use` line(s)") };
-        let proof = match &result.status {
-            ClaimStatus::Verified { proof } => proof.clone(),
-            _ => String::new(),
-        };
         let verb = if pair.op == "rename" { "renamed" } else { "moved" };
         let spotlight_why = outcome.identity_reason.clone().filter(|_| identity_facts.is_empty());
         identity_facts.push(Fact {
             at: Some(Anchor::item(&pair.old)),
             file: input.before.items.get(&pair.old).map(|item| item.file.clone()),
             part: "identity".into(),
-            description: format!("{verb} `{}` → `{}` (proved {proof}){with_lines}", pair.old, pair.new),
+            description: format!("{verb} `{}` → `{}`{with_lines}", pair.old, pair.new),
             status: "derived".into(),
-            class: Some(Class::Neutral),
+            category: if pair.op == "rename" { Category::Rename } else { Category::Move },
+            // The bodies of the fact are the derived bodies that show the name (design 35).
+            compare: if result.affected.is_empty() { Compare::CodeEqual } else { Compare::CodeDifferent },
             affected: result.affected.clone(),
             spotlight: spotlight_why.is_some(),
             spotlight_why,
             reason: input.step.reasons.get(&pair.old).cloned(),
+            note: note.take(),
             ..Default::default()
         });
     }

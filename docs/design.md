@@ -312,6 +312,8 @@ parent tree, step snapshots S1..SN, commit tree, claims, groups, subgroups
 
 ### 8.2 The normal form ladder
 
+Section 35 replaces the verdict rules of this section.
+
 Each normalization step must keep the behavior the same. Then "equal after normalization" proves "equivalent". **The normalization keeps all drops**, because drop order is observable in Rust.
 
 | Level | Form | Absorbs | MVP |
@@ -1393,6 +1395,8 @@ Anchor form for members: `shop::Account.balance` and `shop::Pair.0` for fields, 
 
 ### 22.4 Identity steps
 
+Section 35 replaces the verdict rules of this section.
+
 `rename` and `move-item` are identity claims. They apply to an item, a module, a field, a variant, and a trait method.
 
 **A step that has an identity claim must be neutral.** The rules:
@@ -1421,6 +1425,8 @@ In a step with no identity claim, Semilla pairs entities by name. A member or an
 Positions without names stay ambiguous. Example: `Pair(u32, u32)` becomes `Pair(u32, u32, u32)`. Semilla makes no guess. It reports one coarse fact ("the tuple fields changed") with all sites under it.
 
 ### 22.5 Facts
+
+Section 35 replaces the verdict rules of this section.
 
 A fact is the difference in one part of a paired entity. The parts are independent, so the set of facts is unique.
 
@@ -2718,3 +2724,142 @@ The rule: the driver finds a descriptor from the compiler data (a `static` or a 
 - **A changed `derive` list of a type that a different crate can use.** Each new name is a new trait impl. "Public API changes" has the line "`AsSnakeCase` now has `Clone`, `Copy`, `Debug`", and the API level is `minor`. A removed name gives "`AsSnakeCase` no longer has `Debug` (the public API can change)", and the API level is `major`. The compare uses the last segment of each path in the `derive` attributes. A `derive` in a `cfg_attr` is not in the list.
 - **`no-panic`.** An index (`a[i]`) is not an explicit panic: the panic comes from the bounds check. The text has two names: "explicit panic sites: …" (`unwrap`, `expect`, a panic macro) and "index panic sites (an index out of bounds): …". The rule does not change: each of these sites refutes the claim.
 - **Not done in this batch:** "the same diff as fN" for the same code in two facts; the old name in the change tree after a rename; the "member order" fact for an enum in a function body.
+
+## 35. No verdict: categories and compare results
+
+Batch 7a. This section replaces the verdict rules of the sections 8.2, 22.4, and 22.5, and each later rule that gives a fact the class `neutral (proved)`. The old sections stay as a record.
+
+### 35.1 The decision
+
+**User decision (2026-11-14, variant B).**
+
+- Semilla does not decide if a change is neutral. The verdict `neutral (proved)` is gone.
+- Each fact has exactly one category and exactly one compare result.
+- The category says what kind of change the text shows. It does not say if the change has an effect.
+- The compare result is an observation of the compiled code. It is not a verdict.
+- The reviewer reads each fact. An equal compare never hides the text of an edit.
+
+**The cause.** The class `neutral (proved)` was a verdict: the reviewer did not read the fact. Ten blind trials show the cost. Most accepted cheats were false "neutral" results. Most correction commands of an honest agent came from a missing proof of an honest rename or move. In the last trial, 5 of 40 facts were `neutral (proved)`.
+
+Each detail below that the user did not decide has the mark **Decided by Claude**.
+
+### 35.2 Categories and compare results
+
+**The category list. Decided by Claude** (the user gave the start list; the list is closed: `semilla_core::Category`, 18 entries).
+
+| Category | The change |
+|---|---|
+| `rename` | a new name of an item, a member, a local, or a parameter, with the forced edits at each use |
+| `move` | an item or a file in a different module |
+| `visibility` | the visibility of an item or a member |
+| `declaration` | a signature, generics, bounds, the type of a member or a constant, the set or the order of members, a `derive` list, a qualifier |
+| `added` | a new item, member, `impl`, or test |
+| `removed` | a removed item, member, `impl`, or test |
+| `value` | a literal or the value of a constant |
+| `logic` | statements, operands, calls |
+| `control flow` | branches, loops, exits |
+| `attribute` | an attribute |
+| `docs` | a doc comment or a comment (a doc test change says "doc test" in its text) |
+| `import` | a `use` line, a `mod` line, an `extern crate` line |
+| `macro` | a macro definition or a macro call |
+| `manifest` | a key of a manifest or of a cargo or rustup configuration |
+| `file` | a file that is not Rust code |
+| `build code` | a change of build code (also the file fact of a build script) |
+| `indirect` | the compiled code of a body changes, and its text does not |
+| `text` | changed source text with no other fact (the net of 33.10) |
+
+The start list of the user is unchanged: no entry is joined, and no entry is split. The rules of the sections 22.5 and 23 decide between `value`, `logic`, and `control flow` for an edit in a body. A pattern `_` in place of a name is not a rename of a local: it is a `logic` fact.
+
+**The compare results. User decision** (the four results and the two texts).
+
+| Result | Meaning |
+|---|---|
+| `code equal` | Each body in the scope of the fact has the same compiled code before and after, in each checked configuration. |
+| `code different` | One body or more has different compiled code, or is new, or no longer exists. The fact lists the bodies. |
+| `no compare` | Semilla made no compare. The fact gives the cause. |
+| `no code` | The fact has no compiled code: a doc comment, a manifest key, a file that no body reads. |
+| `pending` | A form of `no compare`: the command had `--fast`, and phase 2 did not run yet. |
+| `not checked` | A form of `no compare`: the command had `--no-build-code`. |
+
+**The order of the rules. Decided by Claude** (`set_compare` in `semilla-verify/src/lib.rs`). The first rule that applies gives the result.
+
+1. A fact with the result `not checked` keeps it.
+2. A doc test: `no compare`. Semilla does not compile a doc test. The same applies to `doc(test(…))`.
+3. A failed build: `no compare`, with the cause.
+4. Phase 1 has no MIR: `pending`. Only a doc text, a comment, and a format change of a manifest are `no code` in phase 1.
+5. A fact with a changed body: `code different`.
+6. A fact in code that no checked configuration compiles: `no compare`, with the note "no compare: no checked configuration compiles `X`".
+7. A doc text, a comment, a manifest key, and a file with no changed body: `no code`.
+8. Each other fact: `code equal`.
+
+**The mismatch mark. User decision** (the mark); **Decided by Claude** (the text and the place). A fact of the category `rename`, `move`, `visibility`, `import`, `docs`, or `attribute` with `code different` gets the line "! the compiled code changes: `a::f`, `a::g`". The text of such a fact gives no cause for different code. The mark asks for no reason. A rename of a type with a derived `Debug` body has the mark: the body shows the new name.
+
+**The fact line.** `  ◆ f1 derived: TEXT [category · compare]`. The sub lines have 6 spaces: "affected bodies: …", "bodies with a changed call site and equal compiled code: …", "note: …", "! the compiled code changes: …". Each JSON output and `semilla mcp` use the fields `category` and `compare`. `Class`, the field `class`, and the option `--class` are gone. A stored record of an older Semilla gives a clear error.
+
+### 35.3 The claims that stay
+
+**User decision.** The claims `rename` and `move-item` and the result `unproved` are gone: Semilla derives each rename and each move (24.2), and the fact has the compare result. The command refuses the claim with exit code 2: "the claim `rename` is gone: Semilla derives each rename and each move as a fact, with the compare result of the compiled code; remove the claim (…)". The property claims stay with their results `verified`, `partial`, and `refuted`: `tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`, `rewrite-pattern`.
+
+These rules are gone too:
+
+- "An identity step must be neutral", and the note "Put the rename in its own step to get a proof". The derivation of 24.2 stays: a step with a second change shows the pair as removed and added, with a note for the cause. The note asks for nothing.
+- "The step declares the class". No step declares a category or a compare result.
+- The spotlight "build configuration" and its reason (35.5 has the notes that replace it).
+
+Each spotlight that is not about a proof stays. The public API facts, the API level, the panic delta, the base line, `verify`, the commit binding, the build sandbox, and the build code mark stay.
+
+### 35.4 The compare level
+
+**User decision.** "The same compiled code" means: the MIR of the level N0 is equal, after the map of the renamed and moved names (N1). Nothing more. The levels N2, N3, and N4 of 8.2 and the SMT check of an equivalence no longer run for a fact. So a swap of two operands, a removed local, and a fold of a constant condition are `code different`. Semilla shows what it sees; the reviewer decides.
+
+The code of the old levels stays in the tree (35.8 lists it).
+
+### 35.5 The configuration scope, the notes, and the joint states
+
+**User decision.** Each compare result holds for the checked configurations only (the six configurations of 26, and each added configuration). Each report says so one time: "Each compare result holds for the checked configurations." Code that no checked configuration compiles gives `no compare` with the cause. The spotlight "inactive code" stays: "inactive code: no checked configuration compiles the changed code (…), so Semilla did not compare the edit; it needs a reason". A changed body with a `cfg!`, a `cfg` attribute, or `option_env!` whose condition Semilla did not check gets a note under the fact. A note asks for no reason. The rule of the rival impl (`semilla-mir/src/rival.rs`) gives no spotlight, no note, and no change of the compare result.
+
+**The notes. Decided by Claude.** Two or more notes of one fact join with "; ".
+
+- A condition that Semilla did not check: "note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)". The note names the function for a `cfg` attribute on a statement: "this body uses code that a `cfg` attribute can change, which Semilla did not check (…)". The same note form applies to the older opaque rules: a type alias of a different crate, an `impl` under `cfg`, a name that a macro gives.
+- Configurations that do not agree: "note: the compiled code is equal in `dev`, `dev, all features`; different in `release`, `release, all features`". Then the result is `code different`.
+- No compare: "note: no compare: no checked configuration compiles `X`".
+
+**The joint states. Decided by Claude.** The joint check of batch 5u stays, and it now runs for each step, not only for a step with a claim. An equal compare that uses two covered conditions or more is true only if the checked configurations have each joint state. Without the check, a false `code equal` is possible (a test of this batch shows one). Semilla adds the missing configurations (the limit is 4 feature selections) and checks the step again: "Semilla added the configurations `dev, features fast`, `release, features fast` for a joint state". An added configuration is a checked configuration, and the header of the report shows it with "(added for a joint state)". If Semilla cannot add a state, the fact gets a note: "this body uses `TA` (…), `TB` (…), which Semilla did not check (…); not checked together: `feature = "fast"` on with `feature = "slow"` off. Add `feature-sets = [["fa", "fc"]]` to `[workspace.metadata.semilla]`". The note asks for no reason.
+
+### 35.6 The counts and the result line
+
+**User decision** (the form); **Decided by Claude** (the details). The result line counts the facts by compare result: "result: accepted · 3 steps · 4 facts: 2 code different, 2 code equal · 0 claims". The order is `code different`, `code equal`, `no compare`, `pending`, `not checked`, `no code`. A count of zero does not show. The marks come after the last count: "(1 with a spotlight)", and the count of the facts with a mismatch mark. The build code mark goes to the count `code equal` and to the verified claims: "2 code equal (1 with the build code of step 1)". The Markdown report has one real `result:` line.
+
+### 35.7 The report: order, risk, fold, role
+
+Each rule: **Decided by Claude**, apart from "no fold because of the compare result" (user decision).
+
+- **The summary.** The result line, then a table with the count of the facts for each category. The header has the line of 35.5 one time.
+- **The order in a group.** A spotlight fact, a fact with the mismatch mark, `code different`, `no compare`, `pending`, `not checked`, `code equal`, `no code` (`Fact::order`).
+- **The fold.** No fact folds because of its compare result. A subgroup with a claim is open. The filters of the UI are the category and the compare result (the search keys `category:` and `compare:`).
+- **The role of a subgroup** comes from the category of its facts (`Category::role`): `rename`, `move`, `import`, and `visibility` give `Mechanical`; `declaration` gives `Interface`; `docs` gives `Docs`; `manifest`, `file`, `build code`, and `attribute` give `Config`; `indirect` gives `Propagation`; each other category gives `Core`. A role is a label: no rule hides or folds a subgroup because of its role.
+- **The kind of a group** comes from its facts (`derived_kind`). Each fact is a derived rename: `rename`. Each fact is a derived move: `move`. Each fact has `code equal` or `no code`, and the group has no claim: `refactor`. Each other group: `behavior`. A doc fact and the API fact of a rename do not count. The kind is a label of the compare results. It is not a verdict.
+- **The risk** of a group is a sum of points: 2 for a `control flow` fact with `code different`; 1 for each other fact set with `code different`, `no compare`, `pending`, or `not checked`; 2 for a mismatch mark; 1 for a spotlight fact; 1 for a public API change; 1 for a panic delta above zero; 2 for a claim that is not verified; 2 for an uncovered change; 2 for a pair warning. The levels: 0 points give 0, 1 to 2 give 1, 3 to 4 give 2, 5 or more give 3. The risk is a reading order. It is not a verdict.
+- **`--fast`.** Phase 2 runs in the command only for a property claim or a possible rename or move.
+
+### 35.8 The limits and the dead code
+
+**The limits.**
+
+- A fact with a changed body is `code different`, also when a different edit of the same body is the cause. This applies to a generic order fact and to an `include!` file fact too.
+- A removed `derive` with a hand-written impl that gives the same MIR can show `[attribute · code equal]`. An attribute that Semilla cannot see into hides the configuration note.
+- A commutative swap (`rate * amount`), a fold of a constant condition, and a removed local are `code different`. They can be equal in one profile only; then the note names the profiles.
+- Two definitions of one name under `cfg` (a twin): the compare of an added configuration can go to the other twin. Then the fact is an "indirect change, cause not known" with a spotlight.
+- Semilla does not compile a doc test. A member order fact with no changed body has `no compare`.
+- Each compare result holds for the checked configurations only. A target, a custom profile, and a condition outside the list are not checked.
+
+**The dead code** (not deleted in this batch):
+
+- the levels N2, N3, and N4 in `semilla-normal`;
+- `compare_deep`, `needs_deep`, and `DEEP_TIME` in `crates/semilla/src/oracle.rs`;
+- `SmtOracle::equivalent` and `checks::check_swap`;
+- the outputs of the rival rule (`crates/semilla-mir/src/rival.rs`, `rival()` in `semilla-verify/src/opaque.rs`);
+- the status changes of `srcconfig::apply` and `opaque.apply` (only their data for the notes is in use);
+- the claim ops `rename` and `move-item` in the verifier (the CLI refuses them; verifier tests and the UI demo data still use them).
+
+**Open.** Each report still has the group kinds "refactor" and "behavior" (35.7), and the HTML report has the mark "each fact: code equal or no code". A reader can take them as a verdict. The user did not decide if these labels stay.

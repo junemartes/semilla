@@ -5,16 +5,14 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use semilla_core::Class;
 use serde_json::{Value, json};
 
 use crate::app::App;
 
 /// The tools and their input schemas.
 fn tools() -> Value {
-    let class = json!({"type": "string", "enum": ["neutral", "logic", "control_flow", "other"]});
     json!([
-        {"name": "step", "description": "Check and store one step (design 24.3). \"Before\" is the end of the last step (or HEAD for the first step); \"after\" is the working tree. Semilla derives a fact for each change, and proves renames and moves when the step has no other change. A rejected step stores nothing; the text gives the cause and the call to make again. `claims` are optional claims (`OP ANCHOR key=value …`); `reasons` maps an anchor to the reason for a fact in the spotlight.", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "group": {"type": "string"}, "claims": {"type": "array", "items": {"type": "string"}}, "reasons": {"type": "object", "additionalProperties": {"type": "string"}}, "class": class, "tree": {"type": "boolean"}, "fast": {"type": "boolean", "description": "Run only phase 1 now and phase 2 in the background (for a large project)."}}, "required": ["intent"]}},
+        {"name": "step", "description": "Check and store one step (design 24.3). \"Before\" is the end of the last step (or HEAD for the first step); \"after\" is the working tree. Semilla derives a fact for each change, with one category and one compare result of the compiled code (`code equal`, `code different`, `no compare`, `no code`). It does not decide if a change is neutral. A rejected step stores nothing; the text gives the cause and the call to make again. `claims` are optional claims (`OP ANCHOR key=value …`); `reasons` maps an anchor to the reason for a fact in the spotlight.", "inputSchema": {"type": "object", "properties": {"intent": {"type": "string"}, "group": {"type": "string"}, "claims": {"type": "array", "items": {"type": "string"}}, "reasons": {"type": "object", "additionalProperties": {"type": "string"}}, "tree": {"type": "boolean"}, "fast": {"type": "boolean", "description": "Run only phase 1 now and phase 2 in the background (for a large project)."}}, "required": ["intent"]}},
         {"name": "undo", "description": "Remove the last stored step. The working tree keeps its changes.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "tag", "description": "After `git commit`: the final check with phase 2, the result, and the git note on the commit (default HEAD). It stores nothing when the final check rejects the change set, and it gives each reason with its step.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
         {"name": "results", "description": "The result of the session, or of a tagged commit: phase 1 runs again now; phase 2 comes only from a check on this machine (else it starts now). The text has one line for each step and the result line. `wait` waits at most this many seconds for phase 2. `verbose` adds the facts.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}, "wait": {"type": "integer"}, "verbose": {"type": "boolean"}}}},
@@ -24,7 +22,7 @@ fn tools() -> Value {
         {"name": "replay_begin", "description": "Start a replay: semilla saves your finished work (or `commit`) as the target and puts the base tree in the working tree.", "inputSchema": {"type": "object", "properties": {"commit": {"type": "string"}}}},
         {"name": "replay_status", "description": "List the hunks that remain between the working tree and the replay target.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "replay_plan", "description": "Return a draft plan (JSON) of all replay steps: the intents, the takes, and the optional claims of each step. Check and edit it, then send it with replay_apply.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "replay_apply", "description": "Apply a whole replay plan: start again from the base, run each step, and check the change set. It reports all problems at once. `full: true` also runs the body proofs.", "inputSchema": {"type": "object", "properties": {"plan": {"type": "object"}, "full": {"type": "boolean"}}, "required": ["plan"]}},
+        {"name": "replay_apply", "description": "Apply a whole replay plan: start again from the base, run each step, and check the change set. It reports all problems at once. `full: true` also runs phase 2 (the MIR checks).", "inputSchema": {"type": "object", "properties": {"plan": {"type": "object"}, "full": {"type": "boolean"}}, "required": ["plan"]}},
         {"name": "replay_end", "description": "End the replay. The working tree must be the target.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "replay_abort", "description": "Stop the replay, remove its steps, and restore the working tree.", "inputSchema": {"type": "object", "properties": {}}}
     ])
@@ -54,8 +52,7 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
                 Some(Value::Object(map)) => map.iter().map(|(anchor, text)| format!("{anchor}={}", text.as_str().unwrap_or(""))).collect(),
                 _ => strings("reasons"),
             };
-            let class: Option<Class> = args.get("class").map(|c| serde_json::from_value(c.clone())).transpose()?;
-            let request = crate::onestep::StepRequest { intent: text("intent").context("`intent` is required")?.to_string(), group: text("group").map(str::to_string), claims: strings("claims"), reasons, class, tree: args.get("tree").and_then(Value::as_bool).unwrap_or(false), fast: args.get("fast").and_then(Value::as_bool).unwrap_or(false) };
+            let request = crate::onestep::StepRequest { intent: text("intent").context("`intent` is required")?.to_string(), group: text("group").map(str::to_string), claims: strings("claims"), reasons, tree: args.get("tree").and_then(Value::as_bool).unwrap_or(false), fast: args.get("fast").and_then(Value::as_bool).unwrap_or(false) };
             let (text, stored) = app.step_once(&request)?;
             if !stored {
                 anyhow::bail!("{text}");

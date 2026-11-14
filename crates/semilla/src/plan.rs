@@ -13,7 +13,7 @@ use semilla_core::text::put_line;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
-use semilla_core::{Class, GroupKind, PairRefusal};
+use semilla_core::{GroupKind, PairRefusal};
 use semilla_syntax::Workspace;
 use serde::{Deserialize, Serialize};
 
@@ -37,8 +37,6 @@ pub struct Plan {
 #[serde(deny_unknown_fields)]
 pub struct PlanStep {
     pub intent: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<Class>,
     /// The parts of the target to copy, as for `replay take`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub take: Vec<String>,
@@ -520,7 +518,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), class: None, claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default() };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default() };
             let map = semilla_verify::checks::renames(&rename_step, &before_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
             let owners = vec![None; edits.len()];
@@ -538,18 +536,13 @@ impl App {
                     todo.push(format!("new function `{}`: add the property claims that are true (no-panic, no-unsafe, no-io, calls-only, tested-by)", item.path));
                 }
             }
-            // An identity step must have no other claim (design 22.4).
-            let identity = claims.iter().any(|c| matches!(c.op.as_str(), "rename" | "move-item"));
-            if identity && claims.iter().any(|c| !matches!(c.op.as_str(), "rename" | "move-item" | "edit-doc")) {
-                todo.push("split the step: put each rename and each move in its own step, before the other changes (an identity step must be neutral)".to_string());
-            }
             // The intent names the items of the claims: the units name only the innermost items.
             let intent = if step.edits.is_empty() { draft_intent(&claims).unwrap_or(step.intent.clone()) } else { step.intent.clone() };
             plan.steps.push(PlanStep {
                 intent,
                 // Design 24.2: only the claims that stay go into the plan. Semilla derives the rest,
                 // also the renames and the moves of a step with no other change.
-                claims: claims.into_iter().filter(|c| crate::onestep::CLAIMS.contains(&c.op.as_str()) && !matches!(c.op.as_str(), "rename" | "move-item")).map(|c| PlanClaim { op: c.op, at: c.at.map(|a| a.to_string()), up: 0, args: c.args }).collect(),
+                claims: claims.into_iter().filter(|c| crate::onestep::CLAIMS.contains(&c.op.as_str())).map(|c| PlanClaim { op: c.op, at: c.at.map(|a| a.to_string()), up: 0, args: c.args }).collect(),
                 todo,
                 ..step
             });
@@ -718,7 +711,7 @@ impl App {
         let mut problems = 0;
         for (index, step) in plan.steps.iter().enumerate() {
             let mut lines: Vec<String> = Vec::new();
-            self.step_begin(&step.intent, step.class)?;
+            self.step_begin(&step.intent)?;
             let before = self.repo.write_tree()?;
             let (changed, step_problems) = self.step_contents(&before, &replay.target, step)?;
             lines.extend(step_problems.into_iter().map(|p| format!("✗ {p}")));

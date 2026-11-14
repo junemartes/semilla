@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use semilla_core::view::{FlowGraph, FlowKind, GraphEdgeKind, GraphNode, TreeNode};
-use semilla_core::{Claim, ClaimResult, Class, Group, Role, Step, Subgroup, ops};
+use semilla_core::{Category, Claim, ClaimResult, Group, Role, Step, Subgroup, ops};
 
 use crate::{SourcePair, UiData, review};
 
@@ -208,16 +208,17 @@ impl Ctx {
         self.claim_step.get(claim).and_then(|step| self.step_group.get(step)).map(String::as_str)
     }
 
-    /// The computed class of a claim. The verifier result has priority. A verified claim without
-    /// a computed class gets the class of the rule table. Other claims have no class.
-    pub fn claim_class(&self, claim: &Claim) -> Option<Class> {
+    /// The category of a claim (design 35). The verifier result has priority. A verified claim
+    /// with no category in its result gets the category of the rule table. Other claims have
+    /// no category.
+    pub fn claim_category(&self, claim: &Claim) -> Option<Category> {
         let result = self.results.get(&claim.id)?;
-        result.class.or_else(|| if result.status.is_verified() { ops::op(&claim.op).and_then(|info| info.class) } else { None })
+        result.category.or_else(|| if result.status.is_verified() { ops::op(&claim.op).and_then(|info| info.category) } else { None })
     }
 
-    /// True if the claim is verified and its computed class is neutral.
-    pub fn is_proved_neutral(&self, claim: &Claim) -> bool {
-        self.results.get(&claim.id).is_some_and(|result| result.status.is_verified()) && self.claim_class(claim) == Some(Class::Neutral)
+    /// True if the claim is verified.
+    pub fn is_verified(&self, claim: &Claim) -> bool {
+        self.results.get(&claim.id).is_some_and(|result| result.status.is_verified())
     }
 
     pub fn graph_node(&self, id: &str) -> Option<&GraphNode> {
@@ -340,14 +341,8 @@ pub fn role_label(role: Role) -> &'static str {
     }
 }
 
-/// The short label of a class, as in the badges of design section 6.3.
-pub fn class_label(class: Option<Class>) -> &'static str {
-    match class {
-        Some(Class::Neutral) => "neutral",
-        Some(Class::Logic) => "logic",
-        Some(Class::ControlFlow) => "ctrl flow",
-        Some(Class::Other) => "other",
-        Some(Class::NotChecked) => "not checked",
-        None => "unknown",
-    }
+/// The label of the category of a claim in a badge (design 35). A claim with no category
+/// shows "unknown".
+pub fn category_label(category: Option<Category>) -> &'static str {
+    category.map_or("unknown", Category::name)
 }

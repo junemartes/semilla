@@ -3,12 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::ops::{self, OpLevel};
-use semilla_core::{ChangeSet, Class, ClaimResult, GroupKind, Report, Role, StepReport, Subgroup};
+use semilla_core::{ChangeSet, ClaimResult, GroupKind, Report, Role, StepReport, Subgroup};
 
 use crate::Options;
 
-/// The suggested role of a claim, from the rule table and the computed class.
-pub fn suggested_role(set: &ChangeSet, claim_id: &str, result: Option<&ClaimResult>, test_items: &BTreeSet<String>) -> Role {
+/// The suggested role of a claim, from the rule table. A fact gets its role from its category
+/// (`Category::role`, design 35).
+pub fn suggested_role(set: &ChangeSet, claim_id: &str, _result: Option<&ClaimResult>, test_items: &BTreeSet<String>) -> Role {
     let Some((_, claim)) = set.claim(claim_id) else { return Role::Core };
     let info = ops::op(&claim.op);
     if claim.at.as_ref().is_some_and(|at| test_items.contains(&at.item)) {
@@ -18,7 +19,6 @@ pub fn suggested_role(set: &ChangeSet, claim_id: &str, result: Option<&ClaimResu
         return Role::Config;
     }
     let role = info.map(|info| info.role).unwrap_or(Role::Core);
-    let neutral = result.is_some_and(|result| result.class == Some(Class::Neutral) && result.status.is_verified());
     // In an api group, a new public item is the interface, and an expression change is a call site.
     let in_api = set.steps.iter().find(|s| s.claims.iter().any(|c| c.id == claim_id)).is_some_and(|step| {
         set.groups.iter().any(|g| g.kind == GroupKind::Api && g.steps.contains(&step.index))
@@ -26,10 +26,10 @@ pub fn suggested_role(set: &ChangeSet, claim_id: &str, result: Option<&ClaimResu
     if in_api && claim.op == "add-item" {
         return Role::Interface;
     }
-    if in_api && info.is_some_and(|info| info.level == OpLevel::Expression) && !neutral {
+    if in_api && info.is_some_and(|info| info.level == OpLevel::Expression) {
         return Role::Propagation;
     }
-    if role == Role::Core && neutral { Role::Mechanical } else { role }
+    role
 }
 
 fn role_title(role: Role) -> &'static str {
@@ -77,8 +77,7 @@ pub fn suggest(set: &ChangeSet, group_id: &str, steps: &[StepReport], test_items
 
 /// Checks the groups and the subgroups. Errors go to `report.organization`.
 pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options: Options) {
-    let results: BTreeMap<&str, &ClaimResult> = steps.iter().flat_map(|step| step.claims.iter()).map(|result| (result.claim.as_str(), result)).collect();
-
+    let _ = steps;
     if set.groups.is_empty() {
         if options.require_groups && !set.steps.is_empty() {
             report.organization.push("the change set has no groups".into());
@@ -111,10 +110,10 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             if info.is_some_and(|i| i.kind == semilla_core::OpKind::Property) {
                 continue;
             }
-            let result = results.get(id);
+            // A group kind is a label (design 35): no rule compares it with a category or with
+            // a compare result.
             let problem = match group.kind {
-                GroupKind::Refactor => (!result.is_some_and(|r| r.class == Some(Class::Neutral))).then(|| "a refactor group can contain only neutral claims"),
-                GroupKind::Rename | GroupKind::Move => (!matches!(*op, "rename" | "move-item" | "rename-local")).then(|| "a rename or move group can contain only identity claims"),
+                GroupKind::Refactor | GroupKind::Rename | GroupKind::Move => None,
                 // A call site update can be any expression op; statement ops add new control flow.
                 GroupKind::Api => (!info.is_some_and(|i| matches!(i.level, OpLevel::Item | OpLevel::Expression) || i.role == Role::Propagation))
                     .then(|| "an api group can contain only claims of item-level ops and of expression-level ops"),
@@ -142,16 +141,12 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             if !group.steps.contains(&step.index) {
                 report.organization.push(format!("subgroup `{}`: claim {claim} is not in a step of group {}", subgroup.title, group.id));
             }
-            let result = results.get(claim.as_str());
-            // In phase 1 a neutral claim is still pending; phase 2 decides.
-            let neutral_proved = result.is_some_and(|r| r.class == Some(Class::Neutral) && (r.status.is_verified() || r.status.is_pending()));
             let info = ops::op(&found.op);
             if info.is_some_and(|i| i.kind == semilla_core::OpKind::Property) {
                 continue;
             }
             let problem = match subgroup.role {
-                // Doc changes (class `other`, no behavior) are mechanical too.
-                Role::Mechanical => (!neutral_proved).then(|| "a Mechanical subgroup can contain only proved neutral claims (doc changes go to a Docs subgroup)"),
+                Role::Mechanical => None,
                 Role::Docs => (found.op != "edit-doc").then(|| "a Docs subgroup can contain only `edit-doc` claims"),
                 Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation || i.level == OpLevel::Expression))
                     .then(|| "a Propagation subgroup can contain only call site claims: expression claims and rewrites"),
@@ -183,8 +178,9 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
 
 /// The open or folded state of a subgroup: its contents decide, not its label.
 pub fn is_open(subgroup: &Subgroup, steps: &[StepReport]) -> bool {
-    let results: BTreeMap<&str, &ClaimResult> = steps.iter().flat_map(|step| step.claims.iter()).map(|result| (result.claim.as_str(), result)).collect();
-    subgroup.claims.iter().any(|claim| !results.get(claim.as_str()).is_some_and(|r| r.class == Some(Class::Neutral) && r.status.is_verified()))
+    // No result folds a subgroup (design 35): a subgroup with a claim is open.
+    let _ = steps;
+    !subgroup.claims.is_empty()
 }
 
 /// Checks the test rule of `tests` groups: all claims are on test items.

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use semilla_core::report::Effect;
-use semilla_core::{ChangeSet, Claim, ClaimStatus, Class, Group, GroupKind, Role, Step, Subgroup};
+use semilla_core::{Category, ChangeSet, Claim, ClaimStatus, Compare, Group, GroupKind, Role, Step, Subgroup};
 use semilla_syntax::Workspace;
 
 use super::*;
@@ -45,7 +45,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: serde_json::Value) -> Claim
 }
 
 fn step(claims: Vec<Claim>) -> Step {
-    Step { index: 0, intent: "test".into(), class: None, claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default() }
+    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default() }
 }
 
 fn run(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)], effect: Option<Effect>) -> StepReport {
@@ -100,7 +100,7 @@ fn structured_claims_cover_all_edits() {
     assert!(status_of(&report, "c2").is_verified(), "{:?}", status_of(&report, "c2"));
     let c2 = report.claims.iter().find(|c| c.claim == "c2").unwrap();
     assert_eq!(c2.effect, Some(Effect::Widen));
-    assert_eq!(c2.class, Some(Class::ControlFlow));
+    assert_eq!(c2.category, Some(Category::ControlFlow));
     assert_eq!(c2.witness.as_deref(), Some("i = 5, n = 5"));
     assert!(report.accepted());
 }
@@ -132,31 +132,18 @@ const PLAIN: &str = "pub fn f(a: u32, b: u32, c: u32) -> u32 {\n    a * b + c\n}
 const EXTRACTED: &str = "pub fn f(a: u32, b: u32, c: u32) -> u32 {\n    let product = a * b;\n    product + c\n}\n";
 
 #[test]
-fn neutral_claims_need_a_body_proof() {
+fn a_claim_of_a_rewrite_checks_the_shape_only() {
+    // Design 35: a claim of a rewrite checks the shape of the edit only. No rule asks for an
+    // equal body. The category comes from the compare of the body.
     let extract = || vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))];
-    let proved = run(PLAIN, EXTRACTED, extract(), &[("demo::f", equal("n2"))], None);
-    assert_eq!(status_of(&proved, "c1"), &ClaimStatus::Verified { proof: "N2".into() });
-    assert!(proved.uncovered.is_empty(), "{:#?}", proved.uncovered);
-    assert!(proved.accepted());
-
-    let unproved = run(PLAIN, EXTRACTED, extract(), &[("demo::f", different(false))], None);
-    assert!(matches!(status_of(&unproved, "c1"), ClaimStatus::Unproved { .. }));
-
-    // A changed graph is not evidence of a behavior change: the claim is unproved, not refuted.
-    let changed_graph = run(PLAIN, EXTRACTED, extract(), &[("demo::f", different(true))], None);
-    assert!(matches!(status_of(&changed_graph, "c1"), ClaimStatus::Unproved { .. }));
-}
-
-#[test]
-fn a_declared_class_must_match() {
-    let (_d1, old) = load(PLAIN);
-    let (_d2, new) = load(EXTRACTED);
-    let mut step = step(vec![claim("c1", "replace-expression", Some("demo::f/tail/lhs"), serde_json::json!({}))]);
-    step.class = Some(Class::Neutral);
-    let _ = (&old, &new);
-    let bodies = FakeBodies(BTreeMap::from([("demo::f".to_string(), different(false))]));
-    let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &bodies, &NoOracle).report;
-    assert!(!report.accepted());
+    let category = |report: &StepReport| report.claims.iter().find(|result| result.claim == "c1").unwrap().category;
+    // An equal result above N1 is not a result of the compare.
+    for (status, expected) in [(equal("n0"), Category::Logic), (equal("n2"), Category::Logic), (different(false), Category::Logic), (different(true), Category::ControlFlow)] {
+        let report = run(PLAIN, EXTRACTED, extract(), &[("demo::f", status)], None);
+        assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "shape".into() });
+        assert_eq!(category(&report), Some(expected), "{report:#?}");
+        assert!(report.uncovered.is_empty() && report.accepted(), "{report:#?}");
+    }
 }
 
 #[test]
@@ -181,13 +168,8 @@ fn renames_are_predicted() {
         &bodies,
         None,
     );
-    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("split the step")), "{:?}", status_of(&report, "c1"));
+    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Refuted { reason } if reason.contains("the step has a second change")), "{:?}", status_of(&report, "c1"));
     assert!(!report.accepted());
-    // D10 (brief 5h, C5): the result line has the status text and the hint. The words "split the
-    // step" occur one time.
-    let result = report.claims.iter().find(|result| result.claim == "c1").unwrap();
-    let line = format!("{}; {}", result.status.text(), result.hint.clone().unwrap_or_default());
-    assert_eq!(line.to_lowercase().matches("split the step").count(), 1, "{line}");
 }
 
 #[test]
@@ -224,7 +206,7 @@ fn an_indirect_change_with_no_cause_is_a_fact_in_the_spotlight() {
     let report = run(src, changed, base(), &bodies, None);
     assert_eq!(unknown_causes(&report), ["demo::g"], "{:#?}", report.facts);
     let fact = report.facts.iter().find(|f| f.part == "indirect change").unwrap();
-    assert!(fact.spotlight && fact.class == Some(Class::Logic) && fact.affected == ["demo::g"], "{fact:#?}");
+    assert!(fact.spotlight && fact.compare == Compare::CodeDifferent && fact.affected == ["demo::g"], "{fact:#?}");
     assert!(!report.accepted(), "the spotlight needs a reason");
     // The claim that owns the edit lists its body.
     assert_eq!(report.claims[0].affected, ["demo::f"]);
@@ -318,9 +300,9 @@ fn group_and_subgroup_rules() {
     let bodies = FakeBodies(BTreeMap::from([("demo::total".to_string(), different(true))]));
     let mut trees = BTreeMap::from([("a".to_string(), old), ("b".to_string(), new)]);
     let (report, _) = verify_changeset(&set, &mut |tree| Ok(trees.remove(tree).unwrap()), &bodies, &FakeExprs(Effect::Widen), Options::default());
-    assert!(!report.accepted);
-    assert!(report.organization.iter().any(|e| e.contains("refactor group")), "{:#?}", report.organization);
-    assert!(report.organization.iter().any(|e| e.contains("Mechanical")), "{:#?}", report.organization);
+    // Design 35: a group kind and the role `Mechanical` are labels. No rule compares them with
+    // a category or with a compare result.
+    assert!(report.organization.is_empty(), "{:#?}", report.organization);
 }
 
 #[test]
@@ -341,7 +323,8 @@ fn subgroup_suggestions_follow_the_roles() {
     let suggestion = organize::suggest(&set, "G1", &report.steps, &Default::default());
     assert_eq!(suggestion.len(), 1);
     assert_eq!(suggestion[0].role, Role::Mechanical);
-    assert!(!organize::is_open(&suggestion[0], &report.steps));
+    // No result folds a subgroup (design 35).
+    assert!(organize::is_open(&suggestion[0], &report.steps));
 }
 
 #[test]
@@ -387,11 +370,11 @@ fn api_level_estimate() {
 }
 
 #[test]
-fn without_bodies_a_neutral_claim_is_pending() {
+fn without_bodies_a_claim_of_a_rewrite_is_verified_by_its_shape() {
     let report = run(PLAIN, EXTRACTED, vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))], &[], None);
-    assert!(status_of(&report, "c1").is_pending(), "{:?}", status_of(&report, "c1"));
+    assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "shape".into() });
     assert!(report.uncovered.is_empty());
-    assert!(!report.accepted(), "a pending claim is not accepted yet");
+    assert!(report.accepted(), "{report:#?}");
 }
 
 #[test]
@@ -533,7 +516,7 @@ fn property_claims_check_the_code_after_the_step() {
     assert!(status_of(&report, "c9").is_pending());
     assert!(status_of(&report, "c10").is_pending());
     assert!(report.uncovered.is_empty(), "{:?}", report.uncovered);
-    assert_eq!(report.claims.iter().find(|c| c.claim == "c5").unwrap().class, None, "a property has no class");
+    assert_eq!(report.claims.iter().find(|c| c.claim == "c5").unwrap().category, None, "a property has no category");
 
     // Phase 2: the facts of the local callee count too.
     let (_d1, old) = load(PROPS_BEFORE);
@@ -676,14 +659,14 @@ fn the_claim_list_of_a_rejected_step_has_a_short_cause() {
     // Brief 5g, item 4: the first lines of a rejected step have the full text of a failed claim.
     // The claim list has only the status and the short cause.
     use semilla_core::ClaimResult;
-    let result = |claim: &str, status: ClaimStatus| ClaimResult { build_code: None, claim: claim.into(), step: 0, status, class: None, effect: None, witness: None, hint: Some("the hint".into()), before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() };
+    let result = |claim: &str, status: ClaimStatus| ClaimResult { build_code: None, claim: claim.into(), step: 0, status, category: None, effect: None, witness: None, hint: Some("the hint".into()), before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() };
     let mut report = semilla_core::StepReport::default();
     report.claims = vec![
         result("c1", ClaimStatus::Refuted { reason: "external calls outside the list of `calls`: `std::fs::write` in `demo::save` (calls to `core` and `alloc` are always allowed)".into() }),
         result("c2", ClaimStatus::Refuted { reason: "implicit panic sites: division by zero in `demo::share`".into() }),
         result("c3", ClaimStatus::Refuted { reason: "the test `demo::tests::t` does not call `demo::a::b`".into() }),
         result("c4", ClaimStatus::Malformed { reason: "the entry `` of `calls` is not a path. Each entry is a path of full segments".into() }),
-        result("c5", ClaimStatus::Unproved { reason: "the MIR of `demo::f` is different (the first difference is in the block 2); split the step".into() }),
+        result("c5", ClaimStatus::Refuted { reason: "the MIR of `demo::f` is different (the first difference is in the block 2); split the step".into() }),
         result("c6", ClaimStatus::Verified { proof: "mir".into() }),
         result("c7", ClaimStatus::Empty),
     ];
@@ -696,7 +679,7 @@ fn the_claim_list_of_a_rejected_step_has_a_short_cause() {
             "  ✗ c2 refuted: implicit panic sites",
             "  ✗ c3 refuted: the test `demo::tests::t` does not call `demo::a::b`",
             "  ✗ c4 malformed: the entry `` of `calls` is not a path",
-            "  ? c5 unproved: the MIR of `demo::f` is different",
+            "  ✗ c5 refuted: the MIR of `demo::f` is different",
             "  ✓ c6 verified (mir)",
             "      hint: the hint",
             "  ✗ c7 empty",
@@ -926,7 +909,7 @@ fn phase_1_gives_no_pair_warning_for_a_pair_that_waits_for_its_identity_proof() 
     let options = Options { derive_edits: true, ..Default::default() };
     // Phase 1: the identity proof waits for phase 2, and no warning shows.
     let (report, _) = verify_changeset(&set, &mut loader, &NoOracle, &NoOracle, options);
-    assert!(report.steps[0].notes.iter().any(|n| n.contains("phase 2 tries the proof")), "{:?}", report.steps[0].notes);
+    assert!(report.steps[0].notes.iter().any(|n| n.contains("phase 2 tries the derivation")), "{:?}", report.steps[0].notes);
     assert!(report.pairs.is_empty(), "{:?}", report.pairs);
     // Phase 2 (the MIR facts are available) with no identity proof: the warning shows.
     let (report, _) = verify_changeset(&set, &mut loader, &MirFacts(Vec::new()), &NoOracle, options);
@@ -990,12 +973,12 @@ fn a_change_in_an_inactive_cfg_twin_is_uncovered_and_in_the_spotlight() {
 }
 
 #[test]
-fn a_neutral_claim_on_a_function_without_a_mir_body_is_unproved() {
+fn an_edit_in_a_function_without_a_mir_body_gets_no_compare() {
+    // Design 35: the edit is a fact with the result `no compare` and the cause.
     let after = TWINS.replace("    '\\\\'\n", "    let c = '\\\\';\n    c\n");
-    let claims = vec![claim("c1", "extract-variable", Some("demo::sep#0/tail"), serde_json::json!({"name": "c"}))];
-    let report = run(TWINS, &after, claims, &[("demo::other", equal("n0"))], None);
-    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("no MIR body")), "{:?}", status_of(&report, "c1"));
-    assert!(!report.accepted());
+    let report = run_derived(TWINS, &after, &[("demo::other", equal("n0"))]);
+    assert!(!report.facts.is_empty() && report.facts.iter().all(|f| f.compare == Compare::NoCompare), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.note.as_deref().is_some_and(|n| n.contains("no compare: no checked configuration compiles `demo::sep#0`"))), "{:#?}", report.facts);
 }
 
 #[test]
@@ -1030,8 +1013,8 @@ fn move_item_explains_the_private_use_edits() {
     let bodies = [("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))];
     let report = run(MOVE_BEFORE, MOVE_AFTER, claims(), &bodies, None);
     assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
-    // The proof is the highest level of all bodies: `run` is equal at N1.
-    assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "N1".into() });
+    // `run` is equal after the move map (N1).
+    assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "compare".into() });
     assert!(report.accepted());
 
     // A `pub use` edit needs its own claim, also when it names the item.
@@ -1101,7 +1084,7 @@ fn a_field_rename_covers_all_uses() {
     assert!(report.accepted());
     // A body that the rename touches and whose MIR changed: unproved.
     let report = run(FIELDS, FIELDS_RENAMED, rename(), &bodies(different(false)), None);
-    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("demo::get")), "{:?}", status_of(&report, "c1"));
+    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Refuted { reason } if reason.contains("demo::get")), "{:?}", status_of(&report, "c1"));
     // A second change in a use is not hidden.
     let more = FIELDS_RENAMED.replace("    a.amount\n", "    a.amount + 1\n");
     let report = run(FIELDS, &more, rename(), &bodies(different(false)), None);
@@ -1168,12 +1151,12 @@ fn an_identity_step_is_proved_by_the_mir_of_the_whole_workspace() {
     // A second type with a field of the same name causes no false report.
     let report = run(VREN, &vren_after(), rename(), &vren_bodies(""), None);
     assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
-    assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "N0".into() });
+    assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "compare".into() });
     assert!(report.accepted());
 
     // The step is rejected: "split the step" when it has a second change, else the name of the body
     // whose MIR changed (design 22.4, rule 4).
-    let split = |report: &StepReport| matches!(status_of(report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("split the step") || reason.contains("is not neutral for it"));
+    let split = |report: &StepReport| matches!(status_of(report, "c1"), ClaimStatus::Refuted { reason } if reason.contains("the step has a second change") || reason.contains("is not a derived body"));
     // A second change hidden in a body.
     let hidden = vren_after().replace("    other.balance\n", "    other.amount\n");
     let report = run(VREN, &hidden, rename(), &vren_bodies("demo::pick"), None);
@@ -1502,8 +1485,8 @@ fn an_identity_step_allows_derived_bodies_and_inlined_callers() {
     let after = before.replace("pub balance: u32", "pub cents: u32").replace("a.balance", "a.cents");
     let rename = || vec![claim("c1", "rename", Some("demo::Account.balance"), serde_json::json!({"to": "cents"}))];
     let debug = "<demo::Account as std::fmt::Debug>::fmt";
-    // The derived `Debug` body shows the field name. `twice` has no text edit and is equal at N3.
-    let bodies = [("demo::get", equal("n0")), ("demo::twice", equal("n3")), (debug, different(false)), ("<demo::Account as std::clone::Clone>::clone", equal("n0"))];
+    // The derived `Debug` body shows the field name. `twice` has no text edit and is equal at N1.
+    let bodies = [("demo::get", equal("n0")), ("demo::twice", equal("n1")), (debug, different(false)), ("<demo::Account as std::clone::Clone>::clone", equal("n0"))];
     let report = run(before, &after, rename(), &bodies, None);
     assert!(report.accepted(), "{:#?}", report);
     assert!(matches!(status_of(&report, "c1"), ClaimStatus::Verified { proof } if proof.contains("1 derived body shows the name")), "{:?}", status_of(&report, "c1"));
@@ -1522,12 +1505,12 @@ fn an_identity_step_allows_derived_bodies_and_inlined_callers() {
     let mut hashed = bodies.to_vec();
     hashed.push(("<demo::Account as std::hash::Hash>::hash", different(false)));
     let report = run(&custom, &custom.replace("pub balance: u32", "pub cents: u32").replace("a.balance", "a.cents"), rename(), &hashed, None);
-    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("--reason")), "{:?}", status_of(&report, "c1"));
+    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Refuted { reason } if reason.contains("--reason")), "{:?}", status_of(&report, "c1"));
     // A hand-written body that differs and has no text edit: rejected, with the name of the body.
     let mut changed = bodies.to_vec();
     changed[1] = ("demo::twice", different(false));
     let report = run(before, &after, rename(), &changed, None);
-    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("demo::twice")), "{:?}", status_of(&report, "c1"));
+    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Refuted { reason } if reason.contains("demo::twice")), "{:?}", status_of(&report, "c1"));
 }
 
 #[test]
@@ -1538,12 +1521,12 @@ fn a_move_gets_move_hints() {
     let rewrite = vec![claim("c1", "rewrite-item", Some("demo::a::over"), serde_json::json!({"new": "demo::b::over", "note": "move it to the b module"}))];
     let report = run(MOVE_BEFORE, MOVE_AFTER, rewrite, &[], None);
     assert_eq!(status_of(&report, "c1"), &ClaimStatus::Empty);
-    assert!(report.claims[0].hint.as_deref().is_some_and(|h| h.contains("move-item")), "{:?}", report.claims[0].hint);
+    assert!(report.claims[0].hint.as_deref().is_some_and(|h| h.contains("Semilla derives a move or a rename")), "{:?}", report.claims[0].hint);
     let pair = semilla_core::PairWarning { old: "a::x::f".into(), new: "b::f".into(), similarity: 1.0, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: None };
-    // C2: the claim syntax of `semilla step`, and no retired op.
-    assert!(pair.text().contains("`--claim 'move-item a::x::f to=b::f'`") && !pair.text().contains("--at") && !pair.text().contains("rewrite-item"), "{}", pair.text());
+    // Design 35: the text names no claim.
+    assert!(pair.text().contains("Semilla derives a rename or a move only in a step with no other change") && !pair.text().contains("--claim"), "{}", pair.text());
     let pair = semilla_core::PairWarning { old: "a::percent".into(), new: "a::pct".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: None };
-    assert!(pair.text().contains("`--claim 'rename a::percent to=pct'`"), "{}", pair.text());
+    assert!(pair.text().starts_with("`a::percent` (removed) and `a::pct` (added) are 90% similar") && !pair.text().contains("--claim"), "{}", pair.text());
 }
 
 #[test]
@@ -1630,8 +1613,8 @@ fn manifest_changes_are_facts_with_a_spotlight() {
     let (found, report) = facts(&profile);
     assert_eq!(found, ["Cargo.toml: profile.dev.overflow-checks added (false)"]);
     assert!(report.facts[0].spotlight && !report.accepted() && report.uncovered.is_empty(), "{:#?}", report);
-    // This check has no MIR records (phase 1): the class of a file fact is pending (brief 5h, C2).
-    assert_eq!(report.facts[0].class, None);
+    // A manifest key can change a body: phase 1 does not know, so the compare result is pending.
+    assert_eq!(report.facts[0].compare, Compare::Pending);
     let with_reason = run_files(&[("Cargo.toml", MANIFEST_V0), lib], &[("Cargo.toml", &profile), lib], &[("Cargo.toml:profile.dev.overflow-checks", "the release build needs the speed")]);
     assert!(with_reason.accepted(), "{:#?}", with_reason);
     // A version change of an existing dependency: a plain fact.
@@ -1641,10 +1624,10 @@ fn manifest_changes_are_facts_with_a_spotlight() {
     // A new dependency: in the spotlight.
     let (_, report) = facts(&format!("{MANIFEST_V0}rand = \"0.8\"\n"));
     assert!(report.facts[0].spotlight);
-    // A format change only: one neutral fact.
+    // A format change only: one fact with no code.
     let (found, report) = facts(&MANIFEST_V0.replace("serde = \"1.0.1\"", "serde = \"1.0.1\" # the serde crate"));
     assert_eq!(found, ["Cargo.toml: format only"]);
-    assert_eq!(report.facts[0].class, Some(Class::Neutral));
+    assert_eq!((report.facts[0].category, report.facts[0].compare), (Category::Manifest, Compare::NoCode));
     // A retired op.
     let report = run(PLAIN, PLAIN, vec![claim("c1", "edit-config", None, serde_json::json!({"file": "Cargo.toml"}))], &[], None);
     assert!(matches!(status_of(&report, "c1"), ClaimStatus::Malformed { reason } if reason.contains("retired")));
@@ -1796,7 +1779,7 @@ fn a_const_value_is_a_fact_that_owns_its_users() {
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
     assert_eq!(report.facts[0].description, "value of `demo::BASE_FEE` changed: 25 → 250");
     assert_eq!(report.facts[0].affected, ["demo::BASE_FEE", "demo::DOUBLE", "demo::fee"]);
-    assert_eq!(report.facts[0].class, Some(Class::Logic));
+    assert_eq!(report.facts[0].compare, Compare::CodeDifferent);
     // In an identity step, the value fact gives "split the step".
     let renamed = after.replace("pub fn other", "pub fn another");
     let (_d1, old) = load(before);
@@ -1804,7 +1787,7 @@ fn a_const_value_is_a_fact_that_owns_its_users() {
     let step = step(vec![claim("c1", "rename", Some("demo::other"), serde_json::json!({"to": "another"}))]);
     let oracle = CallBodies(vec![("demo::BASE_FEE", different(false), vec![]), ("demo::DOUBLE", different(false), vec![]), ("demo::fee", different(false), vec![]), ("demo::another", equal("n0"), vec![])]);
     let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report;
-    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Unproved { reason } if reason.contains("split the step")), "{:?}", status_of(&report, "c1"));
+    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Refuted { reason } if reason.contains("the step has a second change")), "{:?}", status_of(&report, "c1"));
 }
 
 #[test]
@@ -1854,16 +1837,15 @@ fn a_hand_written_impl_that_replaces_a_derive_is_not_neutral() {
     let oracle = SpanBodies(vec![BodyComparison { name: "<demo::E as std::cmp::PartialEq>::eq".into(), span: Some(("src/lib.rs".into(), 8)), status: different(true), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]);
     let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report;
     let imp = report.facts.iter().find(|f| f.part == "trait impl added").expect("an impl fact");
-    assert_ne!(imp.class, Some(Class::Neutral), "{imp:#?}");
+    assert_eq!(imp.compare, Compare::CodeDifferent, "{imp:#?}");
     assert!(!imp.affected.is_empty(), "{imp:#?}");
     assert!(imp.spotlight_why.as_deref().is_some_and(|w| w.contains("replaces the derive")), "{imp:#?}");
-    assert!(report.facts.iter().all(|f| f.class != Some(Class::Neutral)), "{:#?}", report.facts);
     assert!(!report.accepted());
     assert!(report.errors.is_empty(), "{:?}", report.errors);
-    // A new impl with equal bodies elsewhere still has the class of new code.
+    // A new impl with no MIR record of its body: the result is not `code equal`.
     let report = run(before, after, vec![], &[("demo::other", equal("n0"))], None);
     let imp = report.facts.iter().find(|f| f.part == "trait impl added").unwrap();
-    assert_eq!(imp.class, Some(Class::Logic), "{imp:#?}");
+    assert_eq!(imp.compare, Compare::NoCompare, "{imp:#?}");
 }
 
 #[test]
@@ -1877,10 +1859,10 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     let input = owners::Input { made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, callees: None };
     let mut report = StepReport::default();
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
-    // A neutral fact is not an owner.
-    report.facts.push(semilla_core::Fact { id: "f1".into(), part: "visibility".into(), class: Some(Class::Neutral), affected: vec!["demo::g".into()], ..Default::default() });
+    // A fact that does not list the body is not an owner.
+    report.facts.push(semilla_core::Fact { id: "f1".into(), part: "visibility".into(), category: Category::Visibility, compare: Compare::CodeEqual, ..Default::default() });
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
-    report.facts[0].class = Some(Class::Logic);
+    report.facts[0].affected = vec!["demo::g".into()];
     assert!(owners::check(&input, &report).is_empty());
     // The assignment always gives an owner.
     let mut report = StepReport::default();
@@ -1896,24 +1878,24 @@ fn attributes_use_an_allow_list() {
     for harmless in ["#[inline]", "#[allow(dead_code)]", "#[rustfmt::skip]", "#[clippy::cognitive_complexity = \"100\"]"] {
         let report = run(base, &with(harmless), vec![], &bodies, None);
         let fact = &report.facts[0];
-        assert!(!fact.spotlight && fact.class == Some(Class::Neutral), "{harmless}: {fact:#?}");
+        assert!(!fact.spotlight && fact.compare == Compare::CodeEqual, "{harmless}: {fact:#?}");
     }
     // A warning attribute (batch 6a, A1): it needs no reason. On an item that a different crate
-    // can use it is a fact to read. On a private item it is neutral.
+    // can use, the text of the fact says so. The compiled code is equal.
     for warning in ["#[must_use]", "#[deprecated]"] {
         let report = run(base, &with(warning), vec![], &bodies, None);
         let fact = &report.facts[0];
-        assert!(!fact.spotlight && fact.class == Some(Class::Other), "{warning}: {fact:#?}");
+        assert!(!fact.spotlight && (fact.category, fact.compare) == (Category::Attribute, Compare::CodeEqual), "{warning}: {fact:#?}");
         assert!(fact.description.ends_with("(a different crate that uses the item can get a different warning)"), "{warning}: {fact:#?}");
         let report = run(&base.replace("pub ", ""), &with(warning).replace("pub ", ""), vec![], &bodies, None);
         let fact = &report.facts[0];
-        assert!(!fact.spotlight && fact.class == Some(Class::Neutral), "{warning}: {fact:#?}");
+        assert!(!fact.spotlight && fact.compare == Compare::CodeEqual, "{warning}: {fact:#?}");
     }
-    // T5 (trial 2, A5d) and others: in the spotlight, and not neutral by the kind.
+    // T5 (trial 2, A5d) and others: in the spotlight.
     for loud in ["#[ignore]", "#[should_panic]", "#[cfg(test)]", "#[cfg(any())]", "#[test]", "#[no_mangle]", "#[track_caller]", "#[my_macro::instrument]", "#[path = \"x.rs\"]"] {
         let report = run(base, &with(loud), vec![], &bodies, None);
         let fact = &report.facts[0];
-        assert!(fact.spotlight && fact.class != Some(Class::Neutral), "{loud}: {fact:#?}");
+        assert!(fact.spotlight && fact.category == Category::Attribute, "{loud}: {fact:#?}");
         assert!(!report.accepted(), "{loud}");
     }
 }
@@ -1983,7 +1965,7 @@ fn a_build_input_owns_the_indirect_changes_in_the_crates_that_it_reaches() {
     let report = run_spans(&base, &version, vec![], bodies(), &[]);
     let cause = fact(&report, "package.version");
     assert_eq!(cause.affected, ["a::f", "b::g"], "{:#?}", report.facts);
-    assert!(cause.spotlight && cause.reason.is_none() && cause.class == Some(Class::Logic), "{cause:#?}");
+    assert!(cause.spotlight && cause.reason.is_none() && cause.compare == Compare::CodeDifferent, "{cause:#?}");
     assert!(cause.spotlight_why.as_deref().is_some_and(|why| why.contains("a build input: the MIR of 2 bodies changed") && !why.contains("one of these causes")), "{cause:#?}");
     assert_eq!(unknown_causes(&report), ["c::h"], "a crate that the input does not reach: {:#?}", report.facts);
     // One reason on the cause is sufficient for its bodies.
@@ -2047,7 +2029,7 @@ fn an_included_file_owns_the_bodies_that_include_it() {
     let report = run_spans(&before, &after, vec![], bodies.clone(), &[]);
     let file = report.facts.iter().find(|f| f.file.as_deref() == Some("data/base.txt")).expect("a file fact");
     assert_eq!(file.affected, ["demo::BASE", "demo::fee"], "{:#?}", report.facts);
-    assert_ne!(file.class, Some(Class::Neutral));
+    assert_ne!(file.compare, Compare::CodeEqual);
     assert!(unknown_causes(&report).is_empty(), "{:#?}", report.facts);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     // `affects` on a doc claim cannot take the bodies (it is retired).
@@ -2135,15 +2117,19 @@ fn each_edit_gets_a_derived_fact() {
     let texts: Vec<&str> = report.facts.iter().map(|f| f.description.as_str()).collect();
     assert!(texts.iter().any(|t| t.starts_with("added early exit `if v.is_empty()")), "{texts:?}");
     assert!(texts.iter().any(|t| t.starts_with("changed operator `*x < max` → `*x <= max` (effect hint: widen, example: i = 5, n = 5)")), "{texts:?}");
-    assert!(report.facts.iter().all(|f| f.class.is_none()), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.compare == Compare::Pending), "{:#?}", report.facts);
     // Phase 2: a changed body gives the class of the op.
     let report = derive(&[("demo::total", different(true))]);
-    assert!(report.facts.iter().all(|f| f.class == Some(Class::ControlFlow)), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.category == Category::ControlFlow), "{:#?}", report.facts);
     assert!(report.accepted(), "{report:#?}");
-    // An equal body folds its edits under one neutral fact.
+    // An equal body hides no edit (design 35): each edit is a fact with `code equal`.
+    let count = report.facts.len();
+    let report = derive(&[("demo::total", equal("n0"))]);
+    assert_eq!(report.facts.len(), count, "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.compare == Compare::CodeEqual && !f.description.contains("neutral")), "{:#?}", report.facts);
+    // An equal result above N1 is not a result of the compare.
     let report = derive(&[("demo::total", equal("n2"))]);
-    assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
-    assert!(report.facts[0].description.contains("neutral rewrite (proved N2)") && report.facts[0].class == Some(Class::Neutral), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
 }
 
 /// A step check with the new protocol (design 24): derived facts and a derived identity.
@@ -2169,16 +2155,18 @@ fn a_doc_change_and_a_parameter_rename_do_not_stop_an_identity() {
     let report = run_derived(before, &after, &bodies);
     assert!(report.accepted() && report.claims.is_empty(), "{report:#?}");
     let texts = descriptions(&report);
-    assert!(texts[0].starts_with("renamed `demo::Account.balance` → `demo::Account.cents` (proved N0"), "{texts:?}");
-    assert!(report.facts.iter().any(|f| f.description == "parameter `balance` of `demo::make` renamed to `cents`: `u32`" && f.class == Some(Class::Neutral)), "{texts:?}");
-    assert!(report.facts.iter().any(|f| f.description.starts_with("changed docs") && f.class == Some(Class::Other)), "{texts:?}");
+    assert_eq!(texts[0], "renamed `demo::Account.balance` → `demo::Account.cents`");
+    // The derived `Debug` body shows the name: the rename has the mismatch mark (design 35).
+    assert!(report.facts[0].mismatch() && report.facts[0].affected == [debug], "{:#?}", report.facts[0]);
+    assert!(report.facts.iter().any(|f| f.description == "parameter `balance` of `demo::make` renamed to `cents`: `u32`" && f.compare == Compare::CodeEqual), "{texts:?}");
+    assert!(report.facts.iter().any(|f| f.description.starts_with("changed docs") && f.compare == Compare::NoCode), "{texts:?}");
     // The field is a part of the public API: the rename has one more fact to read (design 31.8).
     assert_eq!(texts[3], "public API: `demo::Account.balance` is now `demo::Account.cents` (a different crate can no longer use the old path)", "{texts:?}");
     assert_eq!(report.facts.len(), 4, "{texts:?}");
     // C1: a new module doc and a new inner doc attribute have the class `other`.
     for doc in ["//! The demo crate.\n", "#![doc = \"The demo crate.\"]\n"] {
         let report = run_derived(before, &format!("{doc}{before}"), &[("demo::get", equal("n0")), ("demo::make", equal("n0"))]);
-        assert!(report.accepted() && !report.facts.is_empty() && report.facts.iter().all(|f| f.class == Some(Class::Other)), "{doc}: {:#?}", report.facts);
+        assert!(report.accepted() && !report.facts.is_empty() && report.facts.iter().all(|f| f.compare == Compare::NoCode), "{doc}: {:#?}", report.facts);
     }
     // The same step and a changed literal: no proof.
     let changed = after.replace("a.cents\n", "a.cents + 1\n");
@@ -2237,7 +2225,7 @@ fn one_expression_edit_gives_one_fact() {
     let before = source("a");
     let report = run_derived(&before, &before.replace("a > 0 && b > 0", "a > 0 && b > 0 && x > 0"), &[("demo::f", equal("n0")), ("demo::g", different(true)), ("demo::c", equal("n0"))]);
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
-    assert!(report.facts[0].description.starts_with("added operand `&& x > 0`") && report.facts[0].class == Some(Class::ControlFlow), "{:#?}", report.facts);
+    assert!(report.facts[0].description.starts_with("added operand `&& x > 0`") && report.facts[0].category == Category::ControlFlow, "{:#?}", report.facts);
 }
 
 #[test]
@@ -2255,7 +2243,7 @@ fn the_note_of_a_pair_with_no_proof_names_the_difference_of_the_pair() {
     let bodies = [("demo::a_small_amount_pays_the_fee", equal("n0")), ("demo::other", different(false))];
     let report = run_derived(before, &after, &bodies);
     let note = report.notes.iter().find(|n| n.contains("as removed and added")).unwrap_or_else(|| panic!("{:#?}", report.notes));
-    assert!(note.contains("the MIR of `demo::other` changed") && note.contains("Put the rename in its own step"), "{note}");
+    assert!(note.contains("the MIR of `demo::other` changed") && note.contains("Semilla derives a rename only in a step with no other change"), "{note}");
 }
 
 #[test]
@@ -2271,11 +2259,12 @@ fn a_variant_rename_with_a_derived_debug_is_a_derived_identity() {
     assert_eq!(report.facts.len(), 2, "{:#?}", report.facts);
     assert_eq!(report.facts[1].description, "public API: `demo::LedgerError::Frozen` is now `demo::LedgerError::Locked` (a different crate can no longer use the old path)");
     let fact = &report.facts[0];
-    assert!(fact.description.starts_with("renamed `demo::LedgerError::Frozen` → `demo::LedgerError::Locked` (proved N0; neutral, but 1 derived body shows the name (Debug for demo::LedgerError)"), "{}", fact.description);
-    assert_eq!(fact.class, Some(Class::Neutral));
+    assert_eq!(fact.description, "renamed `demo::LedgerError::Frozen` → `demo::LedgerError::Locked`");
+    // The derived body that shows the name is the body of the fact.
+    assert!(fact.category == Category::Rename && fact.mismatch() && fact.affected == [debug], "{fact:#?}");
     // A field of a variant: the same rule.
     let report = run_derived(before, &before.replace("max", "limit"), &bodies);
-    assert!(report.accepted() && report.facts.len() == 2 && report.facts[0].description.contains("1 derived body shows the name (Debug for demo::LedgerError)"), "{report:#?}");
+    assert!(report.accepted() && report.facts.len() == 2 && report.facts[0].affected == [debug], "{report:#?}");
     assert_eq!(report.facts[1].description, "public API: `demo::LedgerError::OverLimit.max` is now `demo::LedgerError::OverLimit.limit` (a different crate can no longer use the old path)");
     // A body that is not derived keeps the rule: no proof.
     let other = [("demo::check", different(false)), (debug, different(false))];
@@ -2309,11 +2298,11 @@ fn a_rename_with_no_claim_gets_a_derived_proof() {
     assert_eq!(report.facts.len(), 2, "{:#?}", report.facts);
     assert_eq!(report.facts[1].description, "public API: `demo::Account.balance` is now `demo::Account.cents` (a different crate can no longer use the old path)");
     let fact = &report.facts[0];
-    assert!(fact.description.starts_with("renamed `demo::Account.balance` → `demo::Account.cents` (proved N0; neutral, but 1 derived body shows the name"), "{}", fact.description);
-    assert_eq!(fact.class, Some(Class::Neutral));
-    // Phase 1: no proof yet, a note, and the flag that makes `step` run phase 2.
+    assert_eq!(fact.description, "renamed `demo::Account.balance` → `demo::Account.cents`");
+    assert!(fact.mismatch() && fact.affected == [debug], "{fact:#?}");
+    // Phase 1: no compare yet, a note, and the flag that makes `step` run phase 2.
     let report = run_derived(before, &after, &[]);
-    assert!(report.identity_candidates && report.notes.iter().any(|n| n.contains("phase 2 tries the proof")), "{report:#?}");
+    assert!(report.identity_candidates && report.notes.iter().any(|n| n.contains("phase 2 tries the derivation")), "{report:#?}");
     assert!(!descriptions(&report).iter().any(|d| d.starts_with("renamed")));
     // A derived body of another trait than `Debug`: the fact needs a reason, as a claim does.
     let hashed = before.replace("Debug, Clone", "Debug, Clone, Hash");
@@ -2332,30 +2321,30 @@ fn a_hidden_change_next_to_a_derived_identity_is_shown() {
     let report = run_derived(before, &after, &[("demo::get", different(false)), ("<demo::Account as std::fmt::Debug>::fmt", different(false))]);
     let texts = descriptions(&report);
     assert!(!texts.iter().any(|d| d.starts_with("renamed")), "{texts:?}");
-    assert!(report.facts.iter().any(|f| f.description.starts_with("changed literal `1` → `2`") && f.class == Some(Class::Logic)), "{:#?}", report.facts);
-    assert!(report.notes.iter().any(|n| n.contains("Put the rename in its own step to get a proof")), "{:?}", report.notes);
+    assert!(report.facts.iter().any(|f| f.description.starts_with("changed literal `1` → `2`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
+    assert!(report.notes.iter().any(|n| n.contains("Semilla derives a rename only in a step with no other change")), "{:?}", report.notes);
     // A move: the derived fact with no claim.
     let bodies = [("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))];
     let report = run_derived(MOVE_BEFORE, MOVE_AFTER, &bodies);
-    assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over` (proved N1")), "{report:#?}");
+    assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over`")), "{report:#?}");
     // A move and a dropped `pub`: no proof, and the visibility shows.
     let narrow = MOVE_AFTER.replace("    pub fn over", "    fn over");
     let report = run_derived(MOVE_BEFORE, &narrow, &bodies);
     assert!(!descriptions(&report).iter().any(|d| d.starts_with("moved")), "{:?}", descriptions(&report));
-    assert!(report.notes.iter().any(|n| n.contains("the pair has a difference: changed visibility: `pub` → `private`. A move with no other change in its step gets a proof")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.contains("the pair has a difference: changed visibility: `pub` → `private`. Semilla derives a move only in a step with no other change")), "{:?}", report.notes);
     // A move and a body change: no proof, and the body is a logic fact.
     let changed = MOVE_AFTER.replace("x > LIMIT", "x >= LIMIT");
     let report = run_derived(MOVE_BEFORE, &changed, &[("demo::b::over", different(false)), ("demo::b::run", equal("n1"))]);
     assert!(!descriptions(&report).iter().any(|d| d.starts_with("moved")), "{:?}", descriptions(&report));
-    assert!(report.facts.iter().any(|f| f.description.starts_with("added `demo::b::over`") && f.class == Some(Class::Logic)), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|f| f.description.starts_with("added `demo::b::over`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
     // A4 (trial 3, A2): the edit inside the moved item is a fact under the pair.
-    assert!(report.facts.iter().any(|f| f.description.starts_with("`over` differs from the removed `over`: changed operator `x > LIMIT` → `x >= LIMIT`") && f.class == Some(Class::Logic)), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|f| f.description.starts_with("`over` differs from the removed `over`: changed operator `x > LIMIT` → `x >= LIMIT`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
     // A function rename and a changed literal in its body.
     let before = "pub fn percent(a: u64) -> u64 {\n    a / 100\n}\npub fn charge(a: u64) -> u64 {\n    percent(a) + 1\n}\n";
     let after = before.replace("percent", "pct").replace("a / 100", "a / 10");
     let report = run_derived(before, &after, &[("demo::pct", different(false)), ("demo::charge", equal("n0"))]);
     assert!(!descriptions(&report).iter().any(|d| d.starts_with("renamed")), "{:?}", descriptions(&report));
-    assert!(report.facts.iter().any(|f| f.description.starts_with("`pct` differs from the removed `percent`: changed literal `100` → `10`") && f.class == Some(Class::Logic)), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|f| f.description.starts_with("`pct` differs from the removed `percent`: changed literal `100` → `10`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
 }
 
 #[test]
@@ -2384,12 +2373,12 @@ fn equal_facts_fold_and_different_facts_do_not() {
     assert_eq!(report.facts[0].sites[0].sites.len(), 3);
     let text = views::text_report(std::slice::from_ref(&report));
     assert!(text.contains("in: demo::f, demo::g, demo::h"), "{text}");
-    // Phase 2: a fact with another class does not fold.
-    let report = run_derived(before, &after, &[("demo::f", different(false)), ("demo::g", different(false)), ("demo::h", different(true))]);
+    // Phase 2: a fact with another compare result does not fold.
+    let report = run_derived(before, &after, &[("demo::f", different(false)), ("demo::g", different(false)), ("demo::h", equal("n0"))]);
     let texts = descriptions(&report);
     assert_eq!(texts.len(), 2, "{texts:?}");
     assert!(texts.contains(&"2 site(s): changed literal `1` → `2`".to_string()), "{texts:?}");
-    assert!(report.facts.iter().any(|f| f.class == Some(Class::ControlFlow) && f.description.contains("demo::h")), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|f| f.compare == Compare::CodeEqual && f.description.contains("demo::h")), "{:#?}", report.facts);
     // A fact with another text does not fold.
     let mixed = before.replacen("x + 1", "x + 2", 2).replacen("x + 1", "x + 3", 1);
     let texts = descriptions(&run_derived(before, &mixed, &[]));
@@ -2415,15 +2404,16 @@ fn a_renamed_parameter_is_one_fact() {
 #[test]
 fn swapped_branches_are_not_a_neutral_inversion() {
     // `invert-if` is retired as a claim. Swapped branches with no negation change the behavior: the
-    // fact has the class of the body, and its text does not say "inverted".
+    // fact has the compare result of the body, and its text does not say "inverted".
     let before = "pub fn f(a: bool) -> u32 {\n    if a {\n        1\n    } else {\n        2\n    }\n}\n";
     let after = "pub fn f(a: bool) -> u32 {\n    if a {\n        2\n    } else {\n        1\n    }\n}\n";
     let report = run_derived(before, after, &[("demo::f", different(true))]);
     assert!(report.accepted(), "{report:#?}");
-    assert!(report.facts.iter().all(|f| f.class == Some(Class::ControlFlow) && !f.description.contains("invert")), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.compare == Compare::CodeDifferent && !f.description.contains("invert")), "{:#?}", report.facts);
+    // An inversion is equal at N2 only: this is not a result of the compare (design 35).
     let inverted = "pub fn f(a: bool) -> u32 {\n    if !a {\n        2\n    } else {\n        1\n    }\n}\n";
     let report = run_derived(before, inverted, &[("demo::f", equal("n2"))]);
-    assert!(report.facts.iter().all(|f| f.class == Some(Class::Neutral)), "{:#?}", report.facts);
+    assert!(!report.facts.is_empty() && report.facts.iter().all(|f| f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
 }
 
 #[test]
@@ -2432,10 +2422,10 @@ fn the_group_kind_comes_from_the_facts() {
     let after = before.replace("balance", "cents");
     let renamed = run_derived(before, &after, &[("demo::get", equal("n0")), ("<demo::Account as std::fmt::Debug>::fmt", different(false))]);
     assert_eq!(organize::derived_kind(&[&renamed]), Some(GroupKind::Rename));
-    // Phase 1: a class is pending, so no kind.
+    // Phase 1: the compare is pending, so no kind.
     assert_eq!(organize::derived_kind(&[&run_derived(before, &after, &[])]), None);
-    // Only proved neutral facts: a refactor, not a behavior change.
-    let refactor = run_derived(BEFORE, &BEFORE.replace("let mut s = 0;", "let mut s = 0u32;"), &[("demo::total", equal("n2"))]);
+    // Only facts with equal code: the label `refactor`, not `behavior`.
+    let refactor = run_derived(BEFORE, &BEFORE.replace("let mut s = 0;", "let mut s = 0u32;"), &[("demo::total", equal("n0"))]);
     assert_eq!(organize::derived_kind(&[&refactor]), Some(GroupKind::Refactor), "{refactor:#?}");
     let behavior = run_derived(BEFORE, AFTER, &[("demo::total", different(true))]);
     assert_eq!(organize::derived_kind(&[&behavior]), Some(GroupKind::Behavior));
@@ -2458,7 +2448,7 @@ impl BodyOracle for MemberBodies {
 #[test]
 fn a_member_order_is_never_neutral_and_a_cast_puts_it_in_the_spotlight() {
     // Batch 5e: a member order has effects outside the MIR records (the drop order, the derive
-    // output order, the discriminant values). With no changed body it is still `logic`.
+    // output order, the discriminant values). With no changed body it has the result `no compare`.
     let src = "pub enum Kind {\n    Small,\n    Large,\n}\npub fn code(k: Kind) -> u8 {\n    k as u8\n}\npub struct Pair {\n    pub a: u64,\n    pub b: u64,\n}\npub const P: Pair = Pair { a: 1, b: 2 };\npub fn first() -> u64 {\n    P.a\n}\n";
     let check = |after: &str, bodies: Vec<(&'static str, BodyStatus, BodyFacts)>| {
         let (_d1, old) = load(src);
@@ -2467,10 +2457,11 @@ fn a_member_order_is_never_neutral_and_a_cast_puts_it_in_the_spotlight() {
         verify_step(&StepInput { step: &step, before: &old, after: &new }, &MemberBodies(bodies), &NoOracle).report
     };
     let kinds = src.replace("    Small,\n    Large,\n", "    Large,\n    Small,\n");
-    // No body changes: the fact is `logic`, and the text names the discriminant values.
+    // No body changes: the result is `no compare`, and the text names the discriminant values.
     let report = check(&kinds, vec![("demo::code", equal("n0"), BodyFacts::default())]);
     let fact = report.facts.iter().find(|f| f.part == "member order").expect("a member order fact");
-    assert_eq!(fact.class, Some(Class::Logic), "{fact:?}");
+    assert_eq!((fact.category, fact.compare), (Category::Declaration, Compare::NoCompare), "{fact:?}");
+    assert!(fact.note.as_deref().is_some_and(|n| n.contains("no compare: the MIR bodies do not show each effect of a member order")), "{fact:?}");
     assert!(fact.description.contains("the discriminant values") && !fact.spotlight, "{fact:?}");
     // A cast reads the discriminant: the body changes (its text has the values), it goes under
     // the fact, and the fact is in the spotlight.
@@ -2485,7 +2476,7 @@ fn a_member_order_is_never_neutral_and_a_cast_puts_it_in_the_spotlight() {
     let layout = BodyFacts { layouts: vec!["demo::Pair".into()], ..Default::default() };
     let report = check(&pairs, vec![("demo::first", different(false), layout), ("demo::code", equal("n0"), BodyFacts::default())]);
     let fact = report.facts.iter().find(|f| f.part == "member order").expect("a member order fact");
-    assert_eq!((fact.class, fact.affected.clone()), (Some(Class::Logic), vec!["demo::first".to_string()]), "{:#?}", report.facts);
+    assert_eq!((fact.compare, fact.affected.clone()), (Compare::CodeDifferent, vec!["demo::first".to_string()]), "{:#?}", report.facts);
     assert!(!report.facts.iter().any(|f| f.part == "indirect change"), "{:#?}", report.facts);
 }
 
@@ -2531,7 +2522,7 @@ fn equal_type_changes_fold_into_one_fact_with_each_place() {
     // use is a fact to read also with no changed body (batch 6a, A1).
     let report = run_derived(&before.replace("pub ", ""), &after.replace("pub ", ""), &[("demo::find", different(false)), ("demo::other", equal("n0"))]);
     let texts = descriptions(&report);
-    let classes: BTreeSet<String> = report.facts.iter().map(|fact| format!("{:?}", fact.class)).collect();
+    let classes: BTreeSet<String> = report.facts.iter().map(|fact| format!("{:?}", fact.compare)).collect();
     assert!(texts.len() >= 2 && classes.len() == 2, "{:#?}", report.facts);
     for place in ["`demo::Account.id`", "`demo::Event::Close.account`", "`demo::Event::Unknown.0`", "`id`", "return type of `demo::find`"] {
         assert_eq!(texts.iter().filter(|text| text.contains(place)).count(), 1, "the fold shows the place {place} one time: {texts:#?}");
@@ -2544,13 +2535,13 @@ fn equal_type_changes_fold_into_one_fact_with_each_place() {
 }
 
 #[test]
-fn each_body_of_a_site_is_affected_or_proved_equal() {
+fn each_body_of_a_site_is_affected_or_equal() {
     // Brief 5f, C6 (trial 4, D14): the fact of a new parameter named the sites in `schedule`
     // and `withdraw`, but the affected bodies did not have them, with no cause. The compare
     // proves these bodies equal (after the inline of the callee). The fact says so.
     let before = "pub fn charge(amount: u64) -> u64 {\n    amount + 1\n}\npub fn schedule(a: u64) -> u64 {\n    charge(a)\n}\npub fn withdraw(a: u64) -> u64 {\n    charge(a) + 2\n}\n";
     let after = before.replace("charge(amount: u64)", "charge(amount: u64, rate: u64)").replace("amount + 1", "amount + rate").replace("charge(a)", "charge(a, 1)");
-    let report = run_calls(before, &after, vec![("demo::charge", different(false), vec![]), ("demo::schedule", equal("n3"), vec!["demo::charge"]), ("demo::withdraw", different(false), vec!["demo::charge"])]);
+    let report = run_calls(before, &after, vec![("demo::charge", different(false), vec![]), ("demo::schedule", equal("n0"), vec!["demo::charge"]), ("demo::withdraw", different(false), vec!["demo::charge"])]);
     let fact = report.facts.iter().find(|fact| fact.description == "parameter of `demo::charge` added: `rate : u64`").unwrap_or_else(|| panic!("{:#?}", report.facts));
     let sites: BTreeSet<String> = fact.sites.iter().flat_map(|group| group.sites.iter().map(|site| site.item.clone())).collect();
     assert_eq!(sites, ["demo::schedule".to_string(), "demo::withdraw".to_string()].into(), "{fact:#?}");
@@ -2559,7 +2550,7 @@ fn each_body_of_a_site_is_affected_or_proved_equal() {
     // Each body of a site is in one of the two lists.
     assert!(sites.iter().all(|site| fact.affected.contains(site) != fact.equal_sites.contains(site)), "{fact:#?}");
     let text = views::text_report(std::slice::from_ref(&report));
-    assert!(text.contains("      affected bodies: demo::charge, demo::withdraw\n      bodies with a changed call site and no change of behavior (proved): demo::schedule\n"), "{text}");
+    assert!(text.contains("      affected bodies: demo::charge, demo::withdraw\n      bodies with a changed call site and equal compiled code: demo::schedule\n"), "{text}");
 }
 
 const TREE_V0: &str = "pub fn withdraw(balance: u32, amount: u32) -> Result<u32, ()> {\n    if amount > 100 {\n        return Err(());\n    }\n    let fee = 1;\n    Ok(balance - amount - fee)\n}\n";
@@ -2629,12 +2620,12 @@ fn the_text_output_shows_the_scope_of_a_long_list() {
     // Batch 5x, part E (before: brief 5h, C6): the `step` output shows a list of more than 8
     // bodies as a count and the scope. `semilla status --verbose` shows each name.
     let bodies: Vec<String> = (0..21).map(|index| format!("demo::body_{index:02}")).collect();
-    let fact = semilla_core::Fact { id: "f1".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), class: Some(Class::Logic), affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
+    let fact = semilla_core::Fact { id: "f1".into(), part: "type".into(), description: "type of `demo::Cart::total` changed: u32 → u64".into(), status: "derived".into(), category: Category::Declaration, compare: Compare::CodeDifferent, affected: bodies.clone(), equal_sites: bodies[..8].to_vec(), ..Default::default() };
     let mut report = StepReport { facts: vec![fact], ..Default::default() };
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
     assert!(text.contains("      affected bodies: 21 bodies of the crate `demo` (`semilla status --verbose` shows the names)\n"), "{text}");
     // A list of 8 bodies shows each name.
-    assert!(text.contains(&format!("      bodies with a changed call site and no change of behavior (proved): {}\n", bodies[..8].join(", "))), "{text}");
+    assert!(text.contains(&format!("      bodies with a changed call site and equal compiled code: {}\n", bodies[..8].join(", "))), "{text}");
     assert!(!text.contains("demo::body_08"), "{text}");
     let verbose = crate::views::text_report(std::slice::from_ref(&report));
     assert!(verbose.contains(&format!("      affected bodies: {}\n", bodies.join(", "))), "{verbose}");
@@ -2645,8 +2636,32 @@ fn the_text_output_shows_the_scope_of_a_long_list() {
 }
 
 /// The facts of a step whose MIR oracle says that `demo::f` is equal (N0).
-fn source_config_facts(before: &str, after: &str) -> Vec<semilla_core::report::Fact> {
-    run_derived(before, after, &[("demo::f", equal("n0"))]).facts
+/// The notes of the facts, in one text.
+fn fact_notes(facts: &[semilla_core::report::Fact]) -> String {
+    facts.iter().filter_map(|f| f.note.clone()).collect::<Vec<_>>().join("\n")
+}
+
+/// The causes that the rules of the build configuration record for the body `demo::f`, in the
+/// form "`write!` in `demo::f` (Semilla cannot see into it)". Design 35: a use that Semilla
+/// sees goes to the note of a fact. A call that Semilla cannot see into goes to no output.
+fn config_causes(old: &Workspace, new: &Workspace) -> String {
+    let mut bodies = vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n0"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }];
+    crate::srcconfig::apply(&mut bodies, old, new, &BTreeMap::new());
+    let show = |text: &String| match text.strip_suffix(crate::srcconfig::UNSEEN) {
+        Some(call) => format!("`{call}` in `demo::f` (Semilla cannot see into it)"),
+        None if text.ends_with(')') && text.starts_with('`') => text.clone(),
+        None if text.starts_with('`') || text.starts_with("static `") || text.starts_with("code that") => format!("{text} in `demo::f`"),
+        None => format!("`{text}` in `demo::f`"),
+    };
+    bodies[0].stopped.iter().chain(&bodies[0].config).map(show).collect::<Vec<_>>().join("\n")
+}
+
+/// The facts of a rewrite of `demo::f` with equal compiled code, and the causes of
+/// [`config_causes`].
+fn source_config_facts(before: &str, after: &str) -> (Vec<semilla_core::report::Fact>, String) {
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    (run_derived(before, after, &[("demo::f", equal("n0"))]).facts, config_causes(&old, &new))
 }
 
 #[test]
@@ -2654,7 +2669,7 @@ fn a_keyword_before_the_operator_not_is_not_a_macro_name() {
     // Batch 5l, B4: the token reader took `if !(a)` as a call of a macro `if!`. A keyword and
     // the name of a label are not macro names.
     let base = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
-    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.class == Some(Class::Neutral));
+    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.compare == Compare::CodeEqual);
     let spotlight = |facts: &[semilla_core::report::Fact]| facts.iter().filter_map(|f| f.spotlight_why.clone()).collect::<Vec<_>>().join("\n");
     let with = |form: &str| source_config_facts(base, &format!("pub fn f(a: u64) -> u64 {{\n    let c = a;\n    {form}\n    c\n}}\n"));
     for form in [
@@ -2673,93 +2688,96 @@ fn a_keyword_before_the_operator_not_is_not_a_macro_name() {
         "let _ = c as u64 & !(c);",
         "let _ = [!(c), !(c)];",
     ] {
-        let facts = with(form);
-        assert!(proved(&facts) && spotlight(&facts).is_empty(), "{form}: {facts:#?}");
+        let (facts, causes) = with(form);
+        assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.is_empty() && fact_notes(&facts).is_empty(), "{form}: {facts:#?}");
     }
     // A macro call stays a macro call: a raw identifier, a weak keyword, a keyword of a later
     // edition only, and a space before the `!`.
     for (form, name) in [("let _ = r#try!(Ok::<u64, ()>(c));", "try!"), ("other::r#if!(c);", "if!"), ("union!(c);", "union!"), ("gate !(c);", "gate!")] {
-        let facts = with(form);
-        assert!(!proved(&facts) && spotlight(&facts).contains(&format!("`{name}` in `demo::f` (Semilla cannot see into it)")), "{form}: {facts:#?}");
+        let (facts, causes) = with(form);
+        assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains(&format!("`{name}` in `demo::f` (Semilla cannot see into it)")), "{form}: {facts:#?}");
     }
 }
 
 #[test]
-fn a_cfg_attribute_in_a_changed_body_stops_the_proof() {
+fn a_cfg_attribute_in_a_changed_body_is_a_note() {
     // Batch 5k, A1: the compiler removes the code of a false `cfg` attribute, so the MIR of the
-    // check configuration is equal. The proof does not hold for each build.
+    // check configuration is equal. Design 35: the result stays `code equal`, and a note names
+    // the condition. The fact has no spotlight for this cause.
     let base = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
-    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.class == Some(Class::Neutral));
+    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.compare == Compare::CodeEqual);
     let spotlight = |facts: &[semilla_core::report::Fact]| facts.iter().filter_map(|f| f.spotlight_why.clone()).collect::<Vec<_>>().join("\n");
 
     // An honest rewrite, with a free attribute and macros of the standard library.
-    let facts = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    #[allow(unused)]\n    let c = a;\n    debug_assert!(c == a, \"{}\", format!(\"{c}\"));\n    c\n}\n");
-    assert!(proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    #[allow(unused)]\n    let c = a;\n    debug_assert!(c == a, \"{}\", format!(\"{c}\"));\n    c\n}\n");
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.is_empty() && fact_notes(&facts).is_empty(), "{facts:#?}");
 
     // A statement with a `cfg` attribute.
-    let facts = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    #[cfg(not(debug_assertions))]\n    return 0;\n    let b = a;\n    b\n}\n");
-    assert!(!proved(&facts), "{facts:#?}");
-    assert!(spotlight(&facts).contains("this code depends on a build condition") && spotlight(&facts).contains("Uses: `#[cfg(not(debug_assertions))]` in `demo::f`"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    #[cfg(not(debug_assertions))]\n    return 0;\n    let b = a;\n    b\n}\n");
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`#[cfg(not(debug_assertions))]` in `demo::f`"), "{facts:#?}");
+    // The use is a note under each fact of the body. The note asks for no reason.
+    assert!(facts.iter().all(|f| f.note.as_deref() == Some("this body uses `#[cfg(not(debug_assertions))]`, which Semilla did not check (`demo::f`)")), "{facts:#?}");
 
     // A `cfg` attribute with no edit, in a body with an edit: the proof of the edit is for one
     // configuration only.
     let old = "pub fn f(a: u64) -> u64 {\n    let mut b = a;\n    #[cfg(windows)]\n    {\n        b += 1;\n    }\n    b\n}\n";
-    let facts = source_config_facts(old, &old.replace("    b\n}", "    a\n}"));
-    assert!(!proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(old, &old.replace("    b\n}", "    a\n}"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && !causes.is_empty(), "{facts:#?}");
     // The spotlight is only for an edit in the statement with the attribute (batch 5o, A4).
-    let facts = source_config_facts(old, &old.replace("b += 1;", "b += 2;"));
-    assert!(!proved(&facts) && spotlight(&facts).contains("`#[cfg(windows)]` in `demo::f`"), "{facts:#?}");
-    let facts = source_config_facts(old, &old.replace("    #[cfg(windows)]\n", "    b += 0;\n    #[cfg(windows)]\n"));
-    assert!(!proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
-    // An attribute above the changed block. Not an attribute in a different statement.
+    let (facts, causes) = source_config_facts(old, &old.replace("b += 1;", "b += 2;"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`#[cfg(windows)]` in `demo::f`"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(old, &old.replace("    #[cfg(windows)]\n", "    b += 0;\n    #[cfg(windows)]\n"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && !causes.is_empty(), "{facts:#?}");
+    // An attribute above the changed block. The note names each condition of the body.
     let old = "pub fn f(a: u64) -> u64 {\n    #[cfg(unix)]\n    let quick = 1;\n    #[cfg(windows)]\n    {\n        let b = a;\n        return b;\n    }\n    let c = a;\n    c\n}\n";
-    let facts = source_config_facts(old, &old.replace("        let b = a;\n        return b;\n", "        return a;\n"));
-    assert!(!proved(&facts) && spotlight(&facts).contains("`#[cfg(windows)]` in `demo::f`") && !spotlight(&facts).contains("unix"), "{facts:#?}");
-    let facts = source_config_facts(old, &old.replace("    let c = a;\n    c\n", "    a\n"));
-    assert!(!proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(old, &old.replace("        let b = a;\n        return b;\n", "        return a;\n"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`#[cfg(windows)]` in `demo::f`"), "{facts:#?}");
+    assert!(facts.iter().all(|f| f.note.as_deref() == Some("this body uses `#[cfg(unix)]`, `#[cfg(windows)]`, which Semilla did not check (`demo::f`)")), "{facts:#?}");
+    let (facts, causes) = source_config_facts(old, &old.replace("    let c = a;\n    c\n", "    a\n"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && !causes.is_empty(), "{facts:#?}");
     // An edit only in a comment: the tokens are the same, so the proof stays.
-    let facts = source_config_facts(old, &old.replace("    let c = a;\n", "    // A note.\n    let c = a;\n"));
-    assert!(spotlight(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(old, &old.replace("    let c = a;\n", "    // A note.\n    let c = a;\n"));
+    assert!(spotlight(&facts).is_empty() && causes.is_empty() && fact_notes(&facts).is_empty(), "{facts:#?}");
 
     // A `cfg` attribute on the function selects the full function: each build with the body has
     // the same body.
-    let facts = source_config_facts(&format!("#[cfg(unix)]\n{base}"), "#[cfg(unix)]\npub fn f(a: u64) -> u64 {\n    let c = a;\n    c\n}\n");
-    assert!(proved(&facts), "{facts:#?}");
-    let facts = source_config_facts(&format!("#[cfg_attr(unix, inline)]\n{base}"), "#[cfg_attr(unix, inline)]\npub fn f(a: u64) -> u64 {\n    let c = a;\n    c\n}\n");
+    let (facts, causes) = source_config_facts(&format!("#[cfg(unix)]\n{base}"), "#[cfg(unix)]\npub fn f(a: u64) -> u64 {\n    let c = a;\n    c\n}\n");
+    assert!(proved(&facts) && causes.is_empty() && fact_notes(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(&format!("#[cfg_attr(unix, inline)]\n{base}"), "#[cfg_attr(unix, inline)]\npub fn f(a: u64) -> u64 {\n    let c = a;\n    c\n}\n");
     // `inline` under `cfg_attr` is in the allow list (batch 5o, A5). `no_mangle` is not.
-    assert!(proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
-    let facts = source_config_facts(&format!("#[cfg_attr(unix, no_mangle)]\n{base}"), "#[cfg_attr(unix, no_mangle)]\npub fn f(a: u64) -> u64 {\n    let c = a;\n    c\n}\n");
-    assert!(!proved(&facts), "{facts:#?}");
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.is_empty() && fact_notes(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(&format!("#[cfg_attr(unix, no_mangle)]\n{base}"), "#[cfg_attr(unix, no_mangle)]\npub fn f(a: u64) -> u64 {\n    let c = a;\n    c\n}\n");
+    assert!(proved(&facts) && !causes.is_empty(), "{facts:#?}");
 
     // A macro of the workspace with a `cfg` attribute in its definition, also through a second
     // macro.
     let macros = "macro_rules! rel { ($e:expr) => { #[cfg(not(debug_assertions))] { $e } }; }\nmacro_rules! outer { ($e:expr) => { rel!($e) }; }\n";
-    let facts = source_config_facts(&format!("{macros}{base}"), &format!("{macros}pub fn f(a: u64) -> u64 {{\n    outer!(return 0);\n    let b = a;\n    b\n}}\n"));
-    assert!(!proved(&facts) && spotlight(&facts).contains("`outer! (rel! (#[cfg(not(debug_assertions))]))` in `demo::f`"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(&format!("{macros}{base}"), &format!("{macros}pub fn f(a: u64) -> u64 {{\n    outer!(return 0);\n    let b = a;\n    b\n}}\n"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`outer! (rel! (#[cfg(not(debug_assertions))]))` in `demo::f`"), "{facts:#?}");
     // A free macro of the workspace does not stop the proof.
     let free = "macro_rules! twice { ($e:expr) => { $e + $e }; }\n";
-    let facts = source_config_facts(&format!("{free}pub fn f(a: u64) -> u64 {{\n    let b = twice!(a);\n    b\n}}\n"), &format!("{free}pub fn f(a: u64) -> u64 {{\n    let c = twice!(a);\n    c\n}}\n"));
-    assert!(proved(&facts), "{facts:#?}");
+    let (facts, causes) = source_config_facts(&format!("{free}pub fn f(a: u64) -> u64 {{\n    let b = twice!(a);\n    b\n}}\n"), &format!("{free}pub fn f(a: u64) -> u64 {{\n    let c = twice!(a);\n    c\n}}\n"));
+    assert!(proved(&facts) && causes.is_empty() && fact_notes(&facts).is_empty(), "{facts:#?}");
 
     // Semilla cannot see into a macro or an attribute of another crate.
-    let facts = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    other::gate!(return 0);\n    let b = a;\n    b\n}\n");
-    assert!(!proved(&facts) && spotlight(&facts).contains("Semilla cannot see if this code depends on a build condition") && spotlight(&facts).contains("`gate!` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
-    let facts = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    cfg_select! { debug_assertions => {} _ => { return 0; } }\n    let b = a;\n    b\n}\n");
-    assert!(!proved(&facts) && spotlight(&facts).contains("`cfg_select!` in `demo::f`"), "{facts:#?}");
-    let facts = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    #[other::gate]\n    let c = a;\n    c\n}\n");
-    assert!(!proved(&facts) && spotlight(&facts).contains("`#[other::gate]` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    other::gate!(return 0);\n    let b = a;\n    b\n}\n");
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`gate!` in `demo::f` (Semilla cannot see into it)") && fact_notes(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    cfg_select! { debug_assertions => {} _ => { return 0; } }\n    let b = a;\n    b\n}\n");
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`cfg_select!` in `demo::f`"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(base, "pub fn f(a: u64) -> u64 {\n    #[other::gate]\n    let c = a;\n    c\n}\n");
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`#[other::gate]` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
     // A macro of another crate can have the name of a standard macro.
     let glob = "use other::*;\n";
-    let facts = source_config_facts(&format!("{glob}{base}"), &format!("{glob}pub fn f(a: u64) -> u64 {{\n    let c = a;\n    println!(\"{{c}}\");\n    c\n}}\n"));
-    assert!(!proved(&facts) && spotlight(&facts).contains("`println!` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(&format!("{glob}{base}"), &format!("{glob}pub fn f(a: u64) -> u64 {{\n    let c = a;\n    println!(\"{{c}}\");\n    c\n}}\n"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`println!` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
     let import = "use other::gate as vec;\n";
-    let facts = source_config_facts(&format!("{import}{base}"), &format!("{import}pub fn f(a: u64) -> u64 {{\n    let c = a;\n    let _ = vec![c];\n    c\n}}\n"));
-    assert!(!proved(&facts) && spotlight(&facts).contains("`vec!` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
+    let (facts, causes) = source_config_facts(&format!("{import}{base}"), &format!("{import}pub fn f(a: u64) -> u64 {{\n    let c = a;\n    let _ = vec![c];\n    c\n}}\n"));
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`vec!` in `demo::f` (Semilla cannot see into it)"), "{facts:#?}");
 
     // A body with no text edit keeps its status.
     let old = "pub fn f(a: u64) -> u64 {\n    #[cfg(windows)]\n    return 0;\n    a\n}\npub fn g() {}\n";
-    let facts = source_config_facts(old, &old.replace("pub fn g() {}", "pub fn g() {\n}"));
-    assert!(spotlight(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = source_config_facts(old, &old.replace("pub fn g() {}", "pub fn g() {\n}"));
+    assert!(spotlight(&facts).is_empty() && causes.is_empty() && fact_notes(&facts).is_empty(), "{facts:#?}");
 }
 
 #[test]
@@ -2915,11 +2933,11 @@ fn a_pair_with_equal_texts_names_the_path_that_points_to_a_different_item() {
     assert_eq!(found[0].resolves, [semilla_core::report::PairName { name: "LIMIT".into(), old: "demo::a::LIMIT".into(), new: "demo::b::LIMIT".into() }]);
     let text = found[0].text();
     assert_eq!(text, "`demo::a::over` (removed) and `demo::b::over` (added) have the same text, but a name in the text points to a different item: `LIMIT` is `demo::a::LIMIT` in the removed item and `demo::b::LIMIT` in the added item. The move changes the meaning of the code: it is not one item in a new place");
-    assert!(!text.contains("own step") && !text.contains("similar"), "{text}");
+    assert!(!text.contains("no other change") && !text.contains("similar"), "{text}");
     // To `c`: each name points to the same item. The usual text.
     let found = pairs(&format!("{}{}{}", module("a", a, false), module("b", b, false), module("c", c, true)), "demo::c::over");
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].resolves.is_empty() && found[0].text().contains("are 100% similar") && found[0].text().contains("in its own step"), "{:?}", found[0]);
+    assert!(found[0].resolves.is_empty() && found[0].text().contains("are 100% similar") && found[0].text().contains("Semilla derives a rename or a move only in a step with no other change"), "{:?}", found[0]);
 }
 
 /// The source of the opaque input tests (batch 5l).
@@ -3661,7 +3679,7 @@ fn a_caller_of_a_changed_mir_signature_goes_under_the_fact_of_the_callee() {
     assert!(unknown_causes(&report).is_empty(), "{:#?}", report.facts);
     let fact = report.facts.iter().find(|f| f.affected.contains(&"demo::count".to_string())).unwrap_or_else(|| panic!("the fact of the callee owns the caller: {report:#?}"));
     assert!(fact.affected.contains(&"demo::pairs".to_string()) && fact.description.contains("the MIR signature of `demo::pairs` changed"), "{fact:#?}");
-    assert!(fact.class.is_some_and(|class| class != Class::Neutral) && !fact.spotlight, "{fact:#?}");
+    assert!(fact.compare != Compare::CodeEqual && !fact.spotlight, "{fact:#?}");
     // The same MIR signature: the body of the callee is not a part of the MIR of the caller.
     let report = run_derived_with(src, changed, &StatusFacts(bodies, facts(false)));
     assert_eq!(unknown_causes(&report), ["demo::count"], "{:#?}", report.facts);
@@ -3698,7 +3716,7 @@ fn an_associated_constant_goes_under_the_fact_of_its_const_fn() {
     assert!(unknown_causes(&report).is_empty(), "{:#?}", report.facts);
     let fact = report.facts.iter().find(|f| f.at.as_ref().is_some_and(|at| at.item == "demo::Table::new")).unwrap();
     assert_eq!(fact.affected, ["demo::Table::DEFAULT", "demo::Table::FIRST", "demo::Table::new", "demo::start"], "{fact:#?}");
-    assert!(!fact.spotlight && fact.class.is_some_and(|class| class != Class::Neutral), "{fact:#?}");
+    assert!(!fact.spotlight && fact.compare != Compare::CodeEqual, "{fact:#?}");
     // No path from the constant to the changed function: the cause is not known. The constant
     // is a source item, so the fact does not say "code that Semilla does not see".
     let report = run_derived_with(src, &changed, &StatusFacts(bodies, facts(Vec::new())));
@@ -3753,17 +3771,17 @@ fn a_bench_target_with_the_name_of_the_package_has_source_items() {
     assert!(report.facts.iter().all(|f| !f.spotlight), "{:#?}", report.facts);
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
     assert_eq!(report.facts[0].affected, ["demo::demo::DATA", "demo::demo::main", "demo::f"], "{:#?}", report.facts);
-    // A proved rewrite of the library function: the bodies of the bench still change (they read
-    // the text of the file). The fact is not neutral, and its text says why.
+    // A rewrite of the library function with equal compiled code: the bodies of the bench
+    // still change (they read the text of the file). Each edit fact lists them.
     let (_d3, new) = tree(&lib.replace("x + 1", "1 + x"));
     let facts = vec![BodyFacts { name: "demo::DATA".into(), span: at(1), ..Default::default() }, BodyFacts { name: "demo::main".into(), span: at(2), ..Default::default() }];
-    let bodies = vec![("demo::f", equal("n2")), ("demo::DATA", different(false)), ("demo::main", different(false))];
+    let bodies = vec![("demo::f", equal("n0")), ("demo::DATA", different(false)), ("demo::main", different(false))];
     let report = crate::verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &StatusFacts(bodies, facts), &NoOracle, true).report;
-    assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
-    let fact = &report.facts[0];
-    assert!(!fact.spotlight && fact.class == Some(Class::Logic), "{fact:#?}");
-    assert_eq!(fact.description, "`demo::f`: neutral rewrite (proved N2), 2 edit(s); the edit changed other bodies (the affected bodies), so the fact is not neutral");
-    assert_eq!(fact.affected, ["demo::demo::DATA", "demo::demo::main"], "{fact:#?}");
+    assert_eq!(descriptions(&report), ["changed expression `x` → `1` at `demo::f/tail/lhs`", "changed expression `1` → `x` at `demo::f/tail/rhs`"], "{:#?}", report.facts);
+    // The first fact of the file has the bodies of the bench.
+    assert!(report.facts.iter().all(|fact| !fact.spotlight), "{:#?}", report.facts);
+    assert_eq!((report.facts[0].compare, &report.facts[0].affected[..]), (Compare::CodeDifferent, &["demo::demo::DATA".to_string(), "demo::demo::main".to_string()][..]), "{:#?}", report.facts);
+    assert_eq!((report.facts[1].compare, report.facts[1].affected.len()), (Compare::CodeEqual, 0), "{:#?}", report.facts);
 }
 
 /// The two texts of each "`a` → `b`" pair in a fact text.
@@ -3839,7 +3857,7 @@ impl BodyOracle for Comparisons {
 }
 
 #[test]
-fn a_proof_in_only_some_configurations_is_a_note() {
+fn equal_code_in_only_some_configurations_is_a_note() {
     // Batch 5u, part A. The body of `f` has a proof in `dev` and no proof in `release`. The
     // fact gets a note. It has no spotlight, it needs no reason, and it is not neutral.
     let before = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\npub fn g(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
@@ -3848,10 +3866,10 @@ fn a_proof_in_only_some_configurations_is_a_note() {
     let partial = |name: &str| BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: names(&["release"]), equal_in: names(&["dev", "dev, all features"]), stopped: Vec::new() };
     let report = run_derived_with(before, &after, &Comparisons(vec![partial("demo::f")]));
     let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
-    assert_eq!(fact.note.as_deref(), Some("proved neutral in `dev`, `dev, all features`; not proved in `release`"), "{fact:#?}");
-    assert!(report.accepted() && !fact.spotlight && fact.spotlight_why.is_none() && fact.class.is_some_and(|class| class != Class::Neutral), "{report:#?}");
+    assert_eq!(fact.note.as_deref(), Some("the compiled code is equal in `dev`, `dev, all features`; different in `release`"), "{fact:#?}");
+    assert!(report.accepted() && !fact.spotlight && fact.spotlight_why.is_none() && fact.compare != Compare::CodeEqual, "{report:#?}");
     let text = crate::views::text_report(std::slice::from_ref(&report));
-    assert!(text.contains("      note: proved neutral in `dev`") && !text.contains("neutral (proved)") && !text.contains("neutral rewrite"), "{text}");
+    assert!(text.contains("      note: the compiled code is equal in `dev`") && !text.contains("neutral") && !text.contains("proved"), "{text}");
 
     // Negative: a fact with a second body that has no proof in each configuration gets no
     // note. "Proved" is the intersection of the bodies of the fact.
@@ -3862,7 +3880,7 @@ fn a_proof_in_only_some_configurations_is_a_note() {
         let both = fact.affected.contains(&"demo::f".to_string()) && fact.affected.contains(&"demo::g".to_string());
         let only_g = fact.affected == ["demo::g".to_string()];
         assert!(!(both || only_g) || fact.note.is_none(), "{fact:#?}");
-        assert!(fact.class != Some(Class::Neutral), "{fact:#?}");
+        assert!(fact.compare != Compare::CodeEqual, "{fact:#?}");
     }
     // Negative: a body with a proof in each configuration gets no note.
     let report = run_derived_with(before, &after, &Comparisons(vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]));
@@ -3870,7 +3888,7 @@ fn a_proof_in_only_some_configurations_is_a_note() {
 }
 
 #[test]
-fn a_removed_proof_with_no_spotlight_is_a_note() {
+fn a_condition_that_semilla_did_not_check_is_a_note() {
     // Batch 5u (an addition to part A). Semilla removed the proof of `f` because of a build
     // condition, and the edit does not touch the code that reads the condition. The fact gets
     // a note. It has no spotlight, it needs no reason, and it is not neutral.
@@ -3880,20 +3898,21 @@ fn a_removed_proof_with_no_spotlight_is_a_note() {
     let cause = "`l0` (under `#[cfg(feature=\"fa\")]`)";
     let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &[], &[cause, "cfg!(unix)"])]));
     let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
-    assert_eq!(fact.note.as_deref(), Some("no proof: `demo::f` uses `l0` (under `#[cfg(feature=\"fa\")]`), `cfg!(unix)`, and Semilla did not check these conditions"), "{fact:#?}");
-    assert!(report.accepted() && !fact.spotlight && fact.class.is_some_and(|class| class != Class::Neutral), "{report:#?}");
+    assert_eq!(fact.note.as_deref(), Some("this body uses `l0` (under `#[cfg(feature=\"fa\")]`), `cfg!(unix)`, which Semilla did not check (`demo::f`)"), "{fact:#?}");
+    assert!(report.accepted() && !fact.spotlight && fact.compare != Compare::CodeEqual, "{report:#?}");
     let text = crate::views::text_report(std::slice::from_ref(&report));
-    assert!(text.contains("      note: no proof: `demo::f` uses") && !text.contains("neutral"), "{text}");
-    // Negative: a body with a spotlight of the build configuration has the spotlight only.
+    assert!(text.contains("      note: this body uses `l0`") && !text.contains("neutral") && !text.contains("proof"), "{text}");
+    // A use in a changed statement is in the same note. It gives no spotlight (design 35).
     let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &["cfg!(unix)"], &[cause])]));
     let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
-    assert!(fact.spotlight && fact.note.is_none() && !report.accepted(), "{fact:#?}");
-    // Negative: the data of the note has no part in a decision. A body that is equal keeps
-    // its proof and gets no note.
-    let report = run_derived_with(before, &after, &Comparisons(vec![body(equal("n2"), &[], &[cause])]));
-    assert!(report.facts.iter().all(|fact| fact.note.is_none()) && report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{report:#?}");
+    assert!(!fact.spotlight && report.accepted(), "{fact:#?}");
+    assert_eq!(fact.note.as_deref(), Some("this body uses `l0` (under `#[cfg(feature=\"fa\")]`), `cfg!(unix)`, which Semilla did not check (`demo::f`)"), "{fact:#?}");
+    // The data of the note has no part in a decision. A body with equal code keeps its
+    // compare result, and it gets the note.
+    let report = run_derived_with(before, &after, &Comparisons(vec![body(equal("n0"), &[], &[cause])]));
+    assert!(!report.facts.is_empty() && report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && fact.note.as_deref().is_some_and(|note| note.starts_with("this body uses `l0`"))), "{report:#?}");
     let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &[], &[])]));
-    assert!(report.facts.iter().all(|fact| fact.note.is_none() && fact.class != Some(Class::Neutral)), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.note.is_none() && fact.compare != Compare::CodeEqual), "{report:#?}");
 }
 
 /// A body oracle with the units of one checked configuration (batch 5w, part A).
@@ -3925,7 +3944,7 @@ fn run_units(before: &[(&str, &str)], after: &[(&str, &str)], oracle: &UnitBodie
 }
 
 #[test]
-fn an_edit_in_code_that_no_checked_configuration_compiles_is_never_neutral() {
+fn an_edit_in_code_that_no_checked_configuration_compiles_gets_no_compare() {
     // Batch 5w, part A (trial 7 on humantime). A constant in a module with a false `cfg`
     // condition got `neutral (proved)`: no body changed, and no rule asked if a checked
     // configuration compiles the code. Each edit below is in such code.
@@ -3956,14 +3975,14 @@ fn an_edit_in_code_that_no_checked_configuration_compiles_is_never_neutral() {
         let after = module.replacen(old, new, 1);
         let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
         assert!(!report.facts.is_empty() && !report.accepted(), "{name}: {report:#?}");
-        assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{name}: {report:#?}");
-        let marked: Vec<&semilla_core::report::Fact> = report.facts.iter().filter(|fact| fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("build configuration: no checked configuration compiles the changed code (`#[cfg") && why.contains("(windows)") && why.contains("at src/lib.rs:"))).collect();
+        assert!(report.facts.iter().all(|fact| fact.compare != Compare::CodeEqual), "{name}: {report:#?}");
+        let marked: Vec<&semilla_core::report::Fact> = report.facts.iter().filter(|fact| fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("inactive code: no checked configuration compiles the changed code (`#[cfg") && why.contains("(windows)") && why.contains("at src/lib.rs:"))).collect();
         assert!(!marked.is_empty(), "{name}: {report:#?}");
         // One reason for each fact is sufficient. The key is the key that the output shows.
         let keys: Vec<String> = report.facts.iter().filter(|fact| fact.spotlight).map(|fact| fact.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| fact.part.clone())).collect();
         let reasons: Vec<(&str, &str)> = keys.iter().map(|key| (key.as_str(), "the edit is for a different target")).collect();
         let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &oracle, &reasons);
-        assert!(report.accepted() && report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{name}: {report:#?}");
+        assert!(report.accepted() && report.facts.iter().all(|fact| fact.compare != Compare::CodeEqual), "{name}: {report:#?}");
     }
     // Negative: a comment has no token. The edit is free.
     let after = module.replacen("    pub const LIMIT", "    // The limit.\n    pub const LIMIT", 1);
@@ -3984,7 +4003,7 @@ fn an_edit_in_code_that_no_checked_configuration_compiles_is_never_neutral() {
     // record, so the edit is dead.
     let unknown = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec![], files: vec![], known: false };
     let report = run_units(&[manifest, ("src/lib.rs", module)], &[manifest, ("src/lib.rs", &after)], &unknown, &[]);
-    assert!(!report.accepted() && report.facts.iter().all(|fact| fact.spotlight && fact.class != Some(Class::Neutral)), "{report:#?}");
+    assert!(!report.accepted() && report.facts.iter().all(|fact| fact.spotlight && fact.compare != Compare::CodeEqual), "{report:#?}");
 }
 
 #[test]
@@ -3999,7 +4018,7 @@ fn an_edit_in_a_file_that_no_checked_unit_reads_is_never_neutral() {
         let after = file.replace(old, new);
         let report = run_units(&[manifest, lib, ("src/win.rs", file), ("src/nix.rs", file)], &[manifest, lib, ("src/win.rs", &after), ("src/nix.rs", file)], &oracle, &[]);
         let fact = report.facts.first().unwrap_or_else(|| panic!("{report:#?}"));
-        assert!(!report.accepted() && fact.spotlight && fact.class != Some(Class::Neutral), "{report:#?}");
+        assert!(!report.accepted() && fact.spotlight && fact.compare != Compare::CodeEqual, "{report:#?}");
         assert!(fact.spotlight_why.as_deref().unwrap().contains("no checked unit reads the file `src/win.rs`: `#[cfg(windows)]` at `demo::win`"), "{fact:#?}");
         // Negative: the same edit in the file that the unit reads.
         let report = run_units(&[manifest, lib, ("src/win.rs", file), ("src/nix.rs", file)], &[manifest, lib, ("src/win.rs", file), ("src/nix.rs", &after)], &oracle, &[]);
@@ -4017,12 +4036,12 @@ fn an_edit_in_a_macro_input_with_a_condition_is_never_neutral() {
     let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs"], known: true };
     let report = run_units(&[manifest, ("src/lib.rs", source)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
     let fact = report.facts.first().unwrap_or_else(|| panic!("{report:#?}"));
-    assert!(!report.accepted() && fact.spotlight && fact.class != Some(Class::Neutral), "{report:#?}");
+    assert!(!report.accepted() && fact.spotlight && fact.compare != Compare::CodeEqual, "{report:#?}");
     assert!(fact.spotlight_why.as_deref().unwrap().contains("Semilla cannot see if a checked configuration compiles the changed code (the input of `pick!` at src/lib.rs:2 has a `cfg` condition)"), "{fact:#?}");
 }
 
 #[test]
-fn an_identity_in_code_that_no_checked_configuration_compiles_has_no_proof() {
+fn an_identity_in_code_that_no_checked_configuration_compiles_has_no_compare() {
     // Batch 5w, part A. A rename in dead code has no body evidence. The claimed identity is
     // unproved. The derived identity does not show, and the facts have the spotlight.
     let manifest = ("Cargo.toml", MANIFEST);
@@ -4031,12 +4050,12 @@ fn an_identity_in_code_that_no_checked_configuration_compiles_has_no_proof() {
     let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs"], known: true };
     let report = run_units(&[manifest, ("src/lib.rs", source)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
     assert!(!report.accepted() && !report.facts.is_empty(), "{report:#?}");
-    assert!(report.facts.iter().all(|fact| fact.spotlight && !fact.has_proof()), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.spotlight && fact.compare != Compare::CodeEqual), "{report:#?}");
     let (_d1, old) = load_files(&[manifest, ("src/lib.rs", source)]);
     let (_d2, new) = load_files(&[manifest, ("src/lib.rs", &after)]);
     let step = step(vec![claim("c1", "rename", Some("demo::m::twice"), serde_json::json!({"to": "thrice"}))]);
     let report = verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report;
-    assert!(matches!(&report.claims[0].status, ClaimStatus::Unproved { reason } if reason.contains("so the identity of `demo::m::twice` has no proof")), "{report:#?}");
+    assert!(matches!(&report.claims[0].status, ClaimStatus::Refuted { reason } if reason.contains("so Semilla cannot compare the code of `demo::m::twice`")), "{report:#?}");
 }
 
 /// A step with files, a MIR oracle with a fixed status for each body, and derived facts.
@@ -4065,7 +4084,7 @@ fn a_macro_import_of_a_different_target_does_not_stop_a_rename() {
         after.extend(extra.iter().copied());
         run_derived_files(&before, &after, &bodies)
     };
-    let renamed = |report: &StepReport| descriptions(report).iter().any(|d| d.starts_with("renamed `demo::item` → `demo::piece` (proved N1"));
+    let renamed = |report: &StepReport| descriptions(report).iter().any(|d| d.starts_with("renamed `demo::item` → `demo::piece`"));
     let notes = |report: &StepReport| report.notes.join("\n");
     let macro_use = "#[macro_use]\nextern crate other;\n";
 
@@ -4092,37 +4111,35 @@ fn a_macro_import_of_a_different_target_does_not_stop_a_rename() {
         let mut after = vec![("Cargo.toml", MANIFEST_OTHER), ("src/lib.rs", new.as_str())];
         before.extend(extra.iter().copied());
         after.extend(extra.iter().copied());
-        run_derived_files(&before, &after, &[("demo::f", equal("n0"))]).facts
+        let (_d1, old_tree) = load_files(&before);
+        let (_d2, new_tree) = load_files(&after);
+        (run_derived_files(&before, &after, &[("demo::f", equal("n0"))]).facts, config_causes(&old_tree, &new_tree))
     };
-    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.class == Some(Class::Neutral));
+    let proved = |facts: &[semilla_core::report::Fact]| facts.iter().any(|f| f.compare == Compare::CodeEqual);
     let spotlight = |facts: &[semilla_core::report::Fact]| facts.iter().filter_map(|f| f.spotlight_why.clone()).collect::<Vec<_>>().join("\n");
     let shadows = ["use other::write;\n", "use other::{gate, put as write};\n", "pub(crate) use other::write;\n", "mod inner {\n    use other::write;\n}\n", "use other::*;\n", macro_use];
     for head in shadows {
-        let facts = edit(head, &[]);
-        assert!(!proved(&facts) && spotlight(&facts).contains("`write!` in `demo::f` (Semilla cannot see into it)"), "{head}: {facts:#?}");
+        let (facts, causes) = edit(head, &[]);
+        assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.contains("`write!` in `demo::f` (Semilla cannot see into it)"), "{head}: {facts:#?}");
     }
-    let facts = edit("use other::format::Thing;\n", &bench);
-    assert!(proved(&facts) && spotlight(&facts).is_empty(), "{facts:#?}");
+    let (facts, causes) = edit("use other::format::Thing;\n", &bench);
+    assert!(proved(&facts) && spotlight(&facts).is_empty() && causes.is_empty(), "{facts:#?}");
     // A `pub use` of a different workspace target can give the name to each crate.
-    let facts = edit("", &[("src/bin/tool.rs", "pub use other::write;\nfn main() {}\n")]);
-    assert!(!proved(&facts), "{facts:#?}");
-    // A rename with a real shadow: the text of `item` differs only by the name, and the name
-    // is not in the tokens of the call, so the text has no edit. With the name in the tokens
-    // of the call, the proof stops, and the note says the cause.
+    let (facts, causes) = edit("", &[("src/bin/tool.rs", "pub use other::write;\nfn main() {}\n")]);
+    assert!(proved(&facts) && !causes.is_empty(), "{facts:#?}");
+    // A rename with a real shadow. Design 35: the compare with the rename map is the result
+    // for the checked configurations. A macro call that Semilla cannot see into, with the name
+    // in its tokens, does not stop the derivation.
     for head in shadows {
         let report = run(head, lib, &[]);
         assert!(renamed(&report), "{head}: {report:#?}");
         let report = run(head, &lib.replace("    item(out, n);\n", "    let _ = write!(out, \"{}\", item(out, n) == ());\n"), &[]);
-        assert!(!renamed(&report), "{head}: {report:#?}");
-        assert!(notes(&report).contains("`write!` with the name `item` of the rename in its tokens (Semilla cannot see into it)"), "{head}: {}", notes(&report));
-        // Batch 5x, part C: the step has no second change, so the pair warning does not say
-        // "own step". It says the cause.
-        let cause = report.notes.iter().find_map(|note| stopped_pair(note, "demo::item", "demo::piece"));
-        assert!(cause.as_deref().is_some_and(|cause| cause.contains("`write!`")), "{head}: {:?}", report.notes);
-        assert!(report.notes.iter().all(|note| stopped_pair(note, "demo::item", "demo::other").is_none()));
-        let pair = semilla_core::PairWarning { old: "demo::item".into(), new: "demo::piece".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: cause };
-        assert!(pair.text().contains("their step has no other change. Semilla has no proof that it is one item: ") && pair.text().contains("`write!`") && !pair.text().contains("own step"), "{}", pair.text());
+        assert!(renamed(&report) && notes(&report).is_empty(), "{head}: {report:#?}");
     }
+    // Batch 5x, part C: a pair with a known cause and no second change in its step does not
+    // say "own step". It says the cause.
+    let pair = semilla_core::PairWarning { old: "demo::item".into(), new: "demo::piece".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: Some("the cause".into()) };
+    assert_eq!(pair.text(), "`demo::item` (removed) and `demo::piece` (added) are 90% similar, and their step has no other change. Semilla does not derive one item: the cause");
     // A module file of two crate roots has the imports of the two roots.
     let shared = "use std::fmt::Write;\npub fn show(out: &mut String, n: u32) {\n    item(out, n);\n}\nfn item(out: &mut String, n: u32) {\n    let _ = write!(out, \"{n}\");\n}\n";
     let files = |text: &str| -> Vec<(String, String)> {
@@ -4140,19 +4157,26 @@ fn a_macro_import_of_a_different_target_does_not_stop_a_rename() {
     assert_eq!((names("src/lib.rs"), names("src/main.rs"), names("src/util.rs")), ("src/lib.rs".to_string(), "src/main.rs".to_string(), "src/lib.rs src/main.rs".to_string()));
 
     // A caller with a macro call that Semilla cannot see into: a text with only the new name
-    // has no edit. A renamed name in the tokens of the call stops the proof, with the cause.
+    // has no edit. A renamed name in the tokens of the call does not stop the rename: the
+    // compare of the compiled code decides (design 35).
     let caller = lib.replace("    item(out, n);\n", "    other::gate!(n);\n    item(out, n);\n");
     let report = run("", &caller, &[]);
     assert!(renamed(&report), "{report:#?}");
     let inside = lib.replace("    item(out, n);\n", "    other::gate!(item(out, n));\n");
     let report = run("", &inside, &[]);
-    assert!(!renamed(&report), "{report:#?}");
-    assert!(notes(&report).contains("`gate!` with the name `item` of the rename in its tokens (Semilla cannot see into it)"), "{}", notes(&report));
-    // An attribute that Semilla cannot see into, and a `cfg` attribute in the body: no proof.
+    assert!(renamed(&report) && notes(&report).is_empty(), "{report:#?}");
+    // An attribute that Semilla cannot see into, and a `cfg` attribute in the body: the
+    // compare decides (design 35), so Semilla derives the rename.
     for form in ["    #[other::watch]\n    item(out, n);\n", "    #[cfg(windows)]\n    let piece = |_: &mut String, _: u32| {};\n    item(out, n);\n"] {
         let report = run("", &lib.replace("    item(out, n);\n", form), &[]);
-        assert!(!renamed(&report), "{form}: {report:#?}");
+        assert!(renamed(&report), "{form}: {report:#?}");
     }
+    // A condition in a body that has the name: the note of the rename fact names it.
+    let before = "fn item() {}\npub fn run() {\n    #[cfg(windows)]\n    let _piece = 1;\n    item();\n}\n";
+    let body = |name: &str, stopped: &[&str]| BodyComparison { name: name.into(), span: None, status: equal("n1"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: stopped.iter().map(|text| text.to_string()).collect() };
+    let report = run_derived_with(before, &before.replace("item", "piece"), &Comparisons(vec![body("demo::piece", &[]), body("demo::run", &["#[cfg(windows)]"])]));
+    assert_eq!(descriptions(&report), ["renamed `demo::item` → `demo::piece`"], "{report:#?}");
+    assert_eq!((report.facts[0].compare, report.facts[0].note.as_deref()), (Compare::CodeEqual, Some("this body uses `#[cfg(windows)]`, which Semilla did not check (`demo::run`)")), "{report:#?}");
 }
 
 /// The files of a small crate with the module `date` (batch 5x, part B).
@@ -4181,7 +4205,7 @@ fn a_move_into_a_new_module_gets_its_proof_in_one_step() {
     let before = move_files("mod date;\n", DATE, None);
     let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", equal("n0"))];
     let claims = || vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
-    let moved = "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1";
+    let moved = "moved `demo::date::is_leap` → `demo::calendar::is_leap`";
     let proved = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with(moved));
 
     // 1. The honest move: derived, and with the claim.
@@ -4250,7 +4274,7 @@ fn a_moved_constant_and_a_moved_struct_get_their_proof() {
     let after = move_files("mod calendar;\nmod date;\n", "use crate::calendar::LIMIT;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n", Some("pub(crate) const LIMIT: u64 = 4;\n"));
     let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::LIMIT", equal("n0"))];
     let report = run_derived_files(&before, &after, &bodies);
-    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::LIMIT` → `demo::calendar::LIMIT` (proved N1")), "{report:#?}");
+    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::LIMIT` → `demo::calendar::LIMIT`")), "{report:#?}");
     let claims = vec![claim("c1", "move-item", Some("demo::date::LIMIT"), serde_json::json!({"to": "demo::calendar::LIMIT"}))];
     let report = run_claim_files(&before, &after, claims, &bodies);
     assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
@@ -4268,7 +4292,7 @@ fn a_moved_constant_and_a_moved_struct_get_their_proof() {
     let after = move_files("mod calendar;\nmod date;\n", &date_after, Some(YEAR));
     let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::Year::leap", equal("n1"))];
     let report = run_derived_files(&before, &after, &bodies);
-    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::Year` → `demo::calendar::Year` (proved N1")), "{report:#?}");
+    assert!(report.accepted() && descriptions(&report).iter().any(|text| text.starts_with("moved `demo::date::Year` → `demo::calendar::Year`")), "{report:#?}");
     assert!(!descriptions(&report).iter().any(|text| text.contains("added") || text.contains("removed")), "{report:#?}");
     let claims = vec![claim("c1", "move-item", Some("demo::date::Year"), serde_json::json!({"to": "demo::calendar::Year"}))];
     let report = run_claim_files(&before, &after, claims, &bodies);
@@ -4342,7 +4366,7 @@ fn a_nested_function_is_its_own_body() {
     let inner = |name: &str| body(name, "src/lib.rs", 2, different(false));
     let affected = |bodies: Vec<BodyComparison>| -> Vec<String> {
         let report = run_derived_with(before, &after, &SpanBodies(bodies));
-        assert!(report.accepted() && report.facts.len() == 1 && report.facts[0].class == Some(Class::Logic), "{report:#?}");
+        assert!(report.accepted() && report.facts.len() == 1 && report.facts[0].compare == Compare::CodeDifferent, "{report:#?}");
         report.facts[0].affected.clone()
     };
     assert_eq!(affected(vec![outer(equal("n0")), inner("demo::outer::inner")]), ["demo::outer::inner"]);
@@ -4371,7 +4395,7 @@ fn a_stored_reason_of_a_fact_with_no_spotlight_is_a_note() {
     step.reasons.insert(plain.facts[0].reason_place(), "the limit is new".into());
     let report = run(&step);
     assert_eq!(report.facts[0].reason.as_deref(), Some("the limit is new"));
-    assert_eq!((report.facts[0].class, report.facts[0].spotlight), (plain.facts[0].class, false));
+    assert_eq!((report.facts[0].compare, report.facts[0].spotlight), (plain.facts[0].compare, false));
     let text = views::text_report(std::slice::from_ref(&report));
     assert!(text.contains("      note: no spotlight; the agent gave a reason: \"the limit is new\""), "{text}");
 }
@@ -4398,8 +4422,8 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_move() {
     let before = move_files("mod date;\n", DATE, None);
     let bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", equal("n0"))];
     let claims = || vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
-    let proved = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1"));
-    let doc_facts = |report: &StepReport| report.facts.iter().filter(|fact| ["changed docs", "added docs", "removed docs"].iter().any(|start| fact.description.starts_with(start)) && fact.class == Some(Class::Other)).count();
+    let proved = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap`"));
+    let doc_facts = |report: &StepReport| report.facts.iter().filter(|fact| ["changed docs", "added docs", "removed docs"].iter().any(|start| fact.description.starts_with(start)) && fact.compare == Compare::NoCode).count();
 
     // 1. Each form of a plain doc comment: in the file, on the item, and the two together.
     let forms = [
@@ -4472,7 +4496,7 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_move() {
 fn a_plain_doc_comment_does_not_stop_the_proof_of_a_rename() {
     const LIB: &str = "pub fn show(n: u32) -> u32 {\n    item(n)\n}\n/// The item.\nfn item(n: u32) -> u32 {\n    n + 1\n}\n";
     let bodies = [("demo::show", equal("n1")), ("demo::piece", equal("n1"))];
-    let renamed = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("renamed `demo::item` → `demo::piece` (proved N1"));
+    let renamed = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("renamed `demo::item` → `demo::piece`"));
     let claims = || vec![claim("c1", "rename", Some("demo::item"), serde_json::json!({"to": "piece"}))];
     let after = LIB.replace("item(", "piece(");
     for (doc, proof) in [
@@ -4493,10 +4517,10 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_rename() {
         if proof {
             // The doc change is a fact to read with the class `other`.
             let fact = report.facts.iter().find(|fact| ["changed docs", "added docs", "removed docs"].iter().any(|start| fact.description.starts_with(start))).unwrap_or_else(|| panic!("{doc}: {report:#?}"));
-            assert_eq!(fact.class, Some(Class::Other), "{doc}: {report:#?}");
+            assert_eq!(fact.compare, Compare::NoCode, "{doc}: {report:#?}");
         } else {
             // The message does not name a plain doc change: the cause is the other change.
-            assert!(status_of(&report, "c1").text().contains("an identity step must be neutral, but the step also has the change at `demo::piece`"), "{doc}: {report:#?}");
+            assert!(status_of(&report, "c1").text().contains("the step has a second change: the step also has the change at `demo::piece`"), "{doc}: {report:#?}");
         }
     }
 }
@@ -4513,12 +4537,12 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
     const GONE: &str = " (the public API changes: a different crate can no longer use the item)";
     let bodies = [("demo::date::parse", equal("n0")), ("demo::date::is_leap", equal("n0")), ("demo::calendar::leap", equal("n0")), ("demo::calendar::days", equal("n0")), ("demo::calendar::is_leap", equal("n0")), ("demo::time::parse", equal("n0")), ("demo::time::is_leap", equal("n0")), ("demo::date::Year::leap", equal("n0"))];
     // The visibility fact of a step: its text and its class.
-    let visibility = |before: &[(&str, &str)], after: &[(&str, &str)]| -> (String, Option<Class>) {
+    let visibility = |before: &[(&str, &str)], after: &[(&str, &str)]| -> (String, Compare) {
         let report = run_derived_files(before, after, &bodies);
         assert!(report.accepted(), "{report:#?}");
         let fact = report.facts.iter().find(|fact| fact.description.starts_with("visibility of ")).unwrap_or_else(|| panic!("{report:#?}"));
         assert!(!fact.spotlight, "{report:#?}");
-        (fact.description.clone(), fact.class)
+        (fact.description.clone(), fact.compare)
     };
     let files = |lib: &'static str, date: &'static str, calendar: &'static str| move_files(lib, date, Some(calendar));
     let base = files(LIB, DATE, CALENDAR);
@@ -4528,21 +4552,21 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
 
     // V1: `fn` → `pub fn` in a public module.
     let (text, class) = visibility(&base, &files(LIB, DATE, leaked));
-    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `private` → `pub`{NOW}"), Some(Class::Other)));
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `private` → `pub`{NOW}"), Compare::CodeEqual));
     // The reverse of V1.
     let (text, class) = visibility(&files(LIB, DATE, leaked), &base);
-    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub` → `private`{GONE}"), Some(Class::Other)));
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub` → `private`{GONE}"), Compare::CodeEqual));
     // `private` → `pub(crate)`: no crate other than this one sees a difference.
     let (text, class) = visibility(&base, &files(LIB, DATE, in_crate));
-    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub (crate)`".to_string(), Some(Class::Neutral)));
+    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub (crate)`".to_string(), Compare::CodeEqual));
     // `pub(crate)` → `pub` in a public module.
     let (text, class) = visibility(&files(LIB, DATE, in_crate), &files(LIB, DATE, leaked));
-    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub (crate)` → `pub`{NOW}"), Some(Class::Other)));
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub (crate)` → `pub`{NOW}"), Compare::CodeEqual));
     // `pub` in a private module with no re-export. A `pub use` line of a different item of
     // the module does not bring the item.
     for lib in [LIB, "pub mod calendar;\nmod date;\npub use self::date::parse;\n", "pub mod calendar;\nmod date;\npub use self::date::{parse as read};\n"] {
         let (text, class) = visibility(&files(lib, DATE, CALENDAR), &files(lib, public_date, CALENDAR));
-        assert_eq!((text, class), ("visibility of `demo::date::is_leap`: `private` → `pub`".to_string(), Some(Class::Neutral)), "{lib}");
+        assert_eq!((text, class), ("visibility of `demo::date::is_leap`: `private` → `pub`".to_string(), Compare::CodeEqual), "{lib}");
     }
     // `pub` in a private module, and a `pub use` line that can bring the item: by its name, by
     // the name of the module, with a glob, and through an `as` name of a private `use` line.
@@ -4559,22 +4583,22 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
     ] {
         let (text, class) = visibility(&files(lib, DATE, CALENDAR), &files(lib, public_date, CALENDAR));
         assert!(text.starts_with("visibility of `demo::date::is_leap`: `private` → `pub` (the public API can change: ") && text.contains(cause), "{lib}: {text}");
-        assert_eq!(class, Some(Class::Other), "{lib}");
+        assert_eq!(class, Compare::CodeEqual, "{lib}");
     }
     // A method of a `pub` type in a private module: a public signature can give the type to a
     // different crate. A method of a type that is not `pub` stays neutral.
     const YEAR: &str = "pub struct Year(pub u64);\nimpl Year {\n    fn leap(&self) -> bool {\n        self.0 % 4 == 0\n    }\n}\npub fn parse(y: u64) -> bool {\n    Year(y).leap()\n}\n";
     let year_public: &str = Box::leak(YEAR.replace("    fn leap", "    pub fn leap").into_boxed_str());
     let (text, class) = visibility(&files(LIB, YEAR, CALENDAR), &files(LIB, year_public, CALENDAR));
-    assert_eq!(class, Some(Class::Other), "{text}");
+    assert_eq!(class, Compare::CodeEqual, "{text}");
     assert!(text.contains("(the public API can change: the type `Year` is `pub`, and a public signature can give it to a different crate)"), "{text}");
     let hidden: &str = Box::leak(YEAR.replace("pub struct Year", "pub(crate) struct Year").into_boxed_str());
     let hidden_public: &str = Box::leak(hidden.replace("    fn leap", "    pub fn leap").into_boxed_str());
     let (text, class) = visibility(&files(LIB, hidden, CALENDAR), &files(LIB, hidden_public, CALENDAR));
-    assert_eq!((text, class), ("visibility of `demo::date::Year::leap`: `private` → `pub`".to_string(), Some(Class::Neutral)));
+    assert_eq!((text, class), ("visibility of `demo::date::Year::leap`: `private` → `pub`".to_string(), Compare::CodeEqual));
     // A module that becomes public.
     let (text, class) = visibility(&files(LIB, DATE, CALENDAR), &files("pub mod calendar;\npub mod date;\n", DATE, CALENDAR));
-    assert_eq!((text, class), (format!("visibility of `demo::date`: `private` → `pub`{NOW}"), Some(Class::Other)));
+    assert_eq!((text, class), (format!("visibility of `demo::date`: `private` → `pub`{NOW}"), Compare::CodeEqual));
 
     // V2: a move into the public module, with `pub`. The move stays proved neutral, and the
     // visibility is the fact to read.
@@ -4583,21 +4607,21 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
     let v2_bodies = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", equal("n0")), ("demo::calendar::leap", equal("n0")), ("demo::calendar::days", equal("n0"))];
     let report = run_derived_files(&base, &files(LIB, moved_date, moved_calendar), &v2_bodies);
     assert!(report.accepted(), "{report:#?}");
-    let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1")).unwrap_or_else(|| panic!("{report:#?}"));
-    assert_eq!(moved.class, Some(Class::Neutral));
+    let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap`")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(moved.compare, Compare::CodeEqual);
     let fact = report.facts.iter().find(|fact| fact.description.starts_with("visibility of ")).unwrap_or_else(|| panic!("{report:#?}"));
-    assert_eq!((fact.description.clone(), fact.class), (format!("visibility of `demo::calendar::is_leap`: `private` → `pub`{NOW}"), Some(Class::Other)));
+    assert_eq!((fact.description.clone(), fact.compare), (format!("visibility of `demo::calendar::is_leap`: `private` → `pub`{NOW}"), Compare::CodeEqual));
     let claims = vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
     let report = run_claim_facts(&base, &files(LIB, moved_date, moved_calendar), claims, &v2_bodies);
     assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
     let fact = report.facts.iter().find(|fact| fact.description.starts_with("visibility of ")).unwrap_or_else(|| panic!("{report:#?}"));
-    assert_eq!(fact.class, Some(Class::Other), "{report:#?}");
+    assert_eq!(fact.compare, Compare::CodeEqual, "{report:#?}");
 
     // A binary crate has no API for a different crate: the change stays proved neutral.
     let main = "pub mod calendar;\nfn main() {\n    let _ = calendar::days(4);\n}\n";
     let binary = |calendar: &'static str| vec![("Cargo.toml", MANIFEST), ("src/main.rs", main), ("src/calendar.rs", calendar)];
     let (text, class) = visibility(&binary(CALENDAR), &binary(leaked));
-    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub`".to_string(), Some(Class::Neutral)));
+    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub`".to_string(), Compare::CodeEqual));
 }
 
 /// Batch 5x, round 3: a proved rename or move that changes the set of the paths that a
@@ -4623,32 +4647,31 @@ fn a_rename_or_a_move_that_changes_the_public_api_gets_a_fact_to_read() {
     // The API facts of a report. Each one has the class `other`, no spotlight, and no reason.
     let api = |report: &StepReport| -> Vec<String> {
         let facts: Vec<&semilla_core::Fact> = report.facts.iter().filter(|fact| fact.description.contains("public API")).collect();
-        assert!(facts.iter().all(|fact| fact.class == Some(Class::Other) && !fact.spotlight && fact.reason.is_none()), "{report:#?}");
+        assert!(facts.iter().all(|fact| matches!(fact.compare, Compare::NoCode | Compare::CodeEqual) && !fact.spotlight && fact.reason.is_none()), "{report:#?}");
         facts.iter().map(|fact| fact.description.clone()).collect()
     };
     // The identity fact of a derived rename or move: it stays proved neutral.
     let proved = |report: &StepReport, start: &str| {
         assert!(report.accepted(), "{report:#?}");
         let fact = report.facts.iter().find(|fact| fact.description.starts_with(start)).unwrap_or_else(|| panic!("{start}: {report:#?}"));
-        assert_eq!(fact.class, Some(Class::Neutral), "{report:#?}");
+        assert_eq!(fact.compare, Compare::CodeEqual, "{report:#?}");
     };
 
     // V3: a `pub fn` moves from a private module into a public module, with no visibility edit.
     let before = move_files(LIB, DATE, Some(CALENDAR));
     let after = move_files(LIB, DATE_MOVED, Some(&moved_calendar));
     let report = run_derived_files(&before, &after, &bodies);
-    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap`");
     assert_eq!(api(&report), ["public API: a different crate can now use `demo::calendar::is_leap`"]);
-    assert_eq!(report.computed_class, Some(Class::Other));
     assert_eq!(report.facts.len(), 2, "{report:#?}");
     // The text report shows the new fact with its class, and no line asks for a reason.
     let text = views::text_report(std::slice::from_ref(&report));
-    assert!(text.contains("public API: a different crate can now use `demo::calendar::is_leap` [other]") && !text.contains("needs a reason"), "{text}");
+    assert!(text.contains("public API: a different crate can now use `demo::calendar::is_leap` [move · no code]") && !text.contains("needs a reason"), "{text}");
     // The kind of the group stays `move`: the new fact is no second change.
     assert_eq!(semilla_core::report::derived_kind(&[&report]), Some(semilla_core::GroupKind::Move));
     // The reverse of V3: the item goes out of the public API.
     let report = run_derived_files(&after, &before, &bodies);
-    proved(&report, "moved `demo::calendar::is_leap` → `demo::date::is_leap` (proved N1");
+    proved(&report, "moved `demo::calendar::is_leap` → `demo::date::is_leap`");
     assert_eq!(api(&report), ["public API: a different crate can no longer use `demo::calendar::is_leap`"]);
     // V3 with the claim `move-item`: the claim stays verified.
     let claims = vec![claim("c1", "move-item", Some("demo::date::is_leap"), serde_json::json!({"to": "demo::calendar::is_leap"}))];
@@ -4661,7 +4684,7 @@ fn a_rename_or_a_move_that_changes_the_public_api_gets_a_fact_to_read() {
     let after = move_files(LIB, DATE, Some(&renamed));
     const RENAME: &str = "public API: `demo::calendar::days` is now `demo::calendar::day_count` (a different crate can no longer use the old path)";
     let report = run_derived_files(&before, &after, &bodies);
-    proved(&report, "renamed `demo::calendar::days` → `demo::calendar::day_count` (proved N1");
+    proved(&report, "renamed `demo::calendar::days` → `demo::calendar::day_count`");
     assert_eq!(api(&report), [RENAME]);
     assert_eq!(semilla_core::report::derived_kind(&[&report]), Some(semilla_core::GroupKind::Rename));
     // The same rename with the claim `rename`: accepted, the claim is verified.
@@ -4669,59 +4692,50 @@ fn a_rename_or_a_move_that_changes_the_public_api_gets_a_fact_to_read() {
     let report = run_claim_facts(&before, &after, claims(), &bodies);
     assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
     assert_eq!(api(&report), [RENAME]);
-    assert_eq!(report.computed_class, Some(Class::Other));
-    // A declared class `neutral` is not the class of the step: the new fact gives `other`.
-    let (_d1, old) = load_files(&before);
-    let (_d2, new) = load_files(&after);
-    let declared = Step { class: Some(Class::Neutral), ..step(claims()) };
-    let oracle = FakeBodies(bodies.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
-    let report = verify_step_with(&StepInput { step: &declared, before: &old, after: &new }, &oracle, &NoOracle, true).report;
-    let errors: Vec<&String> = report.errors.iter().filter(|error| error.starts_with("the step declares the class `neutral`")).collect();
-    assert!(errors.len() == 1 && errors[0].contains("public API: ") && errors[0].ends_with("give(s) the class `other`"), "{report:#?}");
     // The public module is a private module: no different crate can use the name.
     let report = run_derived_files(&move_files(PRIVATE, DATE, Some(CALENDAR)), &move_files(PRIVATE, DATE, Some(&renamed)), &bodies);
-    proved(&report, "renamed `demo::calendar::days` → `demo::calendar::day_count` (proved N1");
-    assert_eq!((api(&report).len(), report.facts.len(), report.computed_class), (0, 1, Some(Class::Neutral)), "{report:#?}");
+    proved(&report, "renamed `demo::calendar::days` → `demo::calendar::day_count`");
+    assert_eq!((api(&report).len(), report.facts.len()), (0, 1), "{report:#?}");
 
     // A rename of a private function: no new fact.
     let private = CALENDAR.replace("leap", "leap_year");
     let report = run_derived_files(&before, &move_files(LIB, DATE, Some(&private)), &bodies);
-    proved(&report, "renamed `demo::calendar::leap` → `demo::calendar::leap_year` (proved N1");
-    assert_eq!((api(&report).len(), report.facts.len(), report.computed_class), (0, 1, Some(Class::Neutral)), "{report:#?}");
+    proved(&report, "renamed `demo::calendar::leap` → `demo::calendar::leap_year`");
+    assert_eq!((api(&report).len(), report.facts.len()), (0, 1), "{report:#?}");
     let claims = vec![claim("c1", "rename", Some("demo::calendar::leap"), serde_json::json!({"to": "leap_year"}))];
     let report = run_claim_facts(&before, &move_files(LIB, DATE, Some(&private)), claims, &bodies);
     assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
-    assert_eq!((api(&report).len(), report.facts.len(), report.computed_class), (0, 0, Some(Class::Neutral)), "{report:#?}");
+    assert_eq!((api(&report).len(), report.facts.len()), (0, 0), "{report:#?}");
 
     // A move of a private function between two private modules: no new fact.
     let date = DATE.replace("pub fn is_leap", "fn is_leap");
     let calendar = moved_calendar.replace("pub fn is_leap", "pub(crate) fn is_leap");
     let report = run_derived_files(&move_files(PRIVATE, &date, Some(CALENDAR)), &move_files(PRIVATE, DATE_MOVED, Some(&calendar)), &bodies);
-    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
-    assert_eq!((api(&report).len(), report.computed_class), (0, Some(Class::Neutral)), "{report:#?}");
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap`");
+    assert_eq!(api(&report).len(), 0, "{report:#?}");
     assert_eq!(descriptions(&report).len(), 2, "{report:#?}");
 
     // Rule 6 (V2): the step has a visibility fact with an API text for the same item. One
     // fact is sufficient.
     let report = run_derived_files(&move_files(LIB, &date, Some(CALENDAR)), &move_files(LIB, DATE_MOVED, Some(&moved_calendar)), &bodies);
-    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap`");
     assert_eq!(api(&report), ["visibility of `demo::calendar::is_leap`: `private` → `pub` (the public API changes: a different crate can now use the item)"]);
 
     // A "possibly" side: a glob `pub use` line can bring the old path.
     let glob = "mod calendar;\nmod date;\npub use date::*;\n";
     let report = run_derived_files(&move_files(glob, DATE, Some(CALENDAR)), &move_files(glob, DATE_MOVED, Some(&moved_calendar)), &bodies);
-    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap`");
     assert_eq!(api(&report), ["public API can change: a glob `pub use` line names `date` (`demo::date::is_leap` is now `demo::calendar::is_leap`)"]);
 
     // A move between two public modules. A `pub use` line can keep the old path: then the
     // text does not say that the old path stops.
     let public = "pub mod calendar;\npub mod date;\n";
     let report = run_derived_files(&move_files(public, DATE, Some(CALENDAR)), &move_files(public, DATE_MOVED, Some(&moved_calendar)), &bodies);
-    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap`");
     assert_eq!(api(&report), ["public API: `demo::date::is_leap` is now `demo::calendar::is_leap` (a different crate can no longer use the old path)"]);
     let glob = |date: &str| format!("pub use crate::calendar::*;\n\n{}", date.replace("use crate::calendar::is_leap;\n\n", ""));
     let report = run_derived_files(&move_files(public, &glob(DATE), Some(CALENDAR)), &move_files(public, &glob(DATE_MOVED), Some(&moved_calendar)), &bodies);
-    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap` (proved N1");
+    proved(&report, "moved `demo::date::is_leap` → `demo::calendar::is_leap`");
     assert_eq!(api(&report), ["public API: `demo::date::is_leap` is now `demo::calendar::is_leap` (a `pub use` line can keep the old path)"]);
 
     // A variant has no visibility of its own: the enum gives the answer.
@@ -4810,7 +4824,7 @@ fn the_note_of_a_move_with_no_proof_gives_the_cause_that_stops_the_proof() {
     assert!(!note.contains("the pair has a difference") && !note.contains("visibility"), "{note}");
     // The same move with an equal MIR has a proof.
     let report = run_derived(&before, MOVE_AFTER, &[("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))]);
-    assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over` (proved N1")), "{report:#?}");
+    assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over`")), "{report:#?}");
 }
 
 /// The two sides of each "`A` → `B`" part of a fact text are different (batch 6a, A2).
@@ -4822,7 +4836,7 @@ fn sides_differ(description: &str) -> bool {
 /// Batch 6a, A1 (trial 9 on `heck`): a declaration change of an item that a different crate can
 /// use is a fact to read. An equal MIR of the own crate is no proof for a different crate.
 #[test]
-fn a_declaration_change_of_a_public_item_is_never_neutral() {
+fn a_declaration_change_of_a_public_item_names_the_public_api() {
     const BASE: &str = "use std::fmt;\npub struct Show<T: AsRef<str>>(pub T);\nimpl<T: AsRef<str>> fmt::Display for Show<T> {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        f.write_str(self.0.as_ref())\n    }\n}\npub trait Snake: ToOwned {\n    fn snake(&self) -> Self::Owned;\n}\npub trait Snek: Snake {}\nimpl<T: ?Sized + Snake> Snek for T {}\npub fn limit(n: u32) -> u32 {\n    n\n}\npub struct Pair {\n    pub count: u32,\n}\npub const LIMIT: u32 = 4;\npub enum Kind {\n    One = 1,\n}\n";
     let bodies = [("demo::<Show as fmt::Display>::fmt", equal("n0")), ("demo::limit", equal("n0"))];
     // (the old text, the new text, the start of the fact text)
@@ -4849,9 +4863,8 @@ fn a_declaration_change_of_a_public_item_is_never_neutral() {
         assert!(BASE.contains(old), "{old}");
         let report = run_derived(BASE, &BASE.replace(old, new), &bodies);
         let fact = report.facts.iter().find(|fact| fact.description.contains(start)).unwrap_or_else(|| panic!("{new}: {:#?}", descriptions(&report)));
-        assert_eq!(fact.class, Some(Class::Logic), "{new}: {fact:#?}");
+        assert!(matches!(fact.category, Category::Declaration | Category::Value), "{new}: {fact:#?}");
         assert!(fact.description.contains("(the public API can change: a different crate can use the item)"), "{new}: {}", fact.description);
-        assert!(!report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{new}: {:#?}", descriptions(&report));
         assert!(report.facts.iter().all(|fact| sides_differ(&fact.description)), "{new}: {:#?}", descriptions(&report));
         // The API level of the report is `major`.
         let (_d1, before) = load(BASE);
@@ -4859,18 +4872,18 @@ fn a_declaration_change_of_a_public_item_is_never_neutral() {
         let level = crate::api_level(&semilla_syntax::diff(&before, &after, &semilla_syntax::Renames::default()), &before, &after);
         assert_eq!(level.0, "major", "{new}: {level:?}");
     }
-    // A bound change of a private item with an equal MIR: a fact to read, with no API text.
+    // A bound change of a private item with an equal MIR: a declaration fact with no API text.
     let private = BASE.replace("pub ", "");
     let report = run_derived(&private, &private.replace("struct Show<T: AsRef<str>>(T);", "struct Show<T: AsRef<str> + Copy>(T);"), &bodies);
     let fact = report.facts.iter().find(|fact| fact.description.starts_with("generics of `demo::Show`")).unwrap_or_else(|| panic!("{:#?}", descriptions(&report)));
-    assert!(fact.class == Some(Class::Logic) && !fact.description.contains("public API"), "{fact:#?}");
+    assert!(fact.category == Category::Declaration && fact.compare == Compare::CodeEqual && !fact.description.contains("public API"), "{fact:#?}");
     // Each other declaration part of a private item with an equal MIR stays neutral.
     let report = run_derived(&private, &private.replace("fn limit(n: u32) -> u32 {", "const fn limit(n: u32) -> u32 {"), &bodies);
-    assert!(report.facts.iter().all(|fact| fact.class == Some(Class::Neutral)), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual), "{:#?}", report.facts);
     // `private` → `pub(crate)` stays neutral (batch 5x).
     let report = run_derived(&private, &private.replace("fn limit(n: u32) -> u32 {", "pub(crate) fn limit(n: u32) -> u32 {"), &bodies);
     assert_eq!(descriptions(&report), ["visibility of `demo::limit`: `private` → `pub (crate)`"]);
-    assert_eq!(report.facts[0].class, Some(Class::Neutral), "{:#?}", report.facts);
+    assert_eq!(report.facts[0].compare, Compare::CodeEqual, "{:#?}", report.facts);
 }
 
 /// Batch 6a, A2: a fact text never has two equal sides. Each kind of fact with two sides gets a
@@ -4927,22 +4940,21 @@ fn a_doc_test_attribute_needs_a_reason() {
         let report = run_derived(base, &base.replace(old, new), &bodies);
         let fact = report.facts.iter().find(|fact| fact.description.starts_with("attributes of `demo`") || fact.description.starts_with("doc test of `demo`")).unwrap_or_else(|| panic!("{new}: {:#?}", descriptions(&report)));
         assert_eq!(fact.spotlight, needs, "{new}: {fact:#?}");
-        assert!(fact.class != Some(Class::Neutral) || !needs, "{new}: {fact:#?}");
         if new.contains("doc(test(") {
-            assert_eq!(fact.class, Some(Class::Logic), "{new}: {fact:#?}");
+            assert_eq!((fact.compare, fact.note.as_deref()), (Compare::NoCompare, Some("no compare: Semilla does not compile a doc test")), "{new}: {fact:#?}");
             assert!(fact.spotlight_why.as_deref().is_some_and(|why| why.contains("it changes each doc test of the crate")), "{new}: {fact:#?}");
             assert!(!report.accepted(), "{new}");
         }
     }
 }
 
-/// A `doc` attribute with a macro can bring doc tests: the fact has the class `logic`.
+/// A `doc` attribute with a macro can bring doc tests: the fact is a doc test fact with no compare.
 #[test]
-fn a_doc_attribute_with_a_macro_is_a_logic_fact() {
+fn a_doc_attribute_with_a_macro_is_a_doc_test_fact() {
     let base = "#![doc(html_root_url = \"https://docs.rs/demo/1\")]\npub fn f() -> u32 {\n    1\n}\n";
     let report = run_derived(base, &format!("#![doc = include_str!(\"../README.md\")]\n{base}"), &[("demo::f", equal("n0"))]);
     assert_eq!(descriptions(&report), ["doc test of `demo` added"], "{report:#?}");
-    assert_eq!(report.facts[0].class, Some(Class::Logic), "{report:#?}");
+    assert_eq!((report.facts[0].category, report.facts[0].compare), (Category::Docs, Compare::NoCompare), "{report:#?}");
 }
 
 /// Batch 6a, A4 (trial 9): a `use` fact has the text of its line. A changed line pairs with the
@@ -4970,7 +4982,7 @@ fn a_use_fact_shows_its_text_and_the_public_names() {
         ],
         "{report:#?}"
     );
-    assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.compare != Compare::CodeEqual), "{report:#?}");
     assert_eq!(level, ("major", vec![moved.to_string()]), "{level:?}");
     // An honest new line, and a removed name.
     let (report, level) = run("mod camel;\nmod snake;\npub use camel::{AsCamel, ToCamel};\npub use snake::{Other, ToSnake};\n", CAMEL);
@@ -5026,11 +5038,11 @@ fn a_move_keeps_its_proof_when_the_use_lines_change() {
         run_derived_files(&before, &after, &[bodies[0].clone(), bodies[1].clone(), ("demo::words::helper", moved)])
     };
     // A step is clean if the move has a proof and no fact is a fact to read.
-    let clean = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper` (proved N1")) && report.facts.iter().all(|fact| fact.class == Some(Class::Neutral) && !fact.spotlight);
+    let clean = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper`")) && report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && !fact.spotlight);
     // The honest move: a split line in `a` and a joined line in `b`.
     let report = run(A, A_SPLIT, WORDS);
     assert!(clean(&report), "{report:#?}");
-    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper` (proved N1), with 3 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`"], "{report:#?}");
+    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper`, with 3 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`"], "{report:#?}");
     // Each other honest form of the line in `a`.
     for a in ["use crate::{keep, words::helper};\n", "use crate::words::helper;\nuse crate::keep;\n", "use crate::{keep, words};\nuse words::helper;\n", "use crate::keep;\nuse super::words::helper;\n"] {
         let report = run(A, &A_SPLIT.replace("use crate::keep;\nuse crate::words::helper;\n", a), WORDS);
@@ -5131,7 +5143,7 @@ fn a_body_of_a_macro_call_goes_under_the_fact_of_the_call() {
     let oracle = MacroBodies(vec![made("test3", BodyStatus::AfterOnly), made("test3::{closure#0}", BodyStatus::AfterOnly)], [names(&["test1", "test2"]), names(&["test1", "test2", "test3"])], both(BASE, &after));
     let report = run_derived_with(BASE, &after, &oracle);
     assert_eq!(descriptions(&report), ["added macro call `t!(test3: \"C\" => \"c\")` (makes: `test3`)"], "{report:#?}");
-    assert!(report.accepted() && !report.facts[0].spotlight && report.facts[0].class == Some(Class::Logic), "{report:#?}");
+    assert!(report.accepted() && !report.facts[0].spotlight && report.facts[0].compare == Compare::CodeDifferent, "{report:#?}");
     assert_eq!(report.facts[0].affected, ["demo::tests::test3", "demo::tests::test3::{closure#0}"]);
     // A removed call: the same rule.
     let oracle = MacroBodies(vec![made("test3", BodyStatus::BeforeOnly), made("test3::{closure#0}", BodyStatus::BeforeOnly)], [names(&["test1", "test2", "test3"]), names(&["test1", "test2"])], both(&after, BASE));
@@ -5201,16 +5213,16 @@ fn a_move_into_a_new_public_module_gives_the_real_cause() {
         run_derived_files(&before, &after, &[("demo::a::one", equal("n1")), ("demo::words::helper", equal("n0"))])
     };
     let report = run("pub mod", "");
-    let cause = "no proof of the move (the new module `demo::words` is `pub`, so the move changes the public API. Semilla gives no proof for a move into a new public module: this is a known limit)";
+    let cause = "Semilla does not derive the move (the new module `demo::words` is `pub`, so the move changes the public API. Semilla does not derive a move into a new public module: this is a known limit)";
     assert!(report.notes.iter().any(|note| note.contains(cause)), "{:?}", report.notes);
-    assert!(!report.notes.iter().any(|note| note.contains("in its own step")), "{:?}", report.notes);
+    assert!(!report.notes.iter().any(|note| note.contains("no other change")), "{:?}", report.notes);
     assert!(descriptions(&report).iter().any(|text| text == "removed `demo::helper`") && !descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
     // A second change in the step: the advice of the old note is correct, and it stays.
     let report = run("pub mod", "pub fn more() -> u32 {\n    2\n}\n");
-    assert!(report.notes.iter().any(|note| note.contains("Put the move in its own step to get a proof")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|note| note.contains("the step also has the change at `demo::more`. Semilla derives a move only in a step with no other change")), "{:?}", report.notes);
     // A module that is not `pub` keeps the proof.
     let report = run("mod", "");
-    assert!(descriptions(&report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper` (proved N1")), "{report:#?}");
+    assert!(descriptions(&report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper`")), "{report:#?}");
 }
 
 /// Batch 6a, B4 (trial 9): a file that the code reads at build time (`include_str!`,
@@ -5228,11 +5240,12 @@ fn the_spotlight_of_an_include_call_names_the_file() {
         assert!(!text.contains("build condition") && !text.contains("build configuration"), "{call}: {text}");
         assert!(report.spotlight.iter().any(|line| line.starts_with("a file that the code reads at build time: demo::f")), "{call}: {:?}", report.spotlight);
     }
-    // A build condition in the same body keeps its text, and the file has its text.
+    // A build condition in the same body is a note, and the file has its spotlight.
     let report = run_derived_with(base, "pub fn f() -> usize {\n    if cfg!(unix) { 1 } else { include_str!(\"note.txt\").len() }\n}\n", &body(&["cfg!(unix)", "include_str!(\"note.txt\")"]));
     let text = spotlight(&report.facts);
-    assert!(text.contains("this code depends on a build condition") && text.contains("Uses: `cfg!(unix)` in `demo::f`") && text.contains("; a file that the code reads at build time: `note.txt` (`include_str!` in `demo::f`)"), "{report:#?}");
-    assert!(report.spotlight.iter().any(|line| line.starts_with("build configuration: demo::f")), "{:?}", report.spotlight);
+    assert!(text.contains("a file that the code reads at build time: `note.txt` (`include_str!` in `demo::f`)") && !text.contains("build condition"), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.note.as_deref() == Some("this body uses `cfg!(unix)`, which Semilla did not check (`demo::f`)")), "{report:#?}");
+    assert!(report.spotlight.iter().all(|line| line.starts_with("a file that the code reads at build time: demo::f")), "{:?}", report.spotlight);
 }
 
 /// Batch 6a, A6: each changed token of a Rust file is in a fact. A part that the diff does not
@@ -5245,7 +5258,7 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
         assert!(BASE.contains(old), "{old}");
         let report = run_derived(BASE, &BASE.replacen(old, new, 1), &bodies);
         assert!(report.accepted(), "{old}: {:#?}", report.facts);
-        report.facts.iter().map(|fact| (fact.description.clone(), fact.class, fact.spotlight)).collect::<Vec<_>>()
+        report.facts.iter().map(|fact| (fact.description.clone(), fact.compare, fact.spotlight)).collect::<Vec<_>>()
     };
     let one = |old: &str, new: &str| {
         let list = facts(old, new);
@@ -5257,19 +5270,19 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     // The visibility of an associated constant.
     let (text, class, spotlight) = one("pub const FIRST", "pub(crate) const FIRST");
     assert_eq!(text, format!("visibility of the associated constant `FIRST` in `demo::impl Table`: `pub` → `pub (crate)` {api}"));
-    assert_eq!((class, spotlight), (Some(Class::Other), false));
+    assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // An attribute of an associated constant, and of an associated type.
     let (text, class, _) = one("    pub const FIRST", "    #[deprecated]\n    pub const FIRST");
     assert_eq!(text, format!("attributes of the associated constant `FIRST` in `demo::impl Table`: added `# [deprecated]` {api}"));
-    assert_eq!(class, Some(Class::Other));
+    assert_eq!(class, Compare::CodeEqual);
     let (text, class, _) = one("    type Item = u8;", "    #[cfg(all())]\n    type Item = u8;");
     assert!(text.starts_with("attributes of the associated type `Item` in `demo::impl <Table as Set>`: added `# [cfg (all ())]`"), "{text}");
-    assert_eq!(class, Some(Class::Other));
+    assert_eq!(class, Compare::CodeEqual);
     // The visibility of a `use` line: one changed line, and the public name goes.
     for new in ["use inner::helper;", "pub(crate) use inner::helper;"] {
         let (text, class, _) = one("pub use inner::helper;", new);
         assert_eq!(text, format!("changed `use` line: `pub use inner::helper;` → `{new}`: removed the public name `demo::helper` (`demo::inner::helper`)"));
-        assert_eq!(class, Some(Class::Logic));
+        assert_eq!(class, Compare::CodeEqual);
     }
     // An attribute of a `use` line.
     let list = facts("pub use inner::helper;", "#[allow(unused_imports)]\npub use inner::helper;");
@@ -5278,11 +5291,11 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     // The net: a kind of text with no fact kind (`default` on a method of an impl).
     let (text, class, spotlight) = one("    pub fn new(x: u8)", "    pub default fn new(x: u8)");
     assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new (x : u8) -> Table` → `pub default fn new (x : u8) -> Table` {api}"));
-    assert_eq!((class, spotlight), (Some(Class::Other), false));
+    assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // The net fact of an item that no different crate can use has the class `other` too.
     let (text, class, _) = one("    fn go(&self) -> u8 {", "    default fn go(&self) -> u8 {");
     assert!(text.starts_with("changed source text with no other fact, in `demo::Hidden::go`: ") && !text.contains("public API"), "{text}");
-    assert_eq!(class, Some(Class::Other));
+    assert_eq!(class, Compare::CodeEqual);
 
     // No net fact: a change of the format, a comma at the end, a known part.
     assert_eq!(facts("pub struct Table(pub u8);", "pub struct Table(\n    pub u8,\n);"), []);
@@ -5296,19 +5309,22 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     assert!(!text.starts_with("changed source text") && text.contains("# [doc (hidden)]"), "{text}");
 }
 
-/// Batch 6b, part 1: a method that uses code under `cfg`. A text edit of its item stops the
-/// proof of its body.
+/// Batch 6b, part 1: a method that uses code under `cfg`. A text edit of its item gives the
+/// note of the conditions (design 35).
 const UNDER_CFG: &str = "#[cfg(unix)]\npub type Word = u64;\n#[cfg(not(unix))]\npub type Word = u32;\nfn width() -> Word { 8 }\npub const BASE: Word = 2;\npub struct S;\nimpl S {\n    /// The size.\n    #[inline]\n    pub fn size(&self) -> Word {\n        // a note\n        (|| width() + BASE)()\n    }\n}\n";
 
+/// The start of the note of a fact with a text edit of the method of `UNDER_CFG`.
+const UNDER_CFG_NOTE: &str = "this body uses `BASE` (its signature uses `Word`), `Word` (2 definitions, one under `#[cfg(unix)]`)";
+
 /// The bodies of `UNDER_CFG`: the method and its closure, with one status.
-/// The first test below makes sure that an edit of the body stops the proof with this source.
+/// The first test below makes sure that an edit of the body gets the note with this source.
 fn under_cfg_bodies(status: BodyStatus) -> Comparisons {
     let body = |name: &str| BodyComparison { name: name.into(), span: Some(("src/lib.rs".into(), 11)), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
     Comparisons(vec![body("demo::S::size"), body("demo::S::size::{closure#0}")])
 }
 
 #[test]
-fn a_free_declaration_change_does_not_stop_the_proof_of_the_body() {
+fn a_free_declaration_change_is_no_text_edit_of_the_body() {
     // Batch 6b, part 1. The visibility, a doc comment, `doc(hidden)`, `must_use`, and
     // `deprecated` do not change the code of the body. Before, such a change was a text edit
     // of the item, the proof of a body that uses code under `cfg` stopped, and the body got
@@ -5320,10 +5336,9 @@ fn a_free_declaration_change_does_not_stop_the_proof_of_the_body() {
         ("    #[inline]\n", "    #[inline]\n    #[deprecated(note = \"old\")]\n", "attributes of `demo::S::size`: added `# [deprecated (note = \"old\")]`"),
         ("    /// The size.\n", "    /// The size in bytes.\n", "changed docs"),
     ];
-    // The control: an edit of the body stops the proof (the type `Word` is under `cfg`).
+    // The control: an edit of the body gets the note (the type `Word` is under `cfg`).
     let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace("width() + BASE", "BASE + width()"), &under_cfg_bodies(equal("n0")));
-    assert!(report.facts.iter().any(|fact| fact.class == Some(Class::ControlFlow) && fact.affected.iter().any(|body| body == "demo::S::size")), "{:#?}", report.facts);
-    assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{:#?}", report.facts);
+    assert!(!report.facts.is_empty() && report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && fact.note.as_deref().is_some_and(|note| note.starts_with(UNDER_CFG_NOTE))), "{:#?}", report.facts);
     for (old, new, text) in cases {
         let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace(old, new), &under_cfg_bodies(equal("n0")));
         assert!(unknown_causes(&report).is_empty(), "{new}: {:#?}", report.facts);
@@ -5336,26 +5351,25 @@ fn a_free_declaration_change_does_not_stop_the_proof_of_the_body() {
 }
 
 #[test]
-fn an_attribute_that_can_change_the_body_stops_the_proof_as_before() {
+fn an_attribute_that_can_change_the_body_is_a_text_edit_of_the_body() {
     // Batch 6b, part 1, item 3. Each attribute outside the list of the free parts stays a text
-    // edit of the item: the proof of a body that uses code under `cfg` stops.
+    // edit of the item: a body that uses code under `cfg` gets the note.
     for attribute in ["#[track_caller]", "#[cold]", "#[cfg(feature = \"x\")]", "#[target_feature(enable = \"avx2\")]", "#[doc(alias = \"len\")]", "#[other::thing]"] {
         let after = UNDER_CFG.replace("    #[inline]\n", &format!("    #[inline]\n    {attribute}\n"));
         let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(equal("n0")));
-        let stopped = report.facts.iter().any(|fact| fact.affected.iter().any(|body| body == "demo::S::size") || fact.note.as_deref().is_some_and(|note| note.starts_with("no proof: `demo::S::size`")));
-        assert!(stopped, "{attribute}: {:#?}", report.facts);
-        // The body is under a fact that is not neutral (the attribute fact or "indirect change").
-        assert!(report.facts.iter().any(|fact| fact.class != Some(Class::Neutral) && fact.class != Some(Class::Other) && (fact.affected.iter().any(|body| body == "demo::S::size") || fact.at.as_ref().is_some_and(|at| at.item == "demo::S::size"))), "{attribute}: {:#?}", report.facts);
+        // An attribute that Semilla cannot see into gives no note. It has a spotlight.
+        let noted = report.facts.iter().any(|fact| fact.note.as_deref().is_some_and(|note| note.starts_with(UNDER_CFG_NOTE)) || (fact.spotlight && ["target_feature", "other::thing"].iter().any(|name| attribute.contains(name))));
+        assert!(noted, "{attribute}: {:#?}", report.facts);
     }
     // A removed `inline` is in the same rule.
     let report = run_derived_with(UNDER_CFG, &UNDER_CFG.replace("    #[inline]\n", ""), &under_cfg_bodies(equal("n0")));
-    assert!(report.facts.iter().any(|fact| fact.affected.iter().any(|body| body == "demo::S::size") || fact.note.as_deref().is_some_and(|note| note.starts_with("no proof: `demo::S::size`"))), "{:#?}", report.facts);
-    // An attribute macro on the item or on the `impl` block can read the visibility: the
-    // visibility change stays a text edit.
+    assert!(report.facts.iter().any(|fact| fact.note.as_deref().is_some_and(|note| note.starts_with(UNDER_CFG_NOTE))), "{:#?}", report.facts);
+    // An attribute macro on the item or on the `impl` block can read the visibility. The
+    // compare result stays (design 35).
     for (place, with_macro) in [("    #[inline]\n", "    #[inline]\n    #[other::thing]\n"), ("impl S {", "#[other::thing]\nimpl S {")] {
         let before = UNDER_CFG.replace(place, with_macro);
         let report = run_derived_with(&before, &before.replace("    pub fn size", "    pub(crate) fn size"), &under_cfg_bodies(equal("n0")));
-        assert!(!report.accepted() || report.facts.iter().any(|fact| fact.note.as_deref().is_some_and(|note| note.starts_with("no proof: `demo::S::size`"))), "{with_macro}: {:#?}", report.facts);
+        assert!(report.accepted() && report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual), "{with_macro}: {:#?}", report.facts);
     }
 }
 
@@ -5373,18 +5387,18 @@ fn a_real_indirect_change_next_to_a_free_declaration_change_keeps_the_spotlight(
     let after = UNDER_CFG.replace("    #[inline]\n", "    #[inline]\n    #[doc(hidden)]\n").replace("BASE: Word = 2", "BASE: Word = 3");
     let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(different(false)));
     let cause = report.facts.iter().find(|fact| fact.affected.iter().any(|body| body == "demo::S::size")).unwrap_or_else(|| panic!("{:#?}", report.facts));
-    assert!(cause.description.contains("BASE") && cause.class.is_some_and(|class| class != Class::Neutral && class != Class::Other), "{cause:#?}");
+    assert!(cause.description.contains("BASE") && cause.compare == Compare::CodeDifferent, "{cause:#?}");
     assert!(report.facts.iter().any(|fact| fact.description == "attributes of `demo::S::size`: added `# [doc (hidden)]`" && fact.affected.is_empty()), "{:#?}", report.facts);
     // A visibility change together with an edit of the body: the body edit is a fact to read.
     let after = UNDER_CFG.replace("    pub fn size", "    pub(crate) fn size").replace("width() + BASE", "width() * BASE");
     let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(different(false)));
     let edit = report.facts.iter().find(|fact| fact.affected.iter().any(|body| body == "demo::S::size")).unwrap_or_else(|| panic!("{:#?}", report.facts));
-    assert!(edit.description.contains("changed operator") && edit.class == Some(Class::Logic), "{edit:#?}");
+    assert!(edit.description.contains("changed operator") && edit.compare == Compare::CodeDifferent, "{edit:#?}");
     assert!(report.facts.iter().any(|fact| fact.description.starts_with("visibility of `demo::S::size`")), "{:#?}", report.facts);
     // The same edit with an equal MIR in the checked configuration: the body uses code under
-    // `cfg`, so the proof stops, and the fact is not neutral.
+    // `cfg`, so each fact of the method has the note. The compare result stays.
     let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(equal("n0")));
-    assert!(report.facts.iter().all(|fact| fact.class != Some(Class::Neutral)), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && fact.note.as_deref().is_some_and(|note| note.starts_with(UNDER_CFG_NOTE))), "{:#?}", report.facts);
 }
 
 /// The source of the macro tests of batch 6b: a public type with one trait impl.
@@ -5415,7 +5429,8 @@ fn a_macro_call_fact_lists_the_items_that_the_call_makes() {
     let with_str = format!("{KEBAB}{SAME}same!(&str);\n");
     let report = run_derived_with(KEBAB, &with_str, &MacroBodies(vec![eq("&str", BodyStatus::AfterOnly)], none(), both(KEBAB, &with_str)));
     assert_eq!(descriptions(&report), ["added macro `same`", "added macro call `same!(&str)` (makes: `impl PartialEq for AsKebabCase<&str>`)"], "{report:#?}");
-    assert!(report.accepted() && report.facts.iter().all(|fact| !fact.spotlight && fact.class == Some(Class::Logic)), "{report:#?}");
+    assert!(report.accepted() && report.facts.iter().all(|fact| !fact.spotlight && fact.category == Category::Added), "{report:#?}");
+    assert_eq!((report.facts[0].compare, report.facts[1].compare), (Compare::NoCode, Compare::CodeDifferent), "{report:#?}");
     // The body of the made impl is under the fact of the call. The step does not change `fmt`.
     assert!(report.facts[0].affected.is_empty(), "{report:#?}");
     assert_eq!(report.facts[1].affected, ["<demo::AsKebabCase<&str> as core::cmp::PartialEq>::eq"], "{report:#?}");
@@ -5589,7 +5604,7 @@ fn a_bound_change_with_an_equal_set_of_predicates_is_neutral() {
         let changed = BOUNDS.replace(old, new);
         let report = run_derived(BOUNDS, &changed, &bounds_bodies());
         assert_eq!(descriptions(&report), [text], "{new}");
-        assert_eq!(report.facts[0].class, Some(Class::Neutral), "{new}: {:#?}", report.facts[0]);
+        assert_eq!(report.facts[0].compare, Compare::CodeEqual, "{new}: {:#?}", report.facts[0]);
         assert!(!report.facts[0].spotlight && report.facts[0].part == "bounds", "{new}: {:#?}", report.facts[0]);
         // The order and the place of a bound are not a part of the public API.
         let ((_d1, before), (_d2, after)) = (load(BOUNDS), load(&changed));
@@ -5599,14 +5614,14 @@ fn a_bound_change_with_an_equal_set_of_predicates_is_neutral() {
         let (private, changed) = (BOUNDS.replace("pub ", ""), changed.replace("pub ", ""));
         let report = run_derived(&private, &changed, &bounds_bodies());
         assert_eq!(descriptions(&report), [text], "{new}");
-        assert_eq!(report.facts[0].class, Some(Class::Neutral), "{new}: {:#?}", report.facts[0]);
+        assert_eq!(report.facts[0].compare, Compare::CodeEqual, "{new}: {:#?}", report.facts[0]);
     }
 }
 
 /// Batch 6b, part 3: each change that is not only the order or the place of a bound stays a
 /// fact to read, also with an equal MIR of each body.
 #[test]
-fn a_bound_change_with_a_different_set_or_a_different_rest_stays_a_fact_to_read() {
+fn a_bound_change_with_a_different_set_or_a_different_rest_is_a_generics_fact() {
     // (the old text, the new text)
     let cases = [
         // The order of the generic parameters: the arguments go by position.
@@ -5643,7 +5658,6 @@ fn a_bound_change_with_a_different_set_or_a_different_rest_stays_a_fact_to_read(
         let changed = BOUNDS.replace(old, new);
         let report = run_derived(BOUNDS, &changed, &bounds_bodies());
         assert!(!report.facts.is_empty() && !report.facts.iter().any(|fact| fact.part == "bounds"), "{new}: {:#?}", descriptions(&report));
-        assert!(!report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{new}: {:#?}", report.facts);
         let ((_d1, before), (_d2, after)) = (load(BOUNDS), load(&changed));
         let level = crate::api_level(&semilla_syntax::diff(&before, &after, &semilla_syntax::Renames::default()), &before, &after);
         assert_eq!(level.0, "major", "{new}: {level:?}");
@@ -5651,11 +5665,11 @@ fn a_bound_change_with_a_different_set_or_a_different_rest_stays_a_fact_to_read(
     // The macro that reads the tokens is there on the two sides.
     let base = BOUNDS.replace("pub struct Show<", "#[derive(Clone, Custom)]\npub struct Show<");
     let report = run_derived(&base, &base.replace("<T: AsRef<str> + Clone>(pub T);", "<T: Clone + AsRef<str>>(pub T);"), &bounds_bodies());
-    assert_eq!(report.facts[0].class, Some(Class::Logic), "{:#?}", report.facts);
+    assert!(report.facts[0].part != "bounds" && report.facts[0].description.starts_with("generics of `demo::Show`"), "{:#?}", report.facts);
     // A `derive` of the standard library keeps the rule.
     let base = BOUNDS.replace("pub struct Show<", "#[derive(Clone, Debug)]\npub struct Show<");
     let report = run_derived(&base, &base.replace("<T: AsRef<str> + Clone>(pub T);", "<T: Clone + AsRef<str>>(pub T);"), &bounds_bodies());
-    assert_eq!((descriptions(&report), report.facts[0].class), (vec!["bounds of `demo::Show`: order only".to_string()], Some(Class::Neutral)), "{:#?}", report.facts);
+    assert_eq!((descriptions(&report), report.facts[0].compare), (vec!["bounds of `demo::Show`: order only".to_string()], Compare::CodeEqual), "{:#?}", report.facts);
 }
 
 /// Batch 6b, part 3: a different order of the bounds and an edit of the body in one step. The
@@ -5668,7 +5682,7 @@ fn a_bound_order_change_with_a_body_edit_keeps_the_body_fact() {
     let report = run_derived(BOUNDS, &changed, &bodies);
     assert!(descriptions(&report).iter().any(|text| text == "bounds of `demo::limit`: order only"), "{:#?}", descriptions(&report));
     assert!(report.facts.iter().any(|fact| fact.part != "bounds" && fact.affected.iter().any(|body| body == "demo::limit")), "{:#?}", report.facts);
-    assert!(!report.facts.iter().any(|fact| fact.class == Some(Class::Neutral)), "{:#?}", report.facts);
+    assert!(!report.facts.iter().any(|fact| fact.compare == Compare::CodeEqual), "{:#?}", report.facts);
 }
 
 /// Batch 6b, part 4: `no-panic` names an index site "index panic sites", not "explicit panic

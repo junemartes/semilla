@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use semilla_core::{Anchor, Class, Fact, SiteGroup, Step};
+use semilla_core::{Anchor, Category, Fact, SiteGroup, Step};
 use semilla_syntax::{Edit, EditKind, ItemKind, Workspace};
 
 use crate::checks::BodyIndex;
@@ -292,7 +292,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         // of the workspace proves nothing about a crate that Semilla does not compile. A new
         // or removed member changes the API of its owner type.
         let api_item = if key.1.starts_with("member ") { owner_of(&key.0) } else { anchor.item.clone() };
-        let (declaration_read, declaration_note) = crate::declaration_api_change(&key.1, &api_item, before, after);
+        let (_, declaration_note) = crate::declaration_api_change(&key.1, &api_item, before, after);
         // A changed `must_use` or `deprecated` attribute changes the warnings of a different
         // crate that uses the item. The MIR of the workspace does not show this (batch 6a, A1).
         let warning_attribute = key.1 == "attribute"
@@ -315,24 +315,10 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 }
             },
             status: "derived".into(),
-            // A member order is never neutral: it has effects outside the MIR records (the drop
-            // order of the fields, the derive output order, the discriminant values of an enum).
-            // A visibility change of the public API has no MIR: the class is `other`, as for an
-            // attribute. It is a fact to read (batch 5x, round 2).
-            class: if !body_index.available {
-                None
-            } else if !affected.is_empty() || key.1 == "member order" {
-                Some(Class::Logic)
-            } else if api_keys.contains(key) || warning_attribute || key.1 == SOURCE_TEXT {
-                Some(Class::Other)
-            } else if declaration_read {
-                // A bound change, or a declaration change of an item that a different crate
-                // can use: a fact to read, with the class of a declaration change that
-                // changes a body (batch 6a, A1).
-                Some(Class::Logic)
-            } else {
-                Some(Class::Neutral)
-            },
+            // The category comes from the part of the declaration (design 35). The compare
+            // result comes later, from the bodies of the fact.
+            category: part_category(&key.1, &descriptions),
+            compare: Default::default(),
             affected,
             spotlight: spotlight_why.is_some(),
             spotlight_why,
@@ -1335,39 +1321,33 @@ pub fn harmless_attribute_edit(edit: &Edit) -> bool {
     edit.kind == EditKind::Attrs && changed_attributes(edit).iter().all(|name| NO_MIR.contains(&name.as_str()) || is_lint_tool(name))
 }
 
-/// True if a fact with no changed body can be neutral: its kind cannot change the behavior
-/// outside the MIR (invariant I3). A trait impl, an attribute outside the allow list, a manifest
-/// key, a file, and an indirect change can.
-pub fn neutral_kind(fact: &Fact) -> bool {
-    if fact.description.ends_with(": format only") {
-        return true;
-    }
-    match fact.part.as_str() {
-        "trait impl added" | "trait impl removed" | "indirect change" | "source file" | "member order" => false,
-        // C1: a doc attribute has no MIR: its class is `other`.
-        "attribute" => !fact.spotlight && !fact.description.contains("derive") && !fact.description.contains("doc"),
-        _ => fact.file.as_deref().is_none_or(|file| file.ends_with(".rs")),
+/// The category of a type-level fact from its part (design 35, "Decided by Claude").
+pub(crate) fn part_category(part: &str, descriptions: &[String]) -> Category {
+    match part {
+        "visibility" => Category::Visibility,
+        "attribute" => Category::Attribute,
+        "member added" | "trait impl added" => Category::Added,
+        "member removed" | "trait impl removed" => Category::Removed,
+        "value" => Category::Value,
+        "parameter" if !descriptions.is_empty() && descriptions.iter().all(|text| text.contains(" renamed to ")) => Category::Rename,
+        SOURCE_TEXT => Category::Text,
+        _ => Category::Declaration,
     }
 }
 
 /// The spotlight of a fact in a function with no body record.
 pub(crate) const INACTIVE: &str = "a fact in inactive code (no checked configuration compiles it)";
 
-/// The spotlight text of the build configuration (batch 5k, A1).
-pub(crate) const CONFIG_SPOTLIGHT: &str = "build configuration: this code depends on a build condition that Semilla did not check. A proof holds only in the checked configurations.";
+/// The start of the note of a fact whose bodies have code under a build condition that
+/// Semilla did not check (design 35). The note asks for no reason.
+pub(crate) const CONFIG_NOTE: &str = "this body uses";
 
-/// The spotlight of a fact whose changed bodies read the build configuration, or `None`. The
-/// uses come from the MIR records (the expansion data of the compiler), not from the text.
-/// The spotlight text of a changed body with a macro or an attribute that Semilla cannot see
-/// into: the proof of the body holds only for the check configuration.
-pub(crate) const CONFIG_UNSEEN: &str = "build configuration: Semilla cannot see if this code depends on a build condition that it did not check. A proof holds only in the checked configurations.";
-
-/// The note of a fact whose changed bodies have a proof in only some of the checked
+/// The note of a fact whose bodies have equal compiled code in only some of the checked
 /// configurations (batch 5u, part A), or `None`. The note is not a spotlight: the fact needs no
-/// reason. It cannot make a fact neutral: the status of such a body is not `Equal`.
+/// reason. The status of such a body is not `Equal`, so the compare result is `code different`.
 ///
-/// "Proved" is the intersection: a configuration is in the list only if each body of the fact
-/// that is not equal has a proof in it. "Not proved" is the union.
+/// "Equal" is the intersection: a configuration is in the list only if each body of the fact
+/// that is not equal is equal in it. "Different" is the union.
 pub(crate) fn config_note<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
     let mut proved: Option<std::collections::BTreeSet<String>> = None;
     let mut not_proved: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -1384,30 +1364,55 @@ pub(crate) fn config_note<'a>(items: impl Iterator<Item = &'a String>, body_inde
         return None;
     }
     let list = |names: &std::collections::BTreeSet<String>| names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
-    Some(format!("{PROVED_IN} {}; not proved in {}", list(&proved), list(&not_proved)))
+    Some(format!("{EQUAL_IN} {}; different in {}", list(&proved), list(&not_proved)))
 }
 
-/// The note of a fact with a body whose proof Semilla removed because of a build condition
-/// (batch 5u), or `None`. The caller gives the note only to a fact with no spotlight of the
-/// build configuration: the reader sees why an honest rewrite has no proof. The note changes
-/// no class and no decision.
-pub(crate) fn stop_note<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
+/// The note of a fact with a body that has code under a build condition that Semilla did not
+/// check (design 35), or `None`. The data: the causes of the old rule that stopped a proof
+/// (`stopped`), and the uses in the changed statements (`config`). The note changes no
+/// category, no compare result, and no decision. It asks for no reason.
+///
+/// `carried` has the items whose `include!` file has a fact with a spotlight in this step.
+pub(crate) fn stop_note<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex, carried: &std::collections::BTreeSet<String>) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     for item in items {
-        let causes = body_index.stopped(item);
+        let mut causes: Vec<String> = body_index.stopped(item).to_vec();
+        for call in body_index.config(item) {
+            // A file that the code reads at build time has its own spotlight.
+            if include_text(&call, item).is_some() || (carried.contains(item) && call.strip_suffix(crate::srcconfig::UNSEEN) == Some("include!")) {
+                continue;
+            }
+            if !causes.contains(&call) {
+                causes.push(call);
+            }
+        }
         if causes.is_empty() {
             continue;
         }
-        // The forms of the entries are the forms of `config_spotlight`.
-        let show = |text: &String| match text.strip_suffix(crate::srcconfig::UNSEEN) {
-            Some(call) => format!("`{call}` (Semilla cannot see into it)"),
-            None if text.starts_with('`') || text.starts_with("static `") || text.starts_with("code that") => text.clone(),
-            None => format!("`{text}`"),
+        // A state that no checked unit has (batch 5t, part B) is its own sentence.
+        let (gaps, mut causes): (Vec<String>, Vec<String>) = causes.into_iter().partition(|text| text.starts_with(crate::joint::GAP));
+        // A macro or an attribute of another crate that Semilla cannot see into gives no note
+        // (design 35): such a call is in most bodies, and the note names no condition.
+        causes.retain(|text| !text.ends_with(crate::srcconfig::UNSEEN));
+        // The rule of the rival impl gives no note (design 35.5). The rule code stays.
+        causes.retain(|text| !is_rival(text));
+        let show = |text: &String| match text {
+            _ if text.starts_with('`') || text.starts_with("static `") || text.starts_with("code that") => text.clone(),
+            _ => format!("`{text}`"),
         };
         let uses: Vec<String> = causes.iter().take(3).map(show).collect();
         let more = if causes.len() > 3 { format!(" and {} more", causes.len() - 3) } else { String::new() };
-        let noun = if causes.len() == 1 { "that condition" } else { "these conditions" };
-        let part = format!("{NO_PROOF} `{item}` uses {}{more}, and Semilla did not check {noun}", uses.join(", "));
+        let mut part = if causes.is_empty() {
+            String::new()
+        } else {
+            format!("{CONFIG_NOTE} {}{more}, which Semilla did not check (`{item}`)", uses.join(", "))
+        };
+        if let Some(gap) = gaps.first() {
+            part = if part.is_empty() { format!("`{item}`: {gap}") } else { format!("{part}; {gap}") };
+        }
+        if part.is_empty() {
+            continue;
+        }
         if !parts.contains(&part) {
             parts.push(part);
         }
@@ -1415,11 +1420,14 @@ pub(crate) fn stop_note<'a>(items: impl Iterator<Item = &'a String>, body_index:
     if parts.is_empty() { None } else { Some(parts.join("; ")) }
 }
 
-/// The start of the note of [`stop_note`].
-pub(crate) const NO_PROOF: &str = "no proof:";
+/// True if the cause is a message of the rival rule (`semilla-mir`, `rival.rs`): "`cmp` (the call
+/// means `Ord::cmp` now …)".
+fn is_rival(text: &str) -> bool {
+    text.contains(" (the call means `") || text.contains(" (the path means `")
+}
 
 /// The start of the note of [`config_note`].
-pub(crate) const PROVED_IN: &str = "proved neutral in";
+pub(crate) const EQUAL_IN: &str = "the compiled code is equal in";
 
 /// The spotlight text of a name with characters outside ASCII (batch 5k, D7).
 pub(crate) const NON_ASCII: &str = "an identifier with characters outside ASCII";
@@ -1636,81 +1644,38 @@ pub(crate) fn change_sides(text: &str) -> Option<(&str, &str)> {
     Some((&text[..at], &text[at + " → ".len()..]))
 }
 
-///
-/// `carried` has the items whose `include!` file has a fact with a spotlight in this step
-/// (batch 5w, D3). That fact asks for the reason about the code that Semilla does not parse,
-/// so the `include!` call of such an item is not a second cause here.
-pub(crate) fn config_spotlight<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex, carried: &std::collections::BTreeSet<String>) -> Option<String> {
-    let mut uses: Vec<String> = Vec::new();
-    let mut seen = false;
-    let mut gaps: Vec<String> = Vec::new();
+/// The spotlight of a fact whose bodies read a file at build time (batch 6a, B4), or `None`.
+/// A use of the build configuration gives a note, not a spotlight (design 35): see [`stop_note`].
+pub(crate) fn file_spotlight<'a>(items: impl Iterator<Item = &'a String>, body_index: &BodyIndex) -> Option<String> {
     let mut files: Vec<String> = Vec::new();
     for item in items {
         for call in body_index.config(item) {
-            if carried.contains(item) && call.strip_suffix(crate::srcconfig::UNSEEN) == Some("include!") {
+            // A file that the code reads at build time is not a build condition (batch 6a, B4):
+            // the text names the file. Each other use is a note (design 35).
+            if call.ends_with(crate::srcconfig::UNSEEN) || call.starts_with(crate::joint::GAP) {
                 continue;
             }
-            // The state that no checked unit has (batch 5t, part B).
-            if call.starts_with(crate::joint::GAP) {
-                if !gaps.contains(&call) {
-                    gaps.push(call);
+            if let Some(file) = include_text(&call, item) {
+                if !files.contains(&file) {
+                    files.push(file);
                 }
-                continue;
-            }
-            // A macro or an attribute of another crate: Semilla does not see its content.
-            let text = match call.strip_suffix(crate::srcconfig::UNSEEN) {
-                Some(call) => format!("`{call}` in `{item}` (Semilla cannot see into it)"),
-                None => {
-                    // A file that the code reads at build time is not a build condition (batch
-                    // 6a, B4): the text names the file.
-                    if let Some(file) = include_text(&call, item) {
-                        if !files.contains(&file) {
-                            files.push(file);
-                        }
-                        continue;
-                    }
-                    seen = true;
-                    // An entry that names an item has its own code marks (batch 5l).
-                    let named = call.starts_with('`') || call.starts_with("static `");
-                    if named { format!("{call} in `{item}`") } else { format!("`{call}` in `{item}`") }
-                }
-            };
-            if !uses.contains(&text) {
-                uses.push(text);
             }
         }
     }
-    let files = if files.is_empty() {
-        None
-    } else {
-        let more = if files.len() > 3 { format!(" and {} more", files.len() - 3) } else { String::new() };
-        files.truncate(3);
-        Some(format!("{INCLUDE_SPOTLIGHT}{}{more}", files.join(", ")))
-    };
-    if uses.is_empty() && gaps.is_empty() {
-        return files;
+    if files.is_empty() {
+        return None;
     }
-    let more = if uses.len() > 3 { format!(" and {} more", uses.len() - 3) } else { String::new() };
-    uses.truncate(3);
-    let start = if seen || uses.is_empty() { CONFIG_SPOTLIGHT } else { CONFIG_UNSEEN };
-    let uses = if uses.is_empty() { String::new() } else { format!(" Uses: {}{more}", uses.join(", ")) };
-    // One gap is the cause. The fix of the first gap shows the next gap, if there is one.
-    let gap = match gaps.first() {
-        Some(gap) if uses.is_empty() => format!(" Not{}", gap.strip_prefix("not").unwrap_or(gap)),
-        Some(gap) => format!("; {gap}"),
-        None => String::new(),
-    };
-    let files = files.map(|files| format!("; {files}")).unwrap_or_default();
-    Some(format!("{start}{uses}{gap}{files}"))
+    let more = if files.len() > 3 { format!(" and {} more", files.len() - 3) } else { String::new() };
+    files.truncate(3);
+    Some(format!("{INCLUDE_SPOTLIGHT}{}{more}", files.join(", ")))
 }
 
 /// The start of the spotlight text of a file that the code reads at build time (batch 6a, B4).
 pub(crate) const INCLUDE_SPOTLIGHT: &str = "a file that the code reads at build time: ";
 
-/// True if each use of the item that gets the spotlight is a read of a file at build time.
-pub(crate) fn reads_only_files(body_index: &BodyIndex, item: &str) -> bool {
-    let calls = body_index.config(item);
-    !calls.is_empty() && calls.iter().all(|call| include_text(call, item).is_some())
+/// True if a use of the item is a read of a file at build time.
+pub(crate) fn reads_files(body_index: &BodyIndex, item: &str) -> bool {
+    body_index.config(item).iter().any(|call| include_text(call, item).is_some())
 }
 
 /// The text of a use of `include_str!`, `include_bytes!`, or `include!` for the spotlight:

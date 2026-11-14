@@ -273,10 +273,11 @@ main { flex: 1; display: flex; min-height: 0; position: relative; }
 .chip.warn { color: var(--changed); border-color: var(--changed); background: var(--changed-bg); }
 .chip.edited { color: var(--extracted); border-color: var(--extracted); background: var(--extracted-bg); }
 .chip.new { color: var(--moved); border-color: var(--moved); background: var(--moved-bg); font-weight: 600; }
-.chip.cls-neutral { color: var(--added); }
-.chip.cls-logic { color: var(--changed); }
-.chip.cls-control_flow { color: var(--removed); }
-.chip.cls-other { color: var(--moved); }
+/* Design 35: a compare result is an observation. No color says that a change is good. */
+.chip.cmp-code_different { color: var(--changed); }
+.chip.cmp-no_compare, .chip.cmp-pending, .chip.cmp-not_checked { color: var(--moved); }
+.chip.cmp-code_equal, .chip.cmp-no_code, .chip.cmp-none { color: var(--muted); }
+.fact-filter { font-size: 0.85rem; }
 
 del.d { background: var(--removed-bg); color: var(--removed); text-decoration: line-through; padding: 0 2px; border-radius: 3px; }
 ins.d { background: var(--added-bg); color: var(--added); text-decoration: none; padding: 0 2px; border-radius: 3px; }
@@ -361,7 +362,6 @@ details[open] > summary .twisty::before { content: "▾"; }
 .claims tr:first-child td { border-top: none; }
 .claims .icon { width: 1.4em; font-weight: 700; text-align: center; }
 .claims .icon.verified { color: var(--added); }
-.claims .icon.unproved { color: var(--changed); }
 .claims .icon.refuted, .claims .icon.empty, .claims .icon.malformed { color: var(--removed); }
 .claims .icon.no_result, .claims .icon.pending { color: var(--muted); }
 .claims .op { font-family: var(--mono); white-space: nowrap; }
