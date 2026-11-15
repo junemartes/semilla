@@ -494,6 +494,12 @@ mod tests {
         {
             let _scope = enter(Cover::new(&[(&ws, &both)]));
             assert!(covered(condition()) && covered_call("cfg!(debug_assertions)") && !covered_call("cfg!(unix)") && !covered_call("env!(\"A\")"));
+            // Batch 7b, part 4.3: a `cfg_attr` with a covered condition is covered, also with a
+            // content that Semilla does not know. A content `cfg` has its own condition.
+            let kind = |text: &str| crate::opaque::attr_kind(text.parse().unwrap());
+            assert!(matches!(kind("cfg_attr(debug_assertions, repr(C))"), Some(crate::opaque::Attr::Covered)));
+            assert!(matches!(kind("cfg_attr(unix, repr(C))"), Some(crate::opaque::Attr::Select)));
+            assert!(matches!(kind("cfg_attr(debug_assertions, cfg(unix))"), Some(crate::opaque::Attr::Select)));
             // A part of the rule is on again: for one atom, or for each atom and file out of a set.
             let without = Mode::Without("debug_assertions".to_string());
             assert!(!with_mode(&without, || covered(condition())) && with_mode(&without, || covered_call("cfg!(test)")));

@@ -44,6 +44,9 @@ pub struct Input<'a> {
     pub rename_targets: &'a BTreeSet<String>,
     /// The index of the first identity claim.
     pub identity_claim: Option<usize>,
+    /// Each entry of the item rename map with the identity claim that gives it: the claim, the
+    /// old path, the new path (design 36.1).
+    pub identity_pairs: &'a [(usize, String, String)],
     pub callees: Option<&'a BTreeMap<String, ItemFacts>>,
     /// The def path of each `#[test]` function before the step and after it (batch 6a, B2).
     /// `None`: the oracle does not know the tests.
@@ -118,6 +121,18 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         if let Some((parent, _)) = assoc.get(&name).filter(|_| found.is_empty()) {
             found = assoc_text_owners(input, &name, parent);
         }
+        // A new name of a local or a parameter does not change the code. When the body has a
+        // different edit fact, the body goes to that fact (design 36.1, rule 7). With no such
+        // fact, the rename fact keeps the body and gets the mismatch mark.
+        let local_renames: Vec<Owner> = found.iter().copied().filter(|owner| matches!(owner, Owner::Fact(index) if report.facts.get(*index).is_some_and(|fact| fact.category == semilla_core::Category::Rename && matches!(fact.part.as_str(), "body" | "parameter rename")))).collect();
+        if local_renames.len() < found.len() {
+            for owner in &local_renames {
+                if let Owner::Fact(index) = owner {
+                    report.facts[*index].affected.retain(|body| *body != name);
+                }
+            }
+            found.retain(|owner| !local_renames.contains(owner));
+        }
         if !found.is_empty() {
             for owner in &found {
                 record(report, *owner, &name);
@@ -125,9 +140,11 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             owned.insert(name, found[0]);
             continue;
         }
-        if input.rename_targets.contains(&name) || input.identity_derived.contains(&body.name) {
-            // The identity claim must prove the body equal. A different body makes it unproved.
-            if let Some(claim) = input.identity_claim {
+        // A body of a renamed or moved item with no edit fact goes to its identity claim
+        // (design 36.1). The identity fact then has `code different` and the mismatch mark.
+        let target = input.identity_pairs.iter().find(|(_, _, new)| name == *new || name.strip_prefix(new.as_str()).is_some_and(|rest| rest.starts_with("::"))).map(|(claim, _, _)| *claim);
+        if target.is_some() || input.rename_targets.contains(&name) || input.identity_derived.contains(&body.name) {
+            if let Some(claim) = target.or(input.identity_claim) {
                 record(report, Owner::Claim(claim), &name);
                 owned.insert(name, Owner::Claim(claim));
                 continue;
@@ -136,6 +153,13 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         // F5: a fact whose entity the body uses (computed in `facts::derive`).
         if let Some(index) = report.facts.iter().position(|fact| fact.affected.contains(&name)) {
             owned.insert(name, Owner::Fact(index));
+            continue;
+        }
+        // A body with no text edit that has the old name or the new name of a pair in its text
+        // (a string, a macro call): the identity claim owns it (design 36.1).
+        if let Some(claim) = names_pair(input, &name) {
+            record(report, Owner::Claim(claim), &name);
+            owned.insert(name, Owner::Claim(claim));
             continue;
         }
         pending.push((body, name));
@@ -262,7 +286,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { build_code: None, build_code_change: false, reason_key: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -452,7 +476,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { build_code: None, build_code_change: false, reason_key: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),
@@ -500,6 +524,14 @@ fn record(report: &mut StepReport, owner: Owner, name: &str) {
     }
 }
 
+/// The identity claim of a pair whose old name is in the old text of an item, or whose new name
+/// is in its new text. Only a rename counts: a move keeps the name.
+fn names_pair(input: &Input, name: &str) -> Option<usize> {
+    let last = |path: &str| path.rsplit("::").next().unwrap_or(path).rsplit('.').next().unwrap_or(path).to_string();
+    let has = |ws: &Workspace, word: &str| ws.items.get(name).is_some_and(|item| crate::hints::words(&item.text).contains(&word));
+    input.identity_pairs.iter().find(|(_, old, new)| last(old) != last(new) && (has(input.before, &last(old)) || has(input.after, &last(new)))).map(|(claim, _, _)| *claim)
+}
+
 /// The owners of the edits that can change the body: the edits of its item. For a body on one
 /// side only, also the edits of an item that contains it (a removed impl, a `cfg` attribute on a
 /// module, a new derive). A doc edit and a visibility edit never change a body. An attribute edit
@@ -517,6 +549,8 @@ fn text_owners(input: &Input, body: &BodyComparison, name: &str) -> Vec<Owner> {
     let mut found = Vec::new();
     for (index, edit) in input.edits.iter().enumerate() {
         let Some(item) = edit.item() else { continue };
+        // An edit with a place only before the step: its item can have a new path (design 36.1).
+        let item = if edit.after.is_none() { input.identity_pairs.iter().find(|(_, old, _)| old == item).map_or(item, |(_, _, new)| new.as_str()) } else { item };
         let own = item == name;
         let can_change = match edit.kind {
             EditKind::Docs | EditKind::Comment | EditKind::Visibility | EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => false,

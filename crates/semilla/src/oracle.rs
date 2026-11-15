@@ -637,6 +637,23 @@ struct SetState {
 }
 
 impl SetState {
+    /// The body names with two places or more in the records of one side of this
+    /// configuration (two targets with one crate name, or a twin under `cfg(test)`).
+    fn names_with_two_places(&self) -> Vec<String> {
+        let mut found = Vec::new();
+        for side in [&self.before, &self.after] {
+            let mut places: BTreeMap<&str, (&str, usize)> = BTreeMap::new();
+            for record in side.get("n0").into_iter().flatten() {
+                let Some(span) = &record.span else { continue };
+                let place = (span.file.as_str(), span.line_start);
+                if places.insert(record.name.as_str(), place).is_some_and(|old| old != place) {
+                    found.push(record.name.clone());
+                }
+            }
+        }
+        found
+    }
+
     /// True if a body is not equal at N0. No code calls this function now (design 35.4).
     #[allow(dead_code)]
     fn needs_deep(&self) -> bool {
@@ -757,12 +774,15 @@ impl BodyOracle for NormalOracle {
         for (index, config) in checked.iter().enumerate() {
             states.push(self.compare_n0(step, renames, added, config, index, opaque)?);
         }
-        let mut spans = BTreeMap::new();
-        let mut combined: BTreeMap<String, BodyStatus> = BTreeMap::new();
-        // The configurations of each body: those that compile it, and those where it is not equal.
-        let mut compiled: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut differs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut config: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+        // The key of a body: its name and its place. Two definitions of one name under `cfg`
+        // (a twin) have one name and two places, and one configuration compiles only one of
+        // them. With the name as the key, the result of one definition went to the other
+        // definition (design 35.8, batch 7b, part 4.4). A name with two places in one
+        // configuration (two targets with one crate name) keeps the name as its key: the span
+        // of the changed target is then the place of the body (batch 5n, A4).
+        type BodyKey = (String, Option<(String, usize)>);
+        let mut many: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut prepared = Vec::new();
         for mut state in states {
             let own = match state.done.take() {
                 Some(own) => own,
@@ -781,11 +801,22 @@ impl BodyOracle for NormalOracle {
                     own
                 }
             };
-            spans.extend(own);
+            many.extend(state.names_with_two_places());
+            prepared.push((state, own));
+        }
+        let mut spans: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        let mut combined: BTreeMap<BodyKey, BodyStatus> = BTreeMap::new();
+        // The configurations of each body: those that compile it, and those where it is not equal.
+        let mut compiled: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
+        let mut differs: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
+        let mut config: BTreeMap<BodyKey, std::collections::BTreeSet<String>> = BTreeMap::new();
+        for (state, own) in prepared {
+            let key_of = |name: &String| -> BodyKey { (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() }) };
             let name = state.config.name();
             for comparison in state.comparisons {
+                let key = key_of(&comparison.name);
                 if !comparison.config.is_empty() {
-                    config.entry(comparison.name.clone()).or_default().extend(comparison.config.iter().cloned());
+                    config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
                 }
                 let status = match comparison.status {
                     semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
@@ -793,27 +824,30 @@ impl BodyOracle for NormalOracle {
                     semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
                     semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
                 };
-                compiled.entry(comparison.name.clone()).or_default().push(name.clone());
+                compiled.entry(key.clone()).or_default().push(name.clone());
                 if !matches!(status, BodyStatus::Equal { .. }) {
-                    differs.entry(comparison.name.clone()).or_default().push(name.clone());
+                    differs.entry(key.clone()).or_default().push(name.clone());
                 }
-                let merged = match combined.remove(&comparison.name) {
+                let merged = match combined.remove(&key) {
                     Some(old) => combine(old, status),
                     None => status,
                 };
-                combined.insert(comparison.name, merged);
+                combined.insert(key, merged);
             }
+            spans.extend(own);
         }
         Ok(combined
             .into_iter()
-            .map(|(name, status)| {
+            .map(|(key, status)| {
                 // The output names the configurations if the body is equal in one or more of
                 // them, and not equal in one or more (batch 5u, part A). The combined status is
                 // not `Equal`, so the note cannot make a fact neutral.
-                let all = compiled.remove(&name).unwrap_or_default();
-                let differs_in = differs.remove(&name).filter(|list| list.len() < all.len()).unwrap_or_default();
+                let all = compiled.remove(&key).unwrap_or_default();
+                let differs_in = differs.remove(&key).filter(|list| list.len() < all.len()).unwrap_or_default();
                 let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
-                BodyComparison { span: spans.get(&name).cloned(), status, config: config.remove(&name).into_iter().flatten().collect(), differs_in, equal_in, stopped: Vec::new(), name }
+                let config = config.remove(&key).into_iter().flatten().collect();
+                let (name, place) = key;
+                BodyComparison { span: place.or_else(|| spans.get(&name).cloned()), status, config, differs_in, equal_in, stopped: Vec::new(), name }
             })
             .collect())
     }

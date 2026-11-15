@@ -454,7 +454,7 @@ impl App {
             let is_removed = |u: &String| base_ws.items.contains_key(u) && !target_ws.items.contains_key(u) && !is_pair_old(u);
             if let Some((old, new, score)) = pairs.iter().find(|(old, new, _)| members.contains(old) && owner(old) != owner(new)) {
                 // A pair with the same text has no change for a later step.
-                let rest = if *score >= 0.9995 { "the move in a step with no other change" } else { "the move in its own step, then the changes in a later step" };
+                let rest = if *score >= 0.9995 { "the move in a step with no other change" } else { "the move and its other changes; each other change is its own fact" };
                 drafts.push((1, format!("move `{old}` to `{new}` ({:.0}% similar: {rest})", score * 100.0), members, Vec::new()));
             } else if let Some(item) = members.iter().find(|m| signature_changes.contains(m)) {
                 drafts.push((2, format!("change the signature of `{}` and its call sites", name(item)), members, Vec::new()));
@@ -768,7 +768,7 @@ impl App {
                 number += 1;
                 id = format!("G{number}");
             }
-            self.group_set(&id, GroupKind::Behavior, &step.intent, "", vec![index])?;
+            self.group_set(&id, GroupKind::Change, &step.intent, "", vec![index])?;
         }
         session = self.load_session().unwrap_or(session);
         let remaining = self.replay_remaining(&session)?.unwrap_or_default();

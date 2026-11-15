@@ -144,13 +144,16 @@ pub struct FactView {
     pub label: String,
     /// True if the fact has the mismatch mark (design 35.2).
     pub mismatch: bool,
+    /// True if the fact changes the public API (design 36.3): the output shows the line
+    /// "public API: the compare does not cover the code of a different crate".
+    pub api_change: bool,
     /// The place of the fact in a list (design 35.7).
     pub order: u8,
 }
 
 impl FactView {
     pub fn new(step: usize, fact: &semilla_core::Fact) -> FactView {
-        FactView { step, fact: fact.clone(), mark: fact.mark(), part_mark: fact.part_mark(), label: fact.label(), mismatch: fact.mismatch(), order: fact.order() }
+        FactView { step, fact: fact.clone(), mark: fact.mark(), part_mark: fact.part_mark(), label: fact.label(), mismatch: fact.mismatch(), api_change: fact.api_change(), order: fact.order() }
     }
 }
 
@@ -201,8 +204,8 @@ pub struct GroupSummary {
     /// The mark of changed build code for the text of `all_equal` (design 28, I6), with a
     /// space before it, or an empty text.
     pub mark: String,
-    /// The same mark for the kind, if the kind comes from compare results (`refactor`,
-    /// `rename`, `move`).
+    /// The same mark for the kind, if the kind comes from compare results (`rename`,
+    /// `move`).
     pub kind_mark: String,
     /// The sum of `StepReport.panic_delta` over the steps of the group.
     pub panic_delta: i64,
@@ -665,7 +668,7 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
     GroupSummary {
         id: group.id.clone(),
         title: group.title.clone(),
-        kind_mark: if matches!(kind, GroupKind::Refactor | GroupKind::Rename | GroupKind::Move) { mark.clone() } else { String::new() },
+        kind_mark: if matches!(kind, GroupKind::Rename | GroupKind::Move) { mark.clone() } else { String::new() },
         kind,
         why: group.why.clone(),
         steps: group.steps.clone(),
@@ -679,7 +682,9 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
             !facts.is_empty()
                 && uncovered.is_empty()
                 && claims.iter().all(|claim| ctx.is_verified(claim))
-                && facts.iter().all(|fact| matches!(fact.compare, Compare::CodeEqual | Compare::NoCode) && !fact.spotlight)
+                // A fact that changes the public API has an effect that the compare does not
+                // see (design 36.3): the line does not show.
+                && facts.iter().all(|fact| matches!(fact.compare, Compare::CodeEqual | Compare::NoCode) && !fact.spotlight && !fact.api_change() && !fact.is_api_note())
         },
         panic_delta,
         split_hint: split_hint(ctx, group, &claims),
@@ -693,10 +698,10 @@ fn group_summary(ctx: &Ctx, review: &ReviewFile, group: &Group) -> GroupSummary 
 
 /// The kind of a group in a reviewer output (batch 5k, A3). Semilla computes it from the facts
 /// and the claim results of the steps of the group. The stored kind is a claim of the agent
-/// (I5): no reviewer output reads it. While a compare is pending, the kind is `behavior`.
+/// (I5): no reviewer output reads it. While a compare is pending, the kind is `change`.
 fn computed_kind(ctx: &Ctx, group: &Group) -> GroupKind {
     let steps: Vec<&semilla_core::StepReport> = ctx.data.report.steps.iter().filter(|step| group.steps.contains(&step.step)).collect();
-    semilla_core::report::derived_kind(&steps).unwrap_or(GroupKind::Behavior)
+    semilla_core::report::derived_kind(&steps).unwrap_or(GroupKind::Change)
 }
 
 /// The derived facts of the steps of a group.
@@ -715,7 +720,8 @@ pub const ALL_EQUAL: &str = "each fact: code equal or no code";
 /// - 1 point: one or more other facts with `code different`, `no compare`, `pending`, or
 ///   `not checked`.
 /// - 2 points: a fact with the mismatch mark.
-/// - 1 point each: a spotlight fact, a public API change, a panic delta above zero. A public
+/// - 1 point each: a spotlight fact, a public API change, a panic delta above zero, a changed
+///   body with `unsafe` code. A public
 ///   API change is an API level `major` or `minor` of a step, or an `interface` subgroup with
 ///   a claim that is not a rename and not a move.
 /// - 2 points each: a claim that is not verified, an uncovered change, a pair warning.
@@ -762,6 +768,11 @@ fn risk(ctx: &Ctx, group: &Group, subgroups: &[SubgroupSummary], claims: &[&Clai
     if panic_delta > 0 {
         score += 1;
         reasons.push(format!("panics +{panic_delta}"));
+    }
+    // A changed body with `unsafe` code (design 36.5).
+    if facts.iter().any(|fact| fact.unsafe_code) {
+        score += 1;
+        reasons.push("unsafe code".to_string());
     }
     let failed = counts.claims.saturating_sub(counts.verified + counts.partial + counts.pending);
     if failed > 0 {

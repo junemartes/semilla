@@ -322,7 +322,12 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
                 let (old_attr, new_attr) = (edit.attr_before.clone().unwrap_or_default(), edit.attr_after.clone().unwrap_or_default());
                 Some(short(&new.replacen(&format!(" {new_attr} "), &format!(" ⟦{old_attr}⟧→⟦{new_attr}⟧ "), 1)))
             }
-            (EditKind::Modified | EditKind::Replaced, Some(old), Some(new)) => Some(format!("⟦{}⟧→⟦{}⟧", short(old), short(new))),
+            // A cut keeps each part that differs (batch 7b, part 5.6): the two sides never look
+            // the same.
+            (EditKind::Modified | EditKind::Replaced, Some(old), Some(new)) => {
+                let (old, new) = crate::edits::sides(old, new);
+                Some(format!("⟦{old}⟧→⟦{new}⟧"))
+            }
             _ => None,
         };
         let Some(anchor) = edit.anchor() else {
@@ -696,10 +701,18 @@ fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool, nam
         if !fact.affected.is_empty() {
             // The mismatch mark (design 35.2) replaces the list name. It asks for no reason.
             let name = if fact.mismatch() { semilla_core::report::MISMATCH } else { "affected bodies:" };
-            put(out, &format!("      {name} {}", body_list(&fact.affected, names)));
+            put(out, &format!("      {name} {}{}", body_list(&fact.affected, names), fact.other_edits_text()));
         }
         if !fact.equal_sites.is_empty() {
             put(out, &format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
+        }
+        // A public API change (design 36.3): the line asks for no reason.
+        if fact.api_change() {
+            put(out, &format!("      {}", semilla_core::report::API_LINE));
+        }
+        // A changed body with `unsafe` code (design 36.5): the line asks for no reason.
+        if fact.unsafe_code {
+            put(out, &format!("      {}", semilla_core::report::UNSAFE_LINE));
         }
         // The note asks for no reason (batch 5u, part A).
         if let Some(note) = &fact.note {

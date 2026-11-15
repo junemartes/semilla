@@ -272,6 +272,14 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
     let modules: BTreeSet<&String> = before.inner_attrs.keys().chain(after.inner_attrs.keys()).collect();
     for module in modules {
         let (old, new) = (before.inner_attrs.get(module), after.inner_attrs.get(module));
+        // A removed target or a removed module file (batch 7b, part 5.2): its inner attributes
+        // go with it. The fact of a removed item of the module shows the removal. With no
+        // such fact, the attribute edit stays: it is then the only fact of the removal.
+        let gone = new.is_none() && old.is_some_and(|(file, _)| !after.parsed_files.contains(file));
+        let inside = format!("{module}::");
+        if gone && edits.iter().any(|edit| edit.kind == EditKind::ItemRemoved && edit.item().is_some_and(|item| item == module.as_str() || item.starts_with(&inside))) {
+            continue;
+        }
         // The inner doc lines (`//!`, or a doc attribute) are a doc edit. Each other inner
         // attribute is an attribute edit.
         let is_doc = |attr: &String| attr.starts_with("//!") || crate::doc::code_part(attr).0.len() == 1 && attr.starts_with('#');
@@ -465,10 +473,29 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
     let old_members: Vec<String> = before.members.iter().map(|member| renamed_member(member).unwrap_or_else(|| apply(member))).collect();
     if old_members != after.members {
         // The kind of the owner, for the hints (a struct, a variant, an enum, a trait, an impl).
-        let mut edit = attribute_edit(EditKind::Members, View::Signature, before.members.join("\n"), after.members.join("\n"));
-        edit.attr_before = Some(kind_name(before.kind).to_string());
-        edit.attr_after = Some(kind_name(after.kind).to_string());
-        edits.push(edit);
+        let list_edit = |old: String, new: String| {
+            let mut edit = attribute_edit(EditKind::Members, View::Signature, old, new);
+            edit.attr_before = Some(kind_name(before.kind).to_string());
+            edit.attr_after = Some(kind_name(after.kind).to_string());
+            edit
+        };
+        match impl_member_edits(before, after, renames) {
+            // An impl pair (design 36.2): one edit for each associated constant or type.
+            Some(parts) => {
+                for (old, new, old_list, new_list) in parts.members {
+                    let mut edit = list_edit(old.clone().unwrap_or_default(), new.clone().unwrap_or_default());
+                    (edit.text_before, edit.text_after) = (old, new);
+                    edit.node_before = old_list.as_ref().map(|_| "member");
+                    edit.node_after = new_list.as_ref().map(|_| "member");
+                    (edit.source_before, edit.source_after) = (old_list, new_list);
+                    edits.push(edit);
+                }
+                if let Some((old, new)) = parts.order {
+                    edits.push(list_edit(old, new));
+                }
+            }
+            None => edits.push(list_edit(before.members.join("\n"), after.members.join("\n"))),
+        }
     }
     if let (Some(old), Some(new)) = (&before.body, &after.body) {
         let mut context = Context { renames, item_before: &before.path, item_after: &after.path, file: &after.file, source_before: before, source_after: after, edits: Vec::new() };
@@ -477,6 +504,71 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         context.edits.sort_by_key(|edit| edit.line);
         edits.extend(context.edits);
     }
+}
+
+/// The parts of a changed member list of an impl pair.
+struct ImplMembers {
+    /// One entry for each added, removed, or changed member that is not a method: the text
+    /// before and after for the net (an added or removed member has its attributes and its
+    /// visibility), and the list text before and after (`const NAME : T = V ;`).
+    members: Vec<(Option<String>, Option<String>, Option<String>, Option<String>)>,
+    /// The names of the members before and after, if the order of the kept members changed.
+    order: Option<(String, String)>,
+}
+
+/// Splits the changed member list of an impl pair (design 36.2). An added or removed method
+/// has no entry: the method is an item with its own edit. `None` if a side does not parse or
+/// has two members with one name: the caller keeps the edit of the full list.
+fn impl_member_edits(before: &Item, after: &Item, renames: &Renames) -> Option<ImplMembers> {
+    if before.kind != ItemKind::Impl || after.kind != ItemKind::Impl {
+        return None;
+    }
+    // The key (`const NAME`, `type NAME`, `fn NAME`, or the full text), the list text, and
+    // the text with the attributes (no doc text) and the visibility.
+    let side = |item: &Item, old: bool| -> Option<Vec<(String, String, String)>> {
+        let parsed = syn::parse_str::<syn::ItemImpl>(&item.source).ok()?;
+        let apply = |text: String| if old { renames.apply(&before.path, &text) } else { text };
+        let full = |attrs: &[syn::Attribute], vis: &syn::Visibility, default: bool, list: &str| {
+            let mut parts: Vec<String> = attrs.iter().filter(|attr| !matches!(&attr.meta, syn::Meta::NameValue(value) if value.path.is_ident("doc"))).map(|attr| quote::quote!(#attr).to_string()).collect();
+            parts.extend([quote::quote!(#vis).to_string(), if default { "default".to_string() } else { String::new() }, list.to_string()]);
+            parts.retain(|part| !part.is_empty());
+            parts.join(" ")
+        };
+        let members: Vec<(String, String, String)> = parsed
+            .items
+            .iter()
+            .map(|member| {
+                let list = apply(crate::load::impl_member_name(member));
+                match member {
+                    syn::ImplItem::Fn(_) => (list.clone(), list.clone(), list),
+                    syn::ImplItem::Const(constant) => (apply(format!("const {}", constant.ident)), list.clone(), full(&constant.attrs, &constant.vis, constant.defaultness.is_some(), &list)),
+                    syn::ImplItem::Type(ty) => (apply(format!("type {}", ty.ident)), list.clone(), full(&ty.attrs, &ty.vis, ty.defaultness.is_some(), &list)),
+                    _ => (list.clone(), list.clone(), list),
+                }
+            })
+            .collect();
+        let keys: BTreeSet<&String> = members.iter().map(|(key, _, _)| key).collect();
+        (keys.len() == members.len()).then_some(members)
+    };
+    let (old, new) = (side(before, true)?, side(after, false)?);
+    let is_method = |key: &str| key.starts_with("fn ");
+    let mut members = Vec::new();
+    for (key, list, full) in &old {
+        match new.iter().find(|(other, _, _)| other == key) {
+            None if !is_method(key) => members.push((Some(full.clone()), None, Some(list.clone()), None)),
+            Some((_, new_list, _)) if new_list != list => members.push((Some(list.clone()), Some(new_list.clone()), Some(list.clone()), Some(new_list.clone()))),
+            _ => {}
+        }
+    }
+    for (key, list, full) in &new {
+        if !is_method(key) && !old.iter().any(|(other, _, _)| other == key) {
+            members.push((None, Some(full.clone()), None, Some(list.clone())));
+        }
+    }
+    let kept = |list: &[(String, String, String)], other: &[(String, String, String)]| -> Vec<String> { list.iter().filter(|(key, _, _)| other.iter().any(|(k, _, _)| k == key)).map(|(key, _, _)| key.clone()).collect() };
+    let names = |list: &[(String, String, String)]| list.iter().map(|(key, _, _)| key.clone()).collect::<Vec<_>>().join("\n");
+    let order = (kept(&old, &new) != kept(&new, &old)).then(|| (names(&old), names(&new)));
+    Some(ImplMembers { members, order })
 }
 
 /// The edits of the changed parts of a function signature: the qualifiers, the generics, the

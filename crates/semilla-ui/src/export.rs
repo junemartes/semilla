@@ -1353,9 +1353,19 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
             } else if !fact.affected.is_empty() {
                 text.push_str(&format!("; {} affected bod{}{}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
             }
+            // Two or more edits in one body (design 36.5).
+            text.push_str(&fact.other_edits_text());
             if !fact.equal_sites.is_empty() {
                 let count = if full || fact.equal_sites.len() <= semilla_core::report::LIST_LIMIT { String::new() } else { format!("{} ", fact.equal_sites.len()) };
                 text.push_str(&format!("; {count}{}{}{}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
+            }
+            // A public API change (design 36.3).
+            if fact.api_change() {
+                text.push_str(&format!("; {}", semilla_core::report::API_LINE));
+            }
+            // A changed body with `unsafe` code (design 36.5).
+            if fact.unsafe_code {
+                text.push_str(&format!("; {}", semilla_core::report::UNSAFE_LINE));
             }
             if let Some(note) = &fact.note {
                 text.push_str(&format!("; note: {note}{}", fact.part_mark()));
@@ -1377,15 +1387,21 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
 /// block again: its text names the first fact. The Markdown report and the HTML report use
 /// this list.
 fn without_equal_diffs(items: Vec<(usize, &str, String, Option<String>)>) -> Vec<(String, Option<String>)> {
-    let mut shown: Vec<(usize, &str, String)> = Vec::new();
-    let mut result = Vec::new();
+    // The step, the id, the diff block, the text with no id, and the position in the result.
+    let mut shown: Vec<(usize, &str, String, String, usize)> = Vec::new();
+    let mut result: Vec<(String, Option<String>)> = Vec::new();
     for (step, id, text, content) in items {
-        let first = content.as_ref().and_then(|content| shown.iter().find(|(known, _, block)| *known == step && block == content).map(|(_, first, _)| *first));
+        let first = content.as_ref().and_then(|content| shown.iter().find(|(known, _, block, _, _)| *known == step && block == content));
+        // The text of a fact with no id: two facts with the same text say the same thing.
+        let plain = text.replacen(&format!(" {id} "), " ", 1);
         match (first, content) {
-            (Some(first), _) => result.push((format!("{text}; the same diff as {first}"), None)),
+            // Batch 7b, part 5.8: the same text for the same change shows one time. The first
+            // fact names the second fact.
+            (Some((_, _, _, known, position)), _) if *known == plain => result[*position].0.push_str(&format!("; also {id}")),
+            (Some((_, first, _, _, _)), _) => result.push((format!("{text}; the same diff as {first}"), None)),
             (None, content) => {
                 if let Some(content) = &content {
-                    shown.push((step, id, content.clone()));
+                    shown.push((step, id, content.clone(), plain, result.len()));
                 }
                 result.push((text, content));
             }
@@ -1765,7 +1781,11 @@ mod tests {
         let block = Some("- a\n+ b".to_string());
         let items = vec![(0, "f1", "one".to_string(), block.clone()), (0, "f2", "two".to_string(), block.clone()), (0, "f3", "three".to_string(), None), (1, "f1", "four".to_string(), block.clone())];
         let list = without_equal_diffs(items);
-        assert_eq!(list, [("one".to_string(), block.clone()), ("two; the same diff as f1".to_string(), None), ("three".to_string(), None), ("four".to_string(), block)]);
+        assert_eq!(list, [("one".to_string(), block.clone()), ("two; the same diff as f1".to_string(), None), ("three".to_string(), None), ("four".to_string(), block.clone())]);
+        // Batch 7b, part 5.8: two facts of one step with the same text and the same diff block
+        // show the change one time.
+        let items = vec![(0, "f1", "step 0: f1 derived: one".to_string(), block.clone()), (0, "f2", "step 0: f2 derived: one".to_string(), block.clone()), (1, "f1", "step 1: f1 derived: one".to_string(), block.clone())];
+        assert_eq!(without_equal_diffs(items), [("step 0: f1 derived: one; also f2".to_string(), block.clone()), ("step 1: f1 derived: one".to_string(), block)]);
     }
 
     #[test]

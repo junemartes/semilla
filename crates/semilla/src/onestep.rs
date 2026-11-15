@@ -423,6 +423,9 @@ impl App {
                 // Part B of batch 5j: the body below shows the fact with "it needs a reason" and
                 // the exact anchor. The top summary does not repeat the reason line of the fact.
                 // Batch 5y, B3: two facts of one item have one key. The command gives it one time.
+                // Batch 7b, part 5.5: the path of the item is the key. A reason with this key
+                // covers each spotlight in the item, so the command gives it one time.
+                let place = fact.reason_item.clone().unwrap_or(place);
                 let entry = format!("{place}=<why>");
                 if !missing.contains(&entry) {
                     missing.push(entry);
@@ -507,9 +510,9 @@ impl App {
         let title = request.group.clone().unwrap_or_else(|| request.intent.clone());
         let mut session = self.load_session()?;
         // The kind comes from the facts and the compare results (phase 2). In phase 1 a compare
-        // result is pending, so the kind is `behavior`, and the review computes it again from the
+        // result is pending, so the kind is `change`, and the review computes it again from the
         // full report.
-        let step_kind = semilla_verify::organize::derived_kind(&[&report]).unwrap_or(GroupKind::Behavior);
+        let step_kind = semilla_verify::organize::derived_kind(&[&report]).unwrap_or(GroupKind::Change);
         let found = session.changeset.groups.iter().find(|g| g.title == title).cloned();
         let (id, kind, why, mut steps) = match found {
             Some(group) => (group.id, semilla_verify::organize::merge_kinds(group.kind, step_kind), group.why, group.steps),

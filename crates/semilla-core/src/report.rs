@@ -172,6 +172,10 @@ pub struct StepReport {
     pub identity_candidates: bool,
 }
 
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
 /// One derived fact: the difference in one part of a paired entity (design 22.5).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fact {
@@ -208,6 +212,10 @@ pub struct Fact {
     /// exact key of this fact (batch 5x, part D).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason_key: Option<String>,
+    /// The path of the item of the fact, when a reason with this path as its key covers the
+    /// fact (design 36.5). The command to run again gives this key one time for the item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_item: Option<String>,
     /// The forced edits at other sites, grouped by the inserted or removed text (design 22.6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sites: Vec<SiteGroup>,
@@ -223,6 +231,15 @@ pub struct Fact {
     /// check (design 35.5). The note asks for no reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The count of the other facts of the step with an edit in the body of this fact, when
+    /// the compiled code of that body changed (design 36.5). The compare result is a result of
+    /// the edits together. Each output shows [`Fact::other_edits_text`] after the bodies.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub other_edits: usize,
+    /// True if a changed body of the fact has an `unsafe` block or is an `unsafe fn` (design
+    /// 36.5). Each output shows [`UNSAFE_LINE`] with the fact. The line asks for no reason.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unsafe_code: bool,
     /// The mark of design 28 (invariant I6): the check of this fact ran the build code that
     /// step N changes. Each output shows [`build_code_mark`] with a result `code equal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,15 +276,34 @@ impl Fact {
         self.category.expects_equal() && self.compare == Compare::CodeDifferent
     }
 
-    /// The place of the fact in a group of the review report (design 35.7): a spotlight, a
-    /// mismatch mark, then the compare results.
+    /// The text after the list of the affected bodies: " (with N other edits of this body)".
+    /// Empty if the fact is the only edit of its body.
+    pub fn other_edits_text(&self) -> String {
+        match self.other_edits {
+            0 => String::new(),
+            1 => " (with 1 other edit of this body)".to_string(),
+            count => format!(" (with {count} other edits of this body)"),
+        }
+    }
+
+    /// True if the text of the fact has the note of a public API change (design 36.3). The
+    /// compare does not see the code of a different crate, so each output shows [`API_LINE`]
+    /// with the fact.
+    pub fn api_change(&self) -> bool {
+        !self.is_api_note() && (self.description.contains("(the public API can change") || self.description.contains("(the public API changes"))
+    }
+
+    /// The place of the fact in a group of the review report (design 35.7, 36.3): a
+    /// spotlight, a mismatch mark, a public API change, then the compare results.
     pub fn order(&self) -> u8 {
         if self.spotlight {
             0
         } else if self.mismatch() {
             1
+        } else if self.api_change() {
+            2
         } else {
-            2 + self.compare.order()
+            3 + self.compare.order()
         }
     }
 
@@ -383,8 +419,8 @@ pub struct PairWarning {
     /// workspace on the two sides (batch 5k, B5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolves: Vec<PairName>,
-    /// The cause that stopped the derivation of the rename or the move, when the step of the pair has
-    /// no other change (batch 5x, part C). The advice "own step" is then not true.
+    /// The cause that stopped the derivation of the rename or the move (batch 5x, part C, and
+    /// design 36.1). Semilla gives a pair warning only for a pair that it does not derive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped: Option<String>,
 }
@@ -407,20 +443,10 @@ impl PairWarning {
         let parent = |path: &str| path.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default();
         let last = |path: &str| path.rsplit("::").next().unwrap_or(path).rsplit('.').next().unwrap_or(path).to_string();
         let what = if parent(&self.old) == parent(&self.new) && last(&self.old) != last(&self.new) { "name" } else { "place" };
-        let mut text = format!(
-            "`{}` (removed) and `{}` (added) are {:.0}% similar: they can be one item with a new {what} and a second change. Semilla derives a rename or a move only in a step with no other change",
-            self.old,
-            self.new,
-            self.similarity * 100.0
-        );
+        let mut text = format!("`{}` (removed) and `{}` (added) are {:.0}% similar: they can be one item with a new {what} and a second change", self.old, self.new, self.similarity * 100.0);
         if let Some(cause) = &self.stopped {
-            // The step has no second change: a new step gives the same result.
-            text = format!(
-                "`{}` (removed) and `{}` (added) are {:.0}% similar, and their step has no other change. Semilla does not derive one item: {cause}",
-                self.old,
-                self.new,
-                self.similarity * 100.0
-            );
+            // The cause that stopped the derivation (design 36.1).
+            text.push_str(&format!(". Semilla does not derive one item: {cause}"));
         }
         if !self.resolves.is_empty() {
             // B5 of batch 5k: the texts are equal, and a name has a different meaning in the new
@@ -923,6 +949,12 @@ pub const EQUAL_SITES: &str = "bodies with a changed call site and equal compile
 /// The start of the line of the mismatch mark (design 35.2).
 pub const MISMATCH: &str = "! the compiled code changes:";
 
+/// The line under a fact with a changed body that has `unsafe` code (design 36.5).
+pub const UNSAFE_LINE: &str = "! unsafe code: the changed body has an `unsafe` block";
+
+/// The sub line of a fact that changes the public API (design 36.3). It asks for no reason.
+pub const API_LINE: &str = "! public API: the compare does not cover the code of a different crate";
+
 /// The line that each report shows one time (design 35.5).
 pub const CONFIG_SCOPE: &str = "Each compare result holds for the checked configurations.";
 
@@ -1001,9 +1033,8 @@ pub fn list_scope(bodies: &[String]) -> String {
 /// The kind of a group from its facts (design 35.7), or `None` while a compare is pending.
 ///
 /// - Each fact is a derived rename: `rename`. Each fact is a derived move: `move`.
-/// - Each fact has the result `code equal` or `no code`: `refactor`. The kind is a label of
-///   the compare results. It is no verdict.
-/// - Else: `behavior`.
+/// - Else: `change` (design 36.3). The kinds `refactor` and `behavior` read as a verdict:
+///   no derived group has them.
 ///
 /// A property claim changes no code, so it does not count. A doc fact has no code, so it does
 /// not count (trial 4, D9): a rename with its doc comments is a `rename`. The API fact of a
@@ -1019,25 +1050,19 @@ pub fn derived_kind(steps: &[&StepReport]) -> Option<crate::GroupKind> {
         return None;
     }
     if claims.is_empty() && !facts.is_empty() && facts.iter().all(|f| f.part == "identity") {
-        return Some(if facts.iter().all(|f| f.category == Category::Move) { crate::GroupKind::Move } else { crate::GroupKind::Rename });
+        if facts.iter().all(|f| f.category == Category::Move) {
+            return Some(crate::GroupKind::Move);
+        }
+        if facts.iter().all(|f| f.category == Category::Rename) {
+            return Some(crate::GroupKind::Rename);
+        }
     }
-    if !claims.is_empty() || facts.iter().any(|f| !matches!(f.compare, Compare::CodeEqual | Compare::NoCode)) {
-        return Some(crate::GroupKind::Behavior);
-    }
-    Some(crate::GroupKind::Refactor)
+    Some(crate::GroupKind::Change)
 }
 
-/// The kind of a group after one more step: equal kinds stay; the kinds `rename`, `move`, and
-/// `refactor` give `refactor`; any other mix gives `behavior`.
+/// The kind of a group after one more step: equal kinds stay; each mix gives `change`.
 pub fn merge_kinds(old: crate::GroupKind, new: crate::GroupKind) -> crate::GroupKind {
-    let equal_code = |k: crate::GroupKind| matches!(k, crate::GroupKind::Rename | crate::GroupKind::Move | crate::GroupKind::Refactor);
-    if old == new {
-        old
-    } else if equal_code(old) && equal_code(new) {
-        crate::GroupKind::Refactor
-    } else {
-        crate::GroupKind::Behavior
-    }
+    if old == new { old } else { crate::GroupKind::Change }
 }
 
 #[cfg(test)]
@@ -1114,6 +1139,15 @@ mod tests {
         fact.category = Category::Visibility;
         assert!(fact.mismatch(), "the text of a visibility change gives no cause for different code");
         assert_eq!(fact.order(), 1);
+        // Batch 7b, part 3: a public API change is after a mismatch mark and before each
+        // fact with `code different`, also when its compare result is `code equal`.
+        let api = Fact { category: Category::Visibility, compare: Compare::CodeEqual, description: "visibility of `m::f`: `private` → `pub` (the public API changes: a different crate can now use the item)".into(), ..Default::default() };
+        let different = Fact { category: Category::Logic, compare: Compare::CodeDifferent, ..Default::default() };
+        let equal = Fact { category: Category::Logic, compare: Compare::CodeEqual, ..Default::default() };
+        assert!(api.api_change() && !equal.api_change());
+        assert!(fact.order() < api.order() && api.order() < different.order() && different.order() < equal.order());
+        let possible = Fact { description: "qualifiers of `m::f` removed: `const` (the public API can change: a different crate can use the item)".into(), ..equal.clone() };
+        assert!(possible.api_change() && possible.order() == api.order());
         let mut claim = ClaimResult {
             claim: "c1".into(),
             step: 2,

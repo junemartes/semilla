@@ -76,7 +76,7 @@ impl Ctx {
             groups.push(Group {
                 id: UNGROUPED.to_string(),
                 title: "Steps without a group".to_string(),
-                kind: semilla_core::GroupKind::Behavior,
+                kind: semilla_core::GroupKind::Change,
                 why: "The agent did not put these steps in a group.".to_string(),
                 steps: loose,
             });

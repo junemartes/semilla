@@ -226,7 +226,7 @@ async fn group_endpoint() {
     let g2 = get(&app, "/api/group/G2").await;
     assert_eq!(g2["id"], "G2");
     // The kind comes from the facts, not from the stored label `api` (batch 5k, A3).
-    assert_eq!(g2["kind"], "behavior");
+    assert_eq!(g2["kind"], "change");
     let steps = g2["step_details"].as_array().unwrap();
     assert_eq!(steps.len(), 2);
     assert_eq!(steps[1]["index"], 7);

@@ -42,6 +42,9 @@ pub struct Scope {
     pub std_drop_real: BTreeSet<String>,
     /// The parts that Semilla did not examine.
     pub gaps: Vec<String>,
+    /// How an item came into the scope (batch 7b, part 6): the item before it on the route, and
+    /// the text of the link. A direct call has no link text.
+    pub from: BTreeMap<String, (String, String)>,
 }
 
 /// The crates of the standard library.
@@ -190,6 +193,10 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
     let mut drops: BTreeSet<String> = BTreeSet::new();
     let mut gaps: BTreeSet<String> = BTreeSet::new();
     let mut indirect: BTreeMap<String, usize> = BTreeMap::new();
+    // The first body that sends a type to the code of another crate, and the first body that
+    // drops a type.
+    let mut type_from: BTreeMap<String, String> = BTreeMap::new();
+    let mut drop_from: BTreeMap<String, String> = BTreeMap::new();
     let mut todo: Vec<String> = reached.iter().cloned().collect();
     let mut done: BTreeSet<String> = BTreeSet::new();
     loop {
@@ -205,6 +212,7 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
             };
             for callee in &found.callees {
                 if scope.items.insert(callee.clone()) {
+                    scope.from.insert(callee.clone(), (current.clone(), String::new()));
                     todo.push(callee.clone());
                 }
             }
@@ -213,6 +221,7 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
                 if after.items.contains_key(call.as_str()) || facts.contains_key(call.as_str()) {
                     // A function of another crate of the workspace.
                     if scope.items.insert(call.clone()) {
+                        scope.from.insert(call.clone(), (current.clone(), String::new()));
                         todo.push(call.clone());
                     }
                 } else if local.contains(&krate) && !is_std(&krate) {
@@ -224,6 +233,7 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
             for (path, krate) in &found.reach_types {
                 if local.contains(krate) && !is_std(krate) {
                     types.insert(path.clone());
+                    type_from.entry(path.clone()).or_insert_with(|| current.clone());
                 } else if is_std(krate) {
                     if !is_plain(path) {
                         gaps.insert(format!("a value of `{path}` goes to the code of another crate, and it can hold code that Semilla does not see"));
@@ -235,6 +245,7 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
             for (path, krate) in &found.drop_types {
                 if local.contains(krate) && !is_std(krate) {
                     drops.insert(path.clone());
+                    drop_from.entry(path.clone()).or_insert_with(|| current.clone());
                 } else if krate == "std" {
                     scope.std_drops.entry(path.clone()).or_insert(current.clone());
                     match found.drop_calls.get(path).filter(|_| !found.drop_real.contains(path)) {
@@ -267,11 +278,13 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
                 scope.items.insert(name.clone());
                 scope.drop_bodies.insert(name.clone());
                 scope.why.insert(name.clone(), format!("the code can drop a value of `{ty}`"));
+                scope.from.insert(name.clone(), (drop_from.get(ty).cloned().unwrap_or_default(), format!("the drop of a value of `{ty}`")));
                 todo.push(name.clone());
             } else if let Some(ty) = found.impl_of.iter().find(|ty| types.contains(*ty)) {
                 scope.items.insert(name.clone());
                 scope.through_impls.insert(name.clone());
                 scope.why.insert(name.clone(), format!("a trait impl of `{ty}`, which goes to the code of another crate"));
+                scope.from.insert(name.clone(), (type_from.get(ty).cloned().unwrap_or_default(), format!("a generic function of a different crate → each trait impl of `{ty}`")));
                 todo.push(name.clone());
             }
         }
@@ -309,7 +322,58 @@ pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, It
     scope
 }
 
+/// The items of the syntax calls from `root` to `target`, with the two ends (batch 7b, part 6).
+/// `None` if the syntax calls have no route.
+pub fn call_route(calls: &BTreeMap<String, BTreeSet<String>>, root: &str, target: &str) -> Option<Vec<String>> {
+    let mut before: BTreeMap<String, String> = BTreeMap::new();
+    let mut todo = std::collections::VecDeque::from([root.to_string()]);
+    while let Some(current) = todo.pop_front() {
+        if current == target {
+            let mut route = vec![current];
+            while let Some(previous) = before.get(route.last()?) {
+                route.push(previous.clone());
+            }
+            route.reverse();
+            return Some(route);
+        }
+        for next in calls.get(&current).into_iter().flatten() {
+            if !next.starts_with("ext::") && next != root && !before.contains_key(next) {
+                before.insert(next.clone(), current.clone());
+                todo.push_back(next.clone());
+            }
+        }
+    }
+    None
+}
+
 impl Scope {
+    /// The route from the root of a claim to an item of the scope (batch 7b, part 6): each
+    /// item on the route, and the text of each link that is not a direct call.
+    pub fn route(&self, root: &str, calls: &BTreeMap<String, BTreeSet<String>>, item: &str) -> String {
+        let mut parts = vec![format!("`{item}`")];
+        let mut current = item.to_string();
+        let mut seen = BTreeSet::new();
+        while let Some((previous, link)) = self.from.get(&current).filter(|_| seen.insert(current.clone())) {
+            if !link.is_empty() {
+                parts.push(link.clone());
+            }
+            if previous.is_empty() {
+                break;
+            }
+            parts.push(format!("`{previous}`"));
+            current = previous.clone();
+        }
+        // The first item of the route comes from the syntax calls of the root.
+        if current != root {
+            match call_route(calls, root, &current) {
+                Some(route) => parts.extend(route.iter().rev().skip(1).map(|item| format!("`{item}`"))),
+                None => parts.extend(["…".to_string(), format!("`{root}`")]),
+            }
+        }
+        parts.reverse();
+        parts.join(" → ")
+    }
+
     /// The text "in `item` (why the item is in the scope)".
     pub fn place(&self, item: &str) -> String {
         match self.why.get(item) {

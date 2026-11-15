@@ -125,7 +125,11 @@
     for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ') && !folds(fact, group)) parts.push(group.sites.length + ' site(s): ' + group.edit);
     // Design 35.5: the mismatch mark.
     if (fact.mismatch) parts.push(MISMATCH + (fact.affected && fact.affected.length ? ': ' + (fact.affected.length <= 8 ? fact.affected.join(', ') : affectedText(fact.affected)) : ''));
-    else if (fact.affected && fact.affected.length) parts.push(affectedText(fact.affected));
+    else if (fact.affected && fact.affected.length) parts.push(affectedText(fact.affected) + (fact.other_edits ? ' (with ' + fact.other_edits + (fact.other_edits === 1 ? ' other edit' : ' other edits') + ' of this body)' : ''));
+    // Design 36.3: a public API change.
+    if (fact.api_change) parts.push('! public API: the compare does not cover the code of a different crate');
+    // Design 36.5: a changed body with `unsafe` code.
+    if (fact.unsafe_code) parts.push('! unsafe code: the changed body has an `unsafe` block');
     if (fact.note) parts.push('note: ' + fact.note + (fact.part_mark || ''));
     if (!fact.spotlight_why && fact.reason) parts.push('note: no spotlight; the agent gave a reason: ' + quoted(fact.reason));
     if (fact.spotlight_why) parts.push('spotlight: ' + fact.spotlight_why + '; reason' + (fact.reason_key ? ' (key `' + fact.reason_key + '`)' : '') + ': ' + (fact.reason ? quoted(fact.reason) : 'MISSING'));

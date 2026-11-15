@@ -119,7 +119,7 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
                     .then(|| "an api group can contain only claims of item-level ops and of expression-level ops"),
                 GroupKind::Deps => (!info.is_some_and(|i| i.level == OpLevel::File || i.role == Role::Propagation)).then(|| "a deps group can contain only call site claims (the manifest changes are facts)"),
                 GroupKind::Tests => None, // Checked below with the test items.
-                GroupKind::Fix | GroupKind::Feature | GroupKind::Behavior => None,
+                GroupKind::Fix | GroupKind::Feature | GroupKind::Behavior | GroupKind::Change => None,
             };
             if let Some(problem) = problem {
                 report.organization.push(format!("group {}: claim {id} (`{op}`): {problem}", group.id));

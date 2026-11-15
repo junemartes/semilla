@@ -2357,7 +2357,7 @@ Trial 7 on `humantime` (section 30) also showed the cost for an honest agent: a 
 - each `use` line that the move needs;
 - a wider visibility of the moved item (`pub(super)`, `pub(crate)`, `pub`). It stays its own fact, "visibility of `B`: `private` → `pub (crate)`", with the class rule that a visibility fact had before this batch, and with no spotlight.
 
-Three changes continue to stop the proof. A name of the body that means a different item in the new module changes the MIR, so the compare fails. A `cfg` condition on the old path or on the new path that the other path does not have stops the move (`path_conditions`); this is stricter than before. An edit in the moved body is a second change: the items show as removed and added.
+Three changes continue to stop the proof. A name of the body that means a different item in the new module changes the MIR, so the compare fails. A `cfg` condition on the old path or on the new path that the other path does not have stops the move (`path_conditions`); this is stricter than before. An edit in the moved body is a second change: the items show as removed and added. (Batch 7b changes this rule: see 36.1.)
 
 ### 31.3 A message says the cause that the code knows (part C)
 
@@ -2820,7 +2820,7 @@ The code of the old levels stays in the tree (35.8 lists it).
 
 **The notes. Decided by Claude.** Two or more notes of one fact join with "; ".
 
-- A condition that Semilla did not check: "note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)". The note names the function for a `cfg` attribute on a statement: "this body uses code that a `cfg` attribute can change, which Semilla did not check (…)". The same note form applies to the older opaque rules: a type alias of a different crate, an `impl` under `cfg`, a name that a macro gives.
+- A condition that Semilla did not check: "note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)". A note always names the condition (36.4): the text "code that a `cfg` attribute can change" is gone. The same note form applies to the older opaque rules: a type alias of a different crate, an `impl` under `cfg`, a name that a macro gives.
 - Configurations that do not agree: "note: the compiled code is equal in `dev`, `dev, all features`; different in `release`, `release, all features`". Then the result is `code different`.
 - No compare: "note: no compare: no checked configuration compiles `X`".
 
@@ -2835,11 +2835,11 @@ The code of the old levels stays in the tree (35.8 lists it).
 Each rule: **Decided by Claude**, apart from "no fold because of the compare result" (user decision).
 
 - **The summary.** The result line, then a table with the count of the facts for each category. The header has the line of 35.5 one time.
-- **The order in a group.** A spotlight fact, a fact with the mismatch mark, `code different`, `no compare`, `pending`, `not checked`, `code equal`, `no code` (`Fact::order`).
+- **The order in a group.** A spotlight fact, a fact with the mismatch mark, a public API change (36.3), `code different`, `no compare`, `pending`, `not checked`, `code equal`, `no code` (`Fact::order`).
 - **The fold.** No fact folds because of its compare result. A subgroup with a claim is open. The filters of the UI are the category and the compare result (the search keys `category:` and `compare:`).
 - **The role of a subgroup** comes from the category of its facts (`Category::role`): `rename`, `move`, `import`, and `visibility` give `Mechanical`; `declaration` gives `Interface`; `docs` gives `Docs`; `manifest`, `file`, `build code`, and `attribute` give `Config`; `indirect` gives `Propagation`; each other category gives `Core`. A role is a label: no rule hides or folds a subgroup because of its role.
-- **The kind of a group** comes from its facts (`derived_kind`). Each fact is a derived rename: `rename`. Each fact is a derived move: `move`. Each fact has `code equal` or `no code`, and the group has no claim: `refactor`. Each other group: `behavior`. A doc fact and the API fact of a rename do not count. The kind is a label of the compare results. It is not a verdict.
-- **The risk** of a group is a sum of points: 2 for a `control flow` fact with `code different`; 1 for each other fact set with `code different`, `no compare`, `pending`, or `not checked`; 2 for a mismatch mark; 1 for a spotlight fact; 1 for a public API change; 1 for a panic delta above zero; 2 for a claim that is not verified; 2 for an uncovered change; 2 for a pair warning. The levels: 0 points give 0, 1 to 2 give 1, 3 to 4 give 2, 5 or more give 3. The risk is a reading order. It is not a verdict.
+- **The kind of a group** comes from its facts (`derived_kind`). Each fact is a derived rename: `rename`. Each fact is a derived move: `move`. Each other group: `change` (36.3; before batch 7b: `refactor` and `behavior`). A doc fact and the API fact of a rename do not count. The kind is a label of the compare results. It is not a verdict.
+- **The risk** of a group is a sum of points: 2 for a `control flow` fact with `code different`; 1 for each other fact set with `code different`, `no compare`, `pending`, or `not checked`; 2 for a mismatch mark; 1 for a spotlight fact; 1 for a public API change; 1 for a changed body with `unsafe` code (36.5); 1 for a panic delta above zero; 2 for a claim that is not verified; 2 for an uncovered change; 2 for a pair warning. The levels: 0 points give 0, 1 to 2 give 1, 3 to 4 give 2, 5 or more give 3. The risk is a reading order. It is not a verdict.
 - **`--fast`.** Phase 2 runs in the command only for a property claim or a possible rename or move.
 
 ### 35.8 The limits and the dead code
@@ -2849,7 +2849,7 @@ Each rule: **Decided by Claude**, apart from "no fold because of the compare res
 - A fact with a changed body is `code different`, also when a different edit of the same body is the cause. This applies to a generic order fact and to an `include!` file fact too.
 - A removed `derive` with a hand-written impl that gives the same MIR can show `[attribute · code equal]`. An attribute that Semilla cannot see into hides the configuration note.
 - A commutative swap (`rate * amount`), a fold of a constant condition, and a removed local are `code different`. They can be equal in one profile only; then the note names the profiles.
-- Two definitions of one name under `cfg` (a twin): the compare of an added configuration can go to the other twin. Then the fact is an "indirect change, cause not known" with a spotlight.
+- Two definitions of one name under `cfg` (a twin): each twin has its own compare (36.4). A name with two places in one configuration keeps the name key.
 - Semilla does not compile a doc test. A member order fact with no changed body has `no compare`.
 - Each compare result holds for the checked configurations only. A target, a custom profile, and a condition outside the list are not checked.
 
@@ -2862,4 +2862,98 @@ Each rule: **Decided by Claude**, apart from "no fold because of the compare res
 - the status changes of `srcconfig::apply` and `opaque.apply` (only their data for the notes is in use);
 - the claim ops `rename` and `move-item` in the verifier (the CLI refuses them; verifier tests and the UI demo data still use them).
 
-**Open.** Each report still has the group kinds "refactor" and "behavior" (35.7), and the HTML report has the mark "each fact: code equal or no code". A reader can take them as a verdict. The user did not decide if these labels stay.
+**Closed in 36.3.** The group kinds "refactor" and "behavior" are gone from the derived kinds. The mark "each fact: code equal or no code" stays: it is an observation.
+
+## 36. Batch 7b: one fact for each change
+
+Batch 7b. The model of 35.1 stays (the user decided only that model). The rule above each rule of this section: no change of the code is without a fact, and no fact text says less than the change. Each rule of this section: **Decided by Claude**.
+
+### 36.1 A rename or a move with other changes
+
+**The cause.** Semilla derived a rename or a move only in a step with no other change. With a second change, the item showed as removed and added, with a note and a pair warning. The reviewer had to find one real change in four facts. In eleven blind trials, this rule gave most of the extra steps of an honest agent. With no verdict in the model, a rename fact is not a proof, so the rule had no purpose.
+
+**The rule.**
+
+1. A removed item and an added item of the same kind are a candidate pair when their texts are similar (`PAIR_THRESHOLD` = 0.7). The score does not count a doc comment, an attribute, and a visibility. The step can have other changes: in the item, in a different item, and more pairs.
+2. Semilla checks each name map of the pairs. The map with the highest sum of the scores that passes the check gives the facts. Maps with the same score: the map that leaves the smallest number of other facts wins.
+3. The pair gives one `rename` fact or one `move` fact, with the forced edits under it: "renamed `semver::eval::matches_caret` → `semver::eval::matches_caret_op` [rename · code equal]".
+4. Each difference of the pair that the new name does not force is its own fact at the new path: "changed operator `ver.minor > minor` → `ver.minor >= minor` at `semver::eval::matches_caret_op/S3/then/S0/then/S0/value` [logic · code different]". This applies to a signature, a visibility, an attribute, a doc comment, a member, and each edit of a body.
+5. A changed body with an edit fact goes to that fact. A changed body that no fact explains goes to the identity fact. Then the identity fact has `code different` and the mismatch mark.
+6. A type moves with its `impl` blocks: "moved `semver::error::QuotedChar` → `semver::quoted::QuotedChar`, with 1 impl and 2 `use` line(s) [move · code equal]". No "trait impl removed" fact and no "trait impl added" fact shows.
+7. A renamed local or parameter with a second edit in the same body gives one `rename` fact and one fact for each other edit.
+8. A pair that Semilla does not derive shows as removed and added. The note gives the cause: "… show(s) as removed and added: Semilla does not derive the rename (…)". The pair warning shows only for such a pair. The text "Semilla derives a rename only in a step with no other change" is gone.
+
+**The limits.**
+
+- At most 4 removed and 4 added entities of one kind in one owner (`MAX_GROUP`), and at most 24 name maps (`MAX_MAPS`). Above a limit, Semilla derives nothing and gives a note.
+- Two maps with the same score and the same number of other facts: Semilla derives nothing and gives a note.
+- A swap of two names gives no rename fact. Each body edit of each name is its own fact, and each changed call is a fact.
+- A rename where a new item takes the old name gives no rename fact. The old name shows its body edits, and the new name shows as added.
+- An added module fact covers a new second item in the new module.
+- Each private `use` edit in the source module or the destination module of a move goes under the move fact.
+- A changed caller body with no text edit next to a move shows as "indirect change, cause not known".
+
+### 36.2 Associated items and local constants
+
+**The cause.** Trial 10: a new `pub const` in an impl gave general facts ("changed source text with no other fact", "changed code") and no API line. A new inherent impl did not name its members. The API level stayed `patch` for a new public constant or a new trait impl.
+
+**The rule.**
+
+1. Each associated constant, type, and function of an inherent impl or a trait impl has its own fact for an add, a removal, or a change: "added `semver::VersionReq::ANY`", "value of `semver::parse::Op::DEFAULT` changed: Op :: Caret → Op :: Tilde [value · code different]".
+2. The fact of a new or removed impl block lists its members: "added `semver::impl Op` with: `const ALL`", "trait impl `<crate::Version as From<(u64, u64, u64)>>` added with: `fn from`".
+3. A constant in a function body follows the rule of a constant of a module: "value of `MAX_COMPARATORS` (in `semver::parse::version_req`) changed: 32 → 64 [value · code different]".
+4. The general facts (category `text`, and "changed code") do not show a token range that an item fact covers.
+5. The API list and the API level count each item that a different crate can use. An added public associated item, trait impl, or derive of a reachable type: a line, level `minor` or higher. A removed or changed one: level `major`. An `unsafe impl Send` or `Sync`: the line says that each type with a field of this type can change too.
+6. The fact text has the public API text: "(the public API changes: a different crate can now use the item)" or "(the public API can change: a different crate can use the item)". The second form is for an item where Semilla cannot decide. Then the higher level applies.
+7. A fact about an associated item has the category of its change (`visibility`, `attribute`, `value`). The category `text` is only for the general text.
+
+**The limits.** A value text has the token form (`Op :: Caret`). A member that a macro call makes and a twin key keep the old full-list edit. A local `const` with a changed name or type keeps the general text. A changed reachable associated constant or type is `major`, also when the new value is equal for each caller.
+
+### 36.3 The group kinds and the public API line
+
+**The cause.** The kinds `refactor` and `behavior` read as a verdict. A public API change with `code equal` was at the end of its group, but it has an effect on code that the compare does not see.
+
+**The rule.**
+
+1. The derived kind of a group is `rename` (each fact is a derived rename), `move` (each fact is a derived move), or `change` (each other group). A mix of renames and moves is `change`. A doc fact and the API fact of a rename do not count.
+2. The kinds `refactor` and `behavior` stay as input values of the old protocol. No derived group has them.
+3. A fact that changes the public API has the sub line "! public API: the compare does not cover the code of a different crate". The line asks for no reason. In a group, the fact comes after the facts with a mismatch mark and before the facts with `code different`.
+4. The line "each fact: code equal or no code" of a group does not show when the group has such a fact.
+5. Each output text now says the observation, not a verdict ("Semilla gives no verdict for a change").
+
+**The limit.** An added or removed reachable item also has the sub line. The history sections of this document keep their old verdict words as a record.
+
+### 36.4 The configuration notes
+
+**The cause.** A note that is not true costs the trust of the reviewer. For `let align = 2;` → `1` in `<Identifier as Clone>::clone` of `semver`, the note said "this body uses code that a `cfg` attribute can change". The body uses no code under `cfg`, and the note named no condition. The cause was `#![cfg_attr(not(feature = "std"), no_std)]` at the crate root: each item of the crate counted as "under `cfg`".
+
+**The rule.**
+
+1. A note names the item and the condition: "this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)". A stop cause with no name gives no note.
+2. An inner `cfg_attr(COND, ATTR)` of a crate root or of a module removes no item (`opaque::inner_keeps_items`). The items of the module are not "under `cfg`".
+3. A condition where the checked configurations have each value gives no note.
+4. Two definitions of one name under `cfg` (a twin): each twin has its own compare with its own old definition. The limit of 35.8 is gone. Example: "changed expression `a as TB` → `a as u8` at `shop_core::cut#0/tail/operand` [logic · code different]" with "note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`".
+
+**The limits.** An inner `cfg_attr` whose content is a `cfg` or a `cfg_attr` can still remove the module, so the old rule applies to it. A name with two places in one configuration keeps the name key. `no_std` under an inner `cfg_attr` changes the names in scope, not the items: Semilla gives no note for this.
+
+### 36.5 Small rules of the output
+
+1. **A function that goes into a macro call.** The fact is "`semver::eval::matches_tilde` comes from the macro call `same!` now [macro · code equal]", not "removed". An `added` or `removed` fact has `no code` only when the item has no body. Limit: a body edit in the same step shows as `code different` on this fact, with no text of the edit.
+2. **A removed test target.** The attribute edit of a removed module or crate root gives no fact when a "removed" fact shows the removal. With no such fact, the attribute edit stays. The facts of the removed tests, of the `use` lines, and of the manifest stay.
+3. **`unsafe` code.** A fact with a changed body that has an `unsafe` block, or that is an `unsafe fn`, has the line "! unsafe code: the changed body has an `unsafe` block". The line asks for no reason. The risk of the group counts 1 point. Limit: an edit of only the signature does not get the line.
+4. **`status` on a commit with no note.** The text is "commit … has no semilla note; tag it first". The raw git error is gone.
+5. **The `run again` line.** The line has one `--reason 'ITEM=<why>'` for each item. Each fact line keeps its exact key.
+6. **A cut text.** The cut of a long diff text keeps the changed part. The change tree uses the same cut rule as the fact texts. The text "changed item:" replaces "changed item_stmt:".
+7. **`include_str!` in a local constant.** The step needs a reason, as the guide says. The fact text is "added item `const LIMIT: &str = include_str!("limit.txt");`". Each general text with an empty side says "added" or "removed".
+8. **The same text two times.** The Markdown report and the HTML report show two facts with the same text and the same diff block one time, with "; also fN". The step output keeps the two facts.
+9. **The change tree** shows "old → new" for a renamed item. This was already so in each case that the batch ran: no change.
+10. **A member order in a function body.** A changed order of the variants of a local enum, or of the named fields of a local struct, gives a "member order" fact: "member order of `Side` (in `semver::eval::matches_tilde`): `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change". A `#[repr]` or an order derive puts the fact in the spotlight. Limit: the cast rule of a module enum does not apply to a local enum.
+11. **Two edits in one body.** The compare does not separate the edits of one body. The line says so: "affected bodies: semver::eval::matches_tilde (with 1 other edit of this body)".
+
+### 36.6 The route of a `no-panic` result
+
+**The cause.** A refuted `no-panic` claim named panic sites in items that the function does not call. The scope rule of 25.1 adds each trait impl of a local type that goes into a generic function of a different crate. The output did not show this.
+
+**The rule.** The refuted text gives the route from the function to the first three different items with a site: "the route to `semver::parse::<Comparator as FromStr>::from_str`: `semver::eval::matches_req` → a generic function of a different crate → each trait impl of `semver::Comparator` → `semver::parse::<Comparator as FromStr>::from_str`". A drop body has the link "the drop of a value of `T`".
+
+**The limits.** The route does not name the generic function: the MIR record does not hold the call that takes the type. The scope rule is not more exact: a rule that uses the bounds of the callee needs new MIR records. This is open.

@@ -62,7 +62,7 @@ pub fn display_text(edit: &Edit) -> String {
         (Some(_), None) => format!("`{old}`"),
         _ => String::new(),
     };
-    let what = if !op.contains(' ') && semilla_core::ops::op(op).is_some() { words(op) } else { format!("changed {}:", edit.node_after.or(edit.node_before).unwrap_or("code")) };
+    let what = if !op.contains(' ') && semilla_core::ops::op(op).is_some() { words(op) } else { format!("changed {}:", edit.node_after.or(edit.node_before).map(|node| if node == "item_stmt" { "item" } else { node }).unwrap_or("code")) };
     let location = edit.anchor().filter(|a| !a.path.is_empty()).map(|a| format!(" at `{a}`")).unwrap_or_default();
     if let Some(note) = operand_note(edit) {
         return format!("{note}{location}");
@@ -73,6 +73,16 @@ pub fn display_text(edit: &Edit) -> String {
     }
     if let Some(moved) = moved_text(edit) {
         return format!("moved {}: {moved}", edit.node_after.or(edit.node_before).unwrap_or("code"));
+    }
+    // An item in a function body with no text on one side (batch 7b, part 5.7): the item is
+    // new, or it is gone. The text does not show an empty side.
+    if edit.node_after.or(edit.node_before) == Some("item_stmt") {
+        let empty = |text: &Option<String>| text.as_deref().is_none_or(|text| text.trim().is_empty());
+        match (empty(&edit.text_before), empty(&edit.text_after)) {
+            (true, false) => return format!("added item `{new}`{location}"),
+            (false, true) => return format!("removed item `{old}`{location}"),
+            _ => {}
+        }
     }
     // A doc comment with no text on one side: the words of each other doc fact (batch 6a, A2).
     if edit.kind == EditKind::Docs && what == "changed docs" {
@@ -409,9 +419,34 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         if renamed.iter().any(|(owner, old, new)| owner == item && (old == "_" || new == "_")) {
             continue;
         }
-        let pairs: Vec<String> = renamed.iter().filter(|(owner, _, _)| owner == item).map(|(_, old, new)| format!("`{old}` → `{new}`")).collect();
+        let mut pairs: Vec<String> = renamed.iter().filter(|(owner, _, _)| owner == item).map(|(_, old, new)| format!("`{old}` → `{new}`")).collect();
+        let mut body = body;
         if pairs.is_empty() {
-            continue;
+            // Design 36.1, rule 7: the body has other edits too. The binding places give the
+            // name changes: a parameter rename, or a pattern edit that changes one name. The
+            // edits that change only these names fold under the rename fact. Each other edit
+            // keeps its own fact, with the full text of its two sides.
+            // A function with a new name or a new module has a different path before the step.
+            let old_path = context.renames.items.iter().find(|(_, new)| *new == item).map_or(item, |(old, _)| old);
+            let (Some(old_item), Some(new_item)) = (context.before.items.get(old_path), context.after.items.get(item)) else { continue };
+            let mut places: Vec<(String, String)> = facts
+                .iter()
+                .filter(|fact| fact.part == "parameter rename" && fact.at.as_ref().is_some_and(|at| at.item == *item || at.item == *old_path))
+                .filter_map(|fact| {
+                    let mut names = fact.description.split('`');
+                    Some((names.nth(1)?.to_string(), names.nth(3)?.to_string()))
+                })
+                .collect();
+            let is_pattern = |edit: &Edit| edit.anchor().is_some_and(|anchor| anchor.path.last().is_some_and(|last| last.to_string() == "pat" || last.to_string().ends_with(".pat")));
+            places.extend(body.iter().filter(|&&i| is_pattern(&edits[i])).filter_map(|&i| crate::hints::one_name_change(edits[i].text_before.as_deref()?, edits[i].text_after.as_deref()?)));
+            let renamed = crate::hints::local_renames_with_edits(old_item, new_item, &places);
+            body.retain(|&i| crate::hints::only_names_change(edits[i].text_before.as_deref().unwrap_or(""), edits[i].text_after.as_deref().unwrap_or(""), &renamed));
+            // Only the names that an edit of the body shows.
+            let shown = |pair: &(String, String)| body.iter().any(|&i| crate::hints::code_words(edits[i].text_before.as_deref().unwrap_or("")).contains(&pair.0.as_str()));
+            pairs = renamed.iter().filter(|pair| shown(pair)).map(|(old, new)| format!("`{old}` → `{new}`")).collect();
+            if pairs.is_empty() || body.is_empty() {
+                continue;
+            }
         }
         let what = if pairs.len() == 1 { "renamed local" } else { "renamed locals" };
         push(facts, fact_of, &body, Fact {
@@ -567,7 +602,14 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 explained = outcome.explains.iter().copied().filter(|&i| free(fact_of, i)).collect();
                 op_category = outcome.category;
                 let text = match (edit.kind, &edit.text_before, &edit.text_after) {
-                    (EditKind::ItemAdded | EditKind::ItemRemoved, _, _) => format!("`{item}`"),
+                    // The fact of a new or removed impl block lists its members (design 36.2).
+                    (EditKind::ItemAdded | EditKind::ItemRemoved, _, _) => {
+                        let ws = if edit.kind == EditKind::ItemAdded { context.after } else { context.before };
+                        let members = ws.items.get(item.as_str()).filter(|found| found.kind == semilla_syntax::ItemKind::Impl).map(crate::impl_members_text).unwrap_or_default();
+                        // A new or removed item that a different crate can use (design 36.2).
+                        let api = crate::item_api_note(ws, &item, edit.kind == EditKind::ItemAdded).map(|note| format!(" ({note})")).unwrap_or_default();
+                        format!("`{item}`{members}{api}")
+                    }
                     (_, Some(_), Some(_)) if matches!(op, "add-arm" | "add-alternative") && inserted(edit).is_some() => format!("`{}`", inserted(edit).unwrap_or_default()),
                     (_, Some(_), Some(_)) if moved_text(edit).is_some() => format!("moved {}", moved_text(edit).unwrap_or_default()),
                     (_, Some(_), Some(_)) => {
@@ -612,6 +654,15 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 }
             }
         }
+        // A constant in a function body follows the rule of a constant of a module (design 36.2).
+        let local_const = if description.is_none() { local_const_change(edit, context.renames.items.get(&item).unwrap_or(&item)) } else { None };
+        let is_local_const = local_const.is_some();
+        let description = description.or(local_const);
+        // A member order of a type in a function body follows the rule of a type of a module
+        // (design 36.5).
+        let local_order = if description.is_none() { local_member_order(edit, context.renames.items.get(&item).unwrap_or(&item)) } else { None };
+        let (is_local_order, order_spotlight) = (local_order.is_some(), local_order.as_ref().and_then(|(_, why)| why.clone()));
+        let description = description.or(local_order.map(|(text, _)| text));
         let description = description.unwrap_or_else(|| {
             let node = edit.node_after.or(edit.node_before).unwrap_or("code");
             let (old, new) = short_pair(edit);
@@ -626,25 +677,125 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 None if edit.kind == EditKind::Docs && edit.text_before.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("added docs `{new}`"),
                 None if edit.kind == EditKind::Docs && edit.text_after.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("removed docs `{old}`"),
                 None if edit.kind == EditKind::Docs => format!("changed docs `{old}` → `{new}`"),
+                // An item in a function body with no text on one side: the item is new, or it
+                // is gone (batch 7b, part 5.7).
+                None if node == "item_stmt" && edit.text_before.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("added item `{new}`"),
+                None if node == "item_stmt" && edit.text_after.as_deref().is_none_or(|text| text.trim().is_empty()) => format!("removed item `{old}`"),
+                // Each other node with no text on one side: the text does not show an empty side.
+                None if old.is_empty() && !new.is_empty() => format!("added `{node}` `{new}`"),
+                None if new.is_empty() && !old.is_empty() => format!("removed `{node}` `{old}`"),
+                None if node == "item_stmt" => format!("changed item: `{old}` → `{new}`"),
                 None => format!("changed {node}: `{old}` → `{new}`"),
             }
         });
+        // An edit in a renamed or moved item shows at the new path (design 36.1). The steps of
+        // the path are the steps before the step, as for each other edit.
+        let anchor = anchor.map(|mut anchor| {
+            if let Some(new) = context.renames.items.get(&anchor.item).filter(|_| edit.kind != EditKind::Inserted) {
+                anchor.item = new.clone();
+            }
+            anchor
+        });
         let place = anchor.clone().map(|a| a.to_string()).unwrap_or_else(|| item.clone());
         // The text of a move has its two places.
-        let location = anchor.as_ref().filter(|a| !a.path.is_empty() && moved_text(edit).is_none()).map(|a| format!(" at `{a}`")).unwrap_or_default();
+        let location = anchor.as_ref().filter(|a| !a.path.is_empty() && moved_text(edit).is_none() && !is_local_const && !is_local_order).map(|a| format!(" at `{a}`")).unwrap_or_default();
         // C1: a doc edit has no MIR: its category is `docs`, also in a body that changed.
-        let category = if matches!(edit.kind, EditKind::Docs | EditKind::Comment) { Category::Docs } else { category(context, &item, op_category) };
+        let category = if matches!(edit.kind, EditKind::Docs | EditKind::Comment) {
+            Category::Docs
+        } else if is_local_const {
+            Category::Value
+        } else if is_local_order {
+            Category::Declaration
+        } else {
+            category(context, &item, op_category)
+        };
         push(facts, fact_of, &explained, Fact {
             at: anchor.clone().or_else(|| Some(Anchor::item(&item))),
             file: edit.file.clone(),
-            part: "edit".into(),
+            part: if is_local_order { "member order".into() } else { "edit".into() },
             description: format!("{description}{location}"),
             content: long_content(edit),
             category,
-            reason: context.step.reasons.get(&place).cloned(),
+            reason: context.step.reasons.get(&place).or_else(|| context.step.reasons.get(&item).filter(|_| order_spotlight.is_some())).cloned(),
+            spotlight: order_spotlight.is_some(),
+            spotlight_why: order_spotlight,
             ..fact_base()
         });
     }
+}
+
+/// The text of a changed value of a `const` or `static` statement in a function body (design
+/// 36.2): "value of `MAX` (in `m::f`) changed: 32 → 64". `None` for each other edit, and for a
+/// changed name or type: that edit keeps the general text.
+fn local_const_change(edit: &Edit, function: &str) -> Option<String> {
+    if edit.node_before != Some("item_stmt") || edit.node_after != Some("item_stmt") {
+        return None;
+    }
+    let parts = |text: &Option<String>| -> Option<(String, String, String)> {
+        match syn::parse_str::<syn::Item>(text.as_deref()?).ok()? {
+            syn::Item::Const(item) => Some((item.ident.to_string(), semilla_syntax::tree::tokens(&item.ty), semilla_syntax::tree::tokens(&item.expr))),
+            syn::Item::Static(item) => Some((item.ident.to_string(), semilla_syntax::tree::tokens(&item.ty), semilla_syntax::tree::tokens(&item.expr))),
+            _ => None,
+        }
+    };
+    let (old, new) = (parts(&edit.source_before).or_else(|| parts(&edit.text_before))?, parts(&edit.source_after).or_else(|| parts(&edit.text_after))?);
+    if old.0 != new.0 || old.1 != new.1 || old.2 == new.2 {
+        return None;
+    }
+    let text = crate::facts::long_value_description(&old.0, &old.2, &new.2).map(|text| text.replacen(&format!("`{}`", old.0), &format!("`{}` (in `{function}`)", old.0), 1));
+    Some(text.unwrap_or_else(|| format!("value of `{}` (in `{function}`) changed: {} → {}", old.0, old.2, new.2)))
+}
+
+/// The text of a changed member order of an `enum` or a `struct` in a function body (batch 7b,
+/// part 5.10), and the cause of a spotlight. The rule is the rule of a type of a module: the
+/// members that the two sides have are in a different order. `None` for each other edit.
+fn local_member_order(edit: &Edit, function: &str) -> Option<(String, Option<String>)> {
+    if edit.node_before != Some("item_stmt") || edit.node_after != Some("item_stmt") {
+        return None;
+    }
+    // The name, the member names, the attribute text, and the text with the members in the
+    // order of their names.
+    let parts = |text: &Option<String>| -> Option<(String, bool, Vec<String>, String, String)> {
+        match syn::parse_str::<syn::Item>(text.as_deref()?).ok()? {
+            syn::Item::Enum(mut item) => {
+                let names: Vec<String> = item.variants.iter().map(|variant| variant.ident.to_string()).collect();
+                let attrs = item.attrs.iter().map(semilla_syntax::tree::tokens).collect::<Vec<_>>().join(" ");
+                let mut members: Vec<syn::Variant> = item.variants.iter().cloned().collect();
+                members.sort_by_key(|variant| variant.ident.to_string());
+                item.variants = members.into_iter().collect();
+                Some((item.ident.to_string(), true, names, attrs, semilla_syntax::tree::tokens(&item)))
+            }
+            syn::Item::Struct(mut item) => {
+                let attrs = item.attrs.iter().map(semilla_syntax::tree::tokens).collect::<Vec<_>>().join(" ");
+                let syn::Fields::Named(fields) = &mut item.fields else { return None };
+                let names: Vec<String> = fields.named.iter().filter_map(|field| field.ident.as_ref().map(|ident| ident.to_string())).collect();
+                let mut members: Vec<syn::Field> = fields.named.iter().cloned().collect();
+                members.sort_by_key(|field| field.ident.as_ref().map(|ident| ident.to_string()));
+                fields.named = members.into_iter().collect();
+                Some((item.ident.to_string(), false, names, attrs, semilla_syntax::tree::tokens(&item)))
+            }
+            _ => None,
+        }
+    };
+    let (old, new) = (parts(&edit.source_before).or_else(|| parts(&edit.text_before))?, parts(&edit.source_after).or_else(|| parts(&edit.text_after))?);
+    if old.0 != new.0 || old.1 != new.1 {
+        return None;
+    }
+    let kept_old: Vec<&String> = old.2.iter().filter(|name| new.2.contains(name)).collect();
+    let kept_new: Vec<&String> = new.2.iter().filter(|name| old.2.contains(name)).collect();
+    if kept_old == kept_new {
+        return None;
+    }
+    let values = if old.1 { "; the discriminant values of the variants with no explicit value change" } else { "" };
+    let mut text = format!("member order of `{}` (in `{function}`): `{}` → `{}`{values}", old.0, old.2.join(", "), new.2.join(", "));
+    // A second change of the item: the fact shows the two sides of the full item.
+    if old.4 != new.4 {
+        let (before, after) = full_pair(edit);
+        text.push_str(&format!("; the item has a second change: {}", sides_text(&before, &after)));
+    }
+    let order = |attrs: &str| attrs.contains("repr") || attrs.split(|c: char| !c.is_alphanumeric()).any(|word| matches!(word, "PartialOrd" | "Ord" | "Hash"));
+    let why = (order(&old.3) || order(&new.3)).then(|| "an order change in a type with `#[repr]` or an order derive (`PartialOrd`, `Ord`, `Hash`)".to_string());
+    Some((text, why))
 }
 
 /// The text of the condition of an inserted `if`.

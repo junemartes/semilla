@@ -661,6 +661,11 @@ fn item_reasons(input: &StepInput, report: &mut StepReport) {
     for fact in report.facts.iter_mut().filter(|fact| !fact.spotlight && fact.spotlight_why.is_none() && fact.reason.is_none()) {
         fact.reason = input.step.reasons.get(&fact.reason_place()).cloned();
     }
+    // The key for the command to run again (batch 7b, part 5.5): the path of the item, for a
+    // spotlight in a part of an item that a reason can name.
+    for fact in report.facts.iter_mut().filter(|fact| fact.spotlight) {
+        fact.reason_item = fact.at.as_ref().filter(|at| !at.path.is_empty() && fact.reason_place().starts_with(&format!("{}/", at.item)) && is_item_reason_key(&at.item, input.before, input.after)).map(|at| at.item.clone());
+    }
     let keys: Vec<(&String, &String)> = input.step.reasons.iter().filter(|(key, _)| is_item_reason_key(key, input.before, input.after)).collect();
     if keys.is_empty() {
         return;
@@ -1025,7 +1030,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 uncovered.hint = Some(if parent(&old_name) == parent(&new_name) {
                     format!("rename (it looks like a rename of `{old_name}` to `{new_name}`)")
                 } else {
-                    format!("move-item (it looks like a move of `{old_name}` to `{new_name}`: anchor `{old_name}`, to={new_name}; Semilla derives a move only in a step with no other change)")
+                    format!("move-item (it looks like a move of `{old_name}` to `{new_name}`: anchor `{old_name}`, to={new_name}; with no identity claim in the step, Semilla derives the move)")
                 });
             }
         }
@@ -1044,6 +1049,21 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let identity_owned: BTreeSet<String> = if identity_verified { identity_derived.clone() } else { BTreeSet::new() };
     let rename_targets: BTreeSet<String> = renames.items.values().cloned().collect();
     let identity_claim = step.claims.iter().position(is_identity);
+    // Each entry of the rename map with its identity claim (design 36.1). An `impl` block and
+    // its methods follow the move of their type (`checks::moved_impls`).
+    let identity_pairs: Vec<(usize, String, String)> = renames
+        .items
+        .iter()
+        .filter_map(|(old, new)| {
+            let owns = |claim: &semilla_core::Claim| {
+                let Some(at) = claim.at.as_ref().filter(|_| is_identity(claim)) else { return false };
+                let (module, name) = at.item.rsplit_once("::").unwrap_or(("", at.item.as_str()));
+                let with_type = old.strip_prefix(module).and_then(|rest| rest.strip_prefix("::")).is_some_and(|rest| (rest.starts_with("impl ") || rest.starts_with('<')) && hints::words(rest).contains(&name));
+                at.item == *old || checks::is_child(old, &at.item) || with_type
+            };
+            Some((step.claims.iter().position(owns).or(identity_claim)?, old.clone(), new.clone()))
+        })
+        .collect();
     // The tests of the two trees (batch 6a, B2): only for a step with an edit of a macro
     // definition. A failure of the oracle gives no data, and the text then names no test.
     let macro_edit = edits.iter().any(|edit| {
@@ -1076,6 +1096,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         identity_derived: &identity_derived,
         rename_targets: &rename_targets,
         identity_claim,
+        identity_pairs: &identity_pairs,
         callees: call_facts.as_ref(),
     };
     owners::assign(&owner_input, &mut report);
@@ -1396,7 +1417,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     report.api_changes = api_changes;
 
     // The compare result of each fact (design 35).
-    set_compare(&mut report, &body_index, input.before, input.after, build_failed);
+    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed);
 
     // An edit in code that no checked configuration compiles has no compare (batch 5w, part A).
     if body_index.available {
@@ -1443,7 +1464,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 /// 6. A fact in a function that no checked configuration compiles: `no compare`.
 /// 7. A doc text, a comment, a manifest key, and a file with no changed body: `no code`.
 /// 8. Each other fact: `code equal`.
-fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, build_failed: bool) {
+fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool) {
     let note = |fact: &mut semilla_core::Fact, text: String| {
         fact.note = Some(match fact.note.take() {
             Some(old) if old.contains(&text) => old,
@@ -1451,6 +1472,23 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
             None => text,
         });
     };
+    // A changed body with `unsafe` code (design 36.5): the body of the edit, and each body
+    // with changed compiled code. An edit of the signature only is not an edit of the body.
+    let has_unsafe = |item: &str| [after, before].iter().any(|ws| ws.items.get(item).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Fn && item.body.is_some() && hints::words(&item.text).contains(&"unsafe")));
+    for fact in report.facts.iter_mut() {
+        let in_body = fact.at.as_ref().filter(|at| at.path.first().is_some_and(|first| first.to_string() != "sig")).is_some_and(|at| has_unsafe(&at.item));
+        fact.unsafe_code = in_body || fact.affected.iter().any(|item| has_unsafe(item));
+    }
+    // Two or more edits in one body with changed compiled code (design 36.5): the compare is
+    // a result of the edits together, and each fact says so.
+    let body_of = |fact: &semilla_core::Fact| fact.at.as_ref().filter(|at| !at.path.is_empty() && fact.affected.contains(&at.item)).map(|at| at.item.clone());
+    let edited: Vec<Option<String>> = report.facts.iter().map(body_of).collect();
+    for (index, fact) in report.facts.iter_mut().enumerate() {
+        fact.other_edits = match &edited[index] {
+            Some(body) => edited.iter().enumerate().filter(|(other, item)| *other != index && item.as_ref() == Some(body)).count(),
+            None => 0,
+        };
+    }
     for fact in report.facts.iter_mut() {
         if fact.compare == Compare::NotChecked {
             continue;
@@ -1498,7 +1536,8 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
         };
         let inactive = fact.at.as_ref().filter(|_| !no_code).and_then(|at| {
             let mut found = functions(after, &at.item);
-            found.extend(functions(before, &at.item));
+            // A function with a new name or a new module has its body at the new path.
+            found.extend(functions(before, &at.item).into_iter().map(|function| renames.items.get(&function).cloned().unwrap_or(function)));
             found.into_iter().find(|function| !body_index.has_body(function))
         });
         if let Some(item) = inactive {
@@ -1506,8 +1545,11 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
             note(fact, format!("{} no checked configuration compiles `{item}`", uncompiled::NO_COMPARE));
             continue;
         }
-        // An added or a removed item with no body (a type, a trait) has no compiled code.
-        let no_body = matches!(fact.category, Category::Added | Category::Removed);
+        // An added or a removed item with no body (a type, a trait) has no compiled code. An
+        // item with a body that is here has a compiled body with an equal result (batch 7b,
+        // part 5.1): a different definition of the name gives the same code.
+        let bodies = fact.at.as_ref().is_some_and(|at| !functions(after, &at.item).is_empty() || !functions(before, &at.item).is_empty());
+        let no_body = matches!(fact.category, Category::Added | Category::Removed) && !bodies;
         fact.compare = if no_code || no_body { Compare::NoCode } else { Compare::CodeEqual };
     }
 }
@@ -1626,6 +1668,10 @@ fn new_module_of_move(module: &semilla_syntax::Item, renames: &semilla_syntax::R
             count += 1;
             return true;
         }
+        // A new member of a moved item has its own fact (design 36.1).
+        if moved.iter().any(|new| checks::is_child(&item.path, new)) {
+            return true;
+        }
         item.kind == ItemKind::Use && item.vis.is_empty() && item.attrs.is_empty() && !item.path[inside.len()..].contains("::")
     }) && count > 0
 }
@@ -1662,6 +1708,10 @@ fn identity_step(
     use semilla_syntax::EditKind;
     let identity: Vec<usize> = results.iter().enumerate().filter(|(_, (claim, outcome))| is_identity(claim) && outcome.status.is_verified()).map(|(index, _)| index).collect();
     let &first = identity.first()?;
+    // Design 36.1: a derived rename or move does not stop for a second change. Each other
+    // change of the step stays an edit with its own fact, and each changed body gets its owner
+    // from the usual rules (`owners::assign`). Only an explicit claim keeps the rules of 22.4.
+    let with_changes = reason_out.is_some();
     let split = |what: String| {
         Some((
             ClaimStatus::Refuted { reason: format!("{OTHER_CHANGE}{what}") },
@@ -1734,7 +1784,9 @@ fn identity_step(
             let in_body = matches!(edit.kind, EditKind::Inserted | EditKind::Deleted | EditKind::Moved | EditKind::Modified | EditKind::Replaced);
             // A const or a static has its initializer in its signature text (design 22.3, A6).
             let initializer = edit.kind == EditKind::Signature && matches!(edit.attr_before.as_deref(), Some("const" | "static")) && edit.anchor().is_some_and(|a| a.path.is_empty());
-            if (in_body || initializer) && (equal_body(&item) || !body_index.available) {
+            // An equal compare never hides the text of an edit (design 35.1): with a derived
+            // identity, the edit keeps its own fact.
+            if !with_changes && (in_body || initializer) && (equal_body(&item) || !body_index.available) {
                 owners[index] = Some(first);
             }
         }
@@ -1787,10 +1839,10 @@ fn identity_step(
         (edit.kind == EditKind::Comment && attribute_lines(&edit.text_before) == attribute_lines(&edit.text_after))
             || wider(edit)
             || (edit.kind == EditKind::Docs && facts::doc_test_change(edit).is_none())
-            || (facts::is_parameter_rename(edits, index, before, after) && edit.anchor().is_some_and(|a| equal_body(&renames.items.get(&a.item).cloned().unwrap_or_else(|| a.item.clone()))))
+            || (facts::is_parameter_rename(edits, index, before, after, renames) && edit.anchor().is_some_and(|a| equal_body(&renames.items.get(&a.item).cloned().unwrap_or_else(|| a.item.clone()))))
     };
     let other_edit = edits.iter().zip(owners.iter()).enumerate().find(|(index, (edit, owner))| owner.is_none() && !allowed(*index, edit)).map(|(_, (edit, _))| format!("the step also has the change {}", edit.anchor().map(|a| format!("at `{a}`")).or_else(|| edit.file.clone()).unwrap_or_default()));
-    if let Some(name) = bad.first() {
+    if let Some(name) = bad.first().filter(|_| !with_changes) {
         // "Split the step" is a route only when the step has a second change.
         if other_claim.is_some() || other_edit.is_some() {
             return split(format!("the MIR of `{name}` changed"));
@@ -1823,10 +1875,10 @@ fn identity_step(
         }),
         _ => None,
     };
-    if let Some(module) = public_module {
+    if let Some(module) = public_module.filter(|_| !with_changes) {
         return Some((ClaimStatus::Refuted { reason: format!("the new module `{}` is `pub`, so the move changes the public API. Semilla does not derive a move into a new public module: this is a known limit", module.path) }, None));
     }
-    if let Some(what) = other_claim.or(other_edit) {
+    if let Some(what) = other_claim.or(other_edit).filter(|_| !with_changes) {
         return split(what);
     }
     // Rule 3: the derived bodies. `Debug` shows the name, which is expected. Any other trait (serde
@@ -2304,6 +2356,92 @@ fn impl_reach(workspace: &Workspace, item: &semilla_syntax::Item) -> Reach {
     maybe.or(unknown).map_or(Reach::No, Reach::Maybe)
 }
 
+/// The answer to "can a different crate use this associated constant or type?" (design
+/// 36.2). A member of a trait impl has no visibility: the impl gives the answer. A member of
+/// an inherent impl must be `pub`. A member that Semilla cannot find gets the answer of the
+/// impl (the higher level).
+fn assoc_reach(workspace: &Workspace, impl_path: &str, name: &str) -> Reach {
+    let Some(item) = workspace.items.get(impl_path) else { return Reach::No };
+    let public = match syn::parse_str::<syn::ItemImpl>(&item.source) {
+        Ok(parsed) if parsed.trait_.is_none() => {
+            let vis = parsed.items.iter().find_map(|member| match member {
+                syn::ImplItem::Const(constant) if constant.ident == name => Some(&constant.vis),
+                syn::ImplItem::Type(ty) if ty.ident == name => Some(&ty.vis),
+                _ => None,
+            });
+            vis.is_none_or(|vis| matches!(vis, syn::Visibility::Public(_)))
+        }
+        _ => true,
+    };
+    if public { impl_reach(workspace, item) } else { Reach::No }
+}
+
+/// The text of a possible public API change, from the answer for the two sides.
+fn reach_note(old: Reach, new: Reach) -> Option<String> {
+    match (old, new) {
+        (Reach::No, Reach::No) => None,
+        (Reach::Yes, _) | (_, Reach::Yes) => Some("the public API can change: a different crate can use the item".to_string()),
+        (Reach::Maybe(cause), _) | (_, Reach::Maybe(cause)) => Some(format!("the public API can change: {cause}")),
+    }
+}
+
+/// The public API note of a fact about an associated constant or type (design 36.2).
+pub(crate) fn assoc_api_note(impl_path: &str, name: &str, before: &Workspace, after: &Workspace) -> Option<String> {
+    reach_note(assoc_reach(before, impl_path, name), assoc_reach(after, impl_path, name))
+}
+
+/// True for an impl of `Send` or `Sync`: the auto trait of each type with a field of the self
+/// type can change too.
+fn is_auto_trait_impl(item: &semilla_syntax::Item) -> bool {
+    let name = facts::trait_impl_name(item);
+    name.split_once(" as ").is_some_and(|(_, tr)| matches!(tr.trim_end_matches('>').rsplit("::").next().unwrap_or(""), "Send" | "Sync"))
+}
+
+/// The public API note of a fact about a new or removed trait impl (design 36.2).
+pub(crate) fn impl_api_note(impl_path: &str, before: &Workspace, after: &Workspace) -> Option<String> {
+    let side = |ws: &Workspace| ws.items.get(impl_path).map_or(Reach::No, |item| impl_reach(ws, item));
+    let note = reach_note(side(before), side(after))?;
+    let auto = before.items.get(impl_path).or_else(|| after.items.get(impl_path)).is_some_and(is_auto_trait_impl);
+    Some(if auto { format!("{note}; {AUTO_TRAIT_NOTE}") } else { note })
+}
+
+/// The text for a changed `Send` or `Sync` impl.
+const AUTO_TRAIT_NOTE: &str = "each type with a field of this type can change too";
+
+/// The public API note of a fact about a changed `derive` list of a type (design 36.2).
+pub(crate) fn derive_api_note(type_path: &str, before: &Workspace, after: &Workspace) -> Option<String> {
+    reach_note(declaration_reach(before, type_path), declaration_reach(after, type_path))
+}
+
+/// The public API note of the fact of a new or removed item (design 36.2). An inherent impl
+/// has the note if a different crate can use one of its constants or types. `None` for a
+/// `use` line (its fact has the public names) and for an item that no different crate can use.
+pub(crate) fn item_api_note(workspace: &Workspace, path: &str, added: bool) -> Option<String> {
+    use semilla_syntax::ItemKind;
+    let item = workspace.items.get(path)?;
+    let reach = match item.kind {
+        ItemKind::Use => return None,
+        ItemKind::Impl if !item.path.contains(" as ") => {
+            let names = item.members.iter().filter(|member| member.starts_with("const ") || member.starts_with("type ")).filter_map(|member| member.split_whitespace().nth(1));
+            names.map(|name| assoc_reach(workspace, path, name)).find(|reach| *reach != Reach::No).unwrap_or(Reach::No)
+        }
+        _ => declaration_reach(workspace, path),
+    };
+    match reach {
+        Reach::No => None,
+        Reach::Yes if added => Some("the public API changes: a different crate can now use the item".into()),
+        Reach::Yes => Some("the public API changes: a different crate can no longer use the item".into()),
+        Reach::Maybe(cause) => Some(format!("the public API can change: {cause}")),
+    }
+}
+
+/// The members of an impl block for the text of its fact: `` with: `const ALL`, `fn new` ``.
+/// The empty text for an impl with no member.
+pub(crate) fn impl_members_text(item: &semilla_syntax::Item) -> String {
+    let names: Vec<String> = item.members.iter().map(|member| format!("`{}`", member.split_whitespace().take(2).collect::<Vec<_>>().join(" "))).collect();
+    if names.is_empty() { String::new() } else { format!(" with: {}", names.join(", ")) }
+}
+
 /// The fact kinds of a declaration for which an equal MIR of the workspace proves nothing
 /// about a different crate (batch 6a, A1; the audit table of design 33.1).
 fn declaration_part(part: &str) -> bool {
@@ -2486,13 +2624,56 @@ pub fn api_level(edits: &[Edit], before: &Workspace, after: &Workspace) -> (&'st
             let (ws, anchor) = if edit.kind == EditKind::ItemAdded { (after, &edit.after) } else { (before, &edit.before) };
             let item = anchor.as_ref().and_then(|a| ws.items.get(&a.item)).filter(|item| item.kind == semilla_syntax::ItemKind::Impl && item.path.contains(" as "));
             if let Some(item) = item.filter(|item| impl_reach(ws, item) != Reach::No) {
+                // The form of a `derive` line: "`Version` now has `From<u64>`" (design 36.2).
                 let name = facts::trait_impl_name(item);
+                let inner = name.trim_start_matches('<').strip_suffix('>').unwrap_or(&name);
+                let (ty, tr) = inner.split_once(" as ").unwrap_or((inner, ""));
+                let ty = if ty.contains('<') { ty } else { ty.rsplit("::").next().unwrap_or(ty) };
+                let auto = if is_auto_trait_impl(item) { format!(": {AUTO_TRAIT_NOTE}") } else { String::new() };
                 match edit.kind {
-                    EditKind::ItemAdded => minor.push(format!("added trait impl `{name}`")),
-                    _ => major.push(format!("removed trait impl `{name}`")),
+                    EditKind::ItemAdded => minor.push(format!("`{ty}` now has `{tr}`{auto}")),
+                    _ => major.push(format!("`{ty}` no longer has `{tr}` (the public API can change){auto}")),
                 }
                 continue;
             }
+            // A new or removed inherent impl (design 36.2): each `pub` constant and type. A
+            // method is an item with its own edit.
+            let item = anchor.as_ref().and_then(|a| ws.items.get(&a.item)).filter(|item| item.kind == semilla_syntax::ItemKind::Impl && !item.path.contains(" as "));
+            if let Some(item) = item {
+                for member in item.members.iter().filter(|member| member.starts_with("const ") || member.starts_with("type ")) {
+                    let name = member.split_whitespace().nth(1).unwrap_or("");
+                    if assoc_reach(ws, &item.path, name) != Reach::No {
+                        let path = facts::assoc_path(&item.path, name);
+                        match edit.kind {
+                            EditKind::ItemAdded => minor.push(format!("added `{path}`")),
+                            _ => major.push(format!("removed `{path}`")),
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        // An associated constant or type of an impl (design 36.2). If Semilla cannot decide
+        // if a different crate can use the item, the level is the higher level.
+        if let Some((_, name)) = facts::impl_member(edit) {
+            let impl_path = edit.anchor().map(|a| a.item.clone()).unwrap_or_default();
+            let path = facts::assoc_path(&impl_path, name);
+            let (was, now) = (assoc_reach(before, &impl_path, name) != Reach::No, assoc_reach(after, &impl_path, name) != Reach::No);
+            match (edit.source_before.is_some(), edit.source_after.is_some()) {
+                (false, true) if now => minor.push(format!("added `{path}`")),
+                (true, false) if was => major.push(format!("removed `{path}`")),
+                (true, true) if was || now => major.push(format!("changed `{path}` (the type or the value)")),
+                _ => {}
+            }
+            continue;
+        }
+        if let Some((part, name)) = facts::assoc_label(edit) {
+            let impl_path = edit.anchor().map(|a| a.item.clone()).unwrap_or_default();
+            if assoc_reach(before, &impl_path, name) != Reach::No || assoc_reach(after, &impl_path, name) != Reach::No {
+                let part = if part == "attribute" { "attributes" } else { part };
+                major.push(format!("{part} of `{}`", facts::assoc_path(&impl_path, name)));
+            }
+            continue;
         }
         // The bounds of a declaration with an equal set of predicates (batch 6b, part 3): the
         // order of the bounds and the place of a bound are not a part of the public API.
@@ -2744,10 +2925,29 @@ pub fn verify_changeset(
             }
         }
     }
-    // Batch 5x, part C: the step of the pair has no second change, and the proof of the rename
-    // or the move stopped. The note of the step has the cause (`identity::derive`).
-    for pair in report.pairs.iter_mut() {
-        pair.stopped = report.steps.iter().flat_map(|step| &step.notes).find_map(|note| stopped_pair(note, &pair.old, &pair.new));
+    // Design 36.1: a pair warning is only for a pair that Semilla does not derive, and it gives
+    // the cause. The note of the step has the cause when the check of the name map stopped
+    // (`identity::derive`). Each other cause comes from the pair.
+    let step_of = |id: &str| -> Option<usize> {
+        let from_fact = id.strip_prefix("step ").and_then(|rest| rest.split(' ').next()).and_then(|index| index.parse().ok());
+        from_fact.or_else(|| set.steps.iter().find(|step| step.claims.iter().any(|claim| claim.id == id)).map(|step| step.index))
+    };
+    let above_limit = report.steps.iter().flat_map(|step| &step.notes).any(|note| note.contains(": Semilla derives no rename or move above "));
+    // With no derived facts (the claim mode of the tests), Semilla tries no derivation.
+    for pair in report.pairs.iter_mut().filter(|_| options.derive_edits) {
+        let from_note = report.steps.iter().flat_map(|step| &step.notes).find_map(|note| stopped_pair(note, &pair.old, &pair.new));
+        let parent = |path: &str| path.rsplit_once("::").map(|(parent, _)| parent.to_string()).unwrap_or_default();
+        let last = |path: &str| path.rsplit("::").next().unwrap_or(path).to_string();
+        let steps = pair.claims.first().and_then(|id| step_of(id)).zip(pair.claims.get(1).and_then(|id| step_of(id)));
+        // The step has the pair as a candidate, but the compare gave no body (a build that fails).
+        let waits = report.steps.iter().flat_map(|step| &step.notes).any(|note| note.contains("phase 2 tries the derivation") && note.contains(&format!("`{}` → `{}`", pair.old, pair.new)));
+        pair.stopped = from_note.or_else(|| match steps {
+            _ if waits => Some("Semilla has no compare result for the step".to_string()),
+            Some((removed, added)) if removed != added => Some(format!("step {removed} removes the first item and step {added} adds the second item, and Semilla derives a rename or a move in one step")),
+            _ if parent(&pair.old) != parent(&pair.new) && last(&pair.old) != last(&pair.new) => Some("the name and the module are new: Semilla derives a rename in the same module, or a move with the same name".to_string()),
+            _ if above_limit => Some(format!("the step has more than {} removed or added items of one kind in one module", identity::MAX_GROUP)),
+            _ => Some("no name map of the step has this pair".to_string()),
+        });
     }
     (report, outcomes)
 }

@@ -67,6 +67,9 @@ pub enum GroupKind {
     Fix,
     Feature,
     Behavior,
+    /// The derived kind of a group that is not only renames and not only moves (design
+    /// 36.3). The word gives no verdict.
+    Change,
 }
 
 /// A set of steps with one intent. It is about the size of one commit.

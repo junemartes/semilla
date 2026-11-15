@@ -229,6 +229,147 @@ pub fn likely_local_renames(edits: &[Edit], before: &semilla_syntax::Workspace, 
     found
 }
 
+/// True if each use of `name` in the words of an item text can be a local variable or a
+/// parameter (design 36.1, rule 7). A macro (`name!`), a part of a path (`a::name`), and a
+/// field label of a struct literal or pattern are not such a use. A field after a dot
+/// (`x.name`) is a different name: the rule does not count it. The rule is conservative: a
+/// `false` result only keeps the edits as facts of their own.
+pub(crate) fn only_local_uses(words: &[&str], name: &str) -> bool {
+    // For each open bracket: true for a brace that can start a struct literal or pattern.
+    let mut stack: Vec<bool> = Vec::new();
+    for (index, word) in words.iter().enumerate() {
+        let prev = |back: usize| index.checked_sub(back).map_or("", |at| words[at]);
+        let next = |ahead: usize| words.get(index + ahead).copied().unwrap_or("");
+        match *word {
+            "{" => {
+                let name_before = prev(1).chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+                stack.push(name_before || (prev(1) == ">" && prev(2) != "="));
+            }
+            "(" | "[" => stack.push(false),
+            "}" | ")" | "]" => {
+                stack.pop();
+            }
+            found if found == name => {
+                if prev(1) == "." {
+                    continue;
+                }
+                if next(1) == "!" || (prev(1) == ":" && prev(2) == ":") || (next(1) == ":" && next(2) == ":") {
+                    return false;
+                }
+                let label = stack.last().copied().unwrap_or(false) && matches!(prev(1), "{" | ",") && matches!(next(1), ":" | "," | "}");
+                if label {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// The words and the other characters of a token text, as [`words`], with each string literal
+/// and each character literal as one word. So a text in a literal is never a name.
+pub(crate) fn code_words(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let rest = &text[at..];
+        // A raw string: `r"…"`, `r#"…"#`, with an optional `b` before.
+        let raw = rest.strip_prefix("br").or_else(|| rest.strip_prefix('r')).filter(|_| at == 0 || !(bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_'));
+        let hashes = raw.map(|tail| tail.len() - tail.trim_start_matches('#').len());
+        let end = match (raw, hashes) {
+            (Some(tail), Some(count)) if tail[count..].starts_with('"') => {
+                let close = format!("\"{}", "#".repeat(count));
+                let open = rest.len() - tail.len() + count + 1;
+                Some(rest[open..].find(&close).map_or(rest.len(), |found| open + found + close.len()))
+            }
+            _ if rest.starts_with('"') => {
+                let mut escaped = false;
+                let close = rest[1..].char_indices().find(|(_, c)| {
+                    let quote = !escaped && *c == '"';
+                    escaped = !escaped && *c == '\\';
+                    quote
+                });
+                Some(close.map_or(rest.len(), |(index, _)| index + 2))
+            }
+            _ if rest.starts_with('\'') => {
+                // A character literal has its second quote after one character or one escape.
+                let mut chars = rest[1..].char_indices();
+                match chars.next() {
+                    Some((_, '\\')) => rest[3..].find('\'').map(|found| found + 4),
+                    Some((_, c)) => rest[1 + c.len_utf8()..].starts_with('\'').then_some(2 + c.len_utf8()),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(end) = end {
+            out.push(&rest[..end]);
+            at += end;
+            continue;
+        }
+        let c = rest.chars().next().unwrap_or(' ');
+        if c.is_alphanumeric() || c == '_' {
+            let len = rest.char_indices().find(|(_, c)| !(c.is_alphanumeric() || *c == '_')).map_or(rest.len(), |(index, _)| index);
+            out.push(&rest[..len]);
+            at += len;
+        } else {
+            if !c.is_whitespace() {
+                out.push(&rest[..c.len_utf8()]);
+            }
+            at += c.len_utf8();
+        }
+    }
+    out
+}
+
+/// The rename of a local variable or a parameter in an item that has other edits too (design
+/// 36.1, rule 7). `pairs` are the name changes of the binding places: a parameter rename, or
+/// an edit of a pattern that changes only one name. A pair counts when the old name is not in
+/// the new text, the new name is not in the old text, and each use can be a local.
+pub fn local_renames_with_edits(old_item: &semilla_syntax::Item, new_item: &semilla_syntax::Item, pairs: &[(String, String)]) -> Vec<(String, String)> {
+    let (old_words, new_words) = (code_words(&old_item.text), code_words(&new_item.text));
+    let mut found: Vec<(String, String)> = Vec::new();
+    for (old, new) in pairs {
+        // A use that is not a field after a dot.
+        let used = |words: &[&str], name: &str| words.iter().enumerate().any(|(index, word)| *word == name && (index == 0 || words[index - 1] != "."));
+        let fresh = !used(&new_words, old) && !used(&old_words, new);
+        let plain = old != "_" && new != "_" && only_local_uses(&old_words, old) && only_local_uses(&new_words, new);
+        let one_to_one = !found.iter().any(|(a, b)| a == old || b == new);
+        if fresh && plain && one_to_one {
+            found.push((old.clone(), new.clone()));
+        }
+    }
+    found
+}
+
+/// The one name change of two texts: the words are equal except for one consistent change of
+/// one identifier. `None` for each other difference.
+pub(crate) fn one_name_change(before: &str, after: &str) -> Option<(String, String)> {
+    let (old, new) = (code_words(before), code_words(after));
+    if old.len() != new.len() {
+        return None;
+    }
+    let is_ident = |t: &str| t.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && t.chars().all(|c| c.is_alphanumeric() || c == '_');
+    let mut pair: Option<(&str, &str)> = None;
+    for (index, (a, b)) in old.iter().zip(&new).enumerate().filter(|(_, (a, b))| a != b) {
+        // A name after a dot is a field or a method, not a local.
+        if !is_ident(a) || !is_ident(b) || pair.is_some_and(|found| found != (*a, *b)) || (index > 0 && old[index - 1] == ".") {
+            return None;
+        }
+        pair = Some((*a, *b));
+    }
+    pair.map(|(a, b)| (a.to_string(), b.to_string()))
+}
+
+/// True if the names of `pairs` are the only difference of two texts (and the texts differ).
+pub(crate) fn only_names_change(before: &str, after: &str, pairs: &[(String, String)]) -> bool {
+    let (old, new) = (code_words(before), code_words(after));
+    // A name after a dot is a field or a method, not a local.
+    old.len() == new.len() && old != new && old.iter().zip(&new).enumerate().all(|(index, (a, b))| a == b || (pairs.iter().any(|(from, to)| from == a && to == b) && (index == 0 || old[index - 1] != ".")))
+}
+
 /// The words and the other characters of a token text (a delimiter can touch a word: `(len)`).
 pub(crate) fn words(text: &str) -> Vec<&str> {
     let mut out = Vec::new();

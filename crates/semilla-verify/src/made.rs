@@ -269,9 +269,11 @@ pub(crate) fn apply(step: &Step, edits: &[Edit], fact_of: &[Option<usize>], befo
             if direct && let Some(fact) = fact.and_then(|fact| report.facts.get_mut(fact)) {
                 let name = definition_name(item);
                 let path = format!("`{}`", item.path);
-                if fact.description == format!("added {path}") {
+                // The text with no public API note at its end.
+                let plain = fact.description.split(" (the public API ").next().unwrap_or_default().to_string();
+                if plain == format!("added {path}") {
                     fact.description = format!("added macro `{name}`");
-                } else if fact.description == format!("removed {path}") {
+                } else if plain == format!("removed {path}") {
                     fact.description = format!("removed macro `{name}`");
                 } else if let Some(rest) = fact.description.strip_prefix("changed macro or signature ") {
                     fact.description = format!("changed macro `{name}`: {rest}");
@@ -330,6 +332,26 @@ pub(crate) fn apply(step: &Step, edits: &[Edit], fact_of: &[Option<usize>], befo
             let line = format!("removed `{}` (the macro call `{old_name}` made it)", item.label);
             if item.public && !outcome.major.contains(&line) {
                 outcome.major.push(line);
+            }
+        }
+        // An item of the source that a macro call makes now, or the reverse (batch 7b, part
+        // 5.1). The item is not removed and not added: its fact names the macro call. The
+        // compare of its body, if it has one, is the compare of the fact.
+        let wrapped = |item: &Shown, word: &str| -> Option<String> {
+            let mut words = item.label.split_whitespace().rev();
+            let (ident, kind) = (words.next()?, words.next()?);
+            // The made item is in the module of the macro call.
+            let module = call.path.rsplit_once("::").map(|(module, _)| module)?;
+            ["fn", "struct", "enum", "union", "trait", "type", "const", "static"].contains(&kind).then(|| format!("{word} `{module}::{ident}`"))
+        };
+        let macro_name = |text: &str| format!("{}!", text.split('!').next().unwrap_or(text).trim());
+        for (items, word, call_name) in [(&added, "removed", &name), (&removed, "added", &old_name)] {
+            for head in items.iter().filter_map(|item| wrapped(item, word)) {
+                let whole = |fact: &semilla_core::Fact| fact.description == head || fact.description.starts_with(&format!("{head} ("));
+                let Some(fact) = report.facts.iter_mut().find(|fact| matches!(fact.category, Category::Added | Category::Removed) && whole(fact)) else { continue };
+                let path = head.split('`').nth(1).unwrap_or_default().to_string();
+                fact.description = if word == "removed" { format!("`{path}` comes from the macro call `{}` now", macro_name(call_name)) } else { format!("`{path}` came from the macro call `{}` before, and it is an item of the source now", macro_name(call_name)) };
+                fact.category = Category::Macro;
             }
         }
         for item in &added {

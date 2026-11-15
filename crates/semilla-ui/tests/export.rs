@@ -253,6 +253,25 @@ fn the_facts_give_the_risk_and_the_equal_label() {
         assert!(group.all_equal, "{category:?} {compare:?}");
         assert!(render_markdown(&data, false).contains("each fact: code equal or no code"));
     }
+    // Batch 7b, part 3: a public API change with equal code does not have the label, and its
+    // fact line has the public API line.
+    {
+        let mut data = data.clone();
+        let api = semilla_core::Fact { description: "visibility of `shop::f`: `private` → `pub` (the public API changes: a different crate can now use the item)".into(), ..fact(Category::Visibility, Compare::CodeEqual) };
+        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(api);
+        assert!(!g2(&data).all_equal);
+        let text = render_markdown(&data, true);
+        assert!(text.contains("! public API: the compare does not cover the code of a different crate"), "{text}");
+    }
+    // Batch 7b, part 5.3: a changed body with `unsafe` code adds one point and its line.
+    {
+        let mut data = data.clone();
+        let risky = semilla_core::Fact { unsafe_code: true, ..fact(Category::Rename, Compare::CodeEqual) };
+        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(risky);
+        assert_eq!(g2(&data).risk_score, base.risk_score + 1);
+        assert!(g2(&data).risk_reasons.contains(&"unsafe code".to_string()));
+        assert!(render_markdown(&data, true).contains("! unsafe code: the changed body has an `unsafe` block"));
+    }
     // A spotlight fact with equal code does not have the label.
     let mut data = data.clone();
     data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(semilla_core::Fact { spotlight: true, ..fact(Category::Attribute, Compare::CodeEqual) });

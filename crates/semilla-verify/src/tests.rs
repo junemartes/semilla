@@ -787,6 +787,10 @@ fn the_scope_of_a_property_has_the_trait_impls_and_the_drop_impls() {
     let result = check(vec![label(vec![ty("core::fmt::Arguments", "core"), ty("alloc::vec::Vec", "alloc")], vec![])], "no-io");
     assert_eq!(result.status, ClaimStatus::Verified { proof: "partial".into() });
     assert!(result.after.as_deref().is_some_and(|t| t.contains("a value of `core::fmt::Arguments` goes to the code of another crate") && !t.contains("alloc::vec::Vec")), "{result:?}");
+    // Batch 7b, part 6: a panic site in a trait impl has the route from the item of the claim.
+    let result = check(vec![label(vec![ty("demo::Label", "demo")], vec![]), BodyFacts { externals: vec![], panics: vec!["division by zero".into()], ..fmt.clone() }], "no-panic");
+    let route = "; the route to `<demo::Label as std::fmt::Display>::fmt`: `demo::label` → a generic function of a different crate → each trait impl of `demo::Label` → `<demo::Label as std::fmt::Display>::fmt`";
+    assert!(matches!(&result.status, ClaimStatus::Refuted { reason } if reason.ends_with(route)), "{result:?}");
     // The counts.
     let result = check(vec![label(vec![ty("demo::Label", "demo")], vec![ty("demo::Label", "demo")]), BodyFacts { externals: vec![], ..fmt.clone() }, BodyFacts { externals: vec![], ..drop_body.clone() }], "no-panic");
     assert_eq!(result.status, ClaimStatus::Verified { proof: "mir".into() }, "{result:?}");
@@ -915,6 +919,14 @@ fn phase_1_gives_no_pair_warning_for_a_pair_that_waits_for_its_identity_proof() 
     let (report, _) = verify_changeset(&set, &mut loader, &MirFacts(Vec::new()), &NoOracle, options);
     assert_eq!(report.pairs.len(), 1, "{:?}", report.pairs);
     assert_eq!((report.pairs[0].old.as_str(), report.pairs[0].new.as_str()), ("demo::scale", "demo::multiply"));
+    // Design 36.1: the warning is only for a pair that Semilla does not derive, with the cause.
+    assert_eq!(report.pairs[0].stopped.as_deref(), Some("Semilla has no compare result for the step"), "{:?}", report.pairs);
+    // A new name in a new module: the cause is the limit of the derivation.
+    let (_d3, far) = load(&format!("pub mod b {{\n{}}}\n", PAIR_AFTER.replace("pub fn multiply", "pub fn multiply_all")));
+    let mut loader = |tree: &str| Ok(if tree == "a" { old.clone() } else { far.clone() });
+    let (report, _) = verify_changeset(&set, &mut loader, &MirFacts(Vec::new()), &NoOracle, options);
+    let pair = report.pairs.iter().find(|pair| pair.old == "demo::scale").unwrap_or_else(|| panic!("{:?}", report.pairs));
+    assert!(pair.text().ends_with("they can be one item with a new place and a second change. Semilla does not derive one item: the name and the module are new: Semilla derives a rename in the same module, or a move with the same name"), "{}", pair.text());
 }
 
 #[test]
@@ -1521,10 +1533,12 @@ fn a_move_gets_move_hints() {
     let rewrite = vec![claim("c1", "rewrite-item", Some("demo::a::over"), serde_json::json!({"new": "demo::b::over", "note": "move it to the b module"}))];
     let report = run(MOVE_BEFORE, MOVE_AFTER, rewrite, &[], None);
     assert_eq!(status_of(&report, "c1"), &ClaimStatus::Empty);
-    assert!(report.claims[0].hint.as_deref().is_some_and(|h| h.contains("Semilla derives a move or a rename")), "{:?}", report.claims[0].hint);
+    assert!(report.claims[0].hint.as_deref().is_some_and(|h| h.contains("Semilla derives the move or the rename")), "{:?}", report.claims[0].hint);
     let pair = semilla_core::PairWarning { old: "a::x::f".into(), new: "b::f".into(), similarity: 1.0, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: None };
-    // Design 35: the text names no claim.
-    assert!(pair.text().contains("Semilla derives a rename or a move only in a step with no other change") && !pair.text().contains("--claim"), "{}", pair.text());
+    // Design 35: the text names no claim. Design 36.1: the text gives the cause when one is known.
+    assert_eq!(pair.text(), "`a::x::f` (removed) and `b::f` (added) are 100% similar: they can be one item with a new place and a second change");
+    let stopped = semilla_core::PairWarning { stopped: Some("the name and the module are new: Semilla derives a rename in the same module, or a move with the same name".into()), ..pair.clone() };
+    assert!(stopped.text().ends_with("a second change. Semilla does not derive one item: the name and the module are new: Semilla derives a rename in the same module, or a move with the same name") && !stopped.text().contains("--claim"), "{}", stopped.text());
     let pair = semilla_core::PairWarning { old: "a::percent".into(), new: "a::pct".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: None };
     assert!(pair.text().starts_with("`a::percent` (removed) and `a::pct` (added) are 90% similar") && !pair.text().contains("--claim"), "{}", pair.text());
 }
@@ -1777,7 +1791,7 @@ fn a_const_value_is_a_fact_that_owns_its_users() {
     let report = run_calls(before, &after, bodies);
     assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
-    assert_eq!(report.facts[0].description, "value of `demo::BASE_FEE` changed: 25 → 250");
+    assert_eq!(report.facts[0].description, "value of `demo::BASE_FEE` changed: 25 → 250 (the public API can change: a different crate can use the item)");
     assert_eq!(report.facts[0].affected, ["demo::BASE_FEE", "demo::DOUBLE", "demo::fee"]);
     assert_eq!(report.facts[0].compare, Compare::CodeDifferent);
     // In an identity step, the value fact gives "split the step".
@@ -1849,6 +1863,23 @@ fn a_hand_written_impl_that_replaces_a_derive_is_not_neutral() {
 }
 
 #[test]
+fn each_twin_under_cfg_has_its_own_item_and_its_own_status() {
+    // Batch 7b, part 4.4: two definitions of one name under `cfg` have one MIR name at two
+    // places. The body at each place belongs to the item at that place.
+    let (_d, ws) = load("#[cfg(unix)]\npub fn cut(a: u64) -> u64 {\n    a + 1\n}\n#[cfg(not(unix))]\npub fn cut(a: u64) -> u64 {\n    a\n}\n");
+    let bodies = vec![body("demo::cut", "src/lib.rs", 2, different(false)), body("demo::cut", "src/lib.rs", 6, equal("n0"))];
+    let index = checks::BodyIndex::new(&bodies, &ws, &ws);
+    assert_eq!(index.item_of(&bodies[0]).as_deref(), Some("demo::cut#0"));
+    assert_eq!(index.item_of(&bodies[1]).as_deref(), Some("demo::cut#1"));
+    assert!(index.changed("demo::cut#0") && !index.changed("demo::cut#1"));
+    // The MIR name is the name of the two twins: a twin that is not equal wins.
+    assert!(index.changed("demo::cut"));
+    let swapped = vec![bodies[1].clone(), bodies[0].clone()];
+    let index = checks::BodyIndex::new(&swapped, &ws, &ws);
+    assert!(index.changed("demo::cut") && index.changed("demo::cut#0") && !index.changed("demo::cut#1"));
+}
+
+#[test]
 fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     // Invariant I1, checked on a result that a defect in the verifier could make.
     let (_d, ws) = load("pub fn g() -> u32 {\n    1\n}\n");
@@ -1856,7 +1887,7 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }];
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
-    let input = owners::Input { made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, callees: None };
+    let input = owners::Input { made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None };
     let mut report = StepReport::default();
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
     // A fact that does not list the body is not an owner.
@@ -2161,23 +2192,29 @@ fn a_doc_change_and_a_parameter_rename_do_not_stop_an_identity() {
     assert!(report.facts.iter().any(|f| f.description == "parameter `balance` of `demo::make` renamed to `cents`: `u32`" && f.compare == Compare::CodeEqual), "{texts:?}");
     assert!(report.facts.iter().any(|f| f.description.starts_with("changed docs") && f.compare == Compare::NoCode), "{texts:?}");
     // The field is a part of the public API: the rename has one more fact to read (design 31.8).
-    assert_eq!(texts[3], "public API: `demo::Account.balance` is now `demo::Account.cents` (a different crate can no longer use the old path)", "{texts:?}");
-    assert_eq!(report.facts.len(), 4, "{texts:?}");
+    assert_eq!(texts[4], "public API: `demo::Account.balance` is now `demo::Account.cents` (a different crate can no longer use the old path)", "{texts:?}");
+    // The use of the parameter in the body is a local rename fact (design 36.1, rule 7).
+    assert!(report.facts.iter().any(|f| f.description == "`demo::make`: renamed local `balance` → `cents`, 1 edit(s)" && f.category == Category::Rename && f.compare == Compare::CodeEqual), "{texts:?}");
+    assert_eq!(report.facts.len(), 5, "{texts:?}");
     // C1: a new module doc and a new inner doc attribute have the class `other`.
     for doc in ["//! The demo crate.\n", "#![doc = \"The demo crate.\"]\n"] {
         let report = run_derived(before, &format!("{doc}{before}"), &[("demo::get", equal("n0")), ("demo::make", equal("n0"))]);
         assert!(report.accepted() && !report.facts.is_empty() && report.facts.iter().all(|f| f.compare == Compare::NoCode), "{doc}: {:#?}", report.facts);
     }
-    // The same step and a changed literal: no proof.
+    // The same step and a second edit (design 36.1): the rename stays, and the edit is a fact
+    // with its body.
     let changed = after.replace("a.cents\n", "a.cents + 1\n");
     let bodies = [("demo::get", different(false)), ("demo::make", equal("n0")), (debug, different(false))];
     let report = run_derived(before, &changed, &bodies);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("renamed `demo::Account")), "{:?}", descriptions(&report));
-    // A parameter rename in a body that changed is not allowed.
+    assert_eq!(report.facts[0].description, "renamed `demo::Account.balance` → `demo::Account.cents`");
+    assert!(report.facts[0].affected == [debug] && report.facts.iter().any(|f| f.description == "changed expression `a.balance` → `a.cents + 1` at `demo::get/tail`" && f.compare == Compare::CodeDifferent && f.affected == ["demo::get"]), "{report:#?}");
+    // A parameter rename in a body with a second edit: the parameter fact, and the edit fact
+    // with the body.
     let changed = after.replace("Account { cents: cents }", "Account { cents: cents + 1 }");
     let bodies = [("demo::get", equal("n0")), ("demo::make", different(false)), (debug, different(false))];
     let report = run_derived(before, &changed, &bodies);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("renamed `demo::Account")), "{:?}", descriptions(&report));
+    assert!(report.facts.iter().any(|f| f.description == "parameter `balance` of `demo::make` renamed to `cents`: `u32`" && f.compare == Compare::CodeEqual && f.affected.is_empty()), "{report:#?}");
+    assert!(report.facts.iter().any(|f| f.description == "changed struct: `Account { balance: balance }` → `Account { cents: cents + 1 }` at `demo::make/tail`" && f.compare == Compare::CodeDifferent && f.affected == ["demo::make"]), "{report:#?}");
 }
 
 #[test]
@@ -2187,11 +2224,11 @@ fn a_new_type_gives_one_fact() {
     let before = "pub enum Kind {\n    A,\n}\npub fn f() -> u32 {\n    1\n}\n";
     let types = "pub struct Label(pub u64);\npub struct Shown {\n    pub id: u64,\n}\npub enum Mode {\n    Fast,\n    Slow(u8),\n    Named { a: u8 },\n}\n";
     let report = run_derived(before, &format!("{before}{types}"), &[("demo::f", equal("n0"))]);
-    assert_eq!(descriptions(&report), ["added `demo::Label`", "added `demo::Mode`", "added `demo::Shown`"], "{:#?}", report.facts);
+    assert_eq!(descriptions(&report), ["added `demo::Label` (the public API changes: a different crate can now use the item)", "added `demo::Mode` (the public API changes: a different crate can now use the item)", "added `demo::Shown` (the public API changes: a different crate can now use the item)"], "{:#?}", report.facts);
     assert!(report.uncovered.is_empty() && report.accepted(), "{report:#?}");
     // The removal is the same.
     let report = run_derived(&format!("{before}{types}"), before, &[("demo::f", equal("n0"))]);
-    assert_eq!(descriptions(&report), ["removed `demo::Label`", "removed `demo::Mode`", "removed `demo::Shown`"], "{:#?}", report.facts);
+    assert_eq!(descriptions(&report), ["removed `demo::Label` (the public API changes: a different crate can no longer use the item)", "removed `demo::Mode` (the public API changes: a different crate can no longer use the item)", "removed `demo::Shown` (the public API changes: a different crate can no longer use the item)"], "{:#?}", report.facts);
     // A new tuple variant of an old enum: the variant fact has the fields. No tuple fact.
     let report = run_derived(before, &before.replace("    A,\n", "    A,\n    B(u8, u16),\n"), &[("demo::f", equal("n0"))]);
     // A different crate can use the enum: the new variant can change the public API (batch 6a, A1).
@@ -2236,14 +2273,17 @@ fn the_note_of_a_pair_with_no_proof_names_the_difference_of_the_pair() {
     let after = before.replace("a_small_amount_has_no_fee", "a_small_amount_pays_the_fee").replace("200", "170").replace("a + 1", "a + 2");
     let bodies = [("demo::a_small_amount_pays_the_fee", different(false)), ("demo::other", different(false))];
     let report = run_derived(before, &after, &bodies);
-    let note = report.notes.iter().find(|n| n.contains("as removed and added")).unwrap_or_else(|| panic!("{:#?}", report.notes));
-    assert!(note.contains("the pair has a difference: changed literal `200` → `170`") && !note.contains("demo::other"), "{note}");
-    // A pair with no difference: the note names the other change of the step.
+    // Design 36.1: the rename is one fact, and each literal is a fact with its own body.
+    let texts = descriptions(&report);
+    assert_eq!(texts[..3], ["renamed `demo::a_small_amount_has_no_fee` → `demo::a_small_amount_pays_the_fee`", "changed literal `200` → `170` at `demo::a_small_amount_pays_the_fee/S0/init`", "changed literal `1` → `2` at `demo::other/tail/rhs`"], "{texts:?}");
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[1].affected == ["demo::a_small_amount_pays_the_fee"] && report.facts[2].affected == ["demo::other"] && report.notes.is_empty(), "{report:#?}");
+    // A pair with no difference, and a second change in a different function.
     let after = before.replace("a_small_amount_has_no_fee", "a_small_amount_pays_the_fee").replace("a + 1", "a + 2");
     let bodies = [("demo::a_small_amount_pays_the_fee", equal("n0")), ("demo::other", different(false))];
     let report = run_derived(before, &after, &bodies);
-    let note = report.notes.iter().find(|n| n.contains("as removed and added")).unwrap_or_else(|| panic!("{:#?}", report.notes));
-    assert!(note.contains("the MIR of `demo::other` changed") && note.contains("Semilla derives a rename only in a step with no other change"), "{note}");
+    let texts = descriptions(&report);
+    assert_eq!(texts[..2], ["renamed `demo::a_small_amount_has_no_fee` → `demo::a_small_amount_pays_the_fee`", "changed literal `1` → `2` at `demo::other/tail/rhs`"], "{texts:?}");
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[1].compare == Compare::CodeDifferent && report.notes.is_empty(), "{report:#?}");
 }
 
 #[test]
@@ -2266,10 +2306,12 @@ fn a_variant_rename_with_a_derived_debug_is_a_derived_identity() {
     let report = run_derived(before, &before.replace("max", "limit"), &bodies);
     assert!(report.accepted() && report.facts.len() == 2 && report.facts[0].affected == [debug], "{report:#?}");
     assert_eq!(report.facts[1].description, "public API: `demo::LedgerError::OverLimit.max` is now `demo::LedgerError::OverLimit.limit` (a different crate can no longer use the old path)");
-    // A body that is not derived keeps the rule: no proof.
+    // A changed body that is not derived and has no edit fact (design 36.1, rule 4): it is a
+    // body of the rename fact, with the mismatch mark.
     let other = [("demo::check", different(false)), (debug, different(false))];
     let report = run_derived(before, &before.replace("Frozen", "Locked"), &other);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("renamed")), "{:?}", descriptions(&report));
+    let fact = &report.facts[0];
+    assert!(fact.description.starts_with("renamed") && fact.compare == Compare::CodeDifferent && fact.mismatch() && fact.affected == [debug, "demo::check"], "{fact:#?}");
 }
 
 #[test]
@@ -2314,43 +2356,54 @@ fn a_rename_with_no_claim_gets_a_derived_proof() {
 
 #[test]
 fn a_hidden_change_next_to_a_derived_identity_is_shown() {
-    // A rename and a changed literal in the same body: no "renamed (proved)", the literal is a
-    // logic fact, and the note says how to get the proof.
+    // Design 36.1: a rename and a changed literal in the same body. The rename is one fact, and
+    // the literal is a second fact with the changed body.
     let before = "#[derive(Debug)]\npub struct Account {\n    pub balance: u32,\n}\npub fn get(a: &Account) -> u32 {\n    a.balance + 1\n}\n";
     let after = before.replace("pub balance: u32", "pub cents: u32").replace("a.balance + 1", "a.cents + 2");
-    let report = run_derived(before, &after, &[("demo::get", different(false)), ("<demo::Account as std::fmt::Debug>::fmt", different(false))]);
+    let debug = "<demo::Account as std::fmt::Debug>::fmt";
+    let report = run_derived(before, &after, &[("demo::get", different(false)), (debug, different(false))]);
     let texts = descriptions(&report);
-    assert!(!texts.iter().any(|d| d.starts_with("renamed")), "{texts:?}");
-    assert!(report.facts.iter().any(|f| f.description.starts_with("changed literal `1` → `2`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
-    assert!(report.notes.iter().any(|n| n.contains("Semilla derives a rename only in a step with no other change")), "{:?}", report.notes);
+    assert_eq!(texts[0], "renamed `demo::Account.balance` → `demo::Account.cents`", "{texts:?}");
+    // The body with the literal is not a body of the rename fact.
+    assert!(report.facts[0].category == Category::Rename && report.facts[0].affected == [debug], "{:#?}", report.facts[0]);
+    assert!(report.facts.iter().any(|f| f.description == "changed literal `1` → `2` at `demo::get/tail/rhs`" && f.compare == Compare::CodeDifferent && f.affected == ["demo::get"]), "{:#?}", report.facts);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
     // A move: the derived fact with no claim.
     let bodies = [("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))];
     let report = run_derived(MOVE_BEFORE, MOVE_AFTER, &bodies);
     assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over`")), "{report:#?}");
-    // A move and a dropped `pub`: no proof, and the visibility shows.
+    // A move and a dropped `pub`: the move is one fact, and the visibility is a second fact.
     let narrow = MOVE_AFTER.replace("    pub fn over", "    fn over");
     let report = run_derived(MOVE_BEFORE, &narrow, &bodies);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("moved")), "{:?}", descriptions(&report));
-    assert!(report.notes.iter().any(|n| n.contains("the pair has a difference: changed visibility: `pub` → `private`. Semilla derives a move only in a step with no other change")), "{:?}", report.notes);
-    // A move and a body change: no proof, and the body is a logic fact.
+    let texts = descriptions(&report);
+    assert_eq!(texts, ["moved `demo::a::over` → `demo::b::over`, with 2 `use` line(s)", "visibility of `demo::b::over`: `pub` → `private` (the public API changes: a different crate can no longer use the item)"]);
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[1].category == Category::Visibility && report.notes.is_empty(), "{report:#?}");
+    // A move and a body change: the edit is a fact at the new path, with the changed body.
     let changed = MOVE_AFTER.replace("x > LIMIT", "x >= LIMIT");
     let report = run_derived(MOVE_BEFORE, &changed, &[("demo::b::over", different(false)), ("demo::b::run", equal("n1"))]);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("moved")), "{:?}", descriptions(&report));
-    assert!(report.facts.iter().any(|f| f.description.starts_with("added `demo::b::over`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
-    // A4 (trial 3, A2): the edit inside the moved item is a fact under the pair.
-    assert!(report.facts.iter().any(|f| f.description.starts_with("`over` differs from the removed `over`: changed operator `x > LIMIT` → `x >= LIMIT`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
+    let moved = report.facts.iter().find(|f| f.description.starts_with("moved `demo::a::over` → `demo::b::over`")).unwrap();
+    assert!(moved.compare == Compare::CodeEqual && moved.affected.is_empty() && !moved.mismatch(), "{moved:#?}");
+    assert!(report.facts.iter().any(|f| f.description == "changed operator `x > LIMIT` → `x >= LIMIT` at `demo::b::over/tail`" && f.category == Category::Logic && f.compare == Compare::CodeDifferent && f.affected == ["demo::b::over"]), "{:#?}", report.facts);
+    assert!(!descriptions(&report).iter().any(|d| d.starts_with("added `") || d.starts_with("removed `")), "{:?}", descriptions(&report));
     // A function rename and a changed literal in its body.
     let before = "pub fn percent(a: u64) -> u64 {\n    a / 100\n}\npub fn charge(a: u64) -> u64 {\n    percent(a) + 1\n}\n";
     let after = before.replace("percent", "pct").replace("a / 100", "a / 10");
     let report = run_derived(before, &after, &[("demo::pct", different(false)), ("demo::charge", equal("n0"))]);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("renamed")), "{:?}", descriptions(&report));
-    assert!(report.facts.iter().any(|f| f.description.starts_with("`pct` differs from the removed `percent`: changed literal `100` → `10`") && f.compare == Compare::CodeDifferent), "{:#?}", report.facts);
+    let renamed = report.facts.iter().find(|f| f.description == "renamed `demo::percent` → `demo::pct`").unwrap();
+    assert!(renamed.compare == Compare::CodeEqual && !renamed.mismatch(), "{renamed:#?}");
+    assert!(report.facts.iter().any(|f| f.description == "changed literal `100` → `10` at `demo::pct/tail/rhs`" && f.compare == Compare::CodeDifferent && f.affected == ["demo::pct"]), "{:#?}", report.facts);
+    // Rule 4: the body of the renamed item changes, and no edit explains it. The rename fact
+    // has the result `code different` and the mismatch mark.
+    let after = before.replace("percent", "pct");
+    let report = run_derived(before, &after, &[("demo::pct", different(false)), ("demo::charge", equal("n0"))]);
+    let renamed = report.facts.iter().find(|f| f.description == "renamed `demo::percent` → `demo::pct`").unwrap();
+    assert!(renamed.compare == Compare::CodeDifferent && renamed.mismatch() && renamed.affected == ["demo::pct"], "{renamed:#?}");
 }
 
 #[test]
 fn the_identity_search_has_limits() {
-    // Two fields of the same type change their names: the wrong map fails the proof (the order of
-    // the fields changes), so one map passes.
+    // Two fields of the same type change their names. The two maps have the same score: the wrong
+    // map leaves a change of the field order, so the map with no other fact wins.
     let before = "pub struct P {\n    pub a: u32,\n    pub b: u32,\n}\npub fn f(p: &P) -> u32 {\n    p.a - p.b\n}\n";
     let after = before.replace("pub a: u32", "pub x: u32").replace("pub b: u32", "pub y: u32").replace("p.a - p.b", "p.x - p.y");
     let report = run_derived(before, &after, &[("demo::f", equal("n0"))]);
@@ -2424,13 +2477,27 @@ fn the_group_kind_comes_from_the_facts() {
     assert_eq!(organize::derived_kind(&[&renamed]), Some(GroupKind::Rename));
     // Phase 1: the compare is pending, so no kind.
     assert_eq!(organize::derived_kind(&[&run_derived(before, &after, &[])]), None);
-    // Only facts with equal code: the label `refactor`, not `behavior`.
-    let refactor = run_derived(BEFORE, &BEFORE.replace("let mut s = 0;", "let mut s = 0u32;"), &[("demo::total", equal("n0"))]);
-    assert_eq!(organize::derived_kind(&[&refactor]), Some(GroupKind::Refactor), "{refactor:#?}");
-    let behavior = run_derived(BEFORE, AFTER, &[("demo::total", different(true))]);
-    assert_eq!(organize::derived_kind(&[&behavior]), Some(GroupKind::Behavior));
-    assert_eq!(organize::merge_kinds(GroupKind::Rename, GroupKind::Refactor), GroupKind::Refactor);
-    assert_eq!(organize::merge_kinds(GroupKind::Rename, GroupKind::Behavior), GroupKind::Behavior);
+    // Batch 7b, part 3: `refactor` and `behavior` are verdict words. Each other derived group
+    // has the kind `change`, also when each fact has the result `code equal`.
+    let equal_code = run_derived(BEFORE, &BEFORE.replace("let mut s = 0;", "let mut s = 0u32;"), &[("demo::total", equal("n0"))]);
+    assert_eq!(organize::derived_kind(&[&equal_code]), Some(GroupKind::Change), "{equal_code:#?}");
+    let different_code = run_derived(BEFORE, AFTER, &[("demo::total", different(true))]);
+    assert_eq!(organize::derived_kind(&[&different_code]), Some(GroupKind::Change));
+    // A rename and a second change in one group: `change`.
+    assert_eq!(organize::derived_kind(&[&renamed, &equal_code]), Some(GroupKind::Change));
+    assert_eq!(organize::merge_kinds(GroupKind::Rename, GroupKind::Rename), GroupKind::Rename);
+    assert_eq!(organize::merge_kinds(GroupKind::Rename, GroupKind::Change), GroupKind::Change);
+    assert_eq!(organize::merge_kinds(GroupKind::Rename, GroupKind::Move), GroupKind::Change);
+    // Only derived moves: `move`.
+    let moved = "pub mod a {\n    pub fn get() -> u32 {\n        1\n    }\n}\npub mod b {\n}\n";
+    let after = "pub mod a {\n}\npub mod b {\n    pub fn get() -> u32 {\n        1\n    }\n}\n";
+    let report = run_derived(moved, after, &[("demo::b::get", equal("n0"))]);
+    assert_eq!(organize::derived_kind(&[&report]), Some(GroupKind::Move), "{report:#?}");
+    // No derived kind is a verdict word.
+    for kind in [GroupKind::Rename, GroupKind::Move, GroupKind::Change] {
+        let word = serde_json::to_string(&kind).unwrap();
+        assert!(!word.contains("refactor") && !word.contains("behavior"), "{word}");
+    }
 }
 
 /// A body oracle with statuses and full MIR facts.
@@ -2542,7 +2609,7 @@ fn each_body_of_a_site_is_affected_or_equal() {
     let before = "pub fn charge(amount: u64) -> u64 {\n    amount + 1\n}\npub fn schedule(a: u64) -> u64 {\n    charge(a)\n}\npub fn withdraw(a: u64) -> u64 {\n    charge(a) + 2\n}\n";
     let after = before.replace("charge(amount: u64)", "charge(amount: u64, rate: u64)").replace("amount + 1", "amount + rate").replace("charge(a)", "charge(a, 1)");
     let report = run_calls(before, &after, vec![("demo::charge", different(false), vec![]), ("demo::schedule", equal("n0"), vec!["demo::charge"]), ("demo::withdraw", different(false), vec!["demo::charge"])]);
-    let fact = report.facts.iter().find(|fact| fact.description == "parameter of `demo::charge` added: `rate : u64`").unwrap_or_else(|| panic!("{:#?}", report.facts));
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("parameter of `demo::charge` added: `rate : u64`")).unwrap_or_else(|| panic!("{:#?}", report.facts));
     let sites: BTreeSet<String> = fact.sites.iter().flat_map(|group| group.sites.iter().map(|site| site.item.clone())).collect();
     assert_eq!(sites, ["demo::schedule".to_string(), "demo::withdraw".to_string()].into(), "{fact:#?}");
     assert_eq!(fact.affected, ["demo::charge", "demo::withdraw"], "{fact:#?}");
@@ -2600,7 +2667,7 @@ fn the_change_tree_of_two_steps_is_one_diff_with_the_step_numbers() {
 }
 
 #[test]
-fn a_group_of_a_rename_with_its_docs_is_not_behavior() {
+fn a_group_of_a_rename_with_its_docs_has_the_kind_rename() {
     let before = "#[derive(Debug)]\npub struct Account {\n    pub balance: u32,\n}\n/// Returns the balance.\npub fn get(a: &Account) -> u32 {\n    a.balance\n}\n";
     let after = before.replace("balance", "cents");
     let bodies = [("demo::get", equal("n0")), ("<demo::Account as std::fmt::Debug>::fmt", different(false))];
@@ -2609,10 +2676,133 @@ fn a_group_of_a_rename_with_its_docs_is_not_behavior() {
     assert_eq!(organize::derived_kind(&[&report]), Some(GroupKind::Rename), "{:?}", descriptions(&report));
     // Only a doc change: no code changed.
     let docs = run_derived(before, &before.replace("Returns the balance.", "Gives the balance."), &[]);
-    assert_eq!(organize::derived_kind(&[&docs]), Some(GroupKind::Refactor), "{:?}", descriptions(&docs));
-    // A doc change with a logic change stays `behavior`.
+    assert_eq!(organize::derived_kind(&[&docs]), Some(GroupKind::Change), "{:?}", descriptions(&docs));
+    // A doc change with a logic change is `change`.
     let logic = run_derived(before, &before.replace("Returns the balance.", "Gives the balance.").replace("a.balance", "a.balance + 1"), &[("demo::get", different(false))]);
-    assert_eq!(organize::derived_kind(&[&logic]), Some(GroupKind::Behavior), "{:?}", descriptions(&logic));
+    assert_eq!(organize::derived_kind(&[&logic]), Some(GroupKind::Change), "{:?}", descriptions(&logic));
+}
+
+#[test]
+fn a_public_api_fact_has_the_public_api_line() {
+    // Batch 7b, part 3: the compare does not see the code of a different crate. A fact that
+    // changes the public API has a sub line that says so, also with the result `code equal`.
+    let before = "fn hidden(a: u32) -> u32 {\n    a + 1\n}\npub fn get(a: u32) -> u32 {\n    hidden(a)\n}\n";
+    let report = run_derived(before, &before.replace("fn hidden", "pub fn hidden"), &[("demo::hidden", equal("n0")), ("demo::get", equal("n0"))]);
+    let fact = &report.facts[0];
+    assert!(fact.api_change() && fact.compare == Compare::CodeEqual, "{fact:?}");
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains(&format!("\n      {}\n", semilla_core::report::API_LINE)), "{text}");
+    // The line asks for no reason.
+    assert!(report.accepted(), "{report:#?}");
+    // A change of a private item has no such line.
+    let report = run_derived(before, &before.replace("a + 1", "a + 2"), &[("demo::hidden", different(false))]);
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(!text.contains("! public API"), "{text}");
+}
+
+#[test]
+fn two_edits_of_one_body_say_so_on_the_affected_line() {
+    // Batch 7b, part 5.11: the compare of a body is a result of each edit of the body.
+    let before = "pub fn sum(a: u32) -> u32 {\n    let low = 1;\n    let high = 2;\n    a + low + high\n}\npub fn one(a: u32) -> u32 {\n    a + 1\n}\n";
+    let report = run_derived(before, &before.replace("let low = 1;", "let low = 3;").replace("let high = 2;", "let high = 4;").replace("    a + 1\n", "    a + 5\n"), &[("demo::sum", different(false)), ("demo::one", different(false))]);
+    let in_sum: Vec<_> = report.facts.iter().filter(|fact| fact.affected == ["demo::sum"]).collect();
+    assert!(in_sum.len() == 2 && in_sum.iter().all(|fact| fact.other_edits == 1), "{report:#?}");
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert_eq!(text.matches("      affected bodies: demo::sum (with 1 other edit of this body)\n").count(), 2, "{text}");
+    // One edit in a body: no added text.
+    assert!(text.contains("      affected bodies: demo::one\n"), "{text}");
+    let three = semilla_core::Fact { other_edits: 2, ..Default::default() };
+    assert_eq!(three.other_edits_text(), " (with 2 other edits of this body)");
+}
+
+#[test]
+fn a_new_local_const_that_reads_a_file_needs_a_reason() {
+    // Batch 7b, part 5.7: `include_str!` in a new `const` of a function body.
+    let before = "pub fn limit(a: usize) -> usize {\n    a\n}\n";
+    let after = before.replace("    a\n", "    const LIMIT: &str = include_str!(\"limit.txt\");\n    a + LIMIT.len()\n");
+    // The use comes from the MIR records.
+    let call = "include_str!(\"limit.txt\")";
+    let bodies = SpanBodies(vec![BodyComparison { name: "demo::limit".into(), span: None, status: different(false), config: vec![call.to_string()], differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]);
+    let report = run_derived_with(before, &after, &bodies);
+    let fact = report.facts.iter().find(|fact| fact.description.contains("const LIMIT")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(fact.description.starts_with("added item `const LIMIT: &str = include_str!(\"limit.txt\");`"), "{fact:#?}");
+    assert!(fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("a file that the code reads at build time: `limit.txt` (`include_str!` in `demo::limit`)")), "{fact:#?}");
+    assert!(!report.accepted(), "{report:#?}");
+}
+
+#[test]
+fn a_member_order_of_a_local_type_follows_the_rule_of_a_module_type() {
+    // Batch 7b, part 5.10: an `enum` in a function body with a different order of its members.
+    let before = "pub fn rank(a: u8) -> u8 {\n    enum Side { Low, High }\n    let _ = Side::Low;\n    let _ = Side::High;\n    a\n}\n";
+    let check = |after: &str, status: BodyStatus| run_derived(before, after, &[("demo::rank", status)]);
+    // Equal bodies are not a result: `no compare`, as for an enum of a module.
+    let report = check(&before.replace("Low, High", "High, Low"), equal("n0"));
+    let fact = &report.facts[0];
+    assert_eq!(fact.description, "member order of `Side` (in `demo::rank`): `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change");
+    assert_eq!((fact.part.as_str(), fact.category, fact.compare, fact.spotlight), ("member order", Category::Declaration, Compare::NoCompare, false), "{fact:#?}");
+    // A changed body goes under the fact.
+    let report = check(&before.replace("Low, High", "High, Low"), different(false));
+    assert_eq!((report.facts[0].compare, report.facts[0].affected.clone()), (Compare::CodeDifferent, vec!["demo::rank".to_string()]), "{:#?}", report.facts);
+    // An order derive: the fact needs a reason.
+    let derive = before.replace("    enum Side", "    #[derive(PartialEq, PartialOrd)]\n    enum Side");
+    let report = run_derived(&derive, &derive.replace("Low, High", "High, Low"), &[("demo::rank", equal("n0"))]);
+    let fact = &report.facts[0];
+    assert!(fact.spotlight && fact.spotlight_why.as_deref().is_some_and(|why| why.contains("an order derive")) && !report.accepted(), "{fact:#?}");
+    // A second change in the same item shows in the text. A new member only is not an order change.
+    let report = check(&before.replace("Low, High", "High, Low = 4"), equal("n0"));
+    assert!(report.facts[0].description.contains("; the item has a second change: `enum Side { Low, High }` → `enum Side { High, Low = 4 }`"), "{:#?}", report.facts);
+    let report = check(&before.replace("Low, High", "Low, High, Top"), equal("n0"));
+    assert_eq!(report.facts[0].description, "changed item: `enum Side { Low, High }` → `enum Side { Low, High, Top }` at `demo::rank/S0`");
+    // The fields of a struct.
+    let before = "pub fn rank(a: u8) -> u8 {\n    struct Pair { a: u8, b: u16 }\n    let _ = Pair { a, b: 2 };\n    a\n}\n";
+    let report = run_derived(before, &before.replace("a: u8, b: u16 }", "b: u16, a: u8 }"), &[("demo::rank", equal("n0"))]);
+    assert_eq!(report.facts[0].description, "member order of `Pair` (in `demo::rank`): `a, b` → `b, a`");
+}
+
+/// Batch 7b, part 5.6: the diff of a node of the change tree shows the changed part.
+#[test]
+fn the_tree_diff_of_a_long_line_shows_the_changed_part() {
+    let before = "pub fn a() {}\npub fn b() {}\npub fn c() {}\npub fn top() {\n    use crate::{a as first_name, b as second_name, c as third_name};\n    let _ = (first_name, second_name, third_name);\n}\n";
+    let after = before.replace("third_name", "last_name");
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(&after);
+    let oracle = FakeBodies([("demo::top".to_string(), equal("n0"))].into_iter().collect());
+    let outcome = verify_step_with(&StepInput { step: &step(vec![]), before: &old, after: &new }, &oracle, &NoOracle, true);
+    let tree = views::change_tree(&[outcome], &new, &old).render();
+    assert!(tree.contains("⟦…second_name, c as third_name};⟧→⟦…second_name, c as last_name};⟧"), "{tree}");
+}
+
+#[test]
+fn a_removed_test_target_has_no_attribute_fact() {
+    // Batch 7b, part 5.2: the inner attributes of a removed target go with the target.
+    const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n";
+    let lib = "pub fn one() -> u8 {\n    1\n}\n";
+    let target = "#![allow(dead_code)]\n#[test]\nfn first() {\n    assert_eq!(demo::one(), 1);\n}\n";
+    let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("tests/extra.rs", target)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", lib)], &[("demo::one", equal("n0"))]);
+    let texts = descriptions(&report);
+    assert!(texts.iter().any(|text| text.starts_with("removed `demo::extra::first`")) && !texts.iter().any(|text| text.starts_with("attributes of")), "{texts:#?}");
+    // A target with no item: the attribute fact is the only fact of the removal, and it stays.
+    let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("tests/extra.rs", "#![allow(dead_code)]\n")], &[("Cargo.toml", MANIFEST), ("src/lib.rs", lib)], &[("demo::one", equal("n0"))]);
+    assert!(!report.facts.is_empty(), "{report:#?}");
+}
+
+#[test]
+fn a_changed_body_with_unsafe_code_has_the_unsafe_line() {
+    // Batch 7b, part 5.3: an edit in a body with an `unsafe` block, or in an `unsafe fn`.
+    let before = "pub fn read(p: &u32) -> u32 {\n    let step = 2;\n    unsafe { *(p as *const u32) + step }\n}\npub unsafe fn raw(a: u32) -> u32 {\n    a + 1\n}\npub fn plain(a: u32) -> u32 {\n    a + 1\n}\n";
+    let line = format!("\n      {}\n", semilla_core::report::UNSAFE_LINE);
+    for (old, new, body) in [("let step = 2;", "let step = 1;", "demo::read"), ("pub unsafe fn raw(a: u32) -> u32 {\n    a + 1", "pub unsafe fn raw(a: u32) -> u32 {\n    a + 2", "demo::raw")] {
+        let report = run_derived(before, &before.replace(old, new), &[(body, different(false))]);
+        assert!(report.facts.iter().all(|fact| fact.unsafe_code), "{report:#?}");
+        let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+        assert!(text.contains(&line), "{text}");
+        // The line asks for no reason.
+        assert!(report.accepted(), "{report:#?}");
+    }
+    // A body with no `unsafe` code has no such line.
+    let report = run_derived(before, &before.replace("pub fn plain(a: u32) -> u32 {\n    a + 1", "pub fn plain(a: u32) -> u32 {\n    a + 2"), &[("demo::plain", different(false))]);
+    assert!(report.facts.iter().all(|fact| !fact.unsafe_code), "{report:#?}");
+    assert!(!crate::views::text_report_with(std::slice::from_ref(&report), false).contains("! unsafe code"));
 }
 
 #[test]
@@ -2801,6 +2991,11 @@ fn an_identifier_with_a_character_outside_ascii_shows_its_escape_form() {
         assert!(fact.spotlight && why(fact).contains(&format!("{NON_ASCII}: `\u{441}harge` (`\\u{{441}}harge`)")), "{fact:#?}");
     }
     assert!(report.facts.iter().any(|fact| fact.description.contains("`\u{441}harge` (`\\u{441}harge`)")), "{:#?}", report.facts);
+    // Batch 7b: the derived rename fact has the escape form and the spotlight.
+    let report = run_derived(before, &after, &[("demo::\u{441}harge", equal("n0")), ("demo::total", equal("n0"))]);
+    let renamed = report.facts.iter().find(|fact| fact.description.starts_with("renamed `demo::charge`")).unwrap_or_else(|| panic!("{:#?}", report.facts));
+    assert!(renamed.spotlight && why(renamed).contains(&format!("{NON_ASCII}: `\u{441}harge` (`\\u{{441}}harge`)")) && renamed.description.contains("\\u{441}harge`)"), "{renamed:#?}");
+    assert!(!report.accepted(), "the spotlight needs a reason");
     // An ASCII rename has no such spotlight.
     let report = run_derived(before, &before.replace("charge", "charge_fee"), &[]);
     assert!(!report.facts.iter().any(|fact| why(fact).contains(NON_ASCII)), "{:#?}", report.facts);
@@ -2937,7 +3132,7 @@ fn a_pair_with_equal_texts_names_the_path_that_points_to_a_different_item() {
     // To `c`: each name points to the same item. The usual text.
     let found = pairs(&format!("{}{}{}", module("a", a, false), module("b", b, false), module("c", c, true)), "demo::c::over");
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].resolves.is_empty() && found[0].text().contains("are 100% similar") && found[0].text().contains("Semilla derives a rename or a move only in a step with no other change"), "{:?}", found[0]);
+    assert!(found[0].resolves.is_empty() && found[0].text() == "`demo::a::over` (removed) and `demo::c::over` (added) are 100% similar: they can be one item with a new place and a second change", "{:?}", found[0]);
 }
 
 /// The source of the opaque input tests (batch 5l).
@@ -3035,7 +3230,7 @@ fn the_items_of_the_build_configuration_are_opaque_inputs() {
     let mut bodies = vec![body("demo::user", equal("n2"))];
     opaque.apply(&mut bodies, &BTreeMap::new());
     assert_eq!(bodies[0].status, different(true));
-    assert_eq!(bodies[0].config, vec!["`DEEP` (`#[cfg(unix)]`)".to_string(), "`probe` (an `impl` under `cfg`)".to_string()]);
+    assert_eq!(bodies[0].config, vec!["`DEEP` (`#[cfg(unix)]`)".to_string(), "`probe` (an `impl` under `#[cfg(test)]`)".to_string()]);
 
     // The default of a `const` parameter is free only if it is a literal.
     assert!(layout("demo::Bits") && !layout("demo::Byte"));
@@ -3171,6 +3366,46 @@ fn the_exact_rule_uses_the_kind_and_the_scope_of_a_name() {
     let mut bodies = vec![body("demo::serialize", different(false))];
     opaque.apply(&mut bodies, &BTreeMap::new());
     assert_eq!(bodies[0].config, vec!["`Builder` (a type with a part under `cfg`)".to_string()]);
+}
+
+#[test]
+fn an_inner_cfg_attr_puts_no_item_under_cfg_and_a_note_has_a_name() {
+    // Batch 7b, part 4.2: `#![cfg_attr(not(feature = "std"), no_std)]` of the crate root
+    // removes no item. Before, each item of the crate was an item under `cfg`, and each body
+    // with a text edit got the note "this body uses code that a `cfg` attribute can change".
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let src = "#![cfg_attr(not(feature = \"std\"), no_std)]\npub struct Held(u8);\npub fn hold() -> Held {\n    Held(1)\n}\npub fn keep() -> u8 {\n    let _h = hold();\n    1\n}\n";
+    let edit = |src: &str| src.replace("let _h = hold();", "let _ = hold();");
+    let run = |src: &str, types: &[&str]| {
+        let (_d1, before) = load(src);
+        let (_d2, after) = load(&edit(src));
+        let opaque = crate::opaque::Opaque::new(&before, &after);
+        let types: Vec<String> = types.iter().map(|text| text.to_string()).collect();
+        opaque.note(false, "demo::keep", None, &types);
+        opaque.note(true, "demo::keep", None, &types);
+        let stop = opaque.callee(true, "demo::keep", None, &types);
+        let mut bodies = vec![body("demo::keep", equal("n0"))];
+        opaque.apply(&mut bodies, &BTreeMap::new());
+        (stop, bodies.remove(0))
+    };
+    let (stop, found) = run(src, &["demo::Held"]);
+    assert!(!stop && found.status == equal("n0") && found.stopped.is_empty(), "{found:?}");
+    assert!(crate::opaque::inner_keeps_items("#![cfg_attr(not(feature = \"std\"), no_std)]"));
+    // An inner `cfg`, and a `cfg_attr` with a content `cfg`, can remove the module.
+    assert!(!crate::opaque::inner_keeps_items("#![cfg(unix)]") && !crate::opaque::inner_keeps_items("#![cfg_attr(a, cfg(unix))]"));
+    // An outer attribute of an item keeps its rule.
+    assert!(!crate::opaque::inner_keeps_items("#[cfg_attr(unix, repr(C))]"));
+    // Part 4.1: a stop with no hard name gets the name of the type from the driver. The text
+    // "code that a `cfg` attribute can change" is gone.
+    let with_drop = format!("{src}#[cfg(unix)]\nimpl Drop for Held {{\n    fn drop(&mut self) {{}}\n}}\n");
+    let (stop, found) = run(&with_drop, &["demo::Held"]);
+    assert!(stop, "{found:?}");
+    assert_eq!(found.stopped, ["`demo::Held` (a type with an `impl` under `#[cfg(unix)]`)"], "{found:?}");
+    let (_, found) = run(src, &["foreign dep::Loud"]);
+    assert_eq!(found.stopped, ["`dep::Loud` (a type of a different crate, and a feature of that crate can change its parts)"], "{found:?}");
+    // An entry with no name gives no cause, and thus no note.
+    let (_, found) = run(src, &["?"]);
+    assert!(found.stopped.is_empty() && found.status == different(true), "{found:?}");
 }
 
 const SCOPE_SRC: &str = "mod block {
@@ -4139,7 +4374,7 @@ fn a_macro_import_of_a_different_target_does_not_stop_a_rename() {
     // Batch 5x, part C: a pair with a known cause and no second change in its step does not
     // say "own step". It says the cause.
     let pair = semilla_core::PairWarning { old: "demo::item".into(), new: "demo::piece".into(), similarity: 0.9, claims: vec![], refusal: None, reviewer: None, resolves: vec![], stopped: Some("the cause".into()) };
-    assert_eq!(pair.text(), "`demo::item` (removed) and `demo::piece` (added) are 90% similar, and their step has no other change. Semilla does not derive one item: the cause");
+    assert_eq!(pair.text(), "`demo::item` (removed) and `demo::piece` (added) are 90% similar: they can be one item with a new name and a second change. Semilla does not derive one item: the cause");
     // A module file of two crate roots has the imports of the two roots.
     let shared = "use std::fmt::Write;\npub fn show(out: &mut String, n: u32) {\n    item(out, n);\n}\nfn item(out: &mut String, n: u32) {\n    let _ = write!(out, \"{n}\");\n}\n";
     let files = |text: &str| -> Vec<(String, String)> {
@@ -4225,7 +4460,7 @@ fn a_move_into_a_new_module_gets_its_proof_in_one_step() {
     let report = run_derived_files(&before, &move_files("mod calendar;\nmod date;\n", DATE_AFTER, Some(&with_use)), &bodies);
     assert!(proved(&report), "{report:#?}");
 
-    // 2. No proof: each of these steps has a change that is not a part of a move.
+    // 2. A second change in the step: the explicit claim gets no proof. The derived move has its rule below.
     let cases: Vec<(&str, String, String, Vec<(&str, BodyStatus)>)> = vec![
         // A different callee after the move: the new module has a different item of the same
         // name in scope. The MIR of the moved body is not equal.
@@ -4247,7 +4482,19 @@ fn a_move_into_a_new_module_gets_its_proof_in_one_step() {
     for (name, lib, calendar, bodies) in &cases {
         let after = move_files(lib, DATE_AFTER, Some(calendar));
         let report = run_derived_files(&before, &after, bodies);
-        assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{name}: {report:#?}");
+        // Design 36.1: a second change does not stop the derived move. Each other change has
+        // its own fact, or the move fact has the result `code different`.
+        let texts = descriptions(&report);
+        let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap`"));
+        let has = |start: &str| report.facts.iter().any(|fact| fact.description.starts_with(start));
+        match *name {
+            "a different callee" => assert!(moved.is_some_and(|fact| fact.compare == Compare::CodeDifferent && fact.mismatch()), "{name}: {report:#?}"),
+            "a body edit" => assert!(moved.is_some_and(|fact| fact.compare == Compare::CodeEqual) && report.facts.iter().any(|fact| fact.description.starts_with("changed expression `y % 4 == 0` → `y % 4 == 0 && y != 0` at `demo::calendar::is_leap/") && fact.compare == Compare::CodeDifferent), "{name}: {report:#?}"),
+            "a changed caller" => assert!(moved.is_some() && !report.accepted() && has("indirect change, cause not known: `demo::date::parse`"), "{name}: {report:#?}"),
+            "a cfg on the module" | "a cfg in the file" => assert!(moved.is_none() && has("removed `demo::date::is_leap`") && report.notes.iter().any(|note| note.contains("changes the `cfg` conditions on its path")), "{name}: {report:#?}"),
+            "a path attribute" => assert!(moved.is_some() && !report.accepted() && report.facts.iter().any(|fact| fact.description == "added `demo::calendar`" && fact.spotlight), "{name}: {report:#?}"),
+            _ => assert!(moved.is_some() && has("added `demo::calendar`"), "{name}: {texts:?}"),
+        }
         let report = run_claim_files(&before, &after, claims(), bodies);
         assert!(!report.accepted() && !status_of(&report, "c1").is_verified(), "{name}: {report:#?}");
     }
@@ -4281,7 +4528,10 @@ fn a_moved_constant_and_a_moved_struct_get_their_proof() {
     // A different value is not a move.
     let changed = move_files("mod calendar;\nmod date;\n", "use crate::calendar::LIMIT;\npub fn parse(y: u64) -> bool {\n    y % LIMIT == 0\n}\n", Some("pub(crate) const LIMIT: u64 = 5;\n"));
     let report = run_derived_files(&before, &changed, &[("demo::date::parse", different(false)), ("demo::calendar::LIMIT", different(false))]);
-    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+    // Design 36.1: the move is one fact, and the value is a second fact with the changed bodies.
+    let texts = descriptions(&report);
+    assert_eq!(texts, ["moved `demo::date::LIMIT` → `demo::calendar::LIMIT`, with 1 `use` line(s)", "visibility of `demo::calendar::LIMIT`: `private` → `pub (crate)`", "value of `demo::calendar::LIMIT` changed: 4 → 5"]);
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[2].category == Category::Value && report.facts[2].affected == ["demo::calendar::LIMIT", "demo::date::parse"], "{report:#?}");
 
     // A struct with an `impl` block.
     const YEAR: &str = "pub struct Year(pub u64);\nimpl Year {\n    pub fn leap(&self) -> bool {\n        self.0 % 4 == 0\n    }\n}\n";
@@ -4297,11 +4547,12 @@ fn a_moved_constant_and_a_moved_struct_get_their_proof() {
     let claims = vec![claim("c1", "move-item", Some("demo::date::Year"), serde_json::json!({"to": "demo::calendar::Year"}))];
     let report = run_claim_files(&before, &after, claims, &bodies);
     assert!(report.accepted() && status_of(&report, "c1").is_verified(), "{report:#?}");
-    // An edit in a method of the moved type is not a move.
+    // An edit in a method of the moved type (design 36.1): the edit is a fact at the new path.
     let edited = YEAR.replace("% 4", "% 400");
     let after = move_files("mod calendar;\nmod date;\n", &date_after, Some(&edited));
     let report = run_derived_files(&before, &after, &[("demo::date::parse", equal("n1")), ("demo::calendar::Year::leap", different(false))]);
-    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+    assert_eq!(descriptions(&report), ["moved `demo::date::Year` → `demo::calendar::Year`, with 1 impl and 1 `use` line(s)", "changed literal `4` → `400` at `demo::calendar::Year::leap/tail/lhs/rhs`"]);
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[1].compare == Compare::CodeDifferent && report.facts[1].affected == ["demo::calendar::Year::leap"], "{report:#?}");
 }
 
 #[test]
@@ -4451,30 +4702,38 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_move() {
         assert_eq!(doc_facts(&report), count, "{calendar}: {report:#?}");
     }
 
-    // 2. No proof, also with a doc comment in the new file.
+    // 2. A second change, also with a doc comment in the new file. The explicit claim gets no
+    // proof. The derived move (design 36.1) stays, and the second change has its own fact: the
+    // last part of each case is the start of that fact. `None`: Semilla derives no move.
     let changed = [("demo::date::parse", equal("n1")), ("demo::calendar::is_leap", different(false))];
-    let cases: Vec<(&str, String, String, &[(&str, BodyStatus)])> = vec![
-        ("a body edit", LIB.into(), format!("{HEAD}{}", CALENDAR.replace("== 0", "== 0 && y != 0")), &changed),
+    let cases: Vec<(&str, String, String, &[(&str, BodyStatus)], Option<&str>)> = vec![
+        ("a body edit", LIB.into(), format!("{HEAD}{}", CALENDAR.replace("== 0", "== 0 && y != 0")), &changed, Some("changed expression `y % 4 == 0` → `y % 4 == 0 && y != 0` at `demo::calendar::is_leap/tail`")),
         // A bare name of the body is a different item in the new module: the MIR differs.
-        ("a different callee", LIB.into(), format!("{HEAD}{CALENDAR}"), &changed),
-        ("a cfg on the module", "#[cfg(not(windows))]\nmod calendar;\nmod date;\n".into(), format!("{HEAD}{CALENDAR}"), &bodies),
-        ("an allow attribute", LIB.into(), format!("{HEAD}#![allow(dead_code)]\n{CALENDAR}"), &bodies),
-        ("an allow attribute only", LIB.into(), format!("#![allow(dead_code)]\n{CALENDAR}"), &bodies),
-        ("a doc in a cfg_attr", LIB.into(), format!("#![cfg_attr(windows, doc = \"Calendar.\")]\n{CALENDAR}"), &bodies),
-        ("a computed doc in the file", LIB.into(), format!("#![doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies),
-        ("a doc test in the file", LIB.into(), format!("//! Calendar.\n//!\n//! ```\n//! assert!(false);\n//! ```\n{CALENDAR}"), &bodies),
-        ("a hidden item", LIB.into(), format!("{HEAD}#[doc(hidden)]\n{CALENDAR}"), &bodies),
-        ("a computed doc on the item", LIB.into(), format!("{HEAD}#[doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies),
-        ("a cfg on the item", LIB.into(), format!("{HEAD}#[cfg(not(windows))]\n{CALENDAR}"), &bodies),
-        ("a doc test on the item", LIB.into(), format!("{HEAD}/// ```\n/// assert!(false);\n/// ```\n{CALENDAR}"), &bodies),
+        ("a different callee", LIB.into(), format!("{HEAD}{CALENDAR}"), &changed, Some("moved ")),
+        ("a cfg on the module", "#[cfg(not(windows))]\nmod calendar;\nmod date;\n".into(), format!("{HEAD}{CALENDAR}"), &bodies, None),
+        ("an allow attribute", LIB.into(), format!("{HEAD}#![allow(dead_code)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar`: added `# ! [allow (dead_code)]`")),
+        ("an allow attribute only", LIB.into(), format!("#![allow(dead_code)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar`: added `# ! [allow (dead_code)]`")),
+        ("a doc in a cfg_attr", LIB.into(), format!("#![cfg_attr(windows, doc = \"Calendar.\")]\n{CALENDAR}"), &bodies, None),
+        ("a computed doc in the file", LIB.into(), format!("#![doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar` added")),
+        ("a doc test in the file", LIB.into(), format!("//! Calendar.\n//!\n//! ```\n//! assert!(false);\n//! ```\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar` added")),
+        ("a hidden item", LIB.into(), format!("{HEAD}#[doc(hidden)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar::is_leap`: added `# [doc (hidden)]`")),
+        ("a computed doc on the item", LIB.into(), format!("{HEAD}#[doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar::is_leap` added")),
+        ("a cfg on the item", LIB.into(), format!("{HEAD}#[cfg(not(windows))]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar::is_leap`: added `# [cfg (not (windows))]`")),
+        ("a doc test on the item", LIB.into(), format!("{HEAD}/// ```\n/// assert!(false);\n/// ```\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar::is_leap` added")),
         // A doc comment on the `mod` line has no fact of its own, so it is not a part of a move.
-        ("a doc on the mod line", "/// Calendar computations.\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies),
-        ("a doc test on the mod line", "/// ```\n/// assert!(false);\n/// ```\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies),
+        ("a doc on the mod line", "/// Calendar computations.\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies, Some("added `demo::calendar`")),
+        ("a doc test on the mod line", "/// ```\n/// assert!(false);\n/// ```\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies, Some("added `demo::calendar`")),
     ];
-    for (name, lib, calendar, bodies) in &cases {
+    for (name, lib, calendar, bodies, fact) in &cases {
         let after = move_files(lib, DATE_AFTER, Some(calendar));
         let report = run_derived_files(&before, &after, bodies);
-        assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{name}: {report:#?}");
+        let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved `demo::date::is_leap` → `demo::calendar::is_leap`"));
+        match fact {
+            None => assert!(moved.is_none() && descriptions(&report).contains(&"removed `demo::date::is_leap`".to_string()), "{name}: {report:#?}"),
+            // A changed body with no edit: the move fact has the mismatch mark.
+            Some("moved ") => assert!(moved.is_some_and(|fact| fact.compare == Compare::CodeDifferent && fact.mismatch() && fact.affected == ["demo::calendar::is_leap"]), "{name}: {report:#?}"),
+            Some(start) => assert!(moved.is_some_and(|fact| fact.compare == Compare::CodeEqual) && descriptions(&report).iter().any(|text| text.starts_with(start)), "{name}: {report:#?}"),
+        }
         let report = run_claim_facts(&before, &after, claims(), bodies);
         assert!(!report.accepted() && !status_of(&report, "c1").is_verified(), "{name}: {report:#?}");
     }
@@ -4487,11 +4746,14 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_move() {
     assert_eq!(doc_facts(&report), 2, "{report:#?}");
     let other = move_files(LIB, date, Some("//! Calendar computations.\n\npub(crate) const LIMIT: u64 = 5;\n"));
     let report = run_derived_files(&before, &other, &[("demo::date::parse", different(false)), ("demo::calendar::LIMIT", different(false))]);
-    assert!(!descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
+    // Design 36.1: the move is one fact, and the value is a second fact.
+    let texts = descriptions(&report);
+    assert!(texts[0].starts_with("moved `demo::date::LIMIT` → `demo::calendar::LIMIT`") && report.facts[0].compare == Compare::CodeEqual && texts.contains(&"value of `demo::calendar::LIMIT` changed: 4 → 5".to_string()), "{report:#?}");
 }
 
 /// Batch 5x, round 2, part 1, rule 7: a rename step with a doc comment change keeps its proof.
-/// A doc test and an attribute of the `doc` family with no text stop it.
+/// A doc test and an attribute of the `doc` family with no text stop the proof of an explicit
+/// claim. With a derived rename (design 36.1), each of them is a second fact.
 #[test]
 fn a_plain_doc_comment_does_not_stop_the_proof_of_a_rename() {
     const LIB: &str = "pub fn show(n: u32) -> u32 {\n    item(n)\n}\n/// The item.\nfn item(n: u32) -> u32 {\n    n + 1\n}\n";
@@ -4499,19 +4761,19 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_rename() {
     let renamed = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("renamed `demo::item` → `demo::piece`"));
     let claims = || vec![claim("c1", "rename", Some("demo::item"), serde_json::json!({"to": "piece"}))];
     let after = LIB.replace("item(", "piece(");
-    for (doc, proof) in [
-        ("/// The piece.\n", true),
-        ("/// The piece.\n/// It adds one.\n", true),
-        ("", true),
-        ("/** The piece. */\n", true),
-        ("#[doc = \"The piece.\"]\n", true),
-        ("/// The piece.\n///\n/// ```\n/// assert!(false);\n/// ```\n", false),
-        ("/// The item.\n#[doc(hidden)]\n", false),
-        ("#[doc = include_str!(\"../README.md\")]\n", false),
+    for (doc, proof, second) in [
+        ("/// The piece.\n", true, ""),
+        ("/// The piece.\n/// It adds one.\n", true, ""),
+        ("", true, ""),
+        ("/** The piece. */\n", true, ""),
+        ("#[doc = \"The piece.\"]\n", true, ""),
+        ("/// The piece.\n///\n/// ```\n/// assert!(false);\n/// ```\n", false, "doc test of `demo::piece` added"),
+        ("/// The item.\n#[doc(hidden)]\n", false, "attributes of `demo::piece`: added `# [doc (hidden)]`"),
+        ("#[doc = include_str!(\"../README.md\")]\n", false, "doc test of `demo::piece` added"),
     ] {
         let after = after.replace("/// The item.\n", doc);
         let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", LIB)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], &bodies);
-        assert_eq!(renamed(&report), proof, "{doc}: {report:#?}");
+        assert!(renamed(&report) && (proof || descriptions(&report).iter().any(|text| text.starts_with(second))), "{doc}: {report:#?}");
         let report = run_claim_facts(&[("Cargo.toml", MANIFEST), ("src/lib.rs", LIB)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], claims(), &bodies);
         assert_eq!(report.accepted() && status_of(&report, "c1").is_verified(), proof, "{doc}: {report:#?}");
         if proof {
@@ -4803,7 +5065,7 @@ fn a_long_constant_value_shows_the_changed_part_and_the_index() {
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
     let text = &report.facts[0].description;
     assert!(text.starts_with("value of `demo::TABLE` changed at the index 67 (of 120 elements): `"), "{text}");
-    assert!(text.contains("128") && text.contains("129") && text.contains('…') && text.chars().count() < 200, "{text}");
+    assert!(text.contains("128") && text.contains("129") && text.contains('…') && text.chars().count() < 280, "{text}");
     // A short value has the full text of the two sides, and an array with a new length has the counts.
     assert_eq!(crate::facts::long_value_description("demo::A", "[1, 2]", "[1, 3]"), None);
     let long = "[10000000, 20000000, 30000000, 40000000, 50000000, 60000000, 70000000]";
@@ -4818,10 +5080,12 @@ fn the_note_of_a_move_with_no_proof_gives_the_cause_that_stops_the_proof() {
     let before = MOVE_BEFORE.replace("    pub fn over", "    pub(crate) fn over");
     let bodies = [("demo::b::over", different(false)), ("demo::b::run", equal("n1"))];
     let report = run_derived(&before, MOVE_AFTER, &bodies);
-    assert!(!descriptions(&report).iter().any(|d| d.starts_with("moved")), "{:?}", descriptions(&report));
-    let note = report.notes.iter().find(|n| n.contains("show(s) as removed and added")).unwrap_or_else(|| panic!("{:?}", report.notes));
-    assert!(note.contains("`demo::a::over` → `demo::b::over` show(s) as removed and added: the MIR of the item differs after the move (`demo::b::over`)"), "{note}");
-    assert!(!note.contains("the pair has a difference") && !note.contains("visibility"), "{note}");
+    // Design 36.1, rule 4: the changed body has no edit fact. It is a body of the move fact,
+    // which has the result `code different` and the mismatch mark. The visibility is its own
+    // fact, with no body.
+    let moved = &report.facts[0];
+    assert!(moved.description.starts_with("moved `demo::a::over` → `demo::b::over`") && moved.compare == Compare::CodeDifferent && moved.mismatch() && moved.affected == ["demo::b::over"], "{report:#?}");
+    assert!(report.facts[1].description.starts_with("visibility of `demo::b::over`: `pub (crate)` → `pub`") && report.facts[1].compare == Compare::CodeEqual && report.notes.is_empty(), "{report:#?}");
     // The same move with an equal MIR has a proof.
     let report = run_derived(&before, MOVE_AFTER, &[("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))]);
     assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over`")), "{report:#?}");
@@ -5037,8 +5301,9 @@ fn a_move_keeps_its_proof_when_the_use_lines_change() {
         let moved = if words == WORDS { equal("n0") } else { different(false) };
         run_derived_files(&before, &after, &[bodies[0].clone(), bodies[1].clone(), ("demo::words::helper", moved)])
     };
-    // A step is clean if the move has a proof and no fact is a fact to read.
-    let clean = |report: &StepReport| report.accepted() && descriptions(report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper`")) && report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && !fact.spotlight);
+    // A step is clean if the move and its visibility are the only facts (design 36.1: each
+    // other change has its own fact), and each fact has the result `code equal`.
+    let clean = |report: &StepReport| report.accepted() && report.facts.len() == 2 && descriptions(report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper`")) && report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && !fact.spotlight);
     // The honest move: a split line in `a` and a joined line in `b`.
     let report = run(A, A_SPLIT, WORDS);
     assert!(clean(&report), "{report:#?}");
@@ -5067,6 +5332,9 @@ fn a_move_keeps_its_proof_when_the_use_lines_change() {
         let report = run(a_before, a, words);
         assert!(!clean(&report), "{a}: {report:#?}");
     }
+    // The import of a different item with the same name is a fact, not a part of the move.
+    let report = run(A, &A_SPLIT.replace("crate::words::helper", "crate::other::helper"), WORDS);
+    assert!(descriptions(&report).contains(&"added `use` line: `use crate::other::helper;`".to_string()), "{report:#?}");
     // A removed import that a different item with the same name replaces through a glob.
     let glob_before = format!("use crate::other::*;\n{A}");
     let report = run(&glob_before, &format!("use crate::other::*;\n{}", A_SPLIT.replace("use crate::words::helper;\n", "")), WORDS);
@@ -5115,6 +5383,42 @@ impl BodyOracle for MacroBodies {
     fn made(&self, _: &Step) -> anyhow::Result<Option<[crate::made::Made; 2]>> {
         Ok(self.2.clone())
     }
+}
+
+/// Batch 7b, part 5.1: a function that an identity macro call wraps is not a removed item.
+#[test]
+fn a_function_in_an_identity_macro_call_is_a_macro_fact_with_a_compare() {
+    const BASE: &str = "macro_rules! same {\n    ($($t:tt)*) => { $($t)* };\n}\n\nfn tilde(a: u32) -> bool {\n    a > 1\n}\n\npub fn top(a: u32) -> bool {\n    tilde(a)\n}\n";
+    let after = BASE.replace("fn tilde(a: u32) -> bool {\n    a > 1\n}\n", "same! {\nfn tilde(a: u32) -> bool {\n    a > 1\n}\n}\n");
+    let items = [("fn tilde(a: u32) -> bool { a > 1 }", false)];
+    // The tokens of the function keep their places in the source: the compiler data has no
+    // body with a place in the macro definition.
+    let data = |source: &str| made_data(source, &[("same! {", "", &items[..], &[][..])]);
+    let tests = [BTreeSet::new(), BTreeSet::new()];
+    let wrapped = "`demo::tilde` comes from the macro call `same!` now";
+    // The body is equal: the fact has the category `macro` and the result `code equal`.
+    let oracle = MacroBodies(vec![body("demo::tilde", "src/lib.rs", 6, equal("n0")), body("demo::top", "src/lib.rs", 10, equal("n0"))], tests.clone(), Some([data(BASE), data(&after)]));
+    let report = run_derived_with(BASE, &after, &oracle);
+    let fact = report.facts.iter().find(|fact| fact.description == wrapped).unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(fact.category == Category::Macro && fact.compare == Compare::CodeEqual && report.accepted(), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| !fact.description.starts_with("removed `demo::tilde`")), "{report:#?}");
+    // The body is not equal: the same fact has the result `code different`.
+    let oracle = MacroBodies(vec![body("demo::tilde", "src/lib.rs", 6, different(false)), body("demo::top", "src/lib.rs", 10, equal("n0"))], tests.clone(), Some([data(BASE), data(&after)]));
+    let report = run_derived_with(BASE, &after, &oracle);
+    let fact = report.facts.iter().find(|fact| fact.description == wrapped).unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(fact.compare == Compare::CodeDifferent && fact.affected == ["demo::tilde"], "{report:#?}");
+    // The reverse step: the function is an item of the source again.
+    let oracle = MacroBodies(vec![body("demo::tilde", "src/lib.rs", 6, equal("n0")), body("demo::top", "src/lib.rs", 10, equal("n0"))], tests, Some([data(&after), data(BASE)]));
+    let report = run_derived_with(&after, BASE, &oracle);
+    let fact = report.facts.iter().find(|fact| fact.description == "`demo::tilde` came from the macro call `same!` before, and it is an item of the source now").unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(fact.category == Category::Macro && fact.compare == Compare::CodeEqual, "{report:#?}");
+    // An added function with a body that no macro makes: the result is not `no code`.
+    let plain = format!("{BASE}pub fn more(a: u32) -> u32 {{\n    a\n}}\n");
+    let report = run_derived(BASE, &plain, &[("demo::more", BodyStatus::AfterOnly)]);
+    assert!(report.facts.iter().all(|fact| fact.compare != Compare::NoCode), "{report:#?}");
+    // An added type has no body: `no code`.
+    let report = run_derived(BASE, &format!("{BASE}pub struct Unit;\n"), &[("demo::top", equal("n0"))]);
+    assert!(report.facts.iter().all(|fact| fact.compare == Compare::NoCode), "{report:#?}");
 }
 
 /// Batch 6a, B2 (trial 9): a body that a new macro call makes needs no reason of its own. A
@@ -5192,14 +5496,13 @@ fn a_trait_impl_fact_shows_the_self_type_of_the_source() {
     let after = format!("{before}impl Render for As<&str> {{\n    fn render(&self) -> u32 {{\n        1\n    }}\n}}\nimpl From<u8> for As<Vec<u8>> {{\n    fn from(n: u8) -> Self {{\n        As(vec![n])\n    }}\n}}\n");
     let report = run_derived(before, &after, &[]);
     let texts = descriptions(&report);
-    assert!(texts.contains(&"trait impl `<As<&str> as Render>` added".to_string()) && texts.contains(&"trait impl `<As<Vec<u8>> as From<u8>>` added".to_string()), "{texts:#?}");
+    assert!(texts.iter().any(|text| text.starts_with("trait impl `<As<&str> as Render>` added with: `fn render`")) && texts.iter().any(|text| text.starts_with("trait impl `<As<Vec<u8>> as From<u8>>` added with: `fn from`")), "{texts:#?}");
     let fact = report.facts.iter().find(|fact| fact.description.contains("as Render")).unwrap();
     assert_eq!(fact.at.as_ref().map(|at| at.item.as_str()), Some("demo::impl <As as Render>"), "{fact:#?}");
 }
 
-/// Batch 6a, B4 (trial 9): a move into a new `pub` module gets no proof (a known limit). The
-/// note gives the real cause. It does not give the advice "Put the move in its own step": the
-/// step has no other change.
+/// Batch 6a, B4 (trial 9), and design 36.1: a move into a new `pub` module is a derived move.
+/// The new public module is its own fact. An explicit claim keeps the cause of batch 6a.
 #[test]
 fn a_move_into_a_new_public_module_gives_the_real_cause() {
     let lib = "mod a;\nfn helper(n: u32) -> u32 {\n    n + 1\n}\n";
@@ -5213,16 +5516,16 @@ fn a_move_into_a_new_public_module_gives_the_real_cause() {
         run_derived_files(&before, &after, &[("demo::a::one", equal("n1")), ("demo::words::helper", equal("n0"))])
     };
     let report = run("pub mod", "");
-    let cause = "Semilla does not derive the move (the new module `demo::words` is `pub`, so the move changes the public API. Semilla does not derive a move into a new public module: this is a known limit)";
-    assert!(report.notes.iter().any(|note| note.contains(cause)), "{:?}", report.notes);
-    assert!(!report.notes.iter().any(|note| note.contains("no other change")), "{:?}", report.notes);
-    assert!(descriptions(&report).iter().any(|text| text == "removed `demo::helper`") && !descriptions(&report).iter().any(|text| text.starts_with("moved ")), "{report:#?}");
-    // A second change in the step: the advice of the old note is correct, and it stays.
+    let texts = descriptions(&report);
+    assert_eq!(texts, ["moved `demo::helper` → `demo::words::helper`, with 1 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`", "added `demo::words` (the public API changes: a different crate can now use the item)"]);
+    assert!(report.notes.is_empty() && report.facts[0].compare == Compare::CodeEqual && report.facts[2].category == Category::Added, "{report:#?}");
+    // A second change in the step: one more fact.
     let report = run("pub mod", "pub fn more() -> u32 {\n    2\n}\n");
-    assert!(report.notes.iter().any(|note| note.contains("the step also has the change at `demo::more`. Semilla derives a move only in a step with no other change")), "{:?}", report.notes);
-    // A module that is not `pub` keeps the proof.
+    let texts = descriptions(&report);
+    assert!(texts[0].starts_with("moved `demo::helper` → `demo::words::helper`") && texts.iter().any(|text| text.starts_with("added `demo::more`")) && texts.iter().any(|text| text.starts_with("added `demo::words`")) && report.notes.is_empty(), "{report:#?}");
+    // A module that is not `pub` is a part of the move: it has no fact of its own.
     let report = run("mod", "");
-    assert!(descriptions(&report).iter().any(|text| text.starts_with("moved `demo::helper` → `demo::words::helper`")), "{report:#?}");
+    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper`, with 1 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`"]);
 }
 
 /// Batch 6a, B4 (trial 9): a file that the code reads at build time (`include_str!`,
@@ -5257,7 +5560,13 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     let facts = |old: &str, new: &str| {
         assert!(BASE.contains(old), "{old}");
         let report = run_derived(BASE, &BASE.replacen(old, new, 1), &bodies);
-        assert!(report.accepted(), "{old}: {:#?}", report.facts);
+        // A `cfg` attribute of an associated item has the spotlight of each `cfg` attribute.
+        assert!(report.accepted() || new.contains("#[cfg("), "{old}: {:#?}", report.facts);
+        // The category of a part of an associated item is the category of its change (36.2).
+        for fact in &report.facts {
+            let category = if fact.description.starts_with("visibility of the associated") { Some(Category::Visibility) } else if fact.description.starts_with("attributes of the associated") { Some(Category::Attribute) } else { None };
+            assert!(category.is_none_or(|category| fact.category == category), "{fact:#?}");
+        }
         report.facts.iter().map(|fact| (fact.description.clone(), fact.compare, fact.spotlight)).collect::<Vec<_>>()
     };
     let one = |old: &str, new: &str| {
@@ -5440,9 +5749,9 @@ fn a_macro_call_fact_lists_the_items_that_the_call_makes() {
     let direct = format!("{KEBAB}impl PartialEq for AsKebabCase<&str> {{\n    fn eq(&self, other: &Self) -> bool {{\n        self.0 == other.0\n    }}\n}}\n");
     let report = run_derived(KEBAB, &direct, &[]);
     assert_eq!(report.api_level.as_deref(), Some("minor"), "{report:#?}");
-    assert_eq!(report.api_changes, ["added trait impl `<AsKebabCase<&str> as PartialEq>`"], "{report:#?}");
+    assert_eq!(report.api_changes, ["`AsKebabCase<&str>` now has `PartialEq`"], "{report:#?}");
     let report = run_derived(&direct, KEBAB, &[]);
-    assert_eq!((report.api_level.as_deref(), &report.api_changes[..]), (Some("major"), &["removed trait impl `<AsKebabCase<&str> as PartialEq>`".to_string()][..]), "{report:#?}");
+    assert_eq!((report.api_level.as_deref(), &report.api_changes[..]), (Some("major"), &["`AsKebabCase<&str>` no longer has `PartialEq` (the public API can change)".to_string()][..]), "{report:#?}");
     // 2. A changed call: the fact shows the two calls and the two lists.
     let with_string = format!("{KEBAB}{SAME}same!(String);\n");
     let oracle = MacroBodies(vec![eq("&str", BodyStatus::BeforeOnly), eq("String", BodyStatus::AfterOnly)], none(), both(&with_str, &with_string));
@@ -5725,4 +6034,155 @@ fn a_changed_derive_list_of_a_public_type_is_a_public_api_change() {
     // A type that no different crate can use, and an attribute that is not a `derive`.
     assert_eq!(level(&plain.replace("pub struct", "struct"), &more.replace("pub struct", "struct")), ("patch", Vec::new()));
     assert_eq!(level(more, &more.replace("#[derive", "#[repr(transparent)]\n#[derive")), ("patch", Vec::new()));
+}
+
+/// Design 36.1 (batch 7b, part 1): a moved type with an impl, a wider field, and other changes.
+#[test]
+fn a_moved_type_with_a_second_change_is_a_move_and_one_fact_for_each_change() {
+    const ERROR: &str = "use std::fmt;\n#[derive(Debug)]\nstruct Quoted(char);\nimpl fmt::Display for Quoted {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        if self.0 == '\\0' {\n            f.write_str(\"nul\")\n        } else {\n            write!(f, \"{}\", self.0)\n        }\n    }\n}\npub fn show(ch: char) -> String {\n    Quoted(ch).to_string()\n}\n";
+    const QUOTED: &str = "use std::fmt;\n#[derive(Debug)]\npub(crate) struct Quoted(pub(crate) char);\nimpl fmt::Display for Quoted {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        if self.0 == '\\0' {\n            f.write_str(\"nul\")\n        } else {\n            write!(f, \"{}\", self.0)\n        }\n    }\n}\n";
+    const ERROR_AFTER: &str = "use crate::quoted::Quoted;\npub fn show(ch: char) -> String {\n    Quoted(ch).to_string()\n}\n";
+    let files = |lib: &'static str, error: &'static str, quoted: Option<&'static str>| {
+        let mut files = vec![("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("src/error.rs", error)];
+        files.extend(quoted.map(|text| ("src/quoted.rs", text)));
+        files
+    };
+    let before = files("mod error;\n", ERROR, None);
+    let fmt = "demo::quoted::<Quoted as fmt::Display>::fmt";
+    let bodies = [("demo::error::show", equal("n1")), (fmt, equal("n1"))];
+    let report = run_derived_files(&before, &files("mod error;\nmod quoted;\n", ERROR_AFTER, Some(QUOTED)), &bodies);
+    let moved = "moved `demo::error::Quoted` → `demo::quoted::Quoted`, with 1 impl and 2 `use` line(s)";
+    let wider = ["visibility of `demo::quoted::Quoted`: `private` → `pub (crate)`", "visibility of `demo::quoted::Quoted.0`: `private` → `pub (crate)`"];
+    assert_eq!(descriptions(&report), [moved, wider[0], wider[1]]);
+    assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && !fact.mismatch()) && report.notes.is_empty(), "{report:#?}");
+    assert!(report.facts[0].category == Category::Move && report.facts[2].category == Category::Visibility, "{report:#?}");
+    // A body edit in the moved impl.
+    let edited: &'static str = Box::leak(QUOTED.replace("'\\0'", "'0'").into_boxed_str());
+    let report = run_derived_files(&before, &files("mod error;\nmod quoted;\n", ERROR_AFTER, Some(edited)), &[("demo::error::show", equal("n1")), (fmt, different(false))]);
+    assert_eq!(descriptions(&report), [moved, wider[0], wider[1], "change condition `'\\0'` → `'0'` at `demo::quoted::<Quoted as fmt::Display>::fmt/S0/cond/rhs`"]);
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[3].compare == Compare::CodeDifferent && report.facts[3].affected == [fmt], "{report:#?}");
+    // A second field, and the edit of each use.
+    let field: &'static str = Box::leak(QUOTED.replace("Quoted(pub(crate) char)", "Quoted(pub(crate) char, pub(crate) u8)").into_boxed_str());
+    let error: &'static str = Box::leak(ERROR_AFTER.replace("Quoted(ch)", "Quoted(ch, 0)").into_boxed_str());
+    let report = run_derived_files(&before, &files("mod error;\nmod quoted;\n", error, Some(field)), &[("demo::error::show", different(false)), (fmt, equal("n1"))]);
+    let texts = descriptions(&report);
+    assert_eq!(texts, [moved, "the tuple fields of `demo::quoted::Quoted` changed: `(char)` → `(char, u8)`", wider[0], wider[1], "changed expression `Quoted(ch)` → `Quoted(ch, 0)` at `demo::error::show/tail/recv`"]);
+    assert!(report.facts[1].category == Category::Declaration && report.facts[1].compare == Compare::CodeDifferent && report.facts[0].compare == Compare::CodeEqual, "{report:#?}");
+    // A different derive list.
+    let derive: &'static str = Box::leak(QUOTED.replace("#[derive(Debug)]", "#[derive(Debug, Clone, Copy)]").into_boxed_str());
+    let report = run_derived_files(&before, &files("mod error;\nmod quoted;\n", ERROR_AFTER, Some(derive)), &bodies);
+    assert_eq!(descriptions(&report), [moved, wider[0], "attributes of `demo::quoted::Quoted`: derive added: Clone, Copy", wider[1]]);
+    assert_eq!(report.facts[2].category, Category::Declaration, "{report:#?}");
+}
+
+/// Design 36.1: the cases with no derived pair.
+#[test]
+fn a_pair_that_is_not_one_item_shows_as_removed_and_added() {
+    const BASE: &str = "pub fn run(a: u32, b: u32) -> bool {\n    caret(a, b) || tilde(a, b)\n}\nfn caret(a: u32, b: u32) -> bool {\n    if a == 0 {\n        return b == 0;\n    }\n    let low = a * 2;\n    let high = a * 3;\n    b >= low && b < high\n}\nfn tilde(a: u32, b: u32) -> bool {\n    if a > 100 {\n        return false;\n    }\n    let low = a + 1;\n    b > low\n}\n";
+    // A second function with the old name: the old path stays, so the new item is "added".
+    let after = format!("{}fn caret(a: u32, b: u32) -> bool {{\n    caret_op(a, b)\n}}\n", BASE.replace("fn caret(", "fn caret_op("));
+    let report = run_derived(BASE, &after, &[("demo::run", equal("n0")), ("demo::caret", different(true)), ("demo::caret_op", different(false))]);
+    let texts = descriptions(&report);
+    assert!(!texts.iter().any(|text| text.starts_with("renamed ")) && texts.contains(&"added `demo::caret_op`".to_string()) && texts.contains(&"added statement `caret_op(a, b)` at `demo::caret/tail`".to_string()), "{texts:?}");
+    assert!(report.notes.is_empty() && report.facts.iter().filter(|fact| fact.affected == ["demo::caret"]).all(|fact| fact.compare == Compare::CodeDifferent), "{report:#?}");
+    // A new name and a new body: below the limit.
+    let after = BASE.replace("tilde", "tilde_op").replace("    if a > 100 {\n        return false;\n    }\n    let low = a + 1;\n    b > low\n", "    a.checked_add(1).is_some_and(|low| b > low)\n");
+    let report = run_derived(BASE, &after, &[("demo::run", equal("n1")), ("demo::tilde_op", different(true))]);
+    assert_eq!(descriptions(&report), ["changed path `tilde` → `tilde_op` at `demo::run/tail/rhs/callee`", "removed `demo::tilde`", "added `demo::tilde_op`"]);
+    assert!(report.facts[2].compare == Compare::CodeDifferent && report.notes.is_empty(), "{report:#?}");
+    // Two functions swap their names.
+    let after = BASE.replace("fn caret(", "fn swap(").replace("fn tilde(", "fn caret(").replace("fn swap(", "fn tilde(");
+    let report = run_derived(BASE, &after, &[("demo::run", equal("n0")), ("demo::caret", different(true)), ("demo::tilde", different(true))]);
+    let texts = descriptions(&report);
+    assert!(!texts.iter().any(|text| text.starts_with("renamed ")) && texts.contains(&"change condition `a == 0` → `a > 100` at `demo::caret/S0/cond`".to_string()) && texts.contains(&"change condition `a > 100` → `a == 0` at `demo::tilde/S0/cond`".to_string()), "{texts:?}");
+    assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeDifferent), "{report:#?}");
+    // Two pairs with equal texts: the maps have the same score.
+    let twins = "pub fn one(a: u32) -> u32 {\n    a + 1\n}\npub fn two(a: u32) -> u32 {\n    a + 1\n}\n";
+    let after = twins.replace("fn one", "fn first").replace("fn two", "fn second");
+    let report = run_derived(twins, &after, &[("demo::first", equal("n0")), ("demo::second", equal("n0"))]);
+    assert_eq!(descriptions(&report), ["removed `demo::one` (the public API changes: a different crate can no longer use the item)", "removed `demo::two` (the public API changes: a different crate can no longer use the item)", "added `demo::first` (the public API changes: a different crate can now use the item)", "added `demo::second` (the public API changes: a different crate can now use the item)"]);
+    assert_eq!(report.notes, ["`demo::one` → `demo::first`, `demo::two` → `demo::second` show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map has the same similar score and the same number of other facts: (`demo::one` → `demo::first`, `demo::two` → `demo::second`) or (`demo::one` → `demo::second`, `demo::two` → `demo::first`))"]);
+}
+
+/// Design 36.1, rule 7: a local rename with a second edit in the same body.
+#[test]
+fn a_local_rename_with_a_second_edit_is_a_rename_and_one_fact_for_each_edit() {
+    const BASE: &str = "pub struct Ver {\n    pub minor: u32,\n    pub patch: u32,\n}\npub fn caret(ver: &Ver, cmp: &Ver) -> bool {\n    let minor = cmp.minor;\n    if ver.minor > minor {\n        return true;\n    }\n    ver.patch > cmp.patch\n}\npub fn unit(text: &str) -> u32 {\n    match text {\n        \"us\" => 1,\n        _ => 0,\n    }\n}\n";
+    // A local, with a second edit. `minor` is also the name of a field.
+    let after = BASE.replace("let minor = cmp.minor;", "let min = cmp.minor;").replace("ver.minor > minor", "ver.minor >= min");
+    let report = run_derived(BASE, &after, &[("demo::caret", different(false)), ("demo::unit", equal("n0"))]);
+    assert_eq!(descriptions(&report), ["`demo::caret`: renamed local `minor` → `min`, 1 edit(s)", "change condition `ver.minor > minor` → `ver.minor >= min` at `demo::caret/S1/cond`"]);
+    // The rename fact has no body: the changed body is a body of the edit fact.
+    assert!(report.facts[0].category == Category::Rename && report.facts[0].compare == Compare::CodeEqual && report.facts[0].affected.is_empty(), "{report:#?}");
+    assert!(report.facts[1].compare == Compare::CodeDifferent && report.facts[1].affected == ["demo::caret"], "{report:#?}");
+    // A parameter, with a second edit.
+    let after = BASE.replace("cmp", "other").replace("ver.patch > other.patch", "ver.patch >= other.patch");
+    let report = run_derived(BASE, &after, &[("demo::caret", different(false)), ("demo::unit", equal("n0"))]);
+    assert_eq!(descriptions(&report), ["parameter `cmp` of `demo::caret` renamed to `other`: `& Ver`", "`demo::caret`: renamed local `cmp` → `other`, 1 edit(s)", "changed expression `ver.patch > cmp.patch` → `ver.patch >= other.patch` at `demo::caret/tail`"]);
+    assert!(report.facts[..2].iter().all(|fact| fact.category == Category::Rename && fact.compare == Compare::CodeEqual && fact.affected.is_empty()) && report.facts[2].affected == ["demo::caret"], "{report:#?}");
+    // A changed string in a pattern is not a rename of a local.
+    let after = BASE.replace("\"us\"", "\"ms\"");
+    let report = run_derived(BASE, &after, &[("demo::caret", equal("n0")), ("demo::unit", different(false))]);
+    assert_eq!(descriptions(&report), ["changed pattern `\"us\"` → `\"ms\"` at `demo::unit/S0/arm[0].pat`"]);
+    assert_eq!(report.facts[0].compare, Compare::CodeDifferent, "{report:#?}");
+}
+
+/// Batch 7b, part 2 (design 36.2): each associated item of an impl has its own fact, with the
+/// category of its change, the public API note, and a line in the list of the API changes.
+#[test]
+fn an_associated_item_has_its_own_fact_and_its_api_line() {
+    const BASE: &str = "#[derive(Clone)]\npub struct Kind;\npub struct Op(pub u8);\nimpl Op {\n    pub const DEFAULT: Op = Op(1);\n    const HIDDEN: u8 = 1;\n    pub fn get(&self) -> u8 {\n        self.0\n    }\n}\npub trait Named {\n    const NAME: &'static str;\n    type Out;\n}\nimpl Named for Op {\n    const NAME: &'static str = \"op\";\n    type Out = u8;\n}\nunsafe impl Sync for Op {}\npub fn limit() -> usize {\n    const MAX: usize = 32;\n    MAX\n}\n";
+    const API: &str = "(the public API can change: a different crate can use the item)";
+    let bodies = [("demo::Op::get", equal("n0")), ("demo::limit", equal("n0"))];
+    let run = |old: &str, new: &str| {
+        assert!(BASE.contains(old), "{old}");
+        run_derived(BASE, &BASE.replacen(old, new, 1), &bodies)
+    };
+    let one = |old: &str, new: &str| {
+        let report = run(old, new);
+        assert_eq!(report.facts.len(), 1, "{old}: {:#?}", report.facts);
+        (report.facts[0].description.clone(), report.facts[0].category, report.api_level.clone().unwrap_or_default(), report.api_changes.clone())
+    };
+    // Rule 1 and rule 3: a new constant with an attribute and a visibility is one fact. No
+    // general fact shows its tokens.
+    let (text, category, level, api) = one("    const HIDDEN", "    #[doc(hidden)]\n    pub const ANY: Op = Op(0);\n    const HIDDEN");
+    assert_eq!((text, category), (format!("added `demo::Op::ANY` {API}"), Category::Added));
+    assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Op::ANY`".to_string()]));
+    // A changed value, a removed constant: the level is `major`.
+    let (text, category, level, api) = one("DEFAULT: Op = Op(1)", "DEFAULT: Op = Op(2)");
+    assert_eq!((text, category), (format!("value of `demo::Op::DEFAULT` changed: Op (1) → Op (2) {API}"), Category::Value));
+    assert_eq!((level.as_str(), api), ("major", vec!["changed `demo::Op::DEFAULT` (the type or the value)".to_string()]));
+    let (text, category, level, api) = one("    pub const DEFAULT: Op = Op(1);\n", "");
+    assert_eq!((text, category), (format!("removed `demo::Op::DEFAULT` {API}"), Category::Removed));
+    assert_eq!((level.as_str(), api), ("major", vec!["removed `demo::Op::DEFAULT`".to_string()]));
+    // A private constant of an inherent impl is not a part of the public API.
+    let (text, category, level, api) = one("HIDDEN: u8 = 1", "HIDDEN: u8 = 2");
+    assert_eq!((text.as_str(), category), ("value of `demo::Op::HIDDEN` changed: 1 → 2", Category::Value));
+    assert_eq!((level.as_str(), api.len()), ("patch", 0));
+    // A member of a trait impl has no visibility: the impl gives the answer.
+    let (text, category, level, _) = one("= \"op\"", "= \"operator\"");
+    assert_eq!((text, category, level.as_str()), (format!("value of `demo::<Op as Named>::NAME` changed: \"op\" → \"operator\" {API}"), Category::Value, "major"));
+    let (text, category, level, _) = one("type Out = u8", "type Out = u16");
+    assert_eq!((text, category, level.as_str()), (format!("associated type `demo::<Op as Named>::Out`: `type Out = u8 ;` → `type Out = u16 ;` {API}"), Category::Declaration, "major"));
+    // New methods: one fact for each method, and no fact for the member list.
+    let report = run("    pub fn get", "    pub fn a(&self) -> u8 {\n        1\n    }\n    pub fn b(&self) -> u8 {\n        2\n    }\n    pub fn get");
+    assert_eq!(descriptions(&report), ["added `demo::Op::a` (the public API changes: a different crate can now use the item)", "added `demo::Op::b` (the public API changes: a different crate can now use the item)"]);
+    assert_eq!((report.api_level.as_deref(), report.api_changes.len()), (Some("minor"), 2), "{report:#?}");
+    // The fact of a new impl block lists its members.
+    let (text, category, level, api) = one("pub struct Op(pub u8);", "impl Kind {\n    /// Each kind.\n    pub const ALL: [u8; 1] = [1];\n}\npub struct Op(pub u8);");
+    assert_eq!((text.as_str(), category), ("added `demo::impl Kind` with: `const ALL` (the public API changes: a different crate can now use the item)", Category::Added));
+    assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Kind::ALL`".to_string()]));
+    // Rule 2: a constant in a function body follows the rule of a constant of a module.
+    let (text, category, level, _) = one("MAX: usize = 32", "MAX: usize = 64");
+    assert_eq!((text.as_str(), category, level.as_str()), ("value of `MAX` (in `demo::limit`) changed: 32 → 64", Category::Value, "patch"));
+    // Rule 4: a new trait impl, a removed `Sync` impl, a removed `derive` name.
+    let (text, _, level, api) = one("pub fn limit", "impl From<u8> for Op {\n    fn from(x: u8) -> Op {\n        Op(x)\n    }\n}\npub fn limit");
+    assert_eq!(text, format!("trait impl `<Op as From<u8>>` added with: `fn from` {API}"));
+    assert_eq!((level.as_str(), api), ("minor", vec!["`Op` now has `From<u8>`".to_string()]));
+    let (text, category, level, api) = one("unsafe impl Sync for Op {}\n", "");
+    assert!(text.starts_with("trait impl `<Op as Sync>` removed (the public API can change: ") && text.ends_with("; each type with a field of this type can change too)"), "{text}");
+    assert_eq!((category, level.as_str(), api), (Category::Removed, "major", vec!["`Op` no longer has `Sync` (the public API can change): each type with a field of this type can change too".to_string()]));
+    let (text, _, level, api) = one("#[derive(Clone)]\n", "");
+    assert_eq!(text, format!("attributes of `demo::Kind`: derive removed: Clone {API}"));
+    assert_eq!((level.as_str(), api), ("major", vec!["`Kind` no longer has `Clone` (the public API can change)".to_string()]));
 }

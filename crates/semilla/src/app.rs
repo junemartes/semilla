@@ -787,7 +787,7 @@ impl App {
         let (key, set) = match commit {
             Some(commit) => {
                 let commit = self.repo.git(&["rev-parse", commit])?;
-                let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note; tag it first"))?;
+                let note = self.repo.read_note(&commit).map_err(|error| no_note(&commit, error))?;
                 let set: ChangeSet = serde_json::from_str(&note)?;
                 if let Err(error) = self.check_binding(&commit, &set) {
                     let error = error.to_string();
@@ -1002,7 +1002,7 @@ impl App {
     /// Reads the change set of a tagged commit, and checks that it belongs to the commit.
     pub fn commit_changeset(&self, target: &str) -> Result<(String, ChangeSet)> {
         let commit = self.repo.git(&["rev-parse", target])?;
-        let note = self.repo.read_note(&commit).with_context(|| format!("commit {commit} has no semilla note; tag it first"))?;
+        let note = self.repo.read_note(&commit).map_err(|error| no_note(&commit, error))?;
         let set: ChangeSet = serde_json::from_str(&note)?;
         self.check_binding(&commit, &set)?;
         Ok((commit, set))
@@ -1471,10 +1471,10 @@ impl App {
         for pair in &mut report.pairs {
             pair.reviewer = review.pair(&pair.key()).map(str::to_string);
             if pair.reviewer.as_deref() == Some("accepted") {
-                // "Own step" is not a route when the step of the pair has no other change.
+                // The cause that stopped the derivation is the route (design 36.1).
                 report.organization.push(match &pair.stopped {
-                    Some(cause) => format!("the reviewer accepted the pair warning `{}`: its step has no other change, and Semilla cannot derive that it is one item ({cause}). Change the code that stops the derivation, or ask the reviewer to dismiss the warning", pair.key()),
-                    None => format!("the reviewer accepted the pair warning `{}`: make it one changed item: put the rename or the move in its own step with no other change, then change the body in the next step", pair.key()),
+                    Some(cause) => format!("the reviewer accepted the pair warning `{}`: Semilla cannot derive that it is one item ({cause}). Change the code that stops the derivation, or ask the reviewer to dismiss the warning", pair.key()),
+                    None => format!("the reviewer accepted the pair warning `{}`: make it one changed item: keep the module or the name, and keep most of the text in the step of the rename or the move", pair.key()),
                 });
             }
         }
@@ -2130,4 +2130,12 @@ pub(crate) fn summary_line(report: &Report) -> String {
         put_line(&mut text, &format!("  {lines}"));
     }
     text
+}
+
+/// The error for a commit with no Semilla note (batch 7b, part 5.4). The text of the `git`
+/// command says the same thing a second time, so it is not in the message. A different `git`
+/// error keeps its text.
+fn no_note(commit: &str, error: anyhow::Error) -> anyhow::Error {
+    let text = format!("commit {commit} has no semilla note; tag it first");
+    if format!("{error:#}").contains("no note found") { anyhow::anyhow!(text) } else { error.context(text) }
 }

@@ -448,26 +448,30 @@ impl Joint<'_> {
         if atoms.is_empty() {
             return Ok((plain, Vec::new()));
         }
-        let by_name = |bodies: Vec<BodyComparison>| -> BTreeMap<String, BodyComparison> { bodies.into_iter().map(|body| (body.name.clone(), body)).collect() };
+        // The key of a body: its name and its place. Two twins under `cfg` have one name at
+        // two places, and each twin has its own result (batch 7b, part 4).
+        type Key = (String, Option<(String, usize)>);
+        let key = |body: &BodyComparison| -> Key { (body.name.clone(), body.span.clone()) };
+        let by_name = |bodies: Vec<BodyComparison>| -> BTreeMap<Key, BodyComparison> { bodies.into_iter().map(|body| (key(&body), body)).collect() };
         let strict = by_name(run(&Mode::Strict)?);
         let proved = |body: &BodyComparison| property || matches!(body.status, BodyStatus::Equal { .. });
-        let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| proved(body) && strict.get(&body.name) != Some(body)).map(|(at, _)| at).collect();
+        let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| proved(body) && strict.get(&key(body)) != Some(body)).map(|(at, _)| at).collect();
         if open.is_empty() {
             return Ok((plain, Vec::new()));
         }
-        let mut single: Vec<(&String, BTreeMap<String, BodyComparison>)> = Vec::new();
+        let mut single: Vec<(&String, BTreeMap<Key, BodyComparison>)> = Vec::new();
         for atom in atoms {
             single.push((atom, by_name(run(&Mode::Without(atom.clone()))?)));
         }
-        let mut groups: BTreeMap<(BTreeSet<String>, BTreeSet<String>), Option<BTreeMap<String, BodyComparison>>> = BTreeMap::new();
+        let mut groups: BTreeMap<(BTreeSet<String>, BTreeSet<String>), Option<BTreeMap<Key, BodyComparison>>> = BTreeMap::new();
         let mut out = plain;
         let mut wanted: Vec<Selection> = Vec::new();
         for at in open {
             let body = &out[at];
-            let used: BTreeSet<String> = single.iter().filter(|(_, result)| result.get(&body.name) != Some(body)).map(|(atom, _)| (*atom).clone()).collect();
+            let used: BTreeSet<String> = single.iter().filter(|(_, result)| result.get(&key(body)) != Some(body)).map(|(atom, _)| (*atom).clone()).collect();
             let mut only = |atoms: &BTreeSet<String>, files: &BTreeSet<String>| {
                 let result = groups.entry((atoms.clone(), files.clone())).or_insert_with(|| run(&Mode::Only(atoms.clone(), files.clone())).ok().map(by_name));
-                result.as_ref().is_some_and(|result| result.get(&body.name) == Some(body))
+                result.as_ref().is_some_and(|result| result.get(&key(body)) == Some(body))
             };
             let trees = [body.status != BodyStatus::AfterOnly, body.status != BodyStatus::BeforeOnly];
             let mut missing = Vec::new();
@@ -478,7 +482,7 @@ impl Joint<'_> {
                 }
             }
             let text = self.text(&body.name, &gap, added);
-            let mut body = match strict.get(&body.name) {
+            let mut body = match strict.get(&key(body)) {
                 Some(body) => body.clone(),
                 None => BodyComparison { status: BodyStatus::Different { cfg_changed: true }, ..body.clone() },
             };

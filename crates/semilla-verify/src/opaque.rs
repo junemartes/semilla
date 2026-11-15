@@ -219,6 +219,7 @@ pub(crate) fn attr_kind(content: TokenStream) -> Option<Attr> {
                 }
             }
             let mut derives = Vec::new();
+            let mut unknown = false;
             // The first part is the condition.
             for part in parts.iter().skip(1).filter(|part| !part.is_empty()) {
                 let Some(TokenTree::Ident(first)) = part.first() else { return Some(Attr::Select) };
@@ -250,13 +251,20 @@ pub(crate) fn attr_kind(content: TokenStream) -> Option<Attr> {
                     }
                     continue;
                 }
-                return Some(Attr::Select);
+                // A content `cfg` or `cfg_attr` has its own condition: it stays `Select`.
+                if first == "cfg" || first == "cfg_attr" {
+                    return Some(Attr::Select);
+                }
+                unknown = true;
             }
-            // A content that Semilla does not know stays `Select` above: it can be a `cfg` with
-            // a condition that is not covered.
+            // A content that Semilla does not know is `Select`, but not with a covered
+            // condition (batch 7b, part 4.3): the checked configurations have the item with
+            // the attribute and with no attribute, and the compare runs in each one.
             let condition: TokenStream = parts.first().cloned().unwrap_or_default().into_iter().collect();
             Some(if crate::cfgcond::covered(condition) {
                 Attr::Covered
+            } else if unknown {
+                Attr::Select
             } else if derives.is_empty() {
                 Attr::Free
             } else {
@@ -305,6 +313,43 @@ fn attr_of(attr: &str) -> Option<Attr> {
         _ => None,
     })?;
     attr_kind(group.stream())
+}
+
+/// True for an inner `cfg_attr(COND, ATTR)` (`#![…]`) that removes no item (batch 7b, part
+/// 4.2, design 36.4). An inner `cfg_attr` of a crate root or of a module adds an attribute of
+/// the module (`no_std`, `feature(…)`, a lint level). The items of the module stay in each
+/// configuration. Only a content `cfg` or `cfg_attr` can remove the module.
+pub(crate) fn inner_keeps_items(attr: &str) -> bool {
+    if !compact(attr).replace(' ', "").starts_with("#![cfg_attr(") {
+        return false;
+    }
+    let Ok(stream) = attr.parse::<TokenStream>() else { return false };
+    let Some(group) = stream.into_iter().find_map(|tree| match tree {
+        TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group),
+        _ => None,
+    }) else {
+        return false;
+    };
+    let Some(TokenTree::Group(list)) = group.stream().into_iter().nth(1) else { return false };
+    // The first part is the condition. Each other part is an attribute.
+    let mut first_of_part = false;
+    let mut parts = 0;
+    for tree in list.stream() {
+        if is_punct(Some(&tree), ',') {
+            first_of_part = true;
+            parts += 1;
+            continue;
+        }
+        if first_of_part && parts >= 1 {
+            if let TokenTree::Ident(ident) = &tree {
+                if ["cfg", "cfg_attr"].contains(&ident.to_string().as_str()) {
+                    return false;
+                }
+            }
+        }
+        first_of_part = false;
+    }
+    true
 }
 
 /// The tokens of an item text. `macros`: the macros of the workspace (a name of the standard
@@ -740,7 +785,7 @@ fn selects_any<'t>(attrs: impl IntoIterator<Item = &'t String>, derive_ok: bool,
 
 fn own_cfg(item: &Item, shadow: &Shadow) -> bool {
     let _at = crate::cfgcond::at(&item.file);
-    selects_any(&item.attrs, matches!(item.kind, ItemKind::Struct | ItemKind::Enum), &|name| shadow.hides(item, name))
+    selects_any(item.attrs.iter().filter(|attr| !(item.kind == ItemKind::Mod && inner_keeps_items(attr))), matches!(item.kind, ItemKind::Struct | ItemKind::Enum), &|name| shadow.hides(item, name))
 }
 
 /// The crates whose `derive` names have the meaning of their name.
@@ -1390,6 +1435,12 @@ pub(crate) struct Opaque<'a> {
     type_uses: RefCell<[BTreeMap<String, BTreeSet<String>>; 2]>,
     /// The items under `cfg` that each item uses, by the driver, for each side.
     cfg_uses: RefCell<[BTreeMap<String, BTreeSet<String>>; 2]>,
+    /// For each item of each side: the entries of the driver that stop a proof, as texts
+    /// with the name of the type or the item and the cause (batch 7b, part 4.1).
+    stop_uses: RefCell<[BTreeMap<String, BTreeSet<String>>; 2]>,
+    /// The result of `part_cause` for each type name. The search reads each item of the two
+    /// sides, and a build gives the same name many times.
+    part_causes: RefCell<BTreeMap<String, String>>,
     /// The items below a `cfg` attribute with a covered condition, and below no other `cfg`
     /// attribute, for each side (batch 5s, part C): the plain paths. The driver names such an
     /// item as an item under `cfg`. Its use does not stop a proof.
@@ -1811,6 +1862,8 @@ impl<'a> Opaque<'a> {
             entries: Default::default(),
             type_uses: Default::default(),
             cfg_uses: Default::default(),
+            stop_uses: Default::default(),
+            part_causes: Default::default(),
             covered: Default::default(),
         };
         let mut scan = Scan::new(before, after);
@@ -1994,7 +2047,7 @@ impl<'a> Opaque<'a> {
                 .iter()
                 .filter(|(_, (file, attrs))| {
                     let _at = crate::cfgcond::at(file);
-                    selects_any(attrs, false, &|_| false)
+                    selects_any(attrs.iter().filter(|attr| !inner_keeps_items(attr)), false, &|_| false)
                 })
                 .map(|(module, _)| module.replace('-', "_"))
                 .collect();
@@ -2052,7 +2105,14 @@ impl<'a> Opaque<'a> {
                     opaque.selected[side].insert(item.path.clone());
                 }
                 if item.kind == ItemKind::Impl && root.is_some() {
-                    let text = if by_macro(item) { "an `impl` with a macro call in its header" } else { "an `impl` under `cfg`" };
+                    // The text names the attribute with its condition (batch 7b, part 4.1): the
+                    // attribute of the `impl`, or of the root above it.
+                    let selecting = |attrs: &[String]| attrs.iter().find(|attr| matches!(attr_of(attr), Some(Attr::Select) | Some(Attr::Derive(_)))).map(|attr| format!("`{}`", compact(attr).replace('`', "").chars().take(80).collect::<String>()));
+                    let condition = selecting(&item.attrs)
+                        .or_else(|| root.as_ref().and_then(|root| ws.items.get(root)).and_then(|root| selecting(&root.attrs)))
+                        .unwrap_or_else(|| "`cfg`".to_string());
+                    let text = if by_macro(item) { "an `impl` with a macro call in its header".to_string() } else { format!("an `impl` under {condition}") };
+                    let text = text.as_str();
                     opaque.facts.some |= by_macro(item);
                     opaque.facts.any |= by_macro(item);
                     let (head, parts) = &impls[&key(item)];
@@ -2628,6 +2688,69 @@ impl<'a> Opaque<'a> {
         })
     }
 
+    /// The text of an entry of the driver that stops the proof of the reader: the name of the
+    /// type or the item, and the cause (batch 7b, part 4.1). `None`: the entry does not stop
+    /// the proof, or it has no name.
+    fn stop_text(&self, reader: (usize, &str), entry: &str) -> Option<String> {
+        if entry == "?" || !self.stops(Some(reader), std::slice::from_ref(&entry.to_string())) {
+            return None;
+        }
+        let (kind, rest) = match entry.split_once(' ') {
+            Some((kind, rest)) if ["alias", "foreign", "cfg", "std", "touch"].contains(&kind) => (kind, rest),
+            _ => ("", entry),
+        };
+        let name = rest.split('<').next().unwrap_or(rest).trim();
+        let cause = match kind {
+            "alias" => "a type alias, and the build configuration can select its type".to_string(),
+            "foreign" => "a type of a different crate, and a feature of that crate can change its parts".to_string(),
+            "cfg" => self.hard.get(last_name(name)).and_then(|causes| causes.first()).map(|cause| cause.text.clone()).unwrap_or_else(|| "an item under `cfg`".to_string()),
+            "std" => "a trait `impl` under `cfg` for this type".to_string(),
+            _ => self.part_cause(name),
+        };
+        Some(format!("`{name}` ({cause})"))
+    }
+
+    /// The cause text for a type with a part that the build configuration selects (batch 7b,
+    /// part 4.1). The text names the condition where the source shows it: an `impl` under
+    /// `cfg` for the type, or a `cfg` attribute in the declaration of the type.
+    fn part_cause(&self, name: &str) -> String {
+        if let Some(known) = self.part_causes.borrow().get(name) {
+            return known.clone();
+        }
+        let cause = self.find_part_cause(name);
+        self.part_causes.borrow_mut().insert(name.to_string(), cause.clone());
+        cause
+    }
+
+    fn find_part_cause(&self, name: &str) -> String {
+        let short = last_name(name);
+        let shown = |attr: &str| format!("`{}`", compact(attr).replace('`', "").chars().take(80).collect::<String>());
+        let condition = |attrs: &[String]| attrs.iter().find(|attr| compact(attr).starts_with("#[cfg")).map(|attr| shown(attr));
+        for side in [1, 0] {
+            let items = || self.sides[side].items.values();
+            let under = items().filter(|item| item.kind == ItemKind::Impl && self.roots[side].contains_key(&item.path) && impl_parts(item).head.as_deref() == Some(short));
+            if let Some(found) = under.filter_map(|item| condition(&item.attrs)).next() {
+                return format!("a type with an `impl` under {found}");
+            }
+            let own = items().filter(|item| matches!(item.kind, ItemKind::Struct | ItemKind::Enum) && plain_path(&item.path) == name);
+            let inner = own.filter_map(|item| {
+                // The attributes of the item are before its declaration. An attribute in the
+                // declaration is an attribute of a field or of a variant.
+                let body = item.text.find('{').or_else(|| item.text.find('(')).map(|at| &item.text[at..])?;
+                let start = body.find("#[cfg")?;
+                let end = body[start..].find(")]")?;
+                Some(shown(&body[start..start + end + 2]))
+            });
+            if let Some(found) = inner.into_iter().next() {
+                return format!("a type with a part under {found}");
+            }
+        }
+        match self.hard.get(short).and_then(|causes| causes.first()) {
+            Some(cause) => format!("a type; {}", cause.text),
+            None => "a type with a part under `cfg`".to_string(),
+        }
+    }
+
     /// True if the use of the item `path` under `cfg` stops the proof of the reader.
     fn cfg_stops(&self, reader: Option<(usize, &str)>, path: &str) -> bool {
         let path = path.split('<').next().unwrap_or(path).trim();
@@ -2675,6 +2798,9 @@ impl<'a> Opaque<'a> {
             if kind == "cfg" {
                 self.cfg_uses.borrow_mut()[side].entry(path.clone()).or_default().insert(rest.split('<').next().unwrap_or(rest).trim().to_string());
             }
+            if let Some(text) = self.stop_text((side, &path), entry) {
+                self.stop_uses.borrow_mut()[side].entry(path.clone()).or_default().insert(text);
+            }
         }
     }
 
@@ -2689,6 +2815,8 @@ impl<'a> Opaque<'a> {
             if let Some(path) = &path {
                 let found = types.iter().filter_map(|entry| entry.strip_prefix("alias ")).map(str::to_string);
                 self.aliases.borrow_mut()[side].entry(path.clone()).or_default().extend(found);
+                let texts: Vec<String> = types.iter().filter_map(|entry| self.stop_text((side, path), entry)).collect();
+                self.stop_uses.borrow_mut()[side].entry(path.clone()).or_default().extend(texts);
             }
             self.layouts.borrow_mut()[side].extend(path);
             return true;
@@ -2793,8 +2921,26 @@ impl<'a> Opaque<'a> {
                         causes.extend(text.filter(|text| !causes.contains(text)));
                     }
                 }
+                // A stop with no hard name: the entries of the driver name the type or the
+                // item (batch 7b, part 4.1). A cause with no name gives no note: the text
+                // "code that a `cfg` attribute can change" said nothing that a reader can check.
                 if causes.is_empty() {
-                    causes.push("code that a `cfg` attribute can change".to_string());
+                    let stop_uses = self.stop_uses.borrow();
+                    for (side, item) in [(1, Some(new)), (0, old)] {
+                        let Some(item) = item else { continue };
+                        for text in stop_uses[side].get(&item.path).into_iter().flatten() {
+                            if !causes.contains(text) {
+                                causes.push(text.clone());
+                            }
+                        }
+                    }
+                }
+                if causes.is_empty() {
+                    let module = self.module(&new.path);
+                    let path = plain_path(&new.path);
+                    if let Some(glob) = self.globs.iter().find(|glob| path.starts_with(&format!("{glob}::")) || self.sees(&module, glob)) {
+                        causes.push(format!("`{glob}` (a module with names that the build configuration selects, and Semilla cannot list them)"));
+                    }
                 }
                 body.stopped = causes;
             }

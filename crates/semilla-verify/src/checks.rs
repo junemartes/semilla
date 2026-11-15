@@ -77,7 +77,10 @@ pub struct BodyIndex {
     by_item: BTreeMap<String, Vec<BodyStatus>>,
     /// The MIR name → the item path.
     items: BTreeMap<String, String>,
-    /// The MIR name → its status.
+    /// The MIR name and the place → the item path. Two definitions of one name under `cfg`
+    /// (twins) have one MIR name at two places, and each has its own item (batch 7b, part 4).
+    places: BTreeMap<(String, Option<(String, usize)>), String>,
+    /// The MIR name → its status. With twins: a status that is not equal wins.
     statuses: BTreeMap<String, BodyStatus>,
     /// The item path and the MIR name → the uses of the build configuration in the changed
     /// bodies.
@@ -96,9 +99,12 @@ pub struct BodyIndex {
 
 impl BodyIndex {
     pub fn new(bodies: &[BodyComparison], after: &Workspace, before: &Workspace) -> BodyIndex {
-        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), differs_in: BTreeMap::new(), equal_in: BTreeMap::new(), stopped: BTreeMap::new(), available: !bodies.is_empty() };
+        let mut index = BodyIndex { by_item: BTreeMap::new(), items: BTreeMap::new(), places: BTreeMap::new(), statuses: BTreeMap::new(), config: BTreeMap::new(), differs_in: BTreeMap::new(), equal_in: BTreeMap::new(), stopped: BTreeMap::new(), available: !bodies.is_empty() };
         for body in bodies {
-            index.statuses.insert(body.name.clone(), body.status.clone());
+            let twin_differs = index.statuses.get(&body.name).is_some_and(|status| !matches!(status, BodyStatus::Equal { .. }));
+            if !(twin_differs && matches!(body.status, BodyStatus::Equal { .. })) {
+                index.statuses.insert(body.name.clone(), body.status.clone());
+            }
             // A body that exists only before has its span in the "before" tree.
             // The span is a place in the tree of the body. In the other tree, only the name
             // can find the item (batch 6b, part 2): a line of a body from a macro in the new
@@ -141,6 +147,7 @@ impl BodyIndex {
                     index.config.entry(item.clone()).or_default().extend(body.config.iter().cloned());
                 }
                 index.items.insert(body.name.clone(), item.clone());
+                index.places.insert((body.name.clone(), body.span.clone()), item.clone());
                 index.by_item.entry(item).or_default().push(body.status.clone());
             }
         }
@@ -223,7 +230,7 @@ impl BodyIndex {
     }
 
     pub fn item_of(&self, body: &BodyComparison) -> Option<String> {
-        self.items.get(&body.name).cloned()
+        self.places.get(&(body.name.clone(), body.span.clone())).or_else(|| self.items.get(&body.name)).cloned()
     }
 
     /// True if at least one MIR body belongs to the item: a checked configuration compiles it.
@@ -694,15 +701,25 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
             let is_use = edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use");
             let is_path = edit.kind == EditKind::Replaced && edit.node_before == Some("path") && edit.node_after == Some("path");
             let names_item = mentions(&edit.text_before, old_name) || mentions(&edit.text_after, new_name);
+            // A path edit is a forced edit only if it has the old name before and the new name
+            // after (design 36.1). A path that changes to the item from a different name, or
+            // from the item to a different name, is its own fact.
+            let forced_path = mentions(&edit.text_before, old_name) && mentions(&edit.text_after, new_name);
             if is_use {
                 let private = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.vis.is_empty()));
                 let module = edit.item().map(parent);
                 let in_module = claim.op == "move-item" && module.is_some_and(|m| modules.contains(&m));
                 let plain = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.attrs.is_empty()));
                 let same = module.is_some_and(|m| same_imports.contains(m)) && plain(&edit.before, context.before) && plain(&edit.after, context.after);
+                // A line that imports a different item with the same name is not a forced edit
+                // (design 36.1): it is its own fact.
+                let target_ok = |anchor: &Option<Anchor>, ws: &Workspace, name: &str, path: &str| {
+                    anchor.as_ref().and_then(|a| ws.items.get(&a.item)).is_none_or(|line| use_line_names(ws, line).is_some_and(|names| names.iter().all(|(found, target, glob)| *glob || found != name || target == path)))
+                };
+                let names_item = names_item && target_ok(&edit.before, context.before, old_name, &at.item) && target_ok(&edit.after, context.after, new_name, &to);
                 private(&edit.before, context.before) && private(&edit.after, context.after) && (names_item || in_module || same)
             } else {
-                is_path && names_item
+                is_path && forced_path
             }
         })
         .map(|(index, _)| index)
@@ -1582,7 +1599,7 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
         // With `new`, the name map pairs the old and the new item. Equal text means a pure move or
         // rename, which is an identity claim, not a rewrite.
         if new != at.item {
-            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Remove the claim. Semilla derives a move or a rename in a step with no other change.", at.item));
+            outcome.hint = Some(format!("`{}` has the same text at `{new}`: this is a move or a rename, not a rewrite. Remove the claim. Semilla derives the move or the rename.", at.item));
         }
         return outcome;
     }
@@ -1865,6 +1882,28 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
     // impls and the `Drop` impls that the code of another crate runs.
     let found = context.facts.map(|facts| (facts, crate::scope::scope(&at.item, &reached, facts, context.after)));
     let quoted = |found: &[String]| list(&found.iter().map(|path| format!("`{path}`")).collect::<Vec<_>>());
+    // The routes from the item of the claim to the first three items with a site (batch 7b,
+    // part 6). An item of the claim itself has no route.
+    let routes = |items: &[String]| -> String {
+        let mut shown: Vec<&String> = Vec::new();
+        for item in items.iter().filter(|item| **item != at.item) {
+            if !shown.contains(&item) && shown.len() < 3 {
+                shown.push(item);
+            }
+        }
+        shown
+            .iter()
+            .map(|item| {
+                let route = match &found {
+                    Some((_, scope)) => scope.route(&at.item, context.calls, item),
+                    None => crate::scope::call_route(context.calls, &at.item, item).map(|route| route.iter().map(|item| format!("`{item}`")).collect::<Vec<_>>().join(" → ")).unwrap_or_else(|| format!("`{}` → … → `{item}`", at.item)),
+                };
+                format!("; the route to `{item}`: {route}")
+            })
+            .collect()
+    };
+    // The item of a site text (`ITEM/PATH`, with or without the code marks).
+    let site_item = |site: &String| site.trim_matches('`').split('/').next().unwrap_or_default().to_string();
     let outcome = match claim.op.as_str() {
         "no-unsafe" => {
             let unsafe_in = |items: &BTreeSet<String>| -> Vec<String> {
@@ -1896,7 +1935,8 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                 if !index.is_empty() {
                     parts.push(format!("index panic sites (an index out of bounds): {}", list(&index)));
                 }
-                return Outcome::refuted(parts.join("; "));
+                let items: Vec<String> = plain.iter().chain(&index).map(site_item).collect();
+                return Outcome::refuted(format!("{}{}", parts.join("; "), routes(&items)));
             }
             // The implicit panic sites are MIR `Assert` terminators: a division, an index, an
             // overflow check. They come from phase 2.
@@ -1904,6 +1944,7 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                 return Outcome::new(ClaimStatus::Pending { reason: "the implicit panic sites (division, bounds, overflow) come from the MIR in phase 2".into() });
             };
             let mut sites: Vec<String> = Vec::new();
+            let mut site_items: Vec<String> = Vec::new();
             for item in &scope.items {
                 let Some(item_facts) = facts.get(item) else { continue };
                 let calls = item_facts.externals.iter().filter(|path| is_panic_call(path)).map(|path| format!("a call to `{path}`"));
@@ -1912,13 +1953,14 @@ fn check_property(context: &Context, claim: &Claim) -> Outcome {
                     let site = format!("{kind} {}", scope.place(item));
                     if !sites.contains(&site) {
                         sites.push(site);
+                        site_items.push(item.clone());
                     }
                 }
             }
             if !sites.is_empty() {
                 let overflow = sites.iter().any(|site| site.starts_with("overflow"));
                 let note = if overflow { " (the checked build is the dev profile of the tree: it has overflow checks)" } else { "" };
-                return Outcome::refuted(format!("implicit panic sites: {}{note}", list(&sites)));
+                return Outcome::refuted(format!("implicit panic sites: {}{note}{}", list(&sites), routes(&site_items)));
             }
             // A function of another crate can panic. Semilla does not examine it.
             // The source has the name `std::hint::black_box`. The MIR has the intrinsic that

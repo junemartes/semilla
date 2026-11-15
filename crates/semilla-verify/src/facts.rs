@@ -68,7 +68,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 if let Some(tuple) = tuple_owner(&item.path, item.kind).filter(|tuple| !same_change(tuple)) {
                     let key = (tuple.clone(), "tuple fields".to_string());
                     fact_key[index] = Some(key.clone());
-                    add(key, Anchor::item(&tuple), index, tuple_description(&tuple, before, after), &mut keys);
+                    add(key, Anchor::item(&tuple), index, tuple_description(&tuple, before, after, renames), &mut keys);
                     continue;
                 }
                 // A field of a new or removed variant belongs to the variant fact.
@@ -87,7 +87,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 let key = (item.path.clone(), format!("trait impl {verb}"));
                 fact_key[index] = Some(key.clone());
                 let name = trait_impl_name(item);
-                add(key, Anchor::item(&item.path), index, format!("trait impl `{name}` {verb}"), &mut keys);
+                add(key, Anchor::item(&item.path), index, format!("trait impl `{name}` {verb}{}", crate::impl_members_text(item)), &mut keys);
             }
             _ => {}
         }
@@ -136,7 +136,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 Some(((anchor.item.clone(), "visibility".into()), format!("visibility of `{}`: `{}` → `{}`{api}", anchor.item, side(&edit.text_before), side(&edit.text_after))))
             }
             EditKind::Attrs => Some(((anchor.item.clone(), "attribute".into()), attribute_description(&anchor.item, edit))),
-            EditKind::Members => members_fact(edit, &anchor, item, &keys).map(|(key, text)| (key, text)),
+            EditKind::Members => members_fact(edit, &anchor, renames, &keys),
             EditKind::Signature => match edit.node_after.or(edit.node_before) {
                 Some(part) => {
                     let name = match part {
@@ -166,7 +166,12 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                             None => format!("changed source text with no other fact, in `{}`: {}", anchor.item, old_new()),
                         }
                     } else { parameter_description(&anchor, name, edit) };
-                    Some(((anchor.to_string(), name.to_string()), text))
+                    // A part of an associated constant or type has the category of its
+                    // change (design 36.2): the key is the member and the part.
+                    match assoc_label(edit) {
+                        Some((part, member)) => Some(((assoc_path(&anchor.item, member), part.to_string()), text)),
+                        None => Some(((anchor.to_string(), name.to_string()), text)),
+                    }
                 }
                 None => signature_part(edit).map(|part| {
                     let key = match tuple_owner(&anchor.item, item.map(|i| i.kind).unwrap_or(ItemKind::Other)) {
@@ -185,14 +190,14 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         if let Some((key, description)) = found {
             fact_key[index] = Some(key.clone());
             let anchor = if key.1 == "tuple fields" || key.1 == crate::bounds::PART { Anchor::item(&key.0) } else { anchor };
-            let description = if key.1 == "tuple fields" { tuple_description(&key.0, before, after) } else { description };
+            let description = if key.1 == "tuple fields" { tuple_description(&key.0, before, after, renames) } else { description };
             add(key, anchor, index, description, &mut keys);
         }
     }
 
     // A removed and an added parameter of one function with the same type at the same position:
     // one fact "parameter `a` renamed to `b`". The body proof gives the class.
-    merge_parameter_renames(edits, before, after, &mut keys, &mut parts, &mut fact_key);
+    merge_parameter_renames(edits, before, after, renames, &mut keys, &mut parts, &mut fact_key);
 
     // 3. The forced edits at other sites (design 22.6, F1 and F2). A site must have exactly the
     //    forced edit (F6). A call site needs the MIR callee list as the evidence that it calls the
@@ -293,13 +298,24 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
         // or removed member changes the API of its owner type.
         let api_item = if key.1.starts_with("member ") { owner_of(&key.0) } else { anchor.item.clone() };
         let (_, declaration_note) = crate::declaration_api_change(&key.1, &api_item, before, after);
+        // An associated constant or type, a trait impl, and a `derive` list (design 36.2).
+        let declaration_note = match () {
+            _ if impl_member(first).is_some() || assoc_label(first).is_some() => {
+                let name = key.0.rsplit("::").next().unwrap_or("");
+                crate::assoc_api_note(&anchor.item, name, before, after)
+            }
+            _ if key.1.starts_with("trait impl") => crate::impl_api_note(&anchor.item, before, after),
+            _ if key.1 == "attribute" && descriptions.iter().any(|text| text.contains("derive added: ") || text.contains("derive removed: ")) => crate::derive_api_note(&anchor.item, before, after),
+            _ => declaration_note,
+        };
         // A changed `must_use` or `deprecated` attribute changes the warnings of a different
         // crate that uses the item. The MIR of the workspace does not show this (batch 6a, A1).
         let warning_attribute = key.1 == "attribute"
+            && (assoc_label(first).is_none() || declaration_note.is_some())
             && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
             && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false, reason_key: None,
+        facts.push(Fact { build_code: None, build_code_change: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
@@ -309,7 +325,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 // The note shows for each bound change, and for each other declaration change
                 // that no changed body makes a fact to read.
                 match &declaration_note {
-                    Some(note) if matches!(key.1.as_str(), "generics" | "where clause") || affected.is_empty() => format!("{text} ({note})"),
+                    Some(note) => format!("{text} ({note})"),
                     _ if warning_attribute => format!("{text} (a different crate that uses the item can get a different warning)"),
                     _ => text,
                 }
@@ -348,8 +364,10 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
 
 /// The fact text of changed tuple fields, with the types (D8): "the tuple fields of `E::A` changed:
 /// `(u32)` → `(u64)`".
-fn tuple_description(tuple: &str, before: &Workspace, after: &Workspace) -> String {
-    format!("the tuple fields of `{tuple}` changed: `{}` → `{}`", tuple_fields(tuple, before), tuple_fields(tuple, after))
+fn tuple_description(tuple: &str, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames) -> String {
+    // A renamed or moved type has a different path before the step (design 36.1).
+    let old = renames.items.iter().find(|(_, new)| new.as_str() == tuple).map_or(tuple, |(old, _)| old.as_str());
+    format!("the tuple fields of `{tuple}` changed: `{}` → `{}`", tuple_fields(old, before), tuple_fields(tuple, after))
 }
 
 /// The types of the tuple fields of a struct or a variant: `(u32, u64)`, or `()` for none.
@@ -394,7 +412,7 @@ pub(crate) fn doc_test_fact(item: &str, edit: &Edit) -> Option<(String, String)>
 /// True if the edit is one side of a parameter rename (B5): a removed and an added parameter of
 /// one function with the same type at the same position. A parameter name is a local in the MIR,
 /// so the body proof covers its uses.
-pub(crate) fn is_parameter_rename(edits: &[Edit], index: usize, before: &Workspace, after: &Workspace) -> bool {
+pub(crate) fn is_parameter_rename(edits: &[Edit], index: usize, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames) -> bool {
     let is_param = |edit: &Edit| edit.kind == EditKind::Signature && edit.node_after.or(edit.node_before) == Some("param");
     let position = |ws: &Workspace, anchor: &Anchor| {
         let sig = ws.items.get(&anchor.item)?.sig.as_ref()?;
@@ -413,12 +431,15 @@ pub(crate) fn is_parameter_rename(edits: &[Edit], index: usize, before: &Workspa
         return false;
     }
     let Some((added, anchor, ty, at)) = side(edit) else { return false };
-    at.is_some() && edits.iter().enumerate().any(|(other, e)| other != index && is_param(e) && side(e).is_some_and(|(a, o, t, p)| a != added && o.item == anchor.item && t == ty && p == at))
+    // A function with a new name or a new module in the same step is the same function
+    // (design 36.1): the compare uses the path after the step.
+    let now = |added: bool, item: &str| if added { item.to_string() } else { renames.items.get(item).cloned().unwrap_or_else(|| item.to_string()) };
+    at.is_some() && edits.iter().enumerate().any(|(other, e)| other != index && is_param(e) && side(e).is_some_and(|(a, o, t, p)| a != added && now(a, &o.item) == now(added, &anchor.item) && t == ty && p == at))
 }
 
 /// Merges the facts of a removed and an added parameter into one rename fact, when the function,
 /// the type, and the position are equal.
-fn merge_parameter_renames(edits: &[Edit], before: &Workspace, after: &Workspace, keys: &mut Vec<Key>, parts: &mut BTreeMap<Key, (Anchor, Vec<usize>, Vec<String>)>, fact_key: &mut [Option<Key>]) {
+fn merge_parameter_renames(edits: &[Edit], before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, keys: &mut Vec<Key>, parts: &mut BTreeMap<Key, (Anchor, Vec<usize>, Vec<String>)>, fact_key: &mut [Option<Key>]) {
     let position = |ws: &Workspace, anchor: &Anchor| {
         let sig = ws.items.get(&anchor.item)?.sig.as_ref()?;
         let role = anchor.path.last()?.to_string();
@@ -436,11 +457,13 @@ fn merge_parameter_renames(edits: &[Edit], before: &Workspace, after: &Workspace
             let new_edit = &edits[new_index];
             let (None, Some(new_text)) = (&new_edit.text_before, &new_edit.text_after) else { continue };
             let Some((new_name, new_type)) = param_parts(new_text) else { continue };
-            if new_anchor.item != old_anchor.item || new_type != old_type || position(before, &old_anchor).is_none() || position(before, &old_anchor) != position(after, &new_anchor) {
+            // A function with a new name or a new module in the same step is the same function
+            // (design 36.1).
+            if new_anchor.item != *renames.items.get(&old_anchor.item).unwrap_or(&old_anchor.item) || new_type != old_type || position(before, &old_anchor).is_none() || position(before, &old_anchor) != position(after, &new_anchor) {
                 continue;
             }
             let key: Key = (old_anchor.to_string(), "parameter rename".to_string());
-            let description = format!("parameter `{old_name}` of `{}` renamed to `{new_name}`: `{old_type}`", old_anchor.item);
+            let description = format!("parameter `{old_name}` of `{}` renamed to `{new_name}`: `{old_type}`", new_anchor.item);
             let at = keys.iter().position(|k| k == removed).unwrap_or(keys.len());
             keys.insert(at, key.clone());
             keys.retain(|k| k != removed && k != added);
@@ -465,6 +488,15 @@ fn uses(key: &Key, item: &str, after: &Workspace, before: &Workspace, callees: O
     }
     if item == entity {
         return true;
+    }
+    // The body of an associated constant: `m::<impl m::Op>::DEFAULT` for `m::Op::DEFAULT`.
+    if !after.items.contains_key(entity) && !before.items.contains_key(entity) {
+        if let Some((owner, member)) = entity.rsplit_once("::") {
+            let ty = owner.rsplit("::").next().unwrap_or(owner).trim_start_matches('<').split(['<', ' ']).next().unwrap_or("");
+            if !ty.is_empty() && item.contains('<') && item.ends_with(&format!(">::{member}")) && crate::hints::words(item).contains(&ty) {
+                return true;
+            }
+        }
     }
     let function = after.items.get(entity).or_else(|| before.items.get(entity)).is_some_and(|it| it.kind == ItemKind::Fn);
     if function {
@@ -678,8 +710,22 @@ fn tuple_owner(path: &str, kind: ItemKind) -> Option<String> {
 
 /// The fact of a member list: the order of the members, or a part of a member fact (a new or a
 /// removed member changes the list). A tuple owner has one coarse fact.
-fn members_fact(edit: &Edit, anchor: &Anchor, item: Option<&semilla_syntax::Item>, keys: &[Key]) -> Option<(Key, String)> {
+fn members_fact(edit: &Edit, anchor: &Anchor, renames: &semilla_syntax::Renames, keys: &[Key]) -> Option<(Key, String)> {
     let kind = edit.attr_after.as_deref().or(edit.attr_before.as_deref()).unwrap_or("");
+    if let Some((kind, name)) = impl_member(edit) {
+        // An associated constant or type of an impl (design 36.2): one fact for each member.
+        let path = assoc_path(&anchor.item, name);
+        return Some(match (edit.source_before.as_deref(), edit.source_after.as_deref()) {
+            (None, _) => ((path.clone(), "associated added".into()), format!("added `{path}`")),
+            (_, None) => ((path.clone(), "associated removed".into()), format!("removed `{path}`")),
+            (Some(old), Some(new)) if kind == "const" => match (const_parts(&Some(old.to_string())), const_parts(&Some(new.to_string()))) {
+                (Some((old_head, old_value)), Some((new_head, new_value))) if old_head == new_head => ((path.clone(), "value".into()), long_value_description(&path, &old_value, &new_value).unwrap_or_else(|| format!("value of `{path}` changed: {old_value} → {new_value}"))),
+                (Some((old_head, old_value)), Some((new_head, new_value))) if old_value == new_value => ((path.clone(), "type".into()), format!("type of `{path}`: {}", crate::edits::sides_text(&old_head, &new_head))),
+                _ => ((path.clone(), "type and value".into()), format!("type and value of `{path}`: {}", crate::edits::sides_text(old, new))),
+            },
+            (Some(old), Some(new)) => ((path.clone(), "type".into()), format!("associated type `{path}`: {}", crate::edits::sides_text(old, new))),
+        });
+    }
     if !matches!(kind, "struct" | "enum" | "variant") {
         // The member list of a trait or an impl repeats the methods, which are items with claims.
         return None;
@@ -690,22 +736,63 @@ fn members_fact(edit: &Edit, anchor: &Anchor, item: Option<&semilla_syntax::Item
         return Some(((anchor.item.clone(), "tuple fields".into()), String::new()));
     }
     let separator = if kind == "enum" { "::" } else { "." };
-    let kept_old: Vec<&&str> = old.iter().filter(|name| new.contains(name)).collect();
-    let kept_new: Vec<&&str> = new.iter().filter(|name| old.contains(name)).collect();
+    // A member with a new name in the same step is the same member (design 36.1): the order
+    // compare uses the new name on the two sides.
+    let renamed = |name: &str| -> Option<&str> {
+        let (_, to) = renames.items.iter().find(|(from, to)| from.rsplit_once(separator).is_some_and(|(_, last)| last == name) && to.rsplit_once(separator).is_some_and(|(owner, last)| owner == anchor.item && new.contains(&last)))?;
+        to.rsplit_once(separator).map(|(_, last)| last)
+    };
+    let mapped: Vec<&str> = old.iter().map(|name| if new.contains(name) { name } else { renamed(name).unwrap_or(name) }).collect();
+    let kept_old: Vec<&&str> = mapped.iter().filter(|name| new.contains(name)).collect();
+    let kept_new: Vec<&&str> = new.iter().filter(|name| mapped.contains(name)).collect();
     if kept_old != kept_new {
-        let _ = item;
         // The discriminant of a variant with no explicit value is its position.
         let values = if kind == "enum" { "; the discriminant values of the variants with no explicit value change" } else { "" };
         return Some(((anchor.item.clone(), "member order".into()), format!("member order of `{}`: `{}` → `{}`{values}", anchor.item, old.join(", "), new.join(", "))));
     }
     // The list changed only by new or removed members: the edit belongs to their facts.
-    let changed = new.iter().filter(|name| !old.contains(name)).map(|name| (format!("{}{separator}{name}", anchor.item), "member added")).chain(old.iter().filter(|name| !new.contains(name)).map(|name| (format!("{}{separator}{name}", anchor.item), "member removed")));
+    let changed = new.iter().filter(|name| !mapped.contains(name)).map(|name| (format!("{}{separator}{name}", anchor.item), "member added")).chain(mapped.iter().filter(|name| !new.contains(name)).map(|name| (format!("{}{separator}{name}", anchor.item), "member removed")));
     for (member, part) in changed {
         if let Some(key) = keys.iter().find(|(entity, p)| *entity == member && p == part) {
             return Some((key.clone(), String::new()));
         }
     }
     None
+}
+
+/// The kind (`const` or `type`) and the name of the member of an edit of one associated
+/// constant or type of an impl (design 36.2). `None` for each other edit.
+pub(crate) fn impl_member(edit: &Edit) -> Option<(&str, &str)> {
+    if edit.kind != EditKind::Members || (edit.node_before != Some("member") && edit.node_after != Some("member")) {
+        return None;
+    }
+    let mut words = edit.source_after.as_deref().or(edit.source_before.as_deref())?.split_whitespace();
+    let kind = words.next().filter(|kind| matches!(*kind, "const" | "type"))?;
+    Some((kind, words.next()?))
+}
+
+/// The path of an associated item of an impl, in the form of a method path:
+/// `m::impl Op` and `ALL` give `m::Op::ALL`.
+pub(crate) fn assoc_path(impl_path: &str, name: &str) -> String {
+    let last = semilla_syntax::split_path(impl_path).last().copied().unwrap_or(impl_path);
+    let module = impl_path[..impl_path.len() - last.len()].trim_end_matches("::");
+    let owner = last.strip_prefix("impl ").unwrap_or(last);
+    let owner = match owner.rsplit_once('#') {
+        Some((base, index)) if !index.is_empty() && index.chars().all(|c| c.is_ascii_digit()) => base,
+        _ => owner,
+    };
+    format!("{module}::{owner}::{name}")
+}
+
+/// The label parts of an edit of the visibility or of the attributes of an associated
+/// constant or type (`net::associated_edits`): the part name and the name of the member.
+pub(crate) fn assoc_label(edit: &Edit) -> Option<(&'static str, &str)> {
+    if edit.kind != EditKind::Signature || edit.node_after != Some("text") {
+        return None;
+    }
+    let label = edit.attr_after.as_deref()?;
+    let part = if label.starts_with("visibility of the associated ") { "visibility" } else if label.starts_with("attributes of the associated ") { "attribute" } else { return None };
+    Some((part, label.split('`').nth(1)?))
 }
 
 /// The part name of the net fact (batch 6a, A6): a changed source text that no other fact
@@ -852,7 +939,7 @@ pub fn is_fact_edit(edit: &Edit) -> bool {
     match edit.kind {
         EditKind::Visibility | EditKind::Attrs => true,
         EditKind::Signature => signature_part(edit).is_some(),
-        EditKind::Members => matches!(kind, "struct" | "enum" | "variant"),
+        EditKind::Members => matches!(kind, "struct" | "enum" | "variant") || impl_member(edit).is_some(),
         EditKind::ItemAdded | EditKind::ItemRemoved => matches!(kind, "field" | "variant"),
         EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => true,
         _ => false,
@@ -1325,11 +1412,15 @@ pub fn harmless_attribute_edit(edit: &Edit) -> bool {
 pub(crate) fn part_category(part: &str, descriptions: &[String]) -> Category {
     match part {
         "visibility" => Category::Visibility,
+        // A `derive` list is a part of the declaration (design 35.2).
+        "attribute" if descriptions.iter().any(|text| text.contains(": derive added: ") || text.contains("derive removed: ")) => Category::Declaration,
         "attribute" => Category::Attribute,
-        "member added" | "trait impl added" => Category::Added,
-        "member removed" | "trait impl removed" => Category::Removed,
+        "member added" | "trait impl added" | "associated added" => Category::Added,
+        "member removed" | "trait impl removed" | "associated removed" => Category::Removed,
         "value" => Category::Value,
         "parameter" if !descriptions.is_empty() && descriptions.iter().all(|text| text.contains(" renamed to ")) => Category::Rename,
+        // A new name of a parameter is a rename (design 35.2).
+        "parameter rename" => Category::Rename,
         SOURCE_TEXT => Category::Text,
         _ => Category::Declaration,
     }

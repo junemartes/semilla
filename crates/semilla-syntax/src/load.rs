@@ -990,7 +990,7 @@ fn empty_fields(fields: &syn::Fields) -> syn::Fields {
     }
 }
 
-fn impl_member_name(item: &syn::ImplItem) -> String {
+pub(crate) fn impl_member_name(item: &syn::ImplItem) -> String {
     match item {
         syn::ImplItem::Fn(method) => format!("fn {}", method.sig.ident),
         // The full text of an associated constant or type, with no attributes and no visibility
