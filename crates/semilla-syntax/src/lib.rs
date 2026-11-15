@@ -16,7 +16,7 @@ mod net;
 pub mod tree;
 
 pub use diff::{Edit, EditKind, Renames, diff};
-pub use load::{CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
+pub use load::{BodyItem, BodyItems, CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
 pub use tree::Node;
 
 use semilla_core::{Anchor, Segment};
@@ -264,6 +264,27 @@ mod tests {
         renames.idents.push((Some("demo::f".into()), "total".into(), "sum".into()));
         let edits = diff(&old, &new, &renames);
         assert!(edits.is_empty(), "{edits:#?}");
+    }
+
+    #[test]
+    fn a_rename_of_a_method_gives_no_edit_for_a_different_method_with_the_same_name() {
+        // Design 37.10. The method `A::get` gets the name `fetch`. The method `B::get` and its
+        // call keep the name: the text is equal on the two sides, so they have no edit.
+        let before = "pub struct A;\npub struct B;\nimpl A { pub fn get(&self) -> u32 { 1 } }\nimpl B { pub fn get(&self) -> u32 { 2 } }\npub fn f(a: A, b: B) -> u32 { let x = a.get(); x + b.get() }\n";
+        let after = "pub struct A;\npub struct B;\nimpl A { pub fn fetch(&self) -> u32 { 1 } }\nimpl B { pub fn get(&self) -> u32 { 2 } }\npub fn f(a: A, b: B) -> u32 { let x = a.fetch(); x + b.get() }\n";
+        let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)]);
+        let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
+        let mut renames = Renames::default();
+        renames.items.insert("demo::A::get".into(), "demo::A::fetch".into());
+        renames.idents.push((None, "get".into(), "fetch".into()));
+        let edits = diff(&old, &new, &renames);
+        assert!(edits.is_empty(), "{edits:#?}");
+        // A call that keeps the old name in a statement with a different change keeps its edit.
+        let changed = after.replace("x + b.get()", "x + b.get() + 1");
+        let (_d3, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &changed)]);
+        let edits = diff(&old, &new, &renames);
+        assert_eq!(edits.len(), 1, "{edits:#?}");
+        assert_eq!(edits[0].anchor().map(|anchor| anchor.to_string()).as_deref(), Some("demo::f/tail"));
     }
 
     #[test]

@@ -73,6 +73,89 @@ pub struct Added {
     /// verifier asks for the same comparison more than one time. The comparison is a function
     /// of the records of the two trees, the rename map, the added items, and the marks.
     compared: BTreeMap<CompareKey, Compared>,
+    /// The records of the two trees of a step in one configuration (design 37.20), by the two
+    /// trees and the configuration.
+    sides: BTreeMap<SidesKey, std::sync::Arc<Sides>>,
+    /// The rename map with the moved closures, by the record set, the rename map, and the
+    /// added items (design 37.20).
+    moved: Vec<(SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>)>,
+}
+
+/// The key of a record set: the two trees of a step, and the configuration.
+type SidesKey = (String, String, Configuration);
+
+/// The most record sets in memory: the configurations of two steps.
+const MOST_SIDES: usize = 16;
+
+/// The records of the two trees of a step in one configuration, with the data that each compare
+/// of the configuration reads (design 37.20). The verifier asks for the compare of a
+/// configuration many times in one step. The oracle makes this data one time for the record set.
+#[derive(Clone, Debug)]
+struct Sides {
+    before: semilla_normal::Levels,
+    after: semilla_normal::Levels,
+    /// The span and the expanded names of each N0 record, in the order of the records: the
+    /// records of the tree before the step, then those of the tree after it.
+    inputs: [Vec<RecordInputs>; 2],
+    /// The result of [`Sides::names_with_two_places`].
+    two_places: Vec<String>,
+}
+
+/// The span and the expanded names of one record.
+type RecordInputs = (Option<(String, usize)>, Vec<semilla_verify::ExpandedName>);
+
+impl Sides {
+    fn new(before: semilla_normal::Levels, after: semilla_normal::Levels) -> Sides {
+        let inputs = [&before, &after].map(|levels| {
+            let records = levels.get("n0").into_iter().flatten();
+            records
+                .map(|record| {
+                    let span = record.span.as_ref().map(|span| (span.file.clone(), span.line_start));
+                    let names = record
+                        .names
+                        .iter()
+                        .map(|name| semilla_verify::ExpandedName {
+                            word: name.word.clone(),
+                            member: name.member,
+                            qual: name.qual.clone(),
+                            prefix: name.prefix,
+                            mac: name.mac.clone(),
+                            line: name.line,
+                            rival: name.rival.clone(),
+                            count: name.count.max(1),
+                        })
+                        .collect();
+                    (span, names)
+                })
+                .collect()
+        });
+        let mut sides = Sides { before, after, inputs, two_places: Vec::new() };
+        sides.two_places = sides.names_with_two_places();
+        sides
+    }
+
+    /// The N0 records of a side, each with its span and its expanded names.
+    fn records(&self, is_after: bool) -> impl Iterator<Item = (&semilla_normal::BodyRecord, &RecordInputs)> {
+        let levels = if is_after { &self.after } else { &self.before };
+        levels.get("n0").into_iter().flatten().zip(&self.inputs[usize::from(is_after)])
+    }
+
+    /// The body names with two places or more in the records of one side of this
+    /// configuration (two targets with one crate name, or a twin under `cfg(test)`).
+    fn names_with_two_places(&self) -> Vec<String> {
+        let mut found = Vec::new();
+        for side in [&self.before, &self.after] {
+            let mut places: BTreeMap<&str, (&str, usize)> = BTreeMap::new();
+            for record in side.get("n0").into_iter().flatten() {
+                let Some(span) = &record.span else { continue };
+                let place = (span.file.as_str(), span.line_start);
+                if places.insert(record.name.as_str(), place).is_some_and(|old| old != place) {
+                    found.push(record.name.clone());
+                }
+            }
+        }
+        found
+    }
 }
 
 /// The inputs of the comparison of one configuration: the two trees, the configuration, the
@@ -149,6 +232,20 @@ const FAILED_FILE: &str = ".failed";
 /// a full disk, and a write that the sandbox stops are not compile errors.
 fn is_compile_error(text: &str) -> bool {
     text.contains("cargo check failed") && !semilla_normal::cargo::missing_dependency(text) && !text.contains("No space left on device") && !text.contains("Permission denied")
+}
+
+/// The cause in the output for a configuration with a feature that only one tree of the step
+/// has (design 37.7). `before` and `after`: the features of the selection that the tree does
+/// not have. `None`: the two trees have each feature, or one feature is in no tree.
+fn one_side_cause(before: &[String], after: &[String]) -> Option<String> {
+    let (side, other, missing) = match (before.is_empty(), after.is_empty()) {
+        (true, false) => ("before", "after", after),
+        (false, true) => ("after", "before", before),
+        _ => return None,
+    };
+    let names: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
+    let noun = if names.len() == 1 { "feature" } else { "features" };
+    Some(format!("only the code {side} the step has the {noun} {}. The code {other} the step has no such configuration: no compare", names.join(", ")))
 }
 
 /// The first error line of a build error text.
@@ -494,6 +591,55 @@ impl NormalOracle {
         })
     }
 
+    /// The records of the two trees of a step in one configuration, from memory or from
+    /// [`BodyCache::levels`] (design 37.20).
+    fn sides(&self, step: &Step, features: &Configuration) -> Result<std::sync::Arc<Sides>> {
+        let key: SidesKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone());
+        let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).sides.get(&key).cloned();
+        if let Some(sides) = known {
+            return Ok(sides);
+        }
+        let (before, after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
+        let sides = std::sync::Arc::new(Sides::new(before, after));
+        let mut added = self.added.lock().unwrap_or_else(|error| error.into_inner());
+        if added.sides.len() >= MOST_SIDES {
+            added.sides.clear();
+            added.moved.clear();
+        }
+        added.sides.insert(key, sides.clone());
+        Ok(sides)
+    }
+
+    /// Reads the record set of each configuration that is not in memory, each in its own
+    /// thread (design 37.20). An error stays for the caller that asks for the record set.
+    fn read_sides(&self, step: &Step, configs: &[Configuration]) {
+        let known = |config: &Configuration| self.added.lock().unwrap_or_else(|error| error.into_inner()).sides.contains_key(&(step.tree_before.clone(), step.tree_after.clone(), config.clone()));
+        let missing: Vec<&Configuration> = configs.iter().filter(|config| !known(config)).collect();
+        if missing.len() < 2 || missing.len() > MOST_SIDES {
+            return;
+        }
+        std::thread::scope(|scope| {
+            for config in missing {
+                scope.spawn(move || {
+                    let _ = self.sides(step, config);
+                });
+            }
+        });
+    }
+
+    /// [`with_moved_closures`] for a record set, from memory if the rename map and the added
+    /// items are those of an earlier call (design 37.20).
+    fn moved_closures(&self, step: &Step, features: &Configuration, renames: &BTreeMap<String, String>, added: &[String], sides: &Sides) -> BTreeMap<String, String> {
+        let key: SidesKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone());
+        let fits = |entry: &&(SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>)| entry.0 == key && entry.1 == *renames && entry.2 == added;
+        if let Some(entry) = self.added.lock().unwrap_or_else(|error| error.into_inner()).moved.iter().find(fits) {
+            return entry.3.clone();
+        }
+        let made = with_moved_closures(renames, added, &sides.before, &sides.after);
+        self.added.lock().unwrap_or_else(|error| error.into_inner()).moved.push((key, renames.clone(), added.to_vec(), made.clone()));
+        made
+    }
+
     /// Compares the bodies of one configuration at N0.
     fn compare_n0(
         &self,
@@ -504,38 +650,23 @@ impl NormalOracle {
         index: usize,
         opaque: &dyn semilla_verify::OpaqueInputs,
     ) -> Result<SetState> {
-        let (before, after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
-        let renames = with_moved_closures(renames, added, &before, &after);
+        let sides = self.sides(step, features)?;
+        let (before, after) = (&sides.before, &sides.after);
+        let renames = self.moved_closures(step, features, renames, added, &sides);
         let renames = &renames;
         let started = std::time::Instant::now();
         // The bodies that the build configuration selects, by the syntax tree (batch 5l). No
         // normal form looks into them.
-        for (levels, is_after) in [(&before, false), (&after, true)] {
-            for record in levels.get("n0").into_iter().flatten() {
-                let span = record.span.as_ref().map(|span| (span.file.clone(), span.line_start));
+        for is_after in [false, true] {
+            for (record, (span, names)) in sides.records(is_after) {
                 opaque.note(is_after, &record.name, span.as_ref(), &record.adts);
                 opaque.body(is_after, &record.name, span.as_ref(), index, &record.target);
-                let names: Vec<semilla_verify::ExpandedName> = record
-                    .names
-                    .iter()
-                    .map(|name| semilla_verify::ExpandedName {
-                        word: name.word.clone(),
-                        member: name.member,
-                        qual: name.qual.clone(),
-                        prefix: name.prefix,
-                        mac: name.mac.clone(),
-                        line: name.line,
-                        rival: name.rival.clone(),
-                        count: name.count.max(1),
-                    })
-                    .collect();
-                opaque.names(is_after, &record.name, span.as_ref(), &names);
+                opaque.names(is_after, &record.name, span.as_ref(), names);
             }
         }
-        let marks = |levels: &semilla_normal::Levels, is_after: bool| {
+        let marks = |is_after: bool| {
             let mut marks = semilla_normal::Marks::default();
-            for record in levels.get("n0").into_iter().flatten() {
-                let span = record.span.as_ref().map(|span| (span.file.clone(), span.line_start));
+            for (record, (span, _)) in sides.records(is_after) {
                 let callee = opaque.callee(is_after, &record.name, span.as_ref(), &record.adts);
                 let layout = opaque.layout(is_after, &record.name, span.as_ref(), &record.adts);
                 if callee {
@@ -547,18 +678,18 @@ impl NormalOracle {
             }
             marks
         };
-        let (before_marks, after_marks) = (marks(&before, false), marks(&after, true));
+        let (before_marks, after_marks) = (marks(false), marks(true));
         MARK_TIME.add(started);
         // The same comparison of an earlier call (batch 5x, part F): the result is in memory.
         let key: CompareKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone(), renames.clone(), added.to_vec(), [before_marks.opaque.clone(), before_marks.stop.clone(), after_marks.opaque.clone(), after_marks.stop.clone()]);
         let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).compared.get(&key).cloned();
         if let Some((comparisons, spans)) = known {
-            return Ok(SetState { config: features.clone(), renames: renames.clone(), before, after, before_marks, after_marks, comparisons, done: Some(spans) });
+            return Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: Some(spans) });
         }
         let started = std::time::Instant::now();
-        let comparisons = semilla_normal::compare_with(&before, &after, renames, added, &before_marks, &after_marks);
+        let comparisons = semilla_normal::compare_with(before, after, renames, added, &before_marks, &after_marks);
         N0_TIME.add(started);
-        Ok(SetState { config: features.clone(), renames: renames.clone(), before, after, before_marks, after_marks, comparisons, done: None })
+        Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: None })
     }
 
     /// Compares the bodies of one configuration at N2 and N3 (with N4), after `compare_n0`.
@@ -567,12 +698,13 @@ impl NormalOracle {
     #[allow(dead_code)]
     fn compare_deep(&self, step: &Step, added: &[String], state: &mut SetState) -> Result<()> {
         let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], &state.config)?;
-        state.before.extend(old);
-        state.after.extend(new);
-        semilla_normal::drop_opaque_inlines(&mut state.before, &state.before_marks);
-        semilla_normal::drop_opaque_inlines(&mut state.after, &state.after_marks);
+        let sides = std::sync::Arc::make_mut(&mut state.sides);
+        sides.before.extend(old);
+        sides.after.extend(new);
+        semilla_normal::drop_opaque_inlines(&mut sides.before, &state.before_marks);
+        semilla_normal::drop_opaque_inlines(&mut sides.after, &state.after_marks);
         let started = std::time::Instant::now();
-        state.comparisons = semilla_normal::compare_with(&state.before, &state.after, &state.renames, added, &state.before_marks, &state.after_marks);
+        state.comparisons = semilla_normal::compare_with(&state.sides.before, &state.sides.after, &state.renames, added, &state.before_marks, &state.after_marks);
         DEEP_TIME.add(started);
         Ok(())
     }
@@ -627,8 +759,7 @@ fn read_cached(cache: &std::path::Path) -> Result<Vec<semilla_normal::BodyRecord
 struct SetState {
     config: Configuration,
     renames: BTreeMap<String, String>,
-    before: semilla_normal::Levels,
-    after: semilla_normal::Levels,
+    sides: std::sync::Arc<Sides>,
     before_marks: semilla_normal::Marks,
     after_marks: semilla_normal::Marks,
     comparisons: Vec<semilla_normal::BodyComparison>,
@@ -637,23 +768,6 @@ struct SetState {
 }
 
 impl SetState {
-    /// The body names with two places or more in the records of one side of this
-    /// configuration (two targets with one crate name, or a twin under `cfg(test)`).
-    fn names_with_two_places(&self) -> Vec<String> {
-        let mut found = Vec::new();
-        for side in [&self.before, &self.after] {
-            let mut places: BTreeMap<&str, (&str, usize)> = BTreeMap::new();
-            for record in side.get("n0").into_iter().flatten() {
-                let Some(span) = &record.span else { continue };
-                let place = (span.file.as_str(), span.line_start);
-                if places.insert(record.name.as_str(), place).is_some_and(|old| old != place) {
-                    found.push(record.name.clone());
-                }
-            }
-        }
-        found
-    }
-
     /// True if a body is not equal at N0. No code calls this function now (design 35.4).
     #[allow(dead_code)]
     fn needs_deep(&self) -> bool {
@@ -662,12 +776,12 @@ impl SetState {
 
     /// The span of each body: the "after" records win (the name is the "after" name).
     fn spans(&self, spans: &mut BTreeMap<String, (String, usize)>) {
-        for record in [&self.before, &self.after].iter().flat_map(|levels| levels.values().flatten()) {
+        for record in [&self.sides.before, &self.sides.after].iter().flat_map(|levels| levels.values().flatten()) {
             if let Some(span) = &record.span {
                 spans.insert(record.name.clone(), (span.file.clone(), span.line_start));
             }
         }
-        if let (Some(old), Some(new)) = (self.before.get("n0"), self.after.get("n0")) {
+        if let (Some(old), Some(new)) = (self.sides.before.get("n0"), self.sides.after.get("n0")) {
             spans.extend(changed_target_spans(old, new));
         }
     }
@@ -768,6 +882,7 @@ impl BodyOracle for NormalOracle {
 
     fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<BodyComparison>> {
         let checked = self.checked(step)?;
+        self.read_sides(step, &checked);
         // N0 for each configuration, with the rename and move map (N1). Design 35.4: this is the
         // compare of a fact. The levels N2, N3, and N4 do not run.
         let mut states = Vec::new();
@@ -801,7 +916,7 @@ impl BodyOracle for NormalOracle {
                     own
                 }
             };
-            many.extend(state.names_with_two_places());
+            many.extend(state.sides.two_places.iter().cloned());
             prepared.push((state, own));
         }
         let mut spans: BTreeMap<String, (String, usize)> = BTreeMap::new();
@@ -862,8 +977,9 @@ impl BodyOracle for NormalOracle {
         // (batch 6a, B2). The N0 records of each checked configuration have it.
         let mut sides = [std::collections::BTreeSet::new(), std::collections::BTreeSet::new()];
         for config in self.checked(step)? {
-            for (side, tree) in sides.iter_mut().zip([&step.tree_before, &step.tree_after]) {
-                side.extend(self.records_with(tree, "n0", &config)?.into_iter().filter(|record| record.text.starts_with("fn _() -> test::TestDescAndFn")).map(|record| record.name));
+            let records = self.sides(step, &config)?;
+            for (side, levels) in sides.iter_mut().zip([&records.before, &records.after]) {
+                side.extend(levels.get("n0").into_iter().flatten().filter(|record| record.text.starts_with("fn _() -> test::TestDescAndFn")).map(|record| record.name.clone()));
             }
         }
         Ok(Some(sides))
@@ -873,14 +989,24 @@ impl BodyOracle for NormalOracle {
         // The unit records of the N0 build of each checked configuration have the items of
         // the expanded code, and the body records have the macro call sites (batch 6b, part 2).
         let mut sides = [semilla_normal::Made::default(), semilla_normal::Made::default()];
-        for config in self.checked(step)? {
-            for (side, tree) in sides.iter_mut().zip([&step.tree_before, &step.tree_after]) {
-                self.records_or_build(tree, "n0", &config, false)?;
-                let (_, cache, _, _) = self.cache_folder(tree, "n0", &config)?;
-                if !semilla_normal::read_made(&cache, side) {
-                    return Ok(None);
-                }
-            }
+        // Each cache folder has its own thread (design 37.20). The results join in the order of
+        // the configurations and the trees, so the result is that of one thread.
+        let checked = self.checked(step)?;
+        let folders: Vec<(&Configuration, &String)> = checked.iter().flat_map(|config| [(config, &step.tree_before), (config, &step.tree_after)]).collect();
+        let read = |config: &Configuration, tree: &str| -> Result<Option<semilla_normal::Made>> {
+            self.records_or_build(tree, "n0", config, false)?;
+            let (_, cache, _, _) = self.cache_folder(tree, "n0", config)?;
+            let mut made = semilla_normal::Made::default();
+            Ok(semilla_normal::read_made(&cache, &mut made).then_some(made))
+        };
+        let results: Vec<Result<Option<semilla_normal::Made>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = folders.iter().map(|(config, tree)| scope.spawn(|| read(config, tree))).collect();
+            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed")))).collect()
+        });
+        for (index, result) in results.into_iter().enumerate() {
+            let Some(made) = result? else { return Ok(None) };
+            sides[index % 2].items.extend(made.items);
+            sides[index % 2].sites.extend(made.sites);
         }
         Ok(Some(sides.map(|side| semilla_verify::made::Made {
             items: side.items.into_iter().map(|item| semilla_verify::made::MadeItem { file: item.file, line: item.line, col: item.col, module: item.module, text: item.text, test: item.test, public: item.public }).collect(),
@@ -891,9 +1017,16 @@ impl BodyOracle for NormalOracle {
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
         // The facts of each checked configuration (batch 5s, A5). The verifier joins the facts
         // of the bodies of an item, so a property claim must hold in each configuration.
+        // Each configuration has its own thread (design 37.20). The facts join in the order of
+        // the configurations.
+        let checked = self.checked(step)?;
+        let results: Vec<Result<Vec<semilla_verify::BodyFacts>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = checked.iter().map(|config| scope.spawn(move || self.facts_of(step, config))).collect();
+            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed")))).collect()
+        });
         let mut facts = Vec::new();
-        for config in self.checked(step)? {
-            facts.extend(self.facts_of(step, &config)?);
+        for result in results {
+            facts.extend(result?);
         }
         Ok(Some(facts))
     }
@@ -955,6 +1088,14 @@ impl NormalOracle {
             (extra, hint)
         };
         let (listed, same) = self.configurations_with(&step.tree_before, &step.tree_after, &extra)?;
+        // A feature that only one tree has (design 37.7): the configuration is a configuration
+        // of that tree only. Semilla does not build it, and the output names the feature.
+        let metadata = [self.metadata(&step.tree_before), self.metadata(&step.tree_after)];
+        let one_side = |config: &Configuration| -> Option<String> {
+            let missing: Vec<Vec<String>> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::missing_features(data, &config.features)).unwrap_or_default()).collect();
+            one_side_cause(&missing[0], &missing[1])
+        };
+        let (listed, one_sided): (Vec<_>, Vec<_>) = listed.into_iter().partition(|(config, _)| one_side(config).is_none());
         let configs: Vec<Configuration> = listed.iter().map(|(config, _)| config.clone()).collect();
         // The builds of the hint run with the builds of the list. Their results, and their
         // errors, have no use: only the list decides the checked configurations.
@@ -998,6 +1139,9 @@ impl NormalOracle {
                 Some(error) => log.not_checked.push((config.name(), format!("it does not build before the step: {error}"))),
             }
         }
+        for (config, _) in &one_sided {
+            log.not_checked.push((config.name(), one_side(config).unwrap_or_default()));
+        }
         if checked.is_empty() {
             // No configuration builds before the step: the error of the first one is the result.
             let config = Configuration::DEV;
@@ -1015,11 +1159,12 @@ impl NormalOracle {
     fn facts_of(&self, step: &Step, config: &Configuration) -> Result<Vec<semilla_verify::BodyFacts>> {
         // A target name is the name of one build: the walk over the live callees stays in it.
         let tag = |target: String| if *config == Configuration::DEV { target } else { format!("{target} [{}]", config.name()) };
-        let records = self.records_with(&step.tree_after, "n0", config)?;
+        let sides = self.sides(step, config)?;
+        let records = sides.after.get("n0").cloned().unwrap_or_default();
         // The MIR signature of each body before the step, by its name and its target (batch 5n,
         // A1). A body with a new name has no entry: its signature is not a known cause.
         let signature = |text: &str| text.lines().next().unwrap_or("").to_string();
-        let old: BTreeMap<(String, String), String> = self.records_with(&step.tree_before, "n0", config)?.into_iter().map(|record| ((record.name, record.target), signature(&record.text))).collect();
+        let old: BTreeMap<(String, String), String> = sides.before.get("n0").into_iter().flatten().map(|record| ((record.name.clone(), record.target.clone()), signature(&record.text))).collect();
         Ok(
             records
                 .into_iter()
@@ -1115,6 +1260,30 @@ impl ExprOracle for SmtOracle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Batch 7c, part 6.1 (design 37.20): the data of a record set is the data that each compare
+    // made before: the span and the names of each record in the order of the records, and the
+    // names with two places.
+    #[test]
+    fn a_record_set_has_the_span_and_the_names_of_each_record() {
+        let record = |name: &str, file: &str, line: usize, names: serde_json::Value| serde_json::json!({ "name": name, "level": "n0", "text": "fn f() {}", "span": { "file": file, "line_start": line, "line_end": line + 2 }, "names": names }).to_string();
+        let old = [record("demo::f", "src/lib.rs", 3, serde_json::json!([{ "word": "len", "member": true, "count": 0 }, { "word": "Vec", "prefix": true, "count": 2, "line": 4 }])), serde_json::json!({ "name": "demo::g", "level": "n0", "text": "fn g() {}" }).to_string()];
+        let new = [record("demo::f", "src/lib.rs", 3, serde_json::json!([])), record("demo::main", "src/main.rs", 1, serde_json::json!([])), record("demo::main", "benches/demo.rs", 9, serde_json::json!([]))];
+        let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap())]);
+        let sides = Sides::new(levels(&old), levels(&new));
+        let before: Vec<_> = sides.records(false).collect();
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].0.name, "demo::f");
+        assert_eq!(before[0].1.0, Some(("src/lib.rs".to_string(), 3)));
+        // A count of zero is one use, as in each compare before this batch.
+        let names: Vec<(&str, bool, bool, usize, usize)> = before[0].1.1.iter().map(|name| (name.word.as_str(), name.member, name.prefix, name.count, name.line)).collect();
+        assert_eq!(names, [("len", true, false, 1, 0), ("Vec", false, true, 2, 4)]);
+        assert_eq!((before[1].0.name.as_str(), &before[1].1.0, before[1].1.1.len()), ("demo::g", &None, 0));
+        let after: Vec<_> = sides.records(true).map(|(record, (span, _))| (record.name.clone(), span.clone())).collect();
+        assert_eq!(after, [("demo::f".to_string(), Some(("src/lib.rs".to_string(), 3))), ("demo::main".to_string(), Some(("src/main.rs".to_string(), 1))), ("demo::main".to_string(), Some(("benches/demo.rs".to_string(), 9)))]);
+        assert_eq!(sides.two_places, ["demo::main"]);
+        assert_eq!(sides.two_places, sides.names_with_two_places());
+    }
 
     // Batch 5x, part F: the records in memory are the records of the folder on the disk.
     #[test]
@@ -1235,6 +1404,31 @@ mod tests {
         // Batch 5u, part C: a listed set with no default features.
         assert_eq!(state(Features::NoDefaultListed(vec!["extra".into()]))["rich"], set(&["std", "extra"]));
         assert_eq!(state(Features::NoDefaultListed(vec!["extra".into()]))["plain"], set(&[]));
+    }
+
+    // Batch 7c, part 3.2 (design 37.7).
+    #[test]
+    fn a_feature_of_one_tree_only_gives_a_configuration_with_no_compare() {
+        use semilla_normal::cargo::missing_features;
+        let metadata = serde_json::json!({ "packages": [
+            { "name": "plain", "features": {}, "dependencies": [] },
+            { "name": "rich", "features": { "default": ["std"], "std": [] }, "dependencies": [{ "name": "serde", "optional": true }, { "name": "real", "rename": "alias", "optional": true }, { "name": "log" }] },
+        ]});
+        let missing = |names: &[&str]| missing_features(&metadata, &Features::Listed(names.iter().map(|name| name.to_string()).collect()));
+        // A feature of the table, and an optional dependency with its name in the manifest.
+        assert!(missing(&["std", "serde", "alias"]).is_empty());
+        assert_eq!(missing(&["std", "serde1", "real", "log"]), ["serde1", "real", "log"]);
+        // `package/feature`: a feature of one package. A package of a different workspace is not known.
+        assert_eq!(missing(&["rich/std", "plain/std", "other/std"]), ["plain/std"]);
+        assert!(missing_features(&metadata, &Features::All).is_empty());
+        assert_eq!(missing_features(&metadata, &Features::NoDefaultListed(vec!["none".into()])), ["none"]);
+
+        let list = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<Vec<String>>();
+        assert_eq!(one_side_cause(&[], &list(&["serde1"])).unwrap(), "only the code before the step has the feature `serde1`. The code after the step has no such configuration: no compare");
+        assert_eq!(one_side_cause(&list(&["a", "b"]), &[]).unwrap(), "only the code after the step has the features `a`, `b`. The code before the step has no such configuration: no compare");
+        // The two trees have each feature, or no tree has a feature: the usual build decides.
+        assert_eq!(one_side_cause(&[], &[]), None);
+        assert_eq!(one_side_cause(&list(&["a"]), &list(&["a"])), None);
     }
 
     // Batch 5u, part C.

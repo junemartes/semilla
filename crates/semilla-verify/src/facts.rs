@@ -147,6 +147,8 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                         "where" => "where clause",
                         "qualifiers" => "qualifiers",
                         "text" => SOURCE_TEXT,
+                        "body" if edit.node_before.is_none() => BODY_ADDED,
+                        "body" => BODY_REMOVED,
                         _ => part,
                     };
                     // The net (batch 6a, A6): a changed text that no other fact shows.
@@ -165,6 +167,12 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                             }
                             None => format!("changed source text with no other fact, in `{}`: {}", anchor.item, old_new()),
                         }
+                    } else if part == "body" {
+                        // A body on one side only (design 37.1). The text has the body. A long
+                        // body has a cut with the mark, and the report has the full text.
+                        let body = edit.text_after.as_deref().or(edit.text_before.as_deref()).unwrap_or("");
+                        let verb = if name == BODY_ADDED { "body added to" } else { "body removed from" };
+                        format!("{verb} `{}`: `{}`", anchor.item, semilla_syntax::tree::short(&semilla_syntax::tree::one_line(body), 100))
                     } else { parameter_description(&anchor, name, edit) };
                     // A part of an associated constant or type has the category of its
                     // change (design 36.2): the key is the member and the part.
@@ -315,7 +323,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
             && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
@@ -799,6 +807,10 @@ pub(crate) fn assoc_label(edit: &Edit) -> Option<(&'static str, &str)> {
 /// shows. The class is `other`: Semilla does not know what the text changes.
 pub(crate) const SOURCE_TEXT: &str = "source text";
 
+/// The parts of a function that has a body on one side only (design 37.1).
+pub(crate) const BODY_ADDED: &str = "body added";
+pub(crate) const BODY_REMOVED: &str = "body removed";
+
 /// For an edit of the generics, the bounds, or the `where` clause of a declaration: the text
 /// of the change if the set of the predicates is equal and each other part of the declaration
 /// is equal (batch 6b, part 3; the rule is in `bounds.rs`). `None` for each other edit. An
@@ -826,6 +838,8 @@ pub fn signature_part(edit: &Edit) -> Option<&'static str> {
             "where" => "where clause",
             "qualifiers" => "qualifiers",
             "text" => SOURCE_TEXT,
+            "body" if edit.node_before.is_none() => BODY_ADDED,
+            "body" => BODY_REMOVED,
             _ => return None,
         });
     }
@@ -1415,8 +1429,8 @@ pub(crate) fn part_category(part: &str, descriptions: &[String]) -> Category {
         // A `derive` list is a part of the declaration (design 35.2).
         "attribute" if descriptions.iter().any(|text| text.contains(": derive added: ") || text.contains("derive removed: ")) => Category::Declaration,
         "attribute" => Category::Attribute,
-        "member added" | "trait impl added" | "associated added" => Category::Added,
-        "member removed" | "trait impl removed" | "associated removed" => Category::Removed,
+        "member added" | "trait impl added" | "associated added" | BODY_ADDED => Category::Added,
+        "member removed" | "trait impl removed" | "associated removed" | BODY_REMOVED => Category::Removed,
         "value" => Category::Value,
         "parameter" if !descriptions.is_empty() && descriptions.iter().all(|text| text.contains(" renamed to ")) => Category::Rename,
         // A new name of a parameter is a rename (design 35.2).

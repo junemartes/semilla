@@ -430,6 +430,7 @@ pub struct StepInput<'a> {
 }
 
 /// Everything the verifier computed for one step. The views use it too.
+#[derive(Clone)]
 pub struct StepOutcome {
     pub report: StepReport,
     pub edits: Vec<Edit>,
@@ -467,6 +468,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
             identity_api_facts(input, &mut plain);
         }
         item_reasons(input, &mut plain.report);
+        kind_reasons(input, &mut plain.report);
         return plain;
     }
     let mut outcome = identity::derive(input, bodies, exprs, plain);
@@ -475,6 +477,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     let _ = bodies.set_selections(input.step, &outcome.selections);
     identity_api_facts(input, &mut outcome);
     item_reasons(input, &mut outcome.report);
+    kind_reasons(input, &mut outcome.report);
     outcome
 }
 
@@ -539,6 +542,41 @@ pub(crate) fn self_type_text(item: &semilla_syntax::Item) -> Option<String> {
     Some(text)
 }
 
+/// A type text with no lifetime (design 37.2): `&'a mut Node` gives `&mut Node`, and
+/// `dyn Parse + 'a` gives `dyn Parse`. The owner of an impl in an item path has no lifetime.
+fn no_lifetimes(text: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\'') {
+        let name = rest[at + 1..].find(|c: char| !word(c)).unwrap_or(rest.len() - at - 1);
+        let after = &rest[at + 1 + name..];
+        if name == 0 || after.starts_with('\'') {
+            // A character literal, not a lifetime.
+            out.push_str(&rest[..at + 1]);
+            rest = &rest[at + 1..];
+            continue;
+        }
+        // A bound (`+ 'a`) goes away with its `+`.
+        let before = rest[..at].trim_end();
+        out.push_str(before.strip_suffix('+').map_or(&rest[..at], str::trim_end));
+        rest = after.strip_prefix(' ').unwrap_or(after);
+        // An argument of a list goes away with its comma. An empty list goes away.
+        if let Some(next) = rest.strip_prefix(',') {
+            rest = next.trim_start();
+        } else if rest.starts_with('>') {
+            let kept = out.trim_end().strip_suffix(',').map(str::len);
+            out.truncate(kept.unwrap_or(out.len()));
+            if let Some(kept) = out.strip_suffix("::<").or_else(|| out.strip_suffix('<')).map(str::len) {
+                out.truncate(kept);
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Batch 5y, B1 (trial 8): the items of a trait impl that the name `name` can mean. An agent
 /// writes the name from the source: a full trait path (`core::convert::From`) and the generic
 /// arguments of the trait (`From<DecodeError>`). The item name has the trait path of the source
@@ -555,7 +593,7 @@ pub(crate) fn impl_name_matches(name: &str, workspace: &Workspace) -> Vec<String
     let key = |name: &str, short: bool| -> Option<String> {
         let (before, self_type, path, _, after) = impl_name_parts(name)?;
         let after = after.rsplit_once('#').filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).map_or(after, |(start, _)| start);
-        let self_type = plain(self_type);
+        let self_type = plain(&no_lifetimes(self_type));
         let self_type = if short { self_type.rsplit("::").next().unwrap_or_default().to_string() } else { self_type };
         // A name with no `impl ` word and no text after `>` means the impl block: the text of
         // the fact shows the block as `<Type as Trait<A>>`.
@@ -687,6 +725,28 @@ fn item_reasons(input: &StepInput, report: &mut StepReport) {
     }
 }
 
+/// A kind reason (design 37.19, Decided by Claude): a reason with the key `kind:NAME` covers
+/// each open spotlight of the kind `NAME` in this step. The exact key of a fact and the path
+/// of its item go first. A kind reason does not cover a changed file of build code.
+/// Each covered fact has the count of the spotlights that the reason covers.
+fn kind_reasons(input: &StepInput, report: &mut StepReport) {
+    use semilla_core::report::{BUILD_CODE_KIND, KIND_KEY};
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for fact in report.facts.iter_mut().filter(|fact| fact.spotlight && fact.reason.is_none()) {
+        let Some(kind) = fact.kind().filter(|kind| *kind != BUILD_CODE_KIND) else { continue };
+        let key = format!("{KIND_KEY}{kind}");
+        let Some(reason) = input.step.reasons.get(&key) else { continue };
+        fact.reason = Some(reason.clone());
+        *counts.entry(key.clone()).or_default() += 1;
+        fact.reason_key = Some(key);
+    }
+    for fact in &mut report.facts {
+        if let Some(count) = fact.reason_key.as_ref().and_then(|key| counts.get(key)) {
+            fact.reason_covers = *count;
+        }
+    }
+}
+
 /// The check of one step. `derived_identity` is true when the identity claims of the step come
 /// from the candidate search (design 24.2, rule 4), not from the agent.
 pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, derived_identity: bool) -> StepOutcome {
@@ -697,8 +757,16 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // 1. The renames from the identity claims, then the syntax edits.
     let mut renames = checks::renames(step, input.before);
     checks::moved_impls(step, input.before, input.after, &mut renames);
+    // The impl blocks of a renamed type or trait (design 37.2).
+    report.notes.extend(checks::renamed_impls(step, input.before, input.after, &mut renames));
     let renames = renames;
     let edits = semilla_syntax::diff(input.before, input.after, &renames);
+    // A changed file that parses only as code of the 2015 edition (design 37.5).
+    let old_edition: BTreeSet<&String> = input.before.old_edition.keys().chain(input.after.old_edition.keys()).collect();
+    for file in old_edition.into_iter().filter(|file| input.before.rust_files.get(*file) != input.after.rust_files.get(*file)) {
+        let count = input.after.old_edition.get(file).or_else(|| input.before.old_edition.get(file)).copied().unwrap_or(0);
+        report.notes.push(format!("Semilla read `{file}` as code of the 2015 edition: {count} parameter(s) of a trait method have no name. Semilla used the name `_` for each one."));
+    }
 
     // 2. The MIR bodies.
     let added: Vec<String> = step.claims.iter().flat_map(checks::declared_new_items).collect();
@@ -722,6 +790,8 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // The compare result of each body with no rule of the build configuration (design 35): the
     // MIR level N0 after the rename and move map (N1), in the checked configurations.
     let raw: std::cell::RefCell<Vec<(String, BodyStatus)>> = std::cell::RefCell::new(Vec::new());
+    // The name of a compiled body has no twin number (design 37.4).
+    let body_renames = checks::body_renames(&renames.items, input.before, input.after);
     let settled = loop {
         let truths = bodies.truths(step).unwrap_or_default();
         let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
@@ -734,7 +804,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         let run = |mode: &cfgcond::Mode| -> anyhow::Result<(Vec<BodyComparison>, joint::Bodies)> {
             cfgcond::with_mode(mode, || {
                 let opaque = joint::Recorder::new(opaque::Opaque::new(input.before, input.after));
-                let mut bodies = bodies.compare_with(step, &renames.items, &added, &opaque)?;
+                let mut bodies = bodies.compare_with(step, &body_renames, &added, &opaque)?;
                 if matches!(mode, cfgcond::Mode::Plain) {
                     *raw.borrow_mut() = bodies.iter().map(|body| (body.name.clone(), body.status.clone())).collect();
                 }
@@ -1444,6 +1514,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     }
 
     if derive_edits {
+        edits::fold_macro_renames(&mut report.facts, &mut fact_of, input.before, input.after);
         edits::fold(&mut report.facts, &mut fact_of);
     }
     // Part B item 4 of batch 5j: a failed check build gives the same long error to `compare` and
@@ -2825,6 +2896,39 @@ pub fn verify_changeset(
     exprs: &dyn ExprOracle,
     options: Options,
 ) -> (Report, Vec<StepOutcome>) {
+    verify_changeset_cached(set, load, bodies, exprs, options, &mut NoStepCache)
+}
+
+/// The results of the step checks that a process did before (design 37.21). The caller makes
+/// the key: it must have each input of the check of a step.
+pub trait StepCache {
+    /// The result of an equal check of this step, if the process has it.
+    fn get(&mut self, step: &Step) -> Option<StepOutcome>;
+    /// Keeps the result of the check of a step.
+    fn put(&mut self, step: &Step, outcome: &StepOutcome);
+}
+
+/// A cache that keeps no result.
+pub struct NoStepCache;
+
+impl StepCache for NoStepCache {
+    fn get(&mut self, _: &Step) -> Option<StepOutcome> {
+        None
+    }
+
+    fn put(&mut self, _: &Step, _: &StepOutcome) {}
+}
+
+/// [`verify_changeset`] with the step results of this process. A step with a result in the
+/// cache does not run its check again. The checks of the full change set run each time.
+pub fn verify_changeset_cached(
+    set: &ChangeSet,
+    load: &mut dyn FnMut(&str) -> anyhow::Result<Workspace>,
+    bodies: &dyn BodyOracle,
+    exprs: &dyn ExprOracle,
+    options: Options,
+    cache: &mut dyn StepCache,
+) -> (Report, Vec<StepOutcome>) {
     let mut report = Report::default();
     let mut outcomes = Vec::new();
     let mut pair_items: BTreeMap<String, semilla_syntax::Item> = BTreeMap::new();
@@ -2855,7 +2959,14 @@ pub fn verify_changeset(
                         name_targets.insert((added, item.path.clone()), (item.text.clone(), identity::name_targets(item, if added { &after } else { &before })));
                     }
                 }
-                let outcome = verify_step_with(&StepInput { step, before: &before, after: &after }, bodies, exprs, options.derive_edits);
+                let outcome = match cache.get(step) {
+                    Some(outcome) => outcome,
+                    None => {
+                        let outcome = verify_step_with(&StepInput { step, before: &before, after: &after }, bodies, exprs, options.derive_edits);
+                        cache.put(step, &outcome);
+                        outcome
+                    }
+                };
                 // Phase 1 has no MIR: the identity proof of a rename or a move waits for phase 2.
                 // Phase 2 proves the identity (then the pair is one item), or it gives the pair
                 // warning. Phase 1 gives no warning for such a pair.

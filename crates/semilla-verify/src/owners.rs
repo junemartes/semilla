@@ -238,18 +238,27 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         } else {
             format!("a build input: the MIR of {count} bodies changed with no edit of their text, and this change can reach their crates")
         };
+        let mut causes: Vec<String> = Vec::new();
         if group.len() > 1 {
             let list: Vec<String> = group.iter().filter_map(|other| report.facts.get(*other)).map(|fact| format!("`{}`", fact.description)).collect();
             // D10 of batch 5k: the facts of one group can have different counts. A body with
             // one possible cause (a body that reads this key with `env!`, a body of a crate
             // that only this change can reach) is not in the count of the other facts.
+            // Design 37.14: the text shows at most `CAUSE_LIMIT` causes and a cut mark with the
+            // count of the others. The fact keeps the full list in `causes`.
+            let limit = semilla_core::report::CAUSE_LIMIT;
+            let short = if list.len() > limit { format!("{}, and {} more (`semilla status --verbose` shows each cause)", list[..limit].join(", "), list.len() - limit) } else { list.join(", ") };
             if shared == count {
-                why.push_str(&format!(". The bodies have one of these causes: {}", list.join(", ")));
+                why.push_str(&format!(". The bodies have one of these causes: {short}"));
             } else {
-                why.push_str(&format!(". {shared} of the bodies have one of these causes: {}. This change is the only cause of the other {}", list.join(", "), count - shared));
+                why.push_str(&format!(". {shared} of the bodies have one of these causes: {short}. This change is the only cause of the other {}", count - shared));
+            }
+            if list.len() > limit {
+                causes = list;
             }
         }
         let Some(fact) = report.facts.get_mut(index) else { continue };
+        fact.causes = causes;
         fact.spotlight_why = Some(match fact.spotlight_why.take() {
             Some(known) => format!("{known}; {why}"),
             None => why,
@@ -286,7 +295,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { build_code: None, build_code_change: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -476,7 +485,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { build_code: None, build_code_change: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),
@@ -525,11 +534,18 @@ fn record(report: &mut StepReport, owner: Owner, name: &str) {
 }
 
 /// The identity claim of a pair whose old name is in the old text of an item, or whose new name
-/// is in its new text. Only a rename counts: a move keeps the name.
+/// is in its new text, or whose type has the derive that makes the body. Only a rename counts: a
+/// move keeps the name.
 fn names_pair(input: &Input, name: &str) -> Option<usize> {
     let last = |path: &str| path.rsplit("::").next().unwrap_or(path).rsplit('.').next().unwrap_or(path).to_string();
     let has = |ws: &Workspace, word: &str| ws.items.get(name).is_some_and(|item| crate::hints::words(&item.text).contains(&word));
-    input.identity_pairs.iter().find(|(_, old, new)| last(old) != last(new) && (has(input.before, &last(old)) || has(input.after, &last(new)))).map(|(claim, _, _)| *claim)
+    // A body of a derive on the type of the pair (design 37.12): the derive puts the name of the
+    // type in the code (`Debug` prints it), and the body has no item of its own in the source.
+    let derived = |new: &str| {
+        let ty = name.strip_prefix('<').and_then(|rest| rest.split_once(" as ")).map(|(ty, _)| ty.split('<').next().unwrap_or(ty));
+        ty == Some(new) && is_derived(name, input.after)
+    };
+    input.identity_pairs.iter().find(|(_, old, new)| last(old) != last(new) && (has(input.before, &last(old)) || has(input.after, &last(new)) || derived(new))).map(|(claim, _, _)| *claim)
 }
 
 /// The owners of the edits that can change the body: the edits of its item. For a body on one

@@ -275,6 +275,25 @@ pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Work
     if crate::is_test_harness_main(name) {
         return None;
     }
+    // Design 37.20: a large step asks this question two million times, and most questions are
+    // equal. The workspace keeps each answer, and its index gives the items of the file of the
+    // span. The answer is the answer of the full search: the smallest item at the line, and of
+    // two equal items the first path.
+    if let Some(index) = workspace.body_items() {
+        let known = |found: &semilla_syntax::load::FoundItems| found.get(name).and_then(|spans| spans.iter().find(|(at, _)| at.as_ref() == span).map(|(_, item)| item.clone()));
+        if let Some(item) = known(&index.found.lock().unwrap_or_else(|error| error.into_inner())) {
+            return item;
+        }
+        let item = find_indexed(name, span, workspace, &index.by_file);
+        index.found.lock().unwrap_or_else(|error| error.into_inner()).entry(name.to_string()).or_default().push((span.cloned(), item.clone()));
+        return item;
+    }
+    find_scan(name, span, workspace)
+}
+
+/// [`find_item_by`] with a read of each item of the workspace. This is the rule; the index must
+/// give the same answer.
+pub(crate) fn find_scan(name: &str, span: Option<&(String, usize)>, workspace: &Workspace) -> Option<String> {
     if let Some((file, line)) = span {
         let found = workspace
             .items
@@ -303,6 +322,29 @@ pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Work
             && item.path.rsplit("::").next() == Some(short)
     });
     found.min_by_key(|item| item.line_end - item.line_start).map(|item| item.path.clone())
+}
+
+/// [`find_item_by`] with the index of the workspace ([`Workspace::body_items`]).
+pub(crate) fn find_indexed(name: &str, span: Option<&(String, usize)>, workspace: &Workspace, index: &BTreeMap<String, Vec<semilla_syntax::BodyItem>>) -> Option<String> {
+    use semilla_syntax::{BodyItem, ItemKind};
+    // The items at the line of the span, in each file that the file of the span can be.
+    fn at_line<'a>(index: &'a BTreeMap<String, Vec<BodyItem>>, file: &'a str, line: usize) -> impl Iterator<Item = &'a BodyItem> {
+        let files = index.iter().filter(move |(item_file, _)| file.ends_with(item_file.as_str()) || item_file.ends_with(file));
+        files.flat_map(|(_, items)| items).filter(move |item| item.line_start <= line && line <= item.line_end)
+    }
+    if let Some((file, line)) = span
+        && let Some(item) = at_line(index, file, *line).filter(|item| item.kind == ItemKind::Fn).min_by_key(|item| (item.line_end - item.line_start, &item.path))
+    {
+        return Some(item.path.clone());
+    }
+    let name = name.split("::{").next().unwrap_or(name);
+    if workspace.items.contains_key(name) {
+        return Some(name.to_string());
+    }
+    let (file, line) = span?;
+    let short = name.rsplit("::").next()?;
+    let found = at_line(index, file, *line).filter(|item| matches!(item.kind, ItemKind::Const | ItemKind::Static) && item.path.rsplit("::").next() == Some(short));
+    found.min_by_key(|item| (item.line_end - item.line_start, &item.path)).map(|item| item.path.clone())
 }
 
 /// Adds the `impl` blocks of each moved type to the rename map (batch 5x, part B): a block of
@@ -344,6 +386,77 @@ pub fn moved_impls(step: &Step, before: &Workspace, after: &Workspace, renames: 
             }
         }
     }
+}
+
+/// Adds the `impl` blocks of each renamed type or trait to the rename map (design 37.2): a
+/// block whose owner has the old name, when the block is not there after the step and one
+/// block with the new name is. The members of the block follow it. The diff then compares the
+/// two blocks as one impl: a changed header is a declaration edit, and an edit in a member
+/// stays an edit. If two blocks or more fit, the function makes no pair and gives a note.
+pub fn renamed_impls(step: &Step, before: &Workspace, after: &Workspace, renames: &mut Renames) -> Vec<String> {
+    use semilla_syntax::ItemKind;
+    let twin = |tail: &str| -> Option<usize> { tail.rsplit_once('#').filter(|(_, number)| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())).map(|(owner, _)| owner.len()) };
+    let mut notes = Vec::new();
+    for claim in step.claims.iter().filter(|claim| matches!(claim.op.as_str(), "rename" | "move-item")) {
+        let Some((at, to)) = claim.at.as_ref().zip(claim.arg_str("to")) else { continue };
+        let new_path = full_path(&at.item, to);
+        let (old_name, new_name) = (last_segment(&at.item), last_segment(&new_path));
+        let is_type = before.items.get(&at.item).is_some_and(|item| matches!(item.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Type | ItemKind::Trait));
+        if !is_type || old_name == new_name {
+            continue;
+        }
+        let (old_module, new_module) = (parent(&at.item), parent(&new_path));
+        let blocks: Vec<&semilla_syntax::Item> = before.items.values().filter(|item| item.kind == ItemKind::Impl && !renames.items.contains_key(&item.path) && !after.items.contains_key(&item.path)).collect();
+        for item in blocks {
+            let Some((module, tail)) = item.path.rsplit_once("::impl ") else { continue };
+            let owner = &tail[..twin(tail).unwrap_or(tail.len())];
+            let renamed = replace_word(owner, old_name, new_name);
+            if renamed == owner {
+                continue;
+            }
+            let target_module = if module == old_module { new_module } else { module };
+            let target = format!("{target_module}::impl {renamed}");
+            let fits: Vec<&String> = after
+                .items
+                .iter()
+                .filter(|(path, found)| found.kind == ItemKind::Impl && !before.items.contains_key(*path) && path.strip_prefix(&target).is_some_and(|rest| rest.is_empty() || twin(rest) == Some(0)))
+                .map(|(path, _)| path)
+                .collect();
+            if fits.is_empty() {
+                continue;
+            }
+            if fits.len() > 1 || twin(tail).is_some() {
+                let note = format!("Semilla does not pair the impl blocks `impl {owner}` and `impl {renamed}` of the renamed `{old_name}`: two blocks or more fit. Each block shows as removed or added.");
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+                continue;
+            }
+            renames.items.insert(item.path.clone(), target.clone());
+            let members = format!("{module}::{owner}::");
+            for path in before.items.keys().filter(|path| path.starts_with(&members)) {
+                renames.items.entry(path.clone()).or_insert_with(|| format!("{target_module}::{renamed}::{}", &path[members.len()..]));
+            }
+        }
+    }
+    notes
+}
+
+/// Replaces each whole identifier `old` in `text` with `new`.
+fn replace_word(text: &str, old: &str, new: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    for c in text.chars().chain([' ']) {
+        if c.is_alphanumeric() || c == '_' {
+            word.push(c);
+        } else {
+            out.push_str(if word == old { new } else { &word });
+            word.clear();
+            out.push(c);
+        }
+    }
+    out.pop();
+    out
 }
 
 /// Builds the renames of a step from its identity claims.
@@ -436,6 +549,85 @@ fn full_path(item: &str, to: &str) -> String {
             None => to.to_string(),
         }
     }
+}
+
+/// True if the text can declare an item with the name: the word is after a keyword of an item
+/// (`fn NAME`, `struct NAME`, …).
+fn declares(text: &str, word: &str) -> bool {
+    let name = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].trim_end();
+        let whole = before.len() < at && !text[at + word.len()..].chars().next().is_some_and(name);
+        let keyword = before.rsplit(|c: char| !name(c)).next().unwrap_or("");
+        whole && matches!(keyword, "fn" | "struct" | "enum" | "union" | "const" | "static" | "type" | "mod" | "trait")
+    })
+}
+
+/// A path with no twin number: `a::b#0::c` gives `a::b::c`. The name of a compiled body has no
+/// twin number.
+pub(crate) fn no_twin_numbers(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(at) = rest.find('#') {
+        let digits = rest[at + 1..].chars().take_while(char::is_ascii_digit).count();
+        let after = &rest[at + 1 + digits..];
+        out.push_str(&rest[..at]);
+        if digits == 0 || !(after.is_empty() || after.starts_with("::") || after.starts_with('.')) {
+            out.push_str(&rest[at..at + 1 + digits]);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The rename map for the compare of the bodies (design 37.4). A path of a twin has a number
+/// (`bs58::encode#0::max_encoded_len`: a module and a function have the name `encode`). The name
+/// of the compiled body has no number, so the key did not match. A key with a number gets the
+/// name with no number if no other item of its tree can have this name. Else the key stays as
+/// it is, it matches no body, and the compare result stays `code different`.
+pub fn body_renames(renames: &BTreeMap<String, String>, before: &Workspace, after: &Workspace) -> BTreeMap<String, String> {
+    if !renames.iter().any(|(old, new)| old.contains('#') || new.contains('#')) {
+        return renames.clone();
+    }
+    // True if only the item `path` of the tree can give a body with the name `plain`.
+    let unique = |workspace: &Workspace, path: &str, plain: &str| -> bool {
+        workspace.items.iter().filter(|(other, _)| other.as_str() != path && !is_child(other, path) && !is_child(path, other)).all(|(other, item)| {
+            if !other.contains('#') {
+                // An item with no number: a different path, and its name is its path.
+                return other != plain && !is_child(other, plain);
+            }
+            let name = no_twin_numbers(other);
+            if name == plain || is_child(&name, plain) {
+                return false;
+            }
+            // A twin with the name of a parent (the function `encode` for the module `encode`):
+            // an item in its body has a name below it, and the loader does not list such an
+            // item. The text of the twin must not declare the next name.
+            match plain.strip_prefix(name.as_str()).and_then(|rest| rest.strip_prefix("::")) {
+                Some(rest) => {
+                    let next = rest.split("::").next().unwrap_or(rest);
+                    !declares(&item.source, next)
+                }
+                None => true,
+            }
+        })
+    };
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut taken: BTreeMap<String, usize> = BTreeMap::new();
+    let plain: Vec<(String, String)> = renames.iter().map(|(old, new)| (no_twin_numbers(old), no_twin_numbers(new))).collect();
+    for (old, _) in &plain {
+        *taken.entry(old.clone()).or_default() += 1;
+    }
+    for ((old, new), (plain_old, plain_new)) in renames.iter().zip(&plain) {
+        let numbered = old.contains('#') || new.contains('#');
+        if numbered && taken[plain_old] == 1 && unique(before, old, plain_old) && unique(after, new, plain_new) {
+            out.insert(plain_old.clone(), plain_new.clone());
+        } else {
+            out.insert(old.clone(), new.clone());
+        }
+    }
+    out
 }
 
 /// True if `path` is a child of `parent`: a method or a variant (`parent::x`) or a field

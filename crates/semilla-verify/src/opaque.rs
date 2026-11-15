@@ -1441,6 +1441,11 @@ pub(crate) struct Opaque<'a> {
     /// The result of `part_cause` for each type name. The search reads each item of the two
     /// sides, and a build gives the same name many times.
     part_causes: RefCell<BTreeMap<String, String>>,
+    /// The lists that `note` and `names` got for each item of each side (design 37.20). The
+    /// records of two configurations give equal lists for most bodies. An equal list adds
+    /// nothing: each result is a set or a maximum.
+    noted: RefCell<[HashMap<String, Vec<Vec<String>>>; 2]>,
+    named: RefCell<[HashMap<String, Vec<Vec<crate::ExpandedName>>>; 2]>,
     /// The items below a `cfg` attribute with a covered condition, and below no other `cfg`
     /// attribute, for each side (batch 5s, part C): the plain paths. The driver names such an
     /// item as an item under `cfg`. Its use does not stop a proof.
@@ -1864,6 +1869,8 @@ impl<'a> Opaque<'a> {
             cfg_uses: Default::default(),
             stop_uses: Default::default(),
             part_causes: Default::default(),
+            noted: Default::default(),
+            named: Default::default(),
             covered: Default::default(),
         };
         let mut scan = Scan::new(before, after);
@@ -2781,6 +2788,9 @@ impl<'a> Opaque<'a> {
     pub(crate) fn note(&self, after: bool, name: &str, span: Option<&(String, usize)>, types: &[String]) {
         let side = usize::from(after);
         let Some(path) = crate::checks::find_item_by(name, span, self.sides[side]) else { return };
+        if !first_list(&mut self.noted.borrow_mut()[side], &path, types) {
+            return;
+        }
         let mut entries = self.entries.borrow_mut();
         let names = entries[side].entry(path.clone()).or_default();
         for entry in types {
@@ -2859,6 +2869,9 @@ impl<'a> Opaque<'a> {
     pub(crate) fn names(&self, after: bool, name: &str, span: Option<&(String, usize)>, names: &[crate::ExpandedName]) {
         let side = usize::from(after);
         let Some(path) = crate::checks::find_item_by(name, span, self.sides[side]) else { return };
+        if !first_list(&mut self.named.borrow_mut()[side], &path, names) {
+            return;
+        }
         let mut expanded = self.expanded.borrow_mut();
         let found = expanded[side].entry(path).or_default();
         let mut new = false;
@@ -3032,6 +3045,19 @@ impl<'a> Opaque<'a> {
             }
         }
     }
+}
+
+/// True if `list` is a new list for the item `path`. The function keeps each new list.
+pub(crate) fn first_list<T: Clone + PartialEq>(seen: &mut HashMap<String, Vec<Vec<T>>>, path: &str, list: &[T]) -> bool {
+    if let Some(lists) = seen.get_mut(path) {
+        if lists.iter().any(|known| known == list) {
+            return false;
+        }
+        lists.push(list.to_vec());
+        return true;
+    }
+    seen.insert(path.to_string(), vec![list.to_vec()]);
+    true
 }
 
 impl crate::OpaqueInputs for Opaque<'_> {

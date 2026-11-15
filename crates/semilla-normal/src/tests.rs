@@ -393,6 +393,35 @@ fn a_body_that_moves_to_another_crate_is_equal() {
 }
 
 #[test]
+fn a_new_hash_in_each_target_name_keeps_equal_bodies_equal() {
+    // Design 37.12. A new package version gives each target a new hash. The debug text and the
+    // release text of a test body are different, so the body has two texts on each side.
+    let (debug, release) = ("fn _() -> u32 { AddWithOverflow(const 1, const 2) }", "fn _() -> u32 { Add(const 1, const 2) }");
+    let side = |texts: [&str; 2], hashes: [&str; 2]| {
+        levels(vec![
+            in_target(record("k::tests::t", "n0", texts[0], &[]), &format!("k.test.{}", hashes[0])),
+            in_target(record("k::tests::t", "n0", texts[1], &[]), &format!("k.test.{}", hashes[1])),
+        ])
+    };
+    let before = side([debug, release], ["480693c09eb877f6", "351971ccb5242ec3"]);
+    let after = side([debug, release], ["51634368b8893aa1", "d7a1077ee0ccfb6b"]);
+    let results = compare(&before, &after, &no_renames(), &[]);
+    assert_eq!(status_of(&results, "k::tests::t"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    // A changed text in one target is different.
+    let changed = "fn _() -> u32 { Add(const 1, const 3) }";
+    let after = side([debug, changed], ["51634368b8893aa1", "d7a1077ee0ccfb6b"]);
+    let results = compare(&before, &after, &no_renames(), &[]);
+    assert!(matches!(status_of(&results, "k::tests::t"), BodyStatus::Different { .. }), "{results:?}");
+    // A target of a different kind does not pair.
+    let after = levels(vec![
+        in_target(record("k::tests::t", "n0", debug, &[]), "k.test.51634368b8893aa1"),
+        in_target(record("k::tests::t", "n0", release, &[]), "k.lib.d7a1077ee0ccfb6b"),
+    ]);
+    let results = compare(&before, &after, &no_renames(), &[]);
+    assert!(matches!(status_of(&results, "k::tests::t"), BodyStatus::Different { .. }), "{results:?}");
+}
+
+#[test]
 fn the_source_position_of_a_test_is_not_behavior() {
     // `#[test]` makes a `TestDesc` const with the file, the line, and the column of the test. A
     // move above the test changes the line, not the behavior.
@@ -552,6 +581,28 @@ fn one_unit_gives_one_record_file() {
 }
 
 #[test]
+fn a_fresh_unit_with_no_record_file_needs_a_new_build() {
+    // Design 37.11. Cargo did not compile the unit, and an earlier build with other unit names
+    // removed its record file. The records of the unit are lost, so the caller builds again.
+    let dir = tempfile::tempdir().unwrap();
+    let (workspace, out) = (dir.path().join("build"), dir.path().join("records"));
+    std::fs::create_dir_all(&out).unwrap();
+    let unit = |fresh: bool, manifest: &str, kind: &str, file: &str| {
+        format!(r#"{{"reason":"compiler-artifact","manifest_path":"{manifest}","target":{{"name":"k-core","kind":["{kind}"],"crate_types":["lib"]}},"profile":{{"test":false}},"filenames":["{file}"],"fresh":{fresh}}}"#)
+    };
+    let member = workspace.join("k-core/Cargo.toml").display().to_string();
+    let fresh = unit(true, &member, "lib", "/t/libk_core-0a.rmeta");
+    assert!(cargo::fresh_without_records(&fresh, &workspace, &out));
+    // A unit that cargo compiled, a unit with its record file, a build script, and a crate
+    // outside the build folder need no new build.
+    assert!(!cargo::fresh_without_records(&unit(false, &member, "lib", "/t/libk_core-0a.rmeta"), &workspace, &out));
+    assert!(!cargo::fresh_without_records(&unit(true, &member, "custom-build", "/t/build/k-core-0d/build-script-build"), &workspace, &out));
+    assert!(!cargo::fresh_without_records(&unit(true, "/registry/k-core/Cargo.toml", "lib", "/t/libk_core-0a.rmeta"), &workspace, &out));
+    std::fs::write(out.join("k_core.lib.0a.jsonl"), "").unwrap();
+    assert!(!cargo::fresh_without_records(&fresh, &workspace, &out));
+}
+
+#[test]
 fn the_cargo_error_text_has_the_first_error_with_its_cause() {
     // Trial 4, D14: with the JSON messages, the standard error of cargo has only the last line.
     // The cause is in a compiler message on the standard output.
@@ -629,4 +680,106 @@ fn a_record_file_starts_with_the_unit_record() {
     std::fs::write(dir.path().join("demo.test.2.jsonl"), format!("{body}\n")).unwrap();
     assert_eq!(read_units(dir.path()), None);
     assert_eq!(read_units(&dir.path().join("none")), None);
+}
+
+// Batch 7c, part 2 (design 37.4): a rename of a method of a generic impl.
+
+#[test]
+fn a_rename_key_matches_a_body_name_with_generic_arguments() {
+    let body = "fn allocate(_1: &mut Map<V>) -> () { return; }";
+    let caller = |callee: &str, other: &str| format!("_2 = {{k::Map::<V>::{callee}}}(move _1); _3 = {{k::Map::<u32>::{callee}}}(move _4); _5 = {{k::Map::<V>::{other}}}(move _1);");
+    let before = levels(vec![
+        record("k::Map::<V>::allocate", "n0", body, &[]),
+        record("k::Map::<V>::insert", "n0", &caller("allocate", "len"), &["k::Map::<V>::allocate"]),
+        record("k::Map::<V>::len", "n0", "return;", &[]),
+    ]);
+    let after = levels(vec![
+        record("k::Map::<V>::allocate_x", "n0", body, &[]),
+        record("k::Map::<V>::insert", "n0", &caller("allocate_x", "len"), &["k::Map::<V>::allocate_x"]),
+        record("k::Map::<V>::len", "n0", "return;", &[]),
+    ]);
+    let renames = BTreeMap::from([("k::Map::allocate".to_string(), "k::Map::allocate_x".to_string())]);
+    let results = compare(&before, &after, &renames, &[]);
+    let equal = BodyStatus::Equal { level: "n1".into(), proof: vec!["rename-map".into()] };
+    assert_eq!(status_of(&results, "k::Map::<V>::allocate_x"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] }, "{results:?}");
+    // The call with other generic arguments (`Map::<u32>`) is a call of the same function.
+    assert_eq!(status_of(&results, "k::Map::<V>::insert"), &equal, "{results:?}");
+    assert!(results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. })), "{results:?}");
+
+    // A rename with a real change of the body keeps the result "different".
+    let changed = levels(vec![
+        record("k::Map::<V>::allocate_x", "n0", "fn allocate(_1: &mut Map<V>) -> () { _2 = const 1_u8; return; }", &[]),
+        record("k::Map::<V>::insert", "n0", &caller("allocate_x", "len"), &["k::Map::<V>::allocate_x"]),
+        record("k::Map::<V>::len", "n0", "return;", &[]),
+    ]);
+    let results = compare(&before, &changed, &renames, &[]);
+    assert!(matches!(status_of(&results, "k::Map::<V>::allocate_x"), BodyStatus::Different { .. }), "{results:?}");
+
+    // Two bodies fit one key: the match is not unique, and Semilla does not use the key.
+    let twins = |name: &str| {
+        levels(vec![
+            record(&format!("k::Map::<u8>::{name}"), "n0", body, &[]),
+            record("k::Map::<u16>::allocate", "n0", body, &[]),
+        ])
+    };
+    let results = compare(&twins("allocate"), &twins("allocate_x"), &renames, &[]);
+    assert_eq!(status_of(&results, "k::Map::<u8>::allocate"), &BodyStatus::BeforeOnly, "{results:?}");
+    assert_eq!(status_of(&results, "k::Map::<u8>::allocate_x"), &BodyStatus::AfterOnly, "{results:?}");
+
+    // The new name with generic arguments is there before the step: the rename is not usable.
+    let mut taken = before.clone();
+    taken.get_mut("n0").unwrap().push(record("k::Map::<V>::allocate_x", "n0", "return;", &[]));
+    let results = compare(&taken, &after, &renames, &[]);
+    assert_eq!(status_of(&results, "k::Map::<V>::allocate"), &BodyStatus::BeforeOnly, "{results:?}");
+
+    // A move to a different module keeps the list at the type: the same distance from the end.
+    let moved = levels(vec![
+        record("k::m::Map::<V>::allocate_x", "n0", body, &[]),
+    ]);
+    let single = levels(vec![record("k::Map::<V>::allocate", "n0", body, &[])]);
+    let renames = BTreeMap::from([("k::Map::allocate".to_string(), "k::m::Map::allocate_x".to_string())]);
+    let results = compare(&single, &moved, &renames, &[]);
+    assert_eq!(status_of(&results, "k::m::Map::<V>::allocate_x"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] }, "{results:?}");
+}
+
+#[test]
+fn a_generic_key_matches_only_a_whole_path_with_a_list() {
+    let pairs = [(format!("{}a::T::m", paths::GENERIC_KEY), "a::T::n".to_string())];
+    let rename = |text: &str| paths::rename(text, &pairs);
+    assert_eq!(rename("{a::T::<A, B>::m}(x)"), "{a::T::<A, B>::n}(x)");
+    assert_eq!(rename("a::T::<fn(u8) -> Vec<u8>>::m::{closure#0}"), "a::T::<fn(u8) -> Vec<u8>>::n::{closure#0}");
+    // No list: the plain key is the key for this text.
+    assert_eq!(rename("a::T::m"), "a::T::m");
+    // A longer name, a longer path before, and a different segment do not match.
+    assert_eq!(rename("a::T::<A>::m2"), "a::T::<A>::m2");
+    assert_eq!(rename("b::a::T::<A>::m"), "b::a::T::<A>::m");
+    assert_eq!(rename("a::T::<A>::x::m"), "a::T::<A>::x::m");
+    assert_eq!(paths::generic_prefix("a::T::<A>::m::{closure#0}", "a::T::m"), Some("a::T::<A>::m"));
+    assert_eq!(paths::generic_prefix("a::T::<A>::mm", "a::T::m"), None);
+}
+
+#[test]
+fn two_body_names_that_differ_only_in_a_lifetime_are_one_body() {
+    // Design 37.2: the header of the impl lost its lifetime.
+    let old = "<&'a mut a::Node as a::Parse<a::Attrs>>::parse";
+    let new = "<&mut a::Node as a::Parse<a::Attrs>>::parse";
+    assert_eq!(paths::no_lifetimes(old), new);
+    assert_eq!(paths::no_lifetimes("<(dyn a::Shape + 'static)>::area"), "<(dyn a::Shape)>::area");
+    assert_eq!(paths::no_lifetimes("a::T::<'a, B>::m"), "a::T::<B>::m");
+    assert_eq!(paths::no_lifetimes("a::T::<'x'>::m"), "a::T::<'x'>::m");
+    assert_eq!(paths::no_lifetimes("a::Walk::<'a>::len"), "a::Walk::len");
+    assert_eq!(paths::no_lifetimes("<a::Walk<'a> as a::P<B, 'b>>::f"), "<a::Walk as a::P<B>>::f");
+    let before = levels(vec![record(old, "n0", "body", &[]), record("<(dyn a::Shape + 'a)>::area", "n0", "one", &[])]);
+    let after = levels(vec![record(new, "n0", "body", &[]), record("<(dyn a::Shape + 'static)>::area", "n0", "two", &[])]);
+    let results = compare_with(&before, &after, &BTreeMap::new(), &[], &Marks::default(), &Marks::default());
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert_eq!(status_of(&results, new), &BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    // A body with a change stays different.
+    assert!(matches!(status_of(&results, "<(dyn a::Shape + 'static)>::area"), BodyStatus::Different { .. }));
+    // Two names of one tree fit: no pair.
+    let before = levels(vec![record("<&'a a::Node as a::P>::f", "n0", "body", &[]), record("<&'b a::Node as a::P>::f", "n0", "body", &[])]);
+    let after = levels(vec![record("<&a::Node as a::P>::f", "n0", "body", &[])]);
+    let results = compare_with(&before, &after, &BTreeMap::new(), &[], &Marks::default(), &Marks::default());
+    assert_eq!(status_of(&results, "<&'a a::Node as a::P>::f"), &BodyStatus::BeforeOnly);
+    assert_eq!(status_of(&results, "<&a::Node as a::P>::f"), &BodyStatus::AfterOnly);
 }

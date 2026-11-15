@@ -80,7 +80,12 @@ enum Command {
         /// An explicit claim: `OP ANCHOR key=value …`. The anchor can be `FILE:LINE[:COLUMN]`.
         #[arg(long = "claim")]
         claims: Vec<String>,
-        /// The reason for a fact in the spotlight: `ANCHOR=TEXT`.
+        /// The reason for a fact in the spotlight: `ANCHOR=TEXT`. One reason can cover each open
+        /// spotlight of one kind in the step: `kind:KIND=TEXT`. The kinds: `cfg-attribute`,
+        /// `new-attribute`, `changed-attribute`, `inactive-code`, `indirect-change`,
+        /// `changed-macro`, `build-input`, `build-setting`, `manifest-key`, `package-setting`,
+        /// `new-dependency`, `dependency-features`, `dependency-setting`, `other-file`. A changed
+        /// file of build code needs its own reason.
         #[arg(long = "reason")]
         reasons: Vec<String>,
         /// Also print the change tree.
@@ -240,6 +245,12 @@ enum Command {
     },
     /// Build the index of the working tree in `.semilla/index.json`.
     Index,
+    /// Remove each entry of the build code cache that no stored step uses: `semilla cache --clean`.
+    Cache {
+        /// Remove the entries, and print the freed size.
+        #[arg(long)]
+        clean: bool,
+    },
     /// (old protocol, for the replay) Print the change tree.
     #[command(hide = true)]
     Show,
@@ -403,7 +414,7 @@ fn command_mode(command: &Command) -> buildcode::Mode {
 /// command that is not an agent command. `status` with no commit shows the session of the agent.
 /// The worker has the mode of its job.
 fn is_reviewer_command(command: &Command) -> bool {
-    !matches!(command, Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index | Command::Worker | Command::Status { commit: None, .. })
+    !matches!(command, Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index | Command::Cache { .. } | Command::Worker | Command::Status { commit: None, .. })
 }
 
 /// The line for the option `--trust-build-code`, which is gone (design 28.3).
@@ -487,6 +498,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
+            // Design 37.22: the build code cache keeps the entries of the stored steps and the
+            // newest other entries. A failure of the clean is not a failure of the step.
+            let started = std::time::Instant::now();
+            let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
+            timing("clean the build code cache", started);
             if !stored {
                 // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
                 return Ok(ExitCode::from(1));
@@ -552,17 +568,28 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let target = target.unwrap_or_else(|| "session".into());
             let (key, set) = app.review_target(&target)?;
             let hash = background::changeset_hash(&set);
-            // A result of an older state or of an other mode (design 28) is not the result of
-            // this command: the check runs again.
-            if matches!(background::state(&app, &key, &hash), background::State::Missing | background::State::Stale) {
-                background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: app.mode })?;
-            }
-            let state = background::wait(&mut app, &key, &hash, std::time::Duration::from_secs(wait))?;
-            if state != background::State::Ready {
-                println!("the background check of {key} is not ready ({state:?}); see `semilla status`");
-                return Ok(ExitCode::from(1));
-            }
-            let data = app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?;
+            // Design 37.21: the review data of this change set, if a step, the background
+            // check, or a review stored it. Then the command checks nothing again.
+            let data = match app.stored_ui_data(&key, &set) {
+                Some(data) => data,
+                None => {
+                    // A result of an older state or of an other mode (design 28) is not the
+                    // result of this command: the check runs again.
+                    if matches!(background::state(&app, &key, &hash), background::State::Missing | background::State::Stale) {
+                        background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: app.mode })?;
+                    }
+                    let state = background::wait(&mut app, &key, &hash, std::time::Duration::from_secs(wait))?;
+                    if state != background::State::Ready {
+                        println!("the background check of {key} is not ready ({state:?}); see `semilla status`");
+                        return Ok(ExitCode::from(1));
+                    }
+                    // The background check of the session stores the review data.
+                    match app.stored_ui_data(&key, &set) {
+                        Some(data) => data,
+                        None => app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?,
+                    }
+                }
+            };
             if let Some(file) = &md {
                 std::fs::write(file, semilla_ui::export::render_markdown(&data, full))?;
                 println!("wrote {}", file.display());
@@ -647,6 +674,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Index => println!("{}", app.index()?),
+        Command::Cache { clean: false } => println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses."),
+        Command::Cache { clean: true } => {
+            // A background check can build in an entry now. The clean waits for its end.
+            let lock = std::fs::File::create(app.repo.cache_dir().join("worker.lock"))?;
+            lock.lock()?;
+            let (count, size) = app.clean_build_code(0)?;
+            lock.unlock()?;
+            let entries = if count == 1 { "entry" } else { "entries" };
+            println!("removed {count} {entries} of the build code cache that no stored step uses: {} freed", app::size_text(size));
+        }
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),
         Command::Load { commit } => {

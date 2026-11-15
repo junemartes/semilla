@@ -310,6 +310,26 @@ impl Configuration {
     }
 }
 
+/// The features of a selection that no workspace package has, by the manifests (`cargo
+/// metadata --no-deps`). Cargo stops with "does not contain this feature" for such a selection
+/// (design 37.7). A feature is the name of an entry of the feature table, or the name of an
+/// optional dependency. `package/feature` names a feature of one package.
+pub fn missing_features(metadata: &serde_json::Value, features: &Features) -> Vec<String> {
+    let (Features::Listed(list) | Features::NoDefaultListed(list)) = features else { return Vec::new() };
+    let has = |package: &serde_json::Value, feature: &str| -> bool {
+        let optional = |dependency: &serde_json::Value| dependency["optional"].as_bool() == Some(true) && dependency["rename"].as_str().or(dependency["name"].as_str()) == Some(feature);
+        package["features"].as_object().is_some_and(|table| table.contains_key(feature)) || package["dependencies"].as_array().into_iter().flatten().any(optional)
+    };
+    let packages: Vec<&serde_json::Value> = metadata["packages"].as_array().into_iter().flatten().collect();
+    let found = |feature: &String| match feature.split_once('/') {
+        // `dependency/feature` is a feature of a dependency: the manifests of the workspace
+        // do not have its table, so it is not in the result.
+        Some((package, feature)) => packages.iter().filter(|found| found["name"].as_str() == Some(package)).all(|found| has(found, feature)),
+        None => packages.iter().any(|package| has(package, feature)),
+    };
+    list.iter().filter(|feature| !found(feature)).cloned().collect()
+}
+
 /// The feature state of each workspace package for a feature selection, by the manifests
 /// (`cargo metadata --no-deps`): the features of the selection, and each feature that they
 /// name in the feature table of the package.
@@ -458,17 +478,29 @@ pub fn run_cargo_check_delta_config(
     let fingerprint = format!("driver-{}-{modified}", meta.len());
     let mut known = read_known(out);
     let save = |known: &std::collections::BTreeSet<String>| std::fs::write(known_file(out), known.iter().map(|name| format!("{name}\n")).collect::<String>());
-    let stdout = match run_check_command(workspace, level, out, target_dir, &fingerprint, Mode::Json, config, false) {
-        Ok(stdout) => stdout,
+    let check = |known: &mut std::collections::BTreeSet<String>| match run_check_command(workspace, level, out, target_dir, &fingerprint, Mode::Json, config, false) {
+        Ok(stdout) => Ok(stdout),
         Err(error) => {
             // The units that a failed build compiled have record files too.
             if let Some(failed) = error.downcast_ref::<FailedBuild>() {
                 known.extend(unit_files(&failed.stdout));
-                let _ = save(&known);
+                let _ = save(known);
             }
-            return Err(error);
+            Err(error)
         }
     };
+    let mut stdout = check(&mut known)?;
+    // A fresh unit of the workspace with no record file (design 37.11): a build with other
+    // unit names (a different package version) removed the file, and then a tree came back
+    // to the sources of the older build. Cargo does not compile the unit, so the driver
+    // writes no records. The build folder goes away, and one more build makes each record.
+    if fresh_without_records(&stdout, workspace, out) {
+        match std::fs::remove_dir_all(target_dir) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+        stdout = check(&mut known)?;
+    }
     let units = unit_files(&stdout);
     let mut built = Built::default();
     for entry in std::fs::read_dir(out)? {
@@ -607,6 +639,21 @@ pub(crate) fn unit_files(stdout: &str) -> std::collections::BTreeSet<String> {
         }
     }
     names
+}
+
+/// True if cargo did not compile a unit of the workspace (the unit is "fresh") and the records
+/// folder has no file of the unit. A build script has no record file and does not count. A unit
+/// of a package outside the build folder (a crate of the registry) has no records.
+pub(crate) fn fresh_without_records(stdout: &str, workspace: &Path, out: &Path) -> bool {
+    stdout.lines().any(|line| {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { return false };
+        if message.get("reason").and_then(|r| r.as_str()) != Some("compiler-artifact") || message["fresh"].as_bool() != Some(true) {
+            return false;
+        }
+        let member = message["manifest_path"].as_str().is_some_and(|path| Path::new(path).starts_with(workspace));
+        let names = unit_files(line);
+        member && !names.is_empty() && !names.iter().any(|name| out.join(name).is_file())
+    })
 }
 
 /// Divides the record file names of a build: the names of the units with one file, and the

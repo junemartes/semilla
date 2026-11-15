@@ -58,6 +58,65 @@ pub struct StoredReport {
     pub text: String,
 }
 
+/// Stored review data (design 37.21): the data of `semilla review` for one change set. The
+/// data has no notice: each command computes the notices.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredReview {
+    pub key: String,
+    /// The tree of the commit of `key` (empty for the session), as in [`StoredReport`].
+    #[serde(default)]
+    pub tree: String,
+    pub hash: String,
+    pub tools: String,
+    /// The mode of the command that computed the data. Only a command of the same mode reads
+    /// the data, so a command with `--no-build-code` reads no result of changed build code.
+    pub mode: crate::buildcode::Mode,
+    /// The hash of the review file: the decisions of the reviewer are in the report.
+    pub review: String,
+    pub data: semilla_ui::UiData,
+}
+
+fn review_data_file(app: &App, key: &str) -> PathBuf {
+    app.repo.cache_dir().join("review-data").join(format!("{key}.{:?}.json", app.mode).to_lowercase())
+}
+
+/// The hash of the decisions of the reviewer (empty for no file).
+fn review_hash(app: &App) -> String {
+    std::fs::read(app.review_file()).map(|bytes| format!("{:016x}", crate::store::stable_hash(&bytes))).unwrap_or_default()
+}
+
+/// The tree that a result of a key belongs to: empty for the session.
+fn key_tree(app: &App, key: &str) -> String {
+    if key == "session" { String::new() } else { app.repo.commit_tree(key).unwrap_or_default() }
+}
+
+/// Stores the review data of a change set. A result of the syntax phase is not stored.
+pub fn store_review(app: &App, key: &str, hash: &str, data: &semilla_ui::UiData) -> Result<()> {
+    if data.report.phase != "full" {
+        return Ok(());
+    }
+    let stored = StoredReview { key: key.to_string(), tree: key_tree(app, key), hash: hash.to_string(), tools: app.tools_key(), mode: app.mode, review: review_hash(app), data: data.clone() };
+    let file = review_data_file(app, key);
+    std::fs::create_dir_all(file.parent().unwrap())?;
+    // A reader never sees a part of the file: the write goes to a new name first.
+    let part = file.with_extension(format!("{}.part", std::process::id()));
+    std::fs::write(&part, serde_json::to_string(&stored)?)?;
+    std::fs::rename(&part, &file)?;
+    Ok(())
+}
+
+/// The stored review data of a key for a change set hash, if each input is the same: the
+/// change set, the commit tree, the tools, the mode, the phase, and the reviewer decisions.
+pub fn stored_review(app: &App, key: &str, hash: &str) -> Option<semilla_ui::UiData> {
+    if app.no_bodies {
+        return None;
+    }
+    let text = std::fs::read_to_string(review_data_file(app, key)).ok()?;
+    let stored: StoredReview = serde_json::from_str(&text).ok()?;
+    let same = stored.key == key && stored.hash == hash && stored.tools == app.tools_key() && stored.mode == app.mode && stored.review == review_hash(app) && stored.tree == key_tree(app, key);
+    same.then_some(stored.data)
+}
+
 /// The hash of a change set (its JSON form).
 pub fn changeset_hash(set: &ChangeSet) -> String {
     let mut hasher = DefaultHasher::new();
@@ -156,12 +215,17 @@ pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
             Some(set) => Some(set.clone()),
             None => app.commit_changeset(&job.key).ok().map(|(_, set)| set),
         };
-        if let Some(set) = set {
+        // A step of one process can store the result of its change set (design 37.21): then
+        // the job has no work.
+        let done = stored_for(app, &job.key, &job.hash).is_some();
+        if let Some(set) = set.filter(|_| !done) {
             let started = std::time::Instant::now();
-            match app.check_set(&set, job.key != "session") {
-                Ok(result) => {
+            // The check of the session gives the review data too, for `semilla review`.
+            let checked = if job.key == "session" { app.review_parts(&set, None).map(|(report, text, _)| (report, text)) } else { app.check_set(&set, true).map(|result| (result.report, result.text)) };
+            match checked {
+                Ok((report, text)) => {
                     let tree = if job.key == "session" { String::new() } else { app.repo.commit_tree(&job.key).unwrap_or_default() };
-                    let stored = StoredReport { key: job.key.clone(), tree, hash: job.hash.clone(), tools: app.tools_key(), report: result.report, text: result.text };
+                    let stored = StoredReport { key: job.key.clone(), tree, hash: job.hash.clone(), tools: app.tools_key(), report, text };
                     store(app, &stored)?;
                     if log {
                         eprintln!("[worker] {} checked in {:.1} s", job.key, started.elapsed().as_secs_f64());

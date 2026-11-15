@@ -137,6 +137,27 @@ fn own_tokens(files: &mut Files, workspace: &Workspace, item: &Item) -> Vec<Toke
     out
 }
 
+/// The text of the own tokens of an item, with a cut mark (`…`) at each place where the item
+/// has text that the own tokens do not have: a nested item, a function body (design 37.1,
+/// rule 3). Thus a side of the net fact is the full text of the entity or has a cut mark.
+fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -> String {
+    let (start, end) = span(item);
+    let mut out: Vec<Token> = Vec::new();
+    let mut next = 0;
+    let mut cut = false;
+    for token in files.tokens(workspace, &item.file).iter().filter(|token| token.at >= start && token.at < end) {
+        if own.get(next).is_some_and(|own| own.at == token.at) {
+            out.push(own[next].clone());
+            next += 1;
+            cut = false;
+        } else if !cut {
+            out.push(Token { text: "…".to_string(), at: token.at, joint: false });
+            cut = true;
+        }
+    }
+    join(&out)
+}
+
 fn join(tokens: &[Token]) -> String {
     let mut out = String::new();
     for (index, token) in tokens.iter().enumerate() {
@@ -235,8 +256,17 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     if before.file == after.file && before_ws.rust_files.get(&before.file) == after_ws.rust_files.get(&after.file) {
         return None;
     }
-    let old = own_tokens(&mut files.0, before_ws, before);
-    let new = own_tokens(&mut files.1, after_ws, after);
+    let mut old = own_tokens(&mut files.0, before_ws, before);
+    let mut new = own_tokens(&mut files.1, after_ws, after);
+    let (old_shown, new_shown) = (shown(&mut files.0, before_ws, before, &old), shown(&mut files.1, after_ws, after, &new));
+    // A function with a body on one side only (design 37.1): the body edit of the pair has
+    // the body. The `;` of the side with no body is the place of the body.
+    if before.kind == ItemKind::Fn && before.body.is_some() != after.body.is_some() {
+        let no_body = if before.body.is_some() { &mut new } else { &mut old };
+        if no_body.last().is_some_and(|last| last.text == ";") {
+            no_body.pop();
+        }
+    }
     if old.is_empty() || new.is_empty() {
         return None;
     }
@@ -292,7 +322,7 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     if !order && renamed == old_texts && explained(&compact(&join(&old)), &compact(&join(&new)), pair_edits) {
         return None;
     }
-    Some(text_edit(before, after, join(&old), join(&new), new.get(head).map(|token| token.at.0).unwrap_or(after.line_start)))
+    Some(text_edit(before, after, old_shown, new_shown, new.get(head).map(|token| token.at.0).unwrap_or(after.line_start)))
 }
 
 /// The answer to "do the texts of the edits make the new text from the old text?". Each edit

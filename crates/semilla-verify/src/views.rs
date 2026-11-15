@@ -670,70 +670,272 @@ pub fn body_list(items: &[String], names: bool) -> String {
     format!("{} bodies of {} (`semilla status --verbose` shows the names)", items.len(), semilla_core::report::list_scope(items))
 }
 
-/// Writes one fact of the text report. `diff` adds the content change of the fact (a build code
-/// change, design 28.3).
-fn put_fact(out: &mut String, fact: &semilla_core::report::Fact, diff: bool, names: bool) {
-    use text::put_line as put;
-        put(out, &format!("  ◆ {} derived: {} [{}]{}", fact.id, fact.description, fact.label(), fact.mark()));
-        for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
-            if matches!(fact.part.as_str(), "edit" | "body") {
-                // A fold of equal facts: the bodies, with the count of sites in each.
-                let mut items: Vec<(String, usize)> = Vec::new();
-                for site in &group.sites {
-                    match items.iter_mut().find(|(item, _)| *item == site.item) {
-                        Some((_, count)) => *count += 1,
-                        None => items.push((site.item.clone(), 1)),
-                    }
+/// The shortest spotlight text that the text report prints one time for many facts.
+const SHARE_MIN: usize = 120;
+
+/// The place of a fact in the list of a step (design 37.18). The fact numbers do not change.
+/// - 0: a build code change that is no manifest fact (design 28.3: read this change first);
+/// - 1: an edit of a body with `code different`;
+/// - 2: a declaration, an added item, a removed item;
+/// - 3: each other code fact;
+/// - 4: a manifest fact;
+/// - 5: a docs fact, a file fact, and each other fact with `no code`.
+fn rank(fact: &semilla_core::report::Fact) -> u8 {
+    match fact.category {
+        Category::Manifest => 4,
+        _ if fact.build_code_change => 0,
+        Category::Docs | Category::File => 5,
+        _ if fact.compare == Compare::NoCode => 5,
+        Category::Value | Category::Logic | Category::ControlFlow | Category::Macro | Category::Text if fact.compare == Compare::CodeDifferent => 1,
+        Category::Declaration | Category::Added | Category::Removed => 2,
+        _ => 3,
+    }
+}
+
+/// The fact numbers in the order of the numbers.
+fn in_order<'a>(ids: &[&'a str]) -> Vec<&'a str> {
+    let mut ids = ids.to_vec();
+    ids.sort_by_key(|id| id.strip_prefix('f').and_then(|n| n.parse::<usize>().ok()));
+    ids
+}
+
+/// A short list of fact numbers: "f3, f18 to f39". A run of three numbers or more is a range.
+fn id_list(ids: &[&str]) -> String {
+    let number = |id: &str| id.strip_prefix('f').and_then(|n| n.parse::<usize>().ok());
+    let mut parts: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < ids.len() {
+        let mut end = index;
+        while end + 1 < ids.len() && number(ids[end]).zip(number(ids[end + 1])).is_some_and(|(a, b)| b == a + 1) {
+            end += 1;
+        }
+        if end - index >= 2 {
+            parts.push(format!("{} to {}", ids[index], ids[end]));
+        } else {
+            parts.extend(ids[index..=end].iter().map(|id| id.to_string()));
+        }
+        index = end + 1;
+    }
+    parts.join(", ")
+}
+
+/// The part of a spotlight text that many facts can have: the "build input" text, or the full
+/// text. Returns the text before the part, the name of the part, and the part.
+fn shared_text(why: &str) -> (&str, &'static str, &str) {
+    const INPUT: &str = "a build input: ";
+    if let Some(rest) = why.strip_prefix(INPUT) {
+        return ("", INPUT, rest);
+    }
+    match why.find(&format!("; {INPUT}")) {
+        Some(at) => (&why[..at + 2], INPUT, &why[at + 2 + INPUT.len()..]),
+        None => ("", "", why),
+    }
+}
+
+/// The texts that the text report prints one time for many facts of a step (design 37.13).
+#[derive(Default)]
+struct Shared<'a> {
+    /// A spotlight text of two facts or more: the facts with the text, in the order of the list.
+    spotlights: BTreeMap<&'a str, Vec<&'a str>>,
+    /// A long list of bodies of two facts or more: the facts with the list.
+    bodies: BTreeMap<String, Vec<&'a str>>,
+    /// The content change of a file with two facts or more: the facts, in the order of the list.
+    diffs: BTreeMap<(&'a str, &'a str), Vec<&'a str>>,
+}
+
+impl<'a> Shared<'a> {
+    fn new(facts: &[&'a semilla_core::report::Fact], names: bool) -> Self {
+        let mut shared = Shared::default();
+        for fact in facts {
+            let bodies = Self::body_text(fact, names);
+            if bodies.len() >= SHARE_MIN {
+                shared.bodies.entry(bodies).or_default().push(&fact.id);
+            }
+            if let Some(why) = &fact.spotlight_why {
+                let (_, _, part) = shared_text(why);
+                if part.len() >= SHARE_MIN {
+                    shared.spotlights.entry(part).or_default().push(&fact.id);
                 }
-                let shown: Vec<String> = items.iter().take(6).map(|(item, count)| if *count > 1 { format!("{item} ({count})") } else { item.clone() }).collect();
-                let more = if items.len() > 6 { format!(", and {} more", items.len() - 6) } else { String::new() };
-                put(out, &format!("      in: {}{more}", shown.join(", ")));
-            } else {
-                // The bodies of the sites (D15): a body with a site can be proved equal, so it
-                // is not always in the affected bodies.
-                let mut items: Vec<&str> = group.sites.iter().map(|s| s.item.as_str()).collect();
-                items.dedup();
-                let more = if items.len() > 4 { format!(", and {} more", items.len() - 4) } else { String::new() };
-                items.truncate(4);
-                put(out, &format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", ")));
+            }
+            if let Some(content) = fact.content.as_deref().filter(|_| fact.build_code_change) {
+                shared.diffs.entry((fact.file.as_deref().unwrap_or(""), content)).or_default().push(&fact.id);
             }
         }
-        if !fact.affected.is_empty() {
-            // The mismatch mark (design 35.2) replaces the list name. It asks for no reason.
-            let name = if fact.mismatch() { semilla_core::report::MISMATCH } else { "affected bodies:" };
-            put(out, &format!("      {name} {}{}", body_list(&fact.affected, names), fact.other_edits_text()));
-        }
-        if !fact.equal_sites.is_empty() {
-            put(out, &format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
-        }
-        // A public API change (design 36.3): the line asks for no reason.
-        if fact.api_change() {
-            put(out, &format!("      {}", semilla_core::report::API_LINE));
-        }
-        // A changed body with `unsafe` code (design 36.5): the line asks for no reason.
-        if fact.unsafe_code {
-            put(out, &format!("      {}", semilla_core::report::UNSAFE_LINE));
-        }
-        // The note asks for no reason (batch 5u, part A).
-        if let Some(note) = &fact.note {
-            put(out, &format!("      note: {note}{}", fact.part_mark()));
-        }
-        // A stored reason of a fact with no spotlight is a note (batch 5x, part E).
-        if let Some(reason) = fact.reason.as_ref().filter(|_| fact.spotlight_why.is_none()) {
-            put(out, &format!("      note: no spotlight; the agent gave a reason: {}", text::quoted(reason)));
-        }
-        if let Some(why) = &fact.spotlight_why {
-            match &fact.reason {
-                Some(reason) => put(out, &format!("      spotlight: {why}; {}: {}", fact.reason_label(), text::quoted(reason))),
-                None => put(out, &format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone()))),
-            }
-        }
-    if let Some(content) = fact.content.as_ref().filter(|_| diff) {
-        put(out, "      diff:");
-        for line in content.lines() {
-            put(out, &format!("        {line}"));
+        shared.spotlights.retain(|_, ids| ids.len() > 1);
+        shared.bodies.retain(|_, ids| ids.len() > 1);
+        shared
+    }
+
+    /// The text of the list of the affected bodies of a fact.
+    fn body_text(fact: &semilla_core::report::Fact, names: bool) -> String {
+        format!("{}{}", body_list(&fact.affected, names), fact.other_edits_text())
+    }
+
+    /// The list of the affected bodies of a fact. The first fact of a shared list shows the
+    /// list and the numbers of the facts. Each other fact names the first fact.
+    fn bodies(&self, fact: &semilla_core::report::Fact, names: bool) -> String {
+        let text = Self::body_text(fact, names);
+        match self.bodies.get(&text) {
+            Some(ids) if ids[0] == fact.id => format!("{text} (the same list for {})", id_list(&in_order(ids))),
+            Some(ids) => format!("the same list as {}", ids[0]),
+            None => text,
         }
     }
+
+    /// The spotlight text of a fact. The first fact of a shared text shows the text and the
+    /// numbers of the facts. Each other fact names the first fact.
+    fn spotlight(&self, fact: &semilla_core::report::Fact, why: &str) -> String {
+        let (before, name, part) = shared_text(why);
+        match self.spotlights.get(part) {
+            Some(ids) if ids[0] == fact.id => format!("{why} (the same text for {})", id_list(&in_order(ids))),
+            Some(ids) => format!("{before}{name}the same text as {}", ids[0]),
+            None => why.to_string(),
+        }
+    }
+}
+
+/// The lines of one fact of the text report: the first line without the mark and the number,
+/// and the lines under it. `diff` adds the content change of the fact (a build code change,
+/// design 28.3): a change of a file with many facts shows one time, after the last fact.
+fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -> (String, Vec<String>) {
+    let head = format!("derived: {} [{}]{}", fact.description, fact.label(), fact.mark());
+    let mut lines: Vec<String> = Vec::new();
+    let mut put = |line: &str| lines.push(line.to_string());
+    for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
+        if matches!(fact.part.as_str(), "edit" | "body") {
+            // A fold of equal facts: the bodies, with the count of sites in each.
+            let mut items: Vec<(String, usize)> = Vec::new();
+            for site in &group.sites {
+                match items.iter_mut().find(|(item, _)| *item == site.item) {
+                    Some((_, count)) => *count += 1,
+                    None => items.push((site.item.clone(), 1)),
+                }
+            }
+            let shown: Vec<String> = items.iter().take(6).map(|(item, count)| if *count > 1 { format!("{item} ({count})") } else { item.clone() }).collect();
+            let more = if items.len() > 6 { format!(", and {} more", items.len() - 6) } else { String::new() };
+            put(&format!("      in: {}{more}", shown.join(", ")));
+        } else {
+            // The bodies of the sites (D15): a body with a site can be proved equal, so it
+            // is not always in the affected bodies.
+            let mut items: Vec<&str> = group.sites.iter().map(|s| s.item.as_str()).collect();
+            items.dedup();
+            let more = if items.len() > 4 { format!(", and {} more", items.len() - 4) } else { String::new() };
+            items.truncate(4);
+            put(&format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", ")));
+        }
+    }
+    if !fact.affected.is_empty() {
+        // The mismatch mark (design 35.2) replaces the list name. It asks for no reason.
+        let name = if fact.mismatch() { semilla_core::report::MISMATCH } else { "affected bodies:" };
+        put(&format!("      {name} {}", shared.bodies(fact, names)));
+    }
+    if !fact.equal_sites.is_empty() {
+        put(&format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
+    }
+    // A public API change (design 36.3): the line asks for no reason.
+    if fact.api_change() {
+        put(&format!("      {}", semilla_core::report::API_LINE));
+    }
+    // A changed body with `unsafe` code (design 36.5): the line asks for no reason.
+    if fact.unsafe_code {
+        put(&format!("      {}", semilla_core::report::UNSAFE_LINE));
+    }
+    // The note asks for no reason (batch 5u, part A).
+    if let Some(note) = &fact.note {
+        put(&format!("      note: {note}{}", fact.part_mark()));
+    }
+    // A stored reason of a fact with no spotlight is a note (batch 5x, part E).
+    if let Some(reason) = fact.reason.as_ref().filter(|_| fact.spotlight_why.is_none()) {
+        put(&format!("      note: no spotlight; the agent gave a reason: {}", text::quoted(reason)));
+    }
+    if let Some(why) = &fact.spotlight_why {
+        let why = shared.spotlight(fact, why);
+        match &fact.reason {
+            Some(reason) => put(&format!("      spotlight: {why}; {}: {}", fact.reason_label(), text::quoted(reason))),
+            None => put(&format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.reason_place())),
+        }
+        // The full list of the causes (design 37.14), one time for each shared text.
+        let first = self::shared_text(fact.spotlight_why.as_deref().unwrap_or("")).2;
+        if names && !fact.causes.is_empty() && shared.spotlights.get(first).is_none_or(|ids| ids[0] == fact.id) {
+            put(&format!("      each cause: {}", fact.causes.join(", ")));
+        }
+    }
+    if let Some(content) = fact.content.as_deref().filter(|_| fact.build_code_change) {
+        let ids = shared.diffs.get(&(fact.file.as_deref().unwrap_or(""), content)).map(Vec::as_slice).unwrap_or(&[]);
+        if ids.last().is_none_or(|last| *last == fact.id) {
+            if ids.len() > 1 {
+                put(&format!("      diff of `{}` (one time, for {}):", fact.file.as_deref().unwrap_or(""), id_list(&in_order(ids))));
+            } else {
+                put("      diff:");
+            }
+            for line in content.lines() {
+                put(&format!("        {line}"));
+            }
+        }
+    }
+    (head, lines)
+}
+
+/// The facts of one step of the text report (design 37.13 to 37.18).
+/// - The order of the facts follows [`rank`]. A fact keeps its number.
+/// - Facts with the same text, the same category, the same compare result, and the same lines
+///   below are one line with the count, the numbers, and the places.
+/// Returns the build code section (it comes before the claims) and the other facts.
+fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, String) {
+    use text::put_line as put;
+    let (mut first, mut rest) = (String::new(), String::new());
+    let out = &mut first;
+    let mut order: Vec<&semilla_core::report::Fact> = facts.iter().collect();
+    order.sort_by_key(|fact| rank(fact));
+    let shared = Shared::new(&order, names);
+    // Design 28.3: the build code changes of the step come first, with the diff. The manifest
+    // facts of the change are with the other manifest facts: one line names them here.
+    if facts.iter().any(|fact| fact.build_code_change) {
+        put(out, &format!("  ! {}", semilla_core::report::BUILD_CODE_SECTION));
+        let mut files: Vec<(&str, Vec<&str>)> = Vec::new();
+        for fact in order.iter().filter(|fact| fact.build_code_change && rank(fact) != 0) {
+            let file = fact.file.as_deref().unwrap_or("");
+            match files.iter_mut().find(|(name, _)| *name == file) {
+                Some((_, ids)) => ids.push(&fact.id),
+                None => files.push((file, vec![&fact.id])),
+            }
+        }
+        for (file, ids) in files {
+            put(out, &format!("      `{file}`: the manifest facts {} below, with the diff of the file", id_list(&in_order(&ids))));
+        }
+    }
+    struct Line<'a> {
+        ids: Vec<&'a str>,
+        places: Vec<String>,
+        rank: u8,
+        head: String,
+        lines: Vec<String>,
+    }
+    let mut shown: Vec<Line> = Vec::new();
+    for fact in order {
+        let (head, lines) = fact_lines(fact, &shared, names);
+        let place = fact.at.as_ref().map(|at| at.to_string()).or_else(|| fact.file.clone()).unwrap_or_else(|| fact.part.clone());
+        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines) {
+            Some(line) => {
+                line.ids.push(&fact.id);
+                line.places.push(place);
+            }
+            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines }),
+        }
+    }
+    for line in shown {
+        let out = if line.rank == 0 { &mut first } else { &mut rest };
+        if line.ids.len() == 1 {
+            put(out, &format!("  ◆ {} {}", line.ids[0], line.head));
+        } else {
+            put(out, &format!("  ◆ {} {} × {} (also {})", line.ids[0], line.head, line.ids.len(), id_list(&line.ids[1..])));
+            put(out, &format!("      places: {}", line.places.join(", ")));
+        }
+        for text in &line.lines {
+            put(out, text);
+        }
+    }
+    (first, rest)
 }
 
 /// The text report. With `short_failures`, a claim that is not verified shows only its status
@@ -750,13 +952,8 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
     let mut out = String::new();
     for step in steps {
         put(&mut out, &format!("step {}  {}", step.step, text::quoted(&step.intent)));
-        // Design 28.3: the build code changes of the step come first, with the diff.
-        if step.facts.iter().any(|fact| fact.build_code_change) {
-            put(&mut out, &format!("  ! {}", semilla_core::report::BUILD_CODE_SECTION));
-            for fact in step.facts.iter().filter(|fact| fact.build_code_change) {
-                put_fact(&mut out, fact, true, names);
-            }
-        }
+        let (build_code, facts) = fact_list(&step.facts, names);
+        out.push_str(&build_code);
         for claim in &step.claims {
             let mark = match &claim.status {
                 ClaimStatus::Verified { .. } => "✓",
@@ -786,9 +983,7 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
             }
         }
         // The facts: Semilla derives them, the agent writes no claim (design 22.5).
-        for fact in step.facts.iter().filter(|fact| !fact.build_code_change) {
-            put_fact(&mut out, fact, false, names);
-        }
+        out.push_str(&facts);
         for uncovered in &step.uncovered {
             let at = uncovered.at.as_ref().map(|a| a.to_string()).or_else(|| uncovered.file.clone()).unwrap_or_default();
             put(&mut out, &format!("  ✗ uncovered  {at}"));

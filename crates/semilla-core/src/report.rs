@@ -248,6 +248,56 @@ pub struct Fact {
     /// first in its step, with its diff.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub build_code_change: bool,
+    /// The full list of the causes of a "build input" spotlight (design 37.14). The spotlight
+    /// text shows at most [`CAUSE_LIMIT`] causes. `semilla status --verbose` shows each cause.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub causes: Vec<String>,
+    /// The count of the spotlights that the kind reason of this fact covers (design 37.19), or
+    /// 0 for a fact with no kind reason. The key of the reason is `kind:KIND`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reason_covers: usize,
+}
+
+/// The kinds of spotlight that one reason can cover (design 37.19): the name for a reason
+/// with the key `kind:NAME`, and the start of the spotlight text. The kind of a spotlight is the
+/// kind of the first part of its text.
+pub const SPOTLIGHT_KINDS: &[(&str, &str)] = &[
+    ("cfg-attribute", "a changed `cfg` attribute"),
+    ("new-attribute", "a new item with an attribute that can change the behavior"),
+    ("changed-attribute", "a changed attribute that can change the behavior"),
+    ("inactive-code", "inactive code"),
+    ("indirect-change", "an indirect change that Semilla cannot explain"),
+    ("changed-macro", "a changed macro"),
+    ("build-input", "a build input"),
+    ("build-setting", "a build setting"),
+    ("manifest-key", "a manifest key that is not in the allow list"),
+    ("package-setting", "a package setting that changes the build"),
+    ("new-dependency", "a new dependency"),
+    ("dependency-features", "the features of a dependency"),
+    ("dependency-setting", "a dependency setting other than the version"),
+    ("other-file", "a file that is not on the allow list"),
+    (BUILD_CODE_KIND, "build code"),
+];
+
+/// The kind of a changed file of build code. Each such file needs its own reason: no kind
+/// reason covers it (design 37.19).
+pub const BUILD_CODE_KIND: &str = "build-code";
+
+/// The start of the key of a kind reason: `kind:NAME`.
+pub const KIND_KEY: &str = "kind:";
+
+/// The smallest count of open spotlights of one kind for which the command to run again
+/// prints a kind reason (design 37.19).
+pub const KIND_REASON_MIN: usize = 4;
+
+/// The kind of a spotlight text, or `None` for a text with no kind name.
+pub fn spotlight_kind(why: &str) -> Option<&'static str> {
+    SPOTLIGHT_KINDS.iter().find(|(_, start)| why.starts_with(start)).map(|(name, _)| *name)
+}
+
+/// The names of the kinds that a kind reason can cover, for a message.
+pub fn kind_names() -> String {
+    SPOTLIGHT_KINDS.iter().filter(|(name, _)| *name != BUILD_CODE_KIND).map(|(name, _)| format!("`{name}`")).collect::<Vec<_>>().join(", ")
 }
 
 impl Fact {
@@ -255,9 +305,15 @@ impl Fact {
     /// the path of the item and not the exact key of the fact (batch 5x, part D).
     pub fn reason_label(&self) -> String {
         match &self.reason_key {
+            Some(key) if self.reason_covers > 0 => format!("reason (key `{key}`; one reason covers {} spotlight{} of the kind {})", self.reason_covers, if self.reason_covers == 1 { "" } else { "s" }, key.strip_prefix(KIND_KEY).unwrap_or(key)),
             Some(key) => format!("reason (key `{key}`)"),
             None => "reason".to_string(),
         }
+    }
+
+    /// The kind of the spotlight of this fact (design 37.19), if its text has a kind name.
+    pub fn kind(&self) -> Option<&'static str> {
+        self.spotlight_why.as_deref().and_then(spotlight_kind)
     }
 
     /// The exact key of the reason of this fact: its anchor, or its part.
@@ -1015,6 +1071,9 @@ impl FactCounts {
 /// list shows the count and the scope ([`list_scope`]). `semilla status --verbose` and the
 /// report with `--full` have each name.
 pub const LIST_LIMIT: usize = 8;
+
+/// The largest number of causes that the text of a "build input" spotlight shows (design 37.14).
+pub const CAUSE_LIMIT: usize = 5;
 
 /// The scope of a long list of bodies (batch 5x, part E): "the crate `humantime`", or
 /// "2 crates: `a` (30), `b` (15)". The crate is the first segment of the name of a body.

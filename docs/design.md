@@ -2957,3 +2957,190 @@ Batch 7b. The model of 35.1 stays (the user decided only that model). The rule a
 **The rule.** The refuted text gives the route from the function to the first three different items with a site: "the route to `semver::parse::<Comparator as FromStr>::from_str`: `semver::eval::matches_req` → a generic function of a different crate → each trait impl of `semver::Comparator` → `semver::parse::<Comparator as FromStr>::from_str`". A drop body has the link "the drop of a value of `T`".
 
 **The limits.** The route does not name the generic function: the MIR record does not hold the call that takes the type. The scope rule is not more exact: a rule that uses the bounds of the callee needs new MIR records. This is open.
+
+## 37. Batch 7c: a step of the size of a pull request
+
+Batch 7c. The user gave the target on 2026-11-15: a pull request usually has 500 to 800 changed lines, and Semilla must work especially well at this size. The model of 35.1 stays (the user decided only that model and this target). The coordinator measured Semilla on real version pairs of crates, each pair as one step with 300 to 1700 changed lines. This section has the defects of that measure and their rules. The rule above each rule: no change of the code is without a fact, and no fact text says less than the change. Each rule of this section: **Decided by Claude**.
+
+### 37.1 An entity of a different kind, and a body on one side only
+
+**The cause.** A trait `Gen` with the method `fn size(&self) -> usize;` became a struct `Gen` with an inherent method `size` that has a body. The diff paired the two methods by their path. The output had a visibility fact and a text fact with the two signatures. No fact showed the new body, so a change of the body changed no output line.
+
+**The rule.**
+
+1. Two entities of a different kind do not pair by path. A member of a trait definition and a member of an inherent impl are different entities. A trait and a struct with one name are different entities. The old entity is a `removed` fact, and the new entity is an `added` fact: "removed `quickcheck::arbitrary::Gen` (a trait)", "added `quickcheck::arbitrary::Gen` (a struct)". A `use` line and a macro keep the old rule.
+2. A paired function with a body on one side only gives a fact with the body text: "body added to `X`: `{ … }`" (`added`) or "body removed from `X`: `{ … }`" (`removed`). A long body has a cut mark, and the report content has the full text.
+3. Each side of a fact "changed source text with no other fact" is the full text of the entity, or it has a cut mark (`…`) at each place where the text has more: a nested item, a function body.
+
+**Limits.** The rule 1 applies to a pair by path. A pair that the rename rules derive (36.1) has its own check.
+
+### 37.2 The impl blocks of a renamed type, and a header that is different only in lifetimes
+
+**The cause.** The type `Utf8CharIndices<'a>` became `Utf8CharIndicesWithHandler<'a, H>`. Semilla derived the rename of the type, but each impl block showed as removed and added. An `added` fact shows no body. Thus a change in a body of such a block changed no output line. The coordinator found a second case in a pair that the implementer does not have: `impl<'a> Parse for &'a mut Node` became `impl Parse for &mut Node`.
+
+**The rule.**
+
+1. An impl block follows the rename of its type or trait. The block of the old tree and the block of the new tree are one impl if the trait is the same and the self type is the same after the renames of the step. The generic parameters, the bounds, and the `where` clause can be different.
+2. The changed header is one `declaration` fact with the old header and the new header. Each member edit is its own fact. Each added or removed member is its own fact. The rule applies to a trait impl and to an inherent impl.
+3. If two blocks or more fit one block, Semilla makes no pair. The blocks show as removed and added, and a note gives the cause.
+4. The owner of an impl has no lifetime: the two headers above are one impl. The compiler does not permit two impls of one trait that are different only in a lifetime. The names of the compiled bodies pair when they are different only in a lifetime, and no other body name of the two trees has the same text without lifetimes. A reason key with the lifetime of the old header finds the item.
+
+**Limits.** A method rename in an impl whose generics change keeps `code different`. Two impl blocks of twin types that one step adds make no pair. The anchor of an item of the second case has the form `<&mutNode as Parse>`.
+
+### 37.3 A module file under a condition that is off
+
+**The cause.** `#[cfg(windows)] mod windows;` names a file that no checked configuration compiles. Semilla gave one `file` fact for it ("Rust code that Semilla does not parse"). A change in a function of the file changed no output line.
+
+**The rule.**
+
+1. The loader follows each `mod` declaration, also under a `cfg` condition that is off. A `cfg_attr(COND, path = "…")` attribute names one file for a part of the configurations: the loader reads each such file. Two files of one module name are twin modules (`sys#0`, `sys#1`).
+2. The items of the file get their usual syntax facts. Each fact has the compare result `no compare`, with the note "no compare: no checked configuration compiles …".
+3. A file that no checked unit reads has one "inactive code" spotlight. The key of its reason is the file. The facts of the file ask for no reason of their own.
+4. A file that does not parse, and a file that no `mod` declaration names, keep the `file` fact and its spotlight.
+
+**Limits.** Semilla does not compile such a file, so it cannot see an error in it. A twin number changes when the count of the files of a module changes.
+
+### 37.4 The rename map and the name of a compiled body
+
+**The cause.** A rename of a method of `impl<ValueType> GrowingHashmapChar<ValueType>` gave `code different`. The rename map has the path of the source (`strsim::GrowingHashmapChar::allocate`). The name of the compiled body has the generic arguments (`strsim::GrowingHashmapChar::<ValueType>::allocate`), so the key matched no record.
+
+**The rule.**
+
+1. A rename gets a generic key if exactly one body name of the old tree fits the old path, at most one body name of the new tree fits the new path, and no body of the old tree has the new path with generic arguments. If two bodies fit one key (`Type::<u8>::get` and `Type::<u16>::get`), the rename gets no generic key, and the compare result stays `code different`.
+2. A path of a twin has a number (`bs58::encode#0::max_encoded_len`). The name of the compiled body has no number. A key with a number gets the name with no number if no other item of its tree can have this name. Else the key stays, and the compare result stays `code different`.
+3. A rename with a real change of the body keeps `code different` and the mismatch mark: the map changes only the names.
+
+### 37.5 A file that the loader cannot parse
+
+**The cause.** A file with syntax of the 2015 edition (`fn f(u8);` in a trait) stopped the step with an error and with no fact.
+
+**The rule.**
+
+1. A file that does not parse does not stop the step. The file gets one `file` fact with the diff and the spotlight "Semilla cannot parse this file: REASON, in the tree after the step". The spotlight needs a reason. The items of the file on the other side do not show as removed or added. Each other file gets its usual facts.
+2. The loader makes a second try for the 2015 form: it gives each parameter with no name the name `_` and parses again. The lines of the text do not change. A note names the file: "Semilla read `src/tester.rs` as code of the 2015 edition: 1 parameter(s) of a trait method have no name. Semilla used the name `_` for each one."
+
+**Limits.** The second try does not read the edition of the package: it accepts `fn f(u8) {}` in a file of a later edition. The compiler rejects such a file, and then the build fails as usual.
+
+### 37.6 A reason key with `=`
+
+**The cause.** The key of a manifest fact can have `=`: `Cargo.toml:target.cfg(all(target_arch = "aarch64", target_os = "android")).dependencies.libc.version`. Semilla split each `--reason` text at the first `=`, so the printed command could never pass.
+
+**The rule.** The key of a `--reason` text is the longest key `K` that is open in the step, where the text starts with `K=`. If no open key fits, the key is the text before the first `=`. A key is open if a fact with this key got the reason of the split, or if a claim has the key as its anchor. Each `run again:` line passes with no change, also with `'` or `"` in a key: a test runs the line through the shell.
+
+### 37.7 A feature that only one tree has
+
+**The cause.** A step removed the feature `serde1`. Semilla built the configuration `dev, features serde1` on the new tree, cargo stopped ("does not contain this feature"), and the step failed with "the body check failed". The cause of `rand_core-4` is the same.
+
+**The rule.** Semilla reads the features of each tree from the manifests (`cargo metadata --no-deps`). A configuration with a feature that only one tree has is not built. The output names it: "! configurations `dev, features serde1`, `release, features serde1` are not checked: only the code before the step has the feature `serde1`. The code after the step has no such configuration: no compare". The other configurations compare as usual. The manifest fact of the feature stays. The step does not fail for this cause.
+
+**Limits.** A body that only the missing configuration compiles has no compare, and its note says so.
+
+### 37.8 The check of the fact texts (rule 4 of part 1.1)
+
+The search for a fact text that shows only a signature when the body also changed found these places. Each one has a rule above: the pair of two entities of a different kind (37.1, rule 1), the body on one side only (37.1, rule 2), the text fact with no cut mark (37.1, rule 3), the `added` fact of an impl block of a renamed type (37.2), and the file fact of a module file (37.3). An `added` fact and a `removed` fact of a full item show the name of the item and no body. This rule stays: the item is new or gone, and the reports have its text.
+
+### 37.9 The limits of 37.1 to 37.7 that stay
+
+- A rename in a module with two files (twins under `cfg`) can keep `code different`.
+- The `utf8_iter` step has one type fact whose "affected bodies" list has names of two sides that look equal.
+- An added statement with a call gets the category `control flow`.
+- An import fact does not name its module. A field that a struct gets has the category `added`.
+
+### 37.10 The tests of a large step
+
+**The cause.** No test of the repository had a step of more than about 60 changed lines. The repository must not have the source of a crate of a different author.
+
+**The rule.** `crates/semilla/tests/large.rs` makes its fixture. A generator with a fixed seed writes a crate of 12 modules and about 2500 lines: structs with impls, traits with impls, generic functions, a `macro_rules` macro with calls, tests, and docs. A change script applies a known list of 39 changes (578 changed lines): 3 renames, 2 moves, 1 type that gets a generic parameter, 6 body edits, 5 added items, 3 removed items, 4 declaration changes, 5 doc changes, 3 `use` changes, 1 manifest change, and more. The test asserts: the step is accepted in at most two runs; each change has a fact with its category, and each body edit has its exact text; no rename or move shows as removed and added; the count of facts is at most two times the count of changes (the real ratio is 50 to 39, 1.28); no output line has more than 2000 characters; the step takes less than 120 seconds. Fourteen needles each add one small behavior change. For each one, the test asserts that a fact shows the needle text and that each other fact is equal. A second case has 300 changed lines in one file. Each test runs in the usual test run.
+
+The tests found one defect in the diff, with this rule: a rename of a name applies only where the text changed. A signature or a node with an equal text on the two sides did not change, because a different item can have the same name (`a.len()` and `b.len()`). A place that keeps the old name and gets a different meaning shows in the compare of the compiled code.
+
+### 37.11 A fresh unit with no records
+
+**The cause.** A build with other unit names (a different package version) removed a record file. Then a tree came back to the sources of the older build. Cargo did not compile the unit again, so the driver wrote no record, and each body of the unit had no compare.
+
+**The rule.** If cargo says that a unit of the workspace is fresh and the unit has no record file, Semilla removes the build folder and builds one more time.
+
+### 37.12 A new package version, and a derived body of a renamed type
+
+**The cause.** A change of the package version or of a dependency changes the hash in each target name. The compare of the target sets then found no pair. A `derive(Debug)` body has the name of its type in its code, and the body has no item of its own in the source: a rename of the type gave an "indirect change" for it.
+
+**The rule.** The targets pair by their name without the hash: for each such name, the two sides have the same number of targets with the same texts. A changed body of a derive on a renamed type goes under the rename fact, as a mismatch mark: "renamed `depot::stock::StockRecord` → `depot::stock::StockEntry` [rename · code different]", then "! the compiled code changes: <depot::stock::StockEntry as std::fmt::Debug>::fmt". The step needs no reason for it.
+
+### 37.13 A text that many facts have
+
+**The cause.** Each of 22 manifest facts of one file printed the same spotlight text (1.4 kB) and the same full diff of the file (about 40 lines): 990 of 1182 output lines.
+
+**The rule.** The text output prints the diff of a manifest file one time, after the last manifest fact of the file. A spotlight text (120 characters or more) of two facts or more shows at its first fact with the numbers: "(the same text for f10 to f39)". Each other fact says "the same text as f10". A long list of bodies (120 characters or more) of two facts or more has the same rule: "(the same list for f10 to f39)", "the same list as f10". Each fact keeps its own line, its reason key, and its reason.
+
+### 37.14 The causes of a "build input" spotlight
+
+**The rule.** The spotlight text shows at most five causes (`CAUSE_LIMIT`), then "and N more (`semilla status --verbose` shows each cause)". The fact keeps the full list, and `semilla status --verbose` prints it one time for each shared text.
+
+### 37.15 A long changed text
+
+**The cause.** A changed macro printed the full token text of each side: one line of 16 kB. The diff of two long token lists was also slow.
+
+**The rule.** A long middle part uses a diff that is fast when few tokens changed. The fact shows each changed part with context and cut marks. If more tokens changed than the limit of the fast diff (`MOST_CHANGED`), each token of the middle part counts as changed: the text gets longer, and no change goes away.
+
+### 37.16 Equal facts in the text output
+
+**The rule.** Facts with the same text, the same category, the same compare result, and the same lines below are one line: "◆ f1 derived: TEXT [import · code equal] × 3 (also f3, f5)", then "places: src/one.rs, src/two.rs, src/four.rs". A fact with a different compare result, or with its own spotlight key, keeps its own line.
+
+### 37.17 A renamed `macro_rules` macro
+
+**The rule.** The facts "removed macro `a`" and "added macro `b`" of one module become one `rename` fact if the two definitions are equal after the name change: "renamed macro `demo::map_either` → `demo::map_both` [rename · code equal]". A call site that changes only the name goes under it: "2 site(s): changed macro call `map_either!` → `map_both!` (in demo::double, demo::text)". The compare result of the rename fact is the worst result of its call sites. A pair with different definitions keeps its facts. A macro with two possible partners keeps its facts.
+
+**Limits.** A call of the renamed macro at item level keeps its own fact.
+
+### 37.18 The order of the facts
+
+**The rule.** The text output puts the facts of a step in this order: a build code change that is no manifest fact (28.3); each body edit with `code different`; each declaration, added item, and removed item; each other code fact; each manifest fact; each docs fact, file fact, and other fact with `no code`. The fact numbers do not change, because tests, docs, and reason keys use them: `f6` can come before `f1`.
+
+**Limits.** The rules of 37.13, 37.16, and 37.18 apply to the text output. The JSON output and the reports keep each fact with its full text and its own order.
+
+### 37.19 The kind reasons
+
+**The cause.** An honest large step needs 4 to 80 reasons. `socket2` needs 48 reasons for 48 changed `cfg` attributes.
+
+**The rule.**
+
+1. Each kind of spotlight has a short name: `cfg-attribute`, `new-attribute`, `changed-attribute`, `inactive-code`, `indirect-change`, `changed-macro`, `build-input`, `build-setting`, `manifest-key`, `package-setting`, `new-dependency`, `dependency-features`, `dependency-setting`, `other-file`, `build-code`. `semilla step --help` and the guide list the names.
+2. A reason with the key `kind:KIND` covers each open spotlight of the kind in this step. The reason of the exact key of a fact, or of the path of its item, goes first.
+3. The `run again:` line prints one kind reason for a kind with 4 open spotlights or more (`KIND_REASON_MIN`), and the keys of the facts for a kind with fewer.
+4. Each covered spotlight says so in the output and in the reports: "reason (key `kind:inactive-code`; one reason covers 26 spotlights of the kind inactive-code)".
+5. A kind reason for a kind with no open spotlight gets the usual warning ("belongs to no fact of this step"), with the cause.
+6. A changed file of build code keeps one reason for each file. No kind reason covers it.
+
+**Limits.** The kind of a spotlight is the kind of the first part of its text. A spotlight with two parts ("a new dependency; a build input: …") has the kind of the first part. The reviewer reads one reason text for many spotlights: the count in each line shows this.
+
+### 37.20 The time of the body check
+
+**The cause.** The verify phase of `bytes` (+357 −710) took 37 seconds with the records in the cache. The verifier asks for the compare of the bodies 8 times (one time for each mode of the joint check), each time in 6 configurations. Each of the 48 calls read the records again and gave each record to the build configuration rules: 23 seconds.
+
+**The rule.** The work runs one time for each record set.
+
+1. The workspace has an index of its functions, constants, and statics by file, and a memo of each answer of the search for the item of a body. The index is valid while the count of the items stays.
+2. The records of the two trees of a step in one configuration, with the span and the expanded names of each record, stay in memory (at most 16 sets).
+3. The closures of moved functions have a memo by record set, rename map, and added items.
+4. The record sets, the facts of each configuration, and the expanded items are read in threads. The results join in the old order, so the result is that of one thread.
+5. The build configuration rules read a list of an item one time: a second equal list changes no answer, because each result is a set or a maximum.
+
+**The result.** `bytes`, "verify the change set": 36.5 s before, 8.8 s now with the records of the two trees in the cache, 12.3 to 12.5 s for the first run of a new tree (with its `cargo check`). The output of each fixture is equal before and after.
+
+**Limits.** The rules assume that the records of a tree do not change in one process. The start of the build configuration rules runs one time for each of the 8 calls (2.8 s in sum): it depends on the mode.
+
+### 37.21 The stored result of a step
+
+**The cause.** `semilla review --md` checked the change set again: about two times the time of the step.
+
+**The rule.** A process keeps the result of each step check and uses it for an equal step with equal inputs. A full step of a change set with one step stores its result and the review data (`<cache>/<repo>/review-data/`). The background check stores the review data for each other session. `semilla review` uses the stored data if the change set, the tools, and the mode are equal, and it computes the notices again.
+
+**Limits.** After a second step, a review that starts at once waits for the background check.
+
+### 37.22 The build code cache
+
+**The cause.** An entry of the `build-code` cache has 500 MB or more for each tree of a proc-macro crate. Semilla never removed an entry.
+
+**The rule.** After each step, Semilla removes the entries that no tree of the stored steps (or their base) uses, and it keeps the 4 newest of them (`BUILD_CODE_KEEP`): the entry of a rejected step serves the next run. `semilla cache --clean` removes each entry that no stored step uses and prints the size: "removed 4 entries of the build code cache that no stored step uses: 4 kB freed". The command waits for a background check that runs.
+
+**Limits.** The folder sets under `shared/` are not cleaned.

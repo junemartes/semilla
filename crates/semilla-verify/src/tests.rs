@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use semilla_core::report::Effect;
-use semilla_core::{Category, ChangeSet, Claim, ClaimStatus, Compare, Group, GroupKind, Role, Step, Subgroup};
+use semilla_core::{Category, ChangeSet, Claim, ClaimStatus, Compare, Fact, Group, GroupKind, Role, Step, Subgroup};
 use semilla_syntax::Workspace;
 
 use super::*;
@@ -2825,6 +2825,149 @@ fn the_text_output_shows_the_scope_of_a_long_list() {
     assert!(text.contains("      affected bodies: 22 bodies of 2 crates: `demo` (21), `other` (1) ("), "{text}");
 }
 
+#[test]
+fn a_renamed_macro_with_equal_bodies_is_one_rename_fact_with_its_call_sites() {
+    // Design 37.17: the name of a `macro_rules` macro changes, and the body stays equal.
+    let before = "macro_rules! map_either {\n    ($value:expr, $pattern:pat => $result:expr) => {\n        match $value {\n            $pattern => $result,\n        }\n    };\n}\npub fn one(a: u32) -> u32 {\n    map_either!(a, x => x + 1)\n}\npub fn two(a: u32) -> u32 {\n    map_either!(a, y => y * 2)\n}\n";
+    let after = before.replace("map_either", "map_both");
+    let report = run_derived(before, &after, &[("demo::one", equal("n0")), ("demo::two", equal("n0"))]);
+    let texts = descriptions(&report);
+    assert_eq!(texts, ["renamed macro `demo::map_either` → `demo::map_both`"], "{report:#?}");
+    let fact = &report.facts[0];
+    assert_eq!((fact.category, fact.compare), (Category::Rename, Compare::CodeEqual), "{fact:#?}");
+    assert!(report.accepted(), "{report:#?}");
+    // The call sites are under the rename fact.
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains("  ◆ f1 derived: renamed macro `demo::map_either` → `demo::map_both` [rename · code equal]\n      2 site(s): changed macro call `map_either!` → `map_both!` (in demo::one, demo::two)\n"), "{text}");
+    // A call site with one more change keeps its own fact. A changed body shows under the fact.
+    let more = after.replace("map_both!(a, y => y * 2)", "map_both!(a, y => y * 3)");
+    let report = run_derived(before, &more, &[("demo::one", different(false)), ("demo::two", different(false))]);
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains("renamed macro `demo::map_either` → `demo::map_both` [rename · code different]\n      1 site(s): changed macro call `map_either!` → `map_both!` (in demo::one)\n      ! the compiled code changes: demo::one\n"), "{text}");
+    assert!(text.contains("derived: changed macro: `map_either!(a, y => y * 2)` → `map_both!(a, y => y * 3)` at `demo::two/tail` [logic · code different]"), "{text}");
+    // A rename with a different body keeps the removed fact and the added fact.
+    let other = after.replace("$pattern => $result,", "$pattern => $result,\n            #[allow(unreachable_patterns)]\n            _ => unreachable!(),");
+    let report = run_derived(before, &other, &[("demo::one", different(false)), ("demo::two", different(false))]);
+    let texts = descriptions(&report);
+    assert!(texts.iter().any(|text| text.starts_with("removed macro `map_either`")) && texts.iter().any(|text| text.starts_with("added macro `map_both`")), "{texts:#?}");
+    assert!(!texts.iter().any(|text| text.starts_with("renamed ")), "{texts:#?}");
+}
+
+/// A fact for a test of the text output.
+fn shown_fact(id: &str, file: &str, description: &str, category: Category, compare: Compare) -> semilla_core::Fact {
+    semilla_core::Fact { id: id.into(), file: Some(file.into()), part: format!("{file}:{id}"), description: description.into(), status: "derived".into(), category, compare, ..Default::default() }
+}
+
+#[test]
+fn the_text_output_shows_a_manifest_diff_and_an_equal_spotlight_text_one_time() {
+    // Design 37.13: three manifest facts of one file have the same diff and the same long
+    // "build input" text. The diff shows one time, after the last fact. The text shows one
+    // time, with the fact numbers. Each fact keeps its line and its reason key.
+    let input = "a build input: the MIR of 7 bodies changed with no edit of their text, and this change can reach their crates. The bodies have one of these causes: `one`, `two`";
+    let mut facts: Vec<semilla_core::Fact> = [("f2", "a new dependency; "), ("f3", ""), ("f4", "a package setting that changes the build; ")]
+        .iter()
+        .map(|(id, kind)| {
+            let mut fact = shown_fact(id, "Cargo.toml", &format!("Cargo.toml: key {id} changed"), Category::Manifest, Compare::CodeDifferent);
+            fact.spotlight = true;
+            fact.spotlight_why = Some(format!("{kind}{input}"));
+            fact.content = Some("@@ line 1 @@\n- old\n+ new".into());
+            fact.build_code_change = true;
+            fact.affected = (0..7).map(|index| format!("demo::long_module_name::body_{index}")).collect();
+            fact
+        })
+        .collect();
+    facts.insert(0, shown_fact("f1", "src/lib.rs", "changed literal `1` → `2` at `demo::f/S0`", Category::Value, Compare::CodeDifferent));
+    let report = StepReport { facts, ..Default::default() };
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert_eq!(text.matches("- old").count(), 1, "{text}");
+    assert!(text.contains("      diff of `Cargo.toml` (one time, for f2 to f4):\n        @@ line 1 @@\n        - old\n        + new\n"), "{text}");
+    assert_eq!(text.matches("The bodies have one of these causes").count(), 1, "{text}");
+    assert!(text.contains(&format!("      ✗ spotlight: a new dependency; {input} (the same text for f2 to f4); it needs a reason: --reason 'Cargo.toml:f2=…'\n")), "{text}");
+    assert!(text.contains("      ✗ spotlight: a build input: the same text as f2; it needs a reason: --reason 'Cargo.toml:f3=…'\n"), "{text}");
+    assert!(text.contains("      ✗ spotlight: a package setting that changes the build; a build input: the same text as f2; it needs a reason: --reason 'Cargo.toml:f4=…'\n"), "{text}");
+    // A long list of bodies that is equal for the facts shows one time.
+    assert!(text.contains("demo::long_module_name::body_6 (the same list for f2 to f4)\n"), "{text}");
+    assert_eq!(text.matches("      affected bodies: the same list as f2\n").count(), 2, "{text}");
+    for id in ["f1", "f2", "f3", "f4"] {
+        assert_eq!(text.matches(&format!("  ◆ {id} derived: ")).count(), 1, "{text}");
+    }
+    // The build code line names the manifest facts. The facts are below the code fact.
+    assert!(text.contains(&format!("  ! {}\n      `Cargo.toml`: the manifest facts f2 to f4 below, with the diff of the file\n  ◆ f1 ", semilla_core::report::BUILD_CODE_SECTION)), "{text}");
+    // A short text that is equal for two facts shows at each fact.
+    let mut short = report.clone();
+    for fact in &mut short.facts[1..] {
+        fact.spotlight_why = Some("a new dependency".into());
+    }
+    let text = crate::views::text_report_with(std::slice::from_ref(&short), false);
+    assert_eq!(text.matches("✗ spotlight: a new dependency; it needs a reason").count(), 3, "{text}");
+}
+
+#[test]
+fn the_text_output_merges_equal_facts_and_keeps_each_number_and_place() {
+    // Design 37.16: facts with the same text, category, and compare result are one line with
+    // the count, the numbers, and the places. A different compare result keeps its own line.
+    let same = "changed `use` line: `use a::b;` → `use a::c;`";
+    let mut facts = vec![
+        shown_fact("f1", "src/one.rs", same, Category::Import, Compare::CodeEqual),
+        shown_fact("f2", "src/lib.rs", "removed `demo::gone`", Category::Removed, Compare::CodeDifferent),
+        shown_fact("f3", "src/two.rs", same, Category::Import, Compare::CodeEqual),
+        shown_fact("f4", "src/three.rs", same, Category::Import, Compare::CodeDifferent),
+        shown_fact("f5", "src/four.rs", same, Category::Import, Compare::CodeEqual),
+    ];
+    let report = StepReport { facts: facts.clone(), ..Default::default() };
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains(&format!("  ◆ f1 derived: {same} [import · code equal] × 3 (also f3, f5)\n      places: src/one.rs, src/two.rs, src/four.rs\n")), "{text}");
+    assert!(text.contains(&format!("  ◆ f4 derived: {same} [import · code different]\n")), "{text}");
+    assert_eq!(text.matches("  ◆ ").count(), 3, "{text}");
+    // A fact with a different line below it (a spotlight with its own key) keeps its own line.
+    facts[2].spotlight = true;
+    facts[2].spotlight_why = Some("a new attribute".into());
+    let report = StepReport { facts, ..Default::default() };
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(text.contains(&format!("  ◆ f1 derived: {same} [import · code equal] × 2 (also f5)\n")), "{text}");
+    assert!(text.contains(&format!("  ◆ f3 derived: {same} [import · code equal]\n      ✗ spotlight: a new attribute; it needs a reason: --reason 'src/two.rs:f3=…'\n")), "{text}");
+}
+
+#[test]
+fn the_text_output_puts_the_body_edits_with_different_code_first() {
+    // Design 37.18: the order of the facts. Each fact keeps its number.
+    let facts = vec![
+        shown_fact("f1", "Cargo.toml", "Cargo.toml: package.version \"1\" → \"2\"", Category::Manifest, Compare::NoCode),
+        shown_fact("f2", "README.md", "README.md: changed", Category::File, Compare::NoCode),
+        shown_fact("f3", "src/lib.rs", "renamed `demo::a` → `demo::b`", Category::Rename, Compare::CodeEqual),
+        shown_fact("f4", "src/lib.rs", "added `demo::new`", Category::Added, Compare::CodeDifferent),
+        shown_fact("f5", "src/lib.rs", "changed docs of `demo::b`", Category::Docs, Compare::NoCode),
+        shown_fact("f6", "src/lib.rs", "changed literal `1` → `2` at `demo::f/S0`", Category::Value, Compare::CodeDifferent),
+        shown_fact("f7", "src/lib.rs", "changed literal `3` → `3u8` at `demo::g/S0`", Category::Value, Compare::CodeEqual),
+        shown_fact("f8", "src/lib.rs", "added statement `x += 1;` at `demo::f/S1`", Category::Logic, Compare::CodeDifferent),
+    ];
+    let report = StepReport { facts, ..Default::default() };
+    let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    let ids: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("  ◆ ")).map(|line| line.split(' ').next().unwrap()).collect();
+    assert_eq!(ids, ["f6", "f8", "f4", "f3", "f7", "f1", "f2", "f5"], "{text}");
+}
+
+#[test]
+fn a_build_input_spotlight_shows_five_causes_and_the_verbose_output_shows_each_cause() {
+    // Design 37.14: eight changed dependency keys can be the cause of one changed body.
+    let key = |index: usize, version: &str| format!("dep{index} = \"{version}\"\n");
+    let manifest = |version: &str| format!("{MANIFEST}\n[dependencies]\n{}", (0..8).map(|index| key(index, version)).collect::<String>());
+    let lib = "pub fn one() -> u32 {\n    1\n}\n";
+    let (old, new) = (manifest("1.0.0"), manifest("1.1.0"));
+    let report = run_derived_files(&[("Cargo.toml", &old), ("src/lib.rs", lib)], &[("Cargo.toml", &new), ("src/lib.rs", lib)], &[("demo::one", different(false))]);
+    let fact = report.facts.iter().find(|fact| fact.spotlight_why.as_ref().is_some_and(|why| why.contains("a build input"))).unwrap_or_else(|| panic!("{report:#?}"));
+    let why = fact.spotlight_why.as_ref().unwrap();
+    assert!(why.ends_with(", and 3 more (`semilla status --verbose` shows each cause)"), "{why}");
+    assert_eq!(why.split("have one of these causes: ").nth(1).unwrap().matches("`Cargo.toml: ").count(), 5, "{why}");
+    assert_eq!(fact.causes.len(), 8, "{fact:#?}");
+    let short = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(!short.contains("each cause: "), "{short}");
+    let verbose = crate::views::text_report(std::slice::from_ref(&report));
+    assert_eq!(verbose.matches("      each cause: `Cargo.toml: ").count(), 1, "{verbose}");
+    let line = verbose.lines().find(|line| line.starts_with("      each cause: ")).unwrap();
+    assert_eq!(line.matches("`Cargo.toml: dependencies.dep").count(), 8, "{line}");
+}
+
 /// The facts of a step whose MIR oracle says that `demo::f` is equal (N0).
 /// The notes of the facts, in one text.
 fn fact_notes(facts: &[semilla_core::report::Fact]) -> String {
@@ -4252,8 +4395,11 @@ fn an_edit_in_a_file_that_no_checked_unit_reads_is_never_neutral() {
     for (old, new) in [("'/'", "':'"), ("a + b", "b + a")] {
         let after = file.replace(old, new);
         let report = run_units(&[manifest, lib, ("src/win.rs", file), ("src/nix.rs", file)], &[manifest, lib, ("src/win.rs", &after), ("src/nix.rs", file)], &oracle, &[]);
+        // The edit fact has its text and no compare. The file has the one spotlight (design 37.3).
         let fact = report.facts.first().unwrap_or_else(|| panic!("{report:#?}"));
-        assert!(!report.accepted() && fact.spotlight && fact.compare != Compare::CodeEqual, "{report:#?}");
+        assert!(!report.accepted() && !fact.spotlight && fact.compare == Compare::NoCompare, "{report:#?}");
+        let fact = report.facts.iter().find(|fact| fact.spotlight).unwrap_or_else(|| panic!("{report:#?}"));
+        assert!(report.facts.iter().all(|fact| fact.compare != Compare::CodeEqual) && report.facts.iter().filter(|fact| fact.spotlight).count() == 1, "{report:#?}");
         assert!(fact.spotlight_why.as_deref().unwrap().contains("no checked unit reads the file `src/win.rs`: `#[cfg(windows)]` at `demo::win`"), "{fact:#?}");
         // Negative: the same edit in the file that the unit reads.
         let report = run_units(&[manifest, lib, ("src/win.rs", file), ("src/nix.rs", file)], &[manifest, lib, ("src/win.rs", file), ("src/nix.rs", &after)], &oracle, &[]);
@@ -5599,7 +5745,8 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
 
     // The net: a kind of text with no fact kind (`default` on a method of an impl).
     let (text, class, spotlight) = one("    pub fn new(x: u8)", "    pub default fn new(x: u8)");
-    assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new (x : u8) -> Table` → `pub default fn new (x : u8) -> Table` {api}"));
+    assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new (x : u8) -> Table …` → `pub default fn new (x : u8) -> Table …` {api}"));
+    // Design 37.1, rule 3: the text has no body, thus each side has a cut mark.
     assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // The net fact of an item that no different crate can use has the class `other` too.
     let (text, class, _) = one("    fn go(&self) -> u8 {", "    default fn go(&self) -> u8 {");
@@ -6185,4 +6332,333 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     let (text, _, level, api) = one("#[derive(Clone)]\n", "");
     assert_eq!(text, format!("attributes of `demo::Kind`: derive removed: Clone {API}"));
     assert_eq!((level.as_str(), api), ("major", vec!["`Kind` no longer has `Clone` (the public API can change)".to_string()]));
+}
+
+/// The fact texts of a report, with the category.
+fn fact_lines(report: &StepReport) -> Vec<String> {
+    report.facts.iter().map(|fact| format!("{} [{}]", fact.description, fact.category.name())).collect()
+}
+
+// Batch 7c, part 1.1 (design 37.1).
+
+#[test]
+fn a_trait_method_and_an_inherent_method_with_one_path_do_not_pair() {
+    let before = "pub trait Gen {\n    fn size(&self) -> usize;\n}\n";
+    let after = "pub struct Gen {\n    size: usize,\n}\n\nimpl Gen {\n    pub fn size(&self) -> usize {\n        self.size\n    }\n}\n";
+    let report = run_derived(before, after, &[("demo::Gen::size", BodyStatus::AfterOnly)]);
+    let lines = fact_lines(&report);
+    assert!(lines.iter().any(|line| line.starts_with("removed `demo::Gen` (a trait)") && line.ends_with("[removed]")), "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("added `demo::Gen` (a struct)") && line.ends_with("[added]")), "{lines:#?}");
+    // No fact pairs the method of the trait with the method of the impl.
+    assert!(!lines.iter().any(|line| line.contains("visibility of") || line.contains("changed source text") || line.contains("changed item")), "{lines:#?}");
+    // The same rule with no type of the name: the methods are two entities.
+    let after = "pub struct Other;\n\nimpl Gen {\n    pub fn size(&self) -> usize {\n        1\n    }\n}\n";
+    let lines = fact_lines(&run_derived(before, after, &[("demo::Gen::size", BodyStatus::AfterOnly)]));
+    assert!(lines.iter().any(|line| line.starts_with("added `demo::Gen::size` (a method of an impl)")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.contains("changed source text")), "{lines:#?}");
+}
+
+#[test]
+fn a_body_on_one_side_only_is_a_fact_with_the_body_text() {
+    let before = "pub trait Price {\n    fn label(&self) -> u32;\n    fn rate(&self) -> u32 {\n        7\n    }\n}\n";
+    let after = "pub trait Price {\n    fn label(&self) -> u32 {\n        41 + 1\n    }\n    fn rate(&self) -> u32;\n}\n";
+    let report = run(before, after, vec![], &[("demo::Price::label", BodyStatus::AfterOnly), ("demo::Price::rate", BodyStatus::BeforeOnly)], None);
+    let lines = fact_lines(&report);
+    assert!(lines.contains(&"body added to `demo::Price::label`: `{ 41 + 1 }` [added]".to_string()), "{lines:#?}");
+    assert!(lines.contains(&"body removed from `demo::Price::rate`: `{ 7 }` [removed]".to_string()), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.contains("changed source text")), "{lines:#?}");
+    for fact in &report.facts {
+        assert_eq!(fact.compare, Compare::CodeDifferent, "{fact:#?}");
+    }
+    // A different body gives a different text.
+    let other = after.replace("41 + 1", "41 + 2");
+    assert_ne!(fact_lines(&run(before, &other, vec![], &[("demo::Price::label", BodyStatus::AfterOnly), ("demo::Price::rate", BodyStatus::BeforeOnly)], None)), lines);
+    // A long body has a cut mark, and the content has the full text.
+    let long = after.replace("41 + 1", &vec!["41 + 1"; 30].join(" + "));
+    let report = run(before, &long, vec![], &[("demo::Price::label", BodyStatus::AfterOnly), ("demo::Price::rate", BodyStatus::BeforeOnly)], None);
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("body added")).unwrap();
+    assert!(fact.description.contains('…'), "{}", fact.description);
+    assert_eq!(fact.content.as_deref().map(|content| content.matches("41 + 1").count()), Some(30));
+}
+
+// Batch 7c, part 1.2 (design 37.2).
+
+#[test]
+fn the_impl_blocks_of_a_renamed_type_pair_with_a_changed_header() {
+    let before = "pub struct Walk<'a> {\n    pub at: &'a [u8],\n}\n\nimpl<'a> Walk<'a> {\n    pub fn len(&self) -> usize {\n        self.at.len()\n    }\n}\n\nimpl<'a> Iterator for Walk<'a> {\n    type Item = u8;\n    fn next(&mut self) -> Option<u8> {\n        let (first, rest) = self.at.split_first()?;\n        self.at = rest;\n        Some(*first)\n    }\n}\n";
+    let after = "pub struct WalkWith<'a, H> {\n    pub at: &'a [u8],\n    pub h: H,\n}\n\nimpl<'a, H: Copy> WalkWith<'a, H> {\n    pub fn len(&self) -> usize {\n        self.at.len()\n    }\n}\n\nimpl<'a, H: Copy> Iterator for WalkWith<'a, H> {\n    type Item = u8;\n    fn next(&mut self) -> Option<u8> {\n        let (first, rest) = self.at.split_first()?;\n        self.at = rest;\n        Some(*first)\n    }\n}\n";
+    let rename = || vec![claim("c1", "rename", Some("demo::Walk"), serde_json::json!({"to": "WalkWith"}))];
+    let bodies = [("demo::WalkWith::len", equal("n0")), ("<demo::WalkWith<'a, H> as core::iter::Iterator>::next", equal("n0"))];
+    let report = run(before, after, rename(), &bodies, None);
+    let lines = fact_lines(&report);
+    // One declaration fact for each changed header: the old header and the new header.
+    assert!(lines.iter().any(|line| line.starts_with("generics of `demo::impl <WalkWith as Iterator>`: `impl < 'a > Iterator for Walk < 'a > { }` → `impl < 'a , H : Copy > Iterator for WalkWith < 'a , H > { }`") && line.ends_with("[declaration]")), "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("generics of `demo::impl WalkWith`: `impl < 'a > Walk < 'a > { }` → `impl < 'a , H : Copy > WalkWith < 'a , H > { }`")), "{lines:#?}");
+    // No impl shows as removed or added.
+    assert!(!lines.iter().any(|line| line.contains("trait impl") || line.starts_with("removed") || line.starts_with("added `demo::impl")), "{lines:#?}");
+    assert!(report.uncovered.iter().all(|open| !open.description.contains("impl")), "{report:#?}");
+
+    // A needle in a member body is an edit of that member, with its text.
+    let needle = after.replace("Some(*first)", "Some(*first ^ 1)");
+    let report = run_derived_claims(before, &needle, rename(), &bodies);
+    let lines = fact_lines(&report);
+    assert!(lines.iter().any(|line| line.contains("`*first` → `*first ^ 1`") && line.contains("demo::<WalkWith as Iterator>::next")), "{lines:#?}");
+
+    // Two new blocks fit the old block: no pair, and a note.
+    let two = after.replace("impl<'a, H: Copy> Iterator for WalkWith<'a, H> {", "impl<'a> Iterator for WalkWith<'a, u16> {\n    type Item = u8;\n    fn next(&mut self) -> Option<u8> {\n        None\n    }\n}\n\nimpl<'a> Iterator for WalkWith<'a, u8> {");
+    let report = run_derived_claims(before, &two, rename(), &bodies);
+    let lines = fact_lines(&report);
+    assert!(report.notes.iter().any(|note| note.starts_with("Semilla does not pair the impl blocks `impl <Walk as Iterator>` and `impl <WalkWith as Iterator>`")), "{report:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("trait impl `<Walk<'a> as Iterator>` removed")), "{lines:#?}");
+    assert_eq!(lines.iter().filter(|line| line.starts_with("trait impl `<WalkWith<'a, u") && line.contains(" added")).count(), 2, "{lines:#?}");
+}
+
+#[test]
+fn two_impl_blocks_that_differ_only_in_lifetimes_are_one_impl() {
+    // Design 37.2 (addendum): the header loses its lifetime, and two match arms change places.
+    let before = "pub struct Attrs;\npub struct Node {\n    pub kind: u8,\n}\npub trait Parse<A> {\n    fn parse(self, attrs: A) -> u32;\n}\npub trait Shape {}\n\nimpl<'a> Parse<Attrs> for &'a mut Node {\n    fn parse(self, _attrs: Attrs) -> u32 {\n        match self.kind {\n            0 => 10,\n            1 => 20,\n            _ => 30,\n        }\n    }\n}\n\nimpl<'a> dyn Shape + 'a {\n    pub fn area(&self) -> u32 {\n        1\n    }\n}\n";
+    let header = before.replace("impl<'a> Parse<Attrs> for &'a mut Node {", "impl Parse<Attrs> for &mut Node {").replace("impl<'a> dyn Shape + 'a {", "impl dyn Shape {");
+    let after = header.replace("            0 => 10,\n            1 => 20,\n", "            1 => 20,\n            0 => 10,\n").replace("        1\n    }\n}\n", "        2\n    }\n}\n");
+    assert!(after != header && header != before);
+    let bodies = [("demo::<&mutNode as Parse>::parse", different(false)), ("demo::dynShape::area", different(false))];
+    let report = run_derived(before, &after, &bodies);
+    let lines = fact_lines(&report);
+    // One declaration fact for each changed header.
+    let headers: Vec<&String> = lines.iter().filter(|line| line.ends_with("[declaration]")).collect();
+    assert_eq!(headers.len(), 2, "{lines:#?}");
+    assert!(headers[0].starts_with("generics of `demo::impl <&mutNode as Parse>`: `impl < 'a > Parse < Attrs > for & 'a mut Node { }` → `impl Parse < Attrs > for & mut Node { }`"), "{lines:#?}");
+    assert!(headers[1].starts_with("generics of `demo::impl dynShape`: `impl < 'a > dyn Shape + 'a { }` → `impl dyn Shape { }`"), "{lines:#?}");
+    // Each edit in a member is a fact with its text.
+    for text in [
+        "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [logic]",
+        "changed literal `10` → `20` at `demo::<&mutNode as Parse>::parse/S0/arm[0].body` [value]",
+        "changed pattern `1` → `0` at `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [logic]",
+        "changed literal `20` → `10` at `demo::<&mutNode as Parse>::parse/S0/arm[1].body` [value]",
+        "changed literal `1` → `2` at `demo::dynShape::area/tail` [value]",
+    ] {
+        assert!(lines.contains(&text.to_string()), "{text}\n{lines:#?}");
+    }
+    // No impl shows as removed or added.
+    assert_eq!(lines.len(), 7, "{lines:#?}");
+    assert!(report.uncovered.is_empty(), "{report:#?}");
+
+    // A reason key with the lifetime of the old header finds the item (design 37.2).
+    let (_dir, new) = load(&after);
+    assert_eq!(crate::impl_name_matches("demo::<&'a mut Node as Parse<Attrs>>::parse", &new), ["demo::<&mutNode as Parse>::parse"]);
+
+    // Two blocks of the new tree fit the old block: no pair.
+    let two = format!("{after}\nimpl Parse<Attrs> for &'static mut Node {{\n    fn parse(self, _attrs: Attrs) -> u32 {{\n        0\n    }}\n}}\n");
+    let report = run_derived(before, &two, &bodies);
+    let lines = fact_lines(&report);
+    assert!(lines.iter().any(|line| line.starts_with("trait impl `<&'a mut Node as Parse<Attrs>>` removed with: `fn parse`")), "{lines:#?}");
+    assert_eq!(lines.iter().filter(|line| line.starts_with("trait impl `<&") && line.contains(" added with: `fn parse`")).count(), 2, "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.contains("demo::impl <&mutNode as Parse>")), "{lines:#?}");
+}
+
+/// Runs a step with claims, and derives the facts of the edits.
+fn run_derived_claims(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)]) -> StepReport {
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let step = step(claims);
+    let oracle = FakeBodies(bodies.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle, true).report
+}
+
+// Batch 7c, part 1.3 (design 37.3).
+
+#[test]
+fn a_module_file_under_a_condition_that_is_off_gets_the_usual_facts() {
+    let root = "#[cfg_attr(unix, path = \"sys/unix.rs\")]\n#[cfg_attr(windows, path = \"sys/windows.rs\")]\nmod sys;\n#[cfg(windows)]\nmod win;\npub fn live() -> u32 {\n    1\n}\n";
+    let unix = "pub fn open(a: u32) -> u32 {\n    a + 1\n}\n";
+    let windows = "pub fn open(a: u32) -> u32 {\n    a + 2\n}\npub fn close(a: u32) -> u32 {\n    a\n}\n";
+    let win = "pub fn handle(a: u32) -> u32 {\n    a * 4\n}\n";
+    let before = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/sys/unix.rs", unix), ("src/sys/windows.rs", windows), ("src/win.rs", win), ("src/free.rs", "pub fn free() {}\n")];
+    let windows_new = windows.replace("a + 2", "a + 3").replace("pub fn close(a: u32) -> u32 {\n    a\n}\n", "pub fn shut(a: u32) -> u32 {\n    a\n}\n");
+    let win_new = win.replace("a * 4", "a * 5");
+    let after = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/sys/unix.rs", unix), ("src/sys/windows.rs", windows_new.as_str()), ("src/win.rs", win_new.as_str()), ("src/free.rs", "pub fn free() { let _ = 1; }\n")];
+    let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0")), ("demo::sys::open".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs", "src/sys/unix.rs"], known: true };
+    let report = run_units(&before, &after, &oracle, &[]);
+    let lines: Vec<String> = report.facts.iter().map(|fact| format!("{} [{} · {}]{}", fact.description, fact.category.name(), fact.compare.name(), if fact.spotlight { " spotlight" } else { "" })).collect();
+    // Each file of the module is a twin module. An edit in a file that is off has its text.
+    assert!(lines.contains(&"changed literal `2` → `3` at `demo::sys#1::open/tail/rhs` [value · no compare]".to_string()), "{lines:#?}");
+    assert!(lines.contains(&"changed literal `4` → `5` at `demo::win::handle/tail/rhs` [value · no compare]".to_string()), "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("removed `demo::sys#1::close`") && line.ends_with("[removed · no compare]")), "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("added `demo::sys#1::shut`") && line.ends_with("[added · no compare]")), "{lines:#?}");
+    // One spotlight for each file, with the file as the key of the reason.
+    for file in ["src/sys/windows.rs", "src/win.rs"] {
+        let facts: Vec<&Fact> = report.facts.iter().filter(|fact| fact.spotlight && fact.part == file).collect();
+        assert_eq!(facts.len(), 1, "{file}: {lines:#?}");
+        assert!(facts[0].description.starts_with(&format!("{file}: each edit of this file is in code that no checked configuration compiles")), "{lines:#?}");
+        assert!(facts[0].spotlight_why.as_deref().unwrap_or("").contains(&format!("no checked unit reads the file `{file}`")), "{:#?}", facts[0]);
+    }
+    assert_eq!(report.facts.iter().filter(|fact| fact.spotlight && !fact.description.starts_with("src/free.rs")).count(), 2, "{lines:#?}");
+    assert!(report.spotlight.contains(&"inactive code: src/sys/windows.rs (no checked unit reads the file)".to_string()), "{:#?}", report.spotlight);
+    // A file that no `mod` declaration names keeps the file fact.
+    assert!(lines.iter().any(|line| line.starts_with("src/free.rs: changed [file")), "{lines:#?}");
+    // The reason of the file accepts the spotlight.
+    let report = run_units(&before, &after, &oracle, &[("src/sys/windows.rs", "the code for Windows"), ("src/win.rs", "the code for Windows"), ("src/free.rs:", "no module")]);
+    assert!(report.facts.iter().filter(|fact| fact.spotlight).all(|fact| fact.reason.is_some()), "{report:#?}");
+
+    // A file of the module that does not parse keeps the file fact and the spotlight.
+    let broken = windows_new.replace("pub fn shut(a: u32)", "pub fn shut(a: u32");
+    let mut bad = after;
+    bad[3] = ("src/sys/windows.rs", broken.as_str());
+    let report = run_units(&before, &bad, &oracle, &[]);
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("src/sys/windows.rs: changed")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(fact.category, Category::File);
+    assert!(fact.spotlight && fact.spotlight_why.as_deref().unwrap_or("").starts_with("Semilla cannot parse this file: "), "{fact:#?}");
+    // No item of the file shows as removed.
+    assert!(!report.facts.iter().any(|fact| fact.description.contains("demo::sys#1")), "{report:#?}");
+}
+
+// Batch 7c, part 3.3 (design 37.5).
+
+#[test]
+fn a_file_that_does_not_parse_does_not_stop_the_step() {
+    let root = "mod a;\nmod b;\npub fn live() -> u32 {\n    1\n}\n";
+    let a = "pub fn first() -> u32 {\n    1\n}\n";
+    let b = "pub fn second() -> u32 {\n    2\n}\n";
+    let before = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/a.rs", a), ("src/b.rs", b)];
+    let after = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/a.rs", "pub fn first() -> u32 {\n    1 +\n}\n"), ("src/b.rs", "pub fn second() -> u32 {\n    3\n}\n")];
+    let report = run_derived_files(&before, &after, &[("demo::b::second", different(false))]);
+    let lines = fact_lines(&report);
+    assert!(report.errors.is_empty(), "{report:#?}");
+    let fact = report.facts.iter().find(|fact| fact.description == "src/a.rs: changed").unwrap_or_else(|| panic!("{lines:#?}"));
+    assert_eq!(fact.category, Category::File);
+    let why = fact.spotlight_why.as_deref().unwrap_or("");
+    assert!(fact.spotlight && why.starts_with("Semilla cannot parse this file: ") && why.contains("line 3") && why.ends_with("in the tree after the step"), "{fact:#?}");
+    // The diff of the file is the content of the fact.
+    assert!(fact.content.as_deref().is_some_and(|content| content.contains("1 +")), "{fact:#?}");
+    // The other files have their usual facts, and no item of the file shows as removed.
+    assert!(lines.iter().any(|line| line.starts_with("changed literal `2` → `3` at `demo::b::second/tail`")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.contains("demo::a::first")), "{lines:#?}");
+
+    // The 2015 edition: a parameter of a trait method with no name. The file parses, and a
+    // note says so.
+    let old_form = "pub trait Shrink {\n    fn shrink(&self, u8, bool) -> u32;\n    fn size(&self) -> u32 {\n        1\n    }\n}\n";
+    let before = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/a.rs", old_form), ("src/b.rs", b)];
+    let changed = old_form.replace("        1\n", "        2\n");
+    let after = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/a.rs", changed.as_str()), ("src/b.rs", b)];
+    let report = run_derived_files(&before, &after, &[("demo::a::Shrink::size", different(false))]);
+    let lines = fact_lines(&report);
+    assert!(lines.iter().any(|line| line.starts_with("changed literal `1` → `2` at `demo::a::Shrink::size/tail`")), "{lines:#?}");
+    assert!(report.notes.iter().any(|note| note.starts_with("Semilla read `src/a.rs` as code of the 2015 edition: 2 parameter(s)")), "{report:#?}");
+    assert!(!lines.iter().any(|line| line.starts_with("src/a.rs")), "{lines:#?}");
+}
+
+// Batch 7c, part 2 (design 37.4).
+
+#[test]
+fn a_rename_key_with_a_twin_number_gets_the_name_of_the_body() {
+    // A module and a function have the name `encode`: the items of the module have a number.
+    let module = "pub mod encode {\n    pub fn max_len(a: usize) -> usize {\n        a + 1\n    }\n    pub fn other() {}\n}\npub fn encode(a: usize) -> usize {\n    encode::max_len(a)\n}\n#[cfg(unix)]\npub fn twin() -> u8 {\n    1\n}\n#[cfg(windows)]\npub fn twin() -> u8 {\n    2\n}\n";
+    let (_a, before) = load_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", module)]);
+    let (_b, after) = load_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &module.replace("max_len", "max_len_x"))]);
+    assert!(before.items.contains_key("demo::encode#0::max_len"), "{:?}", before.items.keys().collect::<Vec<_>>());
+    let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> { pairs.iter().map(|(old, new)| (old.to_string(), new.to_string())).collect() };
+    let renames = map(&[("demo::encode#0::max_len", "demo::encode#0::max_len_x"), ("demo::plain", "demo::plain_x")]);
+    assert_eq!(checks::body_renames(&renames, &before, &after), map(&[("demo::encode::max_len", "demo::encode::max_len_x"), ("demo::plain", "demo::plain_x")]));
+    // Two twins have one body name (`demo::twin`): the key is not unique, and it stays as it is.
+    let renames = map(&[("demo::twin#0", "demo::twin_x")]);
+    assert_eq!(checks::body_renames(&renames, &before, &before), renames);
+    // The module twin itself: the function `encode` has the same body name.
+    let renames = map(&[("demo::encode#0", "demo::enc")]);
+    assert_eq!(checks::body_renames(&renames, &before, &before), renames);
+    // The function twin declares `max_len` in its body: the body name is not unique, so the
+    // key stays as it is.
+    let inner = module.replace("    encode::max_len(a)\n", "    fn max_len(a: usize) -> usize {\n        a\n    }\n    max_len(a)\n");
+    let (_c, before) = load_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &inner)]);
+    let renames = map(&[("demo::encode#0::other", "demo::encode#0::other_x")]);
+    assert_eq!(checks::body_renames(&renames, &before, &before), map(&[("demo::encode::other", "demo::encode::other_x")]));
+    let renames = map(&[("demo::encode#0::max_len", "demo::encode#0::max_len_x")]);
+    assert_eq!(checks::body_renames(&renames, &before, &before), renames);
+    assert_eq!(checks::no_twin_numbers("a::b#0::c#12.d"), "a::b::c.d");
+    assert_eq!(checks::no_twin_numbers("a::use#0x::b#"), "a::use#0x::b#");
+}
+
+/// Batch 7c, part 6.1 (design 37.20): the index of the items by file gives the answer of the
+/// full search for each name and each line. The fixture has a nested function, two files with
+/// an equal last name, two functions on one line, and a constant of a bench target.
+#[test]
+fn the_item_index_gives_the_answer_of_the_full_search() {
+    let files = [
+        ("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bench]]\nname = \"hex\"\nharness = false\n"),
+        ("src/lib.rs", "pub mod a;\npub mod b;\npub fn outer(x: u32) -> u32 {\n    fn inner(y: u32) -> u32 {\n        y + 1\n    }\n    inner(x)\n}\npub fn one() -> u32 { 1 } pub fn two() -> u32 { 2 }\npub const LIMIT: u32 = 3;\npub static NAME: &str = \"n\";\n"),
+        ("src/a/mod.rs", "pub fn get() -> u32 {\n    1\n}\npub const LIMIT: u32 = 4;\n"),
+        ("src/b/mod.rs", "pub fn get() -> u32 {\n    2\n}\npub struct S;\nimpl S {\n    pub fn get(&self) -> u32 {\n        3\n    }\n}\n"),
+        ("benches/hex.rs", "const DATA: [u8; 2] = [1, 2];\nfn main() {\n    let _ = DATA;\n}\n"),
+    ];
+    let (_dir, workspace) = load_files(&files);
+    let index = &workspace.body_items().expect("the items did not change").by_file;
+    assert!(index.values().flatten().count() >= 10, "{index:?}");
+    let mut names: Vec<String> = workspace.items.keys().cloned().collect();
+    names.extend(["hex::DATA", "demo::outer::{closure#0}", "demo::LIMIT", "demo::none", "LIMIT", "main"].map(String::from));
+    let mut spans: Vec<Option<(String, usize)>> = vec![None];
+    for (file, text) in &files[1..] {
+        for line in 0..text.lines().count() + 3 {
+            spans.push(Some((file.to_string(), line)));
+            spans.push(Some((format!("/abs/demo/{file}"), line)));
+        }
+    }
+    spans.push(Some(("mod.rs".to_string(), 1)));
+    spans.push(Some(("other.rs".to_string(), 1)));
+    let mut found = 0;
+    for name in &names {
+        for span in &spans {
+            let scan = crate::checks::find_scan(name, span.as_ref(), &workspace);
+            assert_eq!(crate::checks::find_indexed(name, span.as_ref(), &workspace, index), scan, "{name} {span:?}");
+            // The first answer comes from the index, and the second answer from the kept answers.
+            for _ in 0..2 {
+                assert_eq!(crate::checks::find_item_by(name, span.as_ref(), &workspace), if crate::is_test_harness_main(name) { None } else { scan.clone() }, "{name} {span:?}");
+            }
+            found += usize::from(scan.is_some());
+        }
+    }
+    assert!(found > 100, "{found}");
+    // A nested function is not an item. Its line gives the function around it.
+    assert_eq!(crate::checks::find_item_by("x", Some(&("src/lib.rs".to_string(), 5)), &workspace).as_deref(), Some("demo::outer"));
+    // A method is smaller than its `impl` block and has its own line range.
+    assert_eq!(crate::checks::find_item_by("x", Some(&("src/b/mod.rs".to_string(), 7)), &workspace).as_deref(), Some("demo::b::S::get"));
+    // The constant of the bench target: the name has no item, the span and the last name do.
+    assert_eq!(crate::checks::find_item_by("hex::DATA", Some(&("benches/hex.rs".to_string(), 1)), &workspace), crate::checks::find_scan("hex::DATA", Some(&("benches/hex.rs".to_string(), 1)), &workspace));
+    // A file name that fits two files: the first path of the smallest items.
+    assert_eq!(crate::checks::find_item_by("x", Some(&("mod.rs".to_string(), 1)), &workspace), crate::checks::find_scan("x", Some(&("mod.rs".to_string(), 1)), &workspace));
+    // A workspace with a different count of items does not use the old index.
+    let mut changed = workspace.clone();
+    let _ = changed.body_items();
+    let item = changed.items.remove("demo::outer").expect("the outer function");
+    assert!(changed.body_items().is_none());
+    assert_eq!(crate::checks::find_item_by("x", Some(&("src/lib.rs".to_string(), 5)), &changed), None, "{}", item.path);
+}
+
+/// Batch 7c, part 6.1 (design 37.20): the rules of the build configuration read a list of an
+/// item one time. An equal list of a different configuration adds nothing, so the facts of a
+/// body that two configurations compile are those of one configuration.
+#[test]
+fn an_equal_list_of_a_body_is_read_one_time() {
+    let mut seen = std::collections::HashMap::new();
+    let list = |words: &[&str]| words.iter().map(|word| word.to_string()).collect::<Vec<String>>();
+    assert!(crate::opaque::first_list(&mut seen, "demo::f", &list(&["cfg demo::A", "u8"])));
+    assert!(!crate::opaque::first_list(&mut seen, "demo::f", &list(&["cfg demo::A", "u8"])));
+    // A different list of the item, and the list of a different item, are new.
+    assert!(crate::opaque::first_list(&mut seen, "demo::f", &list(&["u8"])));
+    assert!(crate::opaque::first_list(&mut seen, "demo::g", &list(&["cfg demo::A", "u8"])));
+    assert!(crate::opaque::first_list(&mut seen, "demo::f", &list(&[])));
+    assert!(!crate::opaque::first_list(&mut seen, "demo::f", &list(&[])));
+    assert!(!crate::opaque::first_list(&mut seen, "demo::f", &list(&["u8"])));
+    // The rule itself: a second call of `note` and of `names` with the list changes no answer.
+    let (_dir, workspace) = load("#[cfg(unix)]\npub struct A(u8);\n#[cfg(not(unix))]\npub struct A(u16);\npub fn f(a: A) -> A { a }\n");
+    let state = |times: usize| {
+        let opaque = crate::opaque::Opaque::new(&workspace, &workspace);
+        let span = ("src/lib.rs".to_string(), 5);
+        let names = [crate::ExpandedName { word: "A".into(), count: 1, line: 5, ..Default::default() }];
+        for _ in 0..times {
+            opaque.note(true, "demo::f", Some(&span), &list(&["touch demo::A"]));
+            crate::OpaqueInputs::names(&opaque, true, "demo::f", Some(&span), &names);
+        }
+        let callee = crate::OpaqueInputs::callee(&opaque, true, "demo::f", Some(&span), &list(&["touch demo::A"]));
+        let layout = crate::OpaqueInputs::layout(&opaque, true, "demo::f", Some(&span), &list(&["touch demo::A"]));
+        (callee, layout)
+    };
+    assert_eq!(state(1), state(3));
 }

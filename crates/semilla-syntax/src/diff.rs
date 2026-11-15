@@ -230,11 +230,16 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
     let mut matched_after = BTreeSet::new();
     let mut net_files = (crate::net::Files::default(), crate::net::Files::default());
 
+    // A file that the loader cannot parse on one side (design 37.5): the file edit has the
+    // change. The items of the file on the other side are not removed and not added.
+    let skip = unparsed_files(before, after);
     let (before_uses, after_uses) = (uses_by_module(before), uses_by_module(after));
-    for (path, item) in before.items.iter().filter(|(_, item)| item.kind != ItemKind::Use) {
+    for (path, item) in before.items.iter().filter(|(_, item)| item.kind != ItemKind::Use && !skip.contains(&item.file)) {
         let target = renames.items.get(path).cloned().unwrap_or_else(|| path.clone());
         match after.items.get(&target) {
-            Some(other) if other.kind == item.kind => {
+            // Two entities of a different kind do not pair by path (design 37.1): a method of
+            // a trait and a method of an inherent impl are two different entities.
+            Some(other) if other.kind == item.kind && in_trait(before, path) == in_trait(after, &target) => {
                 matched_after.insert(target.clone());
                 let start = edits.len();
                 diff_item(item, other, renames, &mut edits);
@@ -245,7 +250,7 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
             _ => edits.push(item_edit(EditKind::ItemRemoved, Some(item), None)),
         }
     }
-    for (path, item) in after.items.iter().filter(|(_, item)| item.kind != ItemKind::Use) {
+    for (path, item) in after.items.iter().filter(|(_, item)| item.kind != ItemKind::Use && !skip.contains(&item.file)) {
         if !matched_after.contains(path) {
             edits.push(item_edit(EditKind::ItemAdded, None, Some(item)));
         }
@@ -254,8 +259,8 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
     // `use` items have no stable position, so they are compared as a set in each module.
     let modules: BTreeSet<&String> = before_uses.keys().chain(after_uses.keys()).collect();
     for module in modules {
-        let old = before_uses.get(module).cloned().unwrap_or_default();
-        let new = after_uses.get(module).cloned().unwrap_or_default();
+        let old: Vec<&Item> = before_uses.get(module).into_iter().flatten().copied().filter(|item| !skip.contains(&item.file)).collect();
+        let new: Vec<&Item> = after_uses.get(module).into_iter().flatten().copied().filter(|item| !skip.contains(&item.file)).collect();
         // The visibility and the attributes are parts of a `use` line (batch 6a, A6): `pub use`
         // that changes to `use` removes a public name.
         let head = |item: &Item| (item.vis.replace(' ', ""), item.attrs.clone());
@@ -272,6 +277,9 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
     let modules: BTreeSet<&String> = before.inner_attrs.keys().chain(after.inner_attrs.keys()).collect();
     for module in modules {
         let (old, new) = (before.inner_attrs.get(module), after.inner_attrs.get(module));
+        if [old, new].iter().flatten().any(|(file, _)| skip.contains(file)) {
+            continue;
+        }
         // A removed target or a removed module file (batch 7b, part 5.2): its inner attributes
         // go with it. The fact of a removed item of the module shows the removal. With no
         // such fact, the attribute edit stays: it is then the only fact of the removal.
@@ -301,6 +309,19 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
     }
     edits.extend(file_edits(before, after));
     edits
+}
+
+/// The files that the loader parses on one side only because of a parse error (design 37.5):
+/// each file with a parse error, and each file that a side with a parse error has and does not
+/// parse (a module of a file that does not parse).
+pub fn unparsed_files(before: &Workspace, after: &Workspace) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = before.parse_errors.keys().chain(after.parse_errors.keys()).cloned().collect();
+    for (side, other) in [(before, after), (after, before)] {
+        if !side.parse_errors.is_empty() {
+            out.extend(other.parsed_files.iter().filter(|file| side.rust_files.contains_key(*file) && !side.parsed_files.contains(*file)).cloned());
+        }
+    }
+    out
 }
 
 /// The file edits: one edit for each path whose entry (content or mode) or text differs, except a
@@ -357,6 +378,12 @@ fn file_edits(before: &Workspace, after: &Workspace) -> Vec<Edit> {
         edits.push(edit);
     }
     edits
+}
+
+/// True if the item is a member of a trait definition (`shop::Price::label` of
+/// `trait Price`). A method of an inherent impl of a type has the same path form.
+pub fn in_trait(workspace: &Workspace, path: &str) -> bool {
+    path.rsplit_once("::").and_then(|(owner, _)| workspace.items.get(owner)).is_some_and(|owner| owner.kind == ItemKind::Trait)
 }
 
 fn uses_by_module(workspace: &Workspace) -> BTreeMap<String, Vec<&Item>> {
@@ -434,7 +461,9 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
     if before.vis != after.vis {
         edits.push(attribute_edit(EditKind::Visibility, View::Signature, before.vis.clone(), after.vis.clone()));
     }
-    if before.kind != ItemKind::Mod && apply(&before.signature) != after.signature {
+    // A signature with an equal text on the two sides did not change (design 37.10): a rename of
+    // a name applies only where the text changed. A different item can have the same name.
+    if before.kind != ItemKind::Mod && before.signature != after.signature && apply(&before.signature) != after.signature {
         // A function signature: one edit for each changed part (design 22.3, A5).
         let parts = match (&before.sig, &after.sig) {
             (Some(old), Some(new)) => signature_parts(before, after, old, new, renames),
@@ -496,6 +525,18 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
             }
             None => edits.push(list_edit(before.members.join("\n"), after.members.join("\n"))),
         }
+    }
+    // A function with a body on one side only (design 37.1): a trait method gets a default
+    // body, or its default body goes away. The edit has the full text of the body.
+    if before.kind == ItemKind::Fn && before.body.is_some() != after.body.is_some() {
+        let body_text = |item: &Item| item.body.as_ref().map(|body| node_source(item, body).unwrap_or_else(|| body.text.clone()));
+        let mut edit = attribute_edit(EditKind::Signature, View::Syntax, String::new(), String::new());
+        (edit.text_before, edit.text_after) = (body_text(before), body_text(after));
+        (edit.source_before, edit.source_after) = (edit.text_before.clone(), edit.text_after.clone());
+        edit.node_before = before.body.as_ref().map(|_| "body");
+        edit.node_after = after.body.as_ref().map(|_| "body");
+        edit.block_like = true;
+        edits.push(edit);
     }
     if let (Some(old), Some(new)) = (&before.body, &after.body) {
         let mut context = Context { renames, item_before: &before.path, item_after: &after.path, file: &after.file, source_before: before, source_after: after, edits: Vec::new() };
@@ -677,8 +718,12 @@ fn dedent(text: &str, column: usize) -> String {
 }
 
 impl Context<'_> {
+    /// True if a node did not change: the text is equal, or the text with the renames is equal.
+    /// A rename of a name applies only where the text changed (design 37.10): a different item
+    /// can have the same name (`a.len()` and `b.len()`). A place that keeps the old name and gets
+    /// a different meaning shows in the compare of the compiled code.
     fn same(&self, before: &Node, after: &Node) -> bool {
-        self.renames.apply(self.item_before, &before.text) == after.text
+        before.text == after.text || self.renames.apply(self.item_before, &before.text) == after.text
     }
 
     fn anchor(item: &str, path: &[String]) -> Anchor {

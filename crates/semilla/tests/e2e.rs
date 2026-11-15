@@ -2381,8 +2381,8 @@ fn a_target_file_is_rust_code_whatever_its_name() {
     // The driver records no unit for a root file with no `.rs` suffix. So no checked unit
     // reads the file, and the edit has no body evidence: it needs a reason (batch 5w, part A).
     let out = run(repo, &["step", "reword the license"], 1);
-    assert!(out.contains("no checked unit reads the file `crates/shop-app/LICENSE.txt`") && out.contains("--reason 'shop_app::license::limit/S0/cond=…'"), "{out}");
-    let out = run(repo, &["step", "reword the license", "--reason", "shop_app::license::limit/S0/cond=the limit is in the range"], 0);
+    assert!(out.contains("no checked unit reads the file `crates/shop-app/LICENSE.txt`") && out.contains("--reason 'crates/shop-app/LICENSE.txt=…'"), "{out}");
+    let out = run(repo, &["step", "reword the license", "--reason", "crates/shop-app/LICENSE.txt=the limit is in the range"], 0);
     assert!(out.contains("shop_app::license::limit") && out.contains("[control flow · no compare]") && out.contains("note: no compare: no checked configuration compiles `shop_app::license::limit`"), "{out}");
     assert!(!out.contains("LICENSE.txt: changed"), "{out}");
 }
@@ -3352,6 +3352,61 @@ fn folder_probe_script(name: &str) -> String {
 /// The folder set (`shared/<key>` or `build-code/<key>`) of a path of the cache folder.
 fn folder_set_of(cache: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(cache).unwrap().components().take(2).collect()
+}
+
+#[test]
+fn the_build_code_cache_keeps_the_entries_of_the_stored_steps_and_the_four_newest() {
+    // Batch 7c, part 6.3 (design 37.22). An entry of the `build-code` cache can have 500 MB.
+    // After a step, an entry that no stored step uses stays only if it is one of the four
+    // newest. `semilla cache --clean` removes each entry that no stored step uses.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    run(repo, &["step", "rename a local"], 0);
+    let cache = repo_cache(repo);
+    let entries = || {
+        let mut names: Vec<String> = std::fs::read_dir(cache.join("build-code")).map(|list| list.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        names.sort();
+        names
+    };
+    // Six entries of old steps, each with 1000 bytes. The entry `old-6` is the newest.
+    let start = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for number in 1..=6u64 {
+        let file = cache.join(format!("build-code/old-{number}/target/data"));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, vec![b'x'; 1000]).unwrap();
+        let time = start + std::time::Duration::from_secs(number * 60);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(time).unwrap();
+        for folder in [file.parent().unwrap(), file.parent().unwrap().parent().unwrap()] {
+            std::fs::File::open(folder).unwrap().set_modified(time).unwrap();
+        }
+    }
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    run(repo, &["step", "change the limit of the cart"], 0);
+    assert_eq!(entries(), ["old-3", "old-4", "old-5", "old-6"], "a step keeps the four newest entries that no stored step uses");
+    let out = run(repo, &["cache", "--clean"], 0);
+    assert_eq!(out, "removed 4 entries of the build code cache that no stored step uses: 4 kB freed\n");
+    assert_eq!(entries(), Vec::<String>::new());
+    assert_eq!(run(repo, &["cache", "--clean"], 0), "removed 0 entries of the build code cache that no stored step uses: 0 B freed\n");
+    if semilla_normal::sandbox::missing().is_some() {
+        return;
+    }
+    // The entry of a stored step with changed build code stays, also with `--clean`.
+    write(repo, "crates/shop-core/build.rs", &folder_probe_script("a"));
+    run(repo, &["step", "add a build script", "--reason", BUILD_REASON], 0);
+    let used = entries();
+    assert_eq!(used.len(), 1, "{used:?}");
+    std::fs::create_dir_all(cache.join("build-code/old-7")).unwrap();
+    assert_eq!(run(repo, &["cache", "--clean"], 0), "removed 1 entry of the build code cache that no stored step uses: 0 B freed\n");
+    assert_eq!(entries(), used);
+    // The step is not stored after `undo`: its entry is not in use.
+    run(repo, &["undo"], 0);
+    let out = run(repo, &["cache", "--clean"], 0);
+    assert!(out.starts_with("removed 1 entry of the build code cache that no stored step uses: ") && out.ends_with(" freed\n") && !out.contains(": 0 B"), "{out}");
+    assert_eq!(entries(), Vec::<String>::new());
+    // The removed entry is only a cache: the same step builds it again.
+    run(repo, &["step", "add a build script", "--reason", BUILD_REASON], 0);
+    assert_eq!(entries(), used);
 }
 
 #[test]
@@ -5226,13 +5281,41 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     write(repo, "crates/shop-core/src/lib.rs", &text);
     write(repo, "crates/shop-core/src/win.rs", &file.replace("'/'", "'\\\\'"));
     let out = run(repo, &["step", "tidy the small module"], 1);
-    let cause = "inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = \"16\")]` at crates/shop-core/src/lib.rs:9), so Semilla did not compare the edit; it needs a reason: --reason";
+    // Design 37.13: the text is equal for each fact. The first fact shows the text and the
+    // fact numbers. Each other fact names the first fact. Each fact keeps its reason key.
+    let cause = "inactive code: no checked configuration compiles the changed code (`#[cfg(target_pointer_width = \"16\")]` at crates/shop-core/src/lib.rs:9), so Semilla did not compare the edit (the same text for f1 to f6, f8 to f12); it needs a reason: --reason";
+    assert_eq!(out.matches(cause).count(), 1, "{out}");
     for (_, _, key) in edits {
-        assert!(out.contains(&format!("{cause} '{key}=…'")), "{key}\n{out}");
+        assert!(out.contains(&format!("{cause} '{key}=…'")) || out.contains(&format!("      ✗ spotlight: the same text as f1; it needs a reason: --reason '{key}=…'")), "{key}\n{out}");
     }
     // The file module: the attribute is in a different file.
-    assert!(out.contains("(no checked unit reads the file `crates/shop-core/src/win.rs`: `#[cfg(target_os = \"none\")]` at `shop_core::win`), so Semilla did not compare the edit; it needs a reason: --reason 'shop_core::win::SEP=…'"), "{out}");
+    // The file has one spotlight, and the key of the reason is the file (design 37.3).
+    assert!(out.contains("(no checked unit reads the file `crates/shop-core/src/win.rs`: `#[cfg(target_os = \"none\")]` at `shop_core::win`), so Semilla did not compare the edit; it needs a reason: --reason 'crates/shop-core/src/win.rs=…'"), "{out}");
+    assert!(out.contains("value of `shop_core::win::SEP` changed: ") && out.contains("[value · no compare]") && !out.contains("--reason 'shop_core::win::SEP"), "{out}");
     assert!(!out.contains("code equal"), "{out}");
+
+    // Design 37.19: eleven open spotlights have the kind `inactive-code`. The command to run
+    // again has one kind reason for them, and no key of an item of the kind.
+    let again = out.lines().find(|line| line.starts_with("run again: ")).unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(again, "run again: semilla step 'tidy the small module' --reason 'kind:inactive-code=<why>'", "{out}");
+    // A kind with no open spotlight, a name that is no kind, and the build code kind: each
+    // reason gets the usual warning, and the command to run again omits it.
+    let out = run(repo, &["step", "tidy the small module", "--reason", "kind:cfg-attribute=a", "--reason", "kind:other=b", "--reason", "kind:build-code=c"], 1);
+    assert!(out.contains("  ! the reason for `kind:cfg-attribute` belongs to no fact of this step; Semilla does not use it. No open spotlight of this step has the kind `cfg-attribute`\n"), "{out}");
+    assert!(out.contains("  ! the reason for `kind:other` belongs to no fact of this step; Semilla does not use it. `other` is not the name of a kind. The kinds: `cfg-attribute`, "), "{out}");
+    assert!(out.contains("  ! the reason for `kind:build-code` belongs to no fact of this step; Semilla does not use it. A kind reason does not cover build code: each changed file of build code needs its own reason\n"), "{out}");
+    assert!(out.ends_with("run again: semilla step 'tidy the small module' --reason 'kind:inactive-code=<why>'\n"), "{out}");
+    // The kind reason covers each spotlight of the kind. The exact key of a fact goes first.
+    // Each covered spotlight says how many spotlights the reason covers.
+    let out = run(repo, &["step", "tidy the small module", "--reason", "kind:inactive-code=the 16 bit target is not in the checks", "--reason", "shop_core::small::LIMIT=the limit of the small target is 8"], 0);
+    assert!(out.starts_with("accepted: "), "{out}");
+    assert_eq!(out.matches("; reason (key `kind:inactive-code`; one reason covers 11 spotlights of the kind inactive-code): \"the 16 bit target is not in the checks\"\n").count(), 11, "{out}");
+    assert!(out.contains("; reason: \"the limit of the small target is 8\"\n"), "{out}");
+    let md = repo.join(".semilla/review.md");
+    run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    let report = std::fs::read_to_string(&md).unwrap();
+    assert!(report.matches("one reason covers 11 spotlights of the kind inactive-code").count() >= 11, "{report}");
+    run(repo, &["undo"], 0);
 
     // One edit with one reason: the step is accepted, and the fact is to read.
     write(repo, "crates/shop-core/src/lib.rs", &lib.replace("LIMIT: u64 = 7", "LIMIT: u64 = 8"));
@@ -5623,7 +5706,9 @@ fn a_manifest_step_gets_each_reason_key_one_time_in_one_round() {
     commit_all(repo, "a default feature");
     let root = std::fs::read_to_string(repo.join("Cargo.toml")).unwrap();
     write(repo, "crates/shop-core/Cargo.toml", &format!("{member}default = []\n"));
-    write(repo, "Cargo.toml", &format!("{root}\n[profile.release]\ndebug-assertions = true\noverflow-checks = false\n"));
+    // Batch 7c (design 37.19): three open spotlights of one kind get their item keys. A fourth
+    // spotlight of the kind gives one kind key (the last part of this test).
+    write(repo, "Cargo.toml", &format!("{root}\n[profile.release]\ndebug-assertions = true\n"));
     write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u64 {\n    if cfg!(debug_assertions) { x as u64 } else { x as u64 + 2 }\n}\n");
     // A file name and the text of a fact are not keys. The message gives the keys.
     let (code, out) = run_env(repo, &["step", "change the build", "--reason", "crates/shop-core/Cargo.toml=the file", "--reason", "crates/shop-core/Cargo.toml: features.default: \"std\" removed=the text"], &[]);
@@ -5638,7 +5723,7 @@ fn a_manifest_step_gets_each_reason_key_one_time_in_one_round() {
     unique.sort();
     unique.dedup();
     assert_eq!(keys.len(), unique.len(), "{again}");
-    for key in ["crates/shop-core/Cargo.toml:features.default", "crates/shop-core/Cargo.toml:features.default: \"std\"", "Cargo.toml:profile.release.debug-assertions", "Cargo.toml:profile.release.overflow-checks"] {
+    for key in ["crates/shop-core/Cargo.toml:features.default", "crates/shop-core/Cargo.toml:features.default: \"std\"", "Cargo.toml:profile.release.debug-assertions"] {
         assert!(keys.contains(&key), "{key}: {again}");
     }
     // The second call with these keys is accepted: the first result had each key.
@@ -5650,6 +5735,60 @@ fn a_manifest_step_gets_each_reason_key_one_time_in_one_round() {
     let (code, out) = run_env(repo, &args, &[]);
     assert_eq!(code, 0, "{out}");
     assert!(out.starts_with("accepted: step 0"), "{out}");
+    // A fourth build setting in the step: the command gives one kind key, and the key is accepted.
+    run(repo, &["undo"], 0);
+    write(repo, "Cargo.toml", &format!("{root}\n[profile.release]\ndebug-assertions = true\noverflow-checks = false\n"));
+    let (code, out) = run_env(repo, &["step", "change the build"], &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("run again: semilla step 'change the build' --reason 'kind:build-setting=<why>'\n"), "{out}");
+    let (code, out) = run_env(repo, &["step", "change the build", "--reason", "kind:build-setting=the build needs it"], &[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("accepted: step 0"), "{out}");
+    assert_eq!(out.matches("one reason covers 4 spotlights of the kind build-setting").count(), 4, "{out}");
+}
+
+#[test]
+fn a_review_after_a_step_uses_the_stored_result_of_the_step() {
+    // Batch 7c, part 6.2 (design 37.21): `semilla review --md` after an accepted step does not
+    // check the step again. The report is the report of a new check.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod unit;\n");
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u32 {\n    x + 1\n}\n");
+    commit_all(repo, "a unit module");
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u32 {\n    x + 2\n}\n\npub fn two() -> u32 {\n    2\n}\n");
+    let (code, out) = run_env(repo, &["step", "add a function"], &[]);
+    assert_eq!(code, 0, "{out}");
+    let review = |name: &str| {
+        let file = dir.path().join(name);
+        let (code, out) = run_env(repo, &["review", "--md", file.to_str().unwrap(), "--wait", "600"], &[("SEMILLA_TIMING", "1")]);
+        assert_eq!(code, 0, "{out}");
+        (out, std::fs::read_to_string(&file).unwrap().replace(name, "FILE"))
+    };
+    let (out, stored) = review("review.md");
+    assert!(!out.contains("verify the change set"), "the review must not check the step again: {out}");
+    assert!(stored.contains("x + 2"), "{stored}");
+    assert!(out.contains("result: accepted · 1 step"), "{out}");
+    // With no stored data, the review checks the step. The report is the same.
+    std::fs::remove_dir_all(repo_cache(repo).join("review-data")).unwrap();
+    let (out, fresh) = review("fresh.md");
+    assert!(out.contains("verify the change set"), "{out}");
+    assert_eq!(stored, fresh);
+    // That review stored its data: the next review does no check.
+    let (out, again) = review("again.md");
+    assert!(!out.contains("verify the change set"), "{out}");
+    assert_eq!(stored, again);
+    // A second step: the stored data of one step is not the data of two steps. The background
+    // check stores the new data, and the review shows the two steps.
+    write(repo, "crates/shop-core/src/unit.rs", "pub fn mode(x: u32) -> u32 {\n    x + 3\n}\n\npub fn two() -> u32 {\n    2\n}\n");
+    let (code, out) = run_env(repo, &["step", "a new value"], &[]);
+    assert_eq!(code, 0, "{out}");
+    let (out, two) = review("two.md");
+    assert!(out.contains("result: accepted · 2 steps"), "{out}");
+    assert!(two.contains("x + 3") && two.contains("a new value"), "{two}");
+    let (out, last) = review("last.md");
+    assert!(!out.contains("verify the change set"), "{out}");
+    assert_eq!(two, last);
 }
 
 #[test]
@@ -5864,4 +6003,93 @@ fn a_new_test_above_other_tests_in_a_test_file_gives_one_fact() {
     write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)").replace("#[test]\nfn test_one", "#[test]\n#[should_panic]\nfn test_one")));
     let out = run(repo, &["step", "a test that must panic"], 1);
     assert!(out.contains("a changed attribute that can change the behavior: `should_panic`") && out.contains("[attribute · code different]") && out.contains("! the compiled code changes: shop_core::req::test_one"), "{out}");
+}
+
+/// Runs a command line of Semilla through the shell, as an agent does.
+fn shell(repo: &Path, line: &str) -> (i32, String) {
+    let root = workspace_root();
+    let binary = Path::new(env!("CARGO_BIN_EXE_semilla"));
+    let path = format!("{}:{}", binary.parent().unwrap().display(), std::env::var("PATH").unwrap_or_default());
+    let output = Command::new("sh")
+        .current_dir(repo)
+        .args(["-c", line])
+        .env("PATH", path)
+        .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
+        .env("SEMILLA_CACHE_DIR", cache_dir(repo))
+        .output()
+        .unwrap();
+    (output.status.code().unwrap_or(-1), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
+}
+
+#[test]
+fn the_run_again_line_passes_with_a_key_that_has_an_equal_sign() {
+    // Batch 7c, part 3.1 (design 37.6). A manifest key with a `cfg(…)` condition has `=` and
+    // `"`. The text before the first `=` was the key, so the reason belonged to no fact, and
+    // the step could never pass.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-util/Cargo.toml", "[package]\nname = \"shop-util\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    write(repo, "crates/shop-util/src/lib.rs", "pub fn util() -> u32 {\n    1\n}\n");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a util crate"]);
+    let manifest = std::fs::read_to_string(repo.join("crates/shop-core/Cargo.toml")).unwrap();
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{manifest}\n[package.metadata.\"it's\"]\nlevel = \"a=b\"\n\n[target.'cfg(all(target_arch = \"aarch64\", target_os = \"android\"))'.dependencies]\nshop-util = {{ path = \"../shop-util\" }}\n"));
+    let out = run(repo, &["step", "it's a step for the \"android\" target"], 1);
+    let again = out.lines().find_map(|line| line.strip_prefix("run again: ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(again.contains("target.cfg(all(target_arch = \"aarch64\", target_os = \"android\")).dependencies.shop-util"), "{again}");
+    // The line passes with no change but the reason texts. One reason has a `=` and quotes.
+    let line = again.replacen("<why>", "the value is a = b, it's \"right\"", 1).replace("<why>", "the target needs it");
+    let (code, out) = shell(repo, &line.replace("it's \"right\"", "it'\\''s \"right\""));
+    assert_eq!(code, 0, "{line}\n{out}");
+    assert!(out.starts_with("accepted: step 0 \"it's a step for the \\\"android\\\" target\""), "{out}");
+    assert!(!out.contains("belongs to no fact") && !out.contains("needs a reason"), "{out}");
+    assert!(out.contains("package.metadata.it's.level added (\"a=b\") [manifest · no code]\n      spotlight: a manifest key that is not in the allow list; reason: \"the value is a = b, it's \\\"right\\\"\""), "{out}");
+    assert!(out.contains("dependencies.shop-util.path added (\"../shop-util\") [manifest · no code]\n      spotlight: a new dependency; reason: \"the target needs it\""), "{out}");
+    run(repo, &["undo"], 0);
+
+    // The key and the reason have a `=`: the longest open key is the key.
+    let out = run(repo, &["step", "the target again"], 1);
+    let keys: Vec<String> = out.lines().find_map(|line| line.strip_prefix("run again: ")).unwrap().split("--reason '").skip(1).map(|part| part.split("=<why>'").next().unwrap().replace("'\\''", "'")).collect();
+    let long = keys.iter().find(|key| key.contains("target_arch = ")).unwrap_or_else(|| panic!("{keys:?}"));
+    let mut args = vec!["step".to_string(), "the target again".to_string()];
+    for key in &keys {
+        args.extend(["--reason".to_string(), format!("{key}=why = this")]);
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run(repo, &args, 0);
+    assert!(out.contains("reason: \"why = this\""), "{out}");
+    assert!(!out.contains("belongs to no fact"), "{long}\n{out}");
+}
+
+// Batch 7c, part 3.2 (design 37.7).
+
+#[test]
+fn a_feature_that_only_one_side_has_does_not_stop_the_step() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let manifest = "[package]\nname = \"shop-core\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nold-name = []\n";
+    let code = "pub mod cart;\n\n#[cfg(feature = \"old-name\")]\npub fn extra() -> u32 {\n    1\n}\n\npub fn plain(a: u32) -> u32 {\n    a + 1\n}\n";
+    write(repo, "Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n\n[workspace.metadata.semilla]\nfeature-sets = [[\"old-name\"]]\n");
+    write(repo, "crates/shop-core/Cargo.toml", manifest);
+    write(repo, "crates/shop-core/src/lib.rs", code);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a feature"]);
+
+    // The step gives the feature a new name, and changes a body.
+    write(repo, "crates/shop-core/Cargo.toml", &manifest.replace("old-name", "new-name"));
+    write(repo, "crates/shop-core/src/lib.rs", &code.replace("old-name", "new-name").replace("a + 1", "a + 2"));
+    let (_, out) = shell(repo, "semilla step 'a new name for the feature'");
+    // The build of the configuration with the old feature does not stop the step.
+    assert!(!out.contains("the body check failed") && !out.contains("does not contain this feature") && !out.contains("the build failed"), "{out}");
+    let gap = "! configurations `dev, features old-name`, `release, features old-name` are not checked: only the code before the step has the feature `old-name`. The code after the step has no such configuration: no compare";
+    assert!(out.contains(gap), "{out}");
+    // The other configurations compare as usual.
+    assert!(out.contains("changed literal `1` → `2` at `shop_core::plain/tail/rhs` [value · code different]"), "{out}");
+    // The manifest facts of the feature stay.
+    assert!(out.contains("crates/shop-core/Cargo.toml: features.old-name removed ([]) [manifest · no code]"), "{out}");
+    assert!(out.contains("crates/shop-core/Cargo.toml: features.new-name added ([]) [manifest · no code]"), "{out}");
+    // The step passes with the reasons of the `run again:` line.
+    let again = out.lines().find_map(|line| line.strip_prefix("run again: ")).unwrap_or_else(|| panic!("{out}")).replace("<why>", "the feature has a new name");
+    let (code, out) = shell(repo, &again);
+    assert!(code == 0 && out.starts_with("accepted: step 0") && out.contains(gap), "{out}");
 }

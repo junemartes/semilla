@@ -342,6 +342,8 @@ pub(crate) struct Dead {
     /// The cause for a message: a clause with the attribute and its place, or with the file
     /// that no unit reads.
     pub cause: String,
+    /// True if no checked unit reads the file (design 37.3): the file gets one spotlight.
+    pub whole: bool,
 }
 
 /// The text for a file that no checked unit reads: the `cfg` attributes of the modules of the
@@ -396,7 +398,7 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
             if known && units.is_empty() {
                 let cause = unread(sides[side], file);
                 for (token, _) in list.iter().zip(&changed).filter(|(_, flag)| **flag) {
-                    out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause: cause.clone() });
+                    out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause: cause.clone(), whole: true });
                 }
                 continue;
             }
@@ -438,7 +440,7 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
                     false => format!("{NOT_COMPILED} ({})", attrs.join(", ")),
                     true => format!("{UNSEEN} ({})", macros.join(", ")),
                 };
-                out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause });
+                out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause, whole: false });
             }
         }
     }
@@ -509,6 +511,8 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
     let mut causes: std::collections::BTreeMap<usize, Vec<String>> = std::collections::BTreeMap::new();
     // The dead lines with no fact, by the item (or the file) and the side.
     let mut free: std::collections::BTreeMap<(Option<String>, String), Vec<String>> = std::collections::BTreeMap::new();
+    let mut quiet: BTreeSet<usize> = BTreeSet::new();
+    let mut whole_files: BTreeSet<String> = BTreeSet::new();
     for entry in dead {
         let around: Vec<&(usize, usize, (String, usize, usize))> = spans.iter().filter(|(_, side, span)| *side == entry.side && span.0 == entry.file && span.1 <= entry.line && entry.line <= span.2).collect();
         let least = around.iter().map(|(_, _, span)| span.2 - span.1).min();
@@ -519,6 +523,17 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
         }
         owners.sort();
         owners.dedup();
+        // A file that no checked unit reads (design 37.3): the file gets one spotlight. Each
+        // fact of the file keeps its text and gets the compare result `no compare`.
+        if entry.whole {
+            quiet.extend(owners.iter().copied());
+            let list = free.entry((None, entry.file.clone())).or_default();
+            if !list.contains(&entry.cause) {
+                list.push(entry.cause.clone());
+            }
+            whole_files.insert(entry.file.clone());
+            continue;
+        }
         for owner in &owners {
             let list = causes.entry(*owner).or_default();
             if !list.contains(&entry.cause) {
@@ -536,6 +551,27 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
         Some(at) => step.reasons.get(&at.to_string()).or_else(|| step.reasons.get(&at.item)).cloned(),
         None => step.reasons.get(&fact.part).cloned(),
     };
+    let no_compare = |fact: &mut semilla_core::Fact| {
+        let place = fact.at.as_ref().map(|at| at.item.clone()).or_else(|| fact.file.clone()).unwrap_or_default();
+        let note = format!("{NO_COMPARE} no checked configuration compiles `{place}`");
+        fact.compare = Compare::NoCompare;
+        fact.note = Some(match fact.note.take() {
+            Some(old) if old.contains(&note) => old,
+            Some(old) => format!("{old}; {note}"),
+            None => note,
+        });
+    };
+    for index in quiet.iter().copied().filter(|index| !causes.contains_key(index)) {
+        let fact = &mut report.facts[index];
+        // The spotlight of the file has the cause of this spotlight.
+        if fact.spotlight_why.as_deref() == Some(crate::facts::INACTIVE) {
+            fact.spotlight = false;
+            fact.spotlight_why = None;
+        }
+        if fact.affected.is_empty() {
+            no_compare(fact);
+        }
+    }
     for (index, list) in causes {
         let fact = &mut report.facts[index];
         let text = spotlight_text(&list);
@@ -549,18 +585,20 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
         // The compare has no data for this code (design 35). A fact with a changed body keeps
         // its result.
         if fact.affected.is_empty() {
-            fact.compare = Compare::NoCompare;
-            let place = fact.at.as_ref().map(|at| at.item.clone()).or_else(|| fact.file.clone()).unwrap_or_default();
-            let note = format!("{NO_COMPARE} no checked configuration compiles `{place}`");
-            fact.note = Some(match fact.note.take() {
-                Some(old) if old.contains(&note) => old,
-                Some(old) => format!("{old}; {note}"),
-                None => note,
-            });
+            no_compare(fact);
         }
         if fact.reason.is_none() {
             fact.reason = reason_of(fact);
         }
+    }
+    // The spotlight list of the report has one line for each file that no unit reads.
+    if !whole_files.is_empty() {
+        let in_whole = |line: &str| {
+            let item = line.strip_prefix(START).and_then(|rest| rest.rsplit_once("(no checked configuration compiles `")).and_then(|(_, rest)| rest.strip_suffix("`)"));
+            item.is_some_and(|item| sides.iter().any(|side| side.items.get(item).is_some_and(|found| whole_files.contains(&found.file))))
+        };
+        report.spotlight.retain(|line| !in_whole(line));
+        report.spotlight.extend(whole_files.iter().map(|file| format!("{START}{file} (no checked unit reads the file)")));
     }
     // 3. The new facts.
     for ((item, file), list) in free {
@@ -574,6 +612,7 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
             },
             description: match &item {
                 Some(item) => format!("an edit in `{item}`, in code that no checked configuration compiles"),
+                None if whole_files.contains(&file) => format!("{file}: each edit of this file is in code that no checked configuration compiles"),
                 None => "an edit in code that no checked configuration compiles".into(),
             },
             status: "derived".into(),

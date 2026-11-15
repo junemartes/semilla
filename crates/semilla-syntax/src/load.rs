@@ -117,6 +117,57 @@ pub struct Workspace {
     /// The inner attributes (`#![…]`) of each crate root and module file, by module path, with
     /// the file. An inline module has them in its own attributes.
     pub inner_attrs: BTreeMap<String, (String, Vec<String>)>,
+    /// The files of the parsed targets that the loader cannot parse, with the reason (design
+    /// 37.5). The file is not in `parsed_files`.
+    pub parse_errors: BTreeMap<String, String>,
+    /// The files that parse only as 2015 edition code, with the count of the parameters with
+    /// no name (design 37.5). The loader gives each such parameter the name `_`.
+    pub old_edition: BTreeMap<String, usize>,
+    /// The items with a body by file ([`Workspace::body_items`]), made at the first use.
+    #[serde(skip)]
+    pub body_index: BodyIndex,
+}
+
+/// One function, constant, or static of a file, for [`Workspace::body_items`].
+#[derive(Clone, Debug)]
+pub struct BodyItem {
+    pub line_start: usize,
+    pub line_end: usize,
+    pub kind: ItemKind,
+    pub path: String,
+}
+
+/// The functions, the constants, and the statics of a workspace by file, with the answers of
+/// the searches that used them.
+#[derive(Debug, Default)]
+pub struct BodyItems {
+    /// The items of each file, in the order of their paths.
+    pub by_file: BTreeMap<String, Vec<BodyItem>>,
+    /// The answers that the search gave: the name of a body, then each span with its answer.
+    pub found: std::sync::Mutex<FoundItems>,
+}
+
+/// The answers of the search for the item of a body, by the name and the span of the body.
+pub type FoundItems = std::collections::HashMap<String, Vec<(Option<(String, usize)>, Option<String>)>>;
+
+/// The index of [`Workspace::body_items`]. A copy of a workspace starts with no index, so a
+/// changed copy makes its own index.
+#[derive(Default)]
+pub struct BodyIndex {
+    /// The count of the items at the time of the index, and the index.
+    cell: std::sync::OnceLock<(usize, BodyItems)>,
+}
+
+impl Clone for BodyIndex {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for BodyIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BodyIndex")
+    }
 }
 
 /// One cargo target of a package.
@@ -184,6 +235,20 @@ pub struct FileEntry {
 }
 
 impl Workspace {
+    /// The functions, constants, and statics of each file, in the order of their paths (design
+    /// 37.20). The search for the item of a compiled body reads only the items of one file.
+    /// `None` if the items changed after the first use: then the caller reads each item.
+    pub fn body_items(&self) -> Option<&BodyItems> {
+        let (count, index) = self.body_index.cell.get_or_init(|| {
+            let mut index = BodyItems::default();
+            for item in self.items.values().filter(|item| matches!(item.kind, ItemKind::Fn | ItemKind::Const | ItemKind::Static)) {
+                index.by_file.entry(item.file.clone()).or_default().push(BodyItem { line_start: item.line_start, line_end: item.line_end, kind: item.kind, path: item.path.clone() });
+            }
+            (self.items.len(), index)
+        });
+        (*count == self.items.len()).then_some(index)
+    }
+
     /// Loads the workspace at `root`. The packages and the targets come from the manifests, with
     /// the rules of cargo for the default targets. The app uses [`Workspace::load_with_metadata`].
     pub fn load(root: &Path) -> Result<Workspace> {
@@ -267,7 +332,7 @@ impl Workspace {
                 // name of the package (`benches/hex.rs` of the package `hex`).
                 let main = *file == package.dir.join("src/main.rs");
                 let module = if kind == "lib" || main { package.name.clone() } else { format!("{}::{}", package.name, name.replace('-', "_")) };
-                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, crate_name: &package.name };
+                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, parse_errors: &mut workspace.parse_errors, old_edition: &mut workspace.old_edition, crate_name: &package.name };
                 loader.load_file(file, &module, matches!(kind.as_str(), "test" | "bench"))?;
             }
         }
@@ -452,13 +517,10 @@ fn walk_code(root: &Path, file: &Path, code: &CodeFile, workspace: &mut Workspac
             match &item_mod.content {
                 Some((_, content)) => modules(root, content, file, &dir.join(&name), false, code, workspace),
                 None => {
-                    let candidates = match path_attr(&item_mod.attrs) {
-                        Some(target) => vec![if top { file.parent().unwrap_or(Path::new(".")).join(target) } else { dir.join(target) }],
-                        None => vec![dir.join(format!("{name}.rs")), dir.join(&name).join("mod.rs")],
-                    };
-                    if let Some(found) = candidates.iter().find(|candidate| candidate.is_file()) {
-                        let child_dir = if path_attr(&item_mod.attrs).is_some() { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
-                        visit(root, found, &child_dir, code, workspace);
+                    let base = if top { file.parent().unwrap_or(Path::new(".")).to_path_buf() } else { dir.to_path_buf() };
+                    for (found, by_attr) in mod_files(&item_mod.attrs, &base, dir, &name) {
+                        let child_dir = if by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(&found) };
+                        visit(root, &found, &child_dir, code, workspace);
                     }
                 }
             }
@@ -481,7 +543,7 @@ fn walk_code(root: &Path, file: &Path, code: &CodeFile, workspace: &mut Workspac
                 visit(root, &included, &dir, code, workspace);
             }
         }
-        if let Ok(parsed) = syn::parse_file(&text) {
+        if let Ok((parsed, _, _)) = parse_rust(&text) {
             modules(root, &parsed.items, file, child_dir, true, code, workspace);
         }
     }
@@ -641,15 +703,65 @@ fn other_name(item: &syn::Item) -> Option<String> {
 /// The generic arguments are not in the owner (`impl<T> Wrapper<T>` gives `Wrapper`), so an impl
 /// keeps its identity when its generics or bounds change. The header change is a signature edit
 /// of the impl. Two impls of one type (`impl W<u8>` and `impl W<u16>`) are twins.
+///
+/// The lifetimes are not in the owner (design 37.2): `impl<'a> Parse for &'a mut Node` and
+/// `impl Parse for &mut Node` give `<&mutNode as Parse>`. The compiler does not permit two
+/// impls of one trait that are different only in a lifetime.
 fn impl_owner(item_impl: &syn::ItemImpl) -> String {
     let self_ty = match item_impl.self_ty.as_ref() {
         syn::Type::Path(type_path) if type_path.qself.is_none() => without_arguments(&type_path.path),
-        other => tokens(other).replace(' ', ""),
+        other => tokens(&without_lifetimes(other)).replace(' ', ""),
     };
     match &item_impl.trait_ {
         Some((_, trait_path, _)) => format!("<{self_ty} as {}>", without_arguments(trait_path)),
         None => self_ty,
     }
+}
+
+/// A type without its lifetimes: `&'a mut Node<'b, T>` gives `&mut Node<T>`, and
+/// `dyn Parse + 'a` gives `dyn Parse`.
+fn without_lifetimes(ty: &syn::Type) -> syn::Type {
+    use syn::visit_mut::{self, VisitMut};
+    struct Lifetimes;
+    fn bounds(list: &mut syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>) {
+        if list.iter().any(|bound| !matches!(bound, syn::TypeParamBound::Lifetime(_))) {
+            *list = std::mem::take(list).into_iter().filter(|bound| !matches!(bound, syn::TypeParamBound::Lifetime(_))).collect();
+        }
+    }
+    impl VisitMut for Lifetimes {
+        fn visit_type_reference_mut(&mut self, node: &mut syn::TypeReference) {
+            node.lifetime = None;
+            visit_mut::visit_type_reference_mut(self, node);
+        }
+        fn visit_path_segment_mut(&mut self, node: &mut syn::PathSegment) {
+            if let syn::PathArguments::AngleBracketed(list) = &mut node.arguments {
+                list.args = std::mem::take(&mut list.args).into_iter().filter(|argument| !matches!(argument, syn::GenericArgument::Lifetime(_))).collect();
+                if list.args.is_empty() {
+                    node.arguments = syn::PathArguments::None;
+                }
+            }
+            visit_mut::visit_path_segment_mut(self, node);
+        }
+        fn visit_type_trait_object_mut(&mut self, node: &mut syn::TypeTraitObject) {
+            bounds(&mut node.bounds);
+            visit_mut::visit_type_trait_object_mut(self, node);
+        }
+        fn visit_type_impl_trait_mut(&mut self, node: &mut syn::TypeImplTrait) {
+            bounds(&mut node.bounds);
+            visit_mut::visit_type_impl_trait_mut(self, node);
+        }
+        fn visit_type_bare_fn_mut(&mut self, node: &mut syn::TypeBareFn) {
+            node.lifetimes = None;
+            visit_mut::visit_type_bare_fn_mut(self, node);
+        }
+        fn visit_trait_bound_mut(&mut self, node: &mut syn::TraitBound) {
+            node.lifetimes = None;
+            visit_mut::visit_trait_bound_mut(self, node);
+        }
+    }
+    let mut ty = ty.clone();
+    Lifetimes.visit_type_mut(&mut ty);
+    ty
 }
 
 /// A path without its generic arguments: `std::fmt::Display`, `Wrapper`.
@@ -698,19 +810,38 @@ struct Loader<'a> {
     items: &'a mut Vec<Item>,
     parsed: &'a mut BTreeSet<String>,
     inner_attrs: &'a mut BTreeMap<String, (String, Vec<String>)>,
+    parse_errors: &'a mut BTreeMap<String, String>,
+    old_edition: &'a mut BTreeMap<String, usize>,
     crate_name: &'a str,
 }
 
 impl Loader<'_> {
     fn load_file(&mut self, file: &Path, module: &str, test: bool) -> Result<()> {
         let source = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
-        let parsed = syn::parse_file(&source).with_context(|| format!("parse {}", file.display()))?;
         let rel = relative(self.root, file);
+        let Some((parsed, source)) = self.parse(&rel, &source) else { return Ok(()) };
         self.parsed.insert(rel.clone());
         // The child modules of a root file are in the folder of the root file, whatever its name.
         let child_dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
         self.record_inner_attrs(&module, &rel, &parsed.attrs);
         self.load_items(&parsed.items, &module, &rel, &source, &child_dir, test)
+    }
+
+    /// Parses the text of a file. A file that does not parse does not stop the load (design
+    /// 37.5): the map of the parse errors gets the reason, and the result is `None`.
+    fn parse(&mut self, rel: &str, text: &str) -> Option<(syn::File, String)> {
+        match parse_rust(text) {
+            Ok((parsed, text, names)) => {
+                if names > 0 {
+                    self.old_edition.insert(rel.to_string(), names);
+                }
+                Some((parsed, text))
+            }
+            Err(reason) => {
+                self.parse_errors.insert(rel.to_string(), reason);
+                None
+            }
+        }
     }
 
     fn load_items(&mut self, items: &[syn::Item], module: &str, file: &str, source: &str, dir: &Path, test: bool) -> Result<()> {
@@ -731,21 +862,20 @@ impl Loader<'_> {
                         // file that the compiler reads). Outside an inline module, the path is
                         // relative to the folder of the current file. Inside an inline module, it
                         // is relative to the folder of that module.
-                        let candidates = match path_attr(&item_mod.attrs) {
-                            Some(target) => {
-                                let base = if *dir == module_dir(&self.root.join(file)) { self.root.join(file).parent().map(Path::to_path_buf).unwrap_or_default() } else { dir.to_path_buf() };
-                                vec![base.join(target)]
-                            }
-                            None => vec![dir.join(format!("{name}.rs")), dir.join(&name).join("mod.rs")],
-                        };
-                        if let Some(found) = candidates.iter().find(|candidate| candidate.exists()) {
+                        // A `cfg_attr(COND, path = "…")` attribute names one more file (design
+                        // 37.3). The loader reads each file that exists, also if the condition
+                        // is off. With two files or more, each file is a twin module (`name#N`).
+                        let base = if *dir == module_dir(&self.root.join(file)) { self.root.join(file).parent().map(Path::to_path_buf).unwrap_or_default() } else { dir.to_path_buf() };
+                        let files = mod_files(&item_mod.attrs, &base, dir, &name);
+                        for (index, (found, by_attr)) in files.iter().enumerate() {
+                            let path = if files.len() > 1 { format!("{path}#{index}") } else { path.clone() };
                             let text = std::fs::read_to_string(found)?;
-                            let parsed = syn::parse_file(&text).with_context(|| format!("parse {}", found.display()))?;
                             let rel = relative(self.root, found);
+                            let Some((parsed, text)) = self.parse(&rel, &text) else { continue };
                             self.parsed.insert(rel.clone());
                             self.record_inner_attrs(&path, &rel, &parsed.attrs);
                             // A file that `#[path]` names is a "mod-rs" file: its child modules are in its own folder.
-                            let child_dir = if path_attr(&item_mod.attrs).is_some() { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
+                            let child_dir = if *by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
                             self.load_items(&parsed.items, &path, &rel, &text, &child_dir, is_test)?;
                         }
                     }
@@ -963,6 +1093,103 @@ fn module_dir(file: &Path) -> PathBuf {
     } else {
         parent.join(stem.as_ref())
     }
+}
+
+/// Parses a Rust file. Code of the 2015 edition can have a parameter with no name in a trait
+/// method (`fn f(u8);`), which `syn` does not parse. The function gives each such parameter
+/// the name `_` and parses again (design 37.5). The result has the tree, the text that the
+/// tree comes from, and the count of the new names. The lines of the text do not change.
+pub fn parse_rust(text: &str) -> std::result::Result<(syn::File, String, usize), String> {
+    let mut text = text.to_string();
+    let mut names = 0;
+    let mut first: Option<String> = None;
+    loop {
+        match syn::parse_file(&text) {
+            Ok(file) => return Ok((file, text, names)),
+            Err(error) => {
+                let at = error.span().start();
+                let reason = format!("{error} (line {}, column {})", at.line, at.column + 1);
+                let first = first.get_or_insert(reason).clone();
+                let offset = if names < 500 && error.to_string() == "expected `:`" { parameter_start(&text, at.line, at.column) } else { None };
+                let Some(offset) = offset else { return Err(first) };
+                text.insert_str(offset, "_: ");
+                names += 1;
+            }
+        }
+    }
+}
+
+/// The byte offset of the start of the parameter that ends before the place (line from 1,
+/// column from 0, in characters): the text after the `(` or the `,` before the place.
+fn parameter_start(text: &str, line: usize, column: usize) -> Option<usize> {
+    let line_start: usize = text.split_inclusive('\n').take(line.checked_sub(1)?).map(str::len).sum();
+    let place = line_start + text.get(line_start..)?.char_indices().nth(column).map(|(offset, _)| offset)?;
+    let mut depth = 0usize;
+    let head = &text[..place];
+    let mut chars = head.char_indices().rev().peekable();
+    while let Some((offset, c)) = chars.next() {
+        match c {
+            // The `>` of `->` is no bracket.
+            '>' if chars.peek().is_some_and(|(_, before)| *before == '-') => {}
+            ')' | ']' | '>' => depth += 1,
+            '(' | ',' if depth == 0 => {
+                let rest = &head[offset + 1..];
+                let start = offset + 1 + (rest.len() - rest.trim_start().len());
+                // A parameter with a name has a `:` (the error is then not about the name).
+                return (start < place).then_some(start);
+            }
+            '(' | '[' | '<' => depth = depth.checked_sub(1)?,
+            '{' | '}' | ';' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The files of a `mod name;` declaration that exist, with the answer to "does an attribute
+/// name the file?". A `cfg_attr(COND, path = "…")` attribute names a file for a part of the
+/// configurations (design 37.3). The list has each such file, then the file of the plain
+/// `#[path]` attribute or the usual file of the module.
+fn mod_files(attrs: &[syn::Attribute], base: &Path, dir: &Path, name: &str) -> Vec<(PathBuf, bool)> {
+    let mut files: Vec<(PathBuf, bool)> = Vec::new();
+    let mut add = |file: PathBuf, by_attr: bool| {
+        if file.is_file() && !files.iter().any(|(found, _)| *found == file) {
+            files.push((file, by_attr));
+        }
+    };
+    for target in attrs.iter().flat_map(conditional_paths) {
+        add(base.join(target), true);
+    }
+    match path_attr(attrs) {
+        Some(target) => add(base.join(target), true),
+        None => {
+            let usual = [dir.join(format!("{name}.rs")), dir.join(name).join("mod.rs")];
+            if let Some(found) = usual.into_iter().find(|candidate| candidate.is_file()) {
+                add(found, false);
+            }
+        }
+    }
+    files
+}
+
+/// The values of `path = "…"` in a `cfg_attr` attribute (also in a `cfg_attr` in it).
+fn conditional_paths(attr: &syn::Attribute) -> Vec<String> {
+    fn of_meta(meta: &syn::Meta, out: &mut Vec<String>) {
+        if !meta.path().is_ident("cfg_attr") {
+            return;
+        }
+        let syn::Meta::List(list) = meta else { return };
+        let Ok(parts) = list.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated) else { return };
+        for part in parts.iter().skip(1) {
+            match part {
+                syn::Meta::NameValue(syn::MetaNameValue { path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }), .. }) if path.is_ident("path") => out.push(text.value()),
+                other => of_meta(other, out),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    of_meta(&attr.meta, &mut out);
+    out
 }
 
 /// The value of a `#[path = "…"]` attribute.
@@ -1188,6 +1415,43 @@ mod tests {
         assert_eq!(ws.items["demo::a::b::bee"].file, "src/other/b.rs");
         assert_eq!(ws.items["demo::a::c::d::dee"].file, "src/a/c/d.rs");
         assert!(!ws.parsed_files.contains("src/fees.rs"));
+    }
+
+    #[test]
+    fn follows_each_file_of_a_module_under_a_condition() {
+        // Design 37.3: `cfg_attr(COND, path = "…")` names one file for each condition. Semilla
+        // reads each file. Two files or more give twin modules.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n");
+        write(root, "src/lib.rs", "#[cfg_attr(unix, path = \"sys/unix.rs\")]\n#[cfg_attr(windows, path = \"sys/windows.rs\")]\nmod sys;\n#[cfg_attr(feature = \"x\", path = \"one.rs\")]\nmod single;\n#[cfg(windows)]\nmod bad;\n");
+        write(root, "src/sys/unix.rs", "pub fn open() {}\n");
+        write(root, "src/sys/windows.rs", "pub fn open() {}\npub fn close() {}\n");
+        write(root, "src/one.rs", "pub fn one() {}\n");
+        write(root, "src/single.rs", "pub fn usual() {}\n");
+        write(root, "src/bad.rs", "pub fn bad( {}\n");
+        let ws = Workspace::load(root).unwrap();
+        let keys = || ws.items.keys().collect::<Vec<_>>();
+        assert_eq!(ws.items["demo::sys#0::open"].file, "src/sys/unix.rs", "{:?}", keys());
+        assert_eq!(ws.items["demo::sys#1::open"].file, "src/sys/windows.rs", "{:?}", keys());
+        assert!(ws.items.contains_key("demo::sys#1::close"), "{:?}", keys());
+        // The file of the attribute and the usual file are the two files of `single`.
+        assert_eq!(ws.items["demo::single#0::one"].file, "src/one.rs", "{:?}", keys());
+        assert_eq!(ws.items["demo::single#1::usual"].file, "src/single.rs", "{:?}", keys());
+        // A file that does not parse does not stop the load. The error is in the record.
+        assert!(!ws.parsed_files.contains("src/bad.rs") && ws.parse_errors.contains_key("src/bad.rs"), "{:?}", ws.parse_errors);
+    }
+
+    #[test]
+    fn parses_a_trait_method_of_the_2015_edition() {
+        // Design 37.5: a parameter with no name is correct only in the 2015 edition.
+        let (_, _, count) = parse_rust("pub trait T {\n    fn f(u8);\n    fn g(&self, Self) -> bool;\n    fn h(a: u8);\n}\n").unwrap();
+        assert_eq!(count, 2);
+        let (_, _, count) = parse_rust("pub fn f(a: u8) {}\n").unwrap();
+        assert_eq!(count, 0);
+        // A different error stays an error, with the line and the column.
+        let error = parse_rust("pub fn f(a: u8) {\n    1 +\n}\n").unwrap_err();
+        assert!(error.contains("(line 3, column "), "{error}");
     }
 
     #[test]

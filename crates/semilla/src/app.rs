@@ -92,6 +92,12 @@ impl Session {
 pub struct App {
     pub repo: Repo,
     workspaces: BTreeMap<String, Workspace>,
+    /// The step results of this process (design 37.21). A second check of an equal step with
+    /// equal inputs reads its result here.
+    step_memo: BTreeMap<String, StepOutcome>,
+    /// The configurations of the steps that this process compared. The log lives as long as
+    /// the step results, because a step result from `step_memo` writes no log.
+    config_log: crate::oracle::ConfigLog,
     /// For tests: skip the MIR body check.
     pub no_bodies: bool,
     /// What the command does with the build code that the change set changes (design 28): it
@@ -307,6 +313,62 @@ impl std::fmt::Display for Rejected {
 
 impl std::error::Error for Rejected {}
 
+/// The count of other entries that the clean of the `build-code` cache keeps after a step
+/// (design 37.22): the entry of a rejected step serves the next run of the step.
+pub const BUILD_CODE_KEEP: usize = 4;
+
+/// The size of the files of a folder, in bytes. A link counts as a link, not as its target.
+fn folder_size(folder: &Path) -> u64 {
+    let mut size = 0;
+    let mut open = vec![folder.to_path_buf()];
+    while let Some(dir) = open.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => open.push(entry.path()),
+                _ => size += std::fs::symlink_metadata(entry.path()).map(|data| data.len()).unwrap_or(0),
+            }
+        }
+    }
+    size
+}
+
+/// A size for a person: `1.2 GB`, `555 MB`, `12 kB`.
+pub fn size_text(bytes: u64) -> String {
+    match bytes {
+        0..1_000 => format!("{bytes} B"),
+        1_000..1_000_000 => format!("{} kB", bytes / 1_000),
+        1_000_000..1_000_000_000 => format!("{} MB", bytes / 1_000_000),
+        _ => format!("{:.1} GB", bytes as f64 / 1e9),
+    }
+}
+
+/// The step results of one process ([`App::step_memo`]).
+struct StepMemo {
+    results: BTreeMap<String, StepOutcome>,
+    /// The inputs of a step check that the step does not have: the mode, the phase, and the
+    /// build code state.
+    inputs: String,
+}
+
+impl StepMemo {
+    fn key(&self, step: &Step) -> String {
+        format!("{}\n{}", serde_json::to_string(step).unwrap_or_default(), self.inputs)
+    }
+}
+
+impl semilla_verify::StepCache for StepMemo {
+    fn get(&mut self, step: &Step) -> Option<StepOutcome> {
+        self.results.get(&self.key(step)).cloned()
+    }
+
+    fn put(&mut self, step: &Step, outcome: &StepOutcome) {
+        // A step with an error of the build can give a different result on the next run.
+        if outcome.report.errors.is_empty() {
+            self.results.insert(self.key(step), outcome.clone());
+        }
+    }
+}
+
 /// The result of a check.
 pub struct CheckResult {
     pub report: Report,
@@ -324,7 +386,7 @@ impl App {
             std::fs::create_dir_all(repo.state_dir())?;
             std::fs::write(&ignore, "*\n")?;
         }
-        Ok(App { repo, workspaces: BTreeMap::new(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() })
+        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() })
     }
 
     /// The review state of the reviewer (the decisions in the UI). It is in the cache folder of
@@ -461,6 +523,46 @@ impl App {
         }
         crate::timing("the build code test", started);
         Ok(code)
+    }
+
+    /// Removes entries of the `build-code` cache (design 37.22). An entry is the folder set of
+    /// one state of changed build code, and it can have 500 MB or more. An entry that a tree of
+    /// the stored steps (or their base) uses stays. Of the other entries, the `keep` newest
+    /// stay. The result is the count of removed entries and their size in bytes.
+    pub fn clean_build_code(&mut self, keep: usize) -> Result<(usize, u64)> {
+        let folder = self.repo.cache_dir().join("build-code");
+        if !folder.is_dir() {
+            return Ok((0, 0));
+        }
+        let set = self.load_session()?.changeset;
+        let mut used: BTreeSet<String> = BTreeSet::new();
+        if !set.steps.is_empty() {
+            let code = self.build_code(&set)?;
+            // The key of a tree with no stored key is its tree name ([`NormalOracle::root`]).
+            used.extend(code.trees.iter().map(|tree| code.keys.get(tree).cloned().unwrap_or_else(|| format!("tree-{tree}"))));
+        }
+        // The other entries, with the time of the last change of the entry or of a folder in it.
+        let mut others: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+        for entry in std::fs::read_dir(&folder)?.flatten() {
+            let path = entry.path();
+            // A link is not an entry: Semilla makes only folders here.
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || used.contains(entry.file_name().to_string_lossy().as_ref()) {
+                continue;
+            }
+            let changed = |path: &Path| std::fs::symlink_metadata(path).and_then(|data| data.modified()).ok();
+            let time = std::iter::once(path.clone()).chain(std::fs::read_dir(&path).into_iter().flatten().flatten().map(|inner| inner.path())).filter_map(|path| changed(&path)).max();
+            others.push((time.unwrap_or(std::time::UNIX_EPOCH), path));
+        }
+        others.sort_by(|a, b| b.cmp(a));
+        let (mut count, mut size) = (0, 0);
+        for (_, path) in others.into_iter().skip(keep) {
+            let bytes = folder_size(&path);
+            if std::fs::remove_dir_all(&path).is_ok() {
+                count += 1;
+                size += bytes;
+            }
+        }
+        Ok((count, size))
     }
 
     /// The key of the shared folder set of a trusted base tree: the digest of its build code
@@ -1415,7 +1517,7 @@ impl App {
         // build code. Such a step gets its phase 1 facts, with no MIR data.
         let note = code.note(self.mode.runs_build_code());
         let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().collect();
-        let log = crate::oracle::ConfigLog::default();
+        let log = self.config_log.clone();
         let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
         let exprs = SmtOracle::for_repo(&self.repo);
@@ -1426,7 +1528,10 @@ impl App {
         let cache = self.workspaces.clone();
         let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
         let started = std::time::Instant::now();
-        let (mut report, mut outcomes) = semilla_verify::verify_changeset(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true });
+        // The key of a step result has each input of the step check that is not in the step.
+        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?}", self.mode, self.no_bodies) };
+        let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
+        self.step_memo = memo.results;
         for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)).filter(|step| skip.contains(&step.step)) {
             let change = note.as_ref().and_then(|note| note.changes.iter().find(|change| change.steps.contains(&step.step))).map(|change| change.step).unwrap_or(step.step);
             mark_not_checked(step, &format!("build code changed in step {change}"));
@@ -1793,15 +1898,46 @@ impl App {
     /// Builds the data of the review UI for a change set. The body checks come from the cache of
     /// the background worker when it has run.
     pub fn ui_data_for(&mut self, set: &ChangeSet, commit: Option<&str>) -> Result<semilla_ui::UiData> {
+        Ok(self.review_parts(set, commit)?.2)
+    }
+
+    /// The review data that a command stored for this change set (design 37.21), with the
+    /// notices of this moment. `None` if no stored data is for this change set, these tools,
+    /// this mode, and these decisions of the reviewer.
+    pub fn stored_ui_data(&mut self, key: &str, set: &ChangeSet) -> Option<semilla_ui::UiData> {
+        let mut data = crate::background::stored_review(self, key, &crate::background::changeset_hash(set))?;
+        self.add_notices(&mut data.report, set, (key != "session").then_some(key));
+        Some(data)
+    }
+
+    /// The notices of a reviewer output. They depend on the commits of the repository, so each
+    /// command computes them, also for stored review data.
+    fn add_notices(&mut self, report: &mut Report, set: &ChangeSet, commit: Option<&str>) {
+        // The build code line is the first line of each output of a reviewer (design 28).
+        report.notices.extend(self.build_code_notice(report));
+        report.notices.extend(self.base_notice(set, commit));
+        report.notices.extend(self.base_build_code_notice(set, commit));
+        // The checked configurations come next to the base line (batch 5s, B1).
+        report.notices.extend(config_lines(report));
+    }
+
+    /// Checks the session change set and stores the result and the review data (design 37.21).
+    /// The step calls it for a change set of one step: the step result of this process serves
+    /// the check, so `semilla review` and `semilla status` do not check the step again.
+    pub(crate) fn store_session_result(&mut self, set: &ChangeSet) -> Result<()> {
+        let (report, text, _) = self.review_parts(set, None)?;
+        let stored = crate::background::StoredReport { key: "session".into(), tree: String::new(), hash: crate::background::changeset_hash(set), tools: self.tools_key(), report, text };
+        crate::background::store(self, &stored)
+    }
+
+    /// The check of a change set for a reviewer: the report and the text of the check, and the
+    /// review data. Stores the review data (with no notice) for the next `semilla review`.
+    pub(crate) fn review_parts(&mut self, set: &ChangeSet, commit: Option<&str>) -> Result<(Report, String, semilla_ui::UiData)> {
+        let input = set;
         let mut set = set.clone();
         let code = self.build_code(&set)?;
-        let mut result = self.check_set_with(&set, false, &code)?;
-        // The build code line is the first line of each output of a reviewer (design 28).
-        result.report.notices.extend(self.build_code_notice(&result.report));
-        result.report.notices.extend(self.base_notice(&set, commit));
-        result.report.notices.extend(self.base_build_code_notice(&set, commit));
-        // The checked configurations come next to the base line (batch 5s, B1).
-        result.report.notices.extend(config_lines(&result.report));
+        let result = self.check_set_with(&set, false, &code)?;
+        let (plain, text) = (result.report.clone(), result.text.clone());
         // Each group shows the engine suggestion of its subgroups. A stored layout has labels of
         // the agent (a role, a title), and no reviewer output shows a stored label (5k, A3).
         let test_items = self.test_items(&set)?;
@@ -1846,7 +1982,11 @@ impl App {
         let head = self.workspace(&set.head_tree).unwrap_or_default();
         let mut graph: WorkspaceGraph = semilla_verify::views::graph(&result.outcomes, &head);
         self.add_external_calls(&mut graph, &head, &set.head_tree, &code);
-        Ok(semilla_ui::UiData { changeset: set, report: result.report, tree: result.tree, flows, graph, sources, fact_sources })
+        let mut data = semilla_ui::UiData { changeset: set, report: result.report, tree: result.tree, flows, graph, sources, fact_sources };
+        // A failed write only costs time: the next command computes the data again.
+        let _ = crate::background::store_review(self, commit.unwrap_or("session"), &crate::background::changeset_hash(input), &data);
+        self.add_notices(&mut data.report, input, commit);
+        Ok((plain, text, data))
     }
 }
 

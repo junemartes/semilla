@@ -10,9 +10,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Anchor, Category, Claim, Fact};
+use semilla_core::{Anchor, Category, Claim, Compare, Fact};
 use semilla_syntax::tree::{display_tokens, one_line};
-use semilla_syntax::{Edit, EditKind};
+use semilla_syntax::{Edit, EditKind, Workspace};
 
 use crate::checks::{self, Context};
 use crate::BodyStatus;
@@ -254,6 +254,10 @@ fn changed_tokens(a: &[(bool, String)], b: &[(bool, String)]) -> (Marks, Marks) 
                 j += 1;
             }
         }
+    } else if n > 0 && m > 0 {
+        // Design 37.15: a long middle part (the body of a macro) uses a diff that is fast when
+        // few tokens changed. If more than `MOST_CHANGED` tokens changed, all is changed.
+        pairs = long_pairs(n, m, |i, j| equal(prefix + i, prefix + j)).into_iter().map(|(i, j)| (prefix + i, prefix + j)).collect();
     }
     let mut marks_a = Marks { changed: vec![true; a.len()], gap: vec![false; a.len() + 1] };
     let mut marks_b = Marks { changed: vec![true; b.len()], gap: vec![false; b.len() + 1] };
@@ -271,6 +275,51 @@ fn changed_tokens(a: &[(bool, String)], b: &[(bool, String)]) -> (Marks, Marks) 
         (next_a, next_b) = (i + 1, j + 1);
     }
     (marks_a, marks_b)
+}
+
+/// The equal token pairs of two long token lists (the diff method of Myers), in order. The
+/// result is empty if the two lists differ in more than `MOST_CHANGED` tokens.
+fn long_pairs(n: usize, m: usize, equal: impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
+    const MOST_CHANGED: usize = 1000;
+    let max = (n + m).min(MOST_CHANGED) as isize;
+    let (n, m) = (n as isize, m as isize);
+    let at = |k: isize| (k + max + 1) as usize;
+    let mut ends = vec![0isize; 2 * max as usize + 3];
+    let mut rounds: Vec<Vec<isize>> = Vec::new();
+    let mut found = None;
+    'search: for d in 0..=max {
+        rounds.push(ends.clone());
+        for k in (-d..=d).step_by(2) {
+            let mut x = if k == -d || (k != d && ends[at(k - 1)] < ends[at(k + 1)]) { ends[at(k + 1)] } else { ends[at(k - 1)] + 1 };
+            let mut y = x - k;
+            while x < n && y < m && equal(x as usize, y as usize) {
+                x += 1;
+                y += 1;
+            }
+            ends[at(k)] = x;
+            if x >= n && y >= m {
+                found = Some(d);
+                break 'search;
+            }
+        }
+    }
+    let Some(last) = found else { return Vec::new() };
+    let mut pairs = Vec::new();
+    let (mut x, mut y) = (n, m);
+    for d in (0..=last).rev() {
+        let ends = &rounds[d as usize];
+        let k = x - y;
+        let before = if k == -d || (k != d && ends[at(k - 1)] < ends[at(k + 1)]) { k + 1 } else { k - 1 };
+        let (start_x, start_y) = if d == 0 { (0, 0) } else { (ends[at(before)], ends[at(before)] - before) };
+        while x > start_x && y > start_y {
+            x -= 1;
+            y -= 1;
+            pairs.push((x as usize, y as usize));
+        }
+        (x, y) = (start_x, start_y);
+    }
+    pairs.reverse();
+    pairs
 }
 
 /// One side of a pair with a cut in each long equal part. An equal token stays when it starts
@@ -531,6 +580,9 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         // A removed and an added item with the same path (a changed `use` line): one fact (D12).
         if edit.kind == EditKind::ItemRemoved {
             let added = (0..edits.len()).find(|&j| j != index && free(fact_of, j) && edits[j].kind == EditKind::ItemAdded && edits[j].item() == Some(item.as_str()));
+            // Two entities of a different kind with one path (design 37.1): the old entity is
+            // removed, and the new entity is added. Each one keeps its own fact.
+            let added = added.filter(|_| different_entities(context, &item).is_none());
             if let Some(added) = added {
                 let full = |text: &Option<String>| one_line(&text.clone().unwrap_or_default());
                 let is_use = edit.attr_before.as_deref() == Some("use") || item.contains("::use#");
@@ -608,7 +660,10 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                         let members = ws.items.get(item.as_str()).filter(|found| found.kind == semilla_syntax::ItemKind::Impl).map(crate::impl_members_text).unwrap_or_default();
                         // A new or removed item that a different crate can use (design 36.2).
                         let api = crate::item_api_note(ws, &item, edit.kind == EditKind::ItemAdded).map(|note| format!(" ({note})")).unwrap_or_default();
-                        format!("`{item}`{members}{api}")
+                        // The kind of the entity, if the other side has a different entity
+                        // with the same path (design 37.1).
+                        let kind = different_entities(context, &item).map(|(old, new)| format!(" ({})", if edit.kind == EditKind::ItemAdded { new } else { old })).unwrap_or_default();
+                        format!("`{item}`{kind}{members}{api}")
                     }
                     (_, Some(_), Some(_)) if matches!(op, "add-arm" | "add-alternative") && inserted(edit).is_some() => format!("`{}`", inserted(edit).unwrap_or_default()),
                     (_, Some(_), Some(_)) if moved_text(edit).is_some() => format!("moved {}", moved_text(edit).unwrap_or_default()),
@@ -722,6 +777,40 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             ..fact_base()
         });
     }
+}
+
+/// The kind words of the two entities with the path `item`, if the path names an entity of a
+/// different kind on each side (design 37.1): a trait and a struct, a method of a trait and a
+/// method of an inherent impl. `None` for a `use` line, for a macro, and for one entity.
+fn different_entities(context: &Context, item: &str) -> Option<(String, String)> {
+    use semilla_syntax::ItemKind;
+    let (old, new) = (context.before.items.get(item)?, context.after.items.get(item)?);
+    if [old.kind, new.kind].iter().any(|kind| matches!(kind, ItemKind::Use | ItemKind::Macro | ItemKind::Other)) {
+        return None;
+    }
+    let (old_trait, new_trait) = (semilla_syntax::diff::in_trait(context.before, item), semilla_syntax::diff::in_trait(context.after, item));
+    if old.kind == new.kind && old_trait == new_trait {
+        return None;
+    }
+    let words = |kind: ItemKind, in_trait: bool| -> String {
+        match kind {
+            ItemKind::Fn if in_trait => "a method of a trait".into(),
+            ItemKind::Fn if item.rsplit_once("::").is_some_and(|(owner, _)| owner.rsplit("::").next().is_some_and(|name| name.starts_with(char::is_uppercase))) => "a method of an impl".into(),
+            ItemKind::Fn => "a function".into(),
+            ItemKind::Struct => "a struct".into(),
+            ItemKind::Enum => "an enum".into(),
+            ItemKind::Trait => "a trait".into(),
+            ItemKind::Impl => "an impl".into(),
+            ItemKind::Const => "a constant".into(),
+            ItemKind::Static => "a static".into(),
+            ItemKind::Type => "a type alias".into(),
+            ItemKind::Mod => "a module".into(),
+            ItemKind::Field => "a field".into(),
+            ItemKind::Variant => "a variant".into(),
+            ItemKind::Use | ItemKind::Macro | ItemKind::Other => "an item".into(),
+        }
+    };
+    Some((words(old.kind, old_trait), words(new.kind, new_trait)))
 }
 
 /// The text of a changed value of a `const` or `static` statement in a function body (design
@@ -901,6 +990,96 @@ fn split_types(text: &str) -> Vec<String> {
     parts
 }
 
+/// The text with each whole word `old` replaced by `new`.
+fn rename_word(text: &str, old: &str, new: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut current = String::new();
+    for c in text.chars().chain([' ']) {
+        if word(c) {
+            current.push(c);
+            continue;
+        }
+        out.push_str(if current == old { new } else { &current });
+        current.clear();
+        out.push(c);
+    }
+    out.pop();
+    out
+}
+
+/// A renamed `macro_rules` macro (design 37.17). The fact "removed macro `a`" and the fact
+/// "added macro `b`" of one module become one `rename` fact if the two definitions are equal
+/// after the name change. A call site fact that changes only the name goes under it. The
+/// compare result of the rename fact is the worst result of its call sites.
+/// A pair with different definitions keeps its facts. A macro with two possible partners
+/// keeps its facts.
+pub fn fold_macro_renames(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>], before: &Workspace, after: &Workspace) {
+    let definition = |fact: &Fact, category: Category, ws: &Workspace| -> Option<(String, String)> {
+        let item = ws.items.get(&fact.at.as_ref().filter(|_| fact.category == category && fact.part == "edit" && !fact.spotlight && fact.reason.is_none() && fact.note.is_none())?.item)?;
+        let path = item.path.strip_suffix('!').filter(|_| crate::owners::is_macro_definition(item))?;
+        Some((path.to_string(), item.text.clone()))
+    };
+    let owner = |path: &str| path.rsplit_once("::").map(|(owner, _)| owner.to_string()).unwrap_or_default();
+    let name = |path: &str| path.rsplit("::").next().unwrap_or(path).to_string();
+    let removed: Vec<(usize, String, String)> = facts.iter().enumerate().filter_map(|(index, fact)| definition(fact, Category::Removed, before).map(|(path, text)| (index, path, text))).collect();
+    let added: Vec<(usize, String, String)> = facts.iter().enumerate().filter_map(|(index, fact)| definition(fact, Category::Added, after).map(|(path, text)| (index, path, text))).collect();
+    let fits = |old: &(usize, String, String), new: &(usize, String, String)| owner(&old.1) == owner(&new.1) && name(&old.1) != name(&new.1) && rename_word(&old.2, &name(&old.1), &name(&new.1)) == new.2;
+    let mut target: Vec<usize> = (0..facts.len()).collect();
+    let mut drop = vec![false; facts.len()];
+    for old in &removed {
+        let partners: Vec<&(usize, String, String)> = added.iter().filter(|new| fits(old, new)).collect();
+        let [new] = partners[..] else { continue };
+        if removed.iter().filter(|other| fits(other, new)).count() != 1 {
+            continue;
+        }
+        let (old_name, new_name) = (name(&old.1), name(&new.1));
+        // The call sites: an edit fact of a macro call whose two sides differ only in the name.
+        // A cut of a side is only in a part that is equal on the two sides (`short_texts`).
+        let is_site = |fact: &Fact| -> bool {
+            let Some(at) = fact.at.as_ref().filter(|_| fact.part == "edit" && !fact.spotlight && fact.reason.is_none() && fact.note.is_none() && fact.sites.is_empty()) else { return false };
+            let Some(sides) = fact.description.strip_suffix(&format!(" at `{at}`")).and_then(|text| text.strip_prefix("changed macro: `")).and_then(|text| text.strip_suffix('`')) else { return false };
+            let parts: Vec<&str> = sides.split("` → `").collect();
+            parts.len() == 2 && parts[0].contains(&format!("{old_name}!")) && rename_word(parts[0], &old_name, &new_name) == parts[1]
+        };
+        let sites: Vec<usize> = (0..facts.len()).filter(|index| !drop[*index] && is_site(&facts[*index])).collect();
+        let level = |compare: Compare| match compare {
+            Compare::NoCode => 0,
+            Compare::CodeEqual => 1,
+            Compare::NoCompare => 2,
+            Compare::CodeDifferent => 4,
+            _ => 3,
+        };
+        let compare = sites.iter().map(|index| facts[*index].compare).max_by_key(|compare| level(*compare)).unwrap_or(Compare::NoCode);
+        let anchors: Vec<Anchor> = sites.iter().filter_map(|index| facts[*index].at.clone()).collect();
+        let mut affected: Vec<String> = sites.iter().flat_map(|index| facts[*index].affected.clone()).collect();
+        affected.sort();
+        affected.dedup();
+        let mut equal_sites: Vec<String> = sites.iter().flat_map(|index| facts[*index].equal_sites.clone()).collect();
+        equal_sites.sort();
+        equal_sites.dedup();
+        let unsafe_code = sites.iter().any(|index| facts[*index].unsafe_code);
+        let build_code = sites.iter().find_map(|index| facts[*index].build_code);
+        let fact = &mut facts[old.0];
+        fact.description = format!("renamed macro `{}` → `{}`", old.1, new.1);
+        fact.category = Category::Rename;
+        fact.compare = compare;
+        fact.part = "macro rename".into();
+        if !anchors.is_empty() {
+            fact.sites = vec![semilla_core::SiteGroup { edit: format!("changed macro call `{old_name}!` → `{new_name}!`"), sites: anchors }];
+        }
+        fact.affected = affected;
+        fact.equal_sites = equal_sites;
+        fact.unsafe_code |= unsafe_code;
+        fact.build_code = fact.build_code.or(build_code);
+        for other in sites.into_iter().chain([new.0]) {
+            target[other] = old.0;
+            drop[other] = true;
+        }
+    }
+    drop_facts(facts, fact_of, &target, &drop);
+}
+
 /// Folds equal facts into one fact (design 24.2, the short output). Two edit facts fold when they
 /// have the same text (without the place), the same category, the same compare result, and no
 /// spotlight. Two body facts fold when they have the same text. Two type facts fold when they have the same
@@ -963,6 +1142,12 @@ pub fn fold(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>]) {
             drop[other] = true;
         }
     }
+    drop_facts(facts, fact_of, &target, &drop);
+}
+
+/// Removes the facts with a `drop` mark. An edit of a removed fact goes to the fact `target`.
+/// Each fact gets its new number.
+fn drop_facts(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>], target: &[usize], drop: &[bool]) {
     // The new index of each kept fact.
     let mut new_index = vec![0; facts.len()];
     let mut next = 0;
@@ -997,6 +1182,32 @@ mod tests {
 
     fn pair(old: &str, new: &str) -> (String, String) {
         short_texts(one_line(old), one_line(new))
+    }
+
+    /// Design 37.15: a long text (the body of a macro) with a small change shows the changed
+    /// part with context and cut marks. Before, each side showed the full text.
+    #[test]
+    fn a_long_text_with_a_small_change_shows_the_changed_part() {
+        let body = |mark: &str| (0..3000).map(|index| if index == 1700 { format!("let v{index} = {mark} ;") } else { format!("let v{index} = {index} ;") }).collect::<Vec<_>>().join(" ");
+        let (old, new) = pair(&body("7"), &body("call ( 8 )"));
+        assert!(old.chars().count() < 120 && new.chars().count() < 120, "{old}\n{new}");
+        assert!(old.starts_with('…') && old.ends_with('…') && new.starts_with('…') && new.ends_with('…'), "{old}\n{new}");
+        assert!(old.contains("v1700 = 7 ;") && new.contains("v1700 = call ( 8 ) ;"), "{old}\n{new}");
+        // Two changes that are far apart: each change shows, with a cut mark between them.
+        let two = body("7").replace("let v40 = 40 ;", "let v40 = 41 ;").replace("let v2900 = 2900 ;", "let w2900 = 2900 ;");
+        let (old, new) = pair(&body("7"), &two);
+        assert!(new.contains("v40 = 41") && new.contains("w2900") && old.contains("v40 = 40") && old.contains("v2900"), "{old}\n{new}");
+        assert!(new.chars().count() < 200 && new.matches('…').count() == 3, "{new}");
+    }
+
+    /// The fast diff gives the same pairs as the table for a small case, and no pair for two
+    /// lists with no equal token.
+    #[test]
+    fn the_fast_diff_finds_each_equal_pair() {
+        let (a, b) = (["a", "b", "c", "d", "e"], ["a", "x", "c", "e", "y"]);
+        assert_eq!(long_pairs(a.len(), b.len(), |i, j| a[i] == b[j]), vec![(0, 0), (2, 2), (4, 3)]);
+        assert_eq!(long_pairs(2, 2, |_, _| false), Vec::new());
+        assert_eq!(long_pairs(3, 0, |_, _| false), Vec::new());
     }
 
     /// Brief 5h, C7: a short text of a fact has no cut in the middle of a token, and the cut of a

@@ -6,7 +6,7 @@
 //! only when the result is accepted.
 
 use semilla_core::text::put_line;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use semilla_core::{Anchor, Claim, GroupKind};
@@ -38,6 +38,49 @@ pub struct StepRequest {
     pub tree: bool,
     /// Phase 1 only; phase 2 runs in the background (B1).
     pub fast: bool,
+}
+
+/// One more place where a `--reason` text can split into a key and a reason (design 37.6).
+struct ReasonSplit {
+    /// The index of the text in the request.
+    text: usize,
+    key: String,
+    reason: String,
+}
+
+/// The keys of a fact that a reason can have.
+fn fact_keys(fact: &semilla_core::report::Fact) -> Vec<String> {
+    let mut keys = vec![fact.reason_place(), fact.part.clone()];
+    keys.extend(fact.at.as_ref().map(|at| at.item.clone()));
+    keys.extend(fact.reason_key.clone());
+    keys.extend(fact.reason_item.clone());
+    keys
+}
+
+/// The split of each `--reason` text with two `=` or more (design 37.6). The rule: the key of
+/// a text is the longest key `K` that is open in the step, where the text starts with `K=`. If
+/// no such key is open, the key is the text before the first `=`.
+///
+/// A key is open if a fact with this key got the reason of the split, or if a claim has the key
+/// as its anchor. The check ran with each possible key in the reason map.
+///
+/// Returns the split of each text whose key is not the text before the first `=`, and true if
+/// the check must run again: a split that is not the split of its text gave a reason to a fact.
+fn reason_splits(report: &semilla_core::report::StepReport, claim_anchors: &[String], first: &[(String, String, String)], others: &[ReasonSplit]) -> (BTreeMap<usize, ReasonSplit>, bool) {
+    let open = |key: &str, reason: &str| claim_anchors.iter().any(|anchor| anchor == key) || report.facts.iter().any(|fact| fact.reason.as_deref() == Some(reason) && fact_keys(fact).iter().any(|found| found == key));
+    let mut chosen: BTreeMap<usize, ReasonSplit> = BTreeMap::new();
+    let mut again = false;
+    for (index, (_, first_key, first_reason)) in first.iter().enumerate() {
+        // The splits of this text, the longest key first.
+        let mut splits: Vec<&ReasonSplit> = others.iter().filter(|split| split.text == index).collect();
+        splits.sort_by_key(|split| std::cmp::Reverse(split.key.len()));
+        let fits: Vec<&ReasonSplit> = splits.into_iter().filter(|split| open(&split.key, &split.reason)).collect();
+        let Some(longest) = fits.first() else { continue };
+        chosen.insert(index, ReasonSplit { text: index, key: longest.key.clone(), reason: longest.reason.clone() });
+        // The first split and each shorter split are not the split of the text.
+        again |= fits.len() > 1 || open(first_key, first_reason);
+    }
+    (chosen, again)
 }
 
 impl StepRequest {
@@ -271,6 +314,24 @@ impl App {
             reason_keys.push((text.clone(), key.clone(), reason.trim().to_string()));
             reasons.insert(key, reason.trim().to_string());
         }
+        // A key can have a `=` (a manifest key with a `cfg(…)` condition), and a reason can
+        // have one too. So a text with two `=` or more has more than one possible key (design
+        // 37.6). The check runs with each possible key. Then the facts tell which key is open,
+        // and the longest open key is the key of the text (`reason_splits`).
+        let first_keys: BTreeSet<String> = reasons.keys().cloned().collect();
+        let mut other_splits: Vec<ReasonSplit> = Vec::new();
+        for (index, text) in request.reasons.iter().enumerate() {
+            for (at, _) in text.match_indices('=').skip(1) {
+                let (key, reason) = (text[..at].trim(), text[at + 1..].trim());
+                if reason.is_empty() || first_keys.contains(key) {
+                    continue;
+                }
+                other_splits.push(ReasonSplit { text: index, key: key.to_string(), reason: reason.to_string() });
+            }
+        }
+        for split in &other_splits {
+            reasons.entry(split.key.clone()).or_insert_with(|| split.reason.clone());
+        }
 
         // B1: phase 2 runs in the command, so the result is final: phase 2 can reject a step (an
         // indirect change with no known cause). With `--fast`, phase 2 runs now only when a
@@ -293,6 +354,32 @@ impl App {
             full = true;
             self.no_bodies = false;
             result = self.check(Some(index), false);
+        }
+        // The key of each `--reason` text with two `=` or more (design 37.6).
+        if !other_splits.is_empty() {
+            if let Ok(found) = &result {
+                let report = found.report.steps.first().cloned().unwrap_or_default();
+                let (chosen, again) = reason_splits(&report, &claim_anchors, &reason_keys, &other_splits);
+                let mut reasons = BTreeMap::new();
+                for (index, (_, key, reason)) in reason_keys.iter_mut().enumerate() {
+                    if let Some(split) = chosen.get(&index) {
+                        (*key, *reason) = (split.key.clone(), split.reason.clone());
+                    }
+                    reasons.insert(key.clone(), reason.clone());
+                }
+                // The stored step has only the key of each text.
+                let mut session = self.load_session()?;
+                if let Some(open) = session.open.as_mut() {
+                    open.reasons = reasons;
+                }
+                self.save_session(&session)?;
+                if again {
+                    // A key that is not the key of its text gave a reason to a fact: the result
+                    // is not the result of the final keys. The check runs again.
+                    self.no_bodies = no_bodies || !full;
+                    result = self.check(Some(index), false);
+                }
+            }
         }
         self.no_bodies = no_bodies;
         let result = match result {
@@ -320,7 +407,14 @@ impl App {
         // step tells it, and the command to run again omits it.
         let unused: Vec<&(String, String, String)> = reason_keys
             .iter()
-            .filter(|(_, key, reason)| !report.facts.iter().any(|fact| fact.reason.as_ref() == Some(reason)) && !claim_anchors.contains(key))
+            // Design 37.19: a kind reason is in use only if it covers a spotlight.
+            .filter(|(_, key, reason)| {
+                if key.starts_with(semilla_core::report::KIND_KEY) {
+                    !report.facts.iter().any(|fact| fact.reason_key.as_ref() == Some(key))
+                } else {
+                    !report.facts.iter().any(|fact| fact.reason.as_ref() == Some(reason)) && !claim_anchors.contains(key)
+                }
+            })
             .collect();
         // The unused keys that are a module path or a crate name.
         let mut wide_keys: BTreeMap<String, &str> = BTreeMap::new();
@@ -357,6 +451,15 @@ impl App {
                 format!(". `{key}` is a body of a fact with a spotlight: the key of the reason is {}", keys.join(", "))
             } else if !file_keys.is_empty() {
                 format!(". `{key}` is not the key of a reason. Each fact has its own key: {}", file_keys.join(", "))
+            } else if let Some(kind) = key.strip_prefix(semilla_core::report::KIND_KEY) {
+                // Design 37.19: a kind reason for a kind with no open spotlight in this step.
+                if kind == semilla_core::report::BUILD_CODE_KIND {
+                    ". A kind reason does not cover build code: each changed file of build code needs its own reason".to_string()
+                } else if semilla_core::report::SPOTLIGHT_KINDS.iter().any(|(name, _)| *name == kind) {
+                    format!(". No open spotlight of this step has the kind `{kind}`")
+                } else {
+                    format!(". `{kind}` is not the name of a kind. The kinds: {}", semilla_core::report::kind_names())
+                }
             } else if let Some(kind) = wide_keys.get(key) {
                 // Batch 5x, part D: a module path and a crate name are not a key of a reason.
                 format!(". `{key}` is a {kind}, and a {kind} is not a valid key of a reason. A key is the path of an item (a function, a method, a constant, a static, a type, a trait), the exact key of a spotlight, or a file key (`path/to/file:`)")
@@ -418,7 +521,18 @@ impl App {
             let mut blocked = Vec::new();
             // The `calls-only` claims that the command changes: the claim, and the new entries.
             let mut widened: Vec<(String, Vec<String>)> = Vec::new();
+            // Design 37.19: a kind with four open spotlights or more gets one kind reason. A
+            // kind with fewer gets the keys of its facts. Build code keeps one key for each file.
+            let kind_of = |fact: &semilla_core::report::Fact| fact.kind().filter(|kind| *kind != semilla_core::report::BUILD_CODE_KIND);
+            let open_kinds: Vec<&str> = report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()).filter_map(kind_of).collect();
             for fact in report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()) {
+                if let Some(kind) = kind_of(fact).filter(|kind| open_kinds.iter().filter(|open| *open == kind).count() >= semilla_core::report::KIND_REASON_MIN) {
+                    let entry = format!("{}{kind}=<why>", semilla_core::report::KIND_KEY);
+                    if !missing.contains(&entry) {
+                        missing.push(entry);
+                    }
+                    continue;
+                }
                 let place = fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone());
                 // Part B of batch 5j: the body below shows the fact with "it needs a reason" and
                 // the exact anchor. The top summary does not repeat the reason line of the fact.
@@ -524,7 +638,14 @@ impl App {
         self.group_set(&id, kind, &title, &why, steps)?;
         // The background check gets the change set with the group of the step, so that the stored
         // result agrees with the session of the next command.
-        self.queue_session(&self.load_session()?.changeset)?;
+        let stored_set = self.load_session()?.changeset;
+        // Design 37.21: a change set of one step has its full result in this process. The step
+        // stores it, so the background check and `semilla review` do not check the step again.
+        // A failure here is not a failure of the step: the background check does the work.
+        if full && !self.no_bodies && stored_set.steps.len() == 1 {
+            let _ = self.store_session_result(&stored_set);
+        }
+        self.queue_session(&stored_set)?;
         // B4: a commit between the steps makes `tag` fail. Say it now, with the fix.
         if index > 0 {
             let head = self.repo.commit_tree("HEAD").unwrap_or_default();
@@ -646,5 +767,46 @@ mod tests {
         assert_eq!(split_words("pure a::<T as B key=1"), ["pure", "a::<T", "as", "B", "key=1"]);
         // A `<` in the middle of a word is not the start of an impl anchor.
         assert_eq!(split_words("pure a::f note=x<y z"), ["pure", "a::f", "note=x<y", "z"]);
+    }
+}
+
+#[cfg(test)]
+mod reason_tests {
+    use super::*;
+    use semilla_core::report::{Fact, StepReport};
+
+    fn fact(part: &str, reason: Option<&str>) -> Fact {
+        Fact { id: "f1".into(), part: part.into(), spotlight: true, reason: reason.map(str::to_string), ..Fact::default() }
+    }
+
+    #[test]
+    fn the_longest_open_key_is_the_key_of_a_reason_text() {
+        // Design 37.6. The text `a=b=c` can have the key `a` or the key `a=b`.
+        let first = vec![("a=b=c".to_string(), "a".to_string(), "b=c".to_string())];
+        let others = vec![ReasonSplit { text: 0, key: "a=b".into(), reason: "c".into() }];
+        // Only `a` is open: the first `=` splits the text, and no check runs again.
+        let report = StepReport { facts: vec![fact("a", Some("b=c")), fact("z", None)], ..StepReport::default() };
+        let (chosen, again) = reason_splits(&report, &[], &first, &others);
+        assert!(chosen.is_empty() && !again);
+        // Only `a=b` is open: it is the key, and the result is already the result of this key.
+        let report = StepReport { facts: vec![fact("a=b", Some("c"))], ..StepReport::default() };
+        let (chosen, again) = reason_splits(&report, &[], &first, &others);
+        assert!(chosen[&0].key == "a=b" && chosen[&0].reason == "c" && !again);
+        // The two keys are open: the longest key is the key. The fact `a` got a reason that is
+        // not its reason, so the check runs again.
+        let report = StepReport { facts: vec![fact("a", Some("b=c")), fact("a=b", Some("c"))], ..StepReport::default() };
+        let (chosen, again) = reason_splits(&report, &[], &first, &others);
+        assert!(chosen[&0].key == "a=b" && again);
+        // No key is open: the first `=` splits the text.
+        let report = StepReport { facts: vec![fact("z", None)], ..StepReport::default() };
+        let (chosen, again) = reason_splits(&report, &[], &first, &others);
+        assert!(chosen.is_empty() && !again);
+        // A fact with the same reason text and a different key does not make a key open.
+        let report = StepReport { facts: vec![fact("z", Some("c"))], ..StepReport::default() };
+        let (chosen, again) = reason_splits(&report, &[], &first, &others);
+        assert!(chosen.is_empty() && !again);
+        // The anchor of a claim is a key too.
+        let (chosen, _) = reason_splits(&report, &["a=b".to_string()], &first, &others);
+        assert_eq!(chosen[&0].key, "a=b");
     }
 }

@@ -326,6 +326,9 @@ fn doc_include(before: &Workspace, after: &Workspace, file: &str) -> bool {
 /// The spotlight text of a file mode change.
 const MODE_WHY: &str = "a file mode (a tool can run or skip a file by its mode)";
 
+/// The start of the spotlight of a file that the loader cannot parse (design 37.5).
+pub(crate) const PARSE_ERROR: &str = "Semilla cannot parse this file: ";
+
 /// Why a file fact with no key list needs a reason, or `None`. Each cause that applies is in the
 /// text, and no other cause: the text must fit the fact (brief 5g, item 4).
 ///
@@ -460,6 +463,12 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
                 // A file that `include!` reads is Rust code, whatever its name is (batch 5w, D3).
                 let rust = before.is_rust_file(&file) || after.is_rust_file(&file) || crate::owners::code_readers(before, after, &file).is_some();
                 let why = file_spotlight(&file, note, content_changed, parsed(before) && parsed(after), rust, code_file(before, after, &file), || doc_include(before, after, &file));
+                // A file that the loader cannot parse (design 37.5): the spotlight has the reason.
+                let error = |ws: &Workspace, side: &str| ws.parse_errors.get(&file).map(|reason| format!("{reason}, in the tree {side} the step"));
+                let why = match error(after, "after").or_else(|| error(before, "before")) {
+                    Some(reason) => Some(format!("{PARSE_ERROR}{reason}")),
+                    None => why,
+                };
                 let note = edit.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
                 fact(format!("{file}:"), format!("{file}: {what}{note}"), why);
             }

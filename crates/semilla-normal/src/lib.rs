@@ -446,7 +446,12 @@ pub fn compare_with(
     before_marks: &Marks,
     after_marks: &Marks,
 ) -> Vec<BodyComparison> {
-    let rename_pairs = usable_renames(before, renames);
+    // The names of the impl items that lost or got a lifetime (design 37.2).
+    let renamed = lifetime_names(before, after, before_marks);
+    let (before, before_marks) = renamed.as_ref().map_or((before, before_marks), |(levels, marks)| (levels, marks));
+    let mut rename_pairs = usable_renames(before, renames);
+    let generic = generic_renames(before, after, &rename_pairs, renames);
+    rename_pairs.extend(generic);
     // The records of the driver in wrapper mode name their target. Old records (and the command
     // mode) do not, and then all records of a name form one set.
     let use_targets = [before, after]
@@ -487,6 +492,46 @@ pub fn compare_with(
     results
 }
 
+/// Gives a body of the old tree the name of the body of the new tree when the two names are
+/// different only in a lifetime (design 37.2): `<&'a mut a::Node as a::Parse>::parse` and
+/// `<&mut a::Node as a::Parse>::parse`. The header of the impl changed, and its bodies did
+/// not move. The two names make a pair only if no other body name of the two trees has the
+/// same text without lifetimes. `None` if there is no such pair.
+fn lifetime_names(before: &Levels, after: &Levels, marks: &Marks) -> Option<(Levels, Marks)> {
+    let names = |levels: &Levels| -> BTreeSet<String> { levels.values().flatten().map(|record| record.name.clone()).collect() };
+    let (old, new) = (names(before), names(after));
+    if !old.iter().chain(&new).any(|name| name.contains('\'')) {
+        return None;
+    }
+    let keys = |names: &BTreeSet<String>| -> BTreeMap<String, Vec<String>> {
+        let mut keys: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for name in names {
+            keys.entry(paths::no_lifetimes(name)).or_default().push(name.clone());
+        }
+        keys
+    };
+    let (old_keys, new_keys) = (keys(&old), keys(&new));
+    let mut pairs = BTreeMap::new();
+    for (key, list) in &old_keys {
+        if let ([from], Some([to])) = (list.as_slice(), new_keys.get(key).map(Vec::as_slice)) {
+            if from != to && !new.contains(from) && !old.contains(to) {
+                pairs.insert(from.clone(), to.clone());
+            }
+        }
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    let mut levels = before.clone();
+    for record in levels.values_mut().flatten() {
+        if let Some(to) = pairs.get(&record.name) {
+            record.name = to.clone();
+        }
+    }
+    let rename = |names: &BTreeSet<String>| names.iter().map(|name| pairs.get(name).unwrap_or(name).clone()).collect();
+    Some((levels, Marks { opaque: rename(&marks.opaque), stop: rename(&marks.stop) }))
+}
+
 /// Returns the rename pairs that are safe to apply. A rename whose target path already exists on
 /// the "before" side (as a body name or in a body text) would make two different items look the
 /// same, so it is not applied. Such a claim is malformed. An exception: the target is itself
@@ -510,6 +555,63 @@ fn usable_renames(before: &Levels, renames: &BTreeMap<String, String>) -> Vec<(S
         })
         .map(|(from, to)| (from.clone(), to.clone()))
         .collect()
+}
+
+/// The generic keys of the rename map (design 37.4). The key of a rename is a path of the source
+/// (`a::Type::method`). The name of a body of a generic impl has the generic arguments
+/// (`a::Type::<T>::method`), and the plain key does not match it. A rename gets a generic key
+/// (`paths::GENERIC_KEY`) if these conditions are true:
+///
+/// - Exactly one body name of the old tree fits the old path, and no body has the plain path.
+/// - At most one body name of the new tree fits the new path.
+/// - No body of the old tree has the new path with generic arguments, in its name or in its text.
+///
+/// If two bodies fit one key (`Type::<u8>::get` and `Type::<u16>::get`), the key is not
+/// unique: the rename gets no generic key, and the compare result stays `code different`.
+fn generic_renames(before: &Levels, after: &Levels, usable: &[(String, String)], renames: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    // Only a path with two segments or more after the crate name can have a list in it.
+    let candidates: Vec<&(String, String)> = usable.iter().filter(|(from, to)| from != to && from.matches("::").count() >= 2).collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let names = |levels: &Levels| -> BTreeSet<String> { levels.values().flatten().map(|record| record.name.clone()).collect() };
+    let (old_names, new_names) = (names(before), names(after));
+    // The distinct starts of the body names that fit a path, and true if a body has the plain path.
+    let fits = |names: &BTreeSet<String>, path: &str| -> (BTreeSet<String>, bool) {
+        let last = path.rsplit("::").next().unwrap_or(path);
+        let mut starts = BTreeSet::new();
+        let mut plain = false;
+        for name in names.iter().filter(|name| name.contains(last)) {
+            if let Some(start) = paths::generic_prefix(name, path) {
+                starts.insert(start.to_string());
+            }
+            plain |= name == path || name.strip_prefix(path).is_some_and(|rest| rest.starts_with("::"));
+        }
+        (starts, plain)
+    };
+    let mut out = Vec::new();
+    for (from, to) in candidates {
+        let (old, plain) = fits(&old_names, from);
+        if old.len() != 1 || plain {
+            continue;
+        }
+        let (new, new_plain) = fits(&new_names, to);
+        if new.len() > 1 || new_plain {
+            continue;
+        }
+        // The new path must not be there before the step, as `usable_renames` requires.
+        if !renames.contains_key(to) {
+            // The marker has the segments of the path, so that each list has a place.
+            let marker = [(format!("{}{to}", paths::GENERIC_KEY), format!("{to}\u{0}"))];
+            let last = to.rsplit("::").next().unwrap_or(to);
+            let mentions = |text: &String| text.contains(last) && paths::rename(text, &marker) != *text;
+            if before.values().flatten().any(|record| mentions(&record.name) || mentions(&record.text)) {
+                continue;
+            }
+        }
+        out.push((format!("{}{from}", paths::GENERIC_KEY), to.clone()));
+    }
+    out
 }
 
 /// Returns rename hints: pairs of a "before" body and an "after" body with the same N1 content
@@ -978,6 +1080,20 @@ fn same_bodies(
     if before.keys().eq(after.keys()) {
         return before == after;
     }
+    // A change of the package version or of a dependency changes the hash in each target name
+    // (design 37.12). The targets then pair by their name without the hash: for each such name,
+    // the two sides have the same number of targets with the same texts.
+    fn by_stem(texts: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<&str, Vec<&BTreeSet<String>>> {
+        let mut stems: BTreeMap<&str, Vec<&BTreeSet<String>>> = BTreeMap::new();
+        for (target, texts) in texts {
+            stems.entry(target_stem(target)).or_default().push(texts);
+        }
+        stems.values_mut().for_each(|texts| texts.sort());
+        stems
+    }
+    if by_stem(before) == by_stem(after) {
+        return true;
+    }
     fn single(texts: &BTreeMap<String, BTreeSet<String>>) -> Option<&String> {
         let all: BTreeSet<&String> = texts.values().flatten().collect();
         match all.into_iter().collect::<Vec<_>>()[..] {
@@ -986,6 +1102,15 @@ fn same_bodies(
         }
     }
     matches!((single(before), single(after)), (Some(b), Some(a)) if b == a)
+}
+
+/// The name of a target without its hash: `depot.test` for `depot.test.480693c09eb877f6`. A name
+/// with no hash at its end stays as it is.
+fn target_stem(target: &str) -> &str {
+    match target.rsplit_once('.') {
+        Some((stem, hash)) if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) => stem,
+        _ => target,
+    }
 }
 
 /// N4 on the terms of one level. Returns the proof (the build rules and the egglog rules).
