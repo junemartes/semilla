@@ -94,6 +94,13 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     // The changed bodies that are associated constants: the name, the parent item, and the text
     // of the constant (batch 5n, A2).
     let assoc: BTreeMap<String, (String, String)> = changed(input.bodies).filter(|body| input.body_index.item_of(body).is_none()).filter_map(|body| Some((body.name.clone(), assoc_const(input, body)?))).collect();
+    // The map from the MIR elements that differ to the edits (design 40.3).
+    let mut map = crate::mirmap::MirMap::new(input.before, input.after, input.edits);
+    // The elements that each fact owns, for the branch mark (design 40.4).
+    let mut branch_of: BTreeMap<usize, [Vec<crate::MirElement>; 2]> = BTreeMap::new();
+    // The nodes of the elements with no owner: the body, and true if the body has an edit.
+    // The nodes of the elements with no owner of each body with an edit, and the edits of the body.
+    let mut unowned_of: BTreeMap<String, (BTreeSet<(usize, crate::mirmap::Mapped)>, BTreeSet<usize>)> = BTreeMap::new();
     for body in changed(input.bodies) {
         let item = input.body_index.item_of(body);
         if is_harness(body) {
@@ -115,11 +122,59 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             owned.insert(name, Owner::Fact(index));
             continue;
         }
-        let mut found = text_owners(input, body, &name);
+        let text_edits = text_edits(input, body, &name);
+        let mut found: Vec<Owner> = Vec::new();
+        for edit in &text_edits {
+            let owner = owner_of_edit(input, *edit);
+            if !found.contains(&owner) {
+                found.push(owner);
+            }
+        }
         // An associated constant has no item of its own: an edit of its text is an edit of the
         // impl or of the trait that has it.
         if let Some((parent, _)) = assoc.get(&name).filter(|_| found.is_empty()) {
             found = assoc_text_owners(input, &name, parent);
+        }
+        // Design 40.3: each edit gets its own compare result. An edit that owns a MIR element
+        // that differs owns the body. If each element that differs has an owner, an edit that
+        // owns none does not own the body (`code equal`). Else each edit keeps the rule of
+        // design 38 (the doubt rule): a doubt never gives `code equal`.
+        // A body with no edit of its text keeps the rules of the evidence below (a changed macro
+        // needs its reason); its elements with no owner name their nodes.
+        if let (BodyStatus::Different { .. }, Some(diff), false) = (&body.status, &body.elements, text_edits.is_empty()) {
+            let own = map.own(diff);
+            let complete = own.complete(diff);
+            let owning: Vec<Owner> = own.owns.keys().map(|edit| owner_of_edit(input, *edit)).fold(Vec::new(), |mut list, owner| {
+                if !list.contains(&owner) {
+                    list.push(owner);
+                }
+                list
+            });
+            for (edit, elements) in &own.owns {
+                if let Some(fact) = input.fact_of[*edit].filter(|_| input.owners[*edit].is_none()) {
+                    let entry = branch_of.entry(fact).or_default();
+                    entry[0].extend(elements[0].iter().cloned());
+                    entry[1].extend(elements[1].iter().cloned());
+                }
+            }
+            map.owning.extend(own.owns.keys().copied());
+            let idle = text_edits.iter().copied().filter(|edit| !own.owns.contains_key(edit));
+            if complete {
+                map.idle_equal.extend(idle);
+                found = owning;
+            } else {
+                map.idle_doubt.extend(idle);
+                for owner in owning {
+                    if !found.contains(&owner) {
+                        found.push(owner);
+                    }
+                }
+            }
+            if !own.unowned.is_empty() {
+                let entry = unowned_of.entry(name.clone()).or_default();
+                entry.0.extend(own.unowned);
+                entry.1.extend(text_edits.iter().copied());
+            }
         }
         // A new name of a local or a parameter does not change the code. When the body has a
         // different edit fact, the body goes to that fact (design 36.1, rule 7). With no such
@@ -273,7 +328,29 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     // No known cause: a new fact with the spotlight. Two bodies of one item (a function and
     // its closure) give one fact (batch 6b, part 1): before, each body gave the same fact again.
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
+    // Design 40.3: the elements with no owner in a body with an edit. The edits keep the doubt
+    // rule, so the fact has no spotlight: it names the places of the change.
+    for (name, (nodes, edits)) in &unowned_of {
+        let causes = type_path_causes(input, report, edits);
+        body_fact(input, report, name, nodes, false, &causes);
+    }
+    // The bodies with no edit and with nodes: one fact for each body, at most `CRATE_BODIES`
+    // in a crate; else one fact for the crate (design 40.3).
+    let mut no_edit: BTreeMap<String, Vec<(String, BTreeSet<(usize, crate::mirmap::Mapped)>)>> = BTreeMap::new();
     for (body, name) in pending {
+        let nodes = match (&body.status, &body.elements) {
+            (BodyStatus::Different { .. }, Some(diff)) => Some(map.own(diff).unowned).filter(|nodes| !nodes.is_empty()),
+            _ => None,
+        };
+        if let Some(nodes) = nodes {
+            let krate = name.trim_start_matches('<').split("::").next().unwrap_or(&name).to_string();
+            let list = no_edit.entry(krate).or_default();
+            match list.iter_mut().find(|(known, _)| *known == name) {
+                Some((_, known)) => known.extend(nodes),
+                None => list.push((name, nodes)),
+            }
+            continue;
+        }
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
         // A known origin: a syntax item, or a derive of a type of the workspace.
@@ -295,7 +372,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -314,6 +391,117 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             note: None,
         });
     }
+    for (krate, bodies) in no_edit {
+        if bodies.len() <= CRATE_BODIES {
+            for (name, nodes) in &bodies {
+                body_fact(input, report, name, nodes, true, "");
+            }
+            continue;
+        }
+        let names: Vec<String> = bodies.iter().map(|(name, _)| name.clone()).collect();
+        let shown: Vec<String> = names.iter().take(CRATE_BODIES).map(|name| format!("`{name}`")).collect();
+        let anchor = Anchor::item(&krate);
+        report.facts.push(Fact {
+            id: format!("f{}", report.facts.len() + 1),
+            at: Some(anchor.clone()),
+            part: "indirect change".into(),
+            description: format!("the compiled code of {} bodies of the crate `{krate}` changes with no edit of their text: {}, and {} more", names.len(), shown.join(", "), names.len() - CRATE_BODIES),
+            status: "derived".into(),
+            category: Category::Indirect,
+            affected: names,
+            spotlight: true,
+            spotlight_why: Some("an indirect change that Semilla cannot explain: give the cause as the reason".to_string()),
+            reason: input.step.reasons.get(&anchor.to_string()).cloned(),
+            ..Default::default()
+        });
+    }
+    // The branch mark (design 40.4) of each fact whose elements change the branches.
+    for (fact, elements) in branch_of {
+        if let Some(fact) = report.facts.get_mut(fact) {
+            fact.branches = crate::mirmap::branch_mark(&elements);
+        }
+    }
+    // Each edit counts one time: an edit with the doubt rule in one body is a doubt.
+    map.counts.owners = map.owning.len();
+    map.counts.doubt = map.idle_doubt.difference(&map.owning).count();
+    map.counts.equal = map.idle_equal.iter().filter(|edit| !map.owning.contains(edit) && !map.idle_doubt.contains(edit)).count();
+    map.counts.errors = map.errors;
+    map.counts.examples = std::mem::take(&mut map.examples);
+    report.mir_map = map.counts;
+}
+
+/// The most bodies with no edit of one crate that get a fact each (design 40.3).
+const CRATE_BODIES: usize = 3;
+
+/// The most display texts in the fact of a body (design 40.3).
+const BODY_TEXTS: usize = 3;
+
+/// The facts of the edits of a body that change a type or a path (design 40.3): the elements of
+/// the body with no edit at their place can follow such a change. Empty if there is none.
+fn type_path_causes(input: &Input, report: &StepReport, edits: &BTreeSet<usize>) -> String {
+    let mut ids: Vec<String> = Vec::new();
+    for edit in edits {
+        let edit_ref = &input.edits[*edit];
+        let kinds = [edit_ref.node_before, edit_ref.node_after];
+        let role = edit_ref.anchor().and_then(|anchor| anchor.path.last()).map(|segment| segment.to_string()).unwrap_or_default();
+        let typed = kinds.iter().flatten().any(|kind| matches!(*kind, "path" | "type" | "signature" | "pattern")) || role == "ty" || role == "callee" || role.starts_with("param");
+        if let Some(fact) = input.fact_of[*edit].filter(|_| typed).and_then(|fact| report.facts.get(fact)) {
+            if !ids.contains(&fact.id) {
+                ids.push(fact.id.clone());
+            }
+        }
+    }
+    if ids.is_empty() { String::new() } else { format!("; a type or a path changes in {} of this body", ids.join(", ")) }
+}
+
+/// The fact of the nodes of the MIR elements with no owner in one body (design 40.3): the
+/// outermost nodes, at most `BODY_TEXTS` display texts, and the lines in a note. With
+/// `spotlight`, the fact needs a reason (a body with no edit).
+fn body_fact(input: &Input, report: &mut StepReport, name: &str, nodes: &BTreeSet<(usize, crate::mirmap::Mapped)>, spotlight: bool, causes: &str) {
+    let anchor = Anchor::item(name);
+    let place = anchor.to_string();
+    // The outermost nodes of each side, and a node with the same text on the two sides one time
+    // (the new side).
+    let inside = |(side, node): &(usize, crate::mirmap::Mapped), (other_side, other): &(usize, crate::mirmap::Mapped)| side == other_side && node != other && node.file == other.file && other.start <= node.start && node.end <= other.end;
+    let outer: Vec<&(usize, crate::mirmap::Mapped)> = nodes.iter().filter(|node| !nodes.iter().any(|other| inside(node, other))).collect();
+    let new_texts: BTreeSet<&str> = outer.iter().filter(|(side, _)| *side == 1).map(|(_, node)| node.text.as_str()).collect();
+    let mut kept: Vec<&(usize, crate::mirmap::Mapped)> = outer.into_iter().filter(|(side, node)| *side == 1 || !new_texts.contains(node.text.as_str())).collect();
+    kept.sort_by(|(a, x), (b, y)| b.cmp(a).then(x.start.cmp(&y.start)));
+    let mut texts: Vec<String> = kept.iter().map(|(side, node)| format!("`{}`{}", node.text, if *side == 0 { " (before the step)" } else { "" })).collect();
+    texts.dedup();
+    let more = texts.len().saturating_sub(BODY_TEXTS);
+    texts.truncate(BODY_TEXTS);
+    let list = if more > 0 { format!("{}, and {more} more", texts.join(", ")) } else { texts.join(", ") };
+    let lines = |side: usize| -> Vec<String> {
+        let mut lines: Vec<usize> = kept.iter().filter(|(found, _)| *found == side).map(|(_, node)| node.start.0).collect();
+        lines.sort();
+        lines.dedup();
+        lines.iter().map(usize::to_string).collect()
+    };
+    let (new_lines, old_lines) = (lines(1), lines(0));
+    let mut note = Vec::new();
+    if !new_lines.is_empty() {
+        note.push(format!("lines {}", new_lines.join(", ")));
+    }
+    if !old_lines.is_empty() {
+        note.push(format!("lines before the step {}", old_lines.join(", ")));
+    }
+    let why = spotlight.then(|| "an indirect change that Semilla cannot explain: give the cause as the reason".to_string());
+    report.facts.push(Fact {
+        id: format!("f{}", report.facts.len() + 1),
+        at: Some(anchor),
+        file: kept.first().map(|(_, node)| node.file.clone()),
+        part: "indirect change".into(),
+        description: format!("the compiled code of `{name}` changes with no edit at its place: {list}{causes}"),
+        status: "derived".into(),
+        category: Category::Indirect,
+        affected: vec![name.to_string()],
+        spotlight,
+        spotlight_why: why,
+        reason: if spotlight { input.step.reasons.get(&place).cloned() } else { None },
+        note: Some(note.join("; ")).filter(|note| !note.is_empty()),
+        ..Default::default()
+    });
 }
 
 /// The cause of a body that a `macro_rules!` macro makes (batch 6a, B2).
@@ -485,7 +673,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),
@@ -548,11 +736,11 @@ fn names_pair(input: &Input, name: &str) -> Option<usize> {
     input.identity_pairs.iter().find(|(_, old, new)| last(old) != last(new) && (has(input.before, &last(old)) || has(input.after, &last(new)) || derived(new))).map(|(claim, _, _)| *claim)
 }
 
-/// The owners of the edits that can change the body: the edits of its item. For a body on one
+/// The edits that can change the body: the edits of its item. For a body on one
 /// side only, also the edits of an item that contains it (a removed impl, a `cfg` attribute on a
 /// module, a new derive). A doc edit and a visibility edit never change a body. An attribute edit
 /// counts only when the attribute is not in the allow list of harmless attributes.
-fn text_owners(input: &Input, body: &BodyComparison, name: &str) -> Vec<Owner> {
+fn text_edits(input: &Input, body: &BodyComparison, name: &str) -> Vec<usize> {
     let one_side = matches!(body.status, BodyStatus::BeforeOnly | BodyStatus::AfterOnly);
     let ws = if body.status == BodyStatus::BeforeOnly { input.before } else { input.after };
     let mut items: BTreeSet<String> = crate::containers(ws, body.span.as_ref()).into_iter().collect();
@@ -573,16 +761,8 @@ fn text_owners(input: &Input, body: &BodyComparison, name: &str) -> Vec<Owner> {
             EditKind::Attrs => !crate::facts::harmless_attribute_edit(edit) && items.contains(item),
             _ => own || (one_side && items.contains(item)),
         };
-        if !can_change {
-            continue;
-        }
-        let owner = match (input.owners[index], input.fact_of[index]) {
-            (Some(claim), _) => Owner::Claim(claim),
-            (None, Some(fact)) => Owner::Fact(fact),
-            (None, None) => Owner::Uncovered,
-        };
-        if !found.contains(&owner) {
-            found.push(owner);
+        if can_change {
+            found.push(index);
         }
     }
     found

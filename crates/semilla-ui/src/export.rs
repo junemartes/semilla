@@ -1360,6 +1360,10 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
                 let count = if full || fact.equal_sites.len() <= semilla_core::report::LIST_LIMIT { String::new() } else { format!("{} ", fact.equal_sites.len()) };
                 text.push_str(&format!("; {count}{}{}{}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
             }
+            // The branch mark (design 40.4).
+            if let Some(branches) = &fact.branches {
+                text.push_str(&format!("; branches: {branches}"));
+            }
             // A public API change (design 36.3).
             if fact.api_change() {
                 text.push_str(&format!("; {}", semilla_core::report::API_LINE));

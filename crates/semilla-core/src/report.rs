@@ -170,6 +170,48 @@ pub struct StepReport {
     /// phase 2 can prove it, so the `step` command runs phase 2 at once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub identity_candidates: bool,
+    /// The counts of the map from the MIR elements to the lossless tree (design 40.2 and
+    /// 40.3). `semilla status --verbose` shows them.
+    #[serde(default, skip_serializing_if = "MirMapCounts::is_empty")]
+    pub mir_map: MirMapCounts,
+}
+
+/// The counts of the map from the MIR elements that differ to the nodes and the edits of a
+/// step (design 40.2 and 40.3).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MirMapCounts {
+    /// The ranges that do not start and end at a token boundary of the tree.
+    #[serde(default)]
+    pub errors: usize,
+    /// The first map errors: `FILE:LINE:COLUMN (bytes START..END)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
+    /// The edits of a changed body that own no element that differs, when an element of the
+    /// body has no owner: these edits keep the result of design 38 (the doubt rule).
+    #[serde(default)]
+    pub doubt: usize,
+    /// The edits that own an element that differs.
+    #[serde(default)]
+    pub owners: usize,
+    /// The edits of a changed body that own no element that differs, when each element has
+    /// an owner: these edits get `code equal`.
+    #[serde(default)]
+    pub equal: usize,
+}
+
+impl MirMapCounts {
+    pub fn is_empty(&self) -> bool {
+        *self == MirMapCounts::default()
+    }
+
+    /// The line of `semilla status --verbose`.
+    pub fn line(&self) -> String {
+        let mut line = format!("MIR map: {} map error(s); {} edit(s) own a changed MIR element; {} edit(s) with equal code in a changed body; {} edit(s) with the doubt rule", self.errors, self.owners, self.equal, self.doubt);
+        if !self.examples.is_empty() {
+            line.push_str(&format!(" (first map errors: {})", self.examples.join(", ")));
+        }
+        line
+    }
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -256,6 +298,11 @@ pub struct Fact {
     /// 0 for a fact with no kind reason. The key of the reason is `kind:KIND`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub reason_covers: usize,
+    /// The branch mark (design 40.4): the MIR elements that the edits of the fact own change
+    /// the branch structure of the compiled code. Each output shows `branches: TEXT`. The mark
+    /// is not a mismatch mark, and it asks for no reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branches: Option<String>,
 }
 
 /// The kinds of spotlight that one reason can cover (design 37.19): the name for a reason

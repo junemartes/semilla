@@ -327,7 +327,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
             && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),

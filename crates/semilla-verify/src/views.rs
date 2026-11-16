@@ -831,6 +831,10 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     if !fact.equal_sites.is_empty() {
         put(&format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
     }
+    // The branch mark (design 40.4): the line asks for no reason.
+    if let Some(branches) = &fact.branches {
+        put(&format!("      branches: {branches}"));
+    }
     // A public API change (design 36.3): the line asks for no reason.
     if fact.api_change() {
         put(&format!("      {}", semilla_core::report::API_LINE));

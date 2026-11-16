@@ -839,6 +839,13 @@ fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
     }
 }
 
+/// The MIR elements that differ, in the form of the verifier.
+fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirDiff {
+    let place = |place: Option<semilla_normal::elements::Place>| place.map(|place| (place.file, place.start, place.end));
+    let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement { tokens: place(element.tokens), call: place(element.call), targets: element.targets, exit: element.exit, glue: element.glue, jump: element.jump };
+    semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other }
+}
+
 /// The answer with no syntax tree: each input is opaque.
 struct AllOpaque;
 
@@ -902,6 +909,20 @@ impl BodyOracle for NormalOracle {
         let mut compiled: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
         let mut differs: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
         let mut config: BTreeMap<BodyKey, std::collections::BTreeSet<String>> = BTreeMap::new();
+        // The MIR elements that differ, over the configurations (design 40.3). `None`: a
+        // configuration has no element data for a changed body.
+        let mut elements: BTreeMap<BodyKey, Option<semilla_normal::elements::ElementDiff>> = BTreeMap::new();
+        // The byte range of each body by its name and place (design 40.2): the "after" records win.
+        let mut ranges: BTreeMap<(String, (String, usize)), (usize, usize)> = BTreeMap::new();
+        for (state, _) in &prepared {
+            for levels in [&state.sides.before, &state.sides.after] {
+                for record in levels.get("n0").into_iter().flatten() {
+                    if let Some((span, range)) = record.span.as_ref().and_then(|span| Some((span, span.range?))) {
+                        ranges.insert((record.name.clone(), (span.file.clone(), span.line_start)), range);
+                    }
+                }
+            }
+        }
         for (state, own) in prepared {
             let key_of = |name: &String| -> BodyKey { (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() }) };
             let name = state.config.name();
@@ -916,6 +937,16 @@ impl BodyOracle for NormalOracle {
                     semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
                     semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
                 };
+                let found = match &status {
+                    BodyStatus::Equal { .. } => Some(semilla_normal::elements::ElementDiff::default()),
+                    BodyStatus::Different { .. } => comparison.elements.clone(),
+                    _ => None,
+                };
+                let entry = elements.entry(key.clone()).or_insert_with(|| Some(semilla_normal::elements::ElementDiff::default()));
+                match (entry.as_mut(), found) {
+                    (Some(known), Some(found)) => known.merge(found),
+                    _ => *entry = None,
+                }
                 compiled.entry(key.clone()).or_default().push(name.clone());
                 if !matches!(status, BodyStatus::Equal { .. }) {
                     differs.entry(key.clone()).or_default().push(name.clone());
@@ -938,8 +969,11 @@ impl BodyOracle for NormalOracle {
                 let differs_in = differs.remove(&key).filter(|list| list.len() < all.len()).unwrap_or_default();
                 let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
                 let config = config.remove(&key).into_iter().flatten().collect();
+                let found = elements.remove(&key).flatten().filter(|_| matches!(status, BodyStatus::Different { .. })).map(mir_diff);
                 let (name, place) = key;
-                BodyComparison { span: place.or_else(|| spans.get(&name).cloned()), status, config, differs_in, equal_in, stopped: Vec::new(), name }
+                let span = place.or_else(|| spans.get(&name).cloned());
+                let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
+                BodyComparison { span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
             })
             .collect())
     }

@@ -2638,7 +2638,8 @@ fn a_later_step_prints_the_phase_2_state_of_a_fast_step() {
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
     let later = no_worker(repo, &["step", "rename a local"], 0);
     assert!(later.contains("accepted: step 2"), "{later}");
-    assert!(later.contains("step 1: phase 2 rejected: indirect change, cause not known: `shop_core::bonus`"), "{later}");
+    // Design 40.3: the fact names the node of the changed MIR element.
+    assert!(later.contains("step 1: phase 2 rejected: the compiled code of `shop_core::bonus` changes with no edit at its place: `BONUS`"), "{later}");
     assert!(later.contains("to fix step 1 (it is not the last step): run `semilla undo` 2 times.") && later.contains("the files stay"), "{later}");
     let commands: Vec<&str> = later.lines().filter(|line| line.trim_start().starts_with("git restore --source=")).collect();
     assert_eq!(commands.len(), 2, "{later}");
@@ -2647,7 +2648,7 @@ fn a_later_step_prints_the_phase_2_state_of_a_fast_step() {
     // A later step of `--fast` prints the stored state.
     write(repo, "crates/shop-core/src/cart.rs", CART_V2);
     let fast = no_worker(repo, &["step", "--fast", "an early return"], 0);
-    assert!(fast.contains("step 1: phase 2 rejected: indirect change") && fast.contains("to fix step 1: run `semilla undo` 3 time(s)"), "{fast}");
+    assert!(fast.contains("step 1: phase 2 rejected: the compiled code of `shop_core::bonus` changes") && fast.contains("to fix step 1: run `semilla undo` 3 time(s)"), "{fast}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
 
@@ -2657,7 +2658,7 @@ fn a_later_step_prints_the_phase_2_state_of_a_fast_step() {
     assert!(!refused.status.success());
     let tag = String::from_utf8_lossy(&refused.stderr).into_owned();
     assert!(tag.starts_with("result: rejected"), "{tag}");
-    assert!(tag.contains("✗ step 1: indirect change, cause not known"), "{tag}");
+    assert!(tag.contains("✗ step 1: the compiled code of `shop_core::bonus` changes with no edit at its place: `BONUS`"), "{tag}");
     assert!(tag.contains("to fix step 1 (it is not the last step): run `semilla undo` 2 times.") && tag.contains("Then run `semilla tag` again."), "{tag}");
     assert!(!tag.contains("for the last step"), "{tag}");
     let commands: Vec<String> = tag.lines().filter(|line| line.trim_start().starts_with("git restore --source=")).map(|line| line.trim().replace("<why>", "the build script reads the file")).collect();
@@ -3794,7 +3795,10 @@ fn no_proof_uses_the_value_of_a_macro_that_the_tree_does_not_decide() {
     // The variable of the command does not reach the build (part A): the result is the same.
     let output = semilla_env(repo, &["step", "fold"], &[("SEMILLA_T_X", "1")]);
     let out = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(output.status.success() && !out.contains("code equal]") && out.contains("[control flow · code different]"), "{out}\n{}", String::from_utf8_lossy(&output.stderr));
+    // Design 40.3: the deleted condition owns the changed elements, so it is never `code equal`.
+    // A kept statement (`a + 1`) can have the same compiled code before and after.
+    let equal_deletions = out.lines().filter(|line| line.contains("deleted statement") && line.contains("code equal]")).count();
+    assert!(output.status.success() && equal_deletions == 0 && out.contains("[control flow · code different]"), "{out}\n{}", String::from_utf8_lossy(&output.stderr));
     for name in &names {
         assert!(out.contains(&format!("shop_core::values::{name}")), "the step shows `{name}`: {out}");
     }
@@ -4194,7 +4198,8 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     // The debug build has `Bill: Flag`: the call means `Low::low`. The release build does not
     // have it: the call means `Base::low`. The winner uses a fact that can change.
     let out = step("    let _ = &t;\n    1\n", "    t.low()\n", 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    // Design 40.5: the category comes from the syntax (a call), not from the compiled code.
+    assert!(out.contains("added statement `t.low()` at `shop_core::by_fact/tail` [logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The control: the calls of an honest rewrite have no rival with such a fact.
     let out = step("    let n = v.iter().map(|y| y + 1).sum::<u64>();\n    n + a\n", "    v.iter().map(|y| y + 1).sum::<u64>() + a\n", 0);
     assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
@@ -4884,7 +4889,7 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a name under cfg"]);
     let note = "note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)";
-    let shown = |out: &str| out.contains(note) && out.contains("[logic · code equal]") && !out.contains("spotlight:") && !out.contains("code different");
+    let shown = |out: &str| out.contains(note) && out.contains("[control flow · code equal]") && !out.contains("spotlight:") && !out.contains("code different");
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("if a > b { l0() + a }", "if b < a { l0() + a }"));
     let out = run(repo, &["step", "probe"], 0);
     assert!(shown(&out) && out.contains("accepted"), "{out}");
@@ -4893,13 +4898,13 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     let md = repo.join(".semilla/review.md");
     run(repo, &["review", "--md", md.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&md).unwrap();
-    assert!(text.contains("\\[logic · code equal\\]; note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)"), "{text}");
+    assert!(text.contains("\\[control flow · code equal\\]; note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)"), "{text}");
     run(repo, &["undo"], 0);
 
     // The same for a statement with a `cfg` attribute that the edit does not touch.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("    if a > b { a } else { 0 }", "    if b < a { a } else { 0 }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::gate`)") && !out.contains("spotlight:") && out.contains("[logic · code equal]"), "{out}");
+    assert!(out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::gate`)") && !out.contains("spotlight:") && out.contains("[control flow · code equal]"), "{out}");
     run(repo, &["undo"], 0);
 
     // An edit of the code that reads the condition: the compare is different in one profile,
@@ -5201,7 +5206,8 @@ fn a_read_of_a_local_moves_across_a_call_only_when_no_pointer_to_it_exists() {
     let dir = rules_5u_setup();
     let repo = &dir.path().join("repo");
     let out = rules_5u_probe(repo, "i < encode.len()", "encode.len() > i");
-    assert!(out.contains("[logic · code different]") && !out.contains("code equal]"), "{out}");
+    // Design 40.5: a changed condition is `control flow`.
+    assert!(out.contains("[control flow · code different]") && !out.contains("code equal]"), "{out}");
     let out = rules_5u_probe(repo, "index += e.valid_up_to();", "index = index + (e.valid_up_to());");
     assert!(out.contains("[logic · code different]") && !out.contains("code equal]"), "{out}");
     // Negative tests: the callee can write the place. Each of these steps changes the result
@@ -6131,4 +6137,284 @@ fn a_fold_never_hides_an_inner_line() {
     // The Markdown report shows the source of each site.
     assert!(needle_md.contains("sum -= value;") && needle_md.contains("sum += value;"), "{needle_md}");
     assert!(!honest_md.contains("sum -= value;"), "{honest_md}");
+}
+
+#[test]
+fn each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_syntax() {
+    // Design 40.3 to 40.5. A body with two edits: a call in a new form with equal compiled code,
+    // and a changed literal. Each edit owns its own MIR elements, so the first edit is
+    // `code equal` and the second is `code different`. A second step adds a branch to the same
+    // body: the literal keeps its category, and the new branch has the branch mark.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub mod cart;\n\npub fn count(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "count");
+    let edited = base.replace("v.len()", "Vec::len(v)").replace("n + 1", "n + 2");
+    write(repo, "crates/shop-core/src/lib.rs", &edited);
+    let call = "changed expression `v.len()` → `Vec::len(v)` at `shop_core::count/S0/init` [logic · code equal]";
+    let literal = "changed literal `1` → `2` at `shop_core::count/tail/rhs` [value · code different]";
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains(call) && out.contains(literal), "{out}");
+    // The list of the affected bodies has only the edit that owns a changed element.
+    assert_eq!(out.matches("affected bodies: shop_core::count").count(), 1, "{out}");
+    run(repo, &["undo"], 0);
+    let branched = edited.replace("    n + 2\n", "    if n > 9 {\n        return 0;\n    }\n    n + 2\n");
+    write(repo, "crates/shop-core/src/lib.rs", &branched);
+    let out = run(repo, &["step", "probe"], 0);
+    // The same edits keep their categories and their results. The new branch has the mark.
+    assert!(out.contains(call) && out.contains(literal), "{out}");
+    assert!(out.contains("added early exit `if n > 9 { return 0; }` at `shop_core::count/S1` [control flow · code different]"), "{out}");
+    assert!(out.contains("branches: the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets)"), "{out}");
+    assert!(!out.contains("[indirect"), "{out}");
+    let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert!(out.contains("step 0: MIR map: 0 map error(s); 2 edit(s) own a changed MIR element; 1 edit(s) with equal code in a changed body; 0 edit(s) with the doubt rule"), "{out}");
+}
+
+/// The six forms of fix round 1, D1 (design 40.3): one small edit, and unchanged code around
+/// it. The alignment pairs each unchanged element, so no fact says "no edit at its place".
+const D1_FORMS: &str = r##"pub mod jaro {
+use std::cmp::{max, min};
+pub fn jaro(a: &str, b: &str) -> f64 {
+    let a_len = a.chars().count();
+    let b_len = b.chars().count();
+    if a_len == 0 && b_len == 0 {
+        return 1.0;
+    } else if a_len == 0 || b_len == 0 {
+        return 0.0;
+    }
+    let mut search_range = max(a_len, b_len) / 2;
+    search_range = search_range.saturating_sub(1);
+    let mut flags_memory = vec![false; a_len + b_len];
+    let (a_flags, b_flags) = flags_memory.split_at_mut(a_len);
+    let mut matches = 0_usize;
+    for (i, a_elem) in a.chars().enumerate() {
+        let min_bound = if i > search_range { i - search_range } else { 0 };
+        let max_bound = min(b_len, i + search_range + 1);
+        for (j, b_elem) in b.chars().enumerate().take(max_bound) {
+            if min_bound <= j && a_elem == b_elem && !b_flags[j] {
+                a_flags[i] = true;
+                b_flags[j] = true;
+                matches += 1;
+                break;
+            }
+        }
+    }
+    let mut transpositions = 0_usize;
+    if matches != 0 {
+        let mut b_iter = b_flags.iter().zip(b.chars());
+        for (a_flag, ch1) in a_flags.iter().zip(a.chars()) {
+            if *a_flag {
+                loop {
+                    if let Some((b_flag, ch2)) = b_iter.next() {
+                        if !*b_flag {
+                            continue;
+                        }
+                        if ch1 != ch2 {
+                            transpositions += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    transpositions /= 2;
+    if matches == 0 {
+        0.0
+    } else {
+        ((matches as f64 / a_len as f64) + (matches as f64 / b_len as f64) + ((matches - transpositions) as f64 / matches as f64)) / 3.0
+    }
+}
+}
+pub mod bs {
+pub struct Alphabet { encode: [u8; 58], decode: [u8; 128] }
+pub enum Error { Dup(char, usize), NonAscii(char, usize) }
+impl Alphabet {
+    pub fn new(base: &[u8; 58]) -> Result<Self, Error> {
+        let mut encode = [0x00; 58];
+        let mut decode = [0xFF; 128];
+        let mut i = 0;
+        while i < encode.len() {
+            if base[i] >= 128 {
+                return Err(Error::NonAscii(base[i] as char, i));
+            }
+            if decode[base[i] as usize] != 0xFF {
+                return Err(Error::Dup(base[i] as char, i));
+            }
+            encode[i] = base[i];
+            decode[base[i] as usize] = i as u8;
+            i += 1;
+        }
+        Ok(Self { encode, decode })
+    }
+}
+}
+pub mod map {
+pub struct Map { fill: usize, mask: usize, keys: Vec<u64> }
+impl Map {
+    pub fn get_mut(&mut self, key: u64) -> Option<&mut u64> {
+        let at = (key as usize) & self.mask;
+        if self.keys[at] == key {
+            return self.keys.get_mut(at);
+        }
+        if self.keys[at] == 0 {
+            self.keys[at] = key;
+            self.fill += 1;
+            if self.fill * 3 >= (self.mask + 1) * 2 {
+                self.mask = self.mask * 2 + 1;
+            }
+        }
+        None
+    }
+}
+}
+pub mod zero {
+pub struct Secret(pub Vec<u8>);
+pub trait Zeroize { fn zeroize(&mut self); }
+impl Zeroize for Vec<u8> { fn zeroize(&mut self) { for b in self.iter_mut() { *b = 0; } } }
+impl Clone for Secret {
+    fn clone(&self) -> Self { Secret(self.0.clone()) }
+    fn clone_from(&mut self, source: &Self) {
+        self.0.zeroize();
+        self.0.clone_from(&source.0);
+    }
+}
+}
+pub mod xo {
+pub struct Xo { s: [u32; 4] }
+fn read_u32_into(src: &[u8], dst: &mut [u32]) { for (i, d) in dst.iter_mut().enumerate() { *d = src[i] as u32; } }
+impl Xo {
+    pub fn from_seed(seed: [u8; 16]) -> Xo {
+        let mut state = [0; 4];
+        read_u32_into(&seed, &mut state);
+        Xo { s: state }
+    }
+}
+}
+pub mod dec {
+pub fn decode(input: &[u8]) -> usize {
+    let mut val = 0usize;
+    let mut i = 0;
+    while i < input.len() {
+        let byte = input[i];
+        val += (byte as usize) * 58;
+        i += 1;
+    }
+    val
+}
+}
+pub mod either {
+    pub enum Either<L, R> { Left(L), Right(R) }
+    impl<L, R> Either<L, R> {
+        pub fn left(self) -> Option<L> {
+            match self {
+                Either::Left(l) => Some(l),
+                Either::Right(_) => None,
+            }
+        }
+    }
+}
+pub mod packing {
+    pub const fn pack(input: &[u8], output: &mut [u8; 8]) -> usize {
+        let mut i = 0;
+        let mut index = 0;
+        while i < input.len() {
+            let mut val = input[i] as usize;
+            let mut j = 0;
+            while j < index {
+                let byte = output[j];
+                val += (byte as usize) * 58;
+                output[j] = (val & 0xFF) as u8;
+                val >>= 8;
+                j += 1;
+            }
+            while val > 0 && index < 8 {
+                output[index] = (val & 0xFF) as u8;
+                index += 1;
+                val >>= 8;
+            }
+            i += 1;
+        }
+        index
+    }
+}
+pub mod checks {
+    pub enum Error { NonAscii { index: usize }, Duplicate { index: usize } }
+    pub fn table(base: &[u8; 8]) -> Result<[u8; 128], Error> {
+        let mut decode = [0xFF; 128];
+        let mut i = 0;
+        while i < base.len() {
+            if base[i] >= 128 {
+                return Err(Error::NonAscii { index: i });
+            }
+            if decode[base[i] as usize] != 0xFF {
+                return Err(Error::Duplicate { index: i });
+            }
+            decode[base[i] as usize] = i as u8;
+            i += 1;
+        }
+        Ok(decode)
+    }
+    pub fn ratio(a_len: usize, b_len: usize) -> f64 {
+        if a_len == 0 && b_len == 0 {
+            return 1.0;
+        } else if a_len == 0 || b_len == 0 {
+            return 0.0;
+        }
+        (a_len as f64) / (b_len as f64)
+    }
+}
+"##;
+
+#[test]
+fn a_small_edit_gives_no_indirect_fact_for_the_code_around_it() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod d1;\n");
+    write(repo, "crates/shop-core/src/d1.rs", D1_FORMS);
+    commit_all(repo, "the forms");
+    for (from, to) in [
+        ("    transpositions /= 2;", "    transpositions = transpositions / (2);"),
+        ("        while i < encode.len() {", "        while !(i < encode.len()) {"),
+        ("        if self.keys[at] == 0 {", "        if !(self.keys[at] == 0) {"),
+        ("        self.0.zeroize();\n", ""),
+        ("        read_u32_into(&seed, &mut state);\n", ""),
+        ("    while i < input.len() {\n        let byte = input[i];", "    loop {\n        if !(i < input.len()) {\n            break;\n        }\n        let byte = input[i];"),
+        // Fix round 2: the forms of the mutants of `bs58` and `strsim` (a value that the driver
+        // wraps as opaque before its use, two returns of one value, a negated condition).
+        ("                val >>= 8;\n                j += 1;", "                j += 1;"),
+        ("        while i < input.len() {\n            let mut val", "        while !(i < input.len()) {\n            let mut val"),
+        ("            if decode[base[i] as usize] != 0xFF {\n                return Err(Error::Duplicate { index: i });\n            }\n", ""),
+        ("        if a_len == 0 && b_len == 0 {", "        if !(a_len == 0 && b_len == 0) {"),
+        // Fix round 1, D2: the tail `match` is replaced, and the element of the block belongs
+        // to the edit.
+        ("            match self {\n                Either::Left(l) => Some(l),\n                Either::Right(_) => None,\n            }\n", "            Default::default()\n"),
+    ] {
+        write(repo, "crates/shop-core/src/d1.rs", &D1_FORMS.replacen(from, to, 1));
+        let out = run(repo, &["step", "probe"], 0);
+        assert!(!out.contains("[indirect") && !out.contains("with no edit at its place"), "{from} → {to}\n{out}");
+        assert!(out.contains("code different]"), "{from} → {to}\n{out}");
+        run(repo, &["undo"], 0);
+        write(repo, "crates/shop-core/src/d1.rs", D1_FORMS);
+    }
+}
+
+#[test]
+fn an_edit_whose_only_effect_is_the_place_of_a_drop_is_code_different() {
+    // Fix round 1, D4: `let _ = guard();` drops the guard at once; `let _g = guard();` drops it
+    // at the end of the scope. The drop at the end of the scope is a glue element with no
+    // owner; the drop at the statement belongs to the edit. The edit is `code different`. The
+    // overflow check of `a + 1` now unwinds through a drop of the guard: a real change with no
+    // edit at its place, and its fact names the pattern edit as a possible cause.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub mod cart;\n\npub struct Guard;\n\nimpl Drop for Guard {\n    fn drop(&mut self) {\n        println!(\"done\");\n    }\n}\n\npub fn guard() -> Guard {\n    Guard\n}\n\npub fn work(a: u32) -> u32 {\n    let _ = guard();\n    a + 1\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "a guard");
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("let _ = guard();", "let _g = guard();"));
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains("changed pattern `_` → `_g` at `shop_core::work/S0/pat` [logic · code different]") && !out.contains("code equal]"), "{out}");
+    assert!(out.contains("the compiled code of `shop_core::work` changes with no edit at its place: `a + 1`; a type or a path changes in f1 of this body [indirect · code different]"), "{out}");
+    assert_eq!(out.matches("◆").count(), 2, "{out}");
 }

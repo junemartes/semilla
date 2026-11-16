@@ -264,9 +264,37 @@ impl BodyIndex {
     }
 }
 
-/// Finds the syntax item of a MIR body: by the span first, then by the name.
+/// Finds the syntax item of a MIR body: by the byte range first (design 40.2), then by the
+/// line of the span, then by the name.
 fn find_item(body: &BodyComparison, workspace: &Workspace) -> Option<String> {
+    if let (Some((file, _)), Some(range)) = (&body.span, body.range)
+        && !crate::is_test_harness_main(&body.name)
+        && let Some(item) = find_item_by_range(file, range, workspace)
+    {
+        return Some(item);
+    }
     find_item_by(&body.name, body.span.as_ref(), workspace)
+}
+
+/// Finds the smallest function item of a file that contains a byte range of the file as
+/// written (design 40.2). `None` if the workspace does not have the file, or no function
+/// contains the range.
+pub fn find_item_by_range(file: &str, range: (usize, usize), workspace: &Workspace) -> Option<String> {
+    let text = workspace.rust_files.get(file)?;
+    let pos = |offset: usize| -> Option<(usize, usize)> {
+        let before = text.get(..offset)?;
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().unwrap_or("").chars().count();
+        Some((line, column))
+    };
+    let (start, end) = (pos(range.0)?, pos(range.1)?);
+    let inside = |item: &&semilla_syntax::Item| item.kind == semilla_syntax::ItemKind::Fn && item.file == file && (item.line_start, item.col_start) <= start && end <= (item.line_end, item.col_end);
+    let found: Vec<&semilla_syntax::Item> = match workspace.body_items() {
+        Some(index) => index.by_file.get(file).into_iter().flatten().filter_map(|body| workspace.items.get(&body.path)).filter(inside).collect(),
+        None => workspace.items.values().filter(inside).collect(),
+    };
+    // The smallest item: the last start, then the first end, then the first path.
+    found.into_iter().max_by(|a, b| (a.line_start, a.col_start).cmp(&(b.line_start, b.col_start)).then((b.line_end, b.col_end).cmp(&(a.line_end, a.col_end))).then(b.path.cmp(&a.path))).map(|item| item.path.clone())
 }
 
 /// Finds the syntax item of a MIR body name and span.
@@ -766,25 +794,20 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
     };
 
     if outcome.category.is_none() {
-        // A changed control flow graph wins over the `logic` category of the op (as for a fact).
+        // Design 40.5: an op with no fixed category gets the category of the syntax.
         outcome.category = match info.category {
-            Some(Category::Logic) | None => computed_category(context, claim).or(info.category),
+            None => computed_category(context, claim),
             other => other,
         };
     }
     outcome
 }
 
-/// The category of a body edit that no op decides: `control flow` if the control flow graph of
-/// the function changes, else `logic`.
+/// The category of a body edit that no op decides (design 40.5): the category of the syntax of
+/// the edit at the anchor, else `logic`. It does not depend on the compiled code.
 fn computed_category(context: &Context, claim: &Claim) -> Option<Category> {
-    let item = claim.at.as_ref()?.item.as_str();
-    match context.bodies.status(item) {
-        Some(BodyStatus::Different { cfg_changed: true }) => Some(Category::ControlFlow),
-        Some(_) => Some(Category::Logic),
-        None if !context.bodies.available => Some(Category::Logic),
-        None => None,
-    }
+    let at = claim.at.as_ref()?;
+    Some(context.edits.iter().find(|edit| edit.anchor() == Some(at)).map_or(Category::Logic, |edit| crate::edits::syntax_category(context, edit)))
 }
 
 fn texts(context: &Context, indexes: &[usize], mut outcome: Outcome) -> Outcome {
@@ -1820,11 +1843,8 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
     let mut outcome = Outcome::verified("rewrite", explains);
     outcome.before = Some(old_item.source.clone());
     outcome.after = Some(new_item.source.clone());
-    outcome.category = match context.bodies.status(&new).or_else(|| context.bodies.status(&at.item)) {
-        Some(BodyStatus::Different { cfg_changed: true }) => Some(Category::ControlFlow),
-        Some(_) => Some(Category::Logic),
-        None => None,
-    };
+    // Design 40.5: an item rewrite is `logic`; the compiled code does not decide it.
+    outcome.category = Some(Category::Logic);
     outcome
 }
 

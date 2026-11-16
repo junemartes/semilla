@@ -18,6 +18,7 @@
 //! compares the raw text.
 
 pub mod cargo;
+pub mod elements;
 pub mod hash;
 pub mod paths;
 pub mod sandbox;
@@ -152,6 +153,10 @@ pub struct BodyRecord {
     /// expansion (only at N0; a closure has no list of its own).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<NameUse>,
+    /// The source range of each MIR element (design 40.1; only at N0).
+    /// The data is shared: a record in memory is cloned for each read of its cache folder.
+    #[serde(rename = "el", default, skip_serializing_if = "Option::is_none", serialize_with = "elements::serialize_shared", deserialize_with = "elements::deserialize_shared")]
+    pub elements: Option<std::sync::Arc<elements::RecordElements>>,
 }
 
 /// One name of the expanded code of an item, with its form and its count.
@@ -186,6 +191,10 @@ pub struct SpanInfo {
     pub file: String,
     pub line_start: usize,
     pub line_end: usize,
+    /// The byte range of the body in the file as written (design 40.2; only at N0, not for a
+    /// body from a macro expansion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<(usize, usize)>,
 }
 
 /// The records of one version, by level name (`n0`, `n2`, `n3`).
@@ -215,6 +224,10 @@ pub struct BodyComparison {
     /// [`BodyRecord::config`]).
     #[serde(default)]
     pub config: Vec<String>,
+    /// The MIR elements that differ (design 40.3), for a body that is `Different` with the
+    /// element ranges on the two sides. `None`: no element data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements: Option<elements::ElementDiff>,
 }
 
 /// The record of one compile unit, from the compiler (batch 5t, part A). The driver writes it
@@ -478,16 +491,18 @@ pub fn compare_with(
     };
     for (name, original) in &before.names {
         if !after.names.contains_key(name) {
-            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name) });
+            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None });
             continue;
         }
         matched.insert(name.clone());
-        results.push(BodyComparison { name: name.clone(), status: stopped(name, ladder(&before, &after, name)), config: config(name) });
+        let status = stopped(name, ladder(&before, &after, name));
+        let elements = if matches!(status, BodyStatus::Different { .. }) { element_diff(&before, &after, name) } else { None };
+        results.push(BodyComparison { name: name.clone(), status, config: config(name), elements });
     }
     for name in after.names.keys() {
         let declared = added.iter().any(|new| name == new || is_child(name, new));
         if !matched.contains(name) && !declared {
-            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name) });
+            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None });
         }
     }
     results.sort_by(|a, b| a.name.cmp(&b.name));
@@ -783,6 +798,9 @@ struct Group {
     terms: BTreeMap<String, BTreeSet<Option<String>>>,
     /// True for an N3 group that has only N2 records (no call was inlined).
     from_n2: bool,
+    /// The element ranges of each record, by target (at N0). The text of a target is the one
+    /// text of `texts`.
+    elements: BTreeMap<String, Vec<Option<std::sync::Arc<elements::RecordElements>>>>,
 }
 
 /// Normalizes the `TestDesc` const of a `#[test]` function `name`:
@@ -1002,6 +1020,9 @@ impl Group {
         // A rename can change the order of the named operands of an aggregate, of the named
         // targets of a switch, and of the entries of a discriminant table.
         let renamed = if renamed != record.text { sort_variant_lists(&sort_aggregates(&renamed)) } else { renamed };
+        if record.level == "n0" {
+            self.elements.entry(target.clone()).or_default().push(record.elements.clone());
+        }
         self.texts.entry(target.clone()).or_default().insert(renamed);
         self.callees.extend(record.callees.iter().map(|callee| paths::rename(callee, renames)));
         self.shapes.insert(record.shape.clone());
@@ -1170,6 +1191,42 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
             .map(|group| group.shapes.clone())
     };
     BodyStatus::Different { cfg_changed: shapes(before) != shapes(after) }
+}
+
+/// The elements that differ in a changed body (design 40.3), over each target. The targets
+/// pair by their name, or by their name without the hash, or as the one target of each side.
+/// `None` if a target has no partner, a target has two texts, or a record has no element data.
+fn element_diff(before: &Side, after: &Side, name: &str) -> Option<elements::ElementDiff> {
+    let (old, new) = (before.group("n0", name)?, after.group("n0", name)?);
+    let pairs: Vec<(&String, &String)> = if old.elements.keys().eq(new.elements.keys()) {
+        old.elements.keys().zip(new.elements.keys()).collect()
+    } else {
+        fn stems(group: &Group) -> BTreeMap<&str, &String> {
+            group.elements.keys().map(|target| (target_stem(target), target)).collect()
+        }
+        let (a, b) = (stems(old), stems(new));
+        if a.len() == old.elements.len() && b.len() == new.elements.len() && a.keys().eq(b.keys()) {
+            a.values().copied().zip(b.values().copied()).collect()
+        } else if old.elements.len() == 1 && new.elements.len() == 1 {
+            old.elements.keys().zip(new.elements.keys()).collect()
+        } else {
+            return None;
+        }
+    };
+    // A target with one text: the text and the ranges of its first record.
+    let one = |group: &Group, target: &String| -> Option<(String, std::sync::Arc<elements::RecordElements>)> {
+        let [text] = group.texts.get(target)?.iter().collect::<Vec<_>>()[..] else { return None };
+        Some((text.clone(), group.elements.get(target)?.first()?.clone()?))
+    };
+    let mut out = elements::ElementDiff::default();
+    for (a, b) in pairs {
+        let (old_text, old_ranges) = one(old, a)?;
+        let (new_text, new_ranges) = one(new, b)?;
+        if old_text != new_text {
+            out.merge(elements::diff_cached((&old_text, &old_ranges), (&new_text, &new_ranges))?);
+        }
+    }
+    Some(out)
 }
 
 /// True if the texts of one body are the same on both sides, by target.

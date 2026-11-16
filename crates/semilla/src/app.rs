@@ -1002,6 +1002,12 @@ impl App {
                 }
                 text.push_str("phase 2 (computed on this machine):\n");
                 text.push_str(&if verbose { stored.text } else { short(&stored.report) });
+                // Design 40.2: the counts of the map from the MIR elements to the tree.
+                if verbose {
+                    for step in stored.report.steps.iter().filter(|step| !step.mir_map.is_empty()) {
+                        put_line(&mut text, &format!("step {}: {}", step.step, step.mir_map.line()));
+                    }
+                }
             }
             None => {
                 text.push_str("phase 1 (computed now):\n");

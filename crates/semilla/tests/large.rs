@@ -341,7 +341,9 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     replace_one(t, &index, "pub fn get(&mut self) -> u32 {", "pub fn get(&mut self) -> T {");
     changes.push(Change { name: "a type gets a generic parameter", facts: vec![expect("declaration", "code different", &["generics of `depot::index::IndexHolder`: `struct IndexHolder { }` → `struct IndexHolder<T> { }`"]), expect("declaration", "code different", &["type `u32` → `T` in 3 places: `depot::index::IndexHolder.value`, return type of `depot::index::IndexHolder::get`, parameter `value` of `depot::index::IndexHolder::new`"]), expect("declaration", "code different", &["generics of `depot::index::impl IndexHolder`: `impl IndexHolder { }` → `impl<T: Copy> IndexHolder<T> { }`"])] });
 
-    // Six body edits: two of a value, two of the logic, two of the control flow.
+    // Six body edits: two of a value, two of the logic, two of the control flow. The category
+    // comes from the syntax of the edit (design 40.5). A statement that moves into a new `if`
+    // keeps its compiled code: the `if` owns the change (design 40.3).
     replace_one(t, &cache, &format!("acc = acc.wrapping_add({});", mark(8, STEP0)), &format!("acc = acc.wrapping_add({});", mark(8, STEP0) + 1000));
     changes.push(Change { name: "body edit: a value in a function", facts: vec![expect("value", "code different", &["changed literal `1160` → `2160` at `depot::cache::cache_step0/S1/rhs/args[0]`"])] });
     replace_one(t, &shape, &format!("acc = acc.wrapping_add({});", mark(10, GRADE)), &format!("acc = acc.wrapping_add({});", mark(10, GRADE) + 1000));
@@ -350,7 +352,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     changes.push(Change { name: "body edit: the logic of a function", facts: vec![expect("logic", "code different", &["changed expression `acc.wrapping_add(1181)` → `acc.wrapping_sub(1181)` at `depot::queue::queue_step1/S1/rhs`"])] });
     let line = format!("        acc = acc.wrapping_add({});\n", mark(11, SCALE));
     replace_one(t, &merge, &line, &format!("{line}        acc = acc.rotate_left(3);\n"));
-    changes.push(Change { name: "body edit: a new statement in a method", facts: vec![expect("control flow", "code different", &["added statement `acc = acc.rotate_left(3)` at `depot::merge::MergeRecord::scale/S2`"])] });
+    changes.push(Change { name: "body edit: a new statement in a method", facts: vec![expect("logic", "code different", &["added statement `acc = acc.rotate_left(3)` at `depot::merge::MergeRecord::scale/S2`"])] });
     replace_one(t, &quota, &format!("acc = acc.wrapping_add({});", mark(6, SCALE)), &format!("acc = acc.wrapping_add({}) ^ 5;", mark(6, SCALE)));
     changes.push(Change { name: "body edit: the logic of a method", facts: vec![expect("logic", "code different", &["changed expression `acc.wrapping_add(1125)` → `acc.wrapping_add(1125) ^ 5` at `depot::quota::QuotaRecord::scale/S1/rhs`"])] });
     let line = format!("    acc = acc.wrapping_add({});\n", mark(10, STEP0 + 2));
@@ -358,7 +360,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     changes.push(Change { name: "body edit: the control flow of a function", facts: vec![expect("control flow", "code different", &["added early exit `if acc > 4000 { return acc; }` at `depot::shape::shape_step2/S2`"])] });
     let line = format!("        acc = acc.wrapping_add({});\n", mark(8, SCORE));
     replace_one(t, &cache, &line, &format!("        if seed > 3 {{\n    {line}        }}\n"));
-    changes.push(Change { name: "body edit: the control flow of a trait method", facts: vec![expect("control flow", "code different", &["deleted statement `acc = acc.wrapping_add(1167)` (the same text as an inner statement of the added `if seed > 3 { acc = acc.wrapping_add(11…`) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"]), expect("control flow", "code different", &["added `if` `if seed > 3 { acc = acc.wrapping_add(1167); }` (each inner statement is a deleted statement of the body, with the same text) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"])] });
+    changes.push(Change { name: "body edit: the control flow of a trait method", facts: vec![expect("logic", "code equal", &["deleted statement `acc = acc.wrapping_add(1167)` (the same text as an inner statement of the added `if seed > 3 { acc = acc.wrapping_add(11…`) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"]), expect("control flow", "code different", &["added `if` `if seed > 3 { acc = acc.wrapping_add(1167); }` (each inner statement is a deleted statement of the body, with the same text) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"])] });
 
     // Added items: functions, a type with an impl, a method, a constant, and a trait impl.
     let blend = generated_fn("Blends two numbers. The larger number goes first.", "cache_blend", 8, 13, 9).replace("-> u32 {\n", "-> u32 {\n    let (x, y) = match x.cmp(&y) {\n        Ordering::Less => (y, x),\n        Ordering::Equal | Ordering::Greater => (x, y),\n    };\n");

@@ -46,6 +46,7 @@ mod normalize;
 mod print;
 mod reach;
 mod rival;
+mod spans;
 mod term;
 mod traits;
 
@@ -218,6 +219,9 @@ struct BodyRecord {
     /// The names of the expanded code of the item (see `config::names`). At n0 only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     names: Vec<NameRecord>,
+    /// The source range of each MIR element of the canonical body (see `spans.rs`). At n0 only.
+    #[serde(rename = "el", skip_serializing_if = "Option::is_none")]
+    elements: Option<spans::Elements>,
 }
 
 /// One name of the expanded code, with its count (see `config::NameUse`).
@@ -318,6 +322,10 @@ struct SpanInfo {
     file: String,
     line_start: usize,
     line_end: usize,
+    /// The byte range of the body in the file as written (see `spans.rs`), if the span is in a
+    /// file of the workspace and not from a macro expansion. At n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<(i64, i64)>,
 }
 
 /// Where the records go.
@@ -846,7 +854,7 @@ fn config_record(name: String, identity: String, span: rustc_public::ty::Span, l
     found.loop_free = true;
     found.span = guarded(|| {
         let lines = span.get_lines();
-        SpanInfo { file: span.get_filename(), line_start: lines.start_line, line_end: lines.end_line }
+        SpanInfo { file: span.get_filename(), line_start: lines.start_line, line_end: lines.end_line, range: None }
     });
     found.config = vec![identity];
     found
@@ -863,6 +871,7 @@ fn harness_record(name: String, body: &Body, level: Level, target: &str) -> Body
     }
     // The span of generated code has no line of the user.
     found.span = None;
+    found.elements = None;
     found
 }
 
@@ -903,6 +912,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: Vec::new(),
+        elements: None,
     }
 }
 
@@ -1004,6 +1014,7 @@ fn record(
             file: body.span.get_filename(),
             line_start: lines.start_line,
             line_end: lines.end_line,
+            range: if level == Level::N0 { spans::body_range(body.span) } else { None },
         }
     });
     BodyRecord {
@@ -1049,6 +1060,7 @@ fn record(
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: printed.config,
+        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical)) } else { None },
     }
 }
 

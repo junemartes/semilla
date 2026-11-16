@@ -29,6 +29,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         inlined: Vec::new(),
         adts: Vec::new(),
         names: Vec::new(),
+        elements: None,
     }
 }
 
@@ -218,7 +219,7 @@ fn duplicate_names_must_match_as_sets() {
 #[test]
 fn records_round_trip_as_json_lines() {
     let mut first = record("k::f", "n0", "a\nb", &["k::g"]);
-    first.span = Some(SpanInfo { file: "src/lib.rs".into(), line_start: 1, line_end: 3 });
+    first.span = Some(SpanInfo { file: "src/lib.rs".into(), line_start: 1, line_end: 3, range: None });
     let text = format!(
         "{}\n\n{}\n",
         serde_json::to_string(&first).unwrap(),

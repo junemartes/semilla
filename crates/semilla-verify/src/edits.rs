@@ -15,7 +15,6 @@ use semilla_syntax::tree::{display_tokens, one_line};
 use semilla_syntax::{Edit, EditKind, Workspace};
 
 use crate::checks::{self, Context};
-use crate::BodyStatus;
 
 /// The words of an op for the fact text.
 fn words(op: &str) -> String {
@@ -430,16 +429,53 @@ fn names_text(names: Option<Vec<crate::NameChange>>) -> String {
     }
 }
 
-/// The category of an edit fact from the category of its op and the body status (design 35).
-/// An op with no fixed category, and a `logic` op, give `control flow` if the control flow
-/// graph of the body changes. Each other op keeps its category.
-fn category(context: &Context, item: &str, op: Option<Category>) -> Category {
-    let graph_changed = matches!(context.bodies.status(item), Some(BodyStatus::Different { cfg_changed: true }));
-    match op {
-        Some(Category::Logic) | None if graph_changed => Category::ControlFlow,
-        Some(category) => category,
-        None => Category::Logic,
+/// The category of an edit fact (design 40.5): the category of its op, or for an op with a
+/// computed category, the category of the syntax of the changed node. The category never
+/// depends on the compiled code: the same edit always gets the same category.
+fn category(context: &Context, edit: &Edit, op: Option<&str>, op_category: Option<Category>) -> Category {
+    let computed = op.and_then(semilla_core::ops::op).is_none_or(|info| info.category.is_none());
+    match op_category {
+        Some(category) if !computed => category,
+        // The SMT effect of a changed condition is a hint of `control flow`; a condition is
+        // `control flow` in the table too.
+        Some(Category::ControlFlow) => Category::ControlFlow,
+        _ => syntax_category(context, edit),
     }
+}
+
+/// The macros of the `panic!` family: a call is an exit (design 40.5).
+const EXIT_MACROS: &[&str] = &["panic", "unreachable", "todo", "unimplemented", "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne"];
+
+/// The node kinds that are a branch, a loop, or an exit (design 40.5).
+const CONTROL_KINDS: &[&str] = &["if", "match", "for", "while", "loop", "return", "break", "continue", "try"];
+
+/// The category of the syntax of a changed node (design 40.5):
+/// - a literal only (each side is a literal): `value`;
+/// - a node in a condition (of `if`, `while`, a match guard), a branch (`if`, `match`, an
+///   arm), a loop (`loop`, `while`, `for`), or an exit (`return`, `break`, `continue`, `?`,
+///   a call of a macro of the `panic!` family) as the top node, or a `let … else`:
+///   `control flow`;
+/// - each other statement, operand, or call: `logic`.
+pub(crate) fn syntax_category(context: &Context, edit: &Edit) -> Category {
+    let kinds: Vec<&str> = [edit.node_before, edit.node_after].into_iter().flatten().collect();
+    if !kinds.is_empty() && kinds.iter().all(|kind| *kind == "lit") {
+        return Category::Value;
+    }
+    let roles = |anchor: &Option<semilla_core::Anchor>| -> Vec<String> { anchor.iter().flat_map(|anchor| anchor.path.iter().map(|segment| segment.to_string())).collect() };
+    let in_condition = [&edit.before, &edit.after].into_iter().any(|anchor| roles(anchor).iter().any(|role| role == "cond" || role.ends_with(".guard") || role.starts_with("arm[") && !role.ends_with(".body")));
+    if in_condition || kinds.iter().any(|kind| CONTROL_KINDS.contains(kind)) {
+        return Category::ControlFlow;
+    }
+    let node = |ws: &semilla_syntax::Workspace, anchor: &Option<semilla_core::Anchor>| anchor.as_ref().and_then(|anchor| semilla_syntax::resolve_node(ws, anchor)).cloned();
+    let nodes = [node(context.before, &edit.before), node(context.after, &edit.after)];
+    let exit_or_let_else = nodes.iter().flatten().any(|node| {
+        (node.kind == "macro" && node.attr.as_deref().is_some_and(|name| EXIT_MACROS.contains(&name)))
+            || (node.kind == "let" && node.children.iter().any(|child| child.role == "else"))
+    });
+    if exit_or_let_else {
+        return Category::ControlFlow;
+    }
+    Category::Logic
 }
 
 /// Derives the edit facts. Sets `fact_of` for each edit that a new fact owns.
@@ -769,7 +805,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         } else if is_local_order {
             Category::Declaration
         } else {
-            category(context, &item, op_category)
+            category(context, edit, (!op.contains(' ')).then_some(op), op_category)
         };
         push(facts, fact_of, &explained, Fact {
             at: anchor.clone().or_else(|| Some(Anchor::item(&item))),

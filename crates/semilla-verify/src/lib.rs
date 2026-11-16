@@ -25,6 +25,7 @@ pub mod scope;
 mod bounds;
 mod joint;
 pub mod made;
+pub mod mirmap;
 mod opaque;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
@@ -74,6 +75,41 @@ pub struct BodyComparison {
     /// condition that Semilla did not check. An entry has the form of an entry of `config`.
     /// The list is the data of a note. It has no part in a decision.
     pub stopped: Vec<String>,
+    /// The byte range of the body in the file of `span`, in the file as written (design 40.2).
+    /// `None` for a body from a macro expansion and for an old record.
+    pub range: Option<(usize, usize)>,
+    /// The MIR elements that differ, for a body that is `Different` (design 40.3). `None`: no
+    /// element data, and each edit of the body keeps the rule of design 38 (the doubt rule).
+    pub elements: Option<MirDiff>,
+}
+
+/// A source range of a MIR element: the file and the byte range in the file as written.
+pub type MirPlace = (String, usize, usize);
+
+/// One MIR element that differs (design 40.3).
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MirElement {
+    /// The range of the tokens of the element. `None`: no source range.
+    pub tokens: Option<MirPlace>,
+    /// The range of the outermost macro call, for an element from a macro expansion.
+    pub call: Option<MirPlace>,
+    /// For a `switchInt` terminator: the count of its targets.
+    pub targets: Option<usize>,
+    /// True for `return` and for a call that does not return.
+    pub exit: bool,
+    /// True for `goto`, `return`, `resume`, `unreachable`, and `drop`: the glue of the blocks
+    /// (design 40.3).
+    pub glue: bool,    /// True for `goto`, `return`, `resume`, and `unreachable`: a jump with no value.
+    pub jump: bool,
+}
+
+/// The MIR elements that differ in a changed body, in each checked configuration together.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MirDiff {
+    pub old: Vec<MirElement>,
+    pub new: Vec<MirElement>,
+    /// A part of the MIR text that is not an element differs (the signature line).
+    pub other: bool,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).

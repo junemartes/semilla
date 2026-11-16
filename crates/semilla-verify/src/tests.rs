@@ -15,7 +15,7 @@ struct FakeBodies(BTreeMap<String, BodyStatus>);
 
 impl BodyOracle for FakeBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }).collect())
     }
 }
 
@@ -131,11 +131,12 @@ const EXTRACTED: &str = "pub fn f(a: u32, b: u32, c: u32) -> u32 {\n    let prod
 #[test]
 fn a_claim_of_a_rewrite_checks_the_shape_only() {
     // Design 35: a claim of a rewrite checks the shape of the edit only. No rule asks for an
-    // equal body. The category comes from the compare of the body.
+    // equal body. The category comes from the op: a different control flow graph does not
+    // change it (design 40.5).
     let extract = || vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))];
     let category = |report: &StepReport| report.claims.iter().find(|result| result.claim == "c1").unwrap().category;
     // An equal result above N1 is not a result of the compare.
-    for (status, expected) in [(equal("n0"), Category::Logic), (equal("n2"), Category::Logic), (different(false), Category::Logic), (different(true), Category::ControlFlow)] {
+    for (status, expected) in [(equal("n0"), Category::Logic), (equal("n2"), Category::Logic), (different(false), Category::Logic), (different(true), Category::Logic)] {
         let report = run(PLAIN, EXTRACTED, extract(), &[("demo::f", status)], None);
         assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "shape".into() });
         assert_eq!(category(&report), Some(expected), "{report:#?}");
@@ -1263,7 +1264,7 @@ struct CallBodies(Vec<(&'static str, BodyStatus, Vec<&'static str>)>);
 
 impl BodyOracle for CallBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.0.iter().map(|(name, _, callees)| BodyFacts { name: name.to_string(), callees: callees.iter().map(|c| c.to_string()).collect(), ..Default::default() }).collect()))
@@ -1559,7 +1560,7 @@ struct ExternalCalls(Vec<(&'static str, BodyStatus, Vec<&'static str>)>);
 
 impl BodyOracle for ExternalCalls {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.0.iter().map(|(name, _, calls)| BodyFacts { name: name.to_string(), externals: calls.iter().map(|c| c.to_string()).collect(), ..Default::default() }).collect()))
@@ -1845,7 +1846,7 @@ fn a_hand_written_impl_that_replaces_a_derive_is_not_neutral() {
     let (_d1, old) = load(before);
     let (_d2, new) = load(after);
     let step = step(vec![]);
-    let oracle = SpanBodies(vec![BodyComparison { name: "<demo::E as std::cmp::PartialEq>::eq".into(), span: Some(("src/lib.rs".into(), 8)), status: different(true), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]);
+    let oracle = SpanBodies(vec![BodyComparison { name: "<demo::E as std::cmp::PartialEq>::eq".into(), span: Some(("src/lib.rs".into(), 8)), status: different(true), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }]);
     let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report;
     let imp = report.facts.iter().find(|f| f.part == "trait impl added").expect("an impl fact");
     assert_eq!(imp.compare, Compare::CodeDifferent, "{imp:#?}");
@@ -1881,7 +1882,7 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     // Invariant I1, checked on a result that a defect in the verifier could make.
     let (_d, ws) = load("pub fn g() -> u32 {\n    1\n}\n");
     let step = step(vec![]);
-    let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }];
+    let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }];
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
     let input = owners::Input { made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None };
@@ -1965,7 +1966,7 @@ fn run_spans(before: &[(&str, &str)], after: &[(&str, &str)], claims: Vec<Claim>
 }
 
 fn body(name: &str, file: &str, line: usize, status: BodyStatus) -> BodyComparison {
-    BodyComparison { name: name.into(), span: Some((file.into(), line)), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }
+    BodyComparison { name: name.into(), span: Some((file.into(), line)), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }
 }
 
 #[test]
@@ -2502,7 +2503,7 @@ struct MemberBodies(Vec<(&'static str, BodyStatus, BodyFacts)>);
 
 impl BodyOracle for MemberBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status, _)| BodyComparison { name: name.to_string(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.0.iter().map(|(name, _, facts)| BodyFacts { name: name.to_string(), ..facts.clone() }).collect()))
@@ -2719,7 +2720,7 @@ fn a_new_local_const_that_reads_a_file_needs_a_reason() {
     let after = before.replace("    a\n", "    const LIMIT: &str = include_str!(\"limit.txt\");\n    a + LIMIT.len()\n");
     // The use comes from the MIR records.
     let call = "include_str!(\"limit.txt\")";
-    let bodies = SpanBodies(vec![BodyComparison { name: "demo::limit".into(), span: None, status: different(false), config: vec![call.to_string()], differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]);
+    let bodies = SpanBodies(vec![BodyComparison { name: "demo::limit".into(), span: None, status: different(false), config: vec![call.to_string()], differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }]);
     let report = run_derived_with(before, &after, &bodies);
     let fact = report.facts.iter().find(|fact| fact.description.contains("const LIMIT")).unwrap_or_else(|| panic!("{report:#?}"));
     assert!(fact.description.starts_with("added item `const LIMIT: &str = include_str!(\"limit.txt\");`"), "{fact:#?}");
@@ -2975,7 +2976,7 @@ fn fact_notes(facts: &[semilla_core::report::Fact]) -> String {
 /// form "`write!` in `demo::f` (Semilla cannot see into it)". Design 35: a use that Semilla
 /// sees goes to the note of a fact. A call that Semilla cannot see into goes to no output.
 fn config_causes(old: &Workspace, new: &Workspace) -> String {
-    let mut bodies = vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n0"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }];
+    let mut bodies = vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n0"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }];
     crate::srcconfig::apply(&mut bodies, old, new, &BTreeMap::new());
     let show = |text: &String| match text.strip_suffix(crate::srcconfig::UNSEEN) {
         Some(call) => format!("`{call}` in `demo::f` (Semilla cannot see into it)"),
@@ -3337,7 +3338,7 @@ fn the_items_of_the_build_configuration_are_opaque_inputs() {
     assert!(!opaque.callee(true, "demo::plain", None, &["demo::Pad".to_string()]));
 
     // A body with a text edit: a hard name stops the proof. Each new use is in the list.
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     // The call of `strict` is a node (batch 5o, A3): the driver gives the item under `cfg`,
     // and the new call makes the MIR different.
     opaque.note(true, "demo::user", None, &["cfg demo::strict".to_string()]);
@@ -3483,7 +3484,7 @@ fn the_exact_rule_uses_the_kind_and_the_scope_of_a_name() {
     // and no spotlight. A new use, or an edit in the tokens of the use, gets the spotlight.
     let (_d1, after) = load(&EXACT_SRC.replace("pub fn outside() -> u64 { Default::default() }", "pub fn outside() -> u64 { let v = Default::default(); v }").replace("pub fn pick() -> u64 { default::make() }", "pub fn pick() -> u64 { let _v = 1; default::make() }").replace("pub fn no_heap() -> usize { serialize() }", "pub fn no_heap() -> usize { default::make(); serialize() }"));
     let opaque = crate::opaque::Opaque::new(&before, &after);
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     let mut bodies = vec![body("demo::outside", equal("n2")), body("demo::block::pick", equal("n2")), body("demo::no_heap", equal("n2"))];
     opaque.apply(&mut bodies, &BTreeMap::new());
     assert_eq!(bodies[0].status, equal("n2"));
@@ -3513,7 +3514,7 @@ fn an_inner_cfg_attr_puts_no_item_under_cfg_and_a_note_has_a_name() {
     // Batch 7b, part 4.2: `#![cfg_attr(not(feature = "std"), no_std)]` of the crate root
     // removes no item. Before, each item of the crate was an item under `cfg`, and each body
     // with a text edit got the note "this body uses code that a `cfg` attribute can change".
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     let src = "#![cfg_attr(not(feature = \"std\"), no_std)]\npub struct Held(u8);\npub fn hold() -> Held {\n    Held(1)\n}\npub fn keep() -> u8 {\n    let _h = hold();\n    1\n}\n";
     let edit = |src: &str| src.replace("let _h = hold();", "let _ = hold();");
     let run = |src: &str, types: &[&str]| {
@@ -3734,7 +3735,7 @@ fn a_name_from_a_macro_expansion_is_a_use() {
 #[test]
 fn a_name_from_an_expansion_belongs_to_its_macro_call() {
     let (_d0, before) = load(EXPANDED_SRC);
-    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), span: None, status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     let lim = |mac: &str, count: usize| [expanded("lim", Some(mac), count)];
     let edits = EXPANDED_SRC
         .replace("{ if call!() != 1 { return 0; } a }", "{ a }")
@@ -3812,7 +3813,7 @@ fn the_spotlight_rule_uses_the_token_diff() {
         .replace("{ let v = lim(); let w = a + a + a + a; v + w }", "{ let w = a + a + a + a; let v = lim(); v + w }");
     let (_d1, after) = load(&edits);
     let opaque = crate::opaque::Opaque::new(&before, &after);
-    let body = |name: &str| BodyComparison { name: name.to_string(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let body = |name: &str| BodyComparison { name: name.to_string(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     let mut bodies = vec![body("demo::between"), body("demo::moved")];
     opaque.apply(&mut bodies, &BTreeMap::new());
     // The stop rule has no change: the body has a hard name, so the proof stops.
@@ -4034,7 +4035,7 @@ impl BodyOracle for StatusFacts {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
         // The span of a body is the span of its MIR facts.
         let span = |name: &str| self.1.iter().find(|facts| facts.name == name).and_then(|facts| facts.span.clone());
-        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.to_string(), span: span(name), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+        Ok(self.0.iter().map(|(name, status)| BodyComparison { name: name.to_string(), span: span(name), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }).collect())
     }
     fn facts(&self, _: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
         Ok(Some(self.1.clone()))
@@ -4238,7 +4239,7 @@ fn equal_code_in_only_some_configurations_is_a_note() {
     let before = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\npub fn g(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
     let after = before.replace("let b = a;\n    b\n}\npub fn g", "a\n}\npub fn g");
     let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
-    let partial = |name: &str| BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: names(&["release"]), equal_in: names(&["dev", "dev, all features"]), stopped: Vec::new() };
+    let partial = |name: &str| BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: names(&["release"]), equal_in: names(&["dev", "dev, all features"]), stopped: Vec::new(), range: None, elements: None };
     let report = run_derived_with(before, &after, &Comparisons(vec![partial("demo::f")]));
     let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
     assert_eq!(fact.note.as_deref(), Some("the compiled code is equal in `dev`, `dev, all features`; different in `release`"), "{fact:#?}");
@@ -4249,7 +4250,7 @@ fn equal_code_in_only_some_configurations_is_a_note() {
     // Negative: a fact with a second body that has no proof in each configuration gets no
     // note. "Proved" is the intersection of the bodies of the fact.
     let all = before.replace("    let b = a;\n    b\n", "    a\n");
-    let none = BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let none = BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     let report = run_derived_with(before, &all, &Comparisons(vec![partial("demo::f"), none]));
     for fact in &report.facts {
         let both = fact.affected.contains(&"demo::f".to_string()) && fact.affected.contains(&"demo::g".to_string());
@@ -4258,7 +4259,7 @@ fn equal_code_in_only_some_configurations_is_a_note() {
         assert!(fact.compare != Compare::CodeEqual, "{fact:#?}");
     }
     // Negative: a body with a proof in each configuration gets no note.
-    let report = run_derived_with(before, &after, &Comparisons(vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]));
+    let report = run_derived_with(before, &after, &Comparisons(vec![BodyComparison { name: "demo::f".into(), span: None, status: equal("n2"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }]));
     assert!(report.facts.iter().all(|fact| fact.note.is_none()), "{report:#?}");
 }
 
@@ -4269,7 +4270,7 @@ fn a_condition_that_semilla_did_not_check_is_a_note() {
     // a note. It has no spotlight, it needs no reason, and it is not neutral.
     let before = "pub fn f(a: u64) -> u64 {\n    let b = a;\n    b\n}\n";
     let after = before.replace("let b = a;\n    b\n", "a\n");
-    let body = |status: BodyStatus, config: &[&str], stopped: &[&str]| BodyComparison { name: "demo::f".into(), span: None, status, config: config.iter().map(|text| text.to_string()).collect(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: stopped.iter().map(|text| text.to_string()).collect() };
+    let body = |status: BodyStatus, config: &[&str], stopped: &[&str]| BodyComparison { name: "demo::f".into(), span: None, status, config: config.iter().map(|text| text.to_string()).collect(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: stopped.iter().map(|text| text.to_string()).collect(), range: None, elements: None };
     let cause = "`l0` (under `#[cfg(feature=\"fa\")]`)";
     let report = run_derived_with(before, &after, &Comparisons(vec![body(different(true), &[], &[cause, "cfg!(unix)"])]));
     let fact = report.facts.iter().find(|fact| fact.affected.contains(&"demo::f".to_string())).unwrap_or_else(|| panic!("{report:#?}"));
@@ -4301,7 +4302,7 @@ struct UnitBodies {
 
 impl BodyOracle for UnitBodies {
     fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
-        Ok(self.bodies.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }).collect())
+        Ok(self.bodies.iter().map(|(name, status)| BodyComparison { name: name.clone(), span: None, status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }).collect())
     }
     fn truths(&self, _: &Step) -> anyhow::Result<[Vec<ConfigTruth>; 2]> {
         let unit = crate::Unit { target: "demo".into(), package: String::new(), cfg: self.cfg.iter().map(|name| name.to_string()).collect(), files: self.files.iter().map(|file| file.to_string()).collect(), root: "src/lib.rs".into() };
@@ -4554,7 +4555,7 @@ fn a_macro_import_of_a_different_target_does_not_stop_a_rename() {
     }
     // A condition in a body that has the name: the note of the rename fact names it.
     let before = "fn item() {}\npub fn run() {\n    #[cfg(windows)]\n    let _piece = 1;\n    item();\n}\n";
-    let body = |name: &str, stopped: &[&str]| BodyComparison { name: name.into(), span: None, status: equal("n1"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: stopped.iter().map(|text| text.to_string()).collect() };
+    let body = |name: &str, stopped: &[&str]| BodyComparison { name: name.into(), span: None, status: equal("n1"), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: stopped.iter().map(|text| text.to_string()).collect(), range: None, elements: None };
     let report = run_derived_with(before, &before.replace("item", "piece"), &Comparisons(vec![body("demo::piece", &[]), body("demo::run", &["#[cfg(windows)]"])]));
     assert_eq!(descriptions(&report), ["renamed `demo::item` → `demo::piece`"], "{report:#?}");
     assert_eq!((report.facts[0].compare, report.facts[0].note.as_deref()), (Compare::CodeEqual, Some("this body uses `#[cfg(windows)]`, which Semilla did not check (`demo::run`)")), "{report:#?}");
@@ -5681,7 +5682,7 @@ fn the_spotlight_of_an_include_call_names_the_file() {
     let base = "pub fn f() -> usize {\n    1\n}\n";
     let spotlight = |facts: &[semilla_core::report::Fact]| facts.iter().filter_map(|f| f.spotlight_why.clone()).collect::<Vec<_>>().join("\n");
     // The uses come from the MIR records.
-    let body = |uses: &[&str]| SpanBodies(vec![BodyComparison { name: "demo::f".into(), span: None, status: different(false), config: uses.iter().map(|text| text.to_string()).collect(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() }]);
+    let body = |uses: &[&str]| SpanBodies(vec![BodyComparison { name: "demo::f".into(), span: None, status: different(false), config: uses.iter().map(|text| text.to_string()).collect(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }]);
     for (call, name, path) in [("include_str!(\"note.txt\")", "include_str!", "note.txt"), ("include_bytes!(\"../data/table.bin\")", "include_bytes!", "../data/table.bin")] {
         let report = run_derived_with(base, &format!("pub fn f() -> usize {{\n    {call}.len()\n}}\n"), &body(&[call]));
         let text = spotlight(&report.facts);
@@ -5775,7 +5776,7 @@ const UNDER_CFG_NOTE: &str = "this body uses `BASE` (its signature uses `Word`),
 /// The bodies of `UNDER_CFG`: the method and its closure, with one status.
 /// The first test below makes sure that an edit of the body gets the note with this source.
 fn under_cfg_bodies(status: BodyStatus) -> Comparisons {
-    let body = |name: &str| BodyComparison { name: name.into(), span: Some(("src/lib.rs".into(), 11)), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new() };
+    let body = |name: &str| BodyComparison { name: name.into(), span: Some(("src/lib.rs".into(), 11)), status: status.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None };
     Comparisons(vec![body("demo::S::size"), body("demo::S::size::{closure#0}")])
 }
 
@@ -6430,9 +6431,9 @@ fn two_impl_blocks_that_differ_only_in_lifetimes_are_one_impl() {
     assert!(headers[1].starts_with("generics of `demo::impl dynShape`: `impl<'a> dyn Shape + 'a { }` → `impl dyn Shape { }`"), "{lines:#?}");
     // Each edit in a member is a fact with its text.
     for text in [
-        "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [logic]",
+        "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [control flow]",
         "changed literal `10` → `20` at `demo::<&mutNode as Parse>::parse/S0/arm[0].body` [value]",
-        "changed pattern `1` → `0` at `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [logic]",
+        "changed pattern `1` → `0` at `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [control flow]",
         "changed literal `20` → `10` at `demo::<&mutNode as Parse>::parse/S0/arm[1].body` [value]",
         "changed literal `1` → `2` at `demo::dynShape::area/tail` [value]",
     ] {
@@ -6909,4 +6910,207 @@ fn a_crlf_file_with_a_string_continuation_parses_and_a_line_end_change_gives_no_
     let report = run_derived(&crlf, &crlf.replace("explicit", "exact"), &[("demo::text", different(false))]);
     let texts = descriptions(&report);
     assert!(texts.len() == 1 && texts[0].starts_with("changed literal"), "{texts:#?}");
+}
+
+
+// Batch 8b (design 40): the exact map from each edit to the compiled code.
+
+/// A body oracle that returns fixed comparisons, with their MIR elements.
+struct ElementBodies(Vec<BodyComparison>);
+
+impl BodyOracle for ElementBodies {
+    fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
+        Ok(self.0.clone())
+    }
+}
+
+/// A MIR element with the byte range of the first `part` in `text`.
+fn element_at(text: &str, part: &str) -> MirElement {
+    let start = text.find(part).unwrap_or_else(|| panic!("no `{part}`"));
+    MirElement { tokens: Some(("src/lib.rs".into(), start, start + part.len())), ..Default::default() }
+}
+
+/// Runs a step with derived facts and fixed comparisons.
+fn run_elements(before: &str, after: &str, claims: Vec<Claim>, oracle: &ElementBodies) -> StepReport {
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let step = step(claims);
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, oracle, &NoOracle, true).report
+}
+
+fn changed_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
+    BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false }) }
+}
+
+const COUNT_BEFORE: &str = "pub fn f(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";
+
+fn count_after() -> String {
+    COUNT_BEFORE.replace("v.len()", "Vec::len(v)").replace("n + 1", "n + 2")
+}
+
+#[test]
+fn each_edit_gets_the_compare_result_of_its_own_mir_elements() {
+    // Design 40.3: the call in a new form owns no element that differs, and each element that
+    // differs has an owner: `code equal`. The literal owns the changed addition.
+    let after = count_after();
+    let body = changed_body("demo::f", vec![element_at(COUNT_BEFORE, "n + 1")], vec![element_at(&after, "n + 2")]);
+    let report = run_elements(COUNT_BEFORE, &after, Vec::new(), &ElementBodies(vec![body.clone()]));
+    let fact = |text: &str| report.facts.iter().find(|fact| fact.description.contains(text)).unwrap_or_else(|| panic!("{text}: {report:#?}"));
+    assert_eq!((fact("`v.len()` → `Vec::len(v)`").compare, fact("`1` → `2`").compare), (Compare::CodeEqual, Compare::CodeDifferent));
+    assert!(fact("`v.len()` → `Vec::len(v)`").affected.is_empty() && fact("`1` → `2`").affected == ["demo::f"]);
+    assert_eq!((report.mir_map.owners, report.mir_map.equal, report.mir_map.doubt, report.mir_map.errors), (1, 1, 0, 0));
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+
+    // An element with no owner (its node is the whole body): each edit that owns nothing keeps
+    // the doubt rule, and a fact names the node. The edits of the body give the cause, so the
+    // fact has no spotlight.
+    let mut doubt = body.clone();
+    // The element is the `n` of the tail: no edit contains it, and it contains no edit.
+    let at = after.find("    n + 2").unwrap() + 4;
+    doubt.elements.as_mut().unwrap().new.push(MirElement { tokens: Some(("src/lib.rs".into(), at, at + 1)), ..Default::default() });
+    let report = run_elements(COUNT_BEFORE, &after, Vec::new(), &ElementBodies(vec![doubt]));
+    let fact = |text: &str| report.facts.iter().find(|fact| fact.description.contains(text)).unwrap_or_else(|| panic!("{text}: {report:#?}"));
+    assert_eq!(fact("`v.len()` → `Vec::len(v)`").compare, Compare::CodeDifferent);
+    assert_eq!(report.mir_map.doubt, 1);
+    let node = fact("the compiled code of `demo::f` changes with no edit at its place: `n`");
+    assert!(node.category == Category::Indirect && !node.spotlight && node.compare == Compare::CodeDifferent, "{node:#?}");
+    assert_eq!(node.note.as_deref(), Some("lines 3"));
+
+    // Fix round 2: a jump with no value (a `goto`, a `return`) at a place with no edit needs no
+    // owner. Its target follows a change with its own elements.
+    let mut jump = body.clone();
+    jump.elements.as_mut().unwrap().new.push(MirElement { tokens: Some(("src/lib.rs".into(), at, at + 1)), glue: true, jump: true, ..Default::default() });
+    let report = run_elements(COUNT_BEFORE, &after, Vec::new(), &ElementBodies(vec![jump]));
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+    assert_eq!(report.facts.iter().find(|fact| fact.description.contains("`v.len()` → `Vec::len(v)`")).unwrap().compare, Compare::CodeEqual);
+
+    // Design 40.3 (fix round 1, D2): an element whose node is a block that contains an edit
+    // belongs to the edits in the block. It never gives "no edit at its place".
+    let mut block = body.clone();
+    block.elements.as_mut().unwrap().new.push(element_at(&after, "{\n    let n"));
+    let report = run_elements(COUNT_BEFORE, &after, Vec::new(), &ElementBodies(vec![block]));
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+    assert!(report.facts.iter().filter(|fact| fact.part == "edit").all(|fact| fact.compare == Compare::CodeDifferent), "{report:#?}");
+
+    // No element data: the rule of design 38 for each edit.
+    let mut unknown = body;
+    unknown.elements = None;
+    let report = run_elements(COUNT_BEFORE, &after, Vec::new(), &ElementBodies(vec![unknown]));
+    assert!(report.facts.iter().filter(|fact| fact.part == "edit").all(|fact| fact.compare == Compare::CodeDifferent), "{report:#?}");
+}
+
+#[test]
+fn a_body_with_no_edit_names_the_node_of_each_changed_element() {
+    // Design 40.3, rule 6: an element with no owner in a body with no edit. The fact names the
+    // node, and it needs a reason as before.
+    let before = "pub fn f(a: u32) -> u32 {\n    a * 2\n}\npub fn g() -> u32 {\n    1\n}\n";
+    let after = before.replace("    1\n", "    3\n");
+    let body = changed_body("demo::f", vec![element_at(before, "a * 2")], vec![element_at(&after, "a * 2")]);
+    let report = run_elements(before, &after, Vec::new(), &ElementBodies(vec![body, BodyComparison { name: "demo::g".into(), ..changed_body("demo::g", Vec::new(), Vec::new()) }]));
+    let facts: Vec<&Fact> = report.facts.iter().filter(|fact| fact.category == Category::Indirect).collect();
+    assert_eq!(facts.len(), 1, "{report:#?}");
+    assert_eq!(facts[0].description, "the compiled code of `demo::f` changes with no edit at its place: `a * 2`");
+    assert!(facts[0].spotlight && facts[0].affected == ["demo::f"], "{report:#?}");
+}
+
+#[test]
+fn a_body_gets_one_fact_with_its_outermost_nodes() {
+    // Fix round 1, D3: one fact for each body. A node inside a different node of the list
+    // does not show; at most three texts show, then "and N more". The lines go to the note. An
+    // edit of a path in the body is a possible cause, and the fact names it.
+    let before = "pub fn f(a: u32, b: u32) -> u32 {\n    let x = a * 2;\n    let y = b * 3;\n    let z = x + y;\n    let w = z * 5;\n    g(w)\n}\npub fn g(a: u32) -> u32 {\n    a\n}\npub fn h(a: u32) -> u32 {\n    a\n}\n";
+    let after = before.replace("    g(w)\n}\npub fn g", "    h(w)\n}\npub fn g");
+    let new = |part: &str| element_at(&after, part);
+    let at = after.find("a * 2").unwrap();
+    let inner = MirElement { tokens: Some(("src/lib.rs".into(), at, at + 1)), ..Default::default() };
+    let body = changed_body("demo::f", Vec::new(), vec![new("a * 2"), inner, new("b * 3"), new("x + y"), new("z * 5")]);
+    let report = run_elements(before, &after, Vec::new(), &ElementBodies(vec![body]));
+    let facts: Vec<&Fact> = report.facts.iter().filter(|fact| fact.category == Category::Indirect).collect();
+    assert_eq!(facts.len(), 1, "{report:#?}");
+    let path = report.facts.iter().find(|fact| fact.description.contains("`g` → `h`")).unwrap();
+    assert_eq!(facts[0].description, format!("the compiled code of `demo::f` changes with no edit at its place: `a * 2`, `b * 3`, `x + y`, and 1 more; a type or a path changes in {} of this body", path.id));
+    assert_eq!(facts[0].note.as_deref(), Some("lines 2, 3, 4, 5"));
+}
+
+#[test]
+fn the_bodies_with_no_edit_of_a_crate_fold_above_three() {
+    // Fix round 1, D3: up to three bodies with no edit of one crate get a fact each; more give
+    // one fact for the crate. The fact lists each body, and it needs one reason.
+    let before = "pub fn f1(a: u32) -> u32 {\n    a * 2\n}\npub fn f2(a: u32) -> u32 {\n    a * 2\n}\npub fn f3(a: u32) -> u32 {\n    a * 2\n}\npub fn f4(a: u32) -> u32 {\n    a * 2\n}\npub fn g() -> u32 {\n    1\n}\n";
+    let after = before.replace("    1\n", "    3\n");
+    let places: Vec<usize> = after.match_indices("a * 2").map(|(at, _)| at).collect();
+    let bodies = |count: usize| -> Vec<BodyComparison> { (1..=count).map(|n| changed_body(&format!("demo::f{n}"), Vec::new(), vec![MirElement { tokens: Some(("src/lib.rs".into(), places[n - 1], places[n - 1] + 5)), ..Default::default() }])).collect() };
+    let indirect = |report: &StepReport| -> Vec<String> { report.facts.iter().filter(|fact| fact.category == Category::Indirect).map(|fact| fact.description.clone()).collect() };
+    let report = run_elements(before, &after, Vec::new(), &ElementBodies(bodies(3)));
+    assert_eq!(indirect(&report).len(), 3, "{report:#?}");
+    let report = run_elements(before, &after, Vec::new(), &ElementBodies(bodies(4)));
+    assert_eq!(indirect(&report), ["the compiled code of 4 bodies of the crate `demo` changes with no edit of their text: `demo::f1`, `demo::f2`, `demo::f3`, and 1 more"], "{report:#?}");
+    let fact = report.facts.iter().find(|fact| fact.category == Category::Indirect).unwrap();
+    assert!(fact.spotlight && fact.affected.len() == 4 && fact.reason_place() == "demo", "{fact:#?}");
+}
+
+#[test]
+fn a_range_maps_to_the_smallest_node_at_token_boundaries() {
+    // Design 40.2: the node of a range, and a map error for a range in a token.
+    let (_d1, old) = load(COUNT_BEFORE);
+    let (_d2, new) = load(&count_after());
+    let edits = semilla_syntax::diff(&old, &new, &Default::default());
+    let mut map = mirmap::MirMap::new(&old, &new, &edits);
+    let place = |text: &str, part: &str| element_at(text, part).tokens.unwrap();
+    let node = map.node(1, &place(&count_after(), "Vec::len(v)")).unwrap();
+    assert_eq!((node.text.as_str(), node.start, node.block_free), ("Vec::len(v)", (2, 12), true));
+    // The range of two tokens inside a node gives the smallest node that contains both.
+    assert_eq!(map.node(0, &place(COUNT_BEFORE, "n = v")).unwrap().text, "let n = v.len();");
+    let (file, start, end) = place(COUNT_BEFORE, "len");
+    assert!(map.node(0, &(file.clone(), start + 1, end)).is_none());
+    assert_eq!((map.errors, map.examples.len()), (1, 1));
+    // The last character of a token (the `end_point` of a span) is the token.
+    assert_eq!(map.node(0, &(file, end - 1, end)).unwrap().text, "len");
+    assert_eq!(map.errors, 1);
+}
+
+#[test]
+fn a_body_range_finds_its_item_on_a_line_with_two_items() {
+    // Design 40.2: the byte range replaces the search by lines.
+    let src = "pub fn a() -> u32 { 1 } pub fn b() -> u32 { 2 }\n";
+    let (_d, ws) = load(src);
+    let start = src.find("pub fn b").unwrap();
+    assert_eq!(checks::find_item_by_range("src/lib.rs", (start, src.len() - 1), &ws).as_deref(), Some("demo::b"));
+    assert_eq!(checks::find_item_by_range("src/lib.rs", (0, 23), &ws).as_deref(), Some("demo::a"));
+    assert_eq!(checks::find_item_by_range("src/other.rs", (0, 23), &ws), None);
+}
+
+#[test]
+fn the_branch_mark_counts_the_branch_points_the_targets_and_the_exits() {
+    // Design 40.4.
+    let switch = |targets: usize| MirElement { targets: Some(targets), ..Default::default() };
+    let exit = MirElement { exit: true, ..Default::default() };
+    assert_eq!(mirmap::branch_mark(&[vec![switch(2)], vec![switch(3)]]).as_deref(), Some("the compiled code of this edit changes its branches (1 → 1 branch point(s), 2 → 3 targets)"));
+    assert_eq!(mirmap::branch_mark(&[vec![], vec![switch(2), exit]]).as_deref(), Some("the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets; 0 → 1 exit(s))"));
+    assert_eq!(mirmap::branch_mark(&[vec![switch(2)], vec![switch(2)]]), None);
+}
+
+#[test]
+fn the_category_of_an_edit_comes_from_its_syntax() {
+    // Design 40.5: the table, one row for each class. The status of the body (with a changed
+    // control flow graph or not) does not change a category.
+    let base = "pub fn f(a: u32, o: Option<u32>) -> u32 {\n    let b = a + 1;\n    if a > b {\n        return 0;\n    }\n    let Some(c) = o else { return 1; };\n    g(b);\n    panic!(\"no\");\n}\nfn g(_x: u32) {}\n";
+    let rows = [
+        ("a + 1", "a + 7", "value"),
+        ("if a > b", "if a >= b", "control flow"),
+        ("        return 0;\n", "", "control flow"),
+        ("    let Some(c) = o else { return 1; };\n", "", "control flow"),
+        ("    g(b);\n", "", "logic"),
+        ("    panic!(\"no\");\n", "", "control flow"),
+        ("let b = a + 1;", "let b = a.wrapping_add(1);", "logic"),
+    ];
+    for (old, new, expected) in rows {
+        let after = base.replacen(old, new, 1);
+        for cfg in [false, true] {
+            let report = run_derived(base, &after, &[("demo::f", different(cfg))]);
+            let lines = fact_lines(&report);
+            let edit: Vec<&String> = lines.iter().filter(|line| line.contains("demo::f")).collect();
+            assert!(!edit.is_empty() && edit.iter().all(|line| line.ends_with(&format!("[{expected}]"))), "{old} → {new} ({cfg}): {lines:#?}");
+        }
+    }
 }

@@ -3297,3 +3297,123 @@ A macro call statement with `;` or with braces is one node, with the place of th
 - A fold of equal type changes (`type X → Y in N places`) compares the display texts. Two places with the same tokens and a different format do not fold. No change goes away.
 - A compare text and a token text of a different place can still be different in a corner case that `syn` printed in another form (`| |` and `||` of an empty closure). The two trees of a step use the same rules, so this gives no false edit.
 - The display text of a part with a hole (a header with `{ }` in place of its fields) has the delimiters of the source and one space between them.
+
+## 40. Batch 8b: the exact map from each edit to the compiled code
+
+**User decisions (2026-11-16).**
+
+1. "Let's use lossless parsing to make it able to map exact changes to the compiler diff." Batch 8a made the lossless tree. This batch makes the map.
+2. The category rule "Both": the category of a fact comes from the edit (its syntax and its role). The same edit always gets the same category. An extra mark tells when the branch structure of the compiled code changes.
+3. "The compiled code should complete the static analysis." The source text gives the category. The compiled code gives the compare result, the branch mark, and the facts for the effects that the text does not show.
+
+The rule above each other rule stays: no change of the code is without a fact, and no fact text says less than the change. A doubt gives the result of design 38, never `code equal`. Each detail below that the user did not decide has the mark **Decided by Claude**.
+
+### 40.1 The record of the driver
+
+**The cause.** The driver recorded only the file and the lines of a body. Semilla found the item of a body by its lines, and each edit got the status of all bodies of its item.
+
+**The rule.**
+
+- At the level n0, the record of a body has `el`: the count of its MIR elements, a list of files, and runs of elements with the same source ranges (`[first, count, file, start, end]`, and `[call file, call start, call end]` for a span from a macro call). An element is a statement or a terminator of the canonical body, in the order of the canonical text (`spans.rs` of the driver).
+- The offsets are offsets in the file as written. `rustc` removes a BOM and changes each CRLF to LF. The driver maps each position back with `SourceFile::original_relative_byte_pos`. The test `element_ranges.rs` has a file with a BOM and CRLF, and a file with CRLF.
+- A span from a macro expansion gets the range of its tokens (a macro input, or the body of a `macro_rules` definition in the workspace) and the range of the outermost macro call. A desugaring (`for`, `?`) is not a macro call. A span in a file outside the workspace (an absolute path: the standard library, a registry crate) has no range.
+- The span of a body has `range`: its byte range, if the span is not from a macro expansion.
+- **Decided by Claude:** a run of elements with the same ranges is one entry. The cache folder of `bytes` (all configurations, two trees) is 769 544 kB with the 8a driver and 793 208 kB with this driver (+3 %).
+
+### 40.2 The node of a range
+
+- Semilla maps each range to the smallest node of the lossless tree of its side (old MIR to the old tree, new MIR to the new tree) that contains the full range (`mirmap.rs`). A range that does not start and end at token boundaries of the tree is a map error. `semilla status --verbose` shows the count and the first five examples: "step 0: MIR map: 0 map error(s); …".
+- **Decided by Claude:** a range inside one token is the range of the token in two cases: the token is a string literal (`rustc` gives each placeholder of a format string, `{:?}`, a span inside the literal), or the range is the last character of the token (the `end_point` of a span; a derive and a cast use it). Before these rules, `bytes` had 4 map errors, `nu-ansi-term` 1, and `quickcheck-2` 2. Each other range inside a token stays a map error.
+- **Decided by Claude:** an empty range (the end of a block, the unit value of an `if` with no `else`) belongs to the token that ends at it, if that token is not a space or a comment.
+- The byte range of a body finds its item: the smallest function that contains the range (`checks::find_item_by_range`). The search by lines and by name stays for a body with no range (a body from a macro). Each body of a `cfg` twin gets its own item by its range.
+
+### 40.3 The compare result of each edit
+
+**The cause.** Each edit got the status of all bodies of its item. A rename of a local got `code different` when a different edit in the same body changed the code.
+
+**The alignment (Decided by Claude, `semilla_normal::elements`; fix round 1).**
+
+1. The key of an element is its text with each local number and each block number removed. **Fix round 2:** the two locals of a symmetric operation (`Add`, `Mul`, `BitAnd`, `BitOr`, `BitXor`, `Eq`, `Ne`, and the checked forms) go in the order of their numbers first. Cause: the printer sorts them as text, so `_100` comes before `_99`. A removed statement renumbered the locals, and `i + search_range` in `strsim::generic_jaro` printed as `CheckedAdd(_100, _99)` before the step and `CheckedAdd(_97, _98)` after it. The numbers follow the order of the first use on each side, so this order is the same on the two sides.
+2. A copy into a temporary (`_t = _p`) that the next element of the same block uses one time, with no other use and the same type, folds into that element. Cause: the normal form forwards a copy only if no borrow of `_p` exists, so a deleted borrow (`read_u32_into(&seed, &mut state);`) changed the element `Xo { s: state }` with no edit at its place.
+3. The elements go in the order of the source (the start of the place, the longer place first), not in the order of the blocks. Cause: a negated condition swaps the targets of a switch, the blocks get a new order, and the old order paired the wrong elements (the body of an `if`, the `Ok(Self { encode, decode })` after a `while`).
+4. The longest common subsequence of the keys aligns the elements, with a weight: a pair of places with the same length and the same offset from the start or from the end of the body counts two times. Cause: after a deleted or a new statement, two elements with the same key (`_ = _`) are near the edit, and the first one paired with the wrong partner. A middle part with more than 4 000 000 cells is not aligned: each of its elements differs.
+5. The pairs vote for the pairs of their locals. The pairs with the most votes give a one-to-one map with equal types. Cause: the first pair of the old map fixed a local, and a wrong first pair broke each later element. The return local and the arguments map to themselves.
+6. A second alignment uses the keys with the locals of the map (a local with no partner is `?` on the two sides). Its pairs vote for the locals with no partner. A pair whose locals do not agree with the map differs.
+7. A block starts with its first element. Each target of a terminator pair must go to two blocks whose first elements are a pair, or one of whose first elements differs. A pair that breaks this rule differs. The check runs again until no pair changes.
+8. A part that is not an element (the signature line, a line after the body) that differs sets `other`.
+9. An element with no range (a value that the driver wraps as opaque just before its use) gets the place of the next element of its block with a range, else of the next element with a range, else of the element before it. The order of step 3 uses the same place. **Fix round 2:** with the place of the element before it, `opaque(j)` of `j += 1` in `bs58` went to `output[j] = …` after a deleted `val >>= 8;`, and the order of the two sides did not agree.
+
+If all elements align and `other` is not set, the texts are equal after a renumber and after the forward of the folded copies (a copy next to its only use keeps the behavior). The diff of a body is the union over its targets and its configurations. A body with no element data has no diff. The test `a_small_edit_gives_no_indirect_fact_for_the_code_around_it` has a form of each case of fix round 1, D1 and D2.
+
+**The owner of an element that differs.**
+
+1. The smallest edit whose node contains the node of the element, on its side.
+   - **Decided by Claude (1b):** else, each edit whose node is inside the node of the element. Cause: the MIR statement of a call has the range of the full call, and the changed literal of an argument is inside it. A block whose tail is replaced gives an element of the block (fix round 1, D2): the edits in the block own it, and it never says "no edit at its place".
+2. Else, the edit of a macro definition or a constant whose node contains the tokens of the element (the element of a `macro_rules` body).
+3. Else, no owner.
+
+The place of an element is its token range if the tokens are inside the macro call (a macro input), else the range of the call.
+
+**Decided by Claude:** the node of an edit is its node in the tree. An edit of a whole item has the range of the item only if the item is added or removed, or if it is a constant, a static, or a `macro_rules` definition. An edit of the header of a container (the generics of an impl, an attribute) does not contain the bodies of the container. Cause: in `quickcheck-2`, a removed bound of an impl header got `code different` from the elements of its methods.
+
+**Decided by Claude (fix round 2):** a jump with no value (`goto`, `return`, `resume`, `unreachable`) with no owner needs no owner at each place, also in a node with no block. Cause: a deleted `if … { return Err(…) }` changed the `goto` of the `return Err(…)` before it to the joined return block, and a negated loop condition changed the `goto` at the end of the loop body. The jump carries no value; the change of its target has its own elements (the switch, the new or the deleted code). A `drop` keeps the rule below.
+
+**Decided by Claude:** a glue element with no owner needs no owner, if its node is a block or the body: a `goto`, a `return`, a `resume`, an `unreachable`, or a `drop`. Cause: a new early exit joins the end of the body, and a new local gets its drop at the end of its scope. The change that causes them has its own elements. Limit: a change whose only effect is the order of the drops at the end of a scope does not show as an element with no owner. The test `an_edit_whose_only_effect_is_the_place_of_a_drop_is_code_different` (fix round 1, D4): `let _ = guard();` → `let _g = guard();`. The drop at the statement (old side) belongs to the edit, so the edit is `code different`; the drop at the end of the scope (new side) is glue. The overflow check of the next statement now unwinds through the drop of the guard: that element has no owner, and its fact names the pattern edit as a possible cause.
+
+**The compare result of an edit.**
+
+- `code different` if it owns an element that differs.
+- `code equal` if it owns none, and each element that differs in each of its bodies has an owner, and `other` is not set.
+- Else the result of design 38 (the doubt rule). A body that is different with no element that differs is a doubt.
+- A body that is equal gives `code equal` to each of its edits, as before.
+- "affected bodies" lists only the bodies where the edit owns an element that differs. The doubt rule keeps the old list.
+- **Decided by Claude:** a body with no edit of its text keeps the rules of the evidence (a changed constant, a macro, a build input, a generic). The rules of a changed macro need their reason.
+
+**The facts of the elements with no owner (fix round 1, D3).** **Decided by Claude:**
+
+- One fact for each body: "the compiled code of `demo::f` changes with no edit at its place: `a * 2`, `b * 3`, `x + y`, and 1 more". The fact keeps the outermost nodes (a node inside a different node of the list does not show) and shows at most 3 display texts. A node of the old tree says "(before the step)"; a node with the same text on the two sides shows one time. The lines go to the note ("note: lines 2, 3, 4, 5"), so the fact text does not change when a step moves the body.
+- A type or a path that an edit of the same body changes: the fact names the edit as a possible cause: "…; a type or a path changes in f3 of this body". An edit of a path, a type, a signature, or a pattern counts. The edit does not get the elements: the text cannot prove that the type causes them.
+- In a body with an edit, the fact has no spotlight: the edits of the body keep the doubt rule, so no change hides.
+- A body with no edit and no known cause: one fact with the spotlight for each body, up to 3 bodies of one crate. More bodies of a crate give one fact: "the compiled code of 4 bodies of the crate `demo` changes with no edit of their text: `demo::f1`, `demo::f2`, `demo::f3`, and 1 more". Its affected bodies list each body (`semilla status --verbose` shows each name), and one reason with the key of the crate (`--reason 'demo=…'`) covers it.
+
+### 40.4 The branch mark
+
+If the elements that the edits of a fact own change the branch structure, the fact gets the line "branches: the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets)". A branch point is a `switchInt` terminator; its targets are counted. An exit is a `return` or a call that does not return. **Decided by Claude:** the text and the counts. An early `return` usually adds no `return` terminator: the exits join one `return` block. The mark is not a mismatch mark and asks for no reason. The mismatch mark of 35.2 stays.
+
+### 40.5 The category of an edit
+
+The category of a fact does not depend on the compiled code. `category()` no longer changes `logic` to `control flow`. An op with a computed category (`COMPUTED` in `ops.rs`), and an edit with no op, get the category of the syntax of the changed node (`edits::syntax_category`). An op with a fixed category keeps it (`add-let` is `logic`).
+
+| Row | The changed node | Category | Example |
+|---|---|---|---|
+| 1 (user) | a literal only: each side is a literal | `value` | `a + 1` → `a + 7` at `…/S0/init/rhs` |
+| 2 (user) | a node in a condition (`cond`, a match guard) or in an arm (not its body) | `control flow` | `if a > b` → `if a >= b`; a changed arm pattern `0` → `1` |
+| 3 (user) | a top node `if`, `match`, `for`, `while`, `loop`, `return`, `break`, `continue`, `?` | `control flow` | deleted statement `return 0;` |
+| 4 (Decided by Claude) | a macro call of the `panic!` family: `panic`, `unreachable`, `todo`, `unimplemented`, `assert`, `assert_eq`, `assert_ne`, and the `debug_` forms | `control flow` | deleted statement `panic!("no");` |
+| 5 (Decided by Claude) | a `let … else` | `control flow` | deleted statement `let Some(c) = o else { return 1; };` |
+| 6 (user) | each other statement, operand, or call | `logic` | deleted statement `g(b);`; `v.len()` → `Vec::len(v)` |
+
+A statement that contains a branch or an exit is `control flow` only if the branch or the exit is its top node (row 3), or if it is a `let … else` (row 5). **Decided by Claude:** the SMT effect of a changed condition (`narrow`, `widen`, `negate`) keeps `control flow`; row 2 gives the same category. An item rewrite (`rewrite-item`) is `logic`.
+
+The test `the_category_of_an_edit_comes_from_its_syntax` runs each row with a body status with and without a changed control flow graph. The e2e test `each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_syntax` has two steps with the same literal edit, one with a second edit that adds a branch: the literal keeps `value`.
+
+### 40.6 Time
+
+**Decided by Claude.** The compare of a changed body aligns its elements. The element data of a record is shared in memory (a read of a cache folder clones each record), and each process keeps the diffs of the text pairs that it saw (at most 20 000; the configurations of a step often have the same two texts). The step time with the 8a binaries and with these binaries, one run at a time, with an empty cache and with a warm cache:
+
+| Fixture | Empty cache | Warm cache |
+|---|---|---|
+| `bytes` | 19.15 s → 20.24 s (+6 %) | 8.44 s → 8.88 s (+5 %) |
+| `quickcheck-2` | 13.43 s → 13.88 s (+3 %) | 1.82 s → 2.01 s (+10 %) |
+| `socket2` | 3.19 s → 3.33 s (+4 %) | 1.60 s → 1.68 s (+5 %) |
+| `rand_xoshiro` | 6.03 s → 6.22 s (+3 %) | 1.35 s → 1.42 s (+5 %) |
+
+Before the shared data and the kept diffs, the warm step of `quickcheck-2` took 2.30 s (+26 %). Fix round 1 adds a second alignment: the check of the step of `bytes` with a warm cache takes 7.53 s (8a: 7.23 s), and the compare of the bodies at N0 1.56 s (8a: 1.44 s).
+
+### 40.7 Limits
+
+- An element whose node is a block or the body belongs to each edit in it (rule 1b). So an element of the whole body makes each edit of the body `code different`.
+- A change of a type in a declaration (a field type, a signature) changes the elements at each use. These elements have no edit at their place: they give `indirect` facts and the doubt rule for the edits of the body.
+- A new local, a removed local, or a new form of a statement can break the map of the locals for a later element with the same text. That element differs, and with no edit at its place it is a doubt.
+- The map does not follow a body into a different file (`include!`): the call owns the elements of the included file.
+- The alignment is an order-preserving one. A statement that moves gives elements that differ on the two sides: the move edit owns them.
