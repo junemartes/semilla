@@ -197,6 +197,30 @@ pub struct MirMapCounts {
     /// an owner: these edits get `code equal`.
     #[serde(default)]
     pub equal: usize,
+    /// The statement pairs of the mapper (a move, or the same text after replacements) whose
+    /// MIR elements do not align with each other (design 41.8).
+    #[serde(default)]
+    pub disagree: usize,
+    /// The statement pairs of the mapper that the check compared.
+    #[serde(default)]
+    pub checked: usize,
+    /// The checked pairs with no aligned element (no proof either way).
+    #[serde(default)]
+    pub unaligned: usize,
+    /// The first pairs that do not agree: `OLD → NEW (cause)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disagree_examples: Vec<String>,
+    /// The statement pairs of round 3, of the composite step, and of the gap rules of 8b in a
+    /// mapped body (design 41.8).
+    #[serde(default)]
+    pub round3: usize,
+    #[serde(default)]
+    pub composites: usize,
+    #[serde(default)]
+    pub gap_pairs: usize,
+    /// The bodies above the limit of the statement mapper (design 41.9).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mapper_skipped: Vec<String>,
 }
 
 impl MirMapCounts {
@@ -209,6 +233,18 @@ impl MirMapCounts {
         let mut line = format!("MIR map: {} map error(s); {} edit(s) own a changed MIR element; {} edit(s) with equal code in a changed body; {} edit(s) with the doubt rule", self.errors, self.owners, self.equal, self.doubt);
         if !self.examples.is_empty() {
             line.push_str(&format!(" (first map errors: {})", self.examples.join(", ")));
+        }
+        if self.checked > 0 {
+            line.push_str(&format!("; statement map: {} pair(s) checked, {} do not agree with the MIR alignment, {} with no aligned element", self.checked, self.disagree, self.unaligned));
+            if !self.disagree_examples.is_empty() {
+                line.push_str(&format!(" (first: {})", self.disagree_examples.join("; ")));
+            }
+        }
+        if self.round3 + self.composites + self.gap_pairs > 0 {
+            line.push_str(&format!("; mapper: {} round 3 pair(s), {} composite pair(s), {} pair(s) of the 8b gap rules", self.round3, self.composites, self.gap_pairs));
+        }
+        if !self.mapper_skipped.is_empty() {
+            line.push_str(&format!("; the statement mapper did not run for {} body(ies) above its limit: {}", self.mapper_skipped.len(), self.mapper_skipped.join(", ")));
         }
         line
     }

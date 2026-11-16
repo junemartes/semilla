@@ -4158,7 +4158,7 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // The control: a rewrite in a body with a macro that gives no such name has no note. The
     // compare at level N0 sees the removed local.
     let out = step("    let v = two!() + a;\n    v\n", "    two!() + a\n", 0);
-    assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE), "{out}");
 }
 
 #[test]
@@ -4200,13 +4200,14 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     let out = step("    let _ = &t;\n    1\n", "    t.low()\n", 0);
     // Design 40.5: the category comes from the syntax (a call), not from the compiled code.
     assert!(out.contains("added statement `t.low()` at `shop_core::by_fact/tail` [logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
-    // The control: the calls of an honest rewrite have no rival with such a fact.
+    // The control: the calls of an honest rewrite have no rival with such a fact. The step
+    // inlines a variable (design 41.5): one `move` fact.
     let out = step("    let n = v.iter().map(|y| y + 1).sum::<u64>();\n    n + a\n", "    v.iter().map(|y| y + 1).sum::<u64>() + a\n", 0);
-    assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // A path in the signature of a nested item (`I::Item`) has no type check result in the
     // body around it. The driver must not ask for one.
     let out = step("    let v = first([a].into_iter()).unwrap_or(0);\n    v\n", "    first([a].into_iter()).unwrap_or(0)\n", 0);
-    assert!(out.contains("[logic · code different]") && !out.contains("compiler error"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains("compiler error"), "{out}");
     // The unstable rule. The compiler puts an unstable candidate after each stable one, if
     // the crate does not have the feature. A `cfg_attr` at the crate root can select it.
     let emp = "pub trait Emp {\n    fn is_empty(&mut self) -> bool;\n}\nimpl Emp for std::slice::Iter<'_, u64> {\n    fn is_empty(&mut self) -> bool {\n        false\n    }\n}\n";
@@ -4233,7 +4234,7 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     // under `cfg` here: such an attribute at the root makes each `impl` of the root a fact
     // that can change.
     let out = unstable("", "Emp::is_empty(&mut it)", "    let e = [a].is_empty();\n    e\n", "    [a].is_empty()\n", 0);
-    assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The orphan rule. A glob `use` under `cfg` is a coarse case: each trait fact of the
     // workspace can change. Only the standard library can have `impl Iterator for usize`.
     // Thus the rival `Iterator::cmp` cannot win for `usize`. It can win for a local type.
@@ -4254,7 +4255,7 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
         run(repo, &["step", "probe"], expect)
     };
     let out = orphan("    let o = a.cmp(&b);\n    o\n", "    a.cmp(&b)\n", 0);
-    assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     let out = orphan("    Ord::cmp(&a, &b)\n", "    a.cmp(&b)\n", 0);
     assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
 }
@@ -4334,9 +4335,10 @@ fn a_trait_impl_of_a_crate_outside_the_workspace_can_change_a_call() {
     // call means `Soft::deep`.
     let out = step("    Quiet::deep(&mut n)\n", "    n.deep()\n", 0);
     assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
-    // The control: no trait of the other crate has the name `calm`.
+    // The control: no trait of the other crate has the name `calm`. The step inlines a variable
+    // (design 41.5).
     let out = step("    let v = n.calm();\n    v\n", "    n.calm()\n", 0);
-    assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
 }
 
 /// The intent of cheat B (trial 6): a line break, a false result line, and the ESC sequence that
@@ -4673,14 +4675,15 @@ fn a_proof_holds_in_each_checked_configuration() {
     run(repo, &["undo"], 0);
 
     // A rewrite of a body that only the feature `fast` compiles: the configurations with all
-    // features have the compare. The compare at level N0 sees the new local.
+    // features have the compare. The compare at level N0 sees the new local. The step extracts
+    // a variable (design 41.5): one `move` fact.
     let out = step(&base.replace("    a * 2\n", "    let b = a * 2;\n    b\n"), 0);
-    assert!(out.contains("[logic · code different]") && !out.contains("no compare") && !out.contains("spotlight"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains("no compare") && !out.contains("spotlight"), "{out}");
 
     // Part C: the list covers `debug_assertions`, so a call of a function with a definition for
     // each value gives no note.
     let out = step(&base.replace("    chk(a) + 1\n", "    let b = chk(a);\n    b + 1\n"), 0);
-    assert!(out.contains("[logic · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE), "{out}");
 
     // B1: each output for the reviewer names the checked configurations, the target, and the
     // conditions that the list does not cover.
@@ -4834,7 +4837,7 @@ fn a_configuration_that_builds_only_its_libraries_and_binaries_is_checked() {
     // A step that builds: the header names the smaller builds, and no configuration has a gap.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ a / m::lim() }", "{\n    let l = m::lim();\n    a / l\n}"));
     let out = run(repo, &["step", "an honest rewrite"], 0);
-    assert!(out.contains("[logic · code different]") && !out.contains("no compare") && !out.contains("not checked"), "{out}");
+    assert!(out.contains("[move · code different]") && !out.contains("no compare") && !out.contains("not checked"), "{out}");
     let out = run(repo, &["status", "--wait", "600"], 0);
     let line = out.lines().find(|line| line.contains("checked configurations (target `")).unwrap_or_default();
     assert!(line.contains("`dev, no default features` (libraries and binaries only: the other targets do not build), `release, no default features` (libraries and binaries only: the other targets do not build)"), "{out}");
@@ -4957,7 +4960,7 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ a as TA as TB as u64 }", "{ let b = a as TA; b as TB as u64 }"));
     let out = run(repo, &["step", "probe"], 0);
     let gap = "; not checked together: `feature = \"fast\"` on with `feature = \"slow\"` off. Semilla added the configuration `dev, features fast` for this state. The configuration does not build before the step, or it does not give this state";
-    assert!(out.contains(CONFIG_NOTE) && out.contains(gap) && out.contains("[logic · code equal]") && !out.contains("spotlight:"), "{out}");
+    assert!(out.contains(CONFIG_NOTE) && out.contains(gap) && out.contains("[move · code equal]") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
     assert!(out.contains("configurations `dev, features fast`, `release, features fast` are not checked: it does not build before the step"), "{out}");
 
@@ -4971,7 +4974,7 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     write(repo, "crates/shop-core/src/lib.rs", &honest);
     let out = run(repo, &["step", "probe"], 0);
     let gap = "; not checked together: `feature = \"fa\"` on with `feature = \"fb\"` off with `feature = \"fc\"` on. Add `feature-sets = [[\"fa\", \"fc\"]]` to `[workspace.metadata.semilla]`";
-    assert!(out.contains(CONFIG_NOTE) && out.contains(gap) && out.contains("[logic · code equal]") && !out.contains("spotlight:"), "{out}");
+    assert!(out.contains(CONFIG_NOTE) && out.contains(gap) && out.contains("[move · code equal]") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
     // The user lists the two states that are left: the four added selections give the others.
     write(repo, "crates/shop-core/src/lib.rs", &three);
@@ -6417,4 +6420,41 @@ fn an_edit_whose_only_effect_is_the_place_of_a_drop_is_code_different() {
     assert!(out.contains("changed pattern `_` → `_g` at `shop_core::work/S0/pat` [logic · code different]") && !out.contains("code equal]"), "{out}");
     assert!(out.contains("the compiled code of `shop_core::work` changes with no edit at its place: `a + 1`; a type or a path changes in f1 of this body [indirect · code different]"), "{out}");
     assert_eq!(out.matches("◆").count(), 2, "{out}");
+}
+
+#[test]
+fn the_statement_mapper_gives_one_fact_for_each_refactoring_and_keeps_each_change() {
+    // Design 41: a statement that moves into a block, an extracted variable, a swap, and a
+    // swap with a changed operator (a needle). Each refactoring is one fact; the change of
+    // behavior keeps its own fact with `code different`. A moved statement has the category of
+    // its statement form, with no mismatch mark (fix round 2); a variable is `move`.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub mod cart;\n\npub fn mix(a: u32, b: u32) -> u32 {\n    let mut s = 0;\n    s += a * 2;\n    if b > 3 {\n        s += b;\n    }\n    s\n}\n\npub fn area(a: u32, b: u32) -> u32 {\n    if a * b + 1 > 10 {\n        return a * b + 1;\n    }\n    0\n}\n\npub fn pick(a: u32, b: u32) -> u32 {\n    let x = a + 1;\n    let y = b * 2;\n    if x > y {\n        return x - y;\n    }\n    x + y\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "refactor");
+    let step = |text: String| -> String {
+        write(repo, "crates/shop-core/src/lib.rs", &text);
+        let out = run(repo, &["step", "probe"], 0);
+        run(repo, &["undo"], 0);
+        out
+    };
+    let out = step(base.replace("    s += a * 2;\n    if b > 3 {\n", "    if b > 3 {\n        s += a * 2;\n"));
+    assert!(out.contains("moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [logic · code different]") && !out.contains("! the compiled code changes"), "{out}");
+    assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
+    let out = step(base.replace("    if a * b + 1 > 10 {\n        return a * b + 1;\n", "    let area = a * b + 1;\n    if area > 10 {\n        return area;\n"));
+    assert!(out.contains("extracted variable `area` = `a * b + 1` (2 uses) at `shop_core::area/S0` [move · code"), "{out}");
+    assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
+    let swapped = base.replace("    let x = a + 1;\n    let y = b * 2;\n", "    let y = b * 2;\n    let x = a + 1;\n");
+    let out = step(swapped.clone());
+    assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [logic · code") && !out.contains("! the compiled code changes"), "{out}");
+    assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
+    // The needle: the move does not absorb the changed operator.
+    let out = step(swapped.replace("if x > y", "if x >= y"));
+    assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [logic · code"), "{out}");
+    assert!(out.contains("`x > y` → `x >= y` at `shop_core::pick/S2/cond` [control flow · code different]"), "{out}");
+    write(repo, "crates/shop-core/src/lib.rs", &swapped);
+    run(repo, &["step", "probe"], 0);
+    let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert!(out.contains("; statement map: "), "{out}");
 }

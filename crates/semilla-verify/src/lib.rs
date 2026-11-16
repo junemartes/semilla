@@ -110,6 +110,9 @@ pub struct MirDiff {
     pub new: Vec<MirElement>,
     /// A part of the MIR text that is not an element differs (the signature line).
     pub other: bool,
+    /// The token ranges of the aligned element pairs (old, new), for the MIR check of the
+    /// statement map (design 41.8).
+    pub pairs: Vec<(MirPlace, MirPlace)>,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
@@ -797,7 +800,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // The impl blocks of a renamed type or trait (design 37.2).
     report.notes.extend(checks::renamed_impls(step, input.before, input.after, &mut renames));
     let renames = renames;
-    let edits = semilla_syntax::diff(input.before, input.after, &renames);
+    let (edits, body_maps) = semilla_syntax::diff_maps(input.before, input.after, &renames);
 
     // 2. The MIR bodies.
     let added: Vec<String> = step.claims.iter().flat_map(checks::declared_new_items).collect();
@@ -1202,6 +1205,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         identity_claim,
         identity_pairs: &identity_pairs,
         callees: call_facts.as_ref(),
+        maps: &body_maps,
     };
     owners::assign(&owner_input, &mut report);
     owners::source_files(&owner_input, &mut report);

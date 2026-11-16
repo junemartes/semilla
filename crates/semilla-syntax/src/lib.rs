@@ -14,12 +14,13 @@ pub mod doc;
 pub mod flow;
 pub mod graph;
 pub mod load;
+mod mapper;
 pub mod rs;
 mod net;
 pub mod tree;
 pub mod tt;
 
-pub use diff::{Edit, EditKind, Renames, diff};
+pub use diff::{BodyMaps, Edit, EditKind, Refactor, Renames, StatementMap, diff, diff_maps};
 pub use load::{BodyItem, BodyItems, CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
 pub use tree::Node;
 

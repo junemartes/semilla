@@ -1363,7 +1363,9 @@ fn check_wrap(context: &Context, claim: &Claim, wrap: bool) -> Outcome {
     let mut explains = vec![holder];
     let mut moved = Vec::new();
     for (index, edit) in context.edits.iter().enumerate() {
-        if edit.kind != removed_kind {
+        // A statement that the statement mapper moves into the new block is a move edit
+        // (design 41).
+        if edit.kind != removed_kind && edit.kind != EditKind::Moved {
             continue;
         }
         let Some(anchor) = side(edit, true) else { continue };

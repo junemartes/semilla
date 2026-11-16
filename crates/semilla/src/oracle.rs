@@ -843,7 +843,8 @@ fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
 fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirDiff {
     let place = |place: Option<semilla_normal::elements::Place>| place.map(|place| (place.file, place.start, place.end));
     let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement { tokens: place(element.tokens), call: place(element.call), targets: element.targets, exit: element.exit, glue: element.glue, jump: element.jump };
-    semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other }
+    let pairs = diff.pairs.into_iter().map(|(old, new)| ((old.file, old.start, old.end), (new.file, new.start, new.end))).collect();
+    semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs }
 }
 
 /// The answer with no syntax tree: each input is opaque.

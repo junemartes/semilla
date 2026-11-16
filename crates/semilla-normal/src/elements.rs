@@ -82,6 +82,10 @@ pub struct ElementDiff {
     /// True if a part of the text that is not an element differs: the signature line, or a
     /// line after the body.
     pub other: bool,
+    /// The token ranges of the aligned element pairs (old, new), for the MIR check of the
+    /// statement map (design 41.8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pairs: Vec<(Place, Place)>,
 }
 
 impl ElementDiff {
@@ -94,6 +98,9 @@ impl ElementDiff {
         self.new.sort();
         self.new.dedup();
         self.other |= other.other;
+        self.pairs.extend(other.pairs);
+        self.pairs.sort();
+        self.pairs.dedup();
     }
 }
 
@@ -596,11 +603,14 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
         old: (0..old.elements.len()).filter(|i| !same[*i]).map(|i| element(&old, &old_ranges, i)).collect(),
         new: (0..new.elements.len()).filter(|i| !same_new[*i]).map(|i| element(&new, &new_ranges, i)).collect(),
         other: old.other != new.other || old.args != new.args,
+        pairs: partner.iter().enumerate().filter_map(|(a, b)| Some((old_ranges[a].0.clone()?, new_ranges[(*b)?].0.clone()?))).collect(),
     };
     out.old.sort();
     out.old.dedup();
     out.new.sort();
     out.new.dedup();
+    out.pairs.sort();
+    out.pairs.dedup();
     Some(out)
 }
 

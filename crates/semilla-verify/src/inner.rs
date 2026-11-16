@@ -26,11 +26,12 @@ struct Stmt {
     source: String,
 }
 
-/// A statement fact of one side: the fact, the statement, and its inner statements.
+/// A statement fact of one side: the fact, the statement, its inner statements, and its anchor.
 struct Side {
     fact: usize,
     stmt: Stmt,
     inner: Vec<Stmt>,
+    anchor: Option<semilla_core::Anchor>,
 }
 
 /// Parses one statement. `None` if the text is not exactly one statement.
@@ -130,7 +131,8 @@ fn sides(edits: &[Edit], fact_of: &[Option<usize>], facts: &[Fact], start: usize
         };
         let Some((stmt, inner)) = text.and_then(|text| parse(text)) else { continue };
         let Some(body) = facts[fact].at.as_ref().map(|at| at.item.clone()) else { continue };
-        out.push((body, Side { fact, stmt, inner }));
+        let anchor = if added { edit.after.clone() } else { edit.before.clone() };
+        out.push((body, Side { fact, stmt, inner, anchor }));
     }
     out
 }
@@ -148,6 +150,28 @@ pub(crate) fn compare(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fa
         // The match of each inner statement: (outer, inner) → the flat fact and the equal mark.
         let mut found: Vec<Vec<Option<(usize, bool)>>> = outer.iter().map(|(_, side)| vec![None; side.inner.len()]).collect();
         let mut used = vec![false; flat.len()];
+        // An inner statement that the statement mapper moved to a different place (design 41):
+        // a move edit whose place on this side is inside the statement.
+        let mut moved: Vec<Vec<bool>> = outer.iter().map(|(_, side)| vec![false; side.inner.len()]).collect();
+        for (o, (_, side)) in outer.iter().enumerate() {
+            let Some(anchor) = &side.anchor else { continue };
+            let mut texts: Vec<Vec<String>> = edits
+                .iter()
+                .filter(|edit| matches!(edit.refactor, Some(semilla_syntax::Refactor::Moved { .. })))
+                .filter_map(|edit| {
+                    let place = if gone == "deleted" { edit.before.as_ref()? } else { edit.after.as_ref()? };
+                    let text = if gone == "deleted" { edit.text_before.as_ref()? } else { edit.text_after.as_ref()? };
+                    (place.item == anchor.item && place.path.len() > anchor.path.len() && place.path.starts_with(&anchor.path)).then(|| text.split_whitespace().map(str::to_string).collect())
+                })
+                .collect();
+            for (i, inner) in side.inner.iter().enumerate() {
+                let bare = |tokens: &[String]| tokens.iter().filter(|token| *token != ";").cloned().collect::<Vec<_>>();
+                if let Some(at) = texts.iter().position(|text| bare(text) == bare(&inner.tokens)) {
+                    texts.remove(at);
+                    moved[o][i] = true;
+                }
+            }
+        }
         for equal in [true, false] {
             for (f, (body, side)) in flat.iter().enumerate() {
                 if used[f] || done[side.fact] {
@@ -159,7 +183,7 @@ pub(crate) fn compare(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fa
                         continue;
                     }
                     for (i, inner) in outer_side.inner.iter().enumerate() {
-                        if found[o][i].is_some() {
+                        if found[o][i].is_some() || moved[o][i] {
                             continue;
                         }
                         let score = if inner.tokens == side.stmt.tokens {
@@ -181,7 +205,7 @@ pub(crate) fn compare(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fa
             }
         }
         for (o, (_, side)) in outer.iter().enumerate() {
-            if found[o].iter().all(Option::is_none) {
+            if found[o].iter().all(Option::is_none) && moved[o].iter().all(|m| !m) {
                 continue;
             }
             let name = head(&side.stmt.source);
@@ -209,11 +233,17 @@ pub(crate) fn compare(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fa
             }
             let equal = found[o].iter().filter(|m| m.is_some_and(|(_, equal)| equal)).count();
             let changed = found[o].iter().filter(|m| m.is_some_and(|(_, equal)| !equal)).count();
-            let missing: Vec<&Stmt> = side.inner.iter().zip(&found[o]).filter(|(_, m)| m.is_none()).map(|(stmt, _)| stmt).collect();
-            let text = if changed == 0 && missing.is_empty() {
+            let moves = moved[o].iter().filter(|m| **m).count();
+            let missing: Vec<&Stmt> = side.inner.iter().zip(&found[o]).zip(&moved[o]).filter(|((_, m), is_moved)| m.is_none() && !**is_moved).map(|((stmt, _), _)| stmt).collect();
+            let text = if changed == 0 && missing.is_empty() && moves == 0 {
                 format!(" (each inner statement is {other} of the body, with the same text)")
+            } else if changed == 0 && missing.is_empty() && equal == 0 {
+                " (each inner statement is a moved statement of the body)".to_string()
             } else {
                 let mut parts = Vec::new();
+                if moves > 0 {
+                    parts.push(format!("{moves} moved to a different place"));
+                }
                 if equal > 0 {
                     parts.push(format!("{equal} with the same text as {other}"));
                 }

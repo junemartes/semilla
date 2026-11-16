@@ -251,6 +251,7 @@ fn text_edit(before: &Item, after: &Item, old: String, new: String, line: usize)
         file: Some(after.file.clone()),
         line,
         note: None,
+        refactor: None,
     }
 }
 

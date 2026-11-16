@@ -3,20 +3,24 @@
 //! The diff goes top-down (design section 8.6):
 //! 1. Match the items. The item map from the identity claims comes first; then the same path.
 //! 2. Compare the attributes of each matched item: visibility, signature, docs, members.
-//! 3. Align the statements of each block (a longest common subsequence on the text), and pair the
-//!    statements in each gap that have the same kind.
+//! 3. Map the statements of each body (the statement mapper, design 41): the same text with
+//!    corresponding parents, the same text at any depth, the same text after replacements, then
+//!    the composites. A mapped statement at a different place is a move. In each block, the
+//!    mapped statements in order are in place; the other statements of a gap pair by kind (the
+//!    rules of batch 8b). A body above the limit of the mapper keeps the rules of batch 8b.
 //! 4. Compare paired nodes. The diff stops at the lowest node that contains the change.
 //!
 //! The renames from the claims are applied to the "before" side first, so a claimed rename gives
 //! no edit.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use semilla_core::{Anchor, View};
 use serde::Serialize;
 
 use crate::load::{Item, ItemKind, Workspace};
-use crate::tree::Node;
+use crate::mapper::{BodyMap, at};
+use crate::tree::{Node, Pos};
 
 /// True for a doc line (`///`, `//!`, or a `#[doc]` attribute). A plain `//` comment is not one.
 pub fn is_doc_line(line: &str) -> bool {
@@ -85,6 +89,60 @@ pub struct Edit {
     /// What changed in a file edit, for example `binary file changed` or `mode 100644 → 100755`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The refactoring of a statement edit (design 41): a move, or a part of an extracted or an
+    /// inlined variable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refactor: Option<Refactor>,
+}
+
+/// The refactoring of an edit (design 41).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Refactor {
+    /// A moved statement. `jumped`: the places of the statements that the move passes over, on
+    /// the old side and on the new side (design 41.7).
+    Moved {
+        #[serde(skip)]
+        jumped: [Vec<(Pos, Pos)>; 2],
+    },
+    /// A part of an extracted variable: its new `let`, or a use. `expr` is the display text of
+    /// the expression. `region`: for the `let`, the places of the statements from the `let` to
+    /// the end of its block, and from the partner of its next statement on the other side.
+    Extract {
+        var: String,
+        expr: String,
+        #[serde(skip)]
+        region: [Vec<(Pos, Pos)>; 2],
+    },
+    /// A part of an inlined variable: its removed `let`, or a use.
+    Inline {
+        var: String,
+        expr: String,
+        #[serde(skip)]
+        region: [Vec<(Pos, Pos)>; 2],
+    },
+}
+
+/// A statement pair of the mapper that is a move, or that is the same only after replacements
+/// (design 41.8). The MIR check of the map uses it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatementMap {
+    pub before: Anchor,
+    pub after: Anchor,
+    pub moved: bool,
+}
+
+/// The extra output of the statement mapper.
+#[derive(Clone, Debug, Default)]
+pub struct BodyMaps {
+    pub maps: Vec<StatementMap>,
+    /// The bodies above the limit of the mapper: they keep the alignment of batch 8b.
+    pub over_limit: Vec<String>,
+    /// The statement pairs of round 3 and of the composite step, and the pairs of the gap
+    /// rules of 8b in a mapped body (design 41.8).
+    pub round3: usize,
+    pub composites: usize,
+    pub gap_pairs: usize,
 }
 
 impl Edit {
@@ -106,6 +164,7 @@ impl Edit {
             file: Some(file.to_string()),
             line: 0,
             note: None,
+            refactor: None,
         }
     }
 
@@ -226,6 +285,12 @@ impl Renames {
 
 /// Computes all edits from `before` to `after`.
 pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edit> {
+    diff_maps(before, after, renames).0
+}
+
+/// Computes all edits from `before` to `after`, and the statement maps of the bodies.
+pub fn diff_maps(before: &Workspace, after: &Workspace, renames: &Renames) -> (Vec<Edit>, BodyMaps) {
+    let mut maps = BodyMaps::default();
     let mut edits = Vec::new();
     let mut matched_after = BTreeSet::new();
     let mut net_files = (crate::net::Files::default(), crate::net::Files::default());
@@ -242,7 +307,7 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
             Some(other) if other.kind == item.kind && in_trait(before, path) == in_trait(after, &target) => {
                 matched_after.insert(target.clone());
                 let start = edits.len();
-                diff_item(item, other, renames, &mut edits);
+                diff_item(item, other, renames, &mut edits, &mut maps);
                 // The net: a changed token that no edit of the pair has (batch 6a, A6).
                 let open = crate::net::uncovered(&mut net_files, before, after, item, other, renames, &edits[start..]);
                 edits.extend(open);
@@ -316,7 +381,7 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
         }
     }
     edits.extend(file_edits(before, after));
-    edits
+    (edits, maps)
 }
 
 /// The files that the loader parses on one side only because of a parse error (design 37.5):
@@ -422,6 +487,7 @@ fn item_edit(kind: EditKind, before: Option<&Item>, after: Option<&Item>) -> Edi
         file: Some(any.file.clone()),
         line: any.line_start,
         note: None,
+        refactor: None,
     }
 }
 
@@ -445,7 +511,7 @@ pub fn kind_name(kind: ItemKind) -> &'static str {
     }
 }
 
-fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edit>) {
+fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edit>, maps: &mut BodyMaps) {
     let attribute_edit = |kind: EditKind, view: View, old: String, new: String| Edit {
         kind,
         view,
@@ -463,6 +529,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         file: Some(after.file.clone()),
         line: after.line_start,
         note: None,
+        refactor: None,
     };
     let apply = |text: &str| renames.apply(&before.path, text);
 
@@ -553,11 +620,45 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         edits.push(edit);
     }
     if let (Some(old), Some(new)) = (&before.body, &after.body) {
-        let mut context = Context { renames, item_before: &before.path, item_after: &after.path, file: &after.file, source_before: before, source_after: after, edits: Vec::new() };
+        // The statement mapper (design 41). A body above its limit keeps the rules of 8b.
+        let same = old.text == new.text;
+        let map = if same { None } else { crate::mapper::map_body(old, new, &|text: &str| renames.apply(&before.path, text)) };
+        if !same && map.is_none() {
+            maps.over_limit.push(after.path.clone());
+        }
+        let visited = map.as_ref().map_or(0, |map| map.old.len());
+        if let Some(map) = map.as_ref() {
+            maps.round3 += map.round3;
+            maps.composites += map.composites;
+        }
+        let mut context = Context {
+            renames,
+            item_before: &before.path,
+            item_after: &after.path,
+            file: &after.file,
+            source_before: before,
+            source_after: after,
+            edits: Vec::new(),
+            map,
+            visited: vec![false; visited],
+            consumed: [HashSet::new(), HashSet::new()],
+            gap_pairs: HashMap::new(),
+            moves: Vec::new(),
+            maps: Vec::new(),
+            variable_edits: Vec::new(),
+        };
         context.block(old, new, &[], &[]);
-        detect_moves(&mut context.edits);
-        context.edits.sort_by_key(|edit| edit.line);
-        edits.extend(context.edits);
+        if context.map.is_some() {
+            context.finish();
+        } else {
+            detect_moves(&mut context.edits);
+        }
+        maps.gap_pairs += context.gap_pairs.len();
+        let Context { edits: mut body_edits, variable_edits, maps: body_maps, .. } = context;
+        body_edits.extend(variable_edits);
+        body_edits.sort_by_key(|edit| edit.line);
+        edits.extend(body_edits);
+        maps.maps.extend(body_maps);
     }
 }
 
@@ -674,6 +775,7 @@ fn signature_parts(before: &Item, after: &Item, old: &Node, new: &Node, renames:
         file: Some(after.file.clone()),
         line: new_node.or(old_node).map(|n| n.start.0).unwrap_or(after.line_start),
         note: None,
+        refactor: None,
     };
     let mut edits = Vec::new();
     for role in ["qualifiers", "generics", "where"] {
@@ -730,6 +832,21 @@ struct Context<'a> {
     source_before: &'a Item,
     source_after: &'a Item,
     edits: Vec<Edit>,
+    /// The statement map of the body (design 41). `None`: the rules of batch 8b.
+    map: Option<BodyMap<'a>>,
+    /// The old statements that the walk compared with their partners.
+    visited: Vec<bool>,
+    /// The nodes inside an inserted, a deleted, or a replaced node, on the old and the new side.
+    consumed: [HashSet<*const Node>; 2],
+    /// The statement pairs of the gap rules: old statement → new statement.
+    gap_pairs: HashMap<usize, usize>,
+    /// The moved pairs: the index of the move edit, the old statement, the new statement.
+    moves: Vec<(usize, usize, usize)>,
+    /// The pairs for the MIR check of the map (design 41.8).
+    maps: Vec<StatementMap>,
+    /// The edits of the extracted and the inlined variables. They are not in `edits` during
+    /// the walk, so a node compare does not count them as a change of the node.
+    variable_edits: Vec<Edit>,
 }
 
 /// The source text of a node, cut from the source of its item.
@@ -782,6 +899,17 @@ impl Context<'_> {
 
     fn edit(&mut self, kind: EditKind, before: Option<(&Node, &[String])>, after: Option<(&Node, &[String])>) {
         let line = after.or(before).map(|(node, _)| node.start.0).unwrap_or(0);
+        // The statements inside an inserted, a deleted, or a replaced node show in its text.
+        if self.map.is_some() && matches!(kind, EditKind::Inserted | EditKind::Deleted | EditKind::Replaced) {
+            for (side, found) in [before, after].into_iter().enumerate() {
+                if let Some((node, _)) = found.filter(|(node, _)| node.has_block()) {
+                    let consumed = &mut self.consumed[side];
+                    node.walk(&mut Vec::new(), &mut |_, inner| {
+                        consumed.insert(at(inner));
+                    });
+                }
+            }
+        }
         self.edits.push(Edit {
             kind,
             view: View::Syntax,
@@ -799,25 +927,233 @@ impl Context<'_> {
             file: Some(self.file.to_string()),
             line,
             note: None,
+            refactor: None,
         });
     }
 
     /// Compares two blocks. `before_path` and `after_path` are the role paths of the blocks.
     fn block(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
+        if self.map.is_some() {
+            self.block_mapped(before, after, before_path, after_path);
+            return;
+        }
         let old: Vec<&Node> = before.children.iter().collect();
         let new: Vec<&Node> = after.children.iter().collect();
         let pairs = lcs(&old, &new, |a, b| self.same(a, b));
+        let (mut i, mut j) = (0, 0);
+        for (pi, pj) in pairs.into_iter().chain(std::iter::once((old.len(), new.len()))) {
+            self.gap(&old[i..pi], &new[j..pj], &old, &new, before_path, after_path);
+            i = pi + 1;
+            j = pj + 1;
+        }
+    }
 
+    /// The block of a mapped body (design 41). The mapped statements of the two blocks in
+    /// order are in place. A statement whose partner is in this block at a different order, or
+    /// in a different block, is moved. Each statement with no partner goes to the gap rules.
+    fn block_mapped(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
+        let old: Vec<&Node> = before.children.iter().collect();
+        let new: Vec<&Node> = after.children.iter().collect();
+        let map = self.map.as_ref().expect("a mapped body");
+        let old_ids: Vec<Option<usize>> = old.iter().map(|node| map.old_at.get(&at(node)).copied()).collect();
+        let new_ids: Vec<Option<usize>> = new.iter().map(|node| map.new_at.get(&at(node)).copied()).collect();
+        // The partner of each old statement in this block.
+        let here: Vec<Option<usize>> = old_ids.iter().map(|id| id.and_then(|o| map.pair_old[o]).and_then(|n| new_ids.iter().position(|x| *x == Some(n)))).collect();
+        let here_new: Vec<bool> = (0..new.len()).map(|j| here.contains(&Some(j))).collect();
+        // A statement with a partner in a different block, or the `let` of a variable.
+        let variable = |id: Option<usize>, inline: bool| id.and_then(|id| map.variables.iter().position(|v| v.inline == inline && v.stmt == id));
+        let away_old: Vec<bool> = old_ids.iter().enumerate().map(|(k, id)| here[k].is_none() && (id.is_some_and(|o| map.pair_old[o].is_some()) || variable(*id, true).is_some())).collect();
+        let away_new: Vec<bool> = new_ids.iter().enumerate().map(|(j, id)| !here_new[j] && (id.is_some_and(|n| map.pair_new[n].is_some()) || variable(*id, false).is_some())).collect();
+        let old_variables: Vec<Option<usize>> = old_ids.iter().map(|id| variable(*id, true)).collect();
+        let new_variables: Vec<Option<usize>> = new_ids.iter().map(|id| variable(*id, false)).collect();
+        let indexes = |count: usize| (0..count).collect::<Vec<usize>>();
+        let pairs = lcs(&indexes(old.len()), &indexes(new.len()), |a, b| here[*a] == Some(*b));
         let child_path = |path: &[String], node: &Node| {
             let mut path = path.to_vec();
             path.push(node.role.clone());
             path
         };
-
+        let in_order: BTreeSet<usize> = pairs.iter().map(|pair| pair.0).collect();
+        for (k, partner) in here.iter().enumerate() {
+            if let Some(j) = partner {
+                self.visit(old[k], new[*j], child_path(before_path, old[k]), child_path(after_path, new[*j]), !in_order.contains(&k));
+            }
+        }
+        // The `let` of an extracted or an inlined variable.
+        for (k, found) in old_variables.iter().enumerate() {
+            if let Some(index) = found {
+                let path = child_path(before_path, old[k]);
+                self.variable_edit(*index, EditKind::Deleted, Some((old[k], &path)), None);
+            }
+        }
+        for (j, found) in new_variables.iter().enumerate() {
+            if let Some(index) = found {
+                let path = child_path(after_path, new[j]);
+                self.variable_edit(*index, EditKind::Inserted, None, Some((new[j], &path)));
+            }
+        }
+        // The gaps between the statements in order: the statements with no partner.
         let (mut i, mut j) = (0, 0);
         for (pi, pj) in pairs.into_iter().chain(std::iter::once((old.len(), new.len()))) {
-            let gap_old = &old[i..pi];
-            let gap_new = &new[j..pj];
+            let gap_old: Vec<&Node> = (i..pi).filter(|&k| here[k].is_none() && !away_old[k]).map(|k| old[k]).collect();
+            let gap_new: Vec<&Node> = (j..pj).filter(|&k| !here_new[k] && !away_new[k]).map(|k| new[k]).collect();
+            self.gap(&gap_old, &gap_new, &old, &new, before_path, after_path);
+            i = pi + 1;
+            j = pj + 1;
+        }
+    }
+
+    /// An edit of an extracted or an inlined variable.
+    fn variable_edit(&mut self, index: usize, kind: EditKind, before: Option<(&Node, &[String])>, after: Option<(&Node, &[String])>) {
+        let Some(variable) = self.map.as_ref().map(|map| map.variables[index].clone()) else { return };
+        self.edit(kind, before, after);
+        let Some(mut edit) = self.edits.pop() else { return };
+        // The display text of the expression: the source of the `let` initializer.
+        let init = |item: &Item, node: Option<(&Node, &[String])>| node.and_then(|(node, _)| node.child("init")).and_then(|init| node_source(item, init)).map(|text| crate::tree::one_line(&text));
+        let expr = init(self.source_after, after).or_else(|| init(self.source_before, before)).unwrap_or_else(|| variable.expr.clone());
+        let region = self.variable_region(&variable);
+        edit.refactor = Some(if variable.inline { Refactor::Inline { var: variable.var, expr, region } } else { Refactor::Extract { var: variable.var, expr, region } });
+        self.variable_edits.push(edit);
+    }
+
+    /// The region of the `let` of a variable (design 41.7): the statements from the `let` to
+    /// the end of its block, and on the other side the statements from the partner of the next
+    /// mapped statement to the end of that block. The locals of these statements get new numbers.
+    fn variable_region(&self, variable: &crate::mapper::Variable) -> [Vec<(Pos, Pos)>; 2] {
+        let mut out: [Vec<(Pos, Pos)>; 2] = [Vec::new(), Vec::new()];
+        let Some(map) = self.map.as_ref() else { return out };
+        let (side, own, other) = if variable.inline { (0, &map.old, &map.new) } else { (1, &map.new, &map.old) };
+        let at = &own[variable.stmt];
+        let siblings = |stmts: &[crate::mapper::Stmt], parent: Option<usize>, block: &str, from: usize| -> Vec<(Pos, Pos)> { stmts.iter().filter(|stmt| stmt.parent == parent && stmt.block == block && stmt.index >= from).map(|stmt| (stmt.node.start, stmt.node.end)).collect() };
+        out[side] = siblings(own, at.parent, &at.block, at.index);
+        let partner = |index: usize| if variable.inline { map.pair_old[index].or_else(|| self.gap_pairs.get(&index).copied()) } else { map.pair_new[index].or_else(|| self.gap_pairs.iter().find(|(_, new)| **new == index).map(|(old, _)| *old)) };
+        let next = (0..own.len()).filter(|&s| own[s].parent == at.parent && own[s].block == at.block && own[s].index > at.index).filter_map(partner).min_by_key(|&t| other[t].index);
+        if let Some(t) = next {
+            out[1 - side] = siblings(other, other[t].parent, &other[t].block, other[t].index);
+        }
+        out
+    }
+
+    /// Compares a mapped pair. A moved pair gets a move edit; then the compare of the two nodes
+    /// gives an edit for each other change.
+    fn visit(&mut self, old: &Node, new: &Node, before_path: Vec<String>, after_path: Vec<String>, moved: bool) {
+        let Some(map) = self.map.as_ref() else { return };
+        let (Some(&o), Some(&n)) = (map.old_at.get(&at(old)), map.new_at.get(&at(new))) else { return };
+        if self.visited[o] {
+            return;
+        }
+        self.visited[o] = true;
+        let same = self.same(old, new);
+        if same {
+            self.mark_visited(old, new);
+        }
+        if moved || !same {
+            let anchor = |item: &str, path: &[String]| Self::anchor(item, path);
+            self.maps.push(StatementMap { before: anchor(self.item_before, &before_path), after: anchor(self.item_after, &after_path), moved });
+        }
+        if moved {
+            self.edit(EditKind::Moved, Some((old, &before_path)), Some((new, &after_path)));
+            if let Some(edit) = self.edits.last_mut() {
+                edit.refactor = Some(Refactor::Moved { jumped: [Vec::new(), Vec::new()] });
+            }
+            self.moves.push((self.edits.len() - 1, o, n));
+        }
+        self.node(old, new, &before_path, &after_path);
+    }
+
+    /// The mapped pairs that the walk of the blocks did not reach: a statement that moves to a
+    /// different block. Then the places that each move passes over.
+    fn finish(&mut self) {
+        let pending: Vec<(usize, usize)> = {
+            let Some(map) = self.map.as_ref() else { return };
+            (0..map.old.len()).filter_map(|o| map.pair_old[o].map(|n| (o, n))).collect()
+        };
+        for (o, n) in pending {
+            let map = self.map.as_ref().expect("a mapped body");
+            let (old, new) = (map.old[o].node, map.new[n].node);
+            if self.visited[o] || (self.consumed[0].contains(&at(old)) && self.consumed[1].contains(&at(new))) {
+                continue;
+            }
+            let (before_path, after_path) = (map.old[o].path.clone(), map.new[n].path.clone());
+            self.visit(old, new, before_path, after_path, true);
+        }
+        for (edit, o, n) in std::mem::take(&mut self.moves) {
+            let jumped = self.jumped(o, n);
+            if let Some(Refactor::Moved { jumped: places }) = self.edits.get_mut(edit).and_then(|edit| edit.refactor.as_mut()) {
+                *places = jumped;
+            }
+        }
+    }
+
+    /// The places of the statements that a move passes over (design 41.7), on the two sides. In
+    /// the lowest block pair that contains the two places: each statement from the first
+    /// statement whose order to the moved statement changes to the end of the block, and the
+    /// statement that the move leaves or enters.
+    fn jumped(&self, o: usize, n: usize) -> [Vec<(Pos, Pos)>; 2] {
+        let Some(map) = self.map.as_ref() else { return [Vec::new(), Vec::new()] };
+        let partner = |x: usize| map.pair_old[x].or_else(|| self.gap_pairs.get(&x).copied());
+        let partner_new = |y: usize| map.pair_new[y].or_else(|| self.gap_pairs.iter().find(|(_, b)| **b == y).map(|(a, _)| *a));
+        let chain = |stmts: &[crate::mapper::Stmt], mut at: usize| {
+            let mut out = vec![at];
+            while let Some(parent) = stmts[at].parent {
+                out.push(parent);
+                at = parent;
+            }
+            out
+        };
+        let (old_chain, new_chain) = (chain(&map.old, o), chain(&map.new, n));
+        // The lowest old ancestor whose partner is an ancestor of the new statement.
+        let mut top = (old_chain.len() - 1, new_chain.len() - 1);
+        for (a, &ancestor) in old_chain.iter().enumerate().skip(1) {
+            if let Some(b) = partner(ancestor).and_then(|p| new_chain.iter().skip(1).position(|&q| q == p)) {
+                top = (a - 1, b);
+                break;
+            }
+        }
+        let (x, y) = (old_chain[top.0], new_chain[top.1]);
+        let mut out: [Vec<(Pos, Pos)>; 2] = [Vec::new(), Vec::new()];
+        let (sx, sy) = (&map.old[x], &map.new[y]);
+        // The first statement of each block whose order to the moved statement changes.
+        let (mut first_old, mut first_new) = (sx.index, sy.index);
+        if sx.block == sy.block {
+            for s in (0..map.old.len()).filter(|&s| s != x && map.old[s].parent == sx.parent && map.old[s].block == sx.block) {
+                let Some(t) = partner(s).filter(|&t| map.new[t].parent == sy.parent && map.new[t].block == sy.block && t != y) else { continue };
+                if (map.old[s].index < sx.index) != (map.new[t].index < sy.index) {
+                    first_old = first_old.min(map.old[s].index);
+                    first_new = first_new.min(map.new[t].index);
+                }
+            }
+        }
+        // The statements from there to the end of the block: the move passes over them, or
+        // their locals get new numbers.
+        for (side, stmts, at, first) in [(0, &map.old, sx, first_old), (1, &map.new, sy, first_new)] {
+            for stmt in stmts.iter().filter(|stmt| stmt.parent == at.parent && stmt.block == at.block && stmt.index >= first) {
+                out[side].push((stmt.node.start, stmt.node.end));
+            }
+        }
+        // The statement that the move leaves or enters, on its other side too.
+        if x != o
+            && let Some(t) = partner(x)
+        {
+            out[1].push((map.new[t].node.start, map.new[t].node.end));
+        }
+        if y != n
+            && let Some(s) = partner_new(y)
+        {
+            out[0].push((map.old[s].node.start, map.old[s].node.end));
+        }
+        out
+    }
+
+    /// The gap rules of batch 8b: the statements of a gap with no partner pair by kind, in
+    /// order. `old` and `new` are all statements of the two blocks.
+    fn gap(&mut self, gap_old: &[&Node], gap_new: &[&Node], old: &[&Node], new: &[&Node], before_path: &[String], after_path: &[String]) {
+        let child_path = |path: &[String], node: &Node| {
+            let mut path = path.to_vec();
+            path.push(node.role.clone());
+            path
+        };
+        {
             let mut used_new = vec![false; gap_new.len()];
             let mut unpaired_old = Vec::new();
             let mut next = 0;
@@ -831,14 +1167,12 @@ impl Context<'_> {
             };
             let positional = gap_old.len() == gap_new.len() && gap_old.iter().zip(gap_new).all(|(a, b)| a.kind == b.kind && !moved(a, b));
             if positional {
-                for (k, (old_node, new_node)) in gap_old.iter().zip(gap_new).enumerate() {
-                    used_new[k] = true;
+                for (old_node, new_node) in gap_old.iter().zip(gap_new) {
                     let (bp, ap) = (child_path(before_path, old_node), child_path(after_path, new_node));
+                    self.gap_pair(old_node, new_node);
                     self.node(old_node, new_node, &bp, &ap);
                 }
-                i = pi + 1;
-                j = pj + 1;
-                continue;
+                return;
             }
             for old_node in gap_old {
                 // Pair with the most similar new statement of the same kind, in order.
@@ -853,6 +1187,7 @@ impl Context<'_> {
                         used_new[k] = true;
                         next = k + 1;
                         let (bp, ap) = (child_path(before_path, old_node), child_path(after_path, gap_new[k]));
+                        self.gap_pair(old_node, gap_new[k]);
                         self.node(old_node, gap_new[k], &bp, &ap);
                     }
                     None => unpaired_old.push(*old_node),
@@ -868,8 +1203,32 @@ impl Context<'_> {
                     self.edit(EditKind::Inserted, None, Some((new_node, &ap)));
                 }
             }
-            i = pi + 1;
-            j = pj + 1;
+        }
+    }
+
+    /// Marks the statements of two equal nodes as compared, if their partners are inside the new
+    /// node. A statement whose partner is outside keeps its move.
+    fn mark_visited(&mut self, old: &Node, new: &Node) {
+        let Some(map) = self.map.as_ref() else { return };
+        let inside = |index: &HashMap<*const Node, usize>, node: &Node| -> Vec<usize> {
+            let mut out = Vec::new();
+            node.walk(&mut Vec::new(), &mut |_, inner| out.extend(index.get(&at(inner)).copied()));
+            out
+        };
+        let news: BTreeSet<usize> = inside(&map.new_at, new).into_iter().collect();
+        for x in inside(&map.old_at, old) {
+            if map.pair_old[x].is_some_and(|y| news.contains(&y)) {
+                self.visited[x] = true;
+            }
+        }
+    }
+
+    /// Keeps a statement pair of the gap rules, for the places of a move.
+    fn gap_pair(&mut self, old: &Node, new: &Node) {
+        if let Some(map) = self.map.as_ref()
+            && let (Some(&o), Some(&n)) = (map.old_at.get(&at(old)), map.new_at.get(&at(new)))
+        {
+            self.gap_pairs.insert(o, n);
         }
     }
 
@@ -912,10 +1271,42 @@ impl Context<'_> {
     /// Compares two paired nodes.
     fn node(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
         if self.same(before, after) {
+            // The statements inside an equal node with a block are in place.
+            if self.map.is_some() && before.has_block() {
+                self.mark_visited(before, after);
+            }
+            return;
+        }
+        // A use of an extracted or an inlined variable (design 41.5): one edit with the mark of
+        // the variable.
+        let variable = self.map.as_ref().and_then(|map| map.variable_use(&map.old_text(&self.renames.apply(self.item_before, &before.text)), before, after).map(|index| map.variables[index].clone()));
+        if let Some(variable) = variable {
+            self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
+            if let Some(mut edit) = self.edits.pop() {
+                let region = [Vec::new(), Vec::new()];
+                edit.refactor = Some(if variable.inline { Refactor::Inline { var: variable.var.clone(), expr: String::new(), region } } else { Refactor::Extract { var: variable.var.clone(), expr: String::new(), region } });
+                self.variable_edits.push(edit);
+            }
             return;
         }
         if self.operand_chain(before, after, before_path, after_path) {
             return;
+        }
+        // A wrap or an unwrap of an expression in a mapped body (`Ok(f(x))` → `f(x)`, design
+        // 41.3): one edit for the node, not an edit for each part.
+        if let Some(map) = self.map.as_ref().filter(|_| before.kind == after.kind && !before.has_block() && !after.has_block()) {
+            let old_text = |node: &Node| map.old_text(&self.renames.apply(self.item_before, &node.text));
+            let inside = |node: &Node, text: &str, rename: bool| {
+                let mut found = false;
+                for child in &node.children {
+                    child.walk(&mut Vec::new(), &mut |_, inner| found |= (if rename { old_text(inner) } else { inner.text.clone() }) == text);
+                }
+                found
+            };
+            if inside(before, &after.text, true) || inside(after, &old_text(before), false) {
+                self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
+                return;
+            }
         }
         let roles = |node: &Node| node.children.iter().map(|child| child.role.clone()).collect::<Vec<_>>();
         let leaf = before.children.is_empty() && after.children.is_empty();
@@ -924,6 +1315,7 @@ impl Context<'_> {
             return;
         }
         let edits_before = self.edits.len();
+        let variables_before = self.variable_edits.len();
         for (old_child, new_child) in before.children.iter().zip(&after.children) {
             let mut bp = before_path.to_vec();
             bp.push(old_child.role.clone());
@@ -932,6 +1324,8 @@ impl Context<'_> {
             if old_child.kind == "block" && new_child.kind == "block" {
                 if !self.same(old_child, new_child) {
                     self.block(old_child, new_child, &bp, &ap);
+                } else {
+                    self.mark_visited(old_child, new_child);
                 }
             } else {
                 self.node(old_child, new_child, &bp, &ap);
@@ -946,7 +1340,11 @@ impl Context<'_> {
             self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
             return;
         }
-        if attr_changed || self.edits.len() == edits_before {
+        // In a mapped body, a statement that moves in or out of a block, and a use of a
+        // variable, have their own edits: a composite whose other text is equal has no edit of
+        // its own.
+        let explained = self.map.as_ref().is_some_and(|map| self.variable_edits.len() > variables_before || map.old_text(&self.renames.apply(self.item_before, &crate::mapper::shell(before))) == crate::mapper::shell(after));
+        if attr_changed || (self.edits.len() == edits_before && !explained) {
             // The node itself changed: an operator, a method name, or text outside the children.
             self.edit(EditKind::Modified, Some((before, before_path)), Some((after, after_path)));
         }
@@ -968,7 +1366,7 @@ fn operands<'a>(node: &'a Node, operator: &str) -> Vec<&'a Node> {
 }
 
 /// True if two statements can be a pair of "the same statement, changed".
-fn same_kind(a: &Node, b: &Node) -> bool {
+pub(crate) fn same_kind(a: &Node, b: &Node) -> bool {
     let expression = |kind: &str| !matches!(kind, "let" | "item_stmt" | "macro");
     a.kind == b.kind || (expression(a.kind) && expression(b.kind) && a.role.starts_with('S') == b.role.starts_with('S') && !a.has_block() && !b.has_block())
 }

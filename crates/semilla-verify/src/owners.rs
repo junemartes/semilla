@@ -55,6 +55,8 @@ pub struct Input<'a> {
     pub made: Option<&'a [crate::made::Made; 2]>,
     /// The facts of the macro calls whose text lists the made items already.
     pub made_listed: &'a BTreeSet<usize>,
+    /// The statement maps of the bodies (design 41), for the MIR check of each map.
+    pub maps: &'a semilla_syntax::BodyMaps,
 }
 
 /// The owner of one changed body.
@@ -95,7 +97,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     // of the constant (batch 5n, A2).
     let assoc: BTreeMap<String, (String, String)> = changed(input.bodies).filter(|body| input.body_index.item_of(body).is_none()).filter_map(|body| Some((body.name.clone(), assoc_const(input, body)?))).collect();
     // The map from the MIR elements that differ to the edits (design 40.3).
-    let mut map = crate::mirmap::MirMap::new(input.before, input.after, input.edits);
+    // The edits of the refactoring facts (design 41.7): a move, a variable, a rename of a local.
+    let refactoring: BTreeSet<usize> = (0..input.edits.len()).filter(|&edit| input.fact_of[edit].and_then(|fact| report.facts.get(fact)).is_some_and(|fact| matches!(fact.category, Category::Move | Category::Rename) && fact.part != "indirect change")).collect();
+    let mut map = crate::mirmap::MirMap::with_refactoring(input.before, input.after, input.edits, &refactoring);
     // The elements that each fact owns, for the branch mark (design 40.4).
     let mut branch_of: BTreeMap<usize, [Vec<crate::MirElement>; 2]> = BTreeMap::new();
     // The nodes of the elements with no owner: the body, and true if the body has an edit.
@@ -142,6 +146,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         // A body with no edit of its text keeps the rules of the evidence below (a changed macro
         // needs its reason); its elements with no owner name their nodes.
         if let (BodyStatus::Different { .. }, Some(diff), false) = (&body.status, &body.elements, text_edits.is_empty()) {
+            map.check_maps(&name, input.maps, diff);
             let own = map.own(diff);
             let complete = own.complete(diff);
             let owning: Vec<Owner> = own.owns.keys().map(|edit| owner_of_edit(input, *edit)).fold(Vec::new(), |mut list, owner| {
@@ -158,7 +163,11 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 }
             }
             map.owning.extend(own.owns.keys().copied());
-            let idle = text_edits.iter().copied().filter(|edit| !own.owns.contains_key(edit));
+            let idle: Vec<usize> = text_edits.iter().copied().filter(|edit| !own.owns.contains_key(edit)).collect();
+            // An element that a refactoring took by its region (design 41.7) can be the effect
+            // of a different edit: such an edit keeps the doubt rule.
+            let complete = complete && !(own.by_region && idle.iter().any(|edit| !refactoring.contains(edit)));
+            let idle = idle.into_iter();
             if complete {
                 map.idle_equal.extend(idle);
                 found = owning;
@@ -427,6 +436,8 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     map.counts.equal = map.idle_equal.iter().filter(|edit| !map.owning.contains(edit) && !map.idle_doubt.contains(edit)).count();
     map.counts.errors = map.errors;
     map.counts.examples = std::mem::take(&mut map.examples);
+    map.counts.mapper_skipped = input.maps.over_limit.clone();
+    (map.counts.round3, map.counts.composites, map.counts.gap_pairs) = (input.maps.round3, input.maps.composites, input.maps.gap_pairs);
     report.mir_map = map.counts;
 }
 

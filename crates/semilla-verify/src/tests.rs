@@ -1885,7 +1885,8 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     let bodies = vec![BodyComparison { name: "demo::g".into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: None }];
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
-    let input = owners::Input { made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None };
+    let maps = semilla_syntax::BodyMaps::default();
+    let input = owners::Input { maps: &maps, made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None };
     let mut report = StepReport::default();
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
     // A fact that does not list the body is not an owner.
@@ -4190,9 +4191,12 @@ fn a_moved_node_shows_its_two_places() {
             assert_ne!(old, new, "a fact shows two equal texts: {texts:#?}");
         }
     }
-    assert!(texts.contains(&"moved let: `let data = v.len() as u32;` from `S0` to `S1` in `demo::f`"), "{texts:#?}");
-    assert!(texts.contains(&"moved path: `None` from `S0/then/tail` to `S0/else/tail` in `demo::h`"), "{texts:#?}");
-    assert!(texts.contains(&"moved call: `Some(0)` from `S0/else/tail` to `S0/then/tail` in `demo::h`"), "{texts:#?}");
+    // Design 41.6: a moved statement shows its two full places.
+    assert!(texts.contains(&"moved statement `let data = v.len() as u32;` from `demo::f/S0` to `demo::f/S1`"), "{texts:#?}");
+    assert!(texts.contains(&"moved statement `None` from `demo::h/S0/then/tail` to `demo::h/S0/else/tail`"), "{texts:#?}");
+    assert!(texts.contains(&"moved statement `Some(0)` from `demo::h/S0/else/tail` to `demo::h/S0/then/tail`"), "{texts:#?}");
+    // Fix round 2 (design 41.7): a moved statement has the category of its statement form.
+    assert!(report.facts.iter().filter(|f| f.description.starts_with("moved statement")).all(|f| f.category == Category::Logic), "{texts:#?}");
 }
 
 #[test]
@@ -6719,17 +6723,22 @@ fn a_restructured_body_gives_the_inner_compare() {
     let with = "fn with(c: &core::cell::Cell<u32>, f: impl FnOnce(&core::cell::Cell<u32>)) {\n    f(c)\n}\n";
     let before = format!("pub fn run(c: &core::cell::Cell<u32>) {{\n    with(c, |c| {{\n        let k = c.get();\n        if k == 1 {{ c.set(k.wrapping_add(2).wrapping_mul(7)); }} else {{ c.set(k & 3); }}\n    }});\n}}\n{with}");
     let after = format!("pub fn run(c: &core::cell::Cell<u32>) {{\n    let k = c.get();\n    if k == 1 {{ c.set(k.wrapping_add(2).wrapping_mul(7)); }} else {{ c.set(k & 3); }}\n}}\n{with}");
+    // Design 41: the statement mapper maps each inner statement to its new place. The deleted
+    // statement says that each inner statement moved (design 38.2 with 41).
     let texts = descriptions(&run_derived(&before, &after, &[]));
-    assert!(texts.iter().any(|t| t.starts_with("added `if` `if k == 1") && t.contains("(the same text as an inner statement of the deleted `with(…)`) at `demo::run/S1`")), "{texts:?}");
-    assert!(texts.iter().any(|t| t.starts_with("deleted statement `with(c, |c|") && t.contains("(each inner statement is an added statement of the body, with the same text) at `demo::run/S0`")), "{texts:?}");
-    // A needle in the cut part of the text shows in the fact.
+    assert!(texts.contains(&"moved statement `let k = c.get();` from `demo::run/S0/args[1]/body/S0` to `demo::run/S0`".to_string()), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("moved statement `if k == 1") && t.ends_with("from `demo::run/S0/args[1]/body/S1` to `demo::run/S1`")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("deleted statement `with(c, |c|") && t.contains("(each inner statement is a moved statement of the body) at `demo::run/S0`")), "{texts:?}");
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    // A needle in the moved statement keeps its own fact.
     let needle = after.replace("k & 3", "k | 3");
     let texts = descriptions(&run_derived(&before, &needle, &[]));
-    assert!(texts.iter().any(|t| t.starts_with("added `if` `if k == 1") && t.contains("(an inner statement of the deleted `with(…)`, except: `…else { c.set(k & 3); }` → `…else { c.set(k | 3); }`)")), "{texts:?}");
-    assert!(texts.iter().any(|t| t.contains("(inner statements: 1 with the same text as an added statement; 1 with a change in an added statement)")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("moved statement `if k == 1")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("`k & 3` → `k | 3`")), "{texts:?}");
     // The reverse step: the statements go into a closure.
     let texts = descriptions(&run_derived(&needle, &before, &[]));
-    assert!(texts.iter().any(|t| t.starts_with("deleted statement `if k == 1") && t.contains("(an inner statement of the added `with(…)`, except: `…else { c.set(k | 3); }` → `…else { c.set(k & 3); }`)")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("added") && t.contains("with(c, |c|") && t.contains("(each inner statement is a moved statement of the body)")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("`k | 3` → `k & 3`")), "{texts:?}");
 }
 
 // Batch 7d, part 1.3 (design 38.3): an item that gets a twin keeps its key for the twin with
@@ -6939,7 +6948,7 @@ fn run_elements(before: &str, after: &str, claims: Vec<Claim>, oracle: &ElementB
 }
 
 fn changed_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
-    BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false }) }
+    BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false, pairs: Vec::new() }) }
 }
 
 const COUNT_BEFORE: &str = "pub fn f(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";
@@ -7113,4 +7122,122 @@ fn the_category_of_an_edit_comes_from_its_syntax() {
             assert!(!edit.is_empty() && edit.iter().all(|line| line.ends_with(&format!("[{expected}]"))), "{old} → {new} ({cfg}): {lines:#?}");
         }
     }
+}
+
+// Batch 8c (design 41): the statement mapper, the refactoring facts, and their compare results.
+
+fn refactor_body(lines: &str) -> String {
+    format!("pub fn f(a: u32, b: u32, v: &mut Vec<u32>) -> u32 {{\n{lines}}}\n")
+}
+
+#[test]
+fn an_extracted_and_an_inlined_variable_are_one_move_fact() {
+    // Design 41.5 and 41.7.
+    let before = refactor_body("    if a * b + 1 > 10 {\n        return a * b + 1;\n    }\n    0\n");
+    let after = refactor_body("    let area = a * b + 1;\n    if area > 10 {\n        return area;\n    }\n    0\n");
+    for (old, new, text) in [(&before, &after, "extracted variable `area` = `a * b + 1` (2 uses) at `demo::f/S0`"), (&after, &before, "inlined variable `area` = `a * b + 1` (2 uses) at `demo::f/S0`")] {
+        let report = run_derived(old, new, &[]);
+        let facts: Vec<&Fact> = report.facts.iter().collect();
+        assert_eq!(facts.len(), 1, "{:?}", descriptions(&report));
+        assert_eq!((facts[0].description.as_str(), facts[0].category), (text, Category::Move));
+    }
+    // A rename of a local and a move: one fact each, the move does not fold into the rename.
+    let before = refactor_body("    let total = a + b;\n    let m = a * 2;\n    total + m\n");
+    let after = refactor_body("    let m = a * 2;\n    let sum = a + b;\n    sum + m\n");
+    let report = run_derived(&before, &after, &[]);
+    let texts = descriptions(&report);
+    assert!(texts.contains(&"moved statement `let total = a + b;` from `demo::f/S0` to `demo::f/S1`".to_string()), "{texts:?}");
+    assert!(texts.contains(&"`demo::f`: renamed local `total` → `sum`, 2 edit(s)".to_string()), "{texts:?}");
+    assert_eq!(texts.len(), 2, "{texts:?}");
+}
+
+#[test]
+fn a_move_owns_the_elements_of_its_region_and_gives_no_indirect_fact() {
+    // Design 41.7: the swap renumbers the locals, so the alignment of the tail fails. The move
+    // owns the elements of its statement and of its region.
+    let before = refactor_body("    let x = a + 1;\n    let y = b * 2;\n    x + y\n");
+    let after = refactor_body("    let y = b * 2;\n    let x = a + 1;\n    x + y\n");
+    let body = changed_body("demo::f", vec![element_at(&before, "a + 1"), element_at(&before, "x + y")], vec![element_at(&after, "a + 1"), element_at(&after, "x + y")]);
+    let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
+    assert_eq!(descriptions(&report), ["moved statement `let x = a + 1;` from `demo::f/S0` to `demo::f/S1`"]);
+    let fact = &report.facts[0];
+    // Fix round 2 (design 41.7): a swap of two statements is `logic`, with no mismatch mark.
+    assert!(fact.category == Category::Logic && fact.compare == Compare::CodeDifferent && !fact.mismatch(), "{fact:#?}");
+}
+
+#[test]
+fn an_element_that_a_move_takes_by_its_region_never_makes_a_different_edit_code_equal() {
+    // Design 41.7, rule 3 (the needle `n_swap_del`): the alignment pairs the deleted `v.push(y)`
+    // with the new `v.push(x)`, so the old `v.push(x)` differs. The move takes it by its region,
+    // and the deleted statement keeps the doubt rule.
+    let before = refactor_body("    let x = a + 1;\n    let y = b * 2;\n    v.push(x);\n    v.push(y);\n    x + y\n");
+    let after = refactor_body("    let y = b * 2;\n    let x = a + 1;\n    v.push(x);\n    x + y\n");
+    let body = changed_body("demo::f", vec![element_at(&before, "v.push(x)")], Vec::new());
+    let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
+    let deleted = report.facts.iter().find(|fact| fact.description.starts_with("deleted statement `v.push(y)`")).unwrap();
+    assert_ne!(deleted.compare, Compare::CodeEqual, "{:#?}", report.facts);
+    assert!(!report.facts.iter().any(|fact| fact.category == Category::Indirect), "{:#?}", report.facts);
+}
+
+#[test]
+fn a_change_inside_a_moved_statement_owns_its_elements() {
+    // Design 41.6 and 41.7, rule 1: the element of `a + 2` goes to the move and to the literal.
+    let before = refactor_body("    let p = a + 1;\n    let q = b + 2;\n    p + q\n");
+    let after = refactor_body("    let q = b + 2;\n    let p = a + 2;\n    p + q\n");
+    let body = changed_body("demo::f", vec![element_at(&before, "a + 1")], vec![element_at(&after, "a + 2")]);
+    let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
+    let literal = report.facts.iter().find(|fact| fact.description.starts_with("changed literal `1` → `2`")).unwrap();
+    assert!(literal.compare == Compare::CodeDifferent && literal.category == Category::Value, "{literal:#?}");
+    let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved statement `let p = a + 1;`")).unwrap();
+    assert_eq!(moved.compare, Compare::CodeDifferent, "{moved:#?}");
+}
+
+#[test]
+fn the_map_check_counts_the_pairs_that_do_not_agree_with_the_mir_alignment() {
+    // Design 41.8: the old `a + 1` (the moved statement) aligns with the new `b * 2` (a
+    // different statement): one map disagreement. The facts do not change.
+    let before = refactor_body("    let x = a + 1;\n    let y = b * 2;\n    x + y\n");
+    let after = refactor_body("    let y = b * 2;\n    let x = a + 1;\n    x + y\n");
+    let place = |text: &str, part: &str| element_at(text, part).tokens.unwrap();
+    let mut body = changed_body("demo::f", vec![element_at(&before, "x + y")], vec![element_at(&after, "x + y")]);
+    if let Some(diff) = body.elements.as_mut() {
+        diff.pairs = vec![(place(&before, "a + 1"), place(&after, "b * 2"))];
+    }
+    let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
+    assert_eq!((report.mir_map.checked, report.mir_map.disagree), (1, 1), "{:#?}", report.mir_map);
+    assert!(report.mir_map.line().contains("statement map: 1 pair(s) checked, 1 do not agree with the MIR alignment, 0 with no aligned element (first: `demo::f/S0` → `demo::f/S1` (moved))"), "{}", report.mir_map.line());
+    assert_eq!(descriptions(&report), ["moved statement `let x = a + 1;` from `demo::f/S0` to `demo::f/S1`"]);
+}
+
+#[test]
+fn an_edit_inside_a_moved_statement_names_its_new_place() {
+    // Fix round 1, D1 (design 41.6): the reviewer reads the new code, so a change inside a
+    // moved statement names the new path. Also inside a moved composite.
+    let before = "pub fn jaro(a: u32, mut transpositions: u32) -> u32 {\n    let m = a + 1;\n    transpositions /= 2;\n    m + transpositions\n}\n";
+    let after = "pub fn jaro(a: u32, mut transpositions: u32) -> u32 {\n    let m = a + 1;\n    if a == 0 {\n        transpositions = 0;\n    } else {\n        transpositions /= 3;\n    }\n    m + transpositions\n}\n";
+    let texts = descriptions(&run_derived(before, after, &[]));
+    assert!(texts.contains(&"changed literal `2` → `3` at `demo::jaro/S1/else/S0/rhs`".to_string()), "{texts:?}");
+    assert!(texts.contains(&"moved statement `transpositions /= 2` from `demo::jaro/S1` to `demo::jaro/S1/else/S0`".to_string()), "{texts:?}");
+    let before = refactor_body("    let mut s = a;\n    if a > 1 {\n        s += 2;\n        s *= b;\n    }\n    s += b;\n    v.push(s);\n    s\n");
+    let after = refactor_body("    let mut s = a;\n    s += b;\n    v.push(s);\n    if a > 1 {\n        s += 3;\n        s *= b;\n    }\n    s\n");
+    let texts = descriptions(&run_derived(&before, &after, &[]));
+    assert!(texts.iter().any(|t| t.starts_with("changed literal `2` → `3` at `demo::f/S3/then/S0/rhs`")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("moved statement `if a > 1")), "{texts:?}");
+    // Fix round 2 (design 41.7): a moved `if` is `control flow`, a moved assignment is `logic`.
+    let report = run_derived(&before, &after, &[]);
+    let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved statement `if a > 1")).unwrap();
+    assert_eq!(moved.category, Category::ControlFlow, "{moved:#?}");
+}
+
+#[test]
+fn a_swap_of_two_statements_is_logic_with_no_mismatch_mark() {
+    // Fix round 2 (design 41.7): a move changes the order of execution. The fact keeps its text,
+    // and it has the category of its statement form, so the mismatch mark does not show.
+    let before = refactor_body("    let x = a + 1;\n    let y = b * 2;\n    x + y\n");
+    let after = refactor_body("    let y = b * 2;\n    let x = a + 1;\n    x + y\n");
+    let body = changed_body("demo::f", vec![element_at(&before, "a + 1")], vec![element_at(&after, "a + 1")]);
+    let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
+    assert_eq!(descriptions(&report), ["moved statement `let x = a + 1;` from `demo::f/S0` to `demo::f/S1`"]);
+    let fact = &report.facts[0];
+    assert!(fact.category == Category::Logic && fact.compare == Compare::CodeDifferent && !fact.mismatch(), "{fact:#?}");
 }

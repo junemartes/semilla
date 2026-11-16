@@ -16,6 +16,11 @@
 //! 2. else, the edit of a macro definition or a constant whose node contains the source range of
 //!    the tokens of the element (an element from a `macro_rules` body);
 //! 3. else, no owner.
+//!
+//! A moved statement (design 41.7) owns the elements of its nodes on the two sides. An element
+//! whose smallest owner is a move also goes to each edit inside its node: a change inside a
+//! moved statement keeps its own result. An element with no owner by the rules above, whose
+//! node is in a statement that the move passes over (with no edit in it), goes to the move.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,6 +56,11 @@ struct EditPlace {
     end: Pos,
     /// True for an edit of a macro definition or of a constant (rule 2).
     definition: bool,
+    /// True for a moved statement (design 41.7).
+    wide: bool,
+    /// True for a statement that a move passes over: the place owns only an element with no
+    /// other owner.
+    jump: bool,
 }
 
 /// The trees and the edit places of the two sides of a step. The trees are made when a body
@@ -87,6 +97,9 @@ pub struct Ownership {
     pub lost: usize,
     /// The count of the `goto` elements with no owner (they need no owner).
     pub glue: usize,
+    /// True if a move or a variable took an element by its region (design 41.7). Then an edit
+    /// of the body that is not a refactoring never gets `code equal` from the owner rule.
+    pub by_region: bool,
 }
 
 impl Ownership {
@@ -98,6 +111,12 @@ impl Ownership {
 
 impl<'a> MirMap<'a> {
     pub fn new(before: &'a Workspace, after: &'a Workspace, edits: &[Edit]) -> MirMap<'a> {
+        Self::with_refactoring(before, after, edits, &BTreeSet::new())
+    }
+
+    /// The map with the edits of the refactoring facts (a move, a variable, a rename of a
+    /// local): such an edit in a statement does not stop the region of a move (design 41.7).
+    pub fn with_refactoring(before: &'a Workspace, after: &'a Workspace, edits: &[Edit], refactoring: &BTreeSet<usize>) -> MirMap<'a> {
         let sides = [before, after];
         let mut places: [BTreeMap<String, Vec<EditPlace>>; 2] = [BTreeMap::new(), BTreeMap::new()];
         for (index, edit) in edits.iter().enumerate() {
@@ -117,7 +136,27 @@ impl<'a> MirMap<'a> {
                     Some(semilla_syntax::Resolved::Item(item)) if definition || matches!(edit.kind, EditKind::ItemAdded | EditKind::ItemRemoved) => ((item.line_start, item.col_start), (item.line_end, item.col_end)),
                     _ => continue,
                 };
-                places[side].entry(item.file.clone()).or_default().push(EditPlace { edit: index, start, end, definition });
+                let wide = matches!(edit.refactor, Some(semilla_syntax::Refactor::Moved { .. }));
+                places[side].entry(item.file.clone()).or_default().push(EditPlace { edit: index, start, end, definition, wide, jump: false });
+            }
+        }
+        // The statements that a move passes over, with no other edit in them (design 41.7). The
+        // `let` of an extracted or an inlined variable: the statements after it in its block.
+        for (index, edit) in edits.iter().enumerate() {
+            let region: [Vec<(Pos, Pos)>; 2] = match &edit.refactor {
+                Some(semilla_syntax::Refactor::Moved { jumped }) => jumped.clone(),
+                Some(semilla_syntax::Refactor::Extract { region, .. } | semilla_syntax::Refactor::Inline { region, .. }) => region.clone(),
+                _ => continue,
+            };
+            for (side, anchor) in [&edit.before, &edit.after].into_iter().enumerate() {
+                let Some(file) = anchor.as_ref().or(edit.before.as_ref()).or(edit.after.as_ref()).and_then(|anchor| sides[side].items.get(&anchor.item)).map(|item| item.file.clone()) else { continue };
+                let list = places[side].entry(file).or_default();
+                for &(start, end) in &region[side] {
+                    let other = list.iter().any(|place| !place.jump && place.edit != index && !refactoring.contains(&place.edit) && start <= place.start && place.end <= end);
+                    if !other {
+                        list.push(EditPlace { edit: index, start, end, definition: false, wide: true, jump: true });
+                    }
+                }
             }
         }
         MirMap { sides, trees: [BTreeMap::new(), BTreeMap::new()], places, errors: 0, examples: Vec::new(), counts: Default::default(), owning: BTreeSet::new(), idle_equal: BTreeSet::new(), idle_doubt: BTreeSet::new() }
@@ -186,19 +225,28 @@ impl<'a> MirMap<'a> {
     /// The smallest edit whose node contains a node on one side. With `definition`, only an
     /// edit of a macro definition or a constant.
     fn owner(&self, side: usize, node: &Mapped, definition: bool) -> Option<usize> {
+        self.owner_place(side, node, definition).map(|place| place.edit)
+    }
+
+    fn owner_place(&self, side: usize, node: &Mapped, definition: bool) -> Option<&EditPlace> {
         let places = self.places[side].get(&node.file)?;
         places
             .iter()
-            .filter(|place| !definition || place.definition)
+            .filter(|place| !place.jump && (!definition || place.definition))
             .filter(|place| place.start <= node.start && node.end <= place.end)
             .max_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)))
-            .map(|place| place.edit)
+    }
+
+    /// The move whose passed-over statement contains a node (design 41.7).
+    fn jump_owner(&self, side: usize, node: &Mapped) -> Option<usize> {
+        let places = self.places[side].get(&node.file)?;
+        places.iter().filter(|place| place.jump && place.start <= node.start && node.end <= place.end).max_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end))).map(|place| place.edit)
     }
 
     /// The edits whose nodes are inside a node on one side.
     fn inner(&self, side: usize, node: &Mapped) -> Vec<usize> {
         let Some(places) = self.places[side].get(&node.file) else { return Vec::new() };
-        let mut found: Vec<usize> = places.iter().filter(|place| node.start <= place.start && place.end <= node.end).map(|place| place.edit).collect();
+        let mut found: Vec<usize> = places.iter().filter(|place| !place.jump && node.start <= place.start && place.end <= node.end).map(|place| place.edit).collect();
         found.sort();
         found.dedup();
         found
@@ -219,7 +267,13 @@ impl<'a> MirMap<'a> {
                     (None, None) => (None, None),
                 };
                 let node = own.and_then(|place| self.node(side, place));
-                let mut owners: Vec<usize> = node.as_ref().and_then(|node| self.owner(side, node, false)).into_iter().collect();
+                let first = node.as_ref().and_then(|node| self.owner_place(side, node, false)).map(|place| (place.edit, place.wide));
+                let mut owners: Vec<usize> = first.map(|(edit, _)| edit).into_iter().collect();
+                // A move owns the elements of its statement, and each change inside the node of
+                // the element owns them too (design 41.7).
+                if let (Some((edit, true)), Some(node)) = (first, &node) {
+                    owners.extend(self.inner(side, node).into_iter().filter(|inner| *inner != edit));
+                }
                 // A glue element with no owner, whose node is a block or the body, follows a
                 // change at a different place (see below).
                 let glue = owners.is_empty() && element.glue && node.as_ref().is_none_or(|node| !node.block_free);
@@ -244,6 +298,13 @@ impl<'a> MirMap<'a> {
                 {
                     owners.extend(self.owner(side, &found, true));
                 }
+                // An element in a statement that a move passes over (design 41.7).
+                if owners.is_empty()
+                    && let Some(node) = &node
+                {
+                    owners.extend(self.jump_owner(side, node));
+                    out.by_region |= !owners.is_empty();
+                }
                 // A glue element (a `goto`, a `return`, a `drop` at the end of a scope) with no
                 // owner, whose node is a block or the body, follows a change at a different place
                 // (a new exit joins the end of the body, a new local gets its drop): that change
@@ -266,6 +327,63 @@ impl<'a> MirMap<'a> {
             }
         }
         out
+    }
+}
+
+impl MirMap<'_> {
+    /// The file and the positions of a source range on one side.
+    fn positions(&mut self, side: usize, place: &MirPlace) -> Option<(String, Pos, Pos)> {
+        let ws = self.sides[side];
+        let tree = self.trees[side].entry(place.0.clone()).or_insert_with(|| {
+            let text = ws.rust_files.get(&place.0)?;
+            let parsed = rs::ast::SourceFile::parse(text, rs::Edition::Edition2021).tree();
+            Some(FileTree { lines: rs::Lines::new(text), root: parsed.syntax().clone() })
+        });
+        let tree = tree.as_ref()?;
+        let length = tree.lines.text().len();
+        (place.2 <= length && place.1 <= place.2).then(|| (place.0.clone(), tree.lines.pos(place.1), tree.lines.pos(place.2)))
+    }
+
+    /// The MIR check of each statement pair of the mapper in a body (design 41.8): the aligned
+    /// elements of the old statement must go to the new statement, and the reverse. A pair
+    /// with an aligned element in a different node does not agree. A pair with no aligned
+    /// element (a moved statement, a changed statement) has no proof either way.
+    pub fn check_maps(&mut self, body: &str, maps: &semilla_syntax::BodyMaps, diff: &MirDiff) {
+        let mine: Vec<&semilla_syntax::StatementMap> = maps.maps.iter().filter(|map| map.after.item == body).collect();
+        if mine.is_empty() {
+            return;
+        }
+        let pairs: Vec<((String, Pos, Pos), (String, Pos, Pos))> = diff.pairs.iter().filter_map(|(a, b)| Some((self.positions(0, a)?, self.positions(1, b)?))).collect();
+        let differ: [Vec<(String, Pos, Pos)>; 2] = [
+            diff.old.iter().filter_map(|element| element.tokens.as_ref()).filter_map(|place| self.positions(0, place)).collect(),
+            diff.new.iter().filter_map(|element| element.tokens.as_ref()).filter_map(|place| self.positions(1, place)).collect(),
+        ];
+        let inside = |(file, start, end): &(String, Pos, Pos), range: &(String, Pos, Pos)| *file == range.0 && range.1 <= *start && *end <= range.2;
+        for map in mine {
+            let range = |side: usize, anchor: &semilla_core::Anchor| -> Option<(String, Pos, Pos)> {
+                let ws = self.sides[side];
+                let node = semilla_syntax::resolve_node(ws, anchor)?;
+                Some((ws.items.get(&anchor.item)?.file.clone(), node.start, node.end))
+            };
+            let (Some(old), Some(new)) = (range(0, &map.before), range(1, &map.after)) else { continue };
+            let old_in: Vec<&((String, Pos, Pos), (String, Pos, Pos))> = pairs.iter().filter(|(a, _)| inside(a, &old)).collect();
+            let new_in: Vec<&((String, Pos, Pos), (String, Pos, Pos))> = pairs.iter().filter(|(_, b)| inside(b, &new)).collect();
+            let any_old = !old_in.is_empty() || differ[0].iter().any(|place| inside(place, &old));
+            let any_new = !new_in.is_empty() || differ[1].iter().any(|place| inside(place, &new));
+            if !any_old && !any_new {
+                continue;
+            }
+            self.counts.checked += 1;
+            let elsewhere = old_in.iter().any(|(_, b)| !inside(b, &new)) || new_in.iter().any(|(a, _)| !inside(a, &old));
+            if elsewhere {
+                self.counts.disagree += 1;
+                if self.counts.disagree_examples.len() < EXAMPLES {
+                    self.counts.disagree_examples.push(format!("`{}` → `{}`{}", map.before, map.after, if map.moved { " (moved)" } else { "" }));
+                }
+            } else if old_in.is_empty() && new_in.is_empty() {
+                self.counts.unaligned += 1;
+            }
+        }
     }
 }
 

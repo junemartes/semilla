@@ -6,13 +6,15 @@
 //! - An edit with no exact shape gets the general fact "changed NODE: `A` → `B`".
 //! - Each edit is its own fact with its text and its category (design 35). The compare result
 //!   comes later, from the MIR compare. An equal compare never hides the text of an edit.
-//! - Only a rename of a local variable folds the edits of its body under one fact.
+//! - Only a rename of a local variable folds the edits of its body under one fact. A moved
+//!   statement, an extracted variable, and an inlined variable (design 41) are one fact each.
+//!   A moved statement has the category of its statement form; a variable has `move`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::{Anchor, Category, Claim, Compare, Fact};
 use semilla_syntax::tree::{display_tokens, one_line};
-use semilla_syntax::{Edit, EditKind, Workspace};
+use semilla_syntax::{Edit, EditKind, Refactor, Workspace};
 
 use crate::checks::{self, Context};
 
@@ -485,6 +487,76 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
     let free = |fact_of: &[Option<usize>], index: usize| owners[index].is_none() && fact_of[index].is_none();
     let item_of = |edit: &Edit| edit.anchor().map(|a| a.item.clone()).or_else(|| edit.item().map(str::to_string));
 
+    // 0. The refactorings of the statement mapper (design 41): a moved statement, an extracted
+    // variable, and an inlined variable. Each one is one fact with the category `move`. Each
+    // other change of the statements has its own edit, so its own fact.
+    let mut variables: BTreeMap<(String, bool, String), Vec<usize>> = BTreeMap::new();
+    for index in 0..edits.len() {
+        if !free(fact_of, index) {
+            continue;
+        }
+        let edit = &edits[index];
+        let Some(item) = item_of(edit) else { continue };
+        match &edit.refactor {
+            // A move of a body above the limit of the mapper (the rules of 8b) has no mark: it
+            // is the same fact.
+            _ if edit.kind == EditKind::Moved => {
+                let (Some(before), Some(after)) = (&edit.before, &edit.after) else { continue };
+                let mut after = after.clone();
+                if let Some(new) = context.renames.items.get(&after.item) {
+                    after.item = new.clone();
+                }
+                let text = short(&edit.source_before, &edit.text_before);
+                push(facts, fact_of, &[index], Fact {
+                    at: Some(after.clone()),
+                    file: edit.file.clone(),
+                    part: "edit".into(),
+                    description: format!("moved statement `{text}` from `{before}` to `{after}`"),
+                    content: long_content(edit),
+                    // Fix round 2 of 8c (design 41.7): a move changes the order of execution, so
+                    // a moved statement gets the category of its statement form (40.5), as an
+                    // added statement of the same form. An extracted or inlined variable keeps
+                    // `move`.
+                    category: syntax_category(context, edit),
+                    reason: context.step.reasons.get(&after.to_string()).cloned(),
+                    ..fact_base()
+                });
+            }
+            Some(Refactor::Extract { var, .. }) => variables.entry((item, false, var.clone())).or_default().push(index),
+            Some(Refactor::Inline { var, .. }) => variables.entry((item, true, var.clone())).or_default().push(index),
+            _ => {}
+        }
+    }
+    for ((_, inline, var), indexes) in &variables {
+        // The `let` of the variable: the inserted (extract) or the deleted (inline) statement.
+        let declaration = indexes.iter().copied().find(|&i| matches!(edits[i].kind, EditKind::Inserted | EditKind::Deleted));
+        let Some(declaration) = declaration else { continue };
+        let edit = &edits[declaration];
+        let expr = match &edit.refactor {
+            Some(Refactor::Extract { expr, .. } | Refactor::Inline { expr, .. }) => expr.clone(),
+            _ => String::new(),
+        };
+        let uses = indexes.len() - 1;
+        let anchor = if *inline { edit.before.clone() } else { edit.after.clone() };
+        let anchor = anchor.map(|mut anchor| {
+            if let Some(new) = context.renames.items.get(&anchor.item) {
+                anchor.item = new.clone();
+            }
+            anchor
+        });
+        let place = anchor.as_ref().map(|anchor| format!(" at `{anchor}`")).unwrap_or_default();
+        let what = if *inline { "inlined variable" } else { "extracted variable" };
+        push(facts, fact_of, indexes, Fact {
+            at: anchor.clone(),
+            file: edit.file.clone(),
+            part: "edit".into(),
+            description: format!("{what} `{var}` = `{}` ({uses} use{}){place}", semilla_syntax::tree::short(&expr, 100), if uses == 1 { "" } else { "s" }),
+            category: Category::Move,
+            reason: anchor.and_then(|anchor| context.step.reasons.get(&anchor.to_string()).cloned()),
+            ..fact_base()
+        });
+    }
+
     // 1. A rename of a local variable: the edits of the body fold under one fact. The text of
     // the item changes only by the new names, so the fact text shows each edit (design 35).
     let mut by_item: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -608,6 +680,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
     }
 
     // 2. Each other free edit: the shape of an old op, else the general fact.
+    let moved_places: Vec<&Anchor> = edits.iter().filter(|edit| edit.kind == EditKind::Moved).filter_map(|edit| edit.before.as_ref()).collect();
     for index in 0..edits.len() {
         if !free(fact_of, index) {
             continue;
@@ -786,6 +859,10 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 None => format!("changed {node}: `{old}` → `{new}`"),
             }
         });
+        // An edit inside a moved statement shows at its new path: the reviewer reads the new
+        // code (design 41.6, fix round 1).
+        let inside_move = edit.before.as_ref().is_some_and(|at| moved_places.iter().any(|place| place.item == at.item && at.path.len() > place.path.len() && at.path.starts_with(&place.path)));
+        let anchor = if inside_move && edit.after.is_some() { edit.after.clone() } else { anchor };
         // An edit in a renamed or moved item shows at the new path (design 36.1). The steps of
         // the path are the steps before the step, as for each other edit.
         let anchor = anchor.map(|mut anchor| {

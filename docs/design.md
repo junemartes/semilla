@@ -3176,6 +3176,8 @@ The reverse step (statements go into a closure) uses the words "the added". An a
 
 **The limits.** The compare uses one level of inner blocks. A fact with more than one edit keeps its text.
 
+**Batch 8c.** The statement mapper (41) maps the inner statements to their new places. A moved inner statement counts as moved (41.10). The notes stay for the inner statements with no partner.
+
 ### 38.3 A new `cfg` twin of an item
 
 **The cause.** Trial 11, T11-4: a new twin of `Slab::capacity` under `cfg(not(feature = "std"))` gave a false rename `Slab::capacity` → `Slab::capacity#0` and the fact "a different crate can no longer use the old path".
@@ -3393,7 +3395,7 @@ The category of a fact does not depend on the compiled code. `category()` no lon
 | 5 (Decided by Claude) | a `let … else` | `control flow` | deleted statement `let Some(c) = o else { return 1; };` |
 | 6 (user) | each other statement, operand, or call | `logic` | deleted statement `g(b);`; `v.len()` → `Vec::len(v)` |
 
-A statement that contains a branch or an exit is `control flow` only if the branch or the exit is its top node (row 3), or if it is a `let … else` (row 5). **Decided by Claude:** the SMT effect of a changed condition (`narrow`, `widen`, `negate`) keeps `control flow`; row 2 gives the same category. An item rewrite (`rewrite-item`) is `logic`.
+A moved statement (41.6) gets the category of its statement form, as an added statement (fix round 2 of 8c). A statement that contains a branch or an exit is `control flow` only if the branch or the exit is its top node (row 3), or if it is a `let … else` (row 5). **Decided by Claude:** the SMT effect of a changed condition (`narrow`, `widen`, `negate`) keeps `control flow`; row 2 gives the same category. An item rewrite (`rewrite-item`) is `logic`.
 
 The test `the_category_of_an_edit_comes_from_its_syntax` runs each row with a body status with and without a changed control flow graph. The e2e test `each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_syntax` has two steps with the same literal edit, one with a second edit that adds a branch: the literal keeps `value`.
 
@@ -3417,3 +3419,110 @@ Before the shared data and the kept diffs, the warm step of `quickcheck-2` took 
 - A new local, a removed local, or a new form of a statement can break the map of the locals for a later element with the same text. That element differs, and with no edit at its place it is a doubt.
 - The map does not follow a body into a different file (`include!`): the call owns the elements of the included file.
 - The alignment is an order-preserving one. A statement that moves gives elements that differ on the two sides: the move edit owns them.
+
+## 41. Batch 8c: a refactoring-aware statement mapper in each body
+
+**User decisions (2026-11-16).**
+
+1. "We should use the version of gumtree that is optimized for refactors. We should detect code moves." The approach is the refactoring-aware AST diff of RefactoringMiner (Alikhanifard and Tsantalis, ACM TOSEM 2024). Semilla has its own implementation in Rust (`semilla_syntax::mapper`).
+2. The category of a fact comes from the edit (its syntax and its role). The compiled code gives the compare result.
+
+The rule above each other rule stays: no change of the code is without a fact, and no fact text says less than the change. A refactoring fact never absorbs a change of behavior. A doubt gives the facts of 8b. **Decided by Claude:** this batch is the mapper inside one body. The work across bodies and files (extract and inline function, a statement that moves to a different function) is batch 8d. Each detail below that the user did not decide has the mark **Decided by Claude**.
+
+### 41.1 The cause
+
+Step 3 of the syntax diff aligned the statements of each block with a longest common subsequence on the text, and it paired the statements of each gap by kind. A statement that moved into or out of a block gave a deleted and an added statement. A renamed local with a second change did not pair. An extracted variable gave one fact for each changed use.
+
+### 41.2 The mapper
+
+The mapper works on the whole body of a pair of matched functions (`mapper::map_body`). A leaf statement has no block (a `let`, an expression statement, a tail with no block). A composite statement has a block (`if`, `match`, a loop, a block, a statement with a closure body). The parent of a statement is the nearest composite that contains it, with the role path of its block (`then`, `arm[0].body`).
+
+1. **Leaf statements first**, in rounds. Each round maps only the statements that no earlier round mapped. A composite with the same full text maps in the same rounds, with its inner statements in order.
+   1. The same compare text (39.2), and the parents correspond: the same header and the same block, or both the body. In each pair of parent groups, the longest common subsequence first, then the nearest pair.
+   2. The same compare text at any depth (a move across blocks). **Decided by Claude:** a tie goes to the larger subtree, then to the pair whose parents are more similar, then to the nearest position.
+   3. The same text after replacements (41.3), with the best score. **Decided by Claude:** the smallest score is 0.6 (`MIN_SCORE`), and the share of equal words (names and literals, not keywords; a candidate variable counts as the words of its expression) is 0.5 or more (`MIN_WORDS`). Cause of the second limit: the punctuation gave `let gen_size = qc_gen_size();` and `let tests = qc_tests();` of `quickcheck-2` a score of 0.71.
+      **Fix round 1, D2 (Decided by Claude):** a pair whose parents correspond (they map, or they have the same header and the same block, or both are the body) is local. In the ranking, a local pair gets 0.2 more (`LOCAL_BONUS`): a pair at a different place wins only with a score higher by more than 0.2. A pair at a different place needs a score of 0.7 or more (`FAR_SCORE`). Cause: in `time-macros` (`date::parse`), the old `return Err(… name: "year" …)` stays at `S3/then/S0` with two changed parts, and a new similar `return Err(… name: "week" …)` in a different block had a higher score. 8c gave a false move, 4 edits, and an added `return` for a statement that was already there. A tie goes to the nearest position.
+      **Fix round 1, D3:** the `let` of an extract or inline candidate takes part in round 3 as each other statement. A candidate that maps is no variable. Cause: `let enum_name = &self.name;` (a candidate) was left out of round 3, so `let name = &self.name;` mapped to `let variant_values = &self.variant_values;`.
+2. **Composite statements next** (**Decided by Claude**): two composites map if they have the same kind and the same child roles, their headers are equal or similar (the structural score of 41.3 of the two headers, without the statements of their blocks, is 0.5 or more; fix round 1, D3), and 50 % or more of their inner statements map to each other (`MIN_SHARE`). The pass runs two times, so an outer composite can count its mapped inner composites. A tie goes to the pair whose parents map, then to the nearest position.
+3. **The walk.** In each block pair, the mapped statements in order (a longest common subsequence of the pairs) are in place. A mapped statement at a different order, or with its partner in a different block, is moved. Each statement with no partner goes to the gap rules of 8b (`Context::gap` in `diff.rs`, the fallback after the mapper): the statements of a gap pair by kind, in order (by position if the gap has the same count of statements with the same kinds on the two sides, else by a word similarity of 0.25 or more). So each case that the mapper does not cover gives the facts of 8b. Fix round 1, D3: in `wasm-bindgen-backend` (`StringEnum::to_tokens`), the pair `let expect_string = format!(…)` → `let enum_name = &self.name;` came from this fallback, after round 3 had mapped `let name = &self.name;` to the wrong statement. With the fixes, `let name` maps to `let enum_name`; the fallback can still pair the two other `let` statements, as in 8b. Step 4 of the syntax diff (the compare of the mapped nodes) stays.
+
+### 41.3 Replacements
+
+Two statements are the same after replacements if a set of token replacements makes their compare texts equal: a local name, a literal, a path or a method name, an argument list, an operator, or a sub-expression that is a variable on one side and an expression on the other. **Decided by Claude (fix round 1, D3):** the score is structural. The compare of the two nodes goes down while the kinds and the child roles are equal. A token that is equal at its place needs no replacement. Each token inside a replaced sub-expression (a different kind, different child roles, or a leaf with a different text) is replaced, and a changed operator or name of the node itself is one replaced token. The score is the count of the tokens that need no replacement, divided by the token count of the larger node (without the statements of its blocks). Exceptions: a use of an extract or inline candidate (`E` on one side, `v` on the other) counts as equal, and the old side has the consistent renames of locals. Before this rule, the score was the longest common subsequence of the token lists, and two statements that share only `let`, `=`, and `;` could pair. Each replacement that is not a consistent rename of a local is an edit at its node, as before (the lowest node that contains the change). **Decided by Claude:** a wrap or an unwrap in a mapped pair of the same kind (`Ok(Self::from_seed(seed))` → `Self::from_seed(seed)`) is one edit of the node. Cause: the compare of the parts gave "changed path `Ok` → `Self::from_seed`" and "changed expression `Self::from_seed(seed)` → `seed`" in `rand_core-4`. An operand chain (design 7d) keeps its rule. The statements in a node with equal text are in place: an `if` in a field of a struct literal gave a false move "from `…/then/tail` to `…/then/tail`" before this rule.
+
+### 41.4 A consistent rename of a local
+
+**Decided by Claude.** The leaf pairs with the same kind and the same token count vote: each pair whose only differences are names that the two sides bind (a pattern, a closure parameter) gives a vote for each name pair. A rename `a` → `b` holds if `a` is not a word of the new body and `b` is not a word of the old body: each use is renamed. The map applies to the old texts in each round. The rename sites stay edits, so the rename fact of design 36.1 stays: "renamed local `total` → `sum`, 3 edit(s)". A moved statement never folds into the rename fact.
+
+### 41.5 Extract variable and inline variable
+
+A new `let v = E;` with no partner, whose name the old body does not have, and whose `E` is a sub-expression that is `v` in a mapped statement, is an extracted variable. The reverse is an inlined variable. **Decided by Claude:** `v` is a plain name with no type and no `else`; a use can be in parentheses. The `let` is an inserted or a deleted edit, and each use is a replaced edit (`E` → `v`). The edits have the mark of the variable, and they make one fact: "extracted variable `area` = `a * b + 1` (2 uses) at `rf::g/S0`", "inlined variable `area` = `a * b + 1` (1 use) at `rf::g/S0`". A use that also changes in a different way gives its own edit: "changed expression `a * b + 1 > 10` → `area >= 10` at `rf::g/S0/cond`".
+
+### 41.6 A move
+
+A mapped statement whose partner is in a different block, or whose order among the mapped statements of its block changes, is moved. The fact: "moved statement `let scale = limit * 2;` from `rf::f/S1` to `rf::f/S2`". It replaces the facts "moved let: …" and "moved binary: …", also for a move of a body above the limit (41.9). A moved statement that also changes gets the move fact and an edit for each other change. **Fix round 1, D1 (Decided by Claude):** an edit inside a moved statement (also inside a moved composite) names its new path, because the reviewer reads the new code: "changed literal `2` → `3` at `strsim::generic_jaro/S11/else/S0/rhs`". Each other edit keeps the path before the step.
+
+### 41.7 The category and the compare result
+
+**Decided by Claude.** An extracted variable and an inlined variable get the category `move`. A consistent rename of a local keeps `rename`. An item move (a function to a different module) keeps `move`. Each other edit keeps the table of 40.5.
+
+**Fix round 2 (Decided by Claude; it replaces the first rule of this section for a moved statement).** A moved statement gets the category of the table of 40.5 for its statement form, as an added statement of the same form: a moved `let` or expression statement is `logic`; a moved `return`, `if`, `match`, or loop is `control flow`. The fact text stays: "moved statement `X` from … to …". Cause: a move changes the order of execution, so its compiled code normally changes. On 27 large real pull requests, 59 of 68 move facts had `code different` and the mismatch mark. On the mutants, 13 changes of behavior (swaps of two dependent statements) had only a `move` fact. The category `move` says that the code does not change, and a mark on almost each move has no value.
+
+The compare result comes from the map of 40.3, with these rules (`mirmap.rs`):
+
+1. A move owns the MIR elements of its statement on the two sides. An element whose smallest owner is a move also goes to each edit inside its node: a change inside a moved statement keeps its own result.
+2. **The region.** The cause of the `indirect` fact of a move in 8b: the dev MIR numbers the locals in the order of their declarations, and the alignment of 40.3 keeps the order. A move or a new `let` renumbers the later locals, and the alignment of a later element can fail with no edit at its place ("moved let `let scale = limit * 2;`" gave an `indirect` fact for `top`, `scale`, and `base + 3`). **Decided by Claude:** the region of a move is the statements of the lowest block pair that contains its two places, from the first statement whose order to the moved statement changes to the end of the block, and the statement that the move leaves or enters. The region of the `let` of a variable is the statements from the `let` to the end of its block, and on the other side from the partner of its next statement. An element with no owner by the rules of 40.3, in a statement of the region with no edit of a different fact (an edit of a rename or a move fact does not count), goes to the refactoring.
+3. An element that a refactoring takes by its region can be the effect of a different edit (a deleted statement whose elements the alignment pairs with a different statement). Then each other edit of the body that is not a refactoring keeps the doubt rule (design 38): it never gets `code equal` from the owner rule. Cause: the needle `n_swap_del` gave "deleted statement `v.push(y)` [logic · code equal]" before this rule.
+4. The mismatch mark of 37 applies to a `move` fact (an extracted or inlined variable, an item move) with `code different`: "! the compiled code changes: …". A moved statement has the category of its form (fix round 2), so it has no mismatch mark: "moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [logic · code different]". An extracted variable whose elements align (the same computation in the same order) gets `code equal`.
+
+### 41.8 The MIR check of each map
+
+The element alignment of 40.3 gives its aligned pairs (`ElementDiff::pairs`, the token ranges). For each statement pair of the mapper that is a move, or that is the same only after replacements, the aligned elements of the old statement must go to the new statement, and the reverse. A pair with an aligned element in a different statement does not agree (a map disagreement). A pair with no aligned element (a moved statement, a changed statement) has no proof either way. `semilla status --verbose` shows the counts and the first five pairs that do not agree: "statement map: 4 pair(s) checked, 1 do not agree with the MIR alignment, 0 with no aligned element (first: `rf::f/S1` → `rf::f/S2`)". A disagreement changes no fact in this batch. The line also gives the counts of the mapper: "mapper: 14 round 3 pair(s), 5 composite pair(s), 4 pair(s) of the 8b gap rules".
+
+### 41.9 Time and limits of the work
+
+**Decided by Claude.** The mapper scores at most 20 000 statement pairs in one body (`MAX_SCORED`: the rename votes, round 3, and the composites). Above the limit, the body keeps the alignment of 8b, and `semilla status --verbose` says so: "the statement mapper did not run for 1 body(ies) above its limit: …". Only the statements whose text the other side does not have vote for a rename.
+
+The step time with the 8b binaries and with these binaries, one run at a time, with an empty cache (the first run) and with a warm cache (`undo`, then the accepted step again):
+
+| Fixture | Empty cache | Warm cache |
+|---|---|---|
+| `bytes` | 20.30 s → 20.34 s (+0 %) | 8.78 s → 8.85 s (+1 %) |
+| `quickcheck-2` | 13.56 s → 13.76 s (+1 %) | 2.01 s → 2.05 s (+2 %) |
+| `socket2` | 3.33 s → 3.36 s (+1 %) | 1.64 s → 1.66 s (+1 %) |
+| `rand_xoshiro` | 6.29 s → 6.23 s (−1 %) | 1.99 s → 1.37 s (a second 8b run: 1.38 s) |
+
+The warm time of `bytes` is the median of three runs of each binary in turn. One single run gave 12.52 s with the same time of the check (7.68 s; 8b: 7.67 s): the difference was outside Semilla. No fixture had a body above the limit.
+
+### 41.10 The inner compare of 38.2
+
+The mapper covers the examples of 38.2: each inner statement of the deleted `data.with_mut(…)` maps to its new place, and a changed inner statement gets the move fact and its own edit. The notes of 38.2 stay, because a deleted composite can keep inner statements with no partner, and a body above the limit keeps the rules of 8b. A moved inner statement counts as moved: "(each inner statement is a moved statement of the body)", "(inner statements: 2 moved to a different place; 1 not in an added statement: `let shared = *shared;`)".
+
+### 41.11 The measure
+
+The case set (36 small crates, each with an old and a new commit; the forms are also in the tests `mapper::tests`, `the_statement_mapper_gives_one_fact_for_each_refactoring_and_keeps_each_change`, and the verify tests of 8c). "One fact": each refactoring of the case has exactly one fact, no `indirect` fact shows, and each other fact is a needle. "Needle": the change of behavior keeps its own fact with `code different`.
+
+| Group | Cases | Facts 8b → 8c | One fact 8b → 8c | Needle kept 8b → 8c |
+|---|---|---|---|---|
+| moves (into and out of `if`, loop, arm, closure, block; a swap; 3 places down) | 14 | 28 → 17 | 2 → 12 | – |
+| extracted and inlined variables (1, 2, 3 uses; one use that also changes) | 6 | 18 → 7 | 0 → 6 | 1 → 1 |
+| renamed locals (with a move, with an extract, alone) | 3 | 11 → 5 | 1 → 3 | – |
+| needles (a refactoring and a changed operator, literal, deleted statement, or negated condition) | 12 | 41 → 27 | 1 → 9 | 10 → 12 |
+| control (a changed literal) | 1 | 1 → 1 | 1 → 1 | 1 → 1 |
+| the forms of fix round 1 (D1, D2, D3) | 3 | 9 → 10 | 0 → 0 | 0 → 1 |
+| total | 39 | 108 → 67 | 5 → 31 | 12 → 15 |
+
+The cases with more than the one fact: `m_into_block` (the move and two changes, by design), `m_let_in_block` (the `indirect` fact of `v + 1`, 41.12), `n_out_loop_op` and `n_closure_lit` (an `indirect` fact in a statement with the needle edit: the region does not take it), `n_iv_neg` (41.12), and the three forms of fix round 1: `f1_moved_literal_path` (the move, the literal at the new path, and the new `if`), `f2_twin_same_place` and `f3_low_share` (the facts of 8b).
+
+On the ten fixtures of 7c, the first line, the runs, and the reasons are the same as in 8b, and no fact changes from `code different` to `code equal`. After fix round 1, the mapper gives 7 facts "moved statement" in `bytes` and 6 in `nu-ansi-term` (before the fix round also 1 in `quickcheck` and 1 in `rand_core-4`), and no extracted or inlined variable. A tail that becomes a statement with `;` keeps its 8b text ("moved assign: `self.offset = 1` from `…/then/tail` to `…/then/S0`", `quickcheck-2`): it is a changed statement, not a move of the mapper. The MIR check after fix round 1: `bytes` 21 pairs checked, 2 do not agree; `quickcheck-2` 32, 2; `nu-ansi-term` 10, 5; each other fixture 0 that do not agree (before: `bytes` 26, 2; `quickcheck-2` 47, 4; `nu-ansi-term` 15, 5; `rand_core-4` 10, 1).
+
+### 41.12 Limits
+
+- The mapper works in one body. A statement that moves to a different function, and an extracted or inlined function, are batch 8d.
+- A tie of round 2 between equal statements can pick a different pair than the author moved (a swap of two statements is one move of either statement).
+- The region of a move takes the elements of the later statements of its block. An effect of a different item on such a statement (a changed type) goes to the move, which then has `code different` (with no mismatch mark since fix round 2: the category is the form of the statement), not an `indirect` fact.
+- The alignment of 40.3 keeps the order. A statement before the region whose locals the alignment breaks keeps its `indirect` fact (`m_let_in_block`: `v + 1`).
+- A `let` with a type or a pattern is not an extract or inline candidate.
+- A use of a variable in an operand chain whose shape changes (`area + 2` → `a * b + 1 + 2`) is not a use: the chain is one changed expression.
+- A composite whose inner statements go to a different level can map to the wrong composite. Before fix round 1, in `quickcheck`, `None => { match … }` became `None => match …`, and the inner `match` mapped to the outer `match`. The structural header score removes this case: the fact is "changed match: `{ match self.seed…=> return None } }` → `match self.seed…=> return None, }`", as in 8b.
+- The gap rules of 8b stay as the fallback (41.2). They can still pair two different statements of one kind in place (`f3_low_share`: `let expect_string = format!(…)` and `let variant_values = &self.variant_values;`), and the rename rule of 36.1 can then name a rename of the two patterns, as in 8b.
