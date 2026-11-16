@@ -18,6 +18,7 @@ pub mod facts;
 pub mod files;
 pub mod hints;
 pub mod identity;
+mod inner;
 pub mod organize;
 pub mod owners;
 pub mod scope;
@@ -400,8 +401,6 @@ pub struct EffectCheck {
 pub trait ExprOracle {
     /// Classifies the change of a condition. `types` maps variable names to Rust type text.
     fn classify(&self, before: &str, after: &str, types: &BTreeMap<String, String>) -> Option<EffectCheck>;
-    /// Returns `Some(true)` if the two expressions are proved equivalent.
-    fn equivalent(&self, before: &str, after: &str, types: &BTreeMap<String, String>) -> Option<bool>;
 }
 
 /// An oracle that proves nothing. Every check gives "not proved".
@@ -415,9 +414,6 @@ impl BodyOracle for NoOracle {
 
 impl ExprOracle for NoOracle {
     fn classify(&self, _: &str, _: &str, _: &BTreeMap<String, String>) -> Option<EffectCheck> {
-        None
-    }
-    fn equivalent(&self, _: &str, _: &str, _: &BTreeMap<String, String>) -> Option<bool> {
         None
     }
 }
@@ -457,6 +453,12 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
 /// Checks one step. With `derive_edits` (design 24.2), each edit with no claim gets a derived fact,
 /// so no edit is uncovered, and a step with no identity claim can get a derived identity.
 pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool) -> StepOutcome {
+    // Design 38.3: an item that gets a twin keeps its key for the twin with its text.
+    let twins = identity::twin_keys(input.before, input.after);
+    let input = match &twins {
+        Some((before, after)) => &StepInput { step: input.step, before, after },
+        None => input,
+    };
     // A reason with no text is not a reason (brief 5f, A4: an empty value proves nothing).
     let mut step = input.step.clone();
     step.reasons.retain(|_, reason| !reason.trim().is_empty());
@@ -791,7 +793,10 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // MIR level N0 after the rename and move map (N1), in the checked configurations.
     let raw: std::cell::RefCell<Vec<(String, BodyStatus)>> = std::cell::RefCell::new(Vec::new());
     // The name of a compiled body has no twin number (design 37.4).
-    let body_renames = checks::body_renames(&renames.items, input.before, input.after);
+    // Design 38.10: a twin in a file that no checked unit reads gives no compiled body.
+    let read_files: Vec<BTreeSet<String>> = bodies.truths(step).unwrap_or_default().iter().map(|side| side.iter().filter(|config| config.known).flat_map(|config| config.units.iter().flat_map(|unit| unit.files.iter().cloned())).collect()).collect();
+    let read = |side: usize| read_files.get(side).filter(|files| !files.is_empty());
+    let body_renames = checks::body_renames_read(&renames.items, input.before, input.after, [read(0), read(1)]);
     let settled = loop {
         let truths = bodies.truths(step).unwrap_or_default();
         let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
@@ -1423,6 +1428,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         }
     }
     report.spotlight.sort();
+    let truths = if body_index.available { oracle.truths(step).unwrap_or_default() } else { Default::default() };
     // An edit inside a function that no checked configuration compiles (design B11). Only the
     // syntax checks this edit, so the reviewer must read it.
     if body_index.available {
@@ -1436,7 +1442,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 let compiled = body_index.has_body(&anchor.item) || renamed.is_some_and(|new| body_index.has_body(new));
                 // A body that a claim declares as new has no compare result.
                 let declared = added.iter().any(|new| anchor.item == *new || checks::is_child(&anchor.item, new));
-                if function && !compiled && !declared {
+                if function && !compiled && !declared && !twin_compiled(input.before, input.after, &truths, &anchor.item) {
                     inactive.insert(format!("inactive code: {} (no checked configuration compiles `{}`)", edit.anchor().unwrap_or(anchor), anchor.item));
                 }
             }
@@ -1487,11 +1493,10 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     report.api_changes = api_changes;
 
     // The compare result of each fact (design 35).
-    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed);
+    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed, &truths);
 
     // An edit in code that no checked configuration compiles has no compare (batch 5w, part A).
     if body_index.available {
-        let truths = oracle.truths(step).unwrap_or_default();
         let dead = uncompiled::dead_edits([input.before, input.after], &truths, &body_index);
         uncompiled::apply(&dead, [input.before, input.after], step, &edits, &fact_of, &renames, &mut report);
     }
@@ -1535,7 +1540,8 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 /// 6. A fact in a function that no checked configuration compiles: `no compare`.
 /// 7. A doc text, a comment, a manifest key, and a file with no changed body: `no code`.
 /// 8. Each other fact: `code equal`.
-fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool) {
+fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool, truths: &[Vec<ConfigTruth>; 2]) {
+    let twin_compiled = |function: &str| twin_compiled(before, after, truths, function);
     let note = |fact: &mut semilla_core::Fact, text: String| {
         fact.note = Some(match fact.note.take() {
             Some(old) if old.contains(&text) => old,
@@ -1612,6 +1618,11 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
             found.into_iter().find(|function| !body_index.has_body(function))
         });
         if let Some(item) = inactive {
+            if matches!(fact.category, Category::Added | Category::Removed) && twin_compiled(&item) {
+                fact.compare = Compare::CodeDifferent;
+                fact.affected = vec![item];
+                continue;
+            }
             fact.compare = Compare::NoCompare;
             note(fact, format!("{} no checked configuration compiles `{item}`", uncompiled::NO_COMPARE));
             continue;
@@ -1619,10 +1630,29 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
         // An added or a removed item with no body (a type, a trait) has no compiled code. An
         // item with a body that is here has a compiled body with an equal result (batch 7b,
         // part 5.1): a different definition of the name gives the same code.
+        // A new version of a dependency (design 38.6): Semilla does not compare its code.
+        if fact.category == Category::Manifest && fact.at.is_none() && files::is_dependency_version(&fact.part) {
+            fact.compare = Compare::NoCompare;
+            note(fact, format!("{} Semilla does not compare the code of a dependency", uncompiled::NO_COMPARE));
+            continue;
+        }
         let bodies = fact.at.as_ref().is_some_and(|at| !functions(after, &at.item).is_empty() || !functions(before, &at.item).is_empty());
         let no_body = matches!(fact.category, Category::Added | Category::Removed) && !bodies;
         fact.compare = if no_code || no_body { Compare::NoCode } else { Compare::CodeEqual };
     }
+}
+
+/// True if `function` is a twin that a step adds or removes (design 38.3), and a checked
+/// configuration compiles it. The compiled body has the name of the plain path, so the body
+/// index has no body for the twin key. The twin is compiled if a checked unit that reads its
+/// file makes each own `cfg` condition of the twin true.
+fn twin_compiled(before: &Workspace, after: &Workspace, truths: &[Vec<ConfigTruth>; 2], function: &str) -> bool {
+    let Some(base) = identity::twin_base(function) else { return false };
+    [(before, &truths[0]), (after, &truths[1])].iter().any(|(ws, side)| {
+        let Some(item) = ws.items.get(function).filter(|_| ws.items.contains_key(base)) else { return false };
+        let preds: Vec<cfgcond::Pred> = item.attrs.iter().flat_map(|attr| cfgcond::own_conditions(attr)).collect();
+        !preds.is_empty() && side.iter().any(|config| config.known && config.units.iter().any(|unit| unit.files.contains(&item.file) && preds.iter().all(|pred| cfgcond::eval(pred, &unit.cfg) == Some(true))))
+    })
 }
 
 /// A derived body of a claimed type: the MIR name is `<TYPE as TRAIT>::method`, the type derives

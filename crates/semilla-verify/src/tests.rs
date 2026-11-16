@@ -26,9 +26,6 @@ impl ExprOracle for FakeExprs {
     fn classify(&self, _: &str, _: &str, _: &BTreeMap<String, String>) -> Option<EffectCheck> {
         Some(EffectCheck { effect: self.0, witness: Some("i = 5, n = 5".into()) })
     }
-    fn equivalent(&self, _: &str, _: &str, _: &BTreeMap<String, String>) -> Option<bool> {
-        Some(self.0 == Effect::Equivalent)
-    }
 }
 
 fn load(src: &str) -> (tempfile::TempDir, Workspace) {
@@ -4431,7 +4428,10 @@ fn an_identity_in_code_that_no_checked_configuration_compiles_has_no_compare() {
     let oracle = UnitBodies { bodies: vec![("demo::live".into(), equal("n0"))], cfg: vec!["unix"], files: vec!["src/lib.rs"], known: true };
     let report = run_units(&[manifest, ("src/lib.rs", source)], &[manifest, ("src/lib.rs", &after)], &oracle, &[]);
     assert!(!report.accepted() && !report.facts.is_empty(), "{report:#?}");
-    assert!(report.facts.iter().all(|fact| fact.spotlight && fact.compare != Compare::CodeEqual), "{report:#?}");
+    // Design 38.10: the derived rename shows, with no compare. The edits keep the spotlight.
+    assert!(report.facts.iter().all(|fact| fact.compare != Compare::CodeEqual) && report.facts.iter().any(|fact| fact.spotlight), "{report:#?}");
+    let rename = report.facts.iter().find(|fact| fact.description == "renamed `demo::m::twice` → `demo::m::thrice`").unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!((rename.compare, rename.note.as_deref()), (Compare::NoCompare, Some("no compare: no checked configuration compiles `demo::m::thrice`")));
     let (_d1, old) = load_files(&[manifest, ("src/lib.rs", source)]);
     let (_d2, new) = load_files(&[manifest, ("src/lib.rs", &after)]);
     let step = step(vec![claim("c1", "rename", Some("demo::m::twice"), serde_json::json!({"to": "thrice"}))]);
@@ -5387,8 +5387,8 @@ fn a_use_fact_shows_its_text_and_the_public_names() {
     assert_eq!(
         descriptions(&report),
         [
-            format!("changed `use` line: `pub use camel::{{AsCamel, ToCamel, ToPascal}};` → `pub use camel::{{AsCamel, ToCamel}};`: {moved}"),
-            format!("added `use` line: `pub use snake::ToSnake as ToPascal;`: {moved}"),
+            format!("changed `use` line: `pub use camel::{{AsCamel, ToCamel, ToPascal}};` → `pub use camel::{{AsCamel, ToCamel}};` in `demo`: {moved}"),
+            format!("added `use` line: `pub use snake::ToSnake as ToPascal;` in `demo`: {moved}"),
         ],
         "{report:#?}"
     );
@@ -5399,32 +5399,32 @@ fn a_use_fact_shows_its_text_and_the_public_names() {
     assert_eq!(
         descriptions(&report),
         [
-            "changed `use` line: `pub use camel::{AsCamel, ToCamel, ToPascal};` → `pub use camel::{AsCamel, ToCamel};`: removed the public name `demo::ToPascal` (`demo::camel::ToPascal`)",
-            "changed `use` line: `pub use snake::ToSnake;` → `pub use snake::{Other, ToSnake};`: added the public name `demo::Other` (`demo::snake::Other`)",
+            "changed `use` line: `pub use camel::{AsCamel, ToCamel, ToPascal};` → `pub use camel::{AsCamel, ToCamel};` in `demo`: removed the public name `demo::ToPascal` (`demo::camel::ToPascal`)",
+            "changed `use` line: `pub use snake::ToSnake;` → `pub use snake::{Other, ToSnake};` in `demo`: added the public name `demo::Other` (`demo::snake::Other`)",
         ],
         "{report:#?}"
     );
     assert_eq!(level, ("major", vec!["removed the public name `demo::ToPascal` (`demo::camel::ToPascal`)".to_string(), "added the public name `demo::Other` (`demo::snake::Other`)".to_string()]), "{level:?}");
     // A glob: the text says "glob" and names the module.
     let (report, level) = run("mod camel;\nmod snake;\npub use camel::{AsCamel, ToCamel, ToPascal};\npub use snake::ToSnake;\npub use snake::*;\n", CAMEL);
-    assert_eq!(descriptions(&report), ["added `use` line: `pub use snake::*;`: added a glob: each public name of `demo::snake` now is a public name of `demo`"], "{report:#?}");
+    assert_eq!(descriptions(&report), ["added `use` line: `pub use snake::*;` in `demo`: added a glob: each public name of `demo::snake` now is a public name of `demo`"], "{report:#?}");
     assert_eq!(level.0, "minor", "{level:?}");
     // The same names in a different form: the text says that the names are the same.
     let (report, level) = run("mod camel;\nmod snake;\npub use camel::{AsCamel, ToPascal};\npub use camel::ToCamel;\npub use snake::ToSnake;\n", CAMEL);
     assert_eq!(
         descriptions(&report),
         [
-            "changed `use` line: `pub use camel::{AsCamel, ToCamel, ToPascal};` → `pub use camel::{AsCamel, ToPascal};` (the public names are the same)",
-            "added `use` line: `pub use camel::ToCamel;` (the public names are the same)",
+            "changed `use` line: `pub use camel::{AsCamel, ToCamel, ToPascal};` → `pub use camel::{AsCamel, ToPascal};` in `demo` (the public names are the same)",
+            "added `use` line: `pub use camel::ToCamel;` in `demo` (the public names are the same)",
         ],
         "{report:#?}"
     );
     assert_eq!(level, ("patch", Vec::new()), "{level:?}");
     // A private line has its text and no public name.
     let (report, _) = run(LIB, "use std::fmt;\nuse std::collections::BTreeMap;\npub struct AsCamel;\npub trait ToCamel {}\npub trait ToPascal {}\npub fn show(_: &dyn fmt::Debug) {}\n");
-    assert_eq!(descriptions(&report), ["added `use` line: `use std::collections::BTreeMap;`"], "{report:#?}");
+    assert_eq!(descriptions(&report), ["added `use` line: `use std::collections::BTreeMap;` in `demo::camel`"], "{report:#?}");
     let (report, _) = run(LIB, "pub struct AsCamel;\npub trait ToCamel {}\npub trait ToPascal {}\npub fn show(_: &dyn std::fmt::Debug) {}\n");
-    assert!(descriptions(&report).contains(&"removed `use` line: `use std::fmt;`".to_string()), "{report:#?}");
+    assert!(descriptions(&report).contains(&"removed `use` line: `use std::fmt;` in `demo::camel`".to_string()), "{report:#?}");
 }
 
 /// Batch 6a, B1 (trial 9): a move keeps its proof when the `use` lines change in the usual
@@ -5480,7 +5480,7 @@ fn a_move_keeps_its_proof_when_the_use_lines_change() {
     }
     // The import of a different item with the same name is a fact, not a part of the move.
     let report = run(A, &A_SPLIT.replace("crate::words::helper", "crate::other::helper"), WORDS);
-    assert!(descriptions(&report).contains(&"added `use` line: `use crate::other::helper;`".to_string()), "{report:#?}");
+    assert!(descriptions(&report).contains(&"added `use` line: `use crate::other::helper;` in `demo::a`".to_string()), "{report:#?}");
     // A removed import that a different item with the same name replaces through a glob.
     let glob_before = format!("use crate::other::*;\n{A}");
     let report = run(&glob_before, &format!("use crate::other::*;\n{}", A_SPLIT.replace("use crate::words::helper;\n", "")), WORDS);
@@ -5736,7 +5736,7 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     // The visibility of a `use` line: one changed line, and the public name goes.
     for new in ["use inner::helper;", "pub(crate) use inner::helper;"] {
         let (text, class, _) = one("pub use inner::helper;", new);
-        assert_eq!(text, format!("changed `use` line: `pub use inner::helper;` → `{new}`: removed the public name `demo::helper` (`demo::inner::helper`)"));
+        assert_eq!(text, format!("changed `use` line: `pub use inner::helper;` → `{new}` in `demo`: removed the public name `demo::helper` (`demo::inner::helper`)"));
         assert_eq!(class, Compare::CodeEqual);
     }
     // An attribute of a `use` line.
@@ -6482,8 +6482,8 @@ fn a_module_file_under_a_condition_that_is_off_gets_the_usual_facts() {
     // Each file of the module is a twin module. An edit in a file that is off has its text.
     assert!(lines.contains(&"changed literal `2` → `3` at `demo::sys#1::open/tail/rhs` [value · no compare]".to_string()), "{lines:#?}");
     assert!(lines.contains(&"changed literal `4` → `5` at `demo::win::handle/tail/rhs` [value · no compare]".to_string()), "{lines:#?}");
-    assert!(lines.iter().any(|line| line.starts_with("removed `demo::sys#1::close`") && line.ends_with("[removed · no compare]")), "{lines:#?}");
-    assert!(lines.iter().any(|line| line.starts_with("added `demo::sys#1::shut`") && line.ends_with("[added · no compare]")), "{lines:#?}");
+    // Design 38.10: the derived rename in the file that is off has no compare.
+    assert!(lines.contains(&"renamed `demo::sys#1::close` → `demo::sys#1::shut` [rename · no compare]".to_string()), "{lines:#?}");
     // One spotlight for each file, with the file as the key of the reason.
     for file in ["src/sys/windows.rs", "src/win.rs"] {
         let facts: Vec<&Fact> = report.facts.iter().filter(|fact| fact.spotlight && fact.part == file).collect();
@@ -6661,4 +6661,184 @@ fn an_equal_list_of_a_body_is_read_one_time() {
         (callee, layout)
     };
     assert_eq!(state(1), state(3));
+}
+
+// Batch 7d, part 1.1 (design 38.1): two facts fold only if their full texts are equal.
+#[test]
+fn a_change_after_the_cut_point_splits_the_fold() {
+    let before = "pub fn f(x: u32) -> u32 {\n    x\n}\npub fn g(x: u32) -> u32 {\n    x\n}\n";
+    let long = "if x == 1 { return x.wrapping_add(1).wrapping_add(2).wrapping_add(3).wrapping_add(4).wrapping_add(5); }";
+    let after = before.replace("{\n    x\n}", &format!("{{\n    {long}\n    x\n}}"));
+    let texts = descriptions(&run_derived(before, &after, &[]));
+    assert!(texts.iter().any(|t| t.starts_with("2 site(s): added early exit `if x == 1") && t.contains('…')), "{texts:?}");
+    // The needle is after the cut point of the text: the two facts stay apart.
+    let needle = after.replacen("wrapping_add(5)", "wrapping_sub(5)", 1);
+    let report = run_derived(before, &needle, &[]);
+    let texts = descriptions(&report);
+    assert!(texts.iter().all(|t| !t.contains("site(s)")), "{texts:?}");
+    assert_eq!(texts.iter().filter(|t| t.starts_with("added early exit `if x == 1")).count(), 2, "{texts:?}");
+    // The text output does not merge them either ("× 2").
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(!text.contains("× 2"), "{text}");
+}
+
+// Batch 7d, part 1.1: the merge of the text output ("× N") compares the full texts.
+#[test]
+fn the_merge_of_the_text_output_compares_the_full_texts() {
+    let fact = |id: &str, content: &str| semilla_core::Fact {
+        id: id.into(),
+        at: Some(Anchor::item(&format!("demo::{id}"))),
+        part: "comment".into(),
+        description: "changed comment `a…` → `b…`".into(),
+        content: Some(content.into()),
+        status: "derived".into(),
+        category: Category::Docs,
+        compare: Compare::NoCode,
+        ..Default::default()
+    };
+    let mut report = run_derived("pub fn f() {}\n", "pub fn f() {}\n", &[]);
+    report.facts = vec![fact("f1", "- a x\n+ b x"), fact("f2", "- a y\n+ b y"), fact("f3", "- a x\n+ b x")];
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("f1 derived: changed comment `a…` → `b…` [docs · no code] × 2 (also f3)"), "{text}");
+    assert!(text.contains("  ◆ f2 derived: changed comment `a…` → `b…` [docs · no code]\n"), "{text}");
+}
+
+// Batch 7d, part 1.2 (design 38.2): the inner statements of a deleted statement and the added
+// statements of the body.
+#[test]
+fn a_restructured_body_gives_the_inner_compare() {
+    let with = "fn with(c: &core::cell::Cell<u32>, f: impl FnOnce(&core::cell::Cell<u32>)) {\n    f(c)\n}\n";
+    let before = format!("pub fn run(c: &core::cell::Cell<u32>) {{\n    with(c, |c| {{\n        let k = c.get();\n        if k == 1 {{ c.set(k.wrapping_add(2).wrapping_mul(7)); }} else {{ c.set(k & 3); }}\n    }});\n}}\n{with}");
+    let after = format!("pub fn run(c: &core::cell::Cell<u32>) {{\n    let k = c.get();\n    if k == 1 {{ c.set(k.wrapping_add(2).wrapping_mul(7)); }} else {{ c.set(k & 3); }}\n}}\n{with}");
+    let texts = descriptions(&run_derived(&before, &after, &[]));
+    assert!(texts.iter().any(|t| t.starts_with("added `if` `if k == 1") && t.contains("(the same text as an inner statement of the deleted `with(…)`) at `demo::run/S1`")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("deleted statement `with(c, |c|") && t.contains("(each inner statement is an added statement of the body, with the same text) at `demo::run/S0`")), "{texts:?}");
+    // A needle in the cut part of the text shows in the fact.
+    let needle = after.replace("k & 3", "k | 3");
+    let texts = descriptions(&run_derived(&before, &needle, &[]));
+    assert!(texts.iter().any(|t| t.starts_with("added `if` `if k == 1") && t.contains("(an inner statement of the deleted `with(…)`, except: `…else { c.set(k & 3); }` → `…else { c.set(k | 3); }`)")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("(inner statements: 1 with the same text as an added statement; 1 with a change in an added statement)")), "{texts:?}");
+    // The reverse step: the statements go into a closure.
+    let texts = descriptions(&run_derived(&needle, &before, &[]));
+    assert!(texts.iter().any(|t| t.starts_with("deleted statement `if k == 1") && t.contains("(an inner statement of the added `with(…)`, except: `…else { c.set(k | 3); }` → `…else { c.set(k & 3); }`)")), "{texts:?}");
+}
+
+// Batch 7d, part 1.3 (design 38.3): an item that gets a twin keeps its key for the twin with
+// the old text. No rename fact and no fact "can no longer use the old path" shows.
+#[test]
+fn a_new_cfg_twin_keeps_the_key_of_the_item() {
+    let before = "pub struct Slab {\n    entries: Vec<u32>,\n}\n\nimpl Slab {\n    pub fn capacity(&self) -> usize {\n        self.entries.capacity()\n    }\n}\n";
+    let after = before.replace("    pub fn capacity", "    #[cfg(feature = \"std\")]\n    pub fn capacity").replace("    }\n}\n", "    }\n\n    /// Return the capacity.\n    #[cfg(not(feature = \"std\"))]\n    pub fn capacity(&self) -> usize {\n        self.entries.capacity() + 0\n    }\n}\n");
+    let twin = "`demo::Slab::capacity#1` (a twin of `demo::Slab::capacity` under `cfg(not(feature = \"std\"))`) with the body: `{ self.entries.capacity() + 0 }`";
+    for (old, new, words) in [(before, after.as_str(), ["added", "added"]), (after.as_str(), before, ["removed", "removed"])] {
+        let texts = descriptions(&run_derived(old, new, &[]));
+        assert!(texts.iter().all(|t| !t.starts_with("renamed") && !t.contains("is now") && !t.starts_with("changed code")), "{texts:?}");
+        assert!(texts.contains(&format!("attributes of `demo::Slab::capacity`: {} `# [cfg (feature = \"std\")]`", words[0])), "{texts:?}");
+        assert!(texts.contains(&format!("{} {twin}", words[1])), "{texts:?}");
+        assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+}
+
+// Batch 7d, part 4.3 (design 38.6): a new version of a dependency has no compare.
+#[test]
+fn a_dependency_version_has_no_compare() {
+    let lib = ("src/lib.rs", "pub fn f() {}\n");
+    let lock = |version: &str| format!("version = 4\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\ndependencies = [\"serde\"]\n\n[[package]]\nname = \"serde\"\nversion = \"{version}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n");
+    let before = [("Cargo.toml", MANIFEST_V0.to_string()), ("Cargo.lock", lock("1.0.1")), (lib.0, lib.1.to_string())];
+    let after = [("Cargo.toml", MANIFEST_V0.replace("1.0.1", "1.0.2")), ("Cargo.lock", lock("1.0.2")), (lib.0, lib.1.to_string())];
+    let as_refs = |files: &[(&'static str, String)]| files.iter().map(|(path, text)| (*path, text.clone())).collect::<Vec<_>>();
+    let (b, a) = (as_refs(&before), as_refs(&after));
+    let b: Vec<(&str, &str)> = b.iter().map(|(p, t)| (*p, t.as_str())).collect();
+    let a: Vec<(&str, &str)> = a.iter().map(|(p, t)| (*p, t.as_str())).collect();
+    let report = run_derived_files(&b, &a, &[("demo::f", equal("n0"))]);
+    let manifest: Vec<&semilla_core::Fact> = report.facts.iter().filter(|fact| fact.category == Category::Manifest).collect();
+    assert_eq!(manifest.len(), 2, "{:#?}", report.facts);
+    for fact in manifest {
+        assert_eq!(fact.compare, Compare::NoCompare, "{fact:#?}");
+        assert_eq!(fact.note.as_deref(), Some("no compare: Semilla does not compare the code of a dependency"), "{fact:#?}");
+    }
+}
+
+// Batch 7d, part 4.4 (design 38.7): a local macro with the name of a standard macro.
+#[test]
+fn a_local_macro_with_a_standard_name_says_what_it_replaces() {
+    let before = "pub fn f(x: u32) -> bool {\n    matches!(x, 1)\n}\npub fn g(x: u32) -> bool {\n    std::matches!(x, 2)\n}\n";
+    let after = format!("macro_rules! matches {{\n    ($e:expr, $p:pat) => {{ true }};\n}}\n{before}");
+    let texts = descriptions(&run_derived(before, &after, &[]));
+    assert!(texts.contains(&"added macro `matches` (it replaces the standard macro `matches!`; each call in its scope: `demo::f`)".to_string()), "{texts:?}");
+    let texts = descriptions(&run_derived(&after, before, &[]));
+    assert!(texts.contains(&"removed macro `matches` (the standard macro `matches!` is used again; each call in its scope: `demo::f`)".to_string()), "{texts:?}");
+    // A different name: the old text.
+    let other = after.replace("macro_rules! matches", "macro_rules! same");
+    assert!(descriptions(&run_derived(before, &other, &[])).contains(&"added macro `same`".to_string()));
+}
+
+// Batch 7d, part 4.1 (design 38.5): no line of the text output has more than 500 characters.
+#[test]
+fn a_long_line_is_cut_and_says_so() {
+    let list: Vec<String> = (0..80).map(|n| format!("demo::item_{n}")).collect();
+    let line = format!("      note: this body uses {}, which Semilla did not check", list.join(", "));
+    let cut = views::fit_line(&line);
+    assert!(cut.chars().count() <= views::LINE_MAX, "{cut}");
+    assert!(cut.starts_with("      note: this body uses demo::item_0, demo::item_1,") && cut.contains("items more; `semilla status --verbose` shows the full line)") && cut.ends_with("demo::item_79, which Semilla did not check"), "{cut}");
+    let hidden: usize = cut.split(" (").nth(1).and_then(|rest| rest.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
+    assert_eq!(hidden + cut.matches("demo::item_").count(), 80, "{cut}");
+    let text = "x".repeat(900);
+    let cut = views::fit_line(&text);
+    assert!(cut.chars().count() <= views::LINE_MAX && cut.contains("(500 characters more; `semilla status --verbose` shows the full line)"), "{cut}");
+    assert_eq!(views::fit_line("short"), "short");
+}
+
+// Batch 7d, part 4.2 (design 38.4): a spotlight line that is equal for a run of facts shows one
+// time, after the last fact of the run.
+#[test]
+fn an_equal_spotlight_line_of_a_run_shows_one_time() {
+    let why = "a build setting: the key can change the code of each body; Semilla compares the bodies of the checked configurations only, and a reviewer reads each such key";
+    let fact = |n: usize| semilla_core::Fact {
+        id: format!("f{n}"),
+        file: Some("Cargo.toml".into()),
+        part: format!("Cargo.toml:lints.clippy.lint_{n}"),
+        description: format!("Cargo.toml: lints.clippy.lint_{n} added (\"warn\")"),
+        status: "derived".into(),
+        category: Category::Manifest,
+        compare: Compare::NoCode,
+        spotlight: true,
+        spotlight_why: Some(why.into()),
+        reason: Some("the lints of the project".into()),
+        reason_key: Some("kind:build-setting".into()),
+        reason_covers: 7,
+        ..Default::default()
+    };
+    let mut report = run_derived("pub fn f() {}\n", "pub fn f() {}\n", &[]);
+    report.facts = (1..=7).map(fact).collect();
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert_eq!(text.matches(why).count(), 1, "{text}");
+    let at = text.find("◆ f7 derived").unwrap();
+    assert!(text[at..].contains("      spotlight of f1 to f7: a build setting"), "{text}");
+    assert!(!text[..at].contains("spotlight"), "{text}");
+    // A different reason breaks the run.
+    report.facts[3].reason = Some("a different reason".into());
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("spotlight of f1 to f3: ") && text.contains("spotlight of f5 to f7: ") && text.contains("      spotlight: a build setting"), "{text}");
+}
+
+// Batch 7d, part 5.1 (design 38.10): a rename in a module with two files. A twin in a file that
+// no checked unit reads gives no compiled body, so the key of the checked twin gets its name.
+#[test]
+fn a_rename_in_twin_module_files_maps_the_checked_twin() {
+    let lib = "#[cfg(unix)]\n#[path = \"sys/unix.rs\"]\nmod sys;\n#[cfg(windows)]\n#[path = \"sys/windows.rs\"]\nmod sys;\npub fn page() -> usize {\n    sys::page_size()\n}\n";
+    let files = |name: &str| vec![("Cargo.toml", MANIFEST.to_string()), ("src/lib.rs", lib.replace("page_size", name)), ("src/sys/unix.rs", format!("pub fn {name}() -> usize {{\n    4096\n}}\n")), ("src/sys/windows.rs", format!("pub fn {name}() -> usize {{\n    8192\n}}\n"))];
+    let load = |name: &str| {
+        let owned = files(name);
+        let refs: Vec<(&str, &str)> = owned.iter().map(|(path, text)| (*path, text.as_str())).collect();
+        load_files(&refs)
+    };
+    let ((_a, before), (_b, after)) = (load("page_size"), load("page_bytes"));
+    assert!(before.items.contains_key("demo::sys#0::page_size") && before.items.contains_key("demo::sys#1::page_size"), "{:?}", before.items.keys().collect::<Vec<_>>());
+    let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> { pairs.iter().map(|(old, new)| (old.to_string(), new.to_string())).collect() };
+    let renames = map(&[("demo::sys#0::page_size", "demo::sys#0::page_bytes"), ("demo::sys#1::page_size", "demo::sys#1::page_bytes")]);
+    // With no list of the read files, each twin can give the body: the keys stay.
+    assert_eq!(checks::body_renames(&renames, &before, &after), renames);
+    let read: BTreeSet<String> = ["src/lib.rs", "src/sys/unix.rs"].iter().map(|file| file.to_string()).collect();
+    assert_eq!(checks::body_renames_read(&renames, &before, &after, [Some(&read), Some(&read)]), map(&[("demo::sys::page_size", "demo::sys::page_bytes"), ("demo::sys#1::page_size", "demo::sys#1::page_bytes")]));
 }

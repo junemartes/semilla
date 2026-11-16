@@ -4,6 +4,8 @@
 //! The test builds the MIR driver first. It uses Z3 from `.semilla/tools/z3` of this workspace
 //! when it exists. Each test repository has its own cache folder (`SEMILLA_CACHE_DIR`).
 
+mod common;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -76,12 +78,12 @@ fn git_out(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn setup() -> tempfile::TempDir {
+fn setup() -> common::TestDir {
     // The MIR driver is a separate binary of the workspace.
     let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
     assert!(status.success(), "build the MIR driver");
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::TestDir::new();
     let repo = &dir.path().join("repo");
     write(repo, "Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
     write(repo, ".gitignore", "/target\n/.semilla/\n");
@@ -401,7 +403,7 @@ const PLAN_TARGET: &str = "pub fn total(v: &[u32]) -> u32 {\n    if v.is_empty()
 fn plan_flow() {
     let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
     assert!(status.success(), "build the MIR driver");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::TestDir::new();
     let repo = &dir.path().join("repo");
     // No `.semilla/` line in `.gitignore`: semilla keeps its state out of the trees by itself.
     write(repo, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
@@ -479,7 +481,7 @@ const MONEY_TARGET: &str = "pub fn format_cents(cents: u64) -> String {\n    let
 fn plan_draft_covers_every_change() {
     let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
     assert!(status.success(), "build the MIR driver");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::TestDir::new();
     let repo = &dir.path().join("repo");
     write(repo, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
     write(repo, ".gitignore", "/target\n");
@@ -544,7 +546,7 @@ fn plan_draft_covers_every_change() {
 fn a_pair_refusal_stays_across_applies() {
     let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
     assert!(status.success(), "build the MIR driver");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::TestDir::new();
     let repo = &dir.path().join("repo");
     write(repo, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
     write(repo, ".gitignore", "/target\n");
@@ -1155,7 +1157,7 @@ fn one_command_for_each_step() {
     let verbose = run(repo, &["status", "HEAD", "--verbose"], 0);
     assert!(verbose.contains("f1 derived") && verbose.contains("\nresult: accepted · 2 steps"), "{verbose}");
     // The default report is short. `--full` adds the change tree and the sources.
-    let out = tempfile::tempdir().unwrap();
+    let out = common::TestDir::new();
     let (short, full) = (out.path().join("short.md"), out.path().join("full.md"));
     run(repo, &["review", "HEAD", "--md", short.to_str().unwrap()], 0);
     run(repo, &["review", "HEAD", "--md", full.to_str().unwrap(), "--full"], 0);
@@ -5181,7 +5183,7 @@ fn rules_5u_probe(repo: &Path, old: &str, new: &str) -> String {
     out
 }
 
-fn rules_5u_setup() -> tempfile::TempDir {
+fn rules_5u_setup() -> common::TestDir {
     let dir = setup();
     let repo = &dir.path().join("repo");
     write(repo, "crates/shop-core/src/lib.rs", &format!("{FEES}{RULES_5U}"));
@@ -5309,7 +5311,8 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     // Each covered spotlight says how many spotlights the reason covers.
     let out = run(repo, &["step", "tidy the small module", "--reason", "kind:inactive-code=the 16 bit target is not in the checks", "--reason", "shop_core::small::LIMIT=the limit of the small target is 8"], 0);
     assert!(out.starts_with("accepted: "), "{out}");
-    assert_eq!(out.matches("; reason (key `kind:inactive-code`; one reason covers 11 spotlights of the kind inactive-code): \"the 16 bit target is not in the checks\"\n").count(), 11, "{out}");
+    // Design 38.4: a run of facts with an equal spotlight line shows the line one time.
+    assert_eq!(out.matches("; reason (key `kind:inactive-code`; one reason covers 11 spotlights of the kind inactive-code): \"the 16 bit target is not in the checks\"\n").count(), 4, "{out}");
     assert!(out.contains("; reason: \"the limit of the small target is 8\"\n"), "{out}");
     let md = repo.join(".semilla/review.md");
     run(repo, &["review", "--md", md.to_str().unwrap()], 0);
@@ -5744,7 +5747,9 @@ fn a_manifest_step_gets_each_reason_key_one_time_in_one_round() {
     let (code, out) = run_env(repo, &["step", "change the build", "--reason", "kind:build-setting=the build needs it"], &[]);
     assert_eq!(code, 0, "{out}");
     assert!(out.starts_with("accepted: step 0"), "{out}");
-    assert_eq!(out.matches("one reason covers 4 spotlights of the kind build-setting").count(), 4, "{out}");
+    // Design 38.4: the equal spotlight line of the run of 4 manifest facts shows one time.
+    assert_eq!(out.matches("one reason covers 4 spotlights of the kind build-setting").count(), 1, "{out}");
+    assert!(out.contains("      spotlight of f"), "{out}");
 }
 
 #[test]
@@ -6092,4 +6097,38 @@ fn a_feature_that_only_one_side_has_does_not_stop_the_step() {
     let again = out.lines().find_map(|line| line.strip_prefix("run again: ")).unwrap_or_else(|| panic!("{out}")).replace("<why>", "the feature has a new name");
     let (code, out) = shell(repo, &again);
     assert!(code == 0 && out.starts_with("accepted: step 0") && out.contains(gap), "{out}");
+}
+
+/// Batch 7d, part 1.1 (design 38.1): two sites with the same head text and a different inner
+/// line do not fold. A change of the inner line in one site changes the text output and the
+/// Markdown report.
+#[test]
+fn a_fold_never_hides_an_inner_line() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub fn first(v: &[u32]) -> u32 {\n    let mut sum = 0;\n    sum\n}\n\npub fn second(v: &[u32]) -> u32 {\n    let mut sum = 0;\n    sum\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod loops;\n");
+    write(repo, "crates/shop-core/src/loops.rs", base);
+    git(repo, &["add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "loops"]);
+    let looped = |inner: &str| format!("    for (index, value) in v.iter().enumerate() {{\n        if index > 0 {{\n            {inner}\n        }}\n    }}\n    sum\n");
+    let outputs = |second: &str| -> (String, String) {
+        let function = |name: &str, inner: &str| format!("pub fn {name}(v: &[u32]) -> u32 {{\n    let mut sum = 0;\n{}}}\n", looped(inner));
+        let text = format!("{}\n{}", function("first", "sum += value;"), function("second", second));
+        write(repo, "crates/shop-core/src/loops.rs", &text);
+        let step = run(repo, &["step", "add the loops"], 0);
+        let md = repo.join(".semilla/review.md");
+        run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+        let report = std::fs::read_to_string(&md).unwrap();
+        run(repo, &["undo"], 0);
+        (step, report)
+    };
+    let (honest, honest_md) = outputs("sum += value;");
+    assert!(honest.contains("2 site(s): added loop `for (index, value) in v.iter().enumerate() { if index > 0 {…`"), "{honest}");
+    let (needle, needle_md) = outputs("sum -= value;");
+    assert!(!needle.contains("site(s): added loop"), "{needle}");
+    assert_eq!(needle.matches("added loop `for (index, value) in v.iter().enumerate() { if index > 0 {…`").count(), 2, "{needle}");
+    // The Markdown report shows the source of each site.
+    assert!(needle_md.contains("sum -= value;") && needle_md.contains("sum += value;"), "{needle_md}");
+    assert!(!honest_md.contains("sum -= value;"), "{honest_md}");
 }

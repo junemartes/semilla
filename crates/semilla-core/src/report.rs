@@ -349,6 +349,26 @@ impl Fact {
         !self.is_api_note() && (self.description.contains("(the public API can change") || self.description.contains("(the public API changes"))
     }
 
+    /// The place of the fact in the list of a step (design 37.18). The text output and the
+    /// Markdown report (design 38.9) use it. The fact numbers do not change.
+    /// - 0: a build code change that is no manifest fact (design 28.3: read this change first);
+    /// - 1: an edit of a body with `code different`;
+    /// - 2: a declaration, an added item, a removed item;
+    /// - 3: each other code fact;
+    /// - 4: a manifest fact;
+    /// - 5: a docs fact, a file fact, and each other fact with `no code`.
+    pub fn text_rank(&self) -> u8 {
+        match self.category {
+            Category::Manifest => 4,
+            _ if self.build_code_change => 0,
+            Category::Docs | Category::File => 5,
+            _ if self.compare == Compare::NoCode => 5,
+            Category::Value | Category::Logic | Category::ControlFlow | Category::Macro | Category::Text if self.compare == Compare::CodeDifferent => 1,
+            Category::Declaration | Category::Added | Category::Removed => 2,
+            _ => 3,
+        }
+    }
+
     /// The place of the fact in a group of the review report (design 35.7, 36.3): a
     /// spotlight, a mismatch mark, a public API change, then the compare results.
     pub fn order(&self) -> u8 {

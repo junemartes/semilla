@@ -95,6 +95,55 @@ pub(crate) fn call_text(item: &Item) -> String {
 }
 
 /// The name of a macro definition: `same` for `m::same!` and for `m::same!#1`.
+/// The macros of the standard prelude (design 38.7). A local `macro_rules!` with one of these
+/// names replaces the standard macro for each call in its scope.
+const STD_MACROS: &[&str] = &[
+    "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "matches", "vec", "format", "format_args", "write", "writeln", "print", "println", "eprint",
+    "eprintln", "panic", "unreachable", "unimplemented", "todo", "concat", "stringify", "line", "column", "file", "module_path", "cfg", "env", "option_env", "include", "include_str",
+    "include_bytes", "compile_error", "dbg",
+];
+
+/// The most call sites that the text of a standard macro name names one by one.
+const STD_CALL_NAMES: usize = 6;
+
+/// The text for a local macro with the name of a standard macro (design 38.7): " (it replaces
+/// the standard macro `matches!` for each call in its scope: `a::f`, `a::g`)". The scope is
+/// the module of the definition and its inner modules, after the definition in its own file.
+/// A call with a path (`std::matches!`) is not in the list. An empty text for each other name.
+fn std_macro_text(name: &str, definition: &Item, ws: &Workspace, added: bool) -> String {
+    if !STD_MACROS.contains(&name) {
+        return String::new();
+    }
+    let module = definition.path.rsplit_once("::").map(|(module, _)| module).unwrap_or("");
+    let calls = |source: &str| -> bool {
+        let pattern = format!("{name}!");
+        source.match_indices(&pattern).any(|(at, _)| {
+            let before = source[..at].chars().last();
+            !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':')
+        })
+    };
+    let mut sites: Vec<&str> = ws
+        .items
+        .values()
+        .filter(|item| item.crate_name == definition.crate_name && item.kind != ItemKind::Macro && item.kind != ItemKind::Mod && item.kind != ItemKind::Impl)
+        .filter(|item| item.path.starts_with(&format!("{module}::")) && (item.file != definition.file || item.line_start > definition.line_end))
+        .filter(|item| calls(&item.source))
+        .map(|item| item.path.as_str())
+        .collect();
+    sites.sort();
+    let count = sites.len();
+    let mut names: Vec<String> = sites.iter().take(STD_CALL_NAMES).map(|site| format!("`{site}`")).collect();
+    if count > STD_CALL_NAMES {
+        names.push(format!("and {} more", count - STD_CALL_NAMES));
+    }
+    let list = if count == 0 { "no call in its scope".to_string() } else { format!("each call in its scope: {}", names.join(", ")) };
+    if added {
+        format!(" (it replaces the standard macro `{name}!`; {list})")
+    } else {
+        format!(" (the standard macro `{name}!` is used again; {list})")
+    }
+}
+
 fn definition_name(item: &Item) -> String {
     item.path.rsplit("::").next().unwrap_or("").split('!').next().unwrap_or("").to_string()
 }
@@ -272,9 +321,9 @@ pub(crate) fn apply(step: &Step, edits: &[Edit], fact_of: &[Option<usize>], befo
                 // The text with no public API note at its end.
                 let plain = fact.description.split(" (the public API ").next().unwrap_or_default().to_string();
                 if plain == format!("added {path}") {
-                    fact.description = format!("added macro `{name}`");
+                    fact.description = format!("added macro `{name}`{}", std_macro_text(&name, item, after, true));
                 } else if plain == format!("removed {path}") {
-                    fact.description = format!("removed macro `{name}`");
+                    fact.description = format!("removed macro `{name}`{}", std_macro_text(&name, item, before, false));
                 } else if let Some(rest) = fact.description.strip_prefix("changed macro or signature ") {
                     fact.description = format!("changed macro `{name}`: {rest}");
                 }

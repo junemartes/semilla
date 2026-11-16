@@ -5,6 +5,8 @@
 //! A change script applies a known list of changes. The test knows each change, so it can
 //! find the fact of each change in the output.
 
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -356,7 +358,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     changes.push(Change { name: "body edit: the control flow of a function", facts: vec![expect("control flow", "code different", &["added early exit `if acc > 4000 { return acc; }` at `depot::shape::shape_step2/S2`"])] });
     let line = format!("        acc = acc.wrapping_add({});\n", mark(8, SCORE));
     replace_one(t, &cache, &line, &format!("        if seed > 3 {{\n    {line}        }}\n"));
-    changes.push(Change { name: "body edit: the control flow of a trait method", facts: vec![expect("control flow", "code different", &["deleted statement `acc = acc.wrapping_add(1167)` at `depot::cache::<CacheRecord as CacheScore>::score/S1`"]), expect("control flow", "code different", &["added `if` `if seed > 3 { acc = acc.wrapping_add(1167); }` at `depot::cache::<CacheRecord as CacheScore>::score/S1`"])] });
+    changes.push(Change { name: "body edit: the control flow of a trait method", facts: vec![expect("control flow", "code different", &["deleted statement `acc = acc.wrapping_add(1167)` (the same text as an inner statement of the added `if seed > 3 { acc = acc.wrapping_add(11…`) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"]), expect("control flow", "code different", &["added `if` `if seed > 3 { acc = acc.wrapping_add(1167); }` (each inner statement is a deleted statement of the body, with the same text) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"])] });
 
     // Added items: functions, a type with an impl, a method, a constant, and a trait impl.
     let blend = generated_fn("Blends two numbers. The larger number goes first.", "cache_blend", 8, 13, 9).replace("-> u32 {\n", "-> u32 {\n    let (x, y) = match x.cmp(&y) {\n        Ordering::Less => (y, x),\n        Ordering::Equal | Ordering::Greater => (x, y),\n    };\n");
@@ -558,11 +560,11 @@ fn write_tree(folder: &Path, tree: &Tree) {
 }
 
 /// Makes a repository with the base tree in one commit. The folder `repo` has the repository.
-fn setup() -> tempfile::TempDir {
+fn setup() -> common::TestDir {
     // The MIR driver is a separate binary of the workspace.
     let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
     assert!(status.success(), "build the MIR driver");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::TestDir::new();
     let repo = &dir.path().join("repo");
     write_tree(repo, &base_tree());
     git(repo, &["init", "-q", "-b", "main"]);
@@ -632,7 +634,8 @@ fn check_step(repo: &Path, changes: &[Change]) -> (usize, Vec<Fact>) {
     // The output is small: at most two facts for each change, and no very long line.
     assert!(facts.len() <= 2 * changes.len(), "{} facts for {} changes:\n{output}", facts.len(), changes.len());
     let longest = output.lines().map(|line| line.chars().count()).max().unwrap_or(0);
-    assert!(longest <= 2000, "a line has {longest} characters:\n{output}");
+    // Design 38.5: no line of the text output has more than 500 characters.
+    assert!(longest <= 500, "a line has {longest} characters:\n{output}");
     (runs, facts)
 }
 

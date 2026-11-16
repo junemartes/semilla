@@ -588,6 +588,18 @@ fn impl_member_edits(before: &Item, after: &Item, renames: &Renames) -> Option<I
                 }
             })
             .collect();
+        // Two methods with one name are twins under `cfg` (design 38.3). Each twin is an item
+        // with its own edit, so the second key gets a number.
+        let mut members = members;
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for (key, _, _) in members.iter_mut().filter(|(key, _, _)| key.starts_with("fn ")) {
+            let mut number = 0;
+            let plain = key.clone();
+            while !seen.insert(key.clone()) {
+                number += 1;
+                *key = format!("{plain}#{number}");
+            }
+        }
         let keys: BTreeSet<&String> = members.iter().map(|(key, _, _)| key).collect();
         (keys.len() == members.len()).then_some(members)
     };

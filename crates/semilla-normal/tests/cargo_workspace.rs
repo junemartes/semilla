@@ -425,14 +425,9 @@ fn two_versions_of_a_two_crate_workspace() {
     assert!(
         matches!(status(&results, "app_b::uses_helper"), BodyStatus::Equal { level, .. } if level == "n1")
     );
-    // The guard clause needs N4.
-    match status(&results, "app_b::get") {
-        BodyStatus::Equal { level, proof } => {
-            assert_eq!(level, "n4");
-            assert!(proof.contains(&"ite-not".to_string()), "{proof:?}");
-        }
-        other => panic!("app_b::get: {other:?}"),
-    }
+    // The inverted guard clause: the compare is the level N0 with the rename map (design 35.4).
+    // The level N4 is gone (batch 7d, design 38.12), so the body is different.
+    assert!(matches!(status(&results, "app_b::get"), BodyStatus::Different { .. }), "{:?}", status(&results, "app_b::get"));
     // A real change stays different. The control flow is the same.
     assert_eq!(status(&results, "app_b::price"), &BodyStatus::Different { cfg_changed: false });
     // The const of an included file changed its value: the body that uses it differs (probe 1 of

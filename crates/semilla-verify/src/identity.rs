@@ -522,6 +522,15 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
                 None => cause,
             });
         }
+        let function = |ws: &Workspace, path: &str| ws.items.get(path).is_some_and(|item| item.kind == ItemKind::Fn && item.body.is_some());
+        let uncompiled = body_index.available && function(input.before, &pair.old) && function(input.after, &pair.new) && !body_index.has_body(&pair.new) && !body_index.has_body(&pair.old);
+        if uncompiled {
+            let text = format!("{} no checked configuration compiles `{}`", crate::uncompiled::NO_COMPARE, pair.new);
+            note = Some(match note.take() {
+                Some(old) => format!("{old}; {text}"),
+                None => text,
+            });
+        }
         identity_facts.push(Fact {
             at: Some(Anchor::item(&pair.old)),
             file: input.before.items.get(&pair.old).map(|item| item.file.clone()),
@@ -529,8 +538,9 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
             description: crate::facts::with_ascii_forms(&format!("{verb} `{}` → `{}`{with_lines}", pair.old, pair.new)),
             status: "derived".into(),
             category: if pair.op == "rename" { Category::Rename } else { Category::Move },
-            // The bodies of the fact are the derived bodies that show the name (design 35).
-            compare: if result.affected.is_empty() { Compare::CodeEqual } else { Compare::CodeDifferent },
+            // The bodies of the fact are the derived bodies that show the name (design 35). A
+            // function that no checked configuration compiles has no compare (design 38.10).
+            compare: if !result.affected.is_empty() { Compare::CodeDifferent } else if uncompiled { Compare::NoCompare } else { Compare::CodeEqual },
             affected: result.affected.clone(),
             spotlight: spotlight_why.is_some(),
             spotlight_why,
@@ -680,4 +690,111 @@ pub fn name_targets(item: &semilla_syntax::Item, workspace: &Workspace) -> BTree
         }
     }
     out
+}
+
+/// The plain path of a twin key (`a::f#1` → `a::f`), or `None` for a path with no twin number.
+pub(crate) fn twin_base(path: &str) -> Option<&str> {
+    let (base, number) = path.rsplit_once('#')?;
+    (!number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) && !base.is_empty()).then_some(base)
+}
+
+/// The new keys of the twins of a step (design 38.3). An item `P` of one tree that gets twins
+/// (`P#0`, `P#1`) in the other tree keeps its key for the twin with its text: the key `P#N` of
+/// that twin becomes `P`. The compare ignores the attributes, the docs, and the visibility. A
+/// key changes only for an item with no inner items, and only if exactly one twin has the
+/// text. `None` if no key changes: then the trees stay as they are.
+pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace)> {
+    let text = |item: &semilla_syntax::Item| without_free_parts(&without_docs(&item.text));
+    // The keys of `twins` that take the plain path: (plain path, twin key).
+    let keys = |single: &Workspace, twins: &Workspace| -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut bases: BTreeMap<&str, Vec<&semilla_syntax::Item>> = BTreeMap::new();
+        for item in twins.items.values() {
+            if let Some(base) = twin_base(&item.path) {
+                bases.entry(base).or_default().push(item);
+            }
+        }
+        for (base, found) in bases {
+            let Some(old) = single.items.get(base) else { continue };
+            if twins.items.contains_key(base) || found.len() < 2 || single.items.keys().any(|key| twin_base(key) == Some(base)) {
+                continue;
+            }
+            let inner = |ws: &Workspace, path: &str| ws.items.keys().any(|key| key.len() > path.len() && key.starts_with(path) && matches!(key.as_bytes()[path.len()], b':' | b'.'));
+            if inner(single, base) {
+                continue;
+            }
+            let same: Vec<&&semilla_syntax::Item> = found.iter().filter(|item| item.kind == old.kind && text(item) == text(old) && !inner(twins, &item.path)).collect();
+            if let [twin] = same[..] {
+                out.push((base.to_string(), twin.path.clone()));
+            }
+        }
+        out
+    };
+    let (from_before, from_after) = (keys(before, after), keys(after, before));
+    if from_before.is_empty() && from_after.is_empty() {
+        return None;
+    }
+    let apply = |ws: &Workspace, keys: &[(String, String)]| -> Workspace {
+        let mut ws = ws.clone();
+        for (base, key) in keys {
+            if let Some(mut item) = ws.items.remove(key) {
+                item.path = base.clone();
+                ws.items.insert(base.clone(), item);
+            }
+        }
+        ws.body_index = Default::default();
+        ws
+    };
+    Some((apply(before, &from_after), apply(after, &from_before)))
+}
+
+/// The text of a twin that a step adds or removes (design 38.3): "(a twin of `P` under
+/// `cfg(…)`) with the body: `{ … }`". `None` if `path` is not such a twin: the tree must have
+/// the plain path `P` too, which only [`twin_keys`] makes.
+pub(crate) fn twin_text(ws: &Workspace, path: &str) -> Option<(String, Option<String>)> {
+    let base = twin_base(path)?;
+    ws.items.get(base)?;
+    let item = ws.items.get(path)?;
+    // The `cfg` attributes of the source, as the source writes them.
+    let source = one_line_source(&item.source);
+    let mut conditions = Vec::new();
+    let mut rest = source.as_str();
+    while let Some(at) = rest.find("#[cfg(") {
+        let tail = &rest[at + 2..];
+        let mut depth = 0usize;
+        let end = tail.char_indices().find(|(_, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            *c == ']' && depth == 0
+        });
+        let Some((end, _)) = end else { break };
+        conditions.push(format!("`{}`", &tail[..end]));
+        rest = &tail[end..];
+    }
+    let under = if conditions.is_empty() { String::new() } else { format!(" under {}", conditions.join(" and ")) };
+    let body = item.body.as_ref().map(|_| {
+        let at = source.find('{').unwrap_or(0);
+        source[at..].to_string()
+    });
+    let (body_text, content) = match body {
+        Some(body) if body.chars().count() > BODY_TEXT => {
+            let cut: String = body.chars().take(BODY_TEXT).collect();
+            (format!(" with the body: `{}…`", cut.trim_end()), Some(format!("+ {body}")))
+        }
+        Some(body) => (format!(" with the body: `{body}`"), None),
+        None => (String::new(), None),
+    };
+    Some((format!(" (a twin of `{base}`{under}){body_text}"), content))
+}
+
+/// The most characters of a twin body in a fact text. The report content has the full body.
+const BODY_TEXT: usize = 200;
+
+/// A source text on one line, with no doc comment line.
+fn one_line_source(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().filter(|line| !line.trim_start().starts_with("///") && !line.trim_start().starts_with("//!")).collect();
+    semilla_syntax::tree::one_line(&lines.join("\n"))
 }

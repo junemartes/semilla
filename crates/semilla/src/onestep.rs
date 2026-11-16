@@ -476,12 +476,12 @@ impl App {
         let sandbox_line: String = crate::oracle::build_warnings().iter().map(|warning| format!("  ! {warning}\n")).collect();
         // Build code that the change set changes (design 28): the step that changes it has the
         // full line, and each later step has the short form.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("  {line}\n")).unwrap_or_default());
+        let sandbox_line = format!("{sandbox_line}{}", result.report.build_code.as_ref().and_then(|note| note.step_line_with(index, semilla_normal::sandbox::missing().map(|missing| missing.state()).as_deref())).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).unwrap_or_default());
         // A configuration of the default list with no check in this step (batch 5s, B1): one
         // line. A step with a check in each configuration has no line.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("  {line}\n")).collect::<String>());
+        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).collect::<String>());
         // A configuration that Semilla added for a joint state of this step (batch 5u, part C): one line.
-        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("  {line}\n")).collect::<String>());
+        let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).collect::<String>());
         if !accepted {
             // Nothing is stored. The reasons first, then the command to run again.
             let mut restore = saved;

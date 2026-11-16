@@ -478,7 +478,9 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
     }
     let hit = |side: usize, span: &(String, usize, usize)| dead.iter().find(|entry| entry.side == side && entry.file == span.0 && span.1 <= entry.line && entry.line <= span.2);
     // 1. The identity claims.
-    for claim in step.claims.iter().filter(|claim| matches!(claim.op.as_str(), "rename" | "move-item")) {
+    // A derived identity (design 38.10) is no claim of the agent: its facts get `no compare`
+    // below, and the rename or the move stays one fact.
+    for claim in step.claims.iter().filter(|claim| matches!(claim.op.as_str(), "rename" | "move-item") && !claim.id.starts_with("derived-identity-")) {
         let Some(at) = &claim.at else { continue };
         let new = renames.items.get(&at.item).cloned().unwrap_or_else(|| at.item.clone());
         let found = span_of(sides[0], &Anchor::item(&at.item)).and_then(|span| hit(0, &span)).or_else(|| span_of(sides[1], &Anchor::item(&new)).and_then(|span| hit(1, &span)));

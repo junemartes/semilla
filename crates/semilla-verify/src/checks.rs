@@ -587,12 +587,24 @@ pub(crate) fn no_twin_numbers(path: &str) -> String {
 /// name with no number if no other item of its tree can have this name. Else the key stays as
 /// it is, it matches no body, and the compare result stays `code different`.
 pub fn body_renames(renames: &BTreeMap<String, String>, before: &Workspace, after: &Workspace) -> BTreeMap<String, String> {
+    body_renames_read(renames, before, after, [None, None])
+}
+
+/// [`body_renames`] with the files that a checked unit of each tree reads (design 38.10). An
+/// item in a file that no checked unit reads gives no compiled body: it does not take the
+/// name of a twin (`sys#1::f` in `sys/windows.rs` does not take `sys::f` from `sys#0::f`).
+/// `None`: the files are not known, so each item can give a body.
+pub fn body_renames_read(renames: &BTreeMap<String, String>, before: &Workspace, after: &Workspace, read: [Option<&BTreeSet<String>>; 2]) -> BTreeMap<String, String> {
     if !renames.iter().any(|(old, new)| old.contains('#') || new.contains('#')) {
         return renames.clone();
     }
     // True if only the item `path` of the tree can give a body with the name `plain`.
     let unique = |workspace: &Workspace, path: &str, plain: &str| -> bool {
-        workspace.items.iter().filter(|(other, _)| other.as_str() != path && !is_child(other, path) && !is_child(path, other)).all(|(other, item)| {
+        let read = if std::ptr::eq(workspace, before) { read[0] } else { read[1] };
+        workspace.items.iter().filter(|(other, _)| other.as_str() != path && !is_child(other, path) && !is_child(path, other)).filter(|(_, item)| read.is_none_or(|files| files.contains(&item.file)))
+            // A module gives no body: its items have their own entries.
+            .filter(|(_, item)| item.kind != semilla_syntax::ItemKind::Mod)
+            .all(|(other, item)| {
             if !other.contains('#') {
                 // An item with no number: a different path, and its name is its path.
                 return other != plain && !is_child(other, plain);
@@ -616,12 +628,16 @@ pub fn body_renames(renames: &BTreeMap<String, String>, before: &Workspace, afte
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     let mut taken: BTreeMap<String, usize> = BTreeMap::new();
     let plain: Vec<(String, String)> = renames.iter().map(|(old, new)| (no_twin_numbers(old), no_twin_numbers(new))).collect();
-    for (old, _) in &plain {
-        *taken.entry(old.clone()).or_default() += 1;
+    // A rename of an item in a file that no checked unit reads gives no body (design 38.10).
+    let compiled = |old: &str| read[0].is_none_or(|files| before.items.get(old).is_none_or(|item| files.contains(&item.file)));
+    for ((old, _), (key, _)) in plain.iter().zip(renames) {
+        if compiled(key) {
+            *taken.entry(old.clone()).or_default() += 1;
+        }
     }
     for ((old, new), (plain_old, plain_new)) in renames.iter().zip(&plain) {
         let numbered = old.contains('#') || new.contains('#');
-        if numbered && taken[plain_old] == 1 && unique(before, old, plain_old) && unique(after, new, plain_new) {
+        if numbered && compiled(old) && taken.get(plain_old) == Some(&1) && unique(before, old, plain_old) && unique(after, new, plain_new) {
             out.insert(plain_old.clone(), plain_new.clone());
         } else {
             out.insert(old.clone(), new.clone());

@@ -681,15 +681,7 @@ const SHARE_MIN: usize = 120;
 /// - 4: a manifest fact;
 /// - 5: a docs fact, a file fact, and each other fact with `no code`.
 fn rank(fact: &semilla_core::report::Fact) -> u8 {
-    match fact.category {
-        Category::Manifest => 4,
-        _ if fact.build_code_change => 0,
-        Category::Docs | Category::File => 5,
-        _ if fact.compare == Compare::NoCode => 5,
-        Category::Value | Category::Logic | Category::ControlFlow | Category::Macro | Category::Text if fact.compare == Compare::CodeDifferent => 1,
-        Category::Declaration | Category::Added | Category::Removed => 2,
-        _ => 3,
-    }
+    fact.text_rank()
 }
 
 /// The fact numbers in the order of the numbers.
@@ -736,8 +728,10 @@ fn shared_text(why: &str) -> (&str, &'static str, &str) {
 #[derive(Default)]
 struct Shared<'a> {
     /// A spotlight text of two facts or more: the facts with the text, in the order of the list.
-    spotlights: BTreeMap<&'a str, Vec<&'a str>>,
-    /// A long list of bodies of two facts or more: the facts with the list.
+    /// The key has the full list of the causes (design 38.1).
+    spotlights: BTreeMap<(&'a str, String), Vec<&'a str>>,
+    /// A long list of bodies of two facts or more: the facts with the list. The key is the full
+    /// list (design 38.1): two lists with the same short text and different names stay apart.
     bodies: BTreeMap<String, Vec<&'a str>>,
     /// The content change of a file with two facts or more: the facts, in the order of the list.
     diffs: BTreeMap<(&'a str, &'a str), Vec<&'a str>>,
@@ -747,14 +741,13 @@ impl<'a> Shared<'a> {
     fn new(facts: &[&'a semilla_core::report::Fact], names: bool) -> Self {
         let mut shared = Shared::default();
         for fact in facts {
-            let bodies = Self::body_text(fact, names);
-            if bodies.len() >= SHARE_MIN {
-                shared.bodies.entry(bodies).or_default().push(&fact.id);
+            if Self::body_text(fact, names).len() >= SHARE_MIN {
+                shared.bodies.entry(Self::body_key(fact)).or_default().push(&fact.id);
             }
             if let Some(why) = &fact.spotlight_why {
                 let (_, _, part) = shared_text(why);
                 if part.len() >= SHARE_MIN {
-                    shared.spotlights.entry(part).or_default().push(&fact.id);
+                    shared.spotlights.entry((part, fact.causes.join(", "))).or_default().push(&fact.id);
                 }
             }
             if let Some(content) = fact.content.as_deref().filter(|_| fact.build_code_change) {
@@ -771,11 +764,17 @@ impl<'a> Shared<'a> {
         format!("{}{}", body_list(&fact.affected, names), fact.other_edits_text())
     }
 
+    /// The key of a list of bodies: each name, and the count of the other edits.
+    fn body_key(fact: &semilla_core::report::Fact) -> String {
+        Self::body_text(fact, true)
+    }
+
     /// The list of the affected bodies of a fact. The first fact of a shared list shows the
     /// list and the numbers of the facts. Each other fact names the first fact.
     fn bodies(&self, fact: &semilla_core::report::Fact, names: bool) -> String {
         let text = Self::body_text(fact, names);
-        match self.bodies.get(&text) {
+        // A fact of a run of 38.4 is not in the map: it keeps its own list.
+        match self.bodies.get(&Self::body_key(fact)).filter(|ids| ids.contains(&fact.id.as_str())) {
             Some(ids) if ids[0] == fact.id => format!("{text} (the same list for {})", id_list(&in_order(ids))),
             Some(ids) => format!("the same list as {}", ids[0]),
             None => text,
@@ -786,7 +785,7 @@ impl<'a> Shared<'a> {
     /// numbers of the facts. Each other fact names the first fact.
     fn spotlight(&self, fact: &semilla_core::report::Fact, why: &str) -> String {
         let (before, name, part) = shared_text(why);
-        match self.spotlights.get(part) {
+        match self.spotlights.get(&(part, fact.causes.join(", "))).filter(|ids| ids.contains(&fact.id.as_str())) {
             Some(ids) if ids[0] == fact.id => format!("{why} (the same text for {})", id_list(&in_order(ids))),
             Some(ids) => format!("{before}{name}the same text as {}", ids[0]),
             None => why.to_string(),
@@ -856,7 +855,7 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
         }
         // The full list of the causes (design 37.14), one time for each shared text.
         let first = self::shared_text(fact.spotlight_why.as_deref().unwrap_or("")).2;
-        if names && !fact.causes.is_empty() && shared.spotlights.get(first).is_none_or(|ids| ids[0] == fact.id) {
+        if names && !fact.causes.is_empty() && shared.spotlights.get(&(first, fact.causes.join(", "))).is_none_or(|ids| ids[0] == fact.id) {
             put(&format!("      each cause: {}", fact.causes.join(", ")));
         }
     }
@@ -876,6 +875,71 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     (head, lines)
 }
 
+/// True for the spotlight line of a fact.
+fn is_spotlight_line(line: &str) -> bool {
+    line.starts_with("      spotlight: ") || line.starts_with("      ✗ spotlight: ")
+}
+
+/// The runs of facts (in the order of the output) with an equal spotlight line (design 38.4):
+/// for each fact of a run of two facts or more, the first and the last index of the run.
+fn spotlight_runs(order: &[&semilla_core::report::Fact], names: bool) -> Vec<Option<(usize, usize)>> {
+    let none = Shared::default();
+    let lines: Vec<Option<String>> = order.iter().map(|fact| fact_lines(fact, &none, names).1.into_iter().find(|line| is_spotlight_line(line))).collect();
+    let mut runs = vec![None; order.len()];
+    let mut start = 0;
+    while start < order.len() {
+        let mut end = start;
+        while lines[start].is_some() && end + 1 < order.len() && lines[end + 1] == lines[start] && rank(order[end + 1]) == rank(order[start]) {
+            end += 1;
+        }
+        if end > start {
+            runs[start..=end].iter_mut().for_each(|run| *run = Some((start, end)));
+        }
+        start = end + 1;
+    }
+    runs
+}
+
+/// The longest line of the text output (design 38.5), in characters.
+pub const LINE_MAX: usize = 500;
+
+/// A line of the text output with at most [`LINE_MAX`] characters (design 38.5). A long list
+/// (items with ", " between them) shows its first items and its last items, with the count of
+/// the items that it does not show. Each other long line shows its start and its end. The cut
+/// says that `semilla status --verbose` shows the full line.
+pub fn fit_line(line: &str) -> String {
+    const HEAD: usize = 300;
+    const TAIL: usize = 100;
+    let count = |text: &str| text.chars().count();
+    if count(line) <= LINE_MAX {
+        return line.to_string();
+    }
+    const FULL: &str = "`semilla status --verbose` shows the full line";
+    let parts: Vec<&str> = line.split(", ").collect();
+    if parts.len() >= 6 {
+        let mut head = 0;
+        let mut size = 0;
+        while head < parts.len() && size + count(parts[head]) + 2 <= HEAD {
+            size += count(parts[head]) + 2;
+            head += 1;
+        }
+        let mut tail = 0;
+        let mut size = 0;
+        while tail + head < parts.len() && size + count(parts[parts.len() - 1 - tail]) + 2 <= TAIL {
+            size += count(parts[parts.len() - 1 - tail]) + 2;
+            tail += 1;
+        }
+        if head >= 1 && tail >= 1 && head + tail < parts.len() {
+            let hidden = parts.len() - head - tail;
+            return format!("{}, … ({hidden} items more; {FULL}) …, {}", parts[..head].join(", "), parts[parts.len() - tail..].join(", "));
+        }
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let start: String = chars[..HEAD].iter().collect();
+    let end: String = chars[chars.len() - TAIL..].iter().collect();
+    format!("{start}… ({} characters more; {FULL}) …{end}", chars.len() - HEAD - TAIL)
+}
+
 /// The facts of one step of the text report (design 37.13 to 37.18).
 /// - The order of the facts follows [`rank`]. A fact keeps its number.
 /// - Facts with the same text, the same category, the same compare result, and the same lines
@@ -887,7 +951,11 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
     let out = &mut first;
     let mut order: Vec<&semilla_core::report::Fact> = facts.iter().collect();
     order.sort_by_key(|fact| rank(fact));
-    let shared = Shared::new(&order, names);
+    // Design 38.4: a spotlight line that is equal for a run of facts shows one time, after the
+    // last fact of the run, with the fact numbers. The texts of such a run do not share.
+    let runs = spotlight_runs(&order, names);
+    let alone: Vec<&semilla_core::report::Fact> = order.iter().enumerate().filter(|(index, _)| runs[*index].is_none()).map(|(_, fact)| *fact).collect();
+    let shared = Shared::new(&alone, names);
     // Design 28.3: the build code changes of the step come first, with the diff. The manifest
     // facts of the change are with the other manifest facts: one line names them here.
     if facts.iter().any(|fact| fact.build_code_change) {
@@ -910,29 +978,45 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
         rank: u8,
         head: String,
         lines: Vec<String>,
+        /// The full texts (design 38.1): facts with a different content stay apart.
+        content: Option<&'a str>,
     }
     let mut shown: Vec<Line> = Vec::new();
-    for fact in order {
-        let (head, lines) = fact_lines(fact, &shared, names);
+    for (index, fact) in order.iter().enumerate() {
+        let fact = *fact;
+        let (head, mut lines) = fact_lines(fact, &shared, names);
+        if let Some((start, end)) = runs[index] {
+            let ids: Vec<&str> = order[start..=end].iter().map(|fact| fact.id.as_str()).collect();
+            if index == end {
+                for line in lines.iter_mut().filter(|line| is_spotlight_line(line)) {
+                    *line = line.replacen("spotlight: ", &format!("spotlight of {}: ", id_list(&ids)), 1);
+                }
+            } else {
+                lines.retain(|line| !is_spotlight_line(line) && !line.starts_with("      each cause: "));
+            }
+        }
         let place = fact.at.as_ref().map(|at| at.to_string()).or_else(|| fact.file.clone()).unwrap_or_else(|| fact.part.clone());
-        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines) {
+        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref()) {
             Some(line) => {
                 line.ids.push(&fact.id);
                 line.places.push(place);
             }
-            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines }),
+            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines, content: fact.content.as_deref() }),
         }
     }
+    // Design 38.5: no line of the text output is longer than `LINE_MAX` characters. The merge
+    // above compares the full lines, so a cut never makes two different facts look equal.
+    let fit = |line: String| if names { line } else { fit_line(&line) };
     for line in shown {
         let out = if line.rank == 0 { &mut first } else { &mut rest };
         if line.ids.len() == 1 {
-            put(out, &format!("  ◆ {} {}", line.ids[0], line.head));
+            put(out, &fit(format!("  ◆ {} {}", line.ids[0], line.head)));
         } else {
-            put(out, &format!("  ◆ {} {} × {} (also {})", line.ids[0], line.head, line.ids.len(), id_list(&line.ids[1..])));
-            put(out, &format!("      places: {}", line.places.join(", ")));
+            put(out, &fit(format!("  ◆ {} {} × {} (also {})", line.ids[0], line.head, line.ids.len(), id_list(&line.ids[1..]))));
+            put(out, &fit(format!("      places: {}", line.places.join(", "))));
         }
         for text in &line.lines {
-            put(out, text);
+            put(out, &fit(text.clone()));
         }
     }
     (first, rest)
@@ -948,7 +1032,9 @@ pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
 fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) -> String {
     // Each line of the report can hold text of the agent or of the repository: `put` shows
     // each hidden character of a line as an escape, so no text starts a new line (5k, A2).
-    use text::put_line as put;
+    // Design 38.5: each line has at most `LINE_MAX` characters (`status --verbose`: each
+    // full line).
+    let put = |out: &mut String, line: &str| text::put_line(out, &if names { line.to_string() } else { fit_line(line) });
     let mut out = String::new();
     for step in steps {
         put(&mut out, &format!("step {}  {}", step.step, text::quoted(&step.intent)));

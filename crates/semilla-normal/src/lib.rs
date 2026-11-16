@@ -19,7 +19,6 @@
 
 pub mod cargo;
 pub mod hash;
-pub mod n4;
 pub mod paths;
 pub mod sandbox;
 
@@ -450,6 +449,9 @@ pub fn compare_with(
     let renamed = lifetime_names(before, after, before_marks);
     let (before, before_marks) = renamed.as_ref().map_or((before, before_marks), |(levels, marks)| (levels, marks));
     let mut rename_pairs = usable_renames(before, renames);
+    // The generic parameters of a renamed impl item that got new names (design 38.10).
+    let params = param_names(before, after, &rename_pairs, before_marks);
+    let (before, before_marks) = params.as_ref().map_or((before, before_marks), |(levels, marks)| (levels, marks));
     let generic = generic_renames(before, after, &rename_pairs, renames);
     rename_pairs.extend(generic);
     // The records of the driver in wrapper mode name their target. Old records (and the command
@@ -529,6 +531,120 @@ fn lifetime_names(before: &Levels, after: &Levels, marks: &Marks) -> Option<(Lev
         }
     }
     let rename = |names: &BTreeSet<String>| names.iter().map(|name| pairs.get(name).unwrap_or(name).clone()).collect();
+    Some((levels, Marks { opaque: rename(&marks.opaque), stop: rename(&marks.stop) }))
+}
+
+/// The start of each body name of `levels` that fits `path` with generic arguments
+/// (`a::Type::<T>::method` for `a::Type::method`).
+fn generic_starts(levels: &Levels, path: &str) -> BTreeSet<String> {
+    let last = path.rsplit("::").next().unwrap_or(path);
+    levels.values().flatten().filter(|record| record.name.contains(last)).filter_map(|record| paths::generic_prefix(&record.name, path).map(str::to_string)).collect()
+}
+
+/// The lists of generic arguments of a body name start (`a::W::<T, N>::m` gives `[[T, N]]`).
+/// `None` if an argument is not a plain name.
+fn generic_lists(start: &str) -> Option<Vec<Vec<String>>> {
+    let mut lists = Vec::new();
+    let mut rest = start;
+    while let Some(at) = rest.find("::<") {
+        let inner = &rest[at + 3..];
+        let end = inner.find('>')?;
+        let list: Vec<String> = inner[..end].split(", ").map(str::to_string).collect();
+        if list.iter().any(|name| name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_')) {
+            return None;
+        }
+        lists.push(list);
+        rest = &inner[end..];
+    }
+    Some(lists)
+}
+
+/// Replaces each word of `map` in a text (a word is a run of name characters).
+fn replace_words(text: &str, map: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        out.push_str(map.get(word.as_str()).unwrap_or(word));
+        word.clear();
+    };
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// The generic parameters of a renamed impl item with new names (design 38.10): the body name
+/// `a::W::<T>::get` becomes `a::W::<U>::value`, and the body text has `U` for `T`. The old
+/// records of such a body get the new names of the parameters. A pair applies only if exactly
+/// one body name of each tree fits the paths, each argument is a plain name, and no new name is
+/// a word of an old body text (and no old name a word of a new body text). `None` if no pair
+/// applies.
+fn param_names(before: &Levels, after: &Levels, usable: &[(String, String)], marks: &Marks) -> Option<(Levels, Marks)> {
+    let mut changes: Vec<(String, BTreeMap<String, String>)> = Vec::new();
+    for (from, to) in usable.iter().filter(|(from, to)| from != to && from.matches("::").count() >= 2) {
+        let (old, new) = (generic_starts(before, from), generic_starts(after, to));
+        let (Some(old), Some(new), 1, 1) = (old.first(), new.first(), old.len(), new.len()) else { continue };
+        let (Some(old_lists), Some(new_lists)) = (generic_lists(old), generic_lists(new)) else { continue };
+        if old_lists.len() != new_lists.len() || old_lists.iter().zip(&new_lists).any(|(a, b)| a.len() != b.len()) {
+            continue;
+        }
+        let map: BTreeMap<String, String> = old_lists.iter().flatten().zip(new_lists.iter().flatten()).filter(|(a, b)| a != b).map(|(a, b)| (a.clone(), b.clone())).collect();
+        // A parameter with the name of a path segment (`impl<W> W<W>`) is not changed.
+        if map.is_empty() || map.keys().chain(map.values()).any(|name| from.split("::").chain(to.split("::")).any(|segment| segment == name)) {
+            continue;
+        }
+        let of = |levels: &Levels, start: &str| -> Vec<String> { levels.values().flatten().filter(|record| record.name == start || record.name.strip_prefix(start).is_some_and(|rest| rest.starts_with("::"))).map(|record| record.text.clone()).collect() };
+        let words = |texts: &[String]| -> BTreeSet<String> { texts.iter().flat_map(|text| text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|word| !word.is_empty()).map(str::to_string).collect::<Vec<_>>()).collect() };
+        let (old_words, new_words) = (words(&of(before, old)), words(&of(after, new)));
+        if map.values().any(|name| old_words.contains(name)) || map.keys().any(|name| new_words.contains(name)) {
+            continue;
+        }
+        changes.push((old.clone(), map));
+    }
+    if changes.is_empty() {
+        return None;
+    }
+    let change = |name: &str| changes.iter().find(|(start, _)| name == start || name.strip_prefix(start.as_str()).is_some_and(|rest| rest.starts_with("::"))).map(|(_, map)| map);
+    let mut levels = before.clone();
+    // A different body names the old start in its text and in its callees: it gets the new
+    // start (`genren::W::<T>::get` becomes `genren::W::<U>::get`).
+    let starts: Vec<(String, String)> = changes.iter().map(|(start, map)| (start.clone(), replace_words(start, map))).collect();
+    let other = |text: &str| -> String {
+        let mut text = text.to_string();
+        for (old, new) in &starts {
+            let mut out = String::with_capacity(text.len());
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find(old.as_str()) {
+                let after = &rest[at + old.len()..];
+                let start_ok = rest[..at].chars().last().is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == ':'));
+                let end_ok = after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+                out.push_str(&rest[..at]);
+                out.push_str(if start_ok && end_ok { new } else { old });
+                rest = after;
+            }
+            out.push_str(rest);
+            text = out;
+        }
+        text
+    };
+    for record in levels.values_mut().flatten() {
+        if let Some(map) = change(&record.name) {
+            record.name = replace_words(&record.name, map);
+            record.text = replace_words(&record.text, map);
+        } else {
+            record.text = other(&record.text);
+        }
+        for callee in record.callees.iter_mut() {
+            *callee = other(callee);
+        }
+    }
+    let rename = |names: &BTreeSet<String>| names.iter().map(|name| change(name).map(|map| replace_words(name, map)).unwrap_or_else(|| name.clone())).collect();
     Some((levels, Marks { opaque: rename(&marks.opaque), stop: rename(&marks.stop) }))
 }
 
@@ -1015,13 +1131,6 @@ impl Side {
             })
             .collect()
     }
-
-    fn hashed_term(&self, level: &str, term: &str) -> String {
-        match self.replacer(level) {
-            Some(replacer) => replacer.apply(term),
-            None => term.to_string(),
-        }
-    }
 }
 
 /// Tries the levels in order for one body, and stops at the first equal level.
@@ -1051,11 +1160,6 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
             {
                 return equal(level, Vec::new());
             }
-        }
-    }
-    for level in ["n2", "n3"] {
-        if let Some(proof) = n4_equal(before, after, level, name) {
-            return equal("n4", proof);
         }
     }
 
@@ -1110,63 +1214,6 @@ fn target_stem(target: &str) -> &str {
     match target.rsplit_once('.') {
         Some((stem, hash)) if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) => stem,
         _ => target,
-    }
-}
-
-/// N4 on the terms of one level. Returns the proof (the build rules and the egglog rules).
-fn n4_equal(before: &Side, after: &Side, level: &str, name: &str) -> Option<Vec<String>> {
-    let (b, a) = (before.group(level, name)?, after.group(level, name)?);
-    if level == "n3" && b.from_n2 && a.from_n2 {
-        return None;
-    }
-    // Both sides must have the same targets, and one distinct term for all of them.
-    if !b.terms.keys().eq(a.terms.keys()) {
-        return None;
-    }
-    let single = |group: &Group| {
-        let terms: BTreeSet<&Option<String>> = group.terms.values().flatten().collect();
-        match terms.into_iter().collect::<Vec<_>>()[..] {
-            [Some(term)] => Some(term.clone()),
-            _ => None,
-        }
-    };
-    let (b_term, a_term) = (single(b)?, single(a)?);
-    let (b_rules, b_body) = split_term(&b_term);
-    let (a_rules, a_body) = split_term(&a_term);
-    let mut proof: Vec<String> = Vec::new();
-    for rule in b_rules.into_iter().chain(a_rules) {
-        if !proof.contains(&rule) {
-            proof.push(rule);
-        }
-    }
-    let plain = (b_body.to_string(), a_body.to_string());
-    let hashed = (before.hashed_term(level, b_body), after.hashed_term(level, a_body));
-    let attempts = if hashed == plain { vec![plain] } else { vec![plain, hashed] };
-    for (b_text, a_text) in &attempts {
-        if b_text == a_text {
-            return Some(proof);
-        }
-        if let n4::Outcome::Proved(rules) = n4::prove(b_text, a_text, &n4::Limits::default()) {
-            for rule in rules {
-                if !proof.contains(&rule) {
-                    proof.push(rule);
-                }
-            }
-            return Some(proof);
-        }
-    }
-    None
-}
-
-/// Splits a term text into the build rules (the `;rules` line) and the node lines.
-fn split_term(term: &str) -> (Vec<String>, &str) {
-    match term.split_once('\n') {
-        Some((first, rest)) if first.starts_with(";rules") => {
-            let rules =
-                first.trim_start_matches(";rules").split_whitespace().map(str::to_string).collect();
-            (rules, rest)
-        }
-        _ => (Vec::new(), term),
     }
 }
 

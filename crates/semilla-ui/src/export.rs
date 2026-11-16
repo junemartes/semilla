@@ -1320,8 +1320,9 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
         .filter(|view| steps.is_none_or(|steps| steps.contains(&view.step)))
         .filter(|view| code.is_none_or(|code| code == view.fact.build_code_change))
         .collect();
-    // A stable sort: the order of today stays inside one result.
-    views.sort_by_key(|view| view.fact.order());
+    // Design 38.9: the order of the text output (a stable sort: the order of the numbers stays
+    // inside one place).
+    views.sort_by_key(|view| view.fact.text_rank());
     let items: Vec<(usize, &str, String, Option<String>)> = views
         .into_iter()
         .map(|view| {
@@ -1388,21 +1389,23 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
 /// this list.
 fn without_equal_diffs(items: Vec<(usize, &str, String, Option<String>)>) -> Vec<(String, Option<String>)> {
     // The step, the id, the diff block, the text with no id, and the position in the result.
-    let mut shown: Vec<(usize, &str, String, String, usize)> = Vec::new();
+    let mut shown: Vec<(usize, &str, Option<String>, String, usize)> = Vec::new();
     let mut result: Vec<(String, Option<String>)> = Vec::new();
     for (step, id, text, content) in items {
-        let first = content.as_ref().and_then(|content| shown.iter().find(|(known, _, block, _, _)| *known == step && block == content));
         // The text of a fact with no id: two facts with the same text say the same thing.
         let plain = text.replacen(&format!(" {id} "), " ", 1);
-        match (first, content) {
-            // Batch 7b, part 5.8: the same text for the same change shows one time. The first
-            // fact names the second fact.
-            (Some((_, _, _, known, position)), _) if *known == plain => result[*position].0.push_str(&format!("; also {id}")),
-            (Some((_, first, _, _, _)), _) => result.push((format!("{text}; the same diff as {first}"), None)),
-            (None, content) => {
-                if let Some(content) = &content {
-                    shown.push((step, id, content.clone(), plain, result.len()));
-                }
+        // Batch 7b, part 5.8, and design 38.9 (the merge of the text output): the same text
+        // with the same diff block (or with no block) shows one time. The first fact names the
+        // second fact.
+        if let Some((_, _, _, _, position)) = shown.iter().find(|(known, _, block, text, _)| *known == step && *block == content && *text == plain) {
+            result[*position].0.push_str(&format!("; also {id}"));
+            continue;
+        }
+        let first = content.as_ref().and_then(|content| shown.iter().find(|(known, _, block, _, _)| *known == step && block.as_ref() == Some(content)));
+        match first {
+            Some((_, first, _, _, _)) => result.push((format!("{text}; the same diff as {first}"), None)),
+            None => {
+                shown.push((step, id, content.clone(), plain, result.len()));
                 result.push((text, content));
             }
         }
@@ -1785,7 +1788,12 @@ mod tests {
         // Batch 7b, part 5.8: two facts of one step with the same text and the same diff block
         // show the change one time.
         let items = vec![(0, "f1", "step 0: f1 derived: one".to_string(), block.clone()), (0, "f2", "step 0: f2 derived: one".to_string(), block.clone()), (1, "f1", "step 1: f1 derived: one".to_string(), block.clone())];
-        assert_eq!(without_equal_diffs(items), [("step 0: f1 derived: one; also f2".to_string(), block.clone()), ("step 1: f1 derived: one".to_string(), block)]);
+        assert_eq!(without_equal_diffs(items), [("step 0: f1 derived: one; also f2".to_string(), block.clone()), ("step 1: f1 derived: one".to_string(), block.clone())]);
+        // Design 38.9: the merge of the text output. The same text with no block shows one
+        // time. The same text with a different block shows two times.
+        let other = Some("- a\n+ c".to_string());
+        let items = vec![(0, "f1", "step 0: f1 derived: two".to_string(), None), (0, "f2", "step 0: f2 derived: two".to_string(), None), (0, "f3", "step 0: f3 derived: two".to_string(), block.clone()), (0, "f4", "step 0: f4 derived: two".to_string(), other.clone())];
+        assert_eq!(without_equal_diffs(items), [("step 0: f1 derived: two; also f2".to_string(), None), ("step 0: f3 derived: two".to_string(), block), ("step 0: f4 derived: two".to_string(), other)]);
     }
 
     #[test]

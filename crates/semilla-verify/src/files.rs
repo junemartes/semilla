@@ -196,6 +196,18 @@ fn dependency(key: &str) -> Option<(String, String)> {
     Some((parts[..=at].join("."), parts.get(at + 1)?.to_string()))
 }
 
+/// True if the manifest fact with this place (`FILE:key`) is a change of the version of a
+/// dependency (design 38.6): a package of `Cargo.lock` (a new version, an added or a removed
+/// package), or the version of a dependency in a manifest. Semilla does not compare the code of
+/// a dependency, so such a fact has the result `no compare`.
+pub fn is_dependency_version(place: &str) -> bool {
+    let Some((file, key)) = place.split_once(':') else { return false };
+    if file.ends_with("Cargo.lock") {
+        return key.starts_with("package ") && !key.ends_with(" source");
+    }
+    file.ends_with("Cargo.toml") && dependency(key).is_some_and(|(table, name)| key == format!("{table}.{name}") || key == format!("{table}.{name}.version"))
+}
+
 /// The descriptive package keys: they do not change the build.
 const DESCRIPTIVE: &[&str] = &["description", "authors", "license", "license-file", "repository", "readme", "keywords", "categories", "homepage", "documentation"];
 

@@ -216,40 +216,6 @@ fn duplicate_names_must_match_as_sets() {
 }
 
 #[test]
-fn n4_proves_an_inverted_guard() {
-    let term_before = ";rules \n#0 (L \"arg 1\")\n#1 (L \"arg 2\")\n#2 (ICmp \"lt\" #0 #1)\n#3 (L \"x\")\n#4 (L \"y\")\n#5 (Ite #2 #3 #4)";
-    let term_after = ";rules path-fact\n#0 (L \"arg 1\")\n#1 (L \"arg 2\")\n#2 (ICmp \"ge\" #0 #1)\n#3 (L \"y\")\n#4 (L \"x\")\n#5 (Ite #2 #3 #4)";
-    let mut b = record("k::f", "n2", "before", &[]);
-    b.term = Some(term_before.into());
-    let mut a = record("k::f", "n2", "after", &[]);
-    a.term = Some(term_after.into());
-    let results = compare(&levels(vec![b]), &levels(vec![a]), &no_renames(), &[]);
-    match status_of(&results, "k::f") {
-        BodyStatus::Equal { level, proof } => {
-            assert_eq!(level, "n4");
-            assert_eq!(proof[0], "path-fact");
-            assert!(proof.contains(&"ite-not".to_string()), "{proof:?}");
-        }
-        other => panic!("not equal: {other:?}"),
-    }
-}
-
-#[test]
-fn n4_keeps_a_changed_constant() {
-    let term = |constant: &str| {
-        format!(
-            ";rules \n#0 (L \"c\")\n#1 (L \"const u32 = 1\")\n#2 (L \"{constant}\")\n#3 (Ite #0 #1 #2)"
-        )
-    };
-    let mut b = record("k::f", "n2", "before", &[]);
-    b.term = Some(term("const u32 = 2"));
-    let mut a = record("k::f", "n2", "after", &[]);
-    a.term = Some(term("const u32 = 3"));
-    let results = compare(&levels(vec![b]), &levels(vec![a]), &no_renames(), &[]);
-    assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }));
-}
-
-#[test]
 fn records_round_trip_as_json_lines() {
     let mut first = record("k::f", "n0", "a\nb", &["k::g"]);
     first.span = Some(SpanInfo { file: "src/lib.rs".into(), line_start: 1, line_end: 3 });
@@ -782,4 +748,27 @@ fn two_body_names_that_differ_only_in_a_lifetime_are_one_body() {
     let results = compare_with(&before, &after, &BTreeMap::new(), &[], &Marks::default(), &Marks::default());
     assert_eq!(status_of(&results, "<&'a a::Node as a::P>::f"), &BodyStatus::BeforeOnly);
     assert_eq!(status_of(&results, "<&a::Node as a::P>::f"), &BodyStatus::AfterOnly);
+}
+
+/// Batch 7d, part 5.2 (design 38.10): an impl with new names of its generic parameters and a
+/// renamed method. The rename map has the generic keys of the new impl.
+#[test]
+fn a_rename_in_an_impl_with_new_parameter_names_is_equal() {
+    let get = "fn _(_1: &k::W<T>) -> T generics <T#0> { _0 = ((*_1).k::W.0: T); }";
+    let call = |name: &str| format!("fn _(_1: &k::W<u32>) -> u32 {{ _3 = const fn(&k::W<u32>) -> u32 {{k::W::<u32>::{name}}}(_1); }}");
+    let before = levels(vec![record("k::W::<T>::get", "n0", get, &[]), record("k::twice", "n0", &call("get"), &["k::W::<T>::get"])]);
+    let value = get.replace('T', "U");
+    let after = |value: &str| levels(vec![record("k::W::<U>::value", "n0", value, &[]), record("k::twice", "n0", &call("value"), &["k::W::<U>::value"])]);
+    let renames: BTreeMap<String, String> = [("k::W::get".to_string(), "k::W::value".to_string())].into();
+    let results = compare(&before, &after(&value), &renames, &[]);
+    assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Equal { .. }), "{results:?}");
+    assert!(matches!(status_of(&results, "k::twice"), BodyStatus::Equal { .. }), "{results:?}");
+    // A needle in the renamed body: different.
+    let results = compare(&before, &after(&value.replace(".0: U", ".1: U")), &renames, &[]);
+    assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Different { .. }), "{results:?}");
+    // A new name that the old body has as a word: no new names, so the compare stays different.
+    let both = "fn _(_1: &k::W<T>, _2: U) -> T generics <T#0> { _0 = ((*_1).k::W.0: T); }";
+    let before = levels(vec![record("k::W::<T>::get", "n0", both, &[]), record("k::twice", "n0", &call("get"), &["k::W::<T>::get"])]);
+    let results = compare(&before, &after(&both.replace('T', "U")), &renames, &[]);
+    assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Different { .. } | BodyStatus::BeforeOnly | BodyStatus::AfterOnly), "{results:?}");
 }

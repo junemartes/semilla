@@ -692,28 +692,11 @@ impl NormalOracle {
         Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: None })
     }
 
-    /// Compares the bodies of one configuration at N2 and N3 (with N4), after `compare_n0`.
-    /// Design 35.4: the compare of a fact is the level N0 with the rename and move map. No
-    /// code calls this function now.
-    #[allow(dead_code)]
-    fn compare_deep(&self, step: &Step, added: &[String], state: &mut SetState) -> Result<()> {
-        let (old, new) = self.levels(&step.tree_before, &step.tree_after, &["n2", "n3"], &state.config)?;
-        let sides = std::sync::Arc::make_mut(&mut state.sides);
-        sides.before.extend(old);
-        sides.after.extend(new);
-        semilla_normal::drop_opaque_inlines(&mut sides.before, &state.before_marks);
-        semilla_normal::drop_opaque_inlines(&mut sides.after, &state.after_marks);
-        let started = std::time::Instant::now();
-        state.comparisons = semilla_normal::compare_with(&state.sides.before, &state.sides.after, &state.renames, added, &state.before_marks, &state.after_marks);
-        DEEP_TIME.add(started);
-        Ok(())
-    }
 }
 
 /// The totals of the time of the phases that run for each configuration (batch 5x, part F).
 pub(crate) static READ_TIME: crate::TimeTotal = crate::TimeTotal::new();
 pub(crate) static N0_TIME: crate::TimeTotal = crate::TimeTotal::new();
-pub(crate) static DEEP_TIME: crate::TimeTotal = crate::TimeTotal::new();
 pub(crate) static MARK_TIME: crate::TimeTotal = crate::TimeTotal::new();
 
 /// The key of the records in memory: the cache folder and the time of its `.complete` file.
@@ -768,12 +751,6 @@ struct SetState {
 }
 
 impl SetState {
-    /// True if a body is not equal at N0. No code calls this function now (design 35.4).
-    #[allow(dead_code)]
-    fn needs_deep(&self) -> bool {
-        self.comparisons.iter().any(|c| !matches!(c.status, semilla_normal::BodyStatus::Equal { .. }))
-    }
-
     /// The span of each body: the "after" records win (the name is the "after" name).
     fn spans(&self, spans: &mut BTreeMap<String, (String, usize)>) {
         for record in [&self.sides.before, &self.sides.after].iter().flat_map(|levels| levels.values().flatten()) {
@@ -1245,15 +1222,6 @@ impl ExprOracle for SmtOracle {
         }
         let effect = if result.panic_conditions_differ && result.effect == Effect::Equivalent { Effect::Unrelated } else { result.effect };
         Some(EffectCheck { effect, witness })
-    }
-
-    fn equivalent(&self, before: &str, after: &str, types: &BTreeMap<String, String>) -> Option<bool> {
-        let solver = self.solver.as_ref()?;
-        match semilla_smt::equivalent(solver, before, after, &Self::env(types)).ok()? {
-            semilla_smt::Equivalence::Proved { .. } => Some(true),
-            semilla_smt::Equivalence::Refuted { .. } => Some(false),
-            semilla_smt::Equivalence::NotProved { .. } => None,
-        }
     }
 }
 

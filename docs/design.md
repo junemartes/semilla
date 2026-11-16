@@ -2853,14 +2853,14 @@ Each rule: **Decided by Claude**, apart from "no fold because of the compare res
 - Semilla does not compile a doc test. A member order fact with no changed body has `no compare`.
 - Each compare result holds for the checked configurations only. A target, a custom profile, and a condition outside the list are not checked.
 
-**The dead code** (not deleted in this batch):
+**The dead code** (batch 7d, 38.12 has the state of each entry):
 
-- the levels N2, N3, and N4 in `semilla-normal`;
-- `compare_deep`, `needs_deep`, and `DEEP_TIME` in `crates/semilla/src/oracle.rs`;
-- `SmtOracle::equivalent` and `checks::check_swap`;
-- the outputs of the rival rule (`crates/semilla-mir/src/rival.rs`, `rival()` in `semilla-verify/src/opaque.rs`);
-- the status changes of `srcconfig::apply` and `opaque.apply` (only their data for the notes is in use);
-- the claim ops `rename` and `move-item` in the verifier (the CLI refuses them; verifier tests and the UI demo data still use them).
+- the levels N2, N3, and N4 in `semilla-normal`: N4 is deleted (done); the N2 and N3 steps of the ladder stay (open);
+- `compare_deep`, `needs_deep`, and `DEEP_TIME` in `crates/semilla/src/oracle.rs`: deleted (done);
+- `SmtOracle::equivalent` and `checks::check_swap`: `ExprOracle::equivalent` is deleted (done); `check_swap` stays, because it is the shape check of the op `swap-operands`;
+- the outputs of the rival rule (`crates/semilla-mir/src/rival.rs`, `rival()` in `semilla-verify/src/opaque.rs`): open;
+- the status changes of `srcconfig::apply` and `opaque.apply` (only their data for the notes is in use): open;
+- the claim ops `rename` and `move-item` in the verifier: they stay, because the derivation of a rename or a move (36.1) checks each name map with these ops.
 
 **Closed in 36.3.** The group kinds "refactor" and "behavior" are gone from the derived kinds. The mark "each fact: code equal or no code" stays: it is an observation.
 
@@ -3144,3 +3144,100 @@ The tests found one defect in the diff, with this rule: a rename of a name appli
 **The rule.** After each step, Semilla removes the entries that no tree of the stored steps (or their base) uses, and it keeps the 4 newest of them (`BUILD_CODE_KEEP`): the entry of a rejected step serves the next run. `semilla cache --clean` removes each entry that no stored step uses and prints the size: "removed 4 entries of the build code cache that no stored step uses: 4 kB freed". The command waits for a background check that runs.
 
 **Limits.** The folder sets under `shared/` are not cleaned.
+
+## 38. Batch 7d: the open defects of trial 11 and batch 7c, and the dead code
+
+Batch 7d. The model of 35.1 and the target of 37 stay. The rule above each rule: no change of the code is without a fact, and no fact text says less than the change. Each rule of this section: **Decided by Claude**.
+
+### 38.1 A fold and a merge compare the full texts
+
+**The cause.** The fold of equal facts (`edits::fold`) used the fact text as its key, and the text has a cut. Two different `if` statements of `bytes` (`promotable_even_drop`, `promotable_odd_drop`) gave one fact "2 site(s): added `if` `if kind == KIND_ARC { release_shared(shared.cast()); } else…`". A change of `addr & !KIND_MASK` to `addr | !KIND_MASK` gave the same output. The coordinator found the same defect in `serde_derive`: a fold of two loops hid the line `missing_content_fallthrough = quote!(_ => #missing_content);` in the text output and in the Markdown report.
+
+**The rule.**
+
+1. Each edit fact with a cut text (`…`) keeps the full texts of its edits in its content (`edits::full_texts`).
+2. Two facts fold only if their full texts are equal: the key of the fold has the content. The same applies to the macro rename fold (37.17), to the merge "× N (also …)" of the text output (37.16), to the shared spotlight texts (the key has the full list of the causes), and to "the same list as fN" (the key is the full list of the bodies).
+3. The Markdown report shows the diff block of each fact. A fold has equal full texts, so one block shows the source of each site.
+
+**The limit.** A fact of a different module with a cut text and no content (a fact that `edits::derive` does not make) keeps its text as its key.
+
+### 38.2 The inner compare of a restructured body
+
+**The cause.** A closure body became the function body in `bytes`: `data.with_mut(|shared| { … })` became the statements of the function. The facts "added `if` …" and "deleted statement …" showed only the head of each statement, so the reviewer could not see if an inner statement changed.
+
+**The rule** (`semilla-verify/src/inner.rs`). For a body with an added statement and a deleted statement, Semilla compares the inner statements of one side (the statements of each block in the statement: a closure body, a plain block, an `unsafe` block, a branch) with the statements of the other side. The fact texts get the result:
+
+- "(the same text as an inner statement of the deleted `data.with_mut(…)`)";
+- "(an inner statement of the deleted `data.with_mut(…)`, except: `…|addr| addr & !KIND_MASK…` → `…|addr| addr | !KIND_MASK…`)" for a similar statement (60 % of the tokens or more, the same first token);
+- at the deleted statement: "(inner statements: 2 with the same text as an added statement; 1 not in an added statement: `let shared = *shared;`)", or the short line "(each inner statement is an added statement of the body, with the same text)".
+
+The reverse step (statements go into a closure) uses the words "the added". An assignment with or without `;` at its end is the same statement. If no inner statement fits, the text stays.
+
+**The limits.** The compare uses one level of inner blocks. A fact with more than one edit keeps its text.
+
+### 38.3 A new `cfg` twin of an item
+
+**The cause.** Trial 11, T11-4: a new twin of `Slab::capacity` under `cfg(not(feature = "std"))` gave a false rename `Slab::capacity` → `Slab::capacity#0` and the fact "a different crate can no longer use the old path".
+
+**The rule.**
+
+1. An item `P` of one tree that has twins `P#0`, `P#1` in the other tree keeps its key for the twin with its text (`identity::twin_keys`). The compare ignores the attributes, the docs, and the visibility. A key changes only for an item with no inner items, and only if exactly one twin has the text.
+2. The other twin is an added or a removed item with its condition and its body: "added `slab::Slab::capacity#1` (a twin of `slab::Slab::capacity` under `cfg(not(feature = "std"))`) with the body: `{ self.entries.capacity() + 0 }` [added · code different]". The text has no public API note: the path exists before and after the step.
+3. Two methods of one name in an impl are twins: the member list of the impl gives no "changed code" fact for them.
+4. A removed twin that a checked unit compiles (each own `cfg` condition is true in a unit that reads its file) has `code different`, not "no checked configuration compiles".
+
+**The limit.** The condition of an outer item (an impl under `cfg`) is not a part of the test of rule 4.
+
+### 38.4 A spotlight line of a run of facts
+
+**The rule.** A spotlight line that is equal for a run of facts (in the order of the output) shows one time, after the last fact of the run: "spotlight of f1 to f37: a build setting …; reason (key `kind:build-setting`; …)". The facts of a run do not use the shared text of 37.13. A line that needs a reason has the key of its fact, so it is never equal for two facts.
+
+### 38.5 The length of a line
+
+**The rule.** No line of the text output has more than 500 characters (`views::LINE_MAX`). A long list (items with ", " between them) shows its first items and its last items: "…, … (25 items more; `semilla status --verbose` shows the full line) …, …". Each other long line shows its start and its end with the count of the characters that it does not show. `semilla status --verbose`, the JSON output, and the reports keep the full text. The merge of 38.1 compares the full lines, so a cut never makes two different facts look equal.
+
+**The limit.** The command to run again and a compiler error keep their full lines.
+
+### 38.6 A dependency version
+
+**The rule.** A changed package of `Cargo.lock` (a new version, an added or a removed package) and the version of a dependency in a manifest have the compare result `no compare`, with the note "no compare: Semilla does not compare the code of a dependency" (`files::is_dependency_version`).
+
+### 38.7 A local macro with the name of a standard macro
+
+**The rule.** An added or a removed `macro_rules!` with the name of a macro of the standard prelude (`vec`, `assert`, `format`, `write`, `matches`, `debug_assert`, …: `made::STD_MACROS`) says what it changes, with the call sites: "added macro `matches` (it replaces the standard macro `matches!`; each call in its scope: `demo::f`)", "removed macro `matches` (the standard macro `matches!` is used again; each call in its scope: `demo::f`)". The scope is the module of the definition and its inner modules, after the definition in its own file. A call with a path (`std::matches!`) is not a call site.
+
+**The limit.** The scope does not follow `#[macro_use]` and `#[macro_export]` to a different module.
+
+### 38.8 The module of an import
+
+**The rule.** The fact of a `use` line names its module: "added `use` line: `use std::cmp::Ordering;` in `depot::ledger`".
+
+### 38.9 The Markdown report
+
+**The rule.** The Markdown report and the HTML report use the order of the text output (`Fact::text_rank`) and its merge: a fact with the same text and the same diff block (or no block) as an earlier fact of its step shows one time, with "; also fN". The fold is the fold of 38.1.
+
+### 38.10 A rename in twin modules, and new names of generic parameters
+
+**The cause.** A rename of a function in `#[cfg(unix)] mod sys;` and `#[cfg(windows)] mod sys;` showed as removed and added: the inactive twin refuted the derived rename. With the rename, the key `sys#0::f` of the checked twin did not get the name of its compiled body (`sys::f`), because the twin `sys#1::f` can have the same name. A rename of a method in an impl whose generic parameters got new names (`impl<T> W<T>` → `impl<U> W<U>`) kept `code different`.
+
+**The rule.**
+
+1. A derived rename or move is no claim of the agent: code that no checked configuration compiles does not stop it. The fact has `no compare` with the note "no compare: no checked configuration compiles `X`".
+2. An item in a file that no checked unit reads gives no compiled body (`checks::body_renames_read`), and a module gives no body. So the key of the checked twin gets the name of its compiled body: "renamed `sysren::sys#0::page_size` → `sysren::sys#0::page_bytes` [rename · code equal]".
+3. A renamed impl item whose generic parameters have new names (`a::W::<T>::get` → `a::W::<U>::value`) gets the new names in the old records (`semilla_normal::param_names`): in its name, in its text, and in the text and the callees of each other body. A pair applies only if exactly one body name of each tree fits the paths, each argument is a plain name, and no new name is a word of the old body text (and no old name a word of the new body text).
+
+**The limits.** A changed list of generic parameters keeps its rule of 5h, B4: each site with generic arguments is an affected body of the generics fact. A parameter with the name of a path segment does not get a new name.
+
+### 38.11 The temporary folders of the tests
+
+**The cause.** A test that runs `semilla` can start the background worker. The worker can run after the end of the test, while the drop of the `TempDir` removes the folder, or after it. Each such run left a folder `.tmp*` with a repository and a cache. The commands of Semilla remove their own temporary folders (the `--fresh` cache is a `Store` that its drop removes).
+
+**The rule.** The tests of `crates/semilla/tests` use `common::TestDir`. Its drop waits for the lock of each worker of the folder, removes the folder, and does this again if a worker made the folder again. After `cargo test --workspace` with `TMPDIR=<folder>`, the folder is empty.
+
+### 38.12 The dead code of 35.8
+
+**Deleted.** The N4 level (`semilla-normal/src/n4.rs`, `n4_equal`, `split_term`, `hashed_term`, the dependency `egglog`; `semilla-core` now asks for the feature `preserve_order` of `serde_json`, which `egglog` gave before: the JSON texts keep the order of their keys), `compare_deep`, `needs_deep`, `DEEP_TIME`, and `ExprOracle::equivalent` with its implementations. The outputs of `semilla step`, `semilla status --verbose`, and `review --md` of `cpufeatures`, `utf8_iter`, `quickcheck`, and the large test case of `crates/semilla/tests/large.rs` are equal before and after the deletion.
+
+The test `two_versions_of_a_two_crate_workspace` now expects `code different` for the inverted guard clause of `app_b::get` (the case of N4).
+
+**Not deleted.** The claim ops `rename` and `move-item` are not dead: the derivation of 36.1 uses them. `check_swap` is the shape check of the op `swap-operands`. The N2 and N3 steps of the ladder, the rival rule of the driver, and the status changes of `srcconfig::apply` and `opaque.apply` are open: a change of the driver changes the records of each cache.
