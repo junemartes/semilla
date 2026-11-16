@@ -339,7 +339,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     replace_one(t, &index, "impl IndexHolder {", "impl<T: Copy> IndexHolder<T> {");
     replace_one(t, &index, "pub fn new(value: u32) -> Self {", "pub fn new(value: T) -> Self {");
     replace_one(t, &index, "pub fn get(&mut self) -> u32 {", "pub fn get(&mut self) -> T {");
-    changes.push(Change { name: "a type gets a generic parameter", facts: vec![expect("declaration", "code different", &["generics of `depot::index::IndexHolder`: `struct IndexHolder { }` → `struct IndexHolder < T > { }`"]), expect("declaration", "code different", &["type `u32` → `T` in 3 places: `depot::index::IndexHolder.value`, return type of `depot::index::IndexHolder::get`, parameter `value` of `depot::index::IndexHolder::new`"]), expect("declaration", "code different", &["generics of `depot::index::impl IndexHolder`: `impl IndexHolder { }` → `impl < T : Copy > IndexHolder < T > { }`"])] });
+    changes.push(Change { name: "a type gets a generic parameter", facts: vec![expect("declaration", "code different", &["generics of `depot::index::IndexHolder`: `struct IndexHolder { }` → `struct IndexHolder<T> { }`"]), expect("declaration", "code different", &["type `u32` → `T` in 3 places: `depot::index::IndexHolder.value`, return type of `depot::index::IndexHolder::get`, parameter `value` of `depot::index::IndexHolder::new`"]), expect("declaration", "code different", &["generics of `depot::index::impl IndexHolder`: `impl IndexHolder { }` → `impl<T: Copy> IndexHolder<T> { }`"])] });
 
     // Six body edits: two of a value, two of the logic, two of the control flow.
     replace_one(t, &cache, &format!("acc = acc.wrapping_add({});", mark(8, STEP0)), &format!("acc = acc.wrapping_add({});", mark(8, STEP0) + 1000));
@@ -411,9 +411,9 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     let (start, end) = item_range(&text, "pub fn ledger_sum_of(");
     let call = text[start..end].lines().find(|line| line.contains("ledger_sum!(")).unwrap().to_string();
     replace_one(t, &ledger, &call, "    ledger_sum!(x, y, z)");
-    changes.push(Change { name: "declaration: a function gets a parameter", facts: vec![expect("declaration", "code different", &["parameter of `depot::ledger::ledger_sum_of` added: `z : u32`"]), expect("macro", "code different", &[&format!("replace macro input `{}` → `ledger_sum!(x, y, z)` at `depot::ledger::ledger_sum_of/tail`", call.trim())])] });
+    changes.push(Change { name: "declaration: a function gets a parameter", facts: vec![expect("declaration", "code different", &["parameter of `depot::ledger::ledger_sum_of` added: `z: u32`"]), expect("macro", "code different", &[&format!("replace macro input `{}` → `ledger_sum!(x, y, z)` at `depot::ledger::ledger_sum_of/tail`", call.trim())])] });
     replace_one(t, &stock, "pub fn stock_fold<T: Copy + Into<u64>>(", "pub fn stock_fold<T: Copy + Into<u64> + PartialOrd>(");
-    changes.push(Change { name: "declaration: a generic function gets a bound", facts: vec![expect("declaration", "code equal", &["generics of `depot::stock::stock_fold` `< T : Copy + Into < u64 > >` → `< T : Copy + Into < u64 > + PartialOrd >`"])] });
+    changes.push(Change { name: "declaration: a generic function gets a bound", facts: vec![expect("declaration", "code equal", &["generics of `depot::stock::stock_fold` `<T: Copy + Into<u64>>` → `<T: Copy + Into<u64> + PartialOrd>`"])] });
     replace_one(t, &route, "pub fn route_pick<T: Copy + PartialOrd>(a: T, b: T) -> T {", "pub fn route_pick<T>(a: T, b: T) -> T\nwhere\n    T: Copy + PartialOrd,\n{");
     changes.push(Change { name: "declaration: the bounds go to a `where` clause", facts: vec![expect("declaration", "code equal", &["bounds of `depot::route::route_pick`: moved to the `where` clause"])] });
     replace_one(t, &cache, "pub struct CacheHolder {\n    pub value: u32,\n    pub count: u32,\n", "pub struct CacheHolder {\n    pub value: u32,\n    pub count: u32,\n    pub limit: u32,\n");
@@ -437,7 +437,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     changes.push(Change { name: "import: add an import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::cmp::Ordering;`"])] });
     replace_one(t, &stock, "use std::fmt;\n", "use std::fmt::{self, Formatter};\n");
     replace_one(t, &stock, "f: &mut fmt::Formatter<'_>", "f: &mut Formatter<'_>");
-    changes.push(Change { name: "import: use a name through a new import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::fmt::{self, Formatter};`"]), expect("declaration", "code equal", &["parameter of `depot::stock::<StockEntry as fmt::Display>::fmt` `f : & mut fmt :: Formatter < '_ >` → `f : & mut Formatter < '_ >`"])] });
+    changes.push(Change { name: "import: use a name through a new import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::fmt::{self, Formatter};`"]), expect("declaration", "code equal", &["parameter of `depot::stock::<StockEntry as fmt::Display>::fmt` `f: &mut fmt::Formatter<'_>` → `f: &mut Formatter<'_>`"])] });
 
     // A manifest change.
     replace_one(t, "depot/Cargo.toml", "version = \"0.1.0\"", "version = \"0.2.0\"");

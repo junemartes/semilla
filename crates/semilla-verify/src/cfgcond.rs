@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
 use semilla_syntax::Workspace;
 
 use crate::srcconfig::compact;
@@ -74,9 +74,9 @@ pub(crate) fn parse(trees: &[TokenTree]) -> Pred {
         (_, 1) => Pred::Atom(name.strip_prefix("r#").unwrap_or(&name).to_string()),
         (_, 3) if is_punct(trees.get(1), '=') => match &trees[2] {
             // The value of the string, not its token text: `"a\u{62}"` is the value `ab`.
-            TokenTree::Literal(literal) => match syn::parse_str::<syn::LitStr>(&literal.to_string()) {
-                Ok(value) => Pred::Atom(format!("{name}=\"{}\"", value.value())),
-                Err(_) => Pred::Other,
+            TokenTree::Literal(literal) => match semilla_syntax::rs::string_value(&literal.to_string()) {
+                Some(value) => Pred::Atom(format!("{name}=\"{value}\"")),
+                None => Pred::Other,
             },
             _ => Pred::Other,
         },

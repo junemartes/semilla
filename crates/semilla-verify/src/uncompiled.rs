@@ -23,10 +23,8 @@
 
 use std::collections::BTreeSet;
 
-use proc_macro2::{Delimiter, LineColumn, Spacing, TokenStream, TokenTree};
+use semilla_syntax::tt::{Delimiter, LineColumn, Spacing, TokenStream, TokenTree};
 use semilla_syntax::Workspace;
-use syn::spanned::Spanned;
-use syn::visit::Visit;
 
 use crate::cfgcond::{self, Pred};
 use crate::checks::BodyIndex;
@@ -105,7 +103,7 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
 /// The tokens of a file text. `None`: the text is not a token list.
 fn tokens(text: &str) -> Option<Vec<Token>> {
     let mut out = Vec::new();
-    flatten(text.parse::<TokenStream>().ok()?, &mut out);
+    flatten(TokenStream::with_places(text).ok()?, &mut out);
     Some(out)
 }
 
@@ -203,35 +201,23 @@ impl Region {
     }
 }
 
-/// Finds each `cfg` range of a file.
-struct Finder {
-    /// The ranges of the nodes around the current node that can have an attribute.
-    stack: Vec<(At, At)>,
-    out: Vec<Region>,
-}
-
-impl Finder {
-    fn within<T: Spanned>(&mut self, node: &T, visit: impl FnOnce(&mut Self)) {
-        let span = node.span();
-        self.stack.push((at(span.start()), at(span.end())));
-        visit(self);
-        self.stack.pop();
-    }
-}
-
 /// The condition and the text of an attribute that removes its node: `cfg(P)`, or
-/// `cfg_attr(P, cfg(Q))` (the node exists if `P` is false or `Q` is true).
-fn condition(attr: &syn::Attribute) -> Option<(Pred, String)> {
-    let syn::Meta::List(list) = &attr.meta else { return None };
-    let text = |name: &str| format!("#[{name}({})]", cfgcond::show(&crate::srcconfig::compact(&list.tokens.to_string())));
-    if list.path.is_ident("cfg") {
-        let trees: Vec<TokenTree> = list.tokens.clone().into_iter().collect();
-        return Some((cfgcond::parse(&trees), text("cfg")));
-    }
-    if !list.path.is_ident("cfg_attr") {
+/// `cfg_attr(P, cfg(Q))` (the node exists if `P` is false or `Q` is true). `content` is the
+/// list of the tokens in the brackets of the attribute.
+fn condition(content: &[TokenTree]) -> Option<(Pred, String)> {
+    let [TokenTree::Ident(path), TokenTree::Group(list)] = content else { return None };
+    if list.delimiter() != Delimiter::Parenthesis {
         return None;
     }
-    let mut parts = cfgcond::parts(list.tokens.clone()).into_iter();
+    let text = |name: &str| format!("#[{name}({})]", cfgcond::show(&crate::srcconfig::compact(&list.stream().to_string())));
+    if *path == "cfg" {
+        let trees: Vec<TokenTree> = list.stream().into_iter().collect();
+        return Some((cfgcond::parse(&trees), text("cfg")));
+    }
+    if *path != "cfg_attr" {
+        return None;
+    }
+    let mut parts = cfgcond::parts(list.stream()).into_iter();
     let first = cfgcond::parse(&parts.next()?);
     let mut found: Option<Pred> = None;
     for part in parts {
@@ -249,87 +235,70 @@ fn condition(attr: &syn::Attribute) -> Option<(Pred, String)> {
     Some((Pred::Any(vec![Pred::Not(Box::new(first)), found?]), text("cfg_attr")))
 }
 
-impl<'ast> Visit<'ast> for Finder {
-    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        let Some(&(start, end)) = self.stack.last() else { return };
-        if let Some((pred, text)) = condition(attr) {
-            let span = attr.span();
-            self.out.push(Region { start, end, attr: (at(span.start()), at(span.end())), preds: vec![pred], macro_input: false, text });
+/// The `cfg` ranges of a file text. A text that is not a Rust file has no range.
+///
+/// The range of an attribute is the range of its node (an item, a field, a statement, an
+/// expression, …). An inner attribute of the file applies to the full file. An inner attribute
+/// of a module, a function, or a block applies to that node.
+fn regions(text: &str) -> Vec<Region> {
+    use semilla_syntax::rs::{AstNode, Lines, SyntaxKind, ast, code_range};
+    let parsed = [semilla_syntax::rs::Edition::Edition2021, semilla_syntax::rs::Edition::Edition2024, semilla_syntax::rs::Edition::Edition2015].into_iter().find_map(|edition| semilla_syntax::rs::parse_file(text, edition).ok());
+    let Some(file) = parsed else { return Vec::new() };
+    let lines = Lines::new(text);
+    let pos = |offset: usize| lines.pos(offset);
+    let span = |node: &semilla_syntax::rs::SyntaxNode| {
+        let range = code_range(node);
+        (pos(range.start), pos(range.end))
+    };
+    let mut out = Vec::new();
+    for node in file.syntax().descendants() {
+        if node.kind() == SyntaxKind::ATTR {
+            let stream = TokenStream::from_node(&node);
+            let content: Vec<TokenTree> = stream.into_iter().find_map(|tree| match tree {
+                TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group.stream().into_iter().collect()),
+                _ => None,
+            }).unwrap_or_default();
+            let Some((pred, shown)) = condition(&content) else { continue };
+            let Some(mut owner) = node.parent() else { continue };
+            // An inner attribute in a list or a block applies to the node of the list.
+            if matches!(owner.kind(), SyntaxKind::ITEM_LIST | SyntaxKind::ASSOC_ITEM_LIST | SyntaxKind::EXTERN_ITEM_LIST | SyntaxKind::MATCH_ARM_LIST | SyntaxKind::STMT_LIST) {
+                owner = owner.parent().unwrap_or(owner);
+                if owner.kind() == SyntaxKind::BLOCK_EXPR && owner.parent().is_some_and(|parent| parent.kind() == SyntaxKind::FN) {
+                    owner = owner.parent().unwrap_or(owner);
+                }
+            }
+            let (start, end) = if owner.kind() == SyntaxKind::SOURCE_FILE { ((0, 0), (usize::MAX, usize::MAX)) } else { span(&owner) };
+            out.push(Region { start, end, attr: span(&node), preds: vec![pred], macro_input: false, text: shown });
+            continue;
         }
-    }
-    fn visit_macro(&mut self, node: &'ast syn::Macro) {
         // The syntax tree does not go into the input of a macro call. A `cfg` condition in
         // the input can remove a part of it.
+        let (first, tree, name) = if let Some(call) = ast::MacroCall::cast(node.clone()) {
+            let name = call.path().and_then(|path| path.segment()).and_then(|segment| segment.name_ref()).map(|name| name.text().to_string()).unwrap_or_default();
+            (call.path().map(|path| path.syntax().text_range().start()), call.token_tree(), name)
+        } else if let Some(definition) = ast::MacroRules::cast(node.clone()) {
+            (definition.macro_rules_token().map(|token| token.text_range().start()), definition.token_tree(), "macro_rules".to_string())
+        } else {
+            continue;
+        };
+        let (Some(first), Some(tree)) = (first, tree) else { continue };
+        let input: TokenStream = TokenStream::from_node(tree.syntax()).into_iter().flat_map(|tree| match tree {
+            TokenTree::Group(group) => group.stream(),
+            _ => TokenStream::new(),
+        }).collect();
         let mut preds: Vec<Pred> = Vec::new();
-        for condition in cfgcond::conditions(node.tokens.clone()) {
+        for condition in cfgcond::conditions(input) {
             let pred = cfgcond::parse(&condition.into_iter().collect::<Vec<_>>());
             if !preds.contains(&pred) {
                 preds.push(pred);
             }
         }
         if !preds.is_empty() {
-            let span = node.span();
-            let name = node.path.segments.last().map(|segment| segment.ident.to_string()).unwrap_or_default();
-            self.out.push(Region { start: at(span.start()), end: at(span.end()), attr: ((0, 0), (0, 0)), preds, macro_input: true, text: name });
+            let (start, end) = (pos(usize::from(first)), pos(usize::from(tree.syntax().text_range().end())));
+            out.push(Region { start, end, attr: ((0, 0), (0, 0)), preds, macro_input: true, text: name });
         }
-        syn::visit::visit_macro(self, node);
     }
-    fn visit_file(&mut self, node: &'ast syn::File) {
-        // An inner attribute of the file applies to the full file.
-        self.stack.push(((0, 0), (usize::MAX, usize::MAX)));
-        syn::visit::visit_file(self, node);
-        self.stack.pop();
-    }
-    fn visit_item(&mut self, node: &'ast syn::Item) {
-        self.within(node, |this| syn::visit::visit_item(this, node));
-    }
-    fn visit_impl_item(&mut self, node: &'ast syn::ImplItem) {
-        self.within(node, |this| syn::visit::visit_impl_item(this, node));
-    }
-    fn visit_trait_item(&mut self, node: &'ast syn::TraitItem) {
-        self.within(node, |this| syn::visit::visit_trait_item(this, node));
-    }
-    fn visit_foreign_item(&mut self, node: &'ast syn::ForeignItem) {
-        self.within(node, |this| syn::visit::visit_foreign_item(this, node));
-    }
-    fn visit_field(&mut self, node: &'ast syn::Field) {
-        self.within(node, |this| syn::visit::visit_field(this, node));
-    }
-    fn visit_variant(&mut self, node: &'ast syn::Variant) {
-        self.within(node, |this| syn::visit::visit_variant(this, node));
-    }
-    fn visit_arm(&mut self, node: &'ast syn::Arm) {
-        self.within(node, |this| syn::visit::visit_arm(this, node));
-    }
-    fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
-        self.within(node, |this| syn::visit::visit_stmt(this, node));
-    }
-    fn visit_expr(&mut self, node: &'ast syn::Expr) {
-        self.within(node, |this| syn::visit::visit_expr(this, node));
-    }
-    fn visit_field_value(&mut self, node: &'ast syn::FieldValue) {
-        self.within(node, |this| syn::visit::visit_field_value(this, node));
-    }
-    fn visit_field_pat(&mut self, node: &'ast syn::FieldPat) {
-        self.within(node, |this| syn::visit::visit_field_pat(this, node));
-    }
-    fn visit_fn_arg(&mut self, node: &'ast syn::FnArg) {
-        self.within(node, |this| syn::visit::visit_fn_arg(this, node));
-    }
-    fn visit_bare_fn_arg(&mut self, node: &'ast syn::BareFnArg) {
-        self.within(node, |this| syn::visit::visit_bare_fn_arg(this, node));
-    }
-    fn visit_generic_param(&mut self, node: &'ast syn::GenericParam) {
-        self.within(node, |this| syn::visit::visit_generic_param(this, node));
-    }
-}
-
-/// The `cfg` ranges of a file text. A text that is not a Rust file has no range.
-fn regions(text: &str) -> Vec<Region> {
-    let Ok(file) = syn::parse_file(text) else { return Vec::new() };
-    let mut finder = Finder { stack: Vec::new(), out: Vec::new() };
-    finder.visit_file(&file);
-    finder.out
+    out
 }
 
 /// One changed line that no checked configuration compiles.

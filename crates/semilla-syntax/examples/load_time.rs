@@ -7,7 +7,7 @@ fn main() {
     for entry in walk(std::path::Path::new(&dir)) {
         let text = std::fs::read_to_string(&entry).unwrap();
         let started = std::time::Instant::now();
-        let _ = syn::parse_file(&text);
+        let _ = semilla_syntax::rs::parse_file(&text, semilla_syntax::rs::Edition::Edition2021);
         parse += started.elapsed();
         files += 1;
     }

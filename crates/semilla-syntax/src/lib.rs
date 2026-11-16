@@ -1,7 +1,9 @@
 //! The syntax view of semilla.
 //!
 //! - [`load`]: loads a Cargo workspace into the entity tree.
+//! - [`rs`]: the lossless parse of Rust code with `ra_ap_syntax`.
 //! - [`tree`]: the node tree inside an item.
+//! - [`tt`]: the token trees and the compare text.
 //! - [`diff`]: the syntax diff of two workspaces.
 //! - [`doc`]: the code part of a doc text (doc tests).
 //! - [`flow`]: flow views of functions.
@@ -12,8 +14,10 @@ pub mod doc;
 pub mod flow;
 pub mod graph;
 pub mod load;
+pub mod rs;
 mod net;
 pub mod tree;
+pub mod tt;
 
 pub use diff::{Edit, EditKind, Renames, diff};
 pub use load::{BodyItem, BodyItems, CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
@@ -186,7 +190,8 @@ mod tests {
         }
     }
 
-    const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n";
+    // The edition of the test code (`async fn`); a package with no edition is 2015 code (design 39.1).
+    const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
 
     #[test]
     fn resolve_and_anchor_at() {

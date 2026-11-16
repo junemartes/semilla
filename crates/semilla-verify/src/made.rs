@@ -149,7 +149,7 @@ fn definition_name(item: &Item) -> String {
 }
 
 /// The text of a token stream with no space that a reader does not write.
-fn tidy(tokens: proc_macro2::TokenStream) -> String {
+fn tidy(tokens: semilla_syntax::tt::TokenStream) -> String {
     let text = tokens.to_string();
     let word = |part: &str| part.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'');
     let word_end = |part: &str| part.chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_');
@@ -175,56 +175,60 @@ fn tidy(tokens: proc_macro2::TokenStream) -> String {
 
 /// Reads one made item from its expanded text. `None`: Semilla cannot read the text.
 fn shown(item: &MadeItem) -> Option<Shown> {
-    use quote::quote;
+    use semilla_syntax::rs::{AstNode, SyntaxNode, ast};
+    use semilla_syntax::tt::TokenStream;
+    use ast::{HasName, HasVisibility};
     // The compiler prints the crate of a macro as `$crate`.
     let text = item.text.replace("$crate", "crate");
-    let parsed = syn::parse_str::<syn::Item>(&text).ok()?;
-    let vis = |vis: &syn::Visibility| match vis {
-        syn::Visibility::Inherited => String::new(),
-        other => format!("{} ", tidy(quote!(#other))),
+    let parsed = semilla_syntax::rs::parse_item(&text)?;
+    let vis = |vis: Option<ast::Visibility>| match vis {
+        None => String::new(),
+        Some(other) => format!("{} ", tidy(TokenStream::from_node(other.syntax()))),
     };
+    let name = |node: &dyn HasName| node.name().map(|name| name.text().to_string()).unwrap_or_default();
+    let attrs_of = |node: &SyntaxNode| semilla_syntax::load::attribute_texts(node);
     let mut implicit = None;
-    let mut inner_attrs: Vec<&syn::Attribute> = Vec::new();
-    let (attrs, label): (&[syn::Attribute], String) = match &parsed {
-        syn::Item::Fn(value) if item.test => (&value.attrs, value.sig.ident.to_string()),
-        syn::Item::Fn(value) => (&value.attrs, format!("{}fn {}", vis(&value.vis), value.sig.ident)),
-        syn::Item::Impl(value) => {
-            if let Some((_, path, _)) = &value.trait_ {
-                implicit = path.segments.last().map(|segment| segment.ident.to_string()).filter(|name| matches!(name.as_str(), "Drop" | "Deref" | "DerefMut"));
+    let mut inner_attrs: Vec<(String, String)> = Vec::new();
+    let label = match &parsed {
+        ast::Item::Fn(value) if item.test => name(value),
+        ast::Item::Fn(value) => format!("{}fn {}", vis(value.visibility()), name(value)),
+        ast::Item::Impl(value) => {
+            if let Some(path) = value.trait_() {
+                let last = path.syntax().descendants().filter_map(ast::NameRef::cast).filter(|name| name.syntax().ancestors().all(|ancestor| ancestor.kind() != semilla_syntax::rs::SyntaxKind::GENERIC_ARG_LIST)).last();
+                implicit = last.map(|name| name.text().to_string()).filter(|name| matches!(name.as_str(), "Drop" | "Deref" | "DerefMut"));
             }
-            inner_attrs.extend(value.items.iter().flat_map(|inner| match inner {
-                syn::ImplItem::Fn(inner) => inner.attrs.iter().collect::<Vec<_>>(),
-                syn::ImplItem::Const(inner) => inner.attrs.iter().collect(),
+            inner_attrs.extend(value.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).flat_map(|inner| match inner {
+                ast::AssocItem::Fn(inner) => attrs_of(inner.syntax()),
+                ast::AssocItem::Const(inner) => attrs_of(inner.syntax()),
                 _ => Vec::new(),
             }));
-            let mut header = value.clone();
-            header.attrs.clear();
-            header.items.clear();
-            let text = tidy(quote!(#header));
-            (&value.attrs, text.trim_end_matches('}').trim_end().trim_end_matches('{').trim_end().to_string())
+            let mut skip: Vec<semilla_syntax::rs::TextRange> = value.syntax().children().filter(|child| matches!(child.kind(), semilla_syntax::rs::SyntaxKind::ATTR | semilla_syntax::rs::SyntaxKind::DOC_COMMENT)).map(|child| child.text_range()).collect();
+            skip.extend(value.assoc_item_list().map(|list| list.syntax().text_range()));
+            let header = semilla_syntax::tt::text_without(value.syntax(), &skip);
+            tidy(header.parse().ok()?)
         }
-        syn::Item::Struct(value) => (&value.attrs, format!("{}struct {}", vis(&value.vis), value.ident)),
-        syn::Item::Enum(value) => (&value.attrs, format!("{}enum {}", vis(&value.vis), value.ident)),
-        syn::Item::Union(value) => (&value.attrs, format!("{}union {}", vis(&value.vis), value.ident)),
-        syn::Item::Trait(value) => (&value.attrs, format!("{}trait {}", vis(&value.vis), value.ident)),
-        syn::Item::TraitAlias(value) => (&value.attrs, format!("{}trait {}", vis(&value.vis), value.ident)),
-        syn::Item::Type(value) => (&value.attrs, format!("{}type {}", vis(&value.vis), value.ident)),
-        syn::Item::Const(value) => (&value.attrs, format!("{}const {}", vis(&value.vis), value.ident)),
-        syn::Item::Static(value) => (&value.attrs, format!("{}static {}", vis(&value.vis), value.ident)),
-        syn::Item::Mod(value) => (&value.attrs, format!("{}mod {}", vis(&value.vis), value.ident)),
-        syn::Item::Use(value) => {
-            let tree = &value.tree;
-            (&value.attrs, format!("{}use {}", vis(&value.vis), tidy(quote!(#tree))))
+        ast::Item::Struct(value) => format!("{}struct {}", vis(value.visibility()), name(value)),
+        ast::Item::Enum(value) => format!("{}enum {}", vis(value.visibility()), name(value)),
+        ast::Item::Union(value) => format!("{}union {}", vis(value.visibility()), name(value)),
+        ast::Item::Trait(value) => format!("{}trait {}", vis(value.visibility()), name(value)),
+        ast::Item::TypeAlias(value) => format!("{}type {}", vis(value.visibility()), name(value)),
+        ast::Item::Const(value) => format!("{}const {}", vis(value.visibility()), value.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into())),
+        ast::Item::Static(value) => format!("{}static {}", vis(value.visibility()), name(value)),
+        ast::Item::Module(value) => format!("{}mod {}", vis(value.visibility()), name(value)),
+        ast::Item::Use(value) => format!("{}use {}", vis(value.visibility()), tidy(TokenStream::from_node(value.use_tree()?.syntax()))),
+        ast::Item::ExternCrate(value) => format!("extern crate {}", value.name_ref()?.text()),
+        ast::Item::ExternBlock(value) => {
+            let abi = value.abi().and_then(|abi| abi.abi_string()).and_then(|text| text.value().ok().map(|value| value.into_owned()));
+            format!("extern {} block", abi.unwrap_or_else(|| "C".into()))
         }
-        syn::Item::ExternCrate(value) => (&value.attrs, format!("extern crate {}", value.ident)),
-        syn::Item::ForeignMod(value) => (&value.attrs, format!("extern {} block", value.abi.name.as_ref().map(|name| name.value()).unwrap_or_else(|| "C".into()))),
-        syn::Item::Macro(value) => (&value.attrs, format!("macro_rules! {}", value.ident.as_ref()?)),
+        ast::Item::MacroRules(value) => format!("macro_rules! {}", name(value)),
         _ => return None,
     };
+    let attrs = attrs_of(parsed.syntax());
     // The impls of a derive have the attributes of the compiler. A derive is not in the
     // spotlight on an item with no macro, so it is not in the spotlight here.
-    let derived = attrs.iter().any(|attr| attr.path().is_ident("automatically_derived"));
-    let texts: Vec<String> = if derived { Vec::new() } else { attrs.iter().chain(inner_attrs).map(|attr| quote!(#attr).to_string()).collect() };
+    let derived = attrs.iter().any(|(path, _)| path == "automatically_derived");
+    let texts: Vec<String> = if derived { Vec::new() } else { attrs.into_iter().chain(inner_attrs).map(|(_, text)| text).collect() };
     let attributes = if item.test { Vec::new() } else { crate::facts::new_attributes(&texts) };
     let has_unsafe = !derived && text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == "unsafe");
     Some(Shown { label, key: (item.module.clone(), item.text.clone()), public: item.public, attributes, has_unsafe, implicit })

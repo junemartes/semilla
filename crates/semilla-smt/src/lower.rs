@@ -1,4 +1,4 @@
-//! Converts a `syn` expression into the small expression tree that the encoder reads.
+//! Converts a Rust expression (a tree of `ra_ap_syntax`) into the small expression tree that the encoder reads.
 //!
 //! The lowering also records the order of evaluation:
 //!
@@ -9,8 +9,11 @@
 //!   the expression evaluates before the read. A call can change a variable, so
 //!   reads in different epochs are different values.
 
-use quote::ToTokens;
 use std::collections::HashMap;
+
+use semilla_syntax::rs::ast;
+use ast::HasGenericArgs;
+use semilla_syntax::rs::AstToken;
 
 use crate::types::RustType;
 
@@ -124,18 +127,17 @@ pub(crate) struct Side {
     pub calls: Vec<String>,
 }
 
-/// Gives the canonical text of an expression.
-pub(crate) fn expr_text(expr: &syn::Expr) -> String {
-    expr.to_token_stream().to_string()
+/// Gives the canonical text of an expression: its compare text (design 39.2).
+pub(crate) fn expr_text(expr: &ast::Expr) -> String {
+    semilla_syntax::rs::compare(expr)
 }
 
 /// Parses Rust expression source text.
-pub(crate) fn parse(text: &str) -> anyhow::Result<syn::Expr> {
-    syn::parse_str::<syn::Expr>(text)
-        .map_err(|error| anyhow::anyhow!("cannot parse the Rust expression `{text}`: {error}"))
+pub(crate) fn parse(text: &str) -> anyhow::Result<ast::Expr> {
+    semilla_syntax::rs::parse_expr(text).ok_or_else(|| anyhow::anyhow!("cannot parse the Rust expression `{text}`: it is not one expression"))
 }
 
-pub(crate) fn lower(expr: &syn::Expr) -> Lowered<Side> {
+pub(crate) fn lower(expr: &ast::Expr) -> Lowered<Side> {
     let mut lowerer = Lowerer::default();
     let root = lowerer.expr(expr)?;
     Ok(Side {
@@ -148,6 +150,11 @@ pub(crate) fn lower(expr: &syn::Expr) -> Lowered<Side> {
 struct Lowerer {
     calls: Vec<String>,
     call_counts: HashMap<String, usize>,
+}
+
+/// The inner expression of a node, or the reason why the encoding cannot model it.
+fn inner(expr: Option<ast::Expr>, outer: &ast::Expr) -> Lowered<ast::Expr> {
+    expr.ok_or_else(|| Unsupported(format!("the expression `{}`", expr_text(outer))))
 }
 
 impl Lowerer {
@@ -171,73 +178,73 @@ impl Lowerer {
         }))
     }
 
-    fn call(&mut self, expr: &syn::Expr) -> Node {
-        let is_let = matches!(expr, syn::Expr::Let(_));
+    fn call(&mut self, expr: &ast::Expr) -> Node {
+        let is_let = matches!(expr, ast::Expr::LetExpr(_));
         self.leaf(expr_text(expr), LeafKind::Call, is_let)
     }
 
-    fn expr(&mut self, expr: &syn::Expr) -> Lowered<Node> {
-        use syn::Expr;
+    fn expr(&mut self, expr: &ast::Expr) -> Lowered<Node> {
+        use ast::Expr;
         match expr {
-            Expr::Paren(inner) => self.expr(&inner.expr),
-            Expr::Group(inner) => self.expr(&inner.expr),
+            Expr::ParenExpr(value) => self.expr(&inner(value.expr(), expr)?),
             // A reference or a dereference has the same value for the comparisons.
-            Expr::Reference(inner) => self.expr(&inner.expr),
-            Expr::Lit(lit) => self.lit(&lit.lit, expr),
-            Expr::Path(path) => Ok(self.path(path, expr)),
-            Expr::Field(_) => {
+            Expr::RefExpr(value) => self.expr(&inner(value.expr(), expr)?),
+            Expr::Literal(lit) => self.lit(lit, expr),
+            Expr::PathExpr(path) => Ok(self.path(path, expr)),
+            Expr::FieldExpr(_) => {
                 if is_pure_place(expr) {
                     Ok(self.leaf(expr_text(expr), LeafKind::Place, false))
                 } else {
                     Ok(self.call(expr))
                 }
             }
-            Expr::Unary(unary) => match unary.op {
-                syn::UnOp::Deref(_) => self.expr(&unary.expr),
-                syn::UnOp::Not(_) => {
-                    let inner = self.expr(&unary.expr)?;
-                    Ok(Node::new(NodeKind::Unary(UnOp::Not, Box::new(inner))))
+            Expr::PrefixExpr(unary) => match unary.op_kind() {
+                Some(ast::UnaryOp::Deref) => self.expr(&inner(unary.expr(), expr)?),
+                Some(ast::UnaryOp::Not) => {
+                    let value = self.expr(&inner(unary.expr(), expr)?)?;
+                    Ok(Node::new(NodeKind::Unary(UnOp::Not, Box::new(value))))
                 }
-                syn::UnOp::Neg(_) => {
-                    let inner = self.expr(&unary.expr)?;
+                Some(ast::UnaryOp::Neg) => {
+                    let value = self.expr(&inner(unary.expr(), expr)?)?;
                     // Fold the sign into an integer literal, so that `-128i8` is valid.
-                    if let NodeKind::Int { mag, neg, suffix } = inner.kind {
+                    if let NodeKind::Int { mag, neg, suffix } = value.kind {
                         return Ok(Node::new(NodeKind::Int {
                             mag,
                             neg: !neg && mag != 0,
                             suffix,
                         }));
                     }
-                    if inner.kind == NodeKind::Float {
-                        return Ok(inner);
+                    if value.kind == NodeKind::Float {
+                        return Ok(value);
                     }
-                    Ok(Node::new(NodeKind::Unary(UnOp::Neg, Box::new(inner))))
+                    Ok(Node::new(NodeKind::Unary(UnOp::Neg, Box::new(value))))
                 }
-                _ => Err(Unsupported(format!(
+                None => Err(Unsupported(format!(
                     "the unary operator in `{}`",
                     expr_text(expr)
                 ))),
             },
-            Expr::Binary(binary) => {
-                let op = match binary.op {
-                    syn::BinOp::And(_) => BinOp::And,
-                    syn::BinOp::Or(_) => BinOp::Or,
-                    syn::BinOp::BitAnd(_) => BinOp::BitAnd,
-                    syn::BinOp::BitOr(_) => BinOp::BitOr,
-                    syn::BinOp::BitXor(_) => BinOp::BitXor,
-                    syn::BinOp::Add(_) => BinOp::Add,
-                    syn::BinOp::Sub(_) => BinOp::Sub,
-                    syn::BinOp::Mul(_) => BinOp::Mul,
-                    syn::BinOp::Div(_) => BinOp::Div,
-                    syn::BinOp::Rem(_) => BinOp::Rem,
-                    syn::BinOp::Shl(_) => BinOp::Shl,
-                    syn::BinOp::Shr(_) => BinOp::Shr,
-                    syn::BinOp::Eq(_) => BinOp::Eq,
-                    syn::BinOp::Ne(_) => BinOp::Ne,
-                    syn::BinOp::Lt(_) => BinOp::Lt,
-                    syn::BinOp::Le(_) => BinOp::Le,
-                    syn::BinOp::Gt(_) => BinOp::Gt,
-                    syn::BinOp::Ge(_) => BinOp::Ge,
+            Expr::BinExpr(binary) => {
+                use ast::{ArithOp, BinaryOp, CmpOp, LogicOp, Ordering};
+                let op = match binary.op_kind() {
+                    Some(BinaryOp::LogicOp(LogicOp::And)) => BinOp::And,
+                    Some(BinaryOp::LogicOp(LogicOp::Or)) => BinOp::Or,
+                    Some(BinaryOp::ArithOp(ArithOp::BitAnd)) => BinOp::BitAnd,
+                    Some(BinaryOp::ArithOp(ArithOp::BitOr)) => BinOp::BitOr,
+                    Some(BinaryOp::ArithOp(ArithOp::BitXor)) => BinOp::BitXor,
+                    Some(BinaryOp::ArithOp(ArithOp::Add)) => BinOp::Add,
+                    Some(BinaryOp::ArithOp(ArithOp::Sub)) => BinOp::Sub,
+                    Some(BinaryOp::ArithOp(ArithOp::Mul)) => BinOp::Mul,
+                    Some(BinaryOp::ArithOp(ArithOp::Div)) => BinOp::Div,
+                    Some(BinaryOp::ArithOp(ArithOp::Rem)) => BinOp::Rem,
+                    Some(BinaryOp::ArithOp(ArithOp::Shl)) => BinOp::Shl,
+                    Some(BinaryOp::ArithOp(ArithOp::Shr)) => BinOp::Shr,
+                    Some(BinaryOp::CmpOp(CmpOp::Eq { negated: false })) => BinOp::Eq,
+                    Some(BinaryOp::CmpOp(CmpOp::Eq { negated: true })) => BinOp::Ne,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Less, strict: true })) => BinOp::Lt,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Less, strict: false })) => BinOp::Le,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Greater, strict: true })) => BinOp::Gt,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Greater, strict: false })) => BinOp::Ge,
                     _ => {
                         return Err(Unsupported(format!(
                             "the assignment operator in `{}`",
@@ -246,48 +253,47 @@ impl Lowerer {
                     }
                 };
                 // Rust evaluates the left operand first.
-                let lhs = self.expr(&binary.left)?;
-                let rhs = self.expr(&binary.right)?;
+                let lhs = self.expr(&inner(binary.lhs(), expr)?)?;
+                let rhs = self.expr(&inner(binary.rhs(), expr)?)?;
                 Ok(Node::new(NodeKind::Binary(
                     op,
                     Box::new(lhs),
                     Box::new(rhs),
                 )))
             }
-            Expr::Cast(cast) => {
-                let inner = self.expr(&cast.expr)?;
-                let target = RustType::parse(&cast.ty.to_token_stream().to_string());
+            Expr::CastExpr(cast) => {
+                let value = self.expr(&inner(cast.expr(), expr)?)?;
+                let ty = cast.ty().map(|ty| semilla_syntax::rs::compare(&ty)).unwrap_or_default();
+                let target = RustType::parse(&ty);
                 if target == RustType::Unknown {
                     return Err(Unsupported(format!(
-                        "the cast to the unknown type `{}`",
-                        cast.ty.to_token_stream()
+                        "the cast to the unknown type `{ty}`"
                     )));
                 }
-                Ok(Node::new(NodeKind::Cast(Box::new(inner), target)))
+                Ok(Node::new(NodeKind::Cast(Box::new(value), target)))
             }
             // All other forms are atoms that can have side effects.
             _ => Ok(self.call(expr)),
         }
     }
 
-    fn lit(&mut self, lit: &syn::Lit, expr: &syn::Expr) -> Lowered<Node> {
-        match lit {
-            syn::Lit::Bool(b) => Ok(Node::new(NodeKind::Bool(b.value))),
-            syn::Lit::Int(int) => {
-                let suffix = int.suffix();
-                let suffix = if suffix.is_empty() {
-                    None
-                } else {
-                    match RustType::parse(suffix) {
+    fn lit(&mut self, lit: &ast::Literal, expr: &ast::Expr) -> Lowered<Node> {
+        match lit.kind() {
+            ast::LiteralKind::Bool(value) => Ok(Node::new(NodeKind::Bool(value))),
+            ast::LiteralKind::IntNumber(int) => {
+                let text = int.text().to_string();
+                let suffix = match int.suffix() {
+                    None | Some("") => None,
+                    Some(suffix) => match RustType::parse(suffix) {
                         RustType::Float => return Ok(Node::new(NodeKind::Float)),
                         ty @ RustType::Int { .. } => Some(ty),
                         _ => {
-                            return Err(Unsupported(format!("the literal suffix in `{}`", int)));
+                            return Err(Unsupported(format!("the literal suffix in `{text}`")));
                         }
-                    }
+                    },
                 };
-                let mag = int.base10_digits().parse::<u128>().map_err(|_| {
-                    Unsupported(format!("the integer literal `{int}` is too large"))
+                let mag = int.value().map_err(|_| {
+                    Unsupported(format!("the integer literal `{text}` is too large"))
                 })?;
                 Ok(Node::new(NodeKind::Int {
                     mag,
@@ -295,27 +301,34 @@ impl Lowerer {
                     suffix,
                 }))
             }
-            syn::Lit::Byte(byte) => Ok(Node::new(NodeKind::Int {
-                mag: byte.value() as u128,
-                neg: false,
-                suffix: Some(RustType::Int {
-                    bits: 8,
-                    signed: false,
-                }),
-            })),
-            syn::Lit::Char(c) => Ok(Node::new(NodeKind::Char(c.value() as u32))),
-            syn::Lit::Float(_) => Ok(Node::new(NodeKind::Float)),
+            ast::LiteralKind::Byte(byte) => match byte.value() {
+                Ok(value) => Ok(Node::new(NodeKind::Int {
+                    mag: value as u128,
+                    neg: false,
+                    suffix: Some(RustType::Int {
+                        bits: 8,
+                        signed: false,
+                    }),
+                })),
+                Err(_) => Err(Unsupported(format!("the literal `{}`", expr_text(expr)))),
+            },
+            ast::LiteralKind::Char(c) => match c.value() {
+                Ok(value) => Ok(Node::new(NodeKind::Char(value as u32))),
+                Err(_) => Err(Unsupported(format!("the literal `{}`", expr_text(expr)))),
+            },
+            ast::LiteralKind::FloatNumber(_) => Ok(Node::new(NodeKind::Float)),
             // Strings and other literals are constants without a model.
             _ => Ok(self.leaf(expr_text(expr), LeafKind::Const, false)),
         }
     }
 
-    fn path(&mut self, path: &syn::ExprPath, expr: &syn::Expr) -> Node {
-        let segments = &path.path.segments;
-        let plain =
-            path.qself.is_none() && segments.iter().all(|segment| segment.arguments.is_none());
-        if plain && segments.len() == 1 && path.path.leading_colon.is_none() {
-            let name = segments[0].ident.to_string();
+    fn path(&mut self, path: &ast::PathExpr, expr: &ast::Expr) -> Node {
+        let segments = path.path().map(|path| path_segments(&path)).unwrap_or_default();
+        let plain = !segments.is_empty() && segments.iter().all(|segment| segment.type_anchor().is_none() && segment.generic_arg_list().is_none() && segment.name_ref().is_some());
+        let rooted = segments.first().is_some_and(|segment| segment.coloncolon_token().is_some());
+        let name = |segment: &ast::PathSegment| segment.name_ref().map(|name| name.text().to_string()).unwrap_or_default();
+        if plain && segments.len() == 1 && !rooted {
+            let name = name(&segments[0]);
             let kind = if is_constant_name(&name) {
                 LeafKind::Const
             } else {
@@ -324,13 +337,25 @@ impl Lowerer {
             return self.leaf(name, kind, false);
         }
         if plain && segments.len() == 2 {
-            let ty = RustType::parse(&segments[0].ident.to_string());
-            if let Some(node) = int_constant(ty, &segments[1].ident.to_string()) {
+            let ty = RustType::parse(&name(&segments[0]));
+            if let Some(node) = int_constant(ty, &name(&segments[1])) {
                 return node;
             }
         }
         self.leaf(expr_text(expr), LeafKind::Const, false)
     }
+}
+
+/// The segments of a path, from the first one.
+fn path_segments(path: &ast::Path) -> Vec<ast::PathSegment> {
+    let mut out = Vec::new();
+    let mut next = Some(path.clone());
+    while let Some(path) = next {
+        out.extend(path.segment());
+        next = path.qualifier();
+    }
+    out.reverse();
+    out
 }
 
 /// True for a name in upper case, for example `MAX_LEN`. Rust uses these names for constants.
@@ -369,15 +394,14 @@ fn int_constant(ty: RustType, name: &str) -> Option<Node> {
 }
 
 /// True if the expression reads a place and has no call: `a`, `a.b.c`, `(*a).b`.
-fn is_pure_place(expr: &syn::Expr) -> bool {
-    use syn::Expr;
+fn is_pure_place(expr: &ast::Expr) -> bool {
+    use ast::Expr;
     match expr {
-        Expr::Path(path) => path.qself.is_none(),
-        Expr::Field(field) => is_pure_place(&field.base),
-        Expr::Paren(inner) => is_pure_place(&inner.expr),
-        Expr::Group(inner) => is_pure_place(&inner.expr),
-        Expr::Reference(inner) => is_pure_place(&inner.expr),
-        Expr::Unary(unary) => matches!(unary.op, syn::UnOp::Deref(_)) && is_pure_place(&unary.expr),
+        Expr::PathExpr(path) => path.path().is_some_and(|path| path_segments(&path).iter().all(|segment| segment.type_anchor().is_none())),
+        Expr::FieldExpr(field) => field.expr().is_some_and(|base| is_pure_place(&base)),
+        Expr::ParenExpr(inner) => inner.expr().is_some_and(|value| is_pure_place(&value)),
+        Expr::RefExpr(inner) => inner.expr().is_some_and(|value| is_pure_place(&value)),
+        Expr::PrefixExpr(unary) => unary.op_kind() == Some(ast::UnaryOp::Deref) && unary.expr().is_some_and(|value| is_pure_place(&value)),
         _ => false,
     }
 }

@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use syn::spanned::Spanned;
 
-use crate::tree::{self, Node, tokens};
+use crate::rs::{self, AstNode, Edition, Lines, SyntaxKind, SyntaxNode, SyntaxToken, T, TextRange, ast, compare_opt};
+use crate::tree::{self, Node};
+use crate::tt::{Delimiter, Flat, TokenStream, TokenTree, compare_text, display_text, flat_display, flat_text, flat_tokens};
+use ast::{HasGenericArgs, HasModuleItem, HasName};
 
 /// One member crate of the workspace.
 #[derive(Clone, Debug, Serialize)]
@@ -87,7 +89,22 @@ pub struct Item {
     pub source: String,
     /// True for test code: `#[test]` functions, `#[cfg(test)]` modules, and files in `tests/`.
     pub test: bool,
+    /// The display texts of the parts (design 39.2): the source text as written, on one line.
+    #[serde(skip)]
+    pub display: ItemDisplay,
 }
+
+/// The display texts of the parts of an item, in the order of the compare texts.
+#[derive(Clone, Debug, Default)]
+pub struct ItemDisplay {
+    pub vis: String,
+    pub signature: String,
+    pub attrs: Vec<String>,
+    pub members: Vec<String>,
+}
+
+/// A compare text and its display text.
+type Text = (String, String);
 
 /// The loaded workspace.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -117,12 +134,12 @@ pub struct Workspace {
     /// The inner attributes (`#![…]`) of each crate root and module file, by module path, with
     /// the file. An inline module has them in its own attributes.
     pub inner_attrs: BTreeMap<String, (String, Vec<String>)>,
+    /// The display texts of the inner attributes, in the same order (design 39.2).
+    #[serde(skip)]
+    pub inner_attrs_display: BTreeMap<String, Vec<String>>,
     /// The files of the parsed targets that the loader cannot parse, with the reason (design
     /// 37.5). The file is not in `parsed_files`.
     pub parse_errors: BTreeMap<String, String>,
-    /// The files that parse only as 2015 edition code, with the count of the parameters with
-    /// no name (design 37.5). The loader gives each such parameter the name `_`.
-    pub old_edition: BTreeMap<String, usize>,
     /// The items with a body by file ([`Workspace::body_items`]), made at the first use.
     #[serde(skip)]
     pub body_index: BodyIndex,
@@ -214,12 +231,13 @@ impl CodeFile {
 }
 
 /// One package for the loader: the folder, the crate name, the member crates that it depends
-/// on, and the targets (kind, name, root file).
+/// on, the targets (kind, name, root file), and the edition (design 39.1).
 struct Package {
     dir: PathBuf,
     name: String,
     deps: Vec<String>,
     targets: Vec<(String, String, PathBuf)>,
+    edition: Edition,
 }
 
 /// One entry of a tree.
@@ -255,10 +273,12 @@ impl Workspace {
         let mut packages = Vec::new();
         let found = find_packages(root)?;
         let names: Vec<String> = found.iter().map(|(_, name, _)| name.clone()).collect();
+        let workspace_edition = read_manifest(&root.join("Cargo.toml")).ok().and_then(|manifest| manifest.get("workspace")?.get("package")?.get("edition")?.as_str().map(str::to_string));
         for (dir, name, manifest) in found {
             let deps = manifest.get("dependencies").and_then(|deps| deps.as_table()).map(|deps| deps.keys().map(|key| key.replace('-', "_")).filter(|key| names.contains(key)).collect()).unwrap_or_default();
             let targets = manifest_targets(&dir, &manifest);
-            packages.push(Package { dir, name, deps, targets });
+            let edition = manifest_edition(&manifest, workspace_edition.as_deref());
+            packages.push(Package { dir, name, deps, targets, edition });
         }
         Workspace::load_packages(root, packages)
     }
@@ -302,7 +322,8 @@ impl Workspace {
                     targets.push((kind.to_string(), name, file));
                 }
             }
-            packages.push(Package { dir, name: crate_name(package), deps, targets });
+            let edition = rs::edition(package.get("edition").and_then(|e| e.as_str()));
+            packages.push(Package { dir, name: crate_name(package), deps, targets, edition });
         }
         packages.sort_by(|a, b| a.dir.cmp(&b.dir));
         Workspace::load_packages(root, packages)
@@ -332,7 +353,7 @@ impl Workspace {
                 // name of the package (`benches/hex.rs` of the package `hex`).
                 let main = *file == package.dir.join("src/main.rs");
                 let module = if kind == "lib" || main { package.name.clone() } else { format!("{}::{}", package.name, name.replace('-', "_")) };
-                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, parse_errors: &mut workspace.parse_errors, old_edition: &mut workspace.old_edition, crate_name: &package.name };
+                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, parse_errors: &mut workspace.parse_errors, crate_name: &package.name, edition: package.edition };
                 loader.load_file(file, &module, matches!(kind.as_str(), "test" | "bench"))?;
             }
         }
@@ -342,7 +363,7 @@ impl Workspace {
             for (kind, name, file) in &package.targets {
                 if !parsed_kind(kind) {
                     let code = CodeFile { package: package.name.clone(), kind: kind.clone(), target: name.clone(), outside: false };
-                    walk_code(root, file, &code, &mut workspace);
+                    walk_code(root, file, &code, package.edition, &mut workspace);
                 }
             }
         }
@@ -356,9 +377,10 @@ impl Workspace {
             if !manifest.contains_key("package") {
                 continue;
             }
+            let edition = manifest_edition(&manifest, None);
             for (kind, name, file) in manifest_targets(&dir, &manifest) {
                 let code = CodeFile { package: relative(root, &dir), kind, target: name, outside: true };
-                walk_code(root, &file, &code, &mut workspace);
+                walk_code(root, &file, &code, edition, &mut workspace);
             }
         }
         workspace.items = unique_paths(items);
@@ -417,6 +439,17 @@ fn find_packages(root: &Path) -> Result<Vec<(PathBuf, String, toml::Table)>> {
         packages.push((dir, name.replace('-', "_"), manifest));
     }
     Ok(packages)
+}
+
+/// The edition of a package manifest: `package.edition`, or the edition of the workspace for
+/// `edition.workspace = true`.
+fn manifest_edition(manifest: &toml::Table, workspace: Option<&str>) -> Edition {
+    let value = manifest.get("package").and_then(|package| package.get("edition"));
+    match value {
+        Some(toml::Value::String(text)) => rs::edition(Some(text)),
+        Some(toml::Value::Table(table)) if table.get("workspace").and_then(|v| v.as_bool()) == Some(true) => rs::edition(workspace),
+        _ => rs::edition(None),
+    }
 }
 
 fn read_manifest(path: &Path) -> Result<toml::Table> {
@@ -509,24 +542,24 @@ fn find_manifests(root: &Path, dir: &Path, found: &mut Vec<PathBuf>) {
 /// Records the root file of a target that the loader does not parse into items, its module
 /// files, and the files that it includes with `include!`. A file that does not parse is still a
 /// code file: the compiler reads it.
-fn walk_code(root: &Path, file: &Path, code: &CodeFile, workspace: &mut Workspace) {
-    fn modules(root: &Path, items: &[syn::Item], file: &Path, dir: &Path, top: bool, code: &CodeFile, workspace: &mut Workspace) {
+fn walk_code(root: &Path, file: &Path, code: &CodeFile, edition: Edition, workspace: &mut Workspace) {
+    fn modules(root: &Path, items: impl Iterator<Item = ast::Item>, file: &Path, dir: &Path, top: bool, code: &CodeFile, edition: Edition, workspace: &mut Workspace) {
         for item in items {
-            let syn::Item::Mod(item_mod) = item else { continue };
-            let name = item_mod.ident.to_string();
-            match &item_mod.content {
-                Some((_, content)) => modules(root, content, file, &dir.join(&name), false, code, workspace),
+            let ast::Item::Module(item_mod) = item else { continue };
+            let name = name_of(&item_mod);
+            match item_mod.item_list() {
+                Some(content) => modules(root, content.items(), file, &dir.join(&name), false, code, edition, workspace),
                 None => {
                     let base = if top { file.parent().unwrap_or(Path::new(".")).to_path_buf() } else { dir.to_path_buf() };
-                    for (found, by_attr) in mod_files(&item_mod.attrs, &base, dir, &name) {
+                    for (found, by_attr) in mod_files(&attributes(item_mod.syntax()), &base, dir, &name) {
                         let child_dir = if by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(&found) };
-                        visit(root, &found, &child_dir, code, workspace);
+                        visit(root, &found, &child_dir, code, edition, workspace);
                     }
                 }
             }
         }
     }
-    fn visit(root: &Path, file: &Path, child_dir: &Path, code: &CodeFile, workspace: &mut Workspace) {
+    fn visit(root: &Path, file: &Path, child_dir: &Path, code: &CodeFile, edition: Edition, workspace: &mut Workspace) {
         let rel = relative(root, file);
         if workspace.parsed_files.contains(&rel) || workspace.code_files.contains_key(&rel) || !file.is_file() {
             return;
@@ -540,16 +573,17 @@ fn walk_code(root: &Path, file: &Path, code: &CodeFile, workspace: &mut Workspac
             if let Some(path) = rest.strip_prefix('"').and_then(|rest| rest.split('"').next()).filter(|_| boundary) {
                 let included = file.parent().unwrap_or(Path::new(".")).join(path);
                 let dir = included.parent().map(Path::to_path_buf).unwrap_or_default();
-                visit(root, &included, &dir, code, workspace);
+                visit(root, &included, &dir, code, edition, workspace);
             }
         }
-        if let Ok((parsed, _, _)) = parse_rust(&text) {
-            modules(root, &parsed.items, file, child_dir, true, code, workspace);
+        let parsed = std::iter::once(edition).chain(rs::EDITIONS).find_map(|edition| rs::parse_file(&text, edition).ok());
+        if let Some(parsed) = parsed {
+            modules(root, parsed.items(), file, child_dir, true, code, edition, workspace);
         }
     }
     // The child modules of a root file are in the folder of the root file.
     let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-    visit(root, file, &dir, code, workspace);
+    visit(root, file, &dir, code, edition, workspace);
 }
 
 /// The files of the module tree of one target root, relative to `root`: the root file, each
@@ -558,7 +592,7 @@ fn walk_code(root: &Path, file: &Path, code: &CodeFile, workspace: &mut Workspac
 pub fn module_files(root: &Path, file: &Path) -> BTreeSet<String> {
     let mut workspace = Workspace::default();
     let code = CodeFile { package: String::new(), kind: String::new(), target: String::new(), outside: false };
-    walk_code(root, file, &code, &mut workspace);
+    walk_code(root, file, &code, Edition::Edition2021, &mut workspace);
     workspace.code_files.into_keys().collect()
 }
 
@@ -569,7 +603,6 @@ fn doc_lines(marker: &str, text: &str) -> String {
     }
     text.lines().map(|line| format!("{marker}{line}")).collect::<Vec<_>>().join("\n")
 }
-
 fn relative(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
     if rel.is_empty() { ".".to_string() } else { rel }
@@ -656,44 +689,62 @@ fn unique_paths(items: Vec<Item>) -> BTreeMap<String, Item> {
     map
 }
 
+/// The name of a node with a name (`r#type` keeps its `r#`).
+fn name_of(node: &impl ast::HasName) -> String {
+    node.name().map(|name| name.text().to_string()).unwrap_or_default()
+}
+
 /// The name that an item gets in its module (the last path segment), and the names of the
 /// methods of an impl (with their owner). Twins have the same name.
-fn sibling_names(item: &syn::Item) -> Vec<String> {
+fn sibling_names(item: &ast::Item) -> Vec<String> {
     match item {
-        syn::Item::Mod(value) => vec![value.ident.to_string()],
-        syn::Item::Fn(value) => vec![value.sig.ident.to_string()],
-        syn::Item::Impl(value) => {
+        ast::Item::Module(value) => vec![name_of(value)],
+        ast::Item::Fn(value) => vec![name_of(value)],
+        ast::Item::Impl(value) => {
             let owner = impl_owner(value);
             let mut names = vec![format!("impl {owner}")];
-            names.extend(value.items.iter().filter_map(|it| match it {
-                syn::ImplItem::Fn(method) => Some(format!("{owner}::{}", method.sig.ident)),
-                _ => None,
-            }));
+            names.extend(impl_methods(value).map(|method| format!("{owner}::{}", name_of(&method))));
             names
         }
-        syn::Item::Struct(value) => vec![value.ident.to_string()],
-        syn::Item::Enum(value) => vec![value.ident.to_string()],
-        syn::Item::Trait(value) => vec![value.ident.to_string()],
-        syn::Item::Const(value) => vec![value.ident.to_string()],
-        syn::Item::Static(value) => vec![value.ident.to_string()],
-        syn::Item::Type(value) => vec![value.ident.to_string()],
+        ast::Item::Struct(value) => vec![name_of(value)],
+        ast::Item::Enum(value) => vec![name_of(value)],
+        ast::Item::Trait(value) if value.eq_token().is_none() => vec![name_of(value)],
+        ast::Item::Const(value) => vec![const_name(value)],
+        ast::Item::Static(value) => vec![name_of(value)],
+        ast::Item::TypeAlias(value) => vec![name_of(value)],
         // A macro definition (`macro_rules! name`). A macro call is not a twin of a definition
         // (batch 6b, part 2): the loader gives each call its own number.
-        syn::Item::Macro(value) => value.ident.as_ref().map(|ident| format!("{ident}!")).into_iter().collect(),
+        ast::Item::MacroRules(value) => vec![format!("{}!", name_of(value))],
         other => other_name(other).into_iter().collect(),
     }
+}
+
+/// The name of a constant: its name, or `_`.
+fn const_name(value: &ast::Const) -> String {
+    value.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".to_string())
+}
+
+/// The methods of an impl: each function with a body.
+fn impl_methods(item: &ast::Impl) -> impl Iterator<Item = ast::Fn> {
+    item.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).filter_map(|member| match member {
+        ast::AssocItem::Fn(method) if method.body().is_some() => Some(method),
+        _ => None,
+    })
 }
 
 /// The name of an item of the kind [`ItemKind::Other`], from its text: `extern crate rand`,
 /// `extern C` (a block of foreign items), or the name of a union or of a trait alias. `None` for
 /// an item with no name of its own: the loader gives it `item#N`, where N is its index among
 /// such items of the module.
-fn other_name(item: &syn::Item) -> Option<String> {
+fn other_name(item: &ast::Item) -> Option<String> {
     match item {
-        syn::Item::ExternCrate(value) => Some(format!("extern crate {}", value.ident)),
-        syn::Item::ForeignMod(value) => Some(format!("extern {}", value.abi.name.as_ref().map(|name| name.value()).unwrap_or_else(|| "C".to_string()))),
-        syn::Item::Union(value) => Some(value.ident.to_string()),
-        syn::Item::TraitAlias(value) => Some(value.ident.to_string()),
+        ast::Item::ExternCrate(value) => Some(format!("extern crate {}", value.name_ref().map(|name| name.text().to_string()).unwrap_or_default())),
+        ast::Item::ExternBlock(value) => {
+            let abi = value.abi().and_then(|abi| abi.abi_string()).and_then(|text| text.value().ok().map(|value| value.into_owned()));
+            Some(format!("extern {}", abi.unwrap_or_else(|| "C".to_string())))
+        }
+        ast::Item::Union(value) => Some(name_of(value)),
+        ast::Item::Trait(value) if value.eq_token().is_some() => Some(name_of(value)),
         _ => None,
     }
 }
@@ -707,70 +758,77 @@ fn other_name(item: &syn::Item) -> Option<String> {
 /// The lifetimes are not in the owner (design 37.2): `impl<'a> Parse for &'a mut Node` and
 /// `impl Parse for &mut Node` give `<&mutNode as Parse>`. The compiler does not permit two
 /// impls of one trait that are different only in a lifetime.
-fn impl_owner(item_impl: &syn::ItemImpl) -> String {
-    let self_ty = match item_impl.self_ty.as_ref() {
-        syn::Type::Path(type_path) if type_path.qself.is_none() => without_arguments(&type_path.path),
-        other => tokens(&without_lifetimes(other)).replace(' ', ""),
+fn impl_owner(item_impl: &ast::Impl) -> String {
+    let self_ty = match item_impl.self_ty() {
+        Some(ast::Type::PathType(path)) if path.path().is_some_and(|path| plain_path(&path)) => without_arguments(path.syntax()),
+        Some(other) => without_lifetimes(other.syntax()).replace(' ', ""),
+        None => String::new(),
     };
-    match &item_impl.trait_ {
-        Some((_, trait_path, _)) => format!("<{self_ty} as {}>", without_arguments(trait_path)),
+    let trait_path = item_impl.trait_().map(|ty| without_arguments(ty.syntax()));
+    match trait_path {
+        Some(trait_path) => format!("<{self_ty} as {trait_path}>"),
         None => self_ty,
     }
 }
 
+/// A path with no qualified start (`<T as Trait>::Name`).
+fn plain_path(path: &ast::Path) -> bool {
+    path.syntax().descendants().filter_map(ast::PathSegment::cast).all(|segment| segment.type_anchor().is_none())
+}
+
 /// A type without its lifetimes: `&'a mut Node<'b, T>` gives `&mut Node<T>`, and
 /// `dyn Parse + 'a` gives `dyn Parse`.
-fn without_lifetimes(ty: &syn::Type) -> syn::Type {
-    use syn::visit_mut::{self, VisitMut};
-    struct Lifetimes;
-    fn bounds(list: &mut syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>) {
-        if list.iter().any(|bound| !matches!(bound, syn::TypeParamBound::Lifetime(_))) {
-            *list = std::mem::take(list).into_iter().filter(|bound| !matches!(bound, syn::TypeParamBound::Lifetime(_))).collect();
-        }
-    }
-    impl VisitMut for Lifetimes {
-        fn visit_type_reference_mut(&mut self, node: &mut syn::TypeReference) {
-            node.lifetime = None;
-            visit_mut::visit_type_reference_mut(self, node);
-        }
-        fn visit_path_segment_mut(&mut self, node: &mut syn::PathSegment) {
-            if let syn::PathArguments::AngleBracketed(list) = &mut node.arguments {
-                list.args = std::mem::take(&mut list.args).into_iter().filter(|argument| !matches!(argument, syn::GenericArgument::Lifetime(_))).collect();
-                if list.args.is_empty() {
-                    node.arguments = syn::PathArguments::None;
-                }
+fn without_lifetimes(ty: &SyntaxNode) -> String {
+    let mut skip: Vec<TextRange> = Vec::new();
+    for node in ty.descendants() {
+        if let Some(reference) = ast::RefType::cast(node.clone()) {
+            skip.extend(reference.lifetime().map(|lifetime| lifetime.syntax().text_range()));
+        } else if let Some(list) = ast::GenericArgList::cast(node.clone()) {
+            let args: Vec<ast::GenericArg> = list.generic_args().collect();
+            if args.iter().all(|arg| matches!(arg, ast::GenericArg::LifetimeArg(_))) {
+                skip.push(list.syntax().text_range());
+            } else {
+                skip.extend(args.iter().filter(|arg| matches!(arg, ast::GenericArg::LifetimeArg(_))).map(|arg| with_separator(arg.syntax(), T![,])));
             }
-            visit_mut::visit_path_segment_mut(self, node);
-        }
-        fn visit_type_trait_object_mut(&mut self, node: &mut syn::TypeTraitObject) {
-            bounds(&mut node.bounds);
-            visit_mut::visit_type_trait_object_mut(self, node);
-        }
-        fn visit_type_impl_trait_mut(&mut self, node: &mut syn::TypeImplTrait) {
-            bounds(&mut node.bounds);
-            visit_mut::visit_type_impl_trait_mut(self, node);
-        }
-        fn visit_type_bare_fn_mut(&mut self, node: &mut syn::TypeBareFn) {
-            node.lifetimes = None;
-            visit_mut::visit_type_bare_fn_mut(self, node);
-        }
-        fn visit_trait_bound_mut(&mut self, node: &mut syn::TraitBound) {
-            node.lifetimes = None;
-            visit_mut::visit_trait_bound_mut(self, node);
+        } else if let Some(bounds) = ast::TypeBoundList::cast(node.clone()) {
+            let lifetime = |bound: &ast::TypeBound| bound.lifetime().is_some() && bound.ty().is_none();
+            let list: Vec<ast::TypeBound> = bounds.bounds().collect();
+            if list.iter().any(|bound| !lifetime(bound)) {
+                skip.extend(list.iter().filter(|bound| lifetime(bound)).map(|bound| with_separator(bound.syntax(), T![+])));
+            }
+        } else if node.kind() == SyntaxKind::FOR_BINDER {
+            skip.push(node.text_range());
         }
     }
-    let mut ty = ty.clone();
-    Lifetimes.visit_type_mut(&mut ty);
-    ty
+    let tokens: Vec<Flat> = flat_tokens(ty).into_iter().filter(|token| !skip.iter().any(|range| range.contains_range(TextRange::new((token.start as u32).into(), (token.end as u32).into())))).collect();
+    flat_text(&tokens)
+}
+
+/// The range of a node with the separator after it, else with the separator before it.
+fn with_separator(node: &SyntaxNode, separator: SyntaxKind) -> TextRange {
+    let next = node.siblings_with_tokens(ra_ap_syntax::Direction::Next).skip(1).find(|element| !element.kind().is_trivia());
+    if let Some(next) = next.filter(|element| element.kind() == separator) {
+        return node.text_range().cover(next.text_range());
+    }
+    let before = node.siblings_with_tokens(ra_ap_syntax::Direction::Prev).skip(1).find(|element| !element.kind().is_trivia());
+    match before.filter(|element| element.kind() == separator) {
+        Some(before) => node.text_range().cover(before.text_range()),
+        None => node.text_range(),
+    }
 }
 
 /// A path without its generic arguments: `std::fmt::Display`, `Wrapper`.
-fn without_arguments(path: &syn::Path) -> String {
-    let mut path = path.clone();
-    for segment in &mut path.segments {
-        segment.arguments = syn::PathArguments::None;
-    }
-    tokens(&path).replace(' ', "")
+fn without_arguments(path: &SyntaxNode) -> String {
+    let skip: Vec<TextRange> = path
+        .descendants()
+        .filter_map(ast::PathSegment::cast)
+        .flat_map(|segment| {
+            let arguments = [segment.generic_arg_list().map(|list| list.syntax().text_range()), segment.parenthesized_arg_list().map(|list| list.syntax().text_range()), segment.ret_type().map(|ret| ret.syntax().text_range())];
+            arguments.into_iter().flatten()
+        })
+        .collect();
+    let tokens: Vec<Flat> = flat_tokens(path).into_iter().filter(|token| !skip.iter().any(|range| range.contains_range(TextRange::new((token.start as u32).into(), (token.end as u32).into())))).collect();
+    flat_text(&tokens).replace(' ', "")
 }
 
 /// Gives each twin name of one item list its suffix (`#0`, `#1`, …) in source order.
@@ -780,7 +838,7 @@ struct Twins {
 }
 
 impl Twins {
-    fn new(items: &[syn::Item]) -> Twins {
+    fn new(items: &[ast::Item]) -> Twins {
         Twins::from_names(items.iter().flat_map(sibling_names))
     }
 
@@ -804,39 +862,147 @@ impl Twins {
     }
 }
 
+
+/// One attribute of an item: an `#[…]` attribute or a doc comment (design 39.3).
+pub(crate) struct Attr {
+    /// The compare text: `# [cfg (test)]`. A doc comment is `# [doc = "…"]`.
+    pub(crate) text: String,
+    /// The path: `doc`, `cfg`, `rustfmt::skip`.
+    pub(crate) path: String,
+    /// The tokens inside the brackets.
+    pub(crate) content: Vec<TokenTree>,
+    /// The display text: `#[cfg(test)]`, `/// x`.
+    pub(crate) display: String,
+    /// The value of a doc string (see [`Attr::doc_value`]).
+    value: Option<String>,
+}
+
+impl Attr {
+    /// A doc text: `/// x`, `#[doc = "x"]`, or `#[doc = include_str!(…)]`. A `#[doc(KEY)]`
+    /// attribute (`doc(hidden)`, `doc(alias = "…")`) is not a doc text (batch 6b, part 1).
+    pub(crate) fn doc_text(&self) -> bool {
+        self.path == "doc" && matches!(self.content.get(1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=')
+    }
+
+    /// The value of a doc string: `/// x` and `#[doc = "x"]` give ` x` and `x`.
+    pub(crate) fn doc_value(&self) -> Option<String> {
+        self.value.clone()
+    }
+
+    /// The value of `NAME = "…"` in the brackets.
+    fn string_value(&self, name: &str) -> Option<String> {
+        match self.content.as_slice() {
+            [TokenTree::Ident(ident), TokenTree::Punct(punct), TokenTree::Literal(literal)] if ident == name && punct.as_char() == '=' => rs::string_value(&literal.to_string()),
+            _ => None,
+        }
+    }
+}
+
+/// The attributes of a node: the outer ones, then the inner ones (`#![…]`, `//!`) of its
+/// block, its module, or its impl.
+pub(crate) fn attributes(node: &SyntaxNode) -> Vec<Attr> {
+    let direct = |node: &SyntaxNode| -> Vec<Attr> { node.children().filter(|child| matches!(child.kind(), SyntaxKind::ATTR | SyntaxKind::DOC_COMMENT)).map(|child| attr(&child)).collect() };
+    let mut out = direct(node);
+    let inner = match node.kind() {
+        SyntaxKind::FN => ast::Fn::cast(node.clone()).and_then(|function| function.body()).and_then(|body| body.stmt_list()).map(|list| list.syntax().clone()),
+        SyntaxKind::MODULE | SyntaxKind::IMPL | SyntaxKind::TRAIT | SyntaxKind::EXTERN_BLOCK => {
+            node.children().find(|child| matches!(child.kind(), SyntaxKind::ITEM_LIST | SyntaxKind::ASSOC_ITEM_LIST | SyntaxKind::EXTERN_ITEM_LIST))
+        }
+        _ => None,
+    };
+    if let Some(inner) = inner {
+        out.extend(direct(&inner));
+    }
+    out
+}
+
+/// The attributes of a node as (path, compare text): the outer ones, then the inner ones.
+pub fn attribute_texts(node: &SyntaxNode) -> Vec<(String, String)> {
+    attributes(node).into_iter().map(|attr| (attr.path, attr.text)).collect()
+}
+
+fn attr(node: &SyntaxNode) -> Attr {
+    let stream = TokenStream::from_node(node);
+    let text = stream.to_string();
+    let content: Vec<TokenTree> = stream.into_iter().find_map(|tree| match tree {
+        TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group.stream().into_iter().collect()),
+        _ => None,
+    }).unwrap_or_default();
+    let path: String = content
+        .iter()
+        .take_while(|tree| matches!(tree, TokenTree::Ident(_)) || matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ':'))
+        .map(|tree| tree.to_string())
+        .collect();
+    // A doc comment has its value in its token. A `#[doc = "…"]` attribute has a string literal.
+    let comment = node.first_token().and_then(|token| crate::tt::doc_comment(token.kind(), token.text())).map(|(_, value)| value);
+    let value = comment.or_else(|| match content.as_slice() {
+        [TokenTree::Ident(name), TokenTree::Punct(punct), TokenTree::Literal(literal)] if *name == "doc" && punct.as_char() == '=' => rs::string_value(&literal.to_string()),
+        _ => None,
+    });
+    Attr { text, path, content, display: display_text(node), value }
+}
+
+/// One Rust file for the loader: its text, its line index, its edition, and its plain comments
+/// (the start line and the text) from the tree (design 39.1, rule 4).
+struct Source {
+    rel: String,
+    text: String,
+    lines: Lines,
+    edition: Edition,
+    comments: Vec<(usize, String)>,
+    /// The tokens of the file in order (for the compare texts).
+    tokens: Vec<Flat>,
+}
+
+impl Source {
+    fn new(rel: &str, text: &str, file: &ast::SourceFile, edition: Edition) -> Source {
+        let lines = Lines::new(text);
+        let mut comments = Vec::new();
+        for token in file.syntax().descendants_with_tokens().filter_map(|element| element.into_token()).filter(|token| token.kind() == SyntaxKind::COMMENT) {
+            let line = lines.pos(usize::from(token.text_range().start())).0;
+            let comment = token.text();
+            let shown = if comment.starts_with("//") { comment.trim().to_string() } else { comment.split_whitespace().collect::<Vec<_>>().join(" ") };
+            comments.push((line, shown));
+        }
+        Source { rel: rel.to_string(), text: text.to_string(), lines, edition, comments, tokens: flat_tokens(file.syntax()) }
+    }
+
+    fn builder(&self) -> tree::Builder<'_> {
+        tree::Builder::with_tokens(&self.lines, self.edition, &self.tokens)
+    }
+}
+
 struct Loader<'a> {
     root: &'a Path,
     /// The items in load order. [`unique_paths`] puts them in the map.
     items: &'a mut Vec<Item>,
     parsed: &'a mut BTreeSet<String>,
     inner_attrs: &'a mut BTreeMap<String, (String, Vec<String>)>,
+    inner_attrs_display: &'a mut BTreeMap<String, Vec<String>>,
     parse_errors: &'a mut BTreeMap<String, String>,
-    old_edition: &'a mut BTreeMap<String, usize>,
     crate_name: &'a str,
+    edition: Edition,
 }
 
 impl Loader<'_> {
     fn load_file(&mut self, file: &Path, module: &str, test: bool) -> Result<()> {
-        let source = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+        let text = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
         let rel = relative(self.root, file);
-        let Some((parsed, source)) = self.parse(&rel, &source) else { return Ok(()) };
+        let Some(parsed) = self.parse(&rel, &text) else { return Ok(()) };
         self.parsed.insert(rel.clone());
         // The child modules of a root file are in the folder of the root file, whatever its name.
         let child_dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-        self.record_inner_attrs(&module, &rel, &parsed.attrs);
-        self.load_items(&parsed.items, &module, &rel, &source, &child_dir, test)
+        let source = Source::new(&rel, &text, &parsed, self.edition);
+        self.record_inner_attrs(module, &rel, parsed.syntax());
+        let items: Vec<ast::Item> = parsed.items().collect();
+        self.load_items(&items, module, &source, &child_dir, test)
     }
 
     /// Parses the text of a file. A file that does not parse does not stop the load (design
-    /// 37.5): the map of the parse errors gets the reason, and the result is `None`.
-    fn parse(&mut self, rel: &str, text: &str) -> Option<(syn::File, String)> {
-        match parse_rust(text) {
-            Ok((parsed, text, names)) => {
-                if names > 0 {
-                    self.old_edition.insert(rel.to_string(), names);
-                }
-                Some((parsed, text))
-            }
+    /// 37.5, 39.4): the map of the parse errors gets the reason, and the result is `None`.
+    fn parse(&mut self, rel: &str, text: &str) -> Option<ast::SourceFile> {
+        match rs::parse_file(text, self.edition) {
+            Ok(parsed) => Some(parsed),
             Err(reason) => {
                 self.parse_errors.insert(rel.to_string(), reason);
                 None
@@ -844,19 +1010,21 @@ impl Loader<'_> {
         }
     }
 
-    fn load_items(&mut self, items: &[syn::Item], module: &str, file: &str, source: &str, dir: &Path, test: bool) -> Result<()> {
+    fn load_items(&mut self, items: &[ast::Item], module: &str, source: &Source, dir: &Path, test: bool) -> Result<()> {
         let mut use_index = 0;
         let mut other_index = 0;
         let mut twins = Twins::new(items);
         let mut call_index: BTreeMap<String, usize> = BTreeMap::new();
         for item in items {
+            let attrs = attributes(item.syntax());
             match item {
-                syn::Item::Mod(item_mod) => {
-                    let name = item_mod.ident.to_string();
+                ast::Item::Module(item_mod) => {
+                    let name = name_of(item_mod);
                     let path = format!("{module}::{}", twins.name(&name));
-                    let is_test = test || is_cfg_test(&item_mod.attrs);
-                    if let Some((_, content)) = &item_mod.content {
-                        self.load_items(content, &path, file, source, &dir.join(&name), is_test)?;
+                    let is_test = test || is_cfg_test(&attrs);
+                    if let Some(content) = item_mod.item_list() {
+                        let content: Vec<ast::Item> = content.items().collect();
+                        self.load_items(&content, &path, source, &dir.join(&name), is_test)?;
                     } else {
                         // `#[path = "…"]` names the file (invariant I4: the syntax tree must read the
                         // file that the compiler reads). Outside an inline module, the path is
@@ -865,124 +1033,133 @@ impl Loader<'_> {
                         // A `cfg_attr(COND, path = "…")` attribute names one more file (design
                         // 37.3). The loader reads each file that exists, also if the condition
                         // is off. With two files or more, each file is a twin module (`name#N`).
+                        let file = &source.rel;
                         let base = if *dir == module_dir(&self.root.join(file)) { self.root.join(file).parent().map(Path::to_path_buf).unwrap_or_default() } else { dir.to_path_buf() };
-                        let files = mod_files(&item_mod.attrs, &base, dir, &name);
+                        let files = mod_files(&attrs, &base, dir, &name);
                         for (index, (found, by_attr)) in files.iter().enumerate() {
                             let path = if files.len() > 1 { format!("{path}#{index}") } else { path.clone() };
                             let text = std::fs::read_to_string(found)?;
                             let rel = relative(self.root, found);
-                            let Some((parsed, text)) = self.parse(&rel, &text) else { continue };
+                            let Some(parsed) = self.parse(&rel, &text) else { continue };
                             self.parsed.insert(rel.clone());
-                            self.record_inner_attrs(&path, &rel, &parsed.attrs);
+                            self.record_inner_attrs(&path, &rel, parsed.syntax());
                             // A file that `#[path]` names is a "mod-rs" file: its child modules are in its own folder.
                             let child_dir = if *by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
-                            self.load_items(&parsed.items, &path, &rel, &text, &child_dir, is_test)?;
+                            let inner = Source::new(&rel, &text, &parsed, self.edition);
+                            let content: Vec<ast::Item> = parsed.items().collect();
+                            self.load_items(&content, &path, &inner, &child_dir, is_test)?;
                         }
                     }
-                    self.add(path, ItemKind::Mod, item, &item_mod.vis, &item_mod.attrs, None, Vec::new(), file, source, is_test);
+                    self.add(path, ItemKind::Mod, item, &vis_text(item_mod), &attrs, None, Vec::new(), source, is_test);
                 }
-                syn::Item::Fn(item_fn) => {
-                    let path = format!("{module}::{}", twins.name(&item_fn.sig.ident.to_string()));
-                    let body = tree::block("body", &item_fn.block);
-                    let is_test = test || has_attr(&item_fn.attrs, "test");
-                    self.add(path, ItemKind::Fn, item, &item_fn.vis, &item_fn.attrs, Some(body), Vec::new(), file, source, is_test);
-                    self.set_signature(&item_fn.sig);
+                ast::Item::Fn(item_fn) => {
+                    let path = format!("{module}::{}", twins.name(&name_of(item_fn)));
+                    let body = item_fn.body().map(|body| source.builder().block("body", &body));
+                    let is_test = test || has_attr(&attrs, "test");
+                    self.add(path, ItemKind::Fn, item, &vis_text(item_fn), &attrs, body, Vec::new(), source, is_test);
+                    self.set_signature(source, item_fn);
                 }
-                syn::Item::Impl(item_impl) => {
+                ast::Item::Impl(item_impl) => {
                     let owner = impl_owner(item_impl);
-                    for impl_item in &item_impl.items {
-                        if let syn::ImplItem::Fn(method) = impl_item {
-                            let path = format!("{module}::{}", twins.name(&format!("{owner}::{}", method.sig.ident)));
-                            let body = tree::block("body", &method.block);
-                            let is_test = test || has_attr(&method.attrs, "test");
-                            self.add_parts(path, ItemKind::Fn, impl_item, &tokens(&method.vis), &method.attrs, Some(body), Vec::new(), file, source, is_test, signature_of_method(method));
-                            self.set_signature(&method.sig);
-                        }
+                    for method in impl_methods(item_impl) {
+                        let path = format!("{module}::{}", twins.name(&format!("{owner}::{}", name_of(&method))));
+                        let body = method.body().map(|body| source.builder().block("body", &body));
+                        let method_attrs = attributes(method.syntax());
+                        let is_test = test || has_attr(&method_attrs, "test");
+                        let signature = texts(&tree::signature_tokens(&method));
+                        self.add_parts(path, ItemKind::Fn, method.syntax(), &vis_text(&method), &method_attrs, body, Vec::new(), source, is_test, signature);
+                        self.set_signature(source, &method);
                     }
                     let path = format!("{module}::{}", twins.name(&format!("impl {owner}")));
-                    let members = item_impl.items.iter().map(|it| impl_member_name(it)).collect();
-                    self.add(path, ItemKind::Impl, item, &syn::Visibility::Inherited, &item_impl.attrs, None, members, file, source, test);
+                    let members = item_impl.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).map(|member| impl_member(&member)).collect();
+                    self.add(path, ItemKind::Impl, item, &Text::default(), &attrs, None, members, source, test);
                 }
-                syn::Item::Struct(item_struct) => {
-                    let path = format!("{module}::{}", twins.name(&item_struct.ident.to_string()));
-                    let members = self.add_fields(&path, &item_struct.fields, file, source, test);
-                    self.add(path, ItemKind::Struct, item, &item_struct.vis, &item_struct.attrs, None, members, file, source, test);
+                ast::Item::Struct(item_struct) => {
+                    let path = format!("{module}::{}", twins.name(&name_of(item_struct)));
+                    let members = both(self.add_fields(&path, item_struct.field_list(), source, test));
+                    self.add(path, ItemKind::Struct, item, &vis_text(item_struct), &attrs, None, members, source, test);
                 }
-                syn::Item::Enum(item_enum) => {
-                    let path = format!("{module}::{}", twins.name(&item_enum.ident.to_string()));
+                ast::Item::Enum(item_enum) => {
+                    let path = format!("{module}::{}", twins.name(&name_of(item_enum)));
                     // The member list of an enum is the order of its variant names. Each variant is
                     // an item, and each variant field is an item.
-                    let mut variant_twins = Twins::from_names(item_enum.variants.iter().map(|v| v.ident.to_string()));
-                    for variant in &item_enum.variants {
-                        let variant_path = format!("{path}::{}", variant_twins.name(&variant.ident.to_string()));
-                        let fields = self.add_fields(&variant_path, &variant.fields, file, source, test);
-                        let mut header = variant.clone();
-                        header.attrs.clear();
-                        header.fields = empty_fields(&variant.fields);
-                        self.add_parts(variant_path, ItemKind::Variant, variant, "", &variant.attrs, None, fields, file, source, test, tokens(&header));
+                    let variants: Vec<ast::Variant> = item_enum.variant_list().into_iter().flat_map(|list| list.variants()).collect();
+                    let mut variant_twins = Twins::from_names(variants.iter().map(name_of));
+                    for variant in &variants {
+                        let variant_path = format!("{path}::{}", variant_twins.name(&name_of(variant)));
+                        let fields = both(self.add_fields(&variant_path, variant.field_list(), source, test));
+                        // The header: the name, the kind of the fields, and the discriminant.
+                        let start = variant.name().map_or(0, |name| usize::from(name.syntax().text_range().start()));
+                        let header = without_parts(variant.syntax(), start, &variant.field_list().map(|list| list.syntax().clone()).into_iter().collect::<Vec<_>>());
+                        self.add_parts(variant_path, ItemKind::Variant, variant.syntax(), &Text::default(), &attributes(variant.syntax()), None, fields, source, test, header);
                     }
-                    let members = item_enum.variants.iter().map(|variant| variant.ident.to_string()).collect();
-                    self.add(path, ItemKind::Enum, item, &item_enum.vis, &item_enum.attrs, None, members, file, source, test);
+                    let members = both(variants.iter().map(name_of).collect());
+                    self.add(path, ItemKind::Enum, item, &vis_text(item_enum), &attrs, None, members, source, test);
                 }
-                syn::Item::Trait(item_trait) => {
-                    let path = format!("{module}::{}", twins.name(&item_trait.ident.to_string()));
+                ast::Item::Trait(item_trait) if item_trait.eq_token().is_none() => {
+                    let path = format!("{module}::{}", twins.name(&name_of(item_trait)));
                     // A trait method is a function item: `shop::Price::label`. A default body gets
                     // statement edits, and its MIR name is the same path. The member list keeps the
                     // order of the methods and the other trait items as text.
-                    let mut method_twins = Twins::from_names(item_trait.items.iter().filter_map(|it| match it {
-                        syn::TraitItem::Fn(method) => Some(method.sig.ident.to_string()),
+                    let trait_items: Vec<ast::AssocItem> = item_trait.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).collect();
+                    let mut method_twins = Twins::from_names(trait_items.iter().filter_map(|it| match it {
+                        ast::AssocItem::Fn(method) => Some(name_of(method)),
                         _ => None,
                     }));
                     let mut members = Vec::new();
-                    for trait_item in &item_trait.items {
+                    for trait_item in &trait_items {
                         match trait_item {
-                            syn::TraitItem::Fn(method) => {
-                                let method_path = format!("{path}::{}", method_twins.name(&method.sig.ident.to_string()));
-                                let body = method.default.as_ref().map(|block| tree::block("body", block));
-                                let is_test = test || has_attr(&method.attrs, "test");
-                                self.add_parts(method_path, ItemKind::Fn, trait_item, "", &method.attrs, body, Vec::new(), file, source, is_test, tokens(&method.sig));
-                                self.set_signature(&method.sig);
-                                members.push(format!("fn {}", method.sig.ident));
+                            ast::AssocItem::Fn(method) => {
+                                let method_path = format!("{path}::{}", method_twins.name(&name_of(method)));
+                                let body = method.body().map(|block| source.builder().block("body", &block));
+                                let method_attrs = attributes(method.syntax());
+                                let is_test = test || has_attr(&method_attrs, "test");
+                                let signature = texts(&tree::signature_tokens(method));
+                                self.add_parts(method_path, ItemKind::Fn, method.syntax(), &Text::default(), &method_attrs, body, Vec::new(), source, is_test, signature);
+                                self.set_signature(source, method);
+                                let name = format!("fn {}", name_of(method));
+                                members.push((name.clone(), name));
                             }
-                            other => members.push(tokens(other)),
+                            other => members.push(node_texts(other.syntax())),
                         }
                     }
-                    self.add(path, ItemKind::Trait, item, &item_trait.vis, &item_trait.attrs, None, members, file, source, test);
+                    self.add(path, ItemKind::Trait, item, &vis_text(item_trait), &attrs, None, members, source, test);
                 }
-                syn::Item::Const(item_const) => {
-                    let path = format!("{module}::{}", twins.name(&item_const.ident.to_string()));
-                    self.add(path, ItemKind::Const, item, &item_const.vis, &item_const.attrs, None, Vec::new(), file, source, test);
+                ast::Item::Const(item_const) => {
+                    let path = format!("{module}::{}", twins.name(&const_name(item_const)));
+                    self.add(path, ItemKind::Const, item, &vis_text(item_const), &attrs, None, Vec::new(), source, test);
                 }
-                syn::Item::Static(item_static) => {
-                    let path = format!("{module}::{}", twins.name(&item_static.ident.to_string()));
-                    self.add(path, ItemKind::Static, item, &item_static.vis, &item_static.attrs, None, Vec::new(), file, source, test);
+                ast::Item::Static(item_static) => {
+                    let path = format!("{module}::{}", twins.name(&name_of(item_static)));
+                    self.add(path, ItemKind::Static, item, &vis_text(item_static), &attrs, None, Vec::new(), source, test);
                 }
-                syn::Item::Type(item_type) => {
-                    let path = format!("{module}::{}", twins.name(&item_type.ident.to_string()));
-                    self.add(path, ItemKind::Type, item, &item_type.vis, &item_type.attrs, None, Vec::new(), file, source, test);
+                ast::Item::TypeAlias(item_type) => {
+                    let path = format!("{module}::{}", twins.name(&name_of(item_type)));
+                    self.add(path, ItemKind::Type, item, &vis_text(item_type), &attrs, None, Vec::new(), source, test);
                 }
-                syn::Item::Use(item_use) => {
+                ast::Item::Use(item_use) => {
                     let path = format!("{module}::use#{use_index}");
                     use_index += 1;
-                    self.add(path, ItemKind::Use, item, &item_use.vis, &item_use.attrs, None, Vec::new(), file, source, test);
+                    self.add(path, ItemKind::Use, item, &vis_text(item_use), &attrs, None, Vec::new(), source, test);
                 }
-                syn::Item::Macro(item_macro) => {
+                ast::Item::MacroRules(_) | ast::Item::MacroCall(_) => {
                     // A definition keeps the plain name `name!`, with a twin suffix only if the
                     // module has two definitions of the name. A call always has a number:
                     // `name!#N`, in source order. So a new call at the end changes no other
                     // name (batch 6b, part 2). With two or more definitions, the numbers of the
                     // calls start after the numbers of the definitions.
-                    let path = match &item_macro.ident {
-                        Some(ident) => format!("{module}::{}", twins.name(&format!("{ident}!"))),
-                        None => {
-                            let name = format!("{}!", tokens(&item_macro.mac.path));
+                    let path = match item {
+                        ast::Item::MacroRules(definition) => format!("{module}::{}", twins.name(&format!("{}!", name_of(definition)))),
+                        ast::Item::MacroCall(call) => {
+                            let name = format!("{}!", compare_opt(call.path().as_ref()));
                             let definitions = twins.count.get(&name).copied().filter(|count| *count >= 2).unwrap_or(0);
                             let index = call_index.entry(name.clone()).or_insert(definitions);
                             *index += 1;
                             format!("{module}::{name}#{}", *index - 1)
                         }
+                        _ => unreachable!(),
                     };
-                    self.add(path, ItemKind::Macro, item, &syn::Visibility::Inherited, &item_macro.attrs, None, Vec::new(), file, source, test);
+                    self.add(path, ItemKind::Macro, item, &Text::default(), &attrs, None, Vec::new(), source, test);
                 }
                 other => {
                     // The name does not have a line number (batch 5n, A3): a new line above the
@@ -994,7 +1171,7 @@ impl Loader<'_> {
                             format!("item#{}", other_index - 1)
                         }
                     };
-                    self.add(format!("{module}::{name}"), ItemKind::Other, item, &syn::Visibility::Inherited, &[], None, Vec::new(), file, source, test);
+                    self.add(format!("{module}::{name}"), ItemKind::Other, item, &Text::default(), &[], None, Vec::new(), source, test);
                 }
             }
         }
@@ -1002,83 +1179,90 @@ impl Loader<'_> {
     }
 
     /// Sets the signature node of the last item (a function).
-    fn set_signature(&mut self, sig: &syn::Signature) {
+    fn set_signature(&mut self, source: &Source, function: &ast::Fn) {
         if let Some(item) = self.items.last_mut() {
-            item.sig = Some(tree::signature(sig));
+            item.sig = Some(source.builder().signature(function));
         }
     }
 
     /// Records the inner attributes of a file (`#![…]`). An inner doc comment is stored as a
     /// `//!` line, as in the source. Each other attribute is stored in its token form.
-    fn record_inner_attrs(&mut self, module: &str, file: &str, attrs: &[syn::Attribute]) {
+    fn record_inner_attrs(&mut self, module: &str, file: &str, root: &SyntaxNode) {
+        let attrs = attributes(root);
         if !attrs.is_empty() {
-            let text = |attr: &syn::Attribute| match &attr.meta {
-                syn::Meta::NameValue(syn::MetaNameValue { value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }), .. }) if attr.path().is_ident("doc") => doc_lines("//!", &text.value()),
-                _ => tokens(attr),
+            let text = |attr: &Attr| match attr.doc_value() {
+                Some(value) => doc_lines("//!", &value),
+                None => attr.text.clone(),
             };
             self.inner_attrs.insert(module.to_string(), (file.to_string(), attrs.iter().map(text).collect()));
+            let shown = |attr: &Attr| match attr.doc_value() {
+                Some(value) => doc_lines("//!", &value),
+                None => attr.display.clone(),
+            };
+            self.inner_attrs_display.insert(module.to_string(), attrs.iter().map(shown).collect());
         }
     }
 
     /// Adds the fields of a struct or a variant as items (`owner.name`, or `owner.0` for a tuple
     /// field), and returns the member list of the owner: the field names in order.
-    fn add_fields(&mut self, owner: &str, fields: &syn::Fields, file: &str, source: &str, test: bool) -> Vec<String> {
+    fn add_fields(&mut self, owner: &str, fields: Option<ast::FieldList>, source: &Source, test: bool) -> Vec<String> {
         let mut names = Vec::new();
-        for (index, field) in fields.iter().enumerate() {
-            let name = field.ident.as_ref().map(|ident| ident.to_string()).unwrap_or_else(|| index.to_string());
-            self.add_parts(format!("{owner}.{name}"), ItemKind::Field, field, &tokens(&field.vis), &field.attrs, None, Vec::new(), file, source, test, tokens(&field.ty));
+        let ty = |ty: Option<ast::Type>| ty.map(|ty| node_texts(ty.syntax())).unwrap_or_default();
+        let fields: Vec<(String, SyntaxNode, Text, Text)> = match fields {
+            Some(ast::FieldList::RecordFieldList(list)) => list.fields().map(|field| (name_of(&field), field.syntax().clone(), vis_text(&field), ty(field.ty()))).collect(),
+            Some(ast::FieldList::TupleFieldList(list)) => list.fields().enumerate().map(|(index, field)| (index.to_string(), field.syntax().clone(), vis_text(&field), ty(field.ty()))).collect(),
+            None => Vec::new(),
+        };
+        for (name, node, vis, ty) in fields {
+            self.add_parts(format!("{owner}.{name}"), ItemKind::Field, &node, &vis, &attributes(&node), None, Vec::new(), source, test, ty);
             names.push(name);
         }
         names
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn add(&mut self, path: String, kind: ItemKind, item: &syn::Item, vis: &syn::Visibility, attrs: &[syn::Attribute], body: Option<Node>, members: Vec<String>, file: &str, source: &str, test: bool) {
+    fn add(&mut self, path: String, kind: ItemKind, item: &ast::Item, vis: &Text, attrs: &[Attr], body: Option<Node>, members: Vec<Text>, source: &Source, test: bool) {
         let signature = signature_of(item);
-        self.add_parts(path, kind, item, &tokens(vis), attrs, body, members, file, source, test, signature);
+        self.add_parts(path, kind, item.syntax(), vis, attrs, body, members, source, test, signature);
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn add_parts(&mut self, path: String, kind: ItemKind, value: &(impl quote::ToTokens + Spanned), vis: &str, attrs: &[syn::Attribute], body: Option<Node>, members: Vec<String>, file: &str, source: &str, test: bool, signature: String) {
-        let span = value.span();
-        let (line_start, line_end) = (span.start().line, span.end().line);
-        let (col_start, col_end) = (span.start().column, span.end().column);
-        let text_source = source_lines(source, line_start, line_end);
-        // Doc comments are stored as `///` lines, as in the source.
-        let doc_line = |attr: &syn::Attribute| match &attr.meta {
-            syn::Meta::NameValue(value) => match &value.value {
-                // A block comment (`/** … */`) has more than one line: each line is a doc line.
-                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }) => doc_lines("///", &text.value()),
-                _ => tokens(attr),
-            },
-            _ => tokens(attr),
+    fn add_parts(&mut self, path: String, kind: ItemKind, value: &SyntaxNode, vis: &Text, attrs: &[Attr], body: Option<Node>, members: Vec<Text>, source: &Source, test: bool, signature: Text) {
+        let range = rs::code_range(value);
+        let (line_start, col_start) = source.lines.pos(range.start);
+        let (line_end, col_end) = source.lines.pos(range.end);
+        let text_source = source_lines(&source.text, line_start, line_end);
+        // Doc comments are stored as `///` lines, as in the source. A block comment
+        // (`/** … */`) has more than one line: each line is a doc line.
+        let doc_line = |attr: &Attr| match attr.doc_value() {
+            Some(value) => doc_lines("///", &value),
+            None => attr.text.clone(),
         };
-        // Only doc text is a doc line: `/// text` and `#[doc = …]`. A `#[doc(KEY)]` attribute
-        // (`doc(hidden)`, `doc(alias = "…")`) is an attribute (batch 6b, part 1). Before, it was
-        // a line of the docs, and a change of it showed as a changed comment.
-        let doc_text = |attr: &syn::Attribute| attr.path().is_ident("doc") && matches!(attr.meta, syn::Meta::NameValue(_));
-        let mut docs: Vec<String> = attrs.iter().filter(|attr| doc_text(attr)).map(doc_line).collect();
-        docs.extend(plain_comments(&text_source));
-        let attrs = attrs.iter().filter(|attr| !doc_text(attr)).map(tokens).collect();
+        let mut docs: Vec<String> = attrs.iter().filter(|attr| attr.doc_text()).map(doc_line).collect();
+        // The plain comments in the lines of the item, from the tree (design 39.1, rule 4).
+        docs.extend(source.comments.iter().filter(|(line, _)| (line_start..=line_end).contains(line)).map(|(_, text)| text.clone()));
+        let (attrs, attr_display): (Vec<String>, Vec<String>) = attrs.iter().filter(|attr| !attr.doc_text()).map(|attr| (attr.text.clone(), attr.display.clone())).unzip();
+        let (members, member_display): (Vec<String>, Vec<String>) = members.into_iter().unzip();
         let item = Item {
             path: path.clone(),
             kind,
             crate_name: self.crate_name.to_string(),
-            file: file.to_string(),
+            file: source.rel.clone(),
             line_start,
             line_end,
             col_start,
             col_end,
-            vis: vis.to_string(),
-            signature,
+            vis: vis.0.clone(),
+            signature: signature.0,
             docs,
             attrs,
             members,
             body,
             sig: None,
-            text: tokens(value),
+            text: source.builder().text(value),
             source: text_source,
             test,
+            display: ItemDisplay { vis: vis.1.clone(), signature: signature.1, attrs: attr_display, members: member_display },
         };
         self.items.push(item);
     }
@@ -1095,62 +1279,11 @@ fn module_dir(file: &Path) -> PathBuf {
     }
 }
 
-/// Parses a Rust file. Code of the 2015 edition can have a parameter with no name in a trait
-/// method (`fn f(u8);`), which `syn` does not parse. The function gives each such parameter
-/// the name `_` and parses again (design 37.5). The result has the tree, the text that the
-/// tree comes from, and the count of the new names. The lines of the text do not change.
-pub fn parse_rust(text: &str) -> std::result::Result<(syn::File, String, usize), String> {
-    let mut text = text.to_string();
-    let mut names = 0;
-    let mut first: Option<String> = None;
-    loop {
-        match syn::parse_file(&text) {
-            Ok(file) => return Ok((file, text, names)),
-            Err(error) => {
-                let at = error.span().start();
-                let reason = format!("{error} (line {}, column {})", at.line, at.column + 1);
-                let first = first.get_or_insert(reason).clone();
-                let offset = if names < 500 && error.to_string() == "expected `:`" { parameter_start(&text, at.line, at.column) } else { None };
-                let Some(offset) = offset else { return Err(first) };
-                text.insert_str(offset, "_: ");
-                names += 1;
-            }
-        }
-    }
-}
-
-/// The byte offset of the start of the parameter that ends before the place (line from 1,
-/// column from 0, in characters): the text after the `(` or the `,` before the place.
-fn parameter_start(text: &str, line: usize, column: usize) -> Option<usize> {
-    let line_start: usize = text.split_inclusive('\n').take(line.checked_sub(1)?).map(str::len).sum();
-    let place = line_start + text.get(line_start..)?.char_indices().nth(column).map(|(offset, _)| offset)?;
-    let mut depth = 0usize;
-    let head = &text[..place];
-    let mut chars = head.char_indices().rev().peekable();
-    while let Some((offset, c)) = chars.next() {
-        match c {
-            // The `>` of `->` is no bracket.
-            '>' if chars.peek().is_some_and(|(_, before)| *before == '-') => {}
-            ')' | ']' | '>' => depth += 1,
-            '(' | ',' if depth == 0 => {
-                let rest = &head[offset + 1..];
-                let start = offset + 1 + (rest.len() - rest.trim_start().len());
-                // A parameter with a name has a `:` (the error is then not about the name).
-                return (start < place).then_some(start);
-            }
-            '(' | '[' | '<' => depth = depth.checked_sub(1)?,
-            '{' | '}' | ';' => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
 /// The files of a `mod name;` declaration that exist, with the answer to "does an attribute
 /// name the file?". A `cfg_attr(COND, path = "…")` attribute names a file for a part of the
 /// configurations (design 37.3). The list has each such file, then the file of the plain
 /// `#[path]` attribute or the usual file of the module.
-fn mod_files(attrs: &[syn::Attribute], base: &Path, dir: &Path, name: &str) -> Vec<(PathBuf, bool)> {
+fn mod_files(attrs: &[Attr], base: &Path, dir: &Path, name: &str) -> Vec<(PathBuf, bool)> {
     let mut files: Vec<(PathBuf, bool)> = Vec::new();
     let mut add = |file: PathBuf, by_attr: bool| {
         if file.is_file() && !files.iter().any(|(found, _)| *found == file) {
@@ -1173,199 +1306,153 @@ fn mod_files(attrs: &[syn::Attribute], base: &Path, dir: &Path, name: &str) -> V
 }
 
 /// The values of `path = "…"` in a `cfg_attr` attribute (also in a `cfg_attr` in it).
-fn conditional_paths(attr: &syn::Attribute) -> Vec<String> {
-    fn of_meta(meta: &syn::Meta, out: &mut Vec<String>) {
-        if !meta.path().is_ident("cfg_attr") {
+fn conditional_paths(attr: &Attr) -> Vec<String> {
+    fn of_meta(meta: &[TokenTree], out: &mut Vec<String>) {
+        let [TokenTree::Ident(name), TokenTree::Group(group)] = meta else { return };
+        if *name != "cfg_attr" || group.delimiter() != Delimiter::Parenthesis {
             return;
         }
-        let syn::Meta::List(list) = meta else { return };
-        let Ok(parts) = list.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated) else { return };
+        let mut parts: Vec<Vec<TokenTree>> = vec![Vec::new()];
+        for tree in group.stream() {
+            match &tree {
+                TokenTree::Punct(punct) if punct.as_char() == ',' => parts.push(Vec::new()),
+                _ => parts.last_mut().expect("a part").push(tree),
+            }
+        }
         for part in parts.iter().skip(1) {
-            match part {
-                syn::Meta::NameValue(syn::MetaNameValue { path, value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }), .. }) if path.is_ident("path") => out.push(text.value()),
+            match part.as_slice() {
+                [TokenTree::Ident(ident), TokenTree::Punct(punct), TokenTree::Literal(literal)] if *ident == "path" && punct.as_char() == '=' => out.extend(rs::string_value(&literal.to_string())),
                 other => of_meta(other, out),
             }
         }
     }
     let mut out = Vec::new();
-    of_meta(&attr.meta, &mut out);
+    of_meta(&attr.content, &mut out);
     out
 }
 
 /// The value of a `#[path = "…"]` attribute.
-fn path_attr(attrs: &[syn::Attribute]) -> Option<String> {
-    attrs.iter().filter(|attr| attr.path().is_ident("path")).find_map(|attr| match &attr.meta {
-        syn::Meta::NameValue(syn::MetaNameValue { value: syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(text), .. }), .. }) => Some(text.value()),
-        _ => None,
-    })
+fn path_attr(attrs: &[Attr]) -> Option<String> {
+    attrs.iter().filter(|attr| attr.path == "path").find_map(|attr| attr.string_value("path"))
 }
 
-fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
-    attrs.iter().any(|attr| attr.path().segments.last().is_some_and(|segment| segment.ident == name))
+fn has_attr(attrs: &[Attr], name: &str) -> bool {
+    attrs.iter().any(|attr| attr.path.rsplit("::").next() == Some(name))
 }
 
-fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| attr.path().is_ident("cfg") && tokens(attr).contains("test"))
+fn is_cfg_test(attrs: &[Attr]) -> bool {
+    attrs.iter().any(|attr| attr.path == "cfg" && attr.text.contains("test"))
 }
 
-/// Fields of the same kind (named, tuple, or unit), without members.
-fn empty_fields(fields: &syn::Fields) -> syn::Fields {
-    match fields {
-        syn::Fields::Named(named) => syn::Fields::Named(syn::FieldsNamed { brace_token: named.brace_token, named: Default::default() }),
-        syn::Fields::Unnamed(unnamed) => syn::Fields::Unnamed(syn::FieldsUnnamed { paren_token: unnamed.paren_token, unnamed: Default::default() }),
-        syn::Fields::Unit => syn::Fields::Unit,
+/// The visibility text of a node: `pub`, `pub (crate)`, or empty, and its display text.
+fn vis_text(node: &impl ast::HasVisibility) -> Text {
+    match node.visibility() {
+        Some(vis) => (compare_text(vis.syntax()), display_text(vis.syntax())),
+        None => Default::default(),
     }
 }
 
-pub(crate) fn impl_member_name(item: &syn::ImplItem) -> String {
+/// A list of names as compare texts and display texts.
+fn both(names: Vec<String>) -> Vec<Text> {
+    names.into_iter().map(|name| (name.clone(), name)).collect()
+}
+
+/// The compare text and the display text of a list of tokens.
+fn texts(tokens: &[Flat]) -> Text {
+    (flat_text(tokens), flat_display(tokens))
+}
+
+/// The compare text and the display text of a node.
+fn node_texts(node: &SyntaxNode) -> Text {
+    (compare_text(node), display_text(node))
+}
+
+/// The compare text of a node from a start offset, with each part of `parts` replaced by its
+/// delimiters: a header with its field list `{ }` or `()`.
+fn without_parts(node: &SyntaxNode, start: usize, parts: &[SyntaxNode]) -> Text {
+    // The range of each part, and the range of its code (from its first to its last token).
+    let ranges: Vec<(TextRange, std::ops::Range<usize>)> = parts.iter().map(|part| (part.text_range(), rs::code_range(part))).collect();
+    let mut tokens = Vec::new();
+    for token in flat_tokens(node).into_iter().filter(|token| token.start >= start) {
+        let part = ranges.iter().find(|(range, _)| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()));
+        match part {
+            // Only the first and the last token of the part (its delimiters) stay.
+            Some((_, code)) => {
+                if token.start == code.start || token.end == code.end {
+                    tokens.push(token);
+                }
+            }
+            None => tokens.push(token),
+        }
+    }
+    texts(&tokens)
+}
+
+/// The offset of the first of the tokens.
+fn first_offset(tokens: impl IntoIterator<Item = Option<SyntaxToken>>) -> usize {
+    tokens.into_iter().flatten().map(|token| usize::from(token.text_range().start())).min().unwrap_or(0)
+}
+
+pub(crate) fn impl_member_name(item: &ast::AssocItem) -> String {
+    impl_member(item).0
+}
+
+/// The compare text and the display text of a member of an impl.
+fn impl_member(item: &ast::AssocItem) -> Text {
     match item {
-        syn::ImplItem::Fn(method) => format!("fn {}", method.sig.ident),
+        ast::AssocItem::Fn(method) if method.body().is_some() => {
+            let name = format!("fn {}", name_of(method));
+            (name.clone(), name)
+        }
         // The full text of an associated constant or type, with no attributes and no visibility
         // (batch 5n, A2): a change of its type or of its value is an edit of the member list. The
         // text starts with the kind and the name (`const NAME`, `type NAME`).
-        syn::ImplItem::Const(constant) => {
-            let mut member = constant.clone();
-            member.attrs.clear();
-            member.vis = syn::Visibility::Inherited;
-            member.defaultness = None;
-            tokens(&member)
-        }
-        syn::ImplItem::Type(ty) => {
-            let mut member = ty.clone();
-            member.attrs.clear();
-            member.vis = syn::Visibility::Inherited;
-            member.defaultness = None;
-            tokens(&member)
-        }
-        other => tokens(other),
+        ast::AssocItem::Const(constant) => without_parts(constant.syntax(), first_offset([constant.const_token()]), &[]),
+        ast::AssocItem::TypeAlias(ty) => without_parts(ty.syntax(), first_offset([ty.type_token()]), &[]),
+        other => node_texts(other.syntax()),
     }
 }
 
 /// The signature text of an item: everything except the body, the docs, and the visibility.
-fn signature_of(item: &syn::Item) -> String {
+fn signature_of(item: &ast::Item) -> Text {
+    let start = |tokens: Vec<Option<SyntaxToken>>| first_offset(tokens);
     match item {
-        syn::Item::Fn(item_fn) => tokens(&item_fn.sig),
-        syn::Item::Impl(item_impl) => {
-            let mut header = item_impl.clone();
-            header.items.clear();
-            header.attrs.clear();
-            tokens(&header)
+        ast::Item::Fn(item_fn) => texts(&tree::signature_tokens(item_fn)),
+        ast::Item::Impl(item_impl) => {
+            let from = start(vec![item_impl.default_token(), item_impl.unsafe_token(), item_impl.impl_token()]);
+            let list: Vec<SyntaxNode> = item_impl.assoc_item_list().map(|list| list.syntax().clone()).into_iter().collect();
+            without_parts(item_impl.syntax(), from, &list)
         }
-        syn::Item::Mod(item_mod) => format!("mod {}", item_mod.ident),
+        ast::Item::Module(item_mod) => {
+            let text = format!("mod {}", name_of(item_mod));
+            (text.clone(), text)
+        }
         // The members (fields, variants, trait items) are items of their own, and the attributes
         // are compared on their own. The signature is the header: the generics, the bounds, and
         // the kind of the fields (named, tuple, or unit).
-        syn::Item::Struct(value) => {
-            let mut header = value.clone();
-            header.attrs.clear();
-            header.vis = syn::Visibility::Inherited;
-            header.fields = empty_fields(&value.fields);
-            tokens(&header)
+        ast::Item::Struct(value) => without_parts(value.syntax(), start(vec![value.struct_token()]), &value.field_list().map(|list| list.syntax().clone()).into_iter().collect::<Vec<_>>()),
+        ast::Item::Enum(value) => without_parts(value.syntax(), start(vec![value.enum_token()]), &value.variant_list().map(|list| list.syntax().clone()).into_iter().collect::<Vec<_>>()),
+        ast::Item::Trait(value) if value.eq_token().is_none() => {
+            without_parts(value.syntax(), start(vec![value.unsafe_token(), value.auto_token(), value.trait_token()]), &value.assoc_item_list().map(|list| list.syntax().clone()).into_iter().collect::<Vec<_>>())
         }
-        syn::Item::Enum(value) => {
-            let mut header = value.clone();
-            header.attrs.clear();
-            header.vis = syn::Visibility::Inherited;
-            header.variants.clear();
-            tokens(&header)
+        // A constant, a static, a type alias, a `use` line: the text without the doc attributes
+        // and the visibility.
+        ast::Item::Const(_) | ast::Item::Static(_) | ast::Item::TypeAlias(_) | ast::Item::Use(_) => {
+            let skip: Vec<TextRange> = item
+                .syntax()
+                .children()
+                .filter(|child| child.kind() == SyntaxKind::VISIBILITY || child.kind() == SyntaxKind::DOC_COMMENT || (child.kind() == SyntaxKind::ATTR && attr(child).path == "doc"))
+                .map(|child| child.text_range())
+                .collect();
+            let tokens: Vec<Flat> = flat_tokens(item.syntax()).into_iter().filter(|token| !skip.iter().any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))).collect();
+            texts(&tokens)
         }
-        syn::Item::Trait(value) => {
-            let mut header = value.clone();
-            header.attrs.clear();
-            header.vis = syn::Visibility::Inherited;
-            header.items.clear();
-            tokens(&header)
-        }
-        other => {
-            let mut copy = other.clone();
-            strip_docs_and_vis(&mut copy);
-            tokens(&copy)
-        }
-    }
-}
-
-fn signature_of_method(method: &syn::ImplItemFn) -> String {
-    tokens(&method.sig)
-}
-
-fn strip_docs_and_vis(item: &mut syn::Item) {
-    macro_rules! strip {
-        ($value:expr) => {{
-            $value.attrs.retain(|attr| !attr.path().is_ident("doc"));
-            $value.vis = syn::Visibility::Inherited;
-        }};
-    }
-    match item {
-        syn::Item::Struct(value) => strip!(value),
-        syn::Item::Enum(value) => strip!(value),
-        syn::Item::Trait(value) => strip!(value),
-        syn::Item::Const(value) => strip!(value),
-        syn::Item::Static(value) => strip!(value),
-        syn::Item::Type(value) => strip!(value),
-        syn::Item::Use(value) => strip!(value),
-        _ => {}
+        other => node_texts(other.syntax()),
     }
 }
 
 fn source_lines(source: &str, start: usize, end: usize) -> String {
     source.lines().skip(start.saturating_sub(1)).take(end + 1 - start.max(1)).collect::<Vec<_>>().join("\n")
-}
-
-/// Finds the plain comments (`//` and `/* */`, not doc comments) in a source text.
-///
-/// This is a small scanner: it skips string and char literals, so `"//"` is not a comment.
-pub fn plain_comments(source: &str) -> Vec<String> {
-    let mut comments = Vec::new();
-    let chars: Vec<char> = source.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '"' => {
-                i += 1;
-                while i < chars.len() && chars[i] != '"' {
-                    if chars[i] == '\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                i += 1;
-            }
-            '\'' if i + 2 < chars.len() && (chars[i + 2] == '\'' || chars[i + 1] == '\\') => {
-                i += 1;
-                while i < chars.len() && chars[i] != '\'' {
-                    if chars[i] == '\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                i += 1;
-            }
-            '/' if chars.get(i + 1) == Some(&'/') => {
-                let start = i;
-                while i < chars.len() && chars[i] != '\n' {
-                    i += 1;
-                }
-                let text: String = chars[start..i].iter().collect();
-                if !text.starts_with("///") && !text.starts_with("//!") {
-                    comments.push(text.trim().to_string());
-                }
-            }
-            '/' if chars.get(i + 1) == Some(&'*') => {
-                let start = i;
-                i += 2;
-                while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
-                    i += 1;
-                }
-                i += 2;
-                let text: String = chars[start..i.min(chars.len())].iter().collect();
-                if !text.starts_with("/**") && !text.starts_with("/*!") {
-                    comments.push(text.split_whitespace().collect::<Vec<_>>().join(" "));
-                }
-            }
-            _ => i += 1,
-        }
-    }
-    comments
 }
 
 #[cfg(test)]
@@ -1444,14 +1531,23 @@ mod tests {
 
     #[test]
     fn parses_a_trait_method_of_the_2015_edition() {
-        // Design 37.5: a parameter with no name is correct only in the 2015 edition.
-        let (_, _, count) = parse_rust("pub trait T {\n    fn f(u8);\n    fn g(&self, Self) -> bool;\n    fn h(a: u8);\n}\n").unwrap();
-        assert_eq!(count, 2);
-        let (_, _, count) = parse_rust("pub fn f(a: u8) {}\n").unwrap();
-        assert_eq!(count, 0);
-        // A different error stays an error, with the line and the column.
-        let error = parse_rust("pub fn f(a: u8) {\n    1 +\n}\n").unwrap_err();
-        assert!(error.contains("(line 3, column "), "{error}");
+        // Design 39.1: the parser gets the edition of the package. A parameter with no name is
+        // correct only in the 2015 edition; the tree keeps the text as it is.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let text = "pub trait T {\n    fn f(u8);\n    fn g(&self, &mut u8) -> bool;\n}\n";
+        write(root, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n");
+        write(root, "src/lib.rs", text);
+        let ws = Workspace::load(root).unwrap();
+        assert!(ws.parse_errors.is_empty(), "{:?}", ws.parse_errors);
+        assert_eq!(ws.items["demo::T::g"].signature, "fn g (& self , & mut u8) -> bool");
+        write(root, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2018\"\n");
+        let ws = Workspace::load(root).unwrap();
+        assert!(ws.parse_errors["src/lib.rs"].contains("(line 2, column "), "{:?}", ws.parse_errors);
+        // The edition of the workspace (`edition.workspace = true`).
+        write(root, "Cargo.toml", "[workspace.package]\nedition = \"2018\"\n[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition.workspace = true\n");
+        let ws = Workspace::load(root).unwrap();
+        assert!(ws.parse_errors.contains_key("src/lib.rs"), "{:?}", ws.parse_errors);
     }
 
     #[test]
@@ -1582,8 +1678,17 @@ mod tests {
     }
 
     #[test]
-    fn comment_scanner_skips_strings() {
-        let comments = plain_comments("let a = \"// not\"; // yes\n/* block */ /// doc");
-        assert_eq!(comments, ["// yes", "/* block */"]);
+    fn the_comments_come_from_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n");
+        write(root, "src/lib.rs", "/// doc\npub fn f() {\n    let a = \"// not\"; // yes\n    /* block\n       two */\n}\n");
+        let ws = Workspace::load(root).unwrap();
+        assert_eq!(ws.items["demo::f"].docs, ["/// doc", "// yes", "/* block two */"]);
+        // A plain comment above an item is not in the item: the item starts at its doc comment.
+        write(root, "src/lib.rs", "// a note\n/// doc\npub fn f() {}\n");
+        let ws = Workspace::load(root).unwrap();
+        assert_eq!((ws.items["demo::f"].line_start, ws.items["demo::f"].col_start), (2, 0));
+        assert_eq!(ws.items["demo::f"].text, "# [doc = \" doc\"] pub fn f () { }");
     }
 }

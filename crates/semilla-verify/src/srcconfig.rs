@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
 use semilla_syntax::{Item, ItemKind, Workspace};
 
 use crate::{BodyComparison, BodyStatus};
@@ -442,7 +442,7 @@ fn changed(old: Vec<TokenTree>, new: Vec<TokenTree>) -> (Vec<TokenTree>, Vec<Tok
             let (inner_old, inner_new, _) = changed(a.stream().into_iter().collect(), b.stream().into_iter().collect());
             let wrap = |side: &[TokenTree], inner: Vec<TokenTree>, end: usize| {
                 let mut out: Vec<TokenTree> = side[start..prefix].to_vec();
-                out.push(TokenTree::Group(proc_macro2::Group::new(a.delimiter(), inner.into_iter().collect())));
+                out.push(TokenTree::Group(semilla_syntax::tt::Group::new(a.delimiter(), inner.into_iter().collect())));
                 out.extend(side[end..end + tail].iter().cloned());
                 out
             };
@@ -490,7 +490,7 @@ fn without_free_parts(stream: TokenStream) -> String {
     // with a different first word is not a part of the visibility (a tuple field: `pub (u8, u8)`).
     if matches!(tokens.get(index), Some(TokenTree::Ident(word)) if word == "pub") {
         index += 1;
-        let scope = |group: &proc_macro2::Group| group.delimiter() == Delimiter::Parenthesis && matches!(group.stream().into_iter().next(), Some(TokenTree::Ident(word)) if ["crate", "super", "self", "in"].contains(&word.to_string().as_str()));
+        let scope = |group: &semilla_syntax::tt::Group| group.delimiter() == Delimiter::Parenthesis && matches!(group.stream().into_iter().next(), Some(TokenTree::Ident(word)) if ["crate", "super", "self", "in"].contains(&word.to_string().as_str()));
         if matches!(tokens.get(index), Some(TokenTree::Group(group)) if scope(group)) {
             index += 1;
         }
@@ -565,16 +565,16 @@ pub(crate) fn token_reader(item: &Item, workspace: &Workspace) -> bool {
 /// The text of the tokens of an item without the doc comments in the attributes before the
 /// item (`/// text` is the attribute `#[doc = "text"]`). Each other attribute stays.
 fn without_item_docs(stream: TokenStream) -> String {
-    let tokens: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
+    let tokens: Vec<semilla_syntax::tt::TokenTree> = stream.into_iter().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut index = 0;
     while index + 1 < tokens.len() {
-        let (proc_macro2::TokenTree::Punct(mark), proc_macro2::TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
-        if mark.as_char() != '#' || group.delimiter() != proc_macro2::Delimiter::Bracket {
+        let (semilla_syntax::tt::TokenTree::Punct(mark), semilla_syntax::tt::TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        if mark.as_char() != '#' || group.delimiter() != semilla_syntax::tt::Delimiter::Bracket {
             break;
         }
         let mut inner = group.stream().into_iter();
-        let doc = matches!((inner.next(), inner.next()), (Some(proc_macro2::TokenTree::Ident(name)), Some(proc_macro2::TokenTree::Punct(equal))) if name == "doc" && equal.as_char() == '=');
+        let doc = matches!((inner.next(), inner.next()), (Some(semilla_syntax::tt::TokenTree::Ident(name)), Some(semilla_syntax::tt::TokenTree::Punct(equal))) if name == "doc" && equal.as_char() == '=');
         if !doc {
             kept.push(format!("# {group}"));
         }

@@ -61,8 +61,8 @@ pub fn describe(edit: &Edit) -> String {
 /// order. `None` for another change.
 fn arm_op(edit: &Edit) -> Option<&'static str> {
     let arms = |text: &Option<String>| -> Option<Vec<String>> {
-        match syn::parse_str::<syn::Expr>(text.as_deref()?).ok()? {
-            syn::Expr::Match(m) => Some(m.arms.iter().map(|arm| quote::ToTokens::to_token_stream(arm).to_string().trim_end_matches(" ,").to_string()).collect()),
+        match semilla_syntax::rs::parse_expr(text.as_deref()?)? {
+            semilla_syntax::rs::ast::Expr::MatchExpr(m) => Some(m.match_arm_list()?.arms().map(|arm| semilla_syntax::rs::compare(&arm).trim_end_matches(" ,").to_string()).collect()),
             _ => None,
         }
     };

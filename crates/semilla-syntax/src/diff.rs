@@ -303,6 +303,14 @@ pub fn diff(before: &Workspace, after: &Workspace, renames: &Renames) -> Vec<Edi
             edit.after = Some(Anchor::item(module.as_str()));
             edit.text_before = Some(texts(old));
             edit.text_after = Some(texts(new));
+            // The display texts (design 39.2), in the order of the compare texts.
+            let shown = |side: &Workspace, entry: Option<&(String, Vec<String>)>| -> Option<String> {
+                let (_, attrs) = entry?;
+                let display = side.inner_attrs_display.get(module).filter(|display| display.len() == attrs.len())?;
+                Some(attrs.iter().zip(display).filter(|(attr, _)| is_doc(attr) == docs).map(|(_, shown)| shown.clone()).collect::<Vec<_>>().join("\n"))
+            };
+            edit.source_before = shown(before, old).or_else(|| edit.text_before.clone());
+            edit.source_after = shown(after, new).or_else(|| edit.text_after.clone());
             edit.line = 1;
             edits.push(edit);
         }
@@ -458,8 +466,14 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
     };
     let apply = |text: &str| renames.apply(&before.path, text);
 
+    // The display text of a part is the source text (design 39.2): an edit of a part has it in
+    // its source fields. The compare text stays in the text fields.
+    let shown = |mut edit: Edit, old: &str, new: &str| {
+        (edit.source_before, edit.source_after) = (Some(old.to_string()), Some(new.to_string()));
+        edit
+    };
     if before.vis != after.vis {
-        edits.push(attribute_edit(EditKind::Visibility, View::Signature, before.vis.clone(), after.vis.clone()));
+        edits.push(shown(attribute_edit(EditKind::Visibility, View::Signature, before.vis.clone(), after.vis.clone()), &before.display.vis, &after.display.vis));
     }
     // A signature with an equal text on the two sides did not change (design 37.10): a rename of
     // a name applies only where the text changed. A different item can have the same name.
@@ -471,7 +485,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         };
         if parts.is_empty() {
             // The kind of the item, for the facts: a field type, a const type, a discriminant.
-            let mut edit = attribute_edit(EditKind::Signature, View::Signature, before.signature.clone(), after.signature.clone());
+            let mut edit = shown(attribute_edit(EditKind::Signature, View::Signature, before.signature.clone(), after.signature.clone()), &before.display.signature, &after.display.signature);
             edit.attr_before = Some(kind_name(before.kind).to_string());
             edit.attr_after = Some(kind_name(after.kind).to_string());
             edits.push(edit);
@@ -490,7 +504,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         edits.push(attribute_edit(EditKind::Comment, View::Syntax, before_comments.join("\n"), after_comments.join("\n")));
     }
     if before.attrs != after.attrs {
-        edits.push(attribute_edit(EditKind::Attrs, View::Syntax, before.attrs.join("\n"), after.attrs.join("\n")));
+        edits.push(shown(attribute_edit(EditKind::Attrs, View::Syntax, before.attrs.join("\n"), after.attrs.join("\n")), &before.display.attrs.join("\n"), &after.display.attrs.join("\n")));
     }
     // A renamed field or variant keeps its place in the member list.
     let renamed_member = |member: &String| {
@@ -523,7 +537,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
                     edits.push(list_edit(old, new));
                 }
             }
-            None => edits.push(list_edit(before.members.join("\n"), after.members.join("\n"))),
+            None => edits.push(shown(list_edit(before.members.join("\n"), after.members.join("\n")), &before.display.members.join("\n"), &after.display.members.join("\n"))),
         }
     }
     // A function with a body on one side only (design 37.1): a trait method gets a default
@@ -566,33 +580,44 @@ fn impl_member_edits(before: &Item, after: &Item, renames: &Renames) -> Option<I
     }
     // The key (`const NAME`, `type NAME`, `fn NAME`, or the full text), the list text, and
     // the text with the attributes (no doc text) and the visibility.
-    let side = |item: &Item, old: bool| -> Option<Vec<(String, String, String)>> {
-        let parsed = syn::parse_str::<syn::ItemImpl>(&item.source).ok()?;
+    let side = |item: &Item, old: bool| -> Option<Vec<(String, String, String, String)>> {
+        let Some(crate::rs::ast::Item::Impl(parsed)) = crate::rs::parse_item(&item.source) else { return None };
         let apply = |text: String| if old { renames.apply(&before.path, &text) } else { text };
-        let full = |attrs: &[syn::Attribute], vis: &syn::Visibility, default: bool, list: &str| {
-            let mut parts: Vec<String> = attrs.iter().filter(|attr| !matches!(&attr.meta, syn::Meta::NameValue(value) if value.path.is_ident("doc"))).map(|attr| quote::quote!(#attr).to_string()).collect();
-            parts.extend([quote::quote!(#vis).to_string(), if default { "default".to_string() } else { String::new() }, list.to_string()]);
+        let full = |node: &crate::rs::SyntaxNode, vis: String, default: bool, list: &str| {
+            let mut parts: Vec<String> = crate::load::attributes(node).iter().filter(|attr| !attr.doc_text()).map(|attr| attr.text.clone()).collect();
+            parts.extend([vis, if default { "default".to_string() } else { String::new() }, list.to_string()]);
             parts.retain(|part| !part.is_empty());
             parts.join(" ")
         };
+        use crate::rs::{AstNode, ast};
+        use ast::{HasName, HasVisibility};
+        let vis = |node: Option<ast::Visibility>| crate::rs::compare_opt(node.as_ref());
         let members: Vec<(String, String, String)> = parsed
-            .items
-            .iter()
+            .assoc_item_list()
+            .into_iter()
+            .flat_map(|list| list.assoc_items())
             .map(|member| {
-                let list = apply(crate::load::impl_member_name(member));
-                match member {
-                    syn::ImplItem::Fn(_) => (list.clone(), list.clone(), list),
-                    syn::ImplItem::Const(constant) => (apply(format!("const {}", constant.ident)), list.clone(), full(&constant.attrs, &constant.vis, constant.defaultness.is_some(), &list)),
-                    syn::ImplItem::Type(ty) => (apply(format!("type {}", ty.ident)), list.clone(), full(&ty.attrs, &ty.vis, ty.defaultness.is_some(), &list)),
+                let list = apply(crate::load::impl_member_name(&member));
+                match &member {
+                    ast::AssocItem::Const(constant) => {
+                        let name = constant.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into());
+                        (apply(format!("const {name}")), list.clone(), full(constant.syntax(), vis(constant.visibility()), constant.default_token().is_some(), &list))
+                    }
+                    ast::AssocItem::TypeAlias(ty) => {
+                        let name = ty.name().map(|name| name.text().to_string()).unwrap_or_default();
+                        (apply(format!("type {name}")), list.clone(), full(ty.syntax(), vis(ty.visibility()), ty.default_token().is_some(), &list))
+                    }
                     _ => (list.clone(), list.clone(), list),
                 }
             })
             .collect();
+        // The display text of each member: the member list of the item has it in the same order.
+        let shown: Vec<String> = if item.display.members.len() == members.len() { item.display.members.clone() } else { members.iter().map(|(_, list, _)| list.clone()).collect() };
+        let mut members: Vec<(String, String, String, String)> = members.into_iter().zip(shown).map(|((key, list, full), shown)| (key, list, full, shown)).collect();
         // Two methods with one name are twins under `cfg` (design 38.3). Each twin is an item
         // with its own edit, so the second key gets a number.
-        let mut members = members;
         let mut seen: BTreeSet<String> = BTreeSet::new();
-        for (key, _, _) in members.iter_mut().filter(|(key, _, _)| key.starts_with("fn ")) {
+        for (key, _, _, _) in members.iter_mut().filter(|(key, _, _, _)| key.starts_with("fn ")) {
             let mut number = 0;
             let plain = key.clone();
             while !seen.insert(key.clone()) {
@@ -600,26 +625,27 @@ fn impl_member_edits(before: &Item, after: &Item, renames: &Renames) -> Option<I
                 *key = format!("{plain}#{number}");
             }
         }
-        let keys: BTreeSet<&String> = members.iter().map(|(key, _, _)| key).collect();
+        let keys: BTreeSet<&String> = members.iter().map(|(key, _, _, _)| key).collect();
         (keys.len() == members.len()).then_some(members)
     };
     let (old, new) = (side(before, true)?, side(after, false)?);
     let is_method = |key: &str| key.starts_with("fn ");
     let mut members = Vec::new();
-    for (key, list, full) in &old {
-        match new.iter().find(|(other, _, _)| other == key) {
-            None if !is_method(key) => members.push((Some(full.clone()), None, Some(list.clone()), None)),
-            Some((_, new_list, _)) if new_list != list => members.push((Some(list.clone()), Some(new_list.clone()), Some(list.clone()), Some(new_list.clone()))),
+    for (key, list, full, shown) in &old {
+        match new.iter().find(|(other, _, _, _)| other == key) {
+            None if !is_method(key) => members.push((Some(full.clone()), None, Some(shown.clone()), None)),
+            Some((_, new_list, _, new_shown)) if new_list != list => members.push((Some(list.clone()), Some(new_list.clone()), Some(shown.clone()), Some(new_shown.clone()))),
             _ => {}
         }
     }
-    for (key, list, full) in &new {
-        if !is_method(key) && !old.iter().any(|(other, _, _)| other == key) {
-            members.push((None, Some(full.clone()), None, Some(list.clone())));
+    for (key, _, full, shown) in &new {
+        if !is_method(key) && !old.iter().any(|(other, _, _, _)| other == key) {
+            members.push((None, Some(full.clone()), None, Some(shown.clone())));
         }
     }
-    let kept = |list: &[(String, String, String)], other: &[(String, String, String)]| -> Vec<String> { list.iter().filter(|(key, _, _)| other.iter().any(|(k, _, _)| k == key)).map(|(key, _, _)| key.clone()).collect() };
-    let names = |list: &[(String, String, String)]| list.iter().map(|(key, _, _)| key.clone()).collect::<Vec<_>>().join("\n");
+    type Member = (String, String, String, String);
+    let kept = |list: &[Member], other: &[Member]| -> Vec<String> { list.iter().filter(|(key, _, _, _)| other.iter().any(|(k, _, _, _)| k == key)).map(|(key, _, _, _)| key.clone()).collect() };
+    let names = |list: &[Member]| list.iter().map(|(key, _, _, _)| key.clone()).collect::<Vec<_>>().join("\n");
     let order = (kept(&old, &new) != kept(&new, &old)).then(|| (names(&old), names(&new)));
     Some(ImplMembers { members, order })
 }
@@ -641,8 +667,9 @@ fn signature_parts(before: &Item, after: &Item, old: &Node, new: &Node, renames:
         text_after: new_node.map(|n| n.text.clone()),
         attr_before: None,
         attr_after: None,
-        source_before: old_node.map(|n| n.text.clone()),
-        source_after: new_node.map(|n| n.text.clone()),
+        // The display text of a part: its source on one line (design 39.2).
+        source_before: old_node.map(|n| part_source(before, n)),
+        source_after: new_node.map(|n| part_source(after, n)),
         block_like: false,
         file: Some(after.file.clone()),
         line: new_node.or(old_node).map(|n| n.start.0).unwrap_or(after.line_start),
@@ -676,6 +703,7 @@ fn signature_parts(before: &Item, after: &Item, old: &Node, new: &Node, renames:
         let mut order = edit("params", "params", Some(old), Some(new));
         order.text_before = Some(old_order.join(", "));
         order.text_after = Some(new_order.join(", "));
+        (order.source_before, order.source_after) = (order.text_before.clone(), order.text_after.clone());
         edits.push(order);
     }
     let (a, b) = (old.child("ret"), new.child("ret"));
@@ -683,6 +711,15 @@ fn signature_parts(before: &Item, after: &Item, old: &Node, new: &Node, renames:
         edits.push(edit("ret", "ret", a, b));
     }
     edits
+}
+
+/// The source text of a signature part on one line. The qualifiers and an empty part keep
+/// their compare text.
+fn part_source(item: &Item, node: &Node) -> String {
+    if node.kind == "qualifiers" || node.text.is_empty() {
+        return node.text.clone();
+    }
+    node_source(item, node).map(|text| crate::tree::one_line(&text)).unwrap_or_else(|| node.text.clone())
 }
 
 struct Context<'a> {

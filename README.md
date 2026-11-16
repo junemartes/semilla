@@ -171,7 +171,7 @@ For the change set, it also checks the group and subgroup rules, and it checks t
 | Crate | Purpose |
 |---|---|
 | `semilla-core` | The data model: anchors, the rule table of ops, claims, steps, groups, reports, view types |
-| `semilla-syntax` | The entity tree from the source, anchors, the syntax diff, flow views, the workspace graph |
+| `semilla-syntax` | The lossless parse (`ra_ap_syntax`), the entity tree from the source, anchors, the syntax diff, flow views, the workspace graph |
 | `semilla-mir` | The rustc driver: canonical MIR at each level, N3 inlining, N4 terms |
 | `semilla-normal` | Runs the driver on a workspace, and compares bodies (N0 to N4, with `egglog` for N4) |
 | `semilla-smt` | Condition effects and expression equivalence with Z3 |

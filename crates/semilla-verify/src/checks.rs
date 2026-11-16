@@ -841,7 +841,7 @@ pub(crate) fn module_imports(workspace: &Workspace, module: &str, renames: Optio
 /// - Each other path stays as it is in the text (a different crate).
 pub(crate) fn use_line_names(workspace: &Workspace, item: &semilla_syntax::Item) -> Option<Vec<(String, String, bool)>> {
     let module = parent(&item.path);
-    let parsed = syn::parse_str::<syn::ItemUse>(&item.signature).or_else(|_| syn::parse_str::<syn::ItemUse>(&item.source)).ok()?;
+    let parsed = semilla_syntax::rs::parse_use(&item.signature).or_else(|| semilla_syntax::rs::parse_use(&item.source))?;
     let mut leaves = Vec::new();
     crate::use_leaves(&parsed.tree, &[], &mut leaves);
     let mut out = Vec::new();
@@ -863,7 +863,7 @@ pub(crate) fn use_line_names(workspace: &Workspace, item: &semilla_syntax::Item)
                     rest = &rest[1..];
                 }
             }
-            Some(first) if parsed.leading_colon.is_none() && workspace.items.contains_key(&format!("{module}::{first}")) => base = module.split("::").collect(),
+            Some(first) if !parsed.leading_colon && workspace.items.contains_key(&format!("{module}::{first}")) => base = module.split("::").collect(),
             _ => {}
         }
         let target = base.iter().copied().chain(rest.iter().map(String::as_str)).collect::<Vec<_>>().join("::");
@@ -1252,8 +1252,8 @@ fn check_compound(context: &Context, claim: &Claim) -> Outcome {
     if matches!(claim.op.as_str(), "add-arm" | "remove-arm" | "move-arm") {
         let after_anchor = Anchor { item: context.renames.items.get(&at.item).cloned().unwrap_or_else(|| at.item.clone()), path: at.path.clone() };
         let arms = |text: &str| -> Option<Vec<String>> {
-            match syn::parse_str::<syn::Expr>(text).ok()? {
-                syn::Expr::Match(m) => Some(m.arms.iter().map(|arm| quote::ToTokens::to_token_stream(arm).to_string().trim_end_matches(" ,").to_string()).collect()),
+            match semilla_syntax::rs::parse_expr(text)? {
+                semilla_syntax::rs::ast::Expr::MatchExpr(m) => Some(m.match_arm_list()?.arms().map(|arm| semilla_syntax::rs::compare(&arm).trim_end_matches(" ,").to_string()).collect()),
                 _ => None,
             }
         };
@@ -1497,20 +1497,23 @@ fn add_effect(context: &Context, at: &Anchor, outcome: &mut Outcome) {
 /// True if one side of a condition change is the `!` of the other side (`C` and `!(C)`), by the
 /// tokens. Parentheses around a side are not a difference.
 fn plain_negation(before: &str, after: &str) -> bool {
-    fn bare(mut expr: syn::Expr) -> syn::Expr {
+    use semilla_syntax::rs::ast;
+    fn bare(mut expr: ast::Expr) -> ast::Expr {
         loop {
             expr = match expr {
-                syn::Expr::Paren(inner) => *inner.expr,
-                syn::Expr::Group(inner) => *inner.expr,
+                ast::Expr::ParenExpr(inner) => match inner.expr() {
+                    Some(value) => value,
+                    None => return ast::Expr::ParenExpr(inner),
+                },
                 other => return other,
             };
         }
     }
-    let side = |text: &str| syn::parse_str::<syn::Expr>(text).ok().map(bare);
+    let side = |text: &str| semilla_syntax::rs::parse_expr(text).map(bare);
     let (Some(before), Some(after)) = (side(before), side(after)) else { return false };
-    let text = |expr: &syn::Expr| quote::ToTokens::to_token_stream(expr).to_string();
-    let negates = |outer: &syn::Expr, inner: &syn::Expr| match outer {
-        syn::Expr::Unary(syn::ExprUnary { op: syn::UnOp::Not(_), expr, .. }) => text(&bare((**expr).clone())) == text(inner),
+    let text = |expr: &ast::Expr| semilla_syntax::rs::compare(expr);
+    let negates = |outer: &ast::Expr, inner: &ast::Expr| match outer {
+        ast::Expr::PrefixExpr(unary) if unary.op_kind() == Some(ast::UnaryOp::Not) => unary.expr().is_some_and(|expr| text(&bare(expr)) == text(inner)),
         _ => false,
     };
     negates(&after, &before) || negates(&before, &after)
@@ -1529,8 +1532,10 @@ fn with_const_values(workspace: &Workspace, text: &str) -> String {
         .values()
         .filter(|item| item.kind == semilla_syntax::ItemKind::Const)
         .filter_map(|item| {
-            let item_const = syn::parse_str::<syn::ItemConst>(&item.text).ok()?;
-            matches!(item_const.expr.as_ref(), syn::Expr::Lit(_)).then(|| (item_const.ident.to_string(), quote::ToTokens::to_token_stream(&item_const.expr).to_string()))
+            use semilla_syntax::rs::ast::{self, HasName};
+            let Some(ast::Item::Const(item_const)) = semilla_syntax::rs::parse_item(&item.text) else { return None };
+            let value = item_const.body()?;
+            matches!(value, ast::Expr::Literal(_)).then(|| Some((item_const.name()?.text().to_string(), semilla_syntax::rs::compare(&value)))).flatten()
         })
         .collect();
     if values.is_empty() {
@@ -1543,12 +1548,13 @@ fn with_const_values(workspace: &Workspace, text: &str) -> String {
 pub fn local_types(workspace: &Workspace, item: &str) -> BTreeMap<String, String> {
     let mut types = BTreeMap::new();
     let Some(item) = workspace.items.get(item) else { return types };
-    if let Ok(signature) = syn::parse_str::<syn::Signature>(&item.signature) {
-        for input in &signature.inputs {
-            if let syn::FnArg::Typed(typed) = input {
-                if let syn::Pat::Ident(ident) = typed.pat.as_ref() {
-                    types.insert(ident.ident.to_string(), quote::ToTokens::to_token_stream(&typed.ty).to_string().replace(' ', ""));
-                }
+    if let Some(signature) = semilla_syntax::rs::parse_signature(&item.signature) {
+        use semilla_syntax::rs::ast::{self, HasName};
+        for param in signature.param_list().into_iter().flat_map(|list| list.params()) {
+            if let (Some(ast::Pat::IdentPat(ident)), Some(ty)) = (param.pat(), param.ty())
+                && let Some(name) = ident.name()
+            {
+                types.insert(name.text().to_string(), semilla_syntax::rs::compare(&ty).replace(' ', ""));
             }
         }
     }
@@ -1760,7 +1766,7 @@ fn strip_paren(text: &str) -> &str {
 
 /// Parses an expression and returns its token text, so that the spacing is the same.
 fn normalize_expr(text: &str) -> Option<String> {
-    syn::parse_str::<syn::Expr>(text).ok().map(|expr| quote::ToTokens::to_token_stream(&expr).to_string())
+    semilla_syntax::rs::parse_expr(text).map(|expr| semilla_syntax::rs::compare(&expr))
 }
 
 

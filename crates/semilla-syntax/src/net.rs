@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
+use crate::tt::{Delimiter, TokenStream, TokenTree};
 
 use semilla_core::{Anchor, View};
 
@@ -25,8 +25,8 @@ use crate::{Item, ItemKind, Workspace};
 struct Token {
     text: String,
     at: (usize, usize),
-    /// True if the next token has no space before it (`::`, `'a`).
-    joint: bool,
+    /// The place after its end.
+    end: (usize, usize),
 }
 
 /// The tokens of the files of one side. A file that is not Rust text has no tokens.
@@ -37,7 +37,7 @@ impl Files {
     fn tokens(&mut self, workspace: &Workspace, file: &str) -> &[Token] {
         self.0.entry(file.to_string()).or_insert_with(|| {
             let mut out = Vec::new();
-            if let Some(stream) = workspace.rust_files.get(file).and_then(|text| text.parse::<TokenStream>().ok()) {
+            if let Some(stream) = workspace.rust_files.get(file).and_then(|text| TokenStream::with_places(text).ok()) {
                 flatten(stream, &mut out);
             }
             out
@@ -66,11 +66,11 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
                     Delimiter::Bracket => ("[", "]"),
                     Delimiter::None => ("", ""),
                 };
-                let start = group.span_open().start();
-                out.push(Token { text: open.to_string(), at: (start.line, start.column), joint: false });
+                let (start, after) = (group.span_open().start(), group.span_open().end());
+                out.push(Token { text: open.to_string(), at: (start.line, start.column), end: (after.line, after.column) });
                 flatten(group.stream(), out);
-                let end = group.span_close().start();
-                out.push(Token { text: close.to_string(), at: (end.line, end.column), joint: false });
+                let (end, after) = (group.span_close().start(), group.span_close().end());
+                out.push(Token { text: close.to_string(), at: (end.line, end.column), end: (after.line, after.column) });
             }
             TokenTree::Punct(punct) => {
                 if punct.as_char() == ',' {
@@ -84,12 +84,12 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
                         continue;
                     }
                 }
-                let start = punct.span().start();
-                out.push(Token { text: punct.as_char().to_string(), at: (start.line, start.column), joint: punct.spacing() == Spacing::Joint });
+                let (start, after) = (punct.span().start(), punct.span().end());
+                out.push(Token { text: punct.as_char().to_string(), at: (start.line, start.column), end: (after.line, after.column) });
             }
             other => {
-                let start = other.span().start();
-                out.push(Token { text: other.to_string(), at: (start.line, start.column), joint: false });
+                let (start, after) = (other.span().start(), other.span().end());
+                out.push(Token { text: other.to_string(), at: (start.line, start.column), end: (after.line, after.column) });
             }
         }
     }
@@ -151,22 +151,22 @@ fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -
             next += 1;
             cut = false;
         } else if !cut {
-            out.push(Token { text: "…".to_string(), at: token.at, joint: false });
+            out.push(Token { text: "…".to_string(), at: token.at, end: token.at });
             cut = true;
         }
     }
     join(&out)
 }
 
+/// The display text of the tokens (design 39.2): one space where the source has space, a
+/// comment, or a token that the net skips between two tokens.
 fn join(tokens: &[Token]) -> String {
     let mut out = String::new();
     for (index, token) in tokens.iter().enumerate() {
-        out.push_str(&token.text);
-        let open = matches!(token.text.as_str(), "(" | "[");
-        let close = tokens.get(index + 1).is_some_and(|next| matches!(next.text.as_str(), ")" | "]"));
-        if !token.joint && !open && !close && index + 1 < tokens.len() {
+        if index > 0 && (tokens[index - 1].end != token.at || token.text == "…" || tokens[index - 1].text == "…") {
             out.push(' ');
         }
+        out.push_str(&token.text);
     }
     out
 }
@@ -177,23 +177,31 @@ fn compact(text: &str) -> String {
 
 /// The associated constants and types of an impl: the kind, the name, the visibility, and the
 /// attributes (no doc text). The member list of the impl has the other parts.
-fn associated(item: &Item) -> Vec<(&'static str, String, String, String)> {
-    let Ok(parsed) = syn::parse_str::<syn::ItemImpl>(&item.source) else { return Vec::new() };
-    let text = |vis: &syn::Visibility, attrs: &[syn::Attribute], default: bool| {
-        let attrs: Vec<String> = attrs.iter().filter(|attr| !matches!(&attr.meta, syn::Meta::NameValue(value) if value.path.is_ident("doc"))).map(|attr| quote::quote!(#attr).to_string()).collect();
-        (format!("{}{}", if default { "default " } else { "" }, quote::quote!(#vis)).trim().to_string(), attrs.join("\n"))
+/// Each part has its compare text and its display text (design 39.2).
+fn associated(item: &Item) -> Vec<(&'static str, String, (String, String), (String, String))> {
+    use crate::rs::{AstNode, ast};
+    use ast::{HasName, HasVisibility};
+    let Some(ast::Item::Impl(parsed)) = crate::rs::parse_item(&item.source) else { return Vec::new() };
+    let text = |node: &crate::rs::SyntaxNode, vis: Option<ast::Visibility>, default: bool| {
+        let attrs: Vec<(String, String)> = crate::load::attributes(node).iter().filter(|attr| !attr.doc_text()).map(|attr| (attr.text.clone(), attr.display.clone())).collect();
+        let default = if default { "default " } else { "" };
+        let vis_display = vis.as_ref().map(|vis| crate::tt::display_text(vis.syntax())).unwrap_or_default();
+        let vis = (format!("{default}{}", crate::rs::compare_opt(vis.as_ref())).trim().to_string(), format!("{default}{vis_display}").trim().to_string());
+        let shown = |pick: fn(&(String, String)) -> &String| attrs.iter().map(pick).cloned().collect::<Vec<_>>().join("\n");
+        (vis, (shown(|pair| &pair.0), shown(|pair| &pair.1)))
     };
     parsed
-        .items
-        .iter()
-        .filter_map(|member| match member {
-            syn::ImplItem::Const(constant) => {
-                let (vis, attrs) = text(&constant.vis, &constant.attrs, constant.defaultness.is_some());
-                Some(("constant", constant.ident.to_string(), vis, attrs))
+        .assoc_item_list()
+        .into_iter()
+        .flat_map(|list| list.assoc_items())
+        .filter_map(|member| match &member {
+            ast::AssocItem::Const(constant) => {
+                let (vis, attrs) = text(constant.syntax(), constant.visibility(), constant.default_token().is_some());
+                Some(("constant", constant.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into()), vis, attrs))
             }
-            syn::ImplItem::Type(ty) => {
-                let (vis, attrs) = text(&ty.vis, &ty.attrs, ty.defaultness.is_some());
-                Some(("type", ty.ident.to_string(), vis, attrs))
+            ast::AssocItem::TypeAlias(ty) => {
+                let (vis, attrs) = text(ty.syntax(), ty.visibility(), ty.default_token().is_some());
+                Some(("type", ty.name().map(|name| name.text().to_string()).unwrap_or_default(), vis, attrs))
             }
             _ => None,
         })
@@ -210,11 +218,13 @@ fn associated_edits(before: &Item, after: &Item, renames: &Renames) -> Vec<Edit>
     let mut out = Vec::new();
     for (kind, name, old_vis, old_attrs) in &old {
         let name_after = renames.apply(&before.path, name);
-        let same = |list: &[(&'static str, String, String, String)], name: &str| list.iter().filter(|(k, n, _, _)| k == kind && n == name).count() == 1;
+        type Part = (&'static str, String, (String, String), (String, String));
+        let same = |list: &[Part], name: &str| list.iter().filter(|(k, n, _, _)| k == kind && n == name).count() == 1;
         let Some((_, _, new_vis, new_attrs)) = new.iter().find(|(k, n, _, _)| k == kind && *n == name_after).filter(|_| same(&old, name) && same(&new, &name_after)) else { continue };
         for (part, a, b) in [("visibility", old_vis, new_vis), ("attributes", old_attrs, new_attrs)] {
-            if renames.apply(&before.path, a) != *b {
-                let mut edit = text_edit(before, after, a.clone(), b.clone(), after.line_start);
+            if renames.apply(&before.path, &a.0) != b.0 {
+                let mut edit = text_edit(before, after, a.0.clone(), b.0.clone(), after.line_start);
+                (edit.source_before, edit.source_after) = (Some(a.1.clone()), Some(b.1.clone()));
                 edit.attr_after = Some(format!("{part} of the associated {kind} `{name_after}`"));
                 out.push(edit);
             }

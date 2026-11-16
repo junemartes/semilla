@@ -692,24 +692,23 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
 /// impl or a trait that has a constant with the name. Returns the path of that parent item and
 /// the text of the constant.
 fn assoc_const(input: &Input, body: &BodyComparison) -> Option<(String, String)> {
-    use quote::ToTokens;
+    use semilla_syntax::rs::{ast, compare, parse_item};
+    use ast::HasName;
     let (file, line) = body.span.as_ref()?;
     // A body in the constant (a closure, an inline constant) is not the constant.
     let short = body.name.rsplit("::").next().filter(|short| !short.starts_with('{'))?;
     let ws = if body.status == BodyStatus::BeforeOnly { input.before } else { input.after };
     let inside = |item: &&semilla_syntax::Item| (file.ends_with(&item.file) || item.file.ends_with(file.as_str())) && item.line_start <= *line && *line <= item.line_end;
     let parent = ws.items.values().filter(|item| matches!(item.kind, ItemKind::Impl | ItemKind::Trait)).filter(inside).min_by_key(|item| item.line_end - item.line_start)?;
-    let text = if parent.kind == ItemKind::Impl {
-        syn::parse_str::<syn::ItemImpl>(&parent.source).ok()?.items.iter().find_map(|member| match member {
-            syn::ImplItem::Const(constant) if constant.ident == short => Some(constant.to_token_stream().to_string()),
-            _ => None,
-        })
-    } else {
-        syn::parse_str::<syn::ItemTrait>(&parent.source).ok()?.items.iter().find_map(|member| match member {
-            syn::TraitItem::Const(constant) if constant.ident == short => Some(constant.to_token_stream().to_string()),
-            _ => None,
-        })
-    }?;
+    let list = match parse_item(&parent.source)? {
+        ast::Item::Impl(value) if parent.kind == ItemKind::Impl => value.assoc_item_list()?,
+        ast::Item::Trait(value) if parent.kind == ItemKind::Trait => value.assoc_item_list()?,
+        _ => return None,
+    };
+    let text = list.assoc_items().find_map(|member| match member {
+        ast::AssocItem::Const(constant) if constant.name().is_some_and(|name| name.text() == short) => Some(compare(&constant)),
+        _ => None,
+    })?;
     Some((parent.path.clone(), text))
 }
 

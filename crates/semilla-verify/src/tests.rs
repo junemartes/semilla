@@ -2578,7 +2578,7 @@ fn equal_type_changes_fold_into_one_fact_with_each_place() {
     let texts = descriptions(&run_derived(before, &mixed, &bodies));
     assert_eq!(texts.len(), 3, "{texts:#?}");
     assert!(texts.iter().any(|text| text == "type of `demo::Account.size`: `u32` → `u16` (the public API can change: a different crate can use the item)"), "{texts:#?}");
-    assert!(texts.iter().any(|text| text == "parameter of `demo::other` `count : u8` → `count : u16` (the public API can change: a different crate can use the item)"), "{texts:#?}");
+    assert!(texts.iter().any(|text| text == "parameter of `demo::other` `count: u8` → `count: u16` (the public API can change: a different crate can use the item)"), "{texts:#?}");
     assert!(texts.iter().any(|text| text.starts_with("type `u32` → `u64` in 5 places: ")), "{texts:#?}");
 
     // A different class does not fold: the type of the parameter changes the body of `find`.
@@ -2606,7 +2606,7 @@ fn each_body_of_a_site_is_affected_or_equal() {
     let before = "pub fn charge(amount: u64) -> u64 {\n    amount + 1\n}\npub fn schedule(a: u64) -> u64 {\n    charge(a)\n}\npub fn withdraw(a: u64) -> u64 {\n    charge(a) + 2\n}\n";
     let after = before.replace("charge(amount: u64)", "charge(amount: u64, rate: u64)").replace("amount + 1", "amount + rate").replace("charge(a)", "charge(a, 1)");
     let report = run_calls(before, &after, vec![("demo::charge", different(false), vec![]), ("demo::schedule", equal("n0"), vec!["demo::charge"]), ("demo::withdraw", different(false), vec!["demo::charge"])]);
-    let fact = report.facts.iter().find(|fact| fact.description.starts_with("parameter of `demo::charge` added: `rate : u64`")).unwrap_or_else(|| panic!("{:#?}", report.facts));
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("parameter of `demo::charge` added: `rate: u64`")).unwrap_or_else(|| panic!("{:#?}", report.facts));
     let sites: BTreeSet<String> = fact.sites.iter().flat_map(|group| group.sites.iter().map(|site| site.item.clone())).collect();
     assert_eq!(sites, ["demo::schedule".to_string(), "demo::withdraw".to_string()].into(), "{fact:#?}");
     assert_eq!(fact.affected, ["demo::charge", "demo::withdraw"], "{fact:#?}");
@@ -4596,7 +4596,7 @@ fn a_move_into_a_new_module_gets_its_proof_in_one_step() {
     let texts = descriptions(&report);
     assert!(!texts.iter().any(|text| text.contains("added") || text.contains("removed")), "{texts:?}");
     // The visibility is a fact to read, with no spotlight.
-    let visibility = report.facts.iter().find(|fact| fact.description == "visibility of `demo::calendar::is_leap`: `private` → `pub (crate)`").unwrap_or_else(|| panic!("{texts:?}"));
+    let visibility = report.facts.iter().find(|fact| fact.description == "visibility of `demo::calendar::is_leap`: `private` → `pub(crate)`").unwrap_or_else(|| panic!("{texts:?}"));
     assert!(!visibility.spotlight && report.spotlight.is_empty(), "{report:#?}");
     let report = run_claim_files(&before, &after, claims(), &bodies);
     assert!(report.accepted() && status_of(&report, "c1").is_verified() && report.uncovered.is_empty(), "{report:#?}");
@@ -4676,7 +4676,7 @@ fn a_moved_constant_and_a_moved_struct_get_their_proof() {
     let report = run_derived_files(&before, &changed, &[("demo::date::parse", different(false)), ("demo::calendar::LIMIT", different(false))]);
     // Design 36.1: the move is one fact, and the value is a second fact with the changed bodies.
     let texts = descriptions(&report);
-    assert_eq!(texts, ["moved `demo::date::LIMIT` → `demo::calendar::LIMIT`, with 1 `use` line(s)", "visibility of `demo::calendar::LIMIT`: `private` → `pub (crate)`", "value of `demo::calendar::LIMIT` changed: 4 → 5"]);
+    assert_eq!(texts, ["moved `demo::date::LIMIT` → `demo::calendar::LIMIT`, with 1 `use` line(s)", "visibility of `demo::calendar::LIMIT`: `private` → `pub(crate)`", "value of `demo::calendar::LIMIT` changed: 4 → 5"]);
     assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[2].category == Category::Value && report.facts[2].affected == ["demo::calendar::LIMIT", "demo::date::parse"], "{report:#?}");
 
     // A struct with an `impl` block.
@@ -4857,14 +4857,14 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_move() {
         // A bare name of the body is a different item in the new module: the MIR differs.
         ("a different callee", LIB.into(), format!("{HEAD}{CALENDAR}"), &changed, Some("moved ")),
         ("a cfg on the module", "#[cfg(not(windows))]\nmod calendar;\nmod date;\n".into(), format!("{HEAD}{CALENDAR}"), &bodies, None),
-        ("an allow attribute", LIB.into(), format!("{HEAD}#![allow(dead_code)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar`: added `# ! [allow (dead_code)]`")),
-        ("an allow attribute only", LIB.into(), format!("#![allow(dead_code)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar`: added `# ! [allow (dead_code)]`")),
+        ("an allow attribute", LIB.into(), format!("{HEAD}#![allow(dead_code)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar`: added `#![allow(dead_code)]`")),
+        ("an allow attribute only", LIB.into(), format!("#![allow(dead_code)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar`: added `#![allow(dead_code)]`")),
         ("a doc in a cfg_attr", LIB.into(), format!("#![cfg_attr(windows, doc = \"Calendar.\")]\n{CALENDAR}"), &bodies, None),
         ("a computed doc in the file", LIB.into(), format!("#![doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar` added")),
         ("a doc test in the file", LIB.into(), format!("//! Calendar.\n//!\n//! ```\n//! assert!(false);\n//! ```\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar` added")),
-        ("a hidden item", LIB.into(), format!("{HEAD}#[doc(hidden)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar::is_leap`: added `# [doc (hidden)]`")),
+        ("a hidden item", LIB.into(), format!("{HEAD}#[doc(hidden)]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar::is_leap`: added `#[doc(hidden)]`")),
         ("a computed doc on the item", LIB.into(), format!("{HEAD}#[doc = include_str!(\"../README.md\")]\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar::is_leap` added")),
-        ("a cfg on the item", LIB.into(), format!("{HEAD}#[cfg(not(windows))]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar::is_leap`: added `# [cfg (not (windows))]`")),
+        ("a cfg on the item", LIB.into(), format!("{HEAD}#[cfg(not(windows))]\n{CALENDAR}"), &bodies, Some("attributes of `demo::calendar::is_leap`: added `#[cfg(not(windows))]`")),
         ("a doc test on the item", LIB.into(), format!("{HEAD}/// ```\n/// assert!(false);\n/// ```\n{CALENDAR}"), &bodies, Some("doc test of `demo::calendar::is_leap` added")),
         // A doc comment on the `mod` line has no fact of its own, so it is not a part of a move.
         ("a doc on the mod line", "/// Calendar computations.\nmod calendar;\nmod date;\n".into(), CALENDAR.into(), &bodies, Some("added `demo::calendar`")),
@@ -4914,7 +4914,7 @@ fn a_plain_doc_comment_does_not_stop_the_proof_of_a_rename() {
         ("/** The piece. */\n", true, ""),
         ("#[doc = \"The piece.\"]\n", true, ""),
         ("/// The piece.\n///\n/// ```\n/// assert!(false);\n/// ```\n", false, "doc test of `demo::piece` added"),
-        ("/// The item.\n#[doc(hidden)]\n", false, "attributes of `demo::piece`: added `# [doc (hidden)]`"),
+        ("/// The item.\n#[doc(hidden)]\n", false, "attributes of `demo::piece`: added `#[doc(hidden)]`"),
         ("#[doc = include_str!(\"../README.md\")]\n", false, "doc test of `demo::piece` added"),
     ] {
         let after = after.replace("/// The item.\n", doc);
@@ -4966,10 +4966,10 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
     assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub` → `private`{GONE}"), Compare::CodeEqual));
     // `private` → `pub(crate)`: no crate other than this one sees a difference.
     let (text, class) = visibility(&base, &files(LIB, DATE, in_crate));
-    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub (crate)`".to_string(), Compare::CodeEqual));
+    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub(crate)`".to_string(), Compare::CodeEqual));
     // `pub(crate)` → `pub` in a public module.
     let (text, class) = visibility(&files(LIB, DATE, in_crate), &files(LIB, DATE, leaked));
-    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub (crate)` → `pub`{NOW}"), Compare::CodeEqual));
+    assert_eq!((text, class), (format!("visibility of `demo::calendar::leap`: `pub(crate)` → `pub`{NOW}"), Compare::CodeEqual));
     // `pub` in a private module with no re-export. A `pub use` line of a different item of
     // the module does not bring the item.
     for lib in [LIB, "pub mod calendar;\nmod date;\npub use self::date::parse;\n", "pub mod calendar;\nmod date;\npub use self::date::{parse as read};\n"] {
@@ -5231,7 +5231,7 @@ fn the_note_of_a_move_with_no_proof_gives_the_cause_that_stops_the_proof() {
     // fact, with no body.
     let moved = &report.facts[0];
     assert!(moved.description.starts_with("moved `demo::a::over` → `demo::b::over`") && moved.compare == Compare::CodeDifferent && moved.mismatch() && moved.affected == ["demo::b::over"], "{report:#?}");
-    assert!(report.facts[1].description.starts_with("visibility of `demo::b::over`: `pub (crate)` → `pub`") && report.facts[1].compare == Compare::CodeEqual && report.notes.is_empty(), "{report:#?}");
+    assert!(report.facts[1].description.starts_with("visibility of `demo::b::over`: `pub(crate)` → `pub`") && report.facts[1].compare == Compare::CodeEqual && report.notes.is_empty(), "{report:#?}");
     // The same move with an equal MIR has a proof.
     let report = run_derived(&before, MOVE_AFTER, &[("demo::b::over", equal("n0")), ("demo::b::run", equal("n1"))]);
     assert!(descriptions(&report).iter().any(|d| d.starts_with("moved `demo::a::over` → `demo::b::over`")), "{report:#?}");
@@ -5292,7 +5292,7 @@ fn a_declaration_change_of_a_public_item_names_the_public_api() {
     assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual), "{:#?}", report.facts);
     // `private` → `pub(crate)` stays neutral (batch 5x).
     let report = run_derived(&private, &private.replace("fn limit(n: u32) -> u32 {", "pub(crate) fn limit(n: u32) -> u32 {"), &bodies);
-    assert_eq!(descriptions(&report), ["visibility of `demo::limit`: `private` → `pub (crate)`"]);
+    assert_eq!(descriptions(&report), ["visibility of `demo::limit`: `private` → `pub(crate)`"]);
     assert_eq!(report.facts[0].compare, Compare::CodeEqual, "{:#?}", report.facts);
 }
 
@@ -5453,7 +5453,7 @@ fn a_move_keeps_its_proof_when_the_use_lines_change() {
     // The honest move: a split line in `a` and a joined line in `b`.
     let report = run(A, A_SPLIT, WORDS);
     assert!(clean(&report), "{report:#?}");
-    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper`, with 3 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`"], "{report:#?}");
+    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper`, with 3 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub(crate)`"], "{report:#?}");
     // Each other honest form of the line in `a`.
     for a in ["use crate::{keep, words::helper};\n", "use crate::words::helper;\nuse crate::keep;\n", "use crate::{keep, words};\nuse words::helper;\n", "use crate::keep;\nuse super::words::helper;\n"] {
         let report = run(A, &A_SPLIT.replace("use crate::keep;\nuse crate::words::helper;\n", a), WORDS);
@@ -5663,7 +5663,7 @@ fn a_move_into_a_new_public_module_gives_the_real_cause() {
     };
     let report = run("pub mod", "");
     let texts = descriptions(&report);
-    assert_eq!(texts, ["moved `demo::helper` → `demo::words::helper`, with 1 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`", "added `demo::words` (the public API changes: a different crate can now use the item)"]);
+    assert_eq!(texts, ["moved `demo::helper` → `demo::words::helper`, with 1 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub(crate)`", "added `demo::words` (the public API changes: a different crate can now use the item)"]);
     assert!(report.notes.is_empty() && report.facts[0].compare == Compare::CodeEqual && report.facts[2].category == Category::Added, "{report:#?}");
     // A second change in the step: one more fact.
     let report = run("pub mod", "pub fn more() -> u32 {\n    2\n}\n");
@@ -5671,7 +5671,7 @@ fn a_move_into_a_new_public_module_gives_the_real_cause() {
     assert!(texts[0].starts_with("moved `demo::helper` → `demo::words::helper`") && texts.iter().any(|text| text.starts_with("added `demo::more`")) && texts.iter().any(|text| text.starts_with("added `demo::words`")) && report.notes.is_empty(), "{report:#?}");
     // A module that is not `pub` is a part of the move: it has no fact of its own.
     let report = run("mod", "");
-    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper`, with 1 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub (crate)`"]);
+    assert_eq!(descriptions(&report), ["moved `demo::helper` → `demo::words::helper`, with 1 `use` line(s)", "visibility of `demo::words::helper`: `private` → `pub(crate)`"]);
 }
 
 /// Batch 6a, B4 (trial 9): a file that the code reads at build time (`include_str!`,
@@ -5724,14 +5724,14 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
 
     // The visibility of an associated constant.
     let (text, class, spotlight) = one("pub const FIRST", "pub(crate) const FIRST");
-    assert_eq!(text, format!("visibility of the associated constant `FIRST` in `demo::impl Table`: `pub` → `pub (crate)` {api}"));
+    assert_eq!(text, format!("visibility of the associated constant `FIRST` in `demo::impl Table`: `pub` → `pub(crate)` {api}"));
     assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // An attribute of an associated constant, and of an associated type.
     let (text, class, _) = one("    pub const FIRST", "    #[deprecated]\n    pub const FIRST");
-    assert_eq!(text, format!("attributes of the associated constant `FIRST` in `demo::impl Table`: added `# [deprecated]` {api}"));
+    assert_eq!(text, format!("attributes of the associated constant `FIRST` in `demo::impl Table`: added `#[deprecated]` {api}"));
     assert_eq!(class, Compare::CodeEqual);
     let (text, class, _) = one("    type Item = u8;", "    #[cfg(all())]\n    type Item = u8;");
-    assert!(text.starts_with("attributes of the associated type `Item` in `demo::impl <Table as Set>`: added `# [cfg (all ())]`"), "{text}");
+    assert!(text.starts_with("attributes of the associated type `Item` in `demo::impl <Table as Set>`: added `#[cfg(all())]`"), "{text}");
     assert_eq!(class, Compare::CodeEqual);
     // The visibility of a `use` line: one changed line, and the public name goes.
     for new in ["use inner::helper;", "pub(crate) use inner::helper;"] {
@@ -5745,7 +5745,7 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
 
     // The net: a kind of text with no fact kind (`default` on a method of an impl).
     let (text, class, spotlight) = one("    pub fn new(x: u8)", "    pub default fn new(x: u8)");
-    assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new (x : u8) -> Table …` → `pub default fn new (x : u8) -> Table …` {api}"));
+    assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new(x: u8) -> Table …` → `pub default fn new(x: u8) -> Table …` {api}"));
     // Design 37.1, rule 3: the text has no body, thus each side has a cut mark.
     assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // The net fact of an item that no different crate can use has the class `other` too.
@@ -5762,7 +5762,7 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     assert!(text.starts_with("visibility of `demo::Table`"), "{text}");
     // An attribute of the `doc` family has its own fact: the net adds no second fact.
     let (text, _, _) = one("pub struct Table(pub u8);", "#[doc(hidden)]\npub struct Table(pub u8);");
-    assert!(!text.starts_with("changed source text") && text.contains("# [doc (hidden)]"), "{text}");
+    assert!(!text.starts_with("changed source text") && text.contains("#[doc(hidden)]"), "{text}");
 }
 
 /// Batch 6b, part 1: a method that uses code under `cfg`. A text edit of its item gives the
@@ -5786,10 +5786,10 @@ fn a_free_declaration_change_is_no_text_edit_of_the_body() {
     // of the item, the proof of a body that uses code under `cfg` stopped, and the body got
     // the fact "indirect change, cause not known" (two times: the method and its closure).
     let cases = [
-        ("    pub fn size", "    pub(crate) fn size", "visibility of `demo::S::size`: `pub` → `pub (crate)`"),
-        ("    #[inline]\n", "    #[inline]\n    #[doc(hidden)]\n", "attributes of `demo::S::size`: added `# [doc (hidden)]`"),
-        ("    #[inline]\n", "    #[must_use]\n    #[inline]\n", "attributes of `demo::S::size`: added `# [must_use]`"),
-        ("    #[inline]\n", "    #[inline]\n    #[deprecated(note = \"old\")]\n", "attributes of `demo::S::size`: added `# [deprecated (note = \"old\")]`"),
+        ("    pub fn size", "    pub(crate) fn size", "visibility of `demo::S::size`: `pub` → `pub(crate)`"),
+        ("    #[inline]\n", "    #[inline]\n    #[doc(hidden)]\n", "attributes of `demo::S::size`: added `#[doc(hidden)]`"),
+        ("    #[inline]\n", "    #[must_use]\n    #[inline]\n", "attributes of `demo::S::size`: added `#[must_use]`"),
+        ("    #[inline]\n", "    #[inline]\n    #[deprecated(note = \"old\")]\n", "attributes of `demo::S::size`: added `#[deprecated(note = \"old\")]`"),
         ("    /// The size.\n", "    /// The size in bytes.\n", "changed docs"),
     ];
     // The control: an edit of the body gets the note (the type `Word` is under `cfg`).
@@ -5844,7 +5844,7 @@ fn a_real_indirect_change_next_to_a_free_declaration_change_keeps_the_spotlight(
     let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(different(false)));
     let cause = report.facts.iter().find(|fact| fact.affected.iter().any(|body| body == "demo::S::size")).unwrap_or_else(|| panic!("{:#?}", report.facts));
     assert!(cause.description.contains("BASE") && cause.compare == Compare::CodeDifferent, "{cause:#?}");
-    assert!(report.facts.iter().any(|fact| fact.description == "attributes of `demo::S::size`: added `# [doc (hidden)]`" && fact.affected.is_empty()), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|fact| fact.description == "attributes of `demo::S::size`: added `#[doc(hidden)]`" && fact.affected.is_empty()), "{:#?}", report.facts);
     // A visibility change together with an edit of the body: the body edit is a fact to read.
     let after = UNDER_CFG.replace("    pub fn size", "    pub(crate) fn size").replace("width() + BASE", "width() * BASE");
     let report = run_derived_with(UNDER_CFG, &after, &under_cfg_bodies(different(false)));
@@ -6199,7 +6199,7 @@ fn a_moved_type_with_a_second_change_is_a_move_and_one_fact_for_each_change() {
     let bodies = [("demo::error::show", equal("n1")), (fmt, equal("n1"))];
     let report = run_derived_files(&before, &files("mod error;\nmod quoted;\n", ERROR_AFTER, Some(QUOTED)), &bodies);
     let moved = "moved `demo::error::Quoted` → `demo::quoted::Quoted`, with 1 impl and 2 `use` line(s)";
-    let wider = ["visibility of `demo::quoted::Quoted`: `private` → `pub (crate)`", "visibility of `demo::quoted::Quoted.0`: `private` → `pub (crate)`"];
+    let wider = ["visibility of `demo::quoted::Quoted`: `private` → `pub(crate)`", "visibility of `demo::quoted::Quoted.0`: `private` → `pub(crate)`"];
     assert_eq!(descriptions(&report), [moved, wider[0], wider[1]]);
     assert!(report.facts.iter().all(|fact| fact.compare == Compare::CodeEqual && !fact.mismatch()) && report.notes.is_empty(), "{report:#?}");
     assert!(report.facts[0].category == Category::Move && report.facts[2].category == Category::Visibility, "{report:#?}");
@@ -6297,7 +6297,7 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Op::ANY`".to_string()]));
     // A changed value, a removed constant: the level is `major`.
     let (text, category, level, api) = one("DEFAULT: Op = Op(1)", "DEFAULT: Op = Op(2)");
-    assert_eq!((text, category), (format!("value of `demo::Op::DEFAULT` changed: Op (1) → Op (2) {API}"), Category::Value));
+    assert_eq!((text, category), (format!("value of `demo::Op::DEFAULT` changed: Op(1) → Op(2) {API}"), Category::Value));
     assert_eq!((level.as_str(), api), ("major", vec!["changed `demo::Op::DEFAULT` (the type or the value)".to_string()]));
     let (text, category, level, api) = one("    pub const DEFAULT: Op = Op(1);\n", "");
     assert_eq!((text, category), (format!("removed `demo::Op::DEFAULT` {API}"), Category::Removed));
@@ -6310,7 +6310,7 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     let (text, category, level, _) = one("= \"op\"", "= \"operator\"");
     assert_eq!((text, category, level.as_str()), (format!("value of `demo::<Op as Named>::NAME` changed: \"op\" → \"operator\" {API}"), Category::Value, "major"));
     let (text, category, level, _) = one("type Out = u8", "type Out = u16");
-    assert_eq!((text, category, level.as_str()), (format!("associated type `demo::<Op as Named>::Out`: `type Out = u8 ;` → `type Out = u16 ;` {API}"), Category::Declaration, "major"));
+    assert_eq!((text, category, level.as_str()), (format!("associated type `demo::<Op as Named>::Out`: `type Out = u8;` → `type Out = u16;` {API}"), Category::Declaration, "major"));
     // New methods: one fact for each method, and no fact for the member list.
     let report = run("    pub fn get", "    pub fn a(&self) -> u8 {\n        1\n    }\n    pub fn b(&self) -> u8 {\n        2\n    }\n    pub fn get");
     assert_eq!(descriptions(&report), ["added `demo::Op::a` (the public API changes: a different crate can now use the item)", "added `demo::Op::b` (the public API changes: a different crate can now use the item)"]);
@@ -6392,8 +6392,8 @@ fn the_impl_blocks_of_a_renamed_type_pair_with_a_changed_header() {
     let report = run(before, after, rename(), &bodies, None);
     let lines = fact_lines(&report);
     // One declaration fact for each changed header: the old header and the new header.
-    assert!(lines.iter().any(|line| line.starts_with("generics of `demo::impl <WalkWith as Iterator>`: `impl < 'a > Iterator for Walk < 'a > { }` → `impl < 'a , H : Copy > Iterator for WalkWith < 'a , H > { }`") && line.ends_with("[declaration]")), "{lines:#?}");
-    assert!(lines.iter().any(|line| line.starts_with("generics of `demo::impl WalkWith`: `impl < 'a > Walk < 'a > { }` → `impl < 'a , H : Copy > WalkWith < 'a , H > { }`")), "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("generics of `demo::impl <WalkWith as Iterator>`: `impl<'a> Iterator for Walk<'a> { }` → `impl<'a, H: Copy> Iterator for WalkWith<'a, H> { }`") && line.ends_with("[declaration]")), "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("generics of `demo::impl WalkWith`: `impl<'a> Walk<'a> { }` → `impl<'a, H: Copy> WalkWith<'a, H> { }`")), "{lines:#?}");
     // No impl shows as removed or added.
     assert!(!lines.iter().any(|line| line.contains("trait impl") || line.starts_with("removed") || line.starts_with("added `demo::impl")), "{lines:#?}");
     assert!(report.uncovered.iter().all(|open| !open.description.contains("impl")), "{report:#?}");
@@ -6426,8 +6426,8 @@ fn two_impl_blocks_that_differ_only_in_lifetimes_are_one_impl() {
     // One declaration fact for each changed header.
     let headers: Vec<&String> = lines.iter().filter(|line| line.ends_with("[declaration]")).collect();
     assert_eq!(headers.len(), 2, "{lines:#?}");
-    assert!(headers[0].starts_with("generics of `demo::impl <&mutNode as Parse>`: `impl < 'a > Parse < Attrs > for & 'a mut Node { }` → `impl Parse < Attrs > for & mut Node { }`"), "{lines:#?}");
-    assert!(headers[1].starts_with("generics of `demo::impl dynShape`: `impl < 'a > dyn Shape + 'a { }` → `impl dyn Shape { }`"), "{lines:#?}");
+    assert!(headers[0].starts_with("generics of `demo::impl <&mutNode as Parse>`: `impl<'a> Parse<Attrs> for &'a mut Node { }` → `impl Parse<Attrs> for &mut Node { }`"), "{lines:#?}");
+    assert!(headers[1].starts_with("generics of `demo::impl dynShape`: `impl<'a> dyn Shape + 'a { }` → `impl dyn Shape { }`"), "{lines:#?}");
     // Each edit in a member is a fact with its text.
     for text in [
         "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [logic]",
@@ -6526,15 +6526,17 @@ fn a_file_that_does_not_parse_does_not_stop_the_step() {
     let fact = report.facts.iter().find(|fact| fact.description == "src/a.rs: changed").unwrap_or_else(|| panic!("{lines:#?}"));
     assert_eq!(fact.category, Category::File);
     let why = fact.spotlight_why.as_deref().unwrap_or("");
-    assert!(fact.spotlight && why.starts_with("Semilla cannot parse this file: ") && why.contains("line 3") && why.ends_with("in the tree after the step"), "{fact:#?}");
+    // The first error of the parser is at the end of `1 +` (design 39.4).
+    assert!(fact.spotlight && why.starts_with("Semilla cannot parse this file: ") && why.contains("(line 2, column 8)") && why.ends_with("in the tree after the step"), "{fact:#?}");
     // The diff of the file is the content of the fact.
     assert!(fact.content.as_deref().is_some_and(|content| content.contains("1 +")), "{fact:#?}");
     // The other files have their usual facts, and no item of the file shows as removed.
     assert!(lines.iter().any(|line| line.starts_with("changed literal `2` → `3` at `demo::b::second/tail`")), "{lines:#?}");
     assert!(!lines.iter().any(|line| line.contains("demo::a::first")), "{lines:#?}");
 
-    // The 2015 edition: a parameter of a trait method with no name. The file parses, and a
-    // note says so.
+    // The 2015 edition: a parameter of a trait method with no name. The package has no
+    // edition, so the parser reads the file as code of the 2015 edition (design 39.1). The file
+    // parses with its own text, and no note is necessary.
     let old_form = "pub trait Shrink {\n    fn shrink(&self, u8, bool) -> u32;\n    fn size(&self) -> u32 {\n        1\n    }\n}\n";
     let before = [("Cargo.toml", MANIFEST), ("src/lib.rs", root), ("src/a.rs", old_form), ("src/b.rs", b)];
     let changed = old_form.replace("        1\n", "        2\n");
@@ -6542,8 +6544,14 @@ fn a_file_that_does_not_parse_does_not_stop_the_step() {
     let report = run_derived_files(&before, &after, &[("demo::a::Shrink::size", different(false))]);
     let lines = fact_lines(&report);
     assert!(lines.iter().any(|line| line.starts_with("changed literal `1` → `2` at `demo::a::Shrink::size/tail`")), "{lines:#?}");
-    assert!(report.notes.iter().any(|note| note.starts_with("Semilla read `src/a.rs` as code of the 2015 edition: 2 parameter(s)")), "{report:#?}");
+    assert!(!report.notes.iter().any(|note| note.contains("2015 edition")), "{report:#?}");
     assert!(!lines.iter().any(|line| line.starts_with("src/a.rs")), "{lines:#?}");
+    // A package of the 2018 edition: the same file does not parse.
+    let manifest = format!("{MANIFEST}edition = \"2018\"\n");
+    let before = [("Cargo.toml", manifest.as_str()), ("src/lib.rs", root), ("src/a.rs", old_form), ("src/b.rs", b)];
+    let after = [("Cargo.toml", manifest.as_str()), ("src/lib.rs", root), ("src/a.rs", changed.as_str()), ("src/b.rs", b)];
+    let report = run_derived_files(&before, &after, &[]);
+    assert!(fact_lines(&report).iter().any(|line| line.starts_with("src/a.rs: changed")), "{report:#?}");
 }
 
 // Batch 7c, part 2 (design 37.4).
@@ -6733,7 +6741,7 @@ fn a_new_cfg_twin_keeps_the_key_of_the_item() {
     for (old, new, words) in [(before, after.as_str(), ["added", "added"]), (after.as_str(), before, ["removed", "removed"])] {
         let texts = descriptions(&run_derived(old, new, &[]));
         assert!(texts.iter().all(|t| !t.starts_with("renamed") && !t.contains("is now") && !t.starts_with("changed code")), "{texts:?}");
-        assert!(texts.contains(&format!("attributes of `demo::Slab::capacity`: {} `# [cfg (feature = \"std\")]`", words[0])), "{texts:?}");
+        assert!(texts.contains(&format!("attributes of `demo::Slab::capacity`: {} `#[cfg(feature = \"std\")]`", words[0])), "{texts:?}");
         assert!(texts.contains(&format!("{} {twin}", words[1])), "{texts:?}");
         assert_eq!(texts.len(), 2, "{texts:?}");
     }
@@ -6841,4 +6849,64 @@ fn a_rename_in_twin_module_files_maps_the_checked_twin() {
     assert_eq!(checks::body_renames(&renames, &before, &after), renames);
     let read: BTreeSet<String> = ["src/lib.rs", "src/sys/unix.rs"].iter().map(|file| file.to_string()).collect();
     assert_eq!(checks::body_renames_read(&renames, &before, &after, [Some(&read), Some(&read)]), map(&[("demo::sys::page_size", "demo::sys::page_bytes"), ("demo::sys#1::page_size", "demo::sys#1::page_bytes")]));
+}
+
+// Batch 8a, part 3 (design 39.2): a fact text shows the display text, the source as written.
+#[test]
+fn a_fact_text_shows_the_source_text_of_a_changed_attribute() {
+    let before = "#[doc(alias = \"a long alias for the function that is the same\", alias = \"version one\")]\npub fn f() -> u32 {\n    1\n}\n";
+    let after = "#[doc(\n    alias = \"a long alias for the function that is the same\",\n    alias = \"version two\"\n)]\npub fn f() -> u32 {\n    1\n}\n";
+    let report = run_derived(before, after, &[("demo::f", equal("n0"))]);
+    let texts = descriptions(&report);
+    // The two sides have a different format: the cut part of each side must show the change.
+    assert!(texts.iter().any(|text| text.starts_with("attributes of `demo::f`: ") && text.contains("version one") && text.contains("version two")), "{texts:#?}");
+    assert!(!texts.iter().any(|text| text.contains("# [")), "{texts:#?}");
+    // A change of the format only gives no fact.
+    let report = run_derived(before, &before.replace("alias = \"version one\"", "alias=\"version one\""), &[("demo::f", equal("n0"))]);
+    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+}
+
+// Batch 8a fix round, D2 (design 39.2): the compare text of a token tree does not depend on
+// spaces or line breaks. A change of spaces only gives no fact; a change of one token gives one.
+#[test]
+fn a_change_of_spaces_in_a_token_tree_gives_no_fact() {
+    let base = "#[cfg(feature=\"std\")]\n#[cfg_attr(feature=\"serde1\", derive(Clone, Debug))]\npub struct S;\n\nmacro_rules! pick {\n    ($a:expr=>$b:expr) => { $a+-$b };\n}\n\npub fn f(a: u32) -> u32 {\n    let v = vec![a=>1];\n    pick!(a=>1)\n}\n";
+    let spaced = "#[cfg( feature = \"std\" )]\n#[cfg_attr(feature = \"serde1\", derive(Clone,\n    Debug))]\npub struct S;\n\nmacro_rules! pick {\n    ($a:expr => $b:expr) => {\n        $a + - $b\n    };\n}\n\npub fn f(a: u32) -> u32 {\n    let v = vec![a => 1];\n    pick!(a => 1)\n}\n";
+    let bodies = [("demo::f", equal("n0"))];
+    let report = run_derived(base, spaced, &bodies);
+    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    // One token changes in each kind: one fact each, and the fact text shows the change.
+    let cases = [
+        ("feature = \"std\" )", "feature = \"alloc\" )", "attributes of `demo::S`"),
+        ("derive(Clone,", "derive(Copy,", "attributes of `demo::S`: derive added: Copy; derive removed: Clone"),
+        ("$a + - $b", "$a - - $b", "changed macro `pick`"),
+        ("pick!(a => 1)", "pick!(a => 2)", "replace macro input"),
+        ("vec![a => 1]", "vec![a => 3]", "replace macro input `vec![a=>1]` → `vec![a => 3]`"),
+    ];
+    // An added attribute next to a spaced one shows only the new attribute.
+    let added = spaced.replace("pub struct S;", "#[cfg_attr(doc_cfg, doc(cfg(feature = \"std\")))]\npub struct S;");
+    let texts = descriptions(&run_derived(base, &added, &bodies));
+    assert_eq!(texts, ["attributes of `demo::S`: added `#[cfg_attr(doc_cfg, doc(cfg(feature = \"std\")))]`"], "{texts:#?}");
+    for (from, to, start) in cases {
+        let report = run_derived(base, &spaced.replace(from, to), &bodies);
+        let texts = descriptions(&report);
+        assert_eq!(texts.len(), 1, "{from}: {texts:#?}");
+        assert!(texts[0].starts_with(start), "{from}: {texts:#?}");
+    }
+}
+
+// Batch 8a fix round, D1 (design 39.4): `rustc` reads a CRLF file with LF. A `\` before a CRLF
+// continues a string. A change of the line ends only gives no fact and no parse error.
+#[test]
+fn a_crlf_file_with_a_string_continuation_parses_and_a_line_end_change_gives_no_fact() {
+    let lf = "/// The text.\npub fn text() -> &'static str {\n    \"enums must have an explicit \\\n     repr\"\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let report = run_derived(lf, &crlf, &[("demo::text", equal("n0"))]);
+    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    let report = run_derived(&crlf, lf, &[("demo::text", equal("n0"))]);
+    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    // A change of the literal in the CRLF file is one value fact.
+    let report = run_derived(&crlf, &crlf.replace("explicit", "exact"), &[("demo::text", different(false))]);
+    let texts = descriptions(&report);
+    assert!(texts.len() == 1 && texts[0].starts_with("changed literal"), "{texts:#?}");
 }

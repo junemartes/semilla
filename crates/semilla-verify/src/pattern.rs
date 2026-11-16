@@ -25,9 +25,8 @@ fn parse_pattern(text: &str) -> Option<Node> {
             source.push(c);
         }
     }
-    let expr: syn::Expr = syn::parse_str(&source).ok()?;
     let _ = chars.peek();
-    Some(semilla_syntax::tree::expr_node("pattern", &expr))
+    semilla_syntax::tree::expr_text_node("pattern", &source)
 }
 
 /// Matches a node against a pattern, and records the bindings.
@@ -60,13 +59,13 @@ fn instantiate(to: &str, bindings: &BTreeMap<String, String>) -> Option<String> 
     for name in names {
         text = text.replace(&format!("${name}"), &format!("({})", bindings[name]));
     }
-    let expr: syn::Expr = syn::parse_str(&text).ok()?;
-    Some(strip_parens(&quote::ToTokens::to_token_stream(&expr).to_string()))
+    let expr = semilla_syntax::rs::parse_expr(&text)?;
+    Some(strip_parens(&semilla_syntax::rs::compare(&expr)))
 }
 
 /// Removes the parentheses that `instantiate` adds around single tokens, so the text compares.
 fn strip_parens(text: &str) -> String {
-    let node = syn::parse_str::<syn::Expr>(text).ok().map(|expr| semilla_syntax::tree::expr_node("x", &expr));
+    let node = semilla_syntax::tree::expr_text_node("x", text);
     node.map(|n| canonical(&n)).unwrap_or_else(|| text.to_string())
 }
 
@@ -217,8 +216,7 @@ mod tests {
     #[test]
     fn pattern_binds_metavariables() {
         let pattern = parse_pattern("$c.total()").unwrap();
-        let expr: syn::Expr = syn::parse_str("cart.items.total()").unwrap();
-        let node = semilla_syntax::tree::expr_node("x", &expr);
+        let node = semilla_syntax::tree::expr_text_node("x", "cart.items.total()").unwrap();
         let mut bindings = BTreeMap::new();
         assert!(matches(&pattern, &node, &mut bindings));
         assert_eq!(bindings["c"], "cart . items");
@@ -228,8 +226,8 @@ mod tests {
     #[test]
     fn same_name_needs_same_text() {
         let pattern = parse_pattern("$a + $a").unwrap();
-        let yes = semilla_syntax::tree::expr_node("x", &syn::parse_str("x + x").unwrap());
-        let no = semilla_syntax::tree::expr_node("x", &syn::parse_str("x + y").unwrap());
+        let yes = semilla_syntax::tree::expr_text_node("x", "x + x").unwrap();
+        let no = semilla_syntax::tree::expr_text_node("x", "x + y").unwrap();
         assert!(matches(&pattern, &yes, &mut BTreeMap::new()));
         assert!(!matches(&pattern, &no, &mut BTreeMap::new()));
     }

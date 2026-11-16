@@ -535,9 +535,8 @@ pub(crate) fn trait_arguments(item: &semilla_syntax::Item) -> Option<String> {
 /// `AsKebabCase<&str>` for `impl Render for AsKebabCase<&str>`. `None` if the header does not
 /// parse.
 pub(crate) fn self_type_text(item: &semilla_syntax::Item) -> Option<String> {
-    use quote::ToTokens;
-    let parsed = syn::parse_str::<syn::ItemImpl>(&item.signature).ok()?;
-    let mut text = parsed.self_ty.to_token_stream().to_string();
+    let Some(semilla_syntax::rs::ast::Item::Impl(parsed)) = semilla_syntax::rs::parse_item(&item.signature) else { return None };
+    let mut text = semilla_syntax::rs::compare(&parsed.self_ty()?);
     for (from, to) in [(" :: ", "::"), (":: ", "::"), (" < ", "<"), ("< ", "<"), (" >", ">"), ("& ", "&"), (" ,", ","), ("( ", "("), (" )", ")"), ("[ ", "["), (" ]", "]"), (" ;", ";")] {
         text = text.replace(from, to);
     }
@@ -763,12 +762,6 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     report.notes.extend(checks::renamed_impls(step, input.before, input.after, &mut renames));
     let renames = renames;
     let edits = semilla_syntax::diff(input.before, input.after, &renames);
-    // A changed file that parses only as code of the 2015 edition (design 37.5).
-    let old_edition: BTreeSet<&String> = input.before.old_edition.keys().chain(input.after.old_edition.keys()).collect();
-    for file in old_edition.into_iter().filter(|file| input.before.rust_files.get(*file) != input.after.rust_files.get(*file)) {
-        let count = input.after.old_edition.get(file).or_else(|| input.before.old_edition.get(file)).copied().unwrap_or(0);
-        report.notes.push(format!("Semilla read `{file}` as code of the 2015 edition: {count} parameter(s) of a trait method have no name. Semilla used the name `_` for each one."));
-    }
 
     // 2. The MIR bodies.
     let added: Vec<String> = step.claims.iter().flat_map(checks::declared_new_items).collect();
@@ -1690,7 +1683,7 @@ fn visibility_rank(vis: &str) -> u8 {
 /// True if a token text has one of the names in a string literal or in the tokens of a macro
 /// call (batch 5x, part C). A text that does not parse gives true.
 fn names_in_text(text: &str, names: &BTreeSet<String>) -> bool {
-    use proc_macro2::{TokenStream, TokenTree};
+    use semilla_syntax::tt::{TokenStream, TokenTree};
     fn walk(stream: TokenStream, names: &BTreeSet<String>, in_macro: bool) -> bool {
         let trees: Vec<TokenTree> = stream.into_iter().collect();
         trees.iter().enumerate().any(|(index, tree)| match tree {
@@ -2251,14 +2244,15 @@ pub(crate) fn in_library(workspace: &Workspace, item: &semilla_syntax::Item) -> 
 }
 
 /// The leaves of a `use` tree: the path of each leaf, the name that it gives, and the glob mark.
-pub(crate) fn use_leaves(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
-    let with = |ident: &syn::Ident| -> Vec<String> { if ident == "self" && !prefix.is_empty() { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() } };
+pub(crate) fn use_leaves(tree: &semilla_syntax::rs::UseTree, prefix: &[String], out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
+    use semilla_syntax::rs::UseTree;
+    let with = |ident: &str| -> Vec<String> { if ident == "self" && !prefix.is_empty() { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() } };
     match tree {
-        syn::UseTree::Path(path) => use_leaves(&path.tree, &with(&path.ident), out),
-        syn::UseTree::Name(name) => out.push((with(&name.ident), None, false)),
-        syn::UseTree::Rename(rename) => out.push((with(&rename.ident), Some(rename.rename.to_string()), false)),
-        syn::UseTree::Group(group) => group.items.iter().for_each(|tree| use_leaves(tree, prefix, out)),
-        syn::UseTree::Glob(_) => out.push((prefix.to_vec(), None, true)),
+        UseTree::Path(ident, tree) => use_leaves(tree, &with(ident), out),
+        UseTree::Name(ident) => out.push((with(ident), None, false)),
+        UseTree::Rename(ident, rename) => out.push((with(ident), Some(rename.clone()), false)),
+        UseTree::Group(items) => items.iter().for_each(|tree| use_leaves(tree, prefix, out)),
+        UseTree::Glob => out.push((prefix.to_vec(), None, true)),
     }
 }
 
@@ -2295,7 +2289,7 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
     let own_name = |path: &str| path.rsplit(['.', ':']).next().unwrap_or(path).split('#').next().unwrap_or("").to_string();
     let mut names: BTreeSet<String> = owners.iter().map(|owner| own_name(&owner.path)).chain([own_name(path)]).filter(|name| !name.is_empty()).collect();
     // A `use` line has no name of its own: its names are the names that it brings.
-    if let Some(parsed) = syn::parse_str::<syn::ItemUse>(&item.signature).ok().filter(|_| item.kind == ItemKind::Use) {
+    if let Some(parsed) = semilla_syntax::rs::parse_use(&item.signature).filter(|_| item.kind == ItemKind::Use) {
         let mut leaves = Vec::new();
         use_leaves(&parsed.tree, &[], &mut leaves);
         names.extend(leaves.into_iter().filter_map(|(target, alias, _)| alias.or_else(|| target.last().cloned())));
@@ -2307,7 +2301,7 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         .filter(same_crate)
         .filter(|other| other.kind == ItemKind::Use)
         .filter_map(|other| {
-            let parsed = syn::parse_str::<syn::ItemUse>(&other.signature).ok()?;
+            let parsed = semilla_syntax::rs::parse_use(&other.signature)?;
             let mut leaves = Vec::new();
             use_leaves(&parsed.tree, &[], &mut leaves);
             Some((compact(&other.vis) == "pub", leaves))
@@ -2413,21 +2407,23 @@ fn impl_reach(workspace: &Workspace, item: &semilla_syntax::Item) -> Reach {
     if item.test || !in_library(workspace, item) {
         return Reach::No;
     }
-    let Ok(parsed) = syn::parse_str::<syn::ItemImpl>(&item.signature) else {
+    use semilla_syntax::rs::ast;
+    let Some(ast::Item::Impl(parsed)) = semilla_syntax::rs::parse_item(&item.signature) else {
         return Reach::Maybe("Semilla cannot read the header of the impl block".into());
     };
-    let text = |tokens: proc_macro2::TokenStream| tokens.to_string().split_whitespace().collect::<String>();
-    let last = |path: &syn::Path| path.segments.last().map(|segment| segment.ident.to_string());
-    let mut names: Vec<(Option<String>, String)> = Vec::new();
-    if let Some((_, path, _)) = &parsed.trait_ {
-        names.push((last(path), text(quote::quote!(#path))));
-    }
-    let self_ty = &parsed.self_ty;
-    let self_name = match &*parsed.self_ty {
-        syn::Type::Path(ty) if ty.qself.is_none() => last(&ty.path),
+    let text = |ty: &ast::Type| semilla_syntax::rs::compare(ty).split_whitespace().collect::<String>();
+    // The last name of a plain path type (no `<T as Trait>::` start).
+    let last = |ty: &ast::Type| match ty {
+        ast::Type::PathType(path) => path.path().filter(|path| path.first_segment().is_some_and(|first| first.type_anchor().is_none())).and_then(|path| path.segment()).and_then(|segment| segment.name_ref()).map(|name| name.text().to_string()),
         _ => None,
     };
-    names.push((self_name, text(quote::quote!(#self_ty))));
+    let mut names: Vec<(Option<String>, String)> = Vec::new();
+    if let Some(path) = parsed.trait_() {
+        names.push((last(&path), text(&path)));
+    }
+    if let Some(self_ty) = parsed.self_ty() {
+        names.push((last(&self_ty), text(&self_ty)));
+    }
     let (mut maybe, mut unknown): (Option<String>, Option<String>) = (None, None);
     for (name, shown) in names {
         let found: Vec<&semilla_syntax::Item> = match &name {
@@ -2463,14 +2459,18 @@ fn impl_reach(workspace: &Workspace, item: &semilla_syntax::Item) -> Reach {
 /// impl (the higher level).
 fn assoc_reach(workspace: &Workspace, impl_path: &str, name: &str) -> Reach {
     let Some(item) = workspace.items.get(impl_path) else { return Reach::No };
-    let public = match syn::parse_str::<syn::ItemImpl>(&item.source) {
-        Ok(parsed) if parsed.trait_.is_none() => {
-            let vis = parsed.items.iter().find_map(|member| match member {
-                syn::ImplItem::Const(constant) if constant.ident == name => Some(&constant.vis),
-                syn::ImplItem::Type(ty) if ty.ident == name => Some(&ty.vis),
+    use semilla_syntax::rs::ast;
+    use ast::{HasName, HasVisibility};
+    let public = match semilla_syntax::rs::parse_item(&item.source) {
+        Some(ast::Item::Impl(parsed)) if parsed.trait_().is_none() => {
+            let named = |node: Option<ast::Name>| node.is_some_and(|node| node.text() == name);
+            let vis = parsed.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).find_map(|member| match member {
+                ast::AssocItem::Const(constant) if named(constant.name()) => Some(constant.visibility()),
+                ast::AssocItem::TypeAlias(ty) if named(ty.name()) => Some(ty.visibility()),
                 _ => None,
             });
-            vis.is_none_or(|vis| matches!(vis, syn::Visibility::Public(_)))
+            // Only `pub` is public: `pub(crate)` is not.
+            vis.is_none_or(|vis| vis.is_some_and(|vis| vis.visibility_inner().is_none()))
         }
         _ => true,
     };
@@ -2638,7 +2638,7 @@ fn pub_use_gives(workspace: &Workspace, path: &str) -> bool {
     let name = path.rsplit(['.', ':']).next().unwrap_or(path);
     let krate = path.split("::").next().unwrap_or(path);
     workspace.items.values().filter(|item| item.kind == ItemKind::Use && item.crate_name == krate && item.vis.replace(' ', "") == "pub").any(|item| {
-        let Ok(parsed) = syn::parse_str::<syn::ItemUse>(&item.signature) else { return true };
+        let Some(parsed) = semilla_syntax::rs::parse_use(&item.signature) else { return true };
         let mut leaves = Vec::new();
         use_leaves(&parsed.tree, &[], &mut leaves);
         leaves.iter().any(|(target, alias, glob)| *glob || alias.as_deref().or(target.last().map(String::as_str)) == Some(name))

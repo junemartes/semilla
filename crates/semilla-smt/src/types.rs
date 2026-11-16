@@ -155,7 +155,7 @@ impl TypeEnv {
 
 /// Gives the canonical text of an expression: the token stream with one space between tokens.
 pub(crate) fn normalize_key(text: &str) -> String {
-    match syn::parse_str::<syn::Expr>(text) {
+    match crate::lower::parse(text) {
         Ok(expr) => crate::lower::expr_text(&expr),
         Err(_) => text.trim().to_string(),
     }

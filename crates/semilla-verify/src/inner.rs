@@ -7,9 +7,9 @@
 //! one side with the statements of the other side, and it adds the result to the fact texts.
 
 use semilla_core::Fact;
-use semilla_syntax::tree::{one_line, tokens};
 use semilla_syntax::Edit;
-use syn::spanned::Spanned;
+use semilla_syntax::rs::{AstNode, SyntaxNode, WalkEvent, ast};
+use semilla_syntax::tt::compare_text;
 
 /// The smallest similarity of two statements (equal tokens / tokens of the longer statement)
 /// for the text "except: …".
@@ -36,41 +36,37 @@ struct Side {
 /// Parses one statement. `None` if the text is not exactly one statement.
 fn parse(text: &str) -> Option<(Stmt, Vec<Stmt>)> {
     let wrapped = format!("{{\n{text}\n}}");
-    let block: syn::Block = syn::parse_str(&wrapped).ok()?;
-    let [stmt] = &block.stmts[..] else { return None };
-    let lines: Vec<&str> = wrapped.split('\n').collect();
-    let slice = |span: proc_macro2::Span| -> Option<String> {
-        let (start, end) = (span.start(), span.end());
-        let offset = |line: usize, column: usize| -> Option<usize> {
-            let before: usize = lines.get(..line.checked_sub(1)?)?.iter().map(|text| text.chars().count() + 1).sum();
-            Some(before + column)
-        };
-        let (from, to) = (offset(start.line, start.column)?, offset(end.line, end.column)?);
-        let chars: Vec<char> = wrapped.chars().collect();
-        (from < to && to <= chars.len()).then(|| one_line(&chars[from..to].iter().collect::<String>()))
-    };
-    let make = |stmt: &syn::Stmt| -> Option<Stmt> {
-        let mut words: Vec<String> = tokens(stmt).split_whitespace().map(str::to_string).collect();
+    let block = semilla_syntax::rs::parse_block(&wrapped)?;
+    let [stmt] = &semilla_syntax::rs::statements(&block.stmt_list()?)[..] else { return None };
+    let make = |stmt: &SyntaxNode| -> Option<Stmt> {
+        let mut words: Vec<String> = compare_text(stmt).split_whitespace().map(str::to_string).collect();
         // An assignment has the value `()`: with or without `;` at its end, it is the same
         // statement (a tail `acc = x` and `acc = x;` in a block).
-        let assign = |expr: &syn::Expr| matches!(expr, syn::Expr::Assign(_)) || matches!(expr, syn::Expr::Binary(binary) if matches!(binary.op, syn::BinOp::AddAssign(_) | syn::BinOp::SubAssign(_) | syn::BinOp::MulAssign(_) | syn::BinOp::DivAssign(_) | syn::BinOp::RemAssign(_) | syn::BinOp::BitXorAssign(_) | syn::BinOp::BitAndAssign(_) | syn::BinOp::BitOrAssign(_) | syn::BinOp::ShlAssign(_) | syn::BinOp::ShrAssign(_)));
-        if matches!(stmt, syn::Stmt::Expr(expr, Some(_)) if assign(expr)) {
+        let assign = |expr: Option<ast::Expr>| matches!(expr, Some(ast::Expr::BinExpr(binary)) if matches!(binary.op_kind(), Some(ast::BinaryOp::Assignment { .. })));
+        if let Some(expr_stmt) = ast::ExprStmt::cast(stmt.clone())
+            && expr_stmt.semicolon_token().is_some()
+            && assign(expr_stmt.expr())
+        {
             words.pop();
         }
-        Some(Stmt { tokens: words, source: slice(stmt.span())? })
+        let source = semilla_syntax::rs::display_syntax(stmt);
+        (!source.is_empty()).then_some(Stmt { tokens: words, source })
     };
     // The inner statements: the statements of each block in the statement that is not in a
-    // different inner block (a closure body, a plain block, an `unsafe` block, a branch).
-    struct Blocks<'a>(Vec<&'a syn::Stmt>);
-    impl<'a> syn::visit::Visit<'a> for Blocks<'a> {
-        fn visit_block(&mut self, block: &'a syn::Block) {
-            self.0.extend(block.stmts.iter());
+    // different inner block (a closure body, a plain block, an `unsafe` block, a branch), and
+    // not in an inner item.
+    let mut inner: Vec<SyntaxNode> = Vec::new();
+    let mut walk = stmt.preorder();
+    while let Some(event) = walk.next() {
+        let WalkEvent::Enter(node) = event else { continue };
+        if ast::Item::can_cast(node.kind()) {
+            walk.skip_subtree();
+        } else if let Some(list) = ast::StmtList::cast(node) {
+            inner.extend(semilla_syntax::rs::statements(&list));
+            walk.skip_subtree();
         }
-        fn visit_item(&mut self, _: &'a syn::Item) {}
     }
-    let mut blocks = Blocks(Vec::new());
-    syn::visit::visit_stmt(&mut blocks, stmt);
-    let inner = blocks.0.into_iter().map(make).collect::<Option<Vec<Stmt>>>()?;
+    let inner = inner.iter().map(make).collect::<Option<Vec<Stmt>>>()?;
     Some((make(stmt)?, inner))
 }
 

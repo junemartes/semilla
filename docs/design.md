@@ -3018,6 +3018,7 @@ Batch 7c. The user gave the target on 2026-11-15: a pull request usually has 500
 
 1. A file that does not parse does not stop the step. The file gets one `file` fact with the diff and the spotlight "Semilla cannot parse this file: REASON, in the tree after the step". The spotlight needs a reason. The items of the file on the other side do not show as removed or added. Each other file gets its usual facts.
 2. The loader makes a second try for the 2015 form: it gives each parameter with no name the name `_` and parses again. The lines of the text do not change. A note names the file: "Semilla read `src/tester.rs` as code of the 2015 edition: 1 parameter(s) of a trait method have no name. Semilla used the name `_` for each one."
+3. Batch 8a: rule 2 is gone. The parser gets the edition of the package (design 39.1).
 
 **Limits.** The second try does not read the edition of the package: it accepts `fn f(u8) {}` in a file of a later edition. The compiler rejects such a file, and then the build fails as usual.
 
@@ -3241,3 +3242,58 @@ The reverse step (statements go into a closure) uses the words "the added". An a
 The test `two_versions_of_a_two_crate_workspace` now expects `code different` for the inverted guard clause of `app_b::get` (the case of N4).
 
 **Not deleted.** The claim ops `rename` and `move-item` are not dead: the derivation of 36.1 uses them. `check_swap` is the shape check of the op `swap-operands`. The N2 and N3 steps of the ladder, the rival rule of the driver, and the status changes of `srcconfig::apply` and `opaque.apply` are open: a change of the driver changes the records of each cache.
+
+## 39. Batch 8a: one lossless parser
+
+**User decision (2026-11-16).** Semilla parses only losslessly, with one parser. `syn`, `quote`, and `proc-macro2` go away. The lossless parse is the base of an exact map from each change to the MIR (batch 8b) and of a refactoring-aware AST diff (batch 8c).
+
+Each detail below that the user did not decide has the mark **Decided by Claude**.
+
+### 39.1 The parser
+
+- Semilla parses each Rust file with `ra_ap_syntax` `=0.0.360`, the syntax tree of rust-analyzer (`semilla_syntax::rs`). The parser gets the edition of the package of the file: `package.edition`, the edition of the workspace for `edition.workspace = true`, or the `edition` of `cargo metadata`. A package with no edition is 2015 code.
+- The tree is lossless: its text is equal to the file, byte for byte. The loader checks this for each file (`rs::parse_file`).
+- Each node keeps its byte range. A position is a line (from 1) and a column (in characters, from 0), from a line index of the file (`rs::Lines`). The start of an item is its first token that is not a space or a plain comment: the tree puts the comments above an item into the item.
+- Spaces and plain comments are trivia tokens of the tree. The comments of an item (its `docs` list) are the comment tokens of the tree that start in the lines of the item. A `////` comment and a `/**/` comment are plain comments (as for the compiler); the old text scanner did not see them.
+- The 2015 retry of 37.5 (rule 2) and its note are gone. **Decided by Claude:** `ra_ap_syntax` reports "missing type for function parameter" also in the 2015 edition. In a 2015 package, this message for a parameter of a trait method with one pattern (`fn f(u8);`) is not an error: the tree is complete, and the compiler accepts the code. The parameter keeps its text: Semilla does not add a name.
+- **Decided by Claude.** A text with no package (the text of a fact, a claim pattern, a signature text) parses with the editions 2021, 2024, then 2015: the first parse with no error wins. The text of a `const _: () = (TEXT);`, `type _T = TEXT;`, `fn _f() { let TEXT; }`, or `trait _T { TEXT; }` wrapper gives an expression, a type, a pattern, or a signature (`rs::parse_expr`, `rs::parse_type`, `rs::parse_pat`, `rs::parse_signature`). The node must have the full text.
+
+### 39.2 The compare text and the display text
+
+- **The compare text** of a node is the list of its tokens without trivia (`tt::compare_text`). **Decided by Claude:** the text form puts one space between two tokens, as `proc_macro` does: no space after a joint mark, inside `()` and `[]`, and in an empty group; `{ x }` has spaces. So a compare text is the old token text in most cases (`g () ;`, `# [cfg (test)]`), and the rules that read a token text stay the same. Two nodes are the same if their compare texts are equal. A change of formatting only gives no edit.
+- A doc comment is the attribute `# [doc = "…"]` in the compare text, as for the compiler. **Decided by Claude:** a doc comment is not trivia, because it is an attribute of its item.
+- Each character of an operator is a mark. Outside a token tree, a mark is joint only inside one operator token of the tree (`::`, `->`, `>=`). In a token tree (a macro input, an attribute input, a `macro_rules` body), the lexer gives one token for each mark. **Fix round of 8a:** marks that touch are joint only if they make one operator of `rustc` (`=>`, `::`, `..=`, `<<=`, …; the longest operator first). Each other pair of marks is two tokens, also if they touch (`=-` is `=` and `-`). So the compare text of a token tree does not depend on spaces or line breaks. Before the fix, a mark was joint before each mark that touched it, as in `proc_macro`.
+- A list of display texts (the attributes, the `where` predicates) gives a fact text through the compare texts: an entry with the same tokens on the two sides has one display text. So a change of spaces in one attribute is not "removed" and "added" when a different attribute changes. A `derive` name has no spaces in a fact text. The compare text of an associated constant decides between a type fact and a value fact.
+- **The display text** of a node in a fact is its source text as written, on one line (`tt::display_text`): the source text of each token, with one space where the source has space or a comment. Example: `#[cfg(feature = "std")]`, not `# [cfg (feature = "std")]`. The loader keeps the display text of the visibility, the signature, each attribute, each member, and each inner attribute next to the compare text (`Item::display`, `Workspace::inner_attrs_display`). An item-level edit has the display texts in its source fields. A fact text shows the source field; the logic of the facts reads the compare text.
+- The net (batch 6a, A6) shows its tokens with the spaces of the source.
+- The cut rules of 37.15 and 38.5 apply to the display text.
+
+### 39.3 The token trees
+
+- `semilla_syntax::tt` has the token tree types of `proc_macro`: a group, an identifier, a mark, and a literal, with places. The rules that read the tokens of an attribute, a `cfg` condition, a macro input, or a file use them. A text becomes a token list through the parse of a macro call `_m!{TEXT}`.
+- A `use` tree has the form of `syn` (`rs::UseTree`): a path segment with the rest, a name, a name with a new name, a glob, or a group.
+
+### 39.4 A file that does not parse
+
+`ra_ap_syntax` always gives a tree, also for wrong code. **The rule.** A file whose tree has an error node, whose parse has an error message, or whose tree text is not equal to the file, is a file that does not parse. The rule of 37.5 (rule 1) applies: one `file` fact with the diff, a spotlight that names the first error (the earliest error, with its line and column), and the step does not stop. Semilla never compares or derives facts from a tree with an error.
+
+**Decided by Claude:** an error message of the validation of `ra_ap_syntax` (for example a visibility on an item of a trait impl, a bad escape in a literal) is also an error. The compiler rejects such code.
+
+**CRLF (fix round of 8a).** `rustc` changes each CRLF to LF before it lexes a file. `ra_ap_syntax` does not: a `\` before a CRLF in a string gave "unknown character escape". **Decided by Claude:** the tree comes from the text as written (lossless, with the byte ranges of the file). The errors come from a second parse of the text with LF, with their offsets mapped back to the text as written (`rs::parse_checked`; also for a token list and for a macro input). The text of a literal and of a doc comment in a token list has LF for CRLF, so its compare text and its value are the text that `rustc` reads; a doc comment has no CR at its end. A CR that is not before LF stays: in a string or a doc comment it is an error for `rustc` and for Semilla. So a change of the line ends only gives no syntax edit, as each other change of formatting. 7d gave a "changed literal" fact for a literal with a line break in a file whose line ends changed. That fact does not come back: the tokens that `rustc` reads are equal. The file change still shows where the file rules show it (a file of build code gets its build code fact).
+
+### 39.5 The input of a macro
+
+A macro call keeps its input as a token tree. The input of a standard macro whose input is a list of expressions (`format!`, `write!`, `assert!`, `vec!`, …; design 4.1) is parsed as the argument list of a call. **Decided by Claude:** the text `const _: () = _f(INPUT\n);` with the edition of the file. The places of the arguments are places in the file. If the parse has an error (for example `vec![0; n]`), the macro node has no children, as before.
+
+A macro call statement with `;` or with braces is one node, with the place of the full statement. A call with braces at the end of a block is a statement, not the tail (as in `syn`).
+
+### 39.6 Time
+
+**Decided by Claude.** The checks parse one text many times (the text of an item for each rule). Each thread keeps the parsed fragments and the token lists of the texts that it saw (at most 50 000 entries each; then the memory starts again). A token list has places only from `TokenStream::with_places` (the net, the inactive code pass). The loader reads the compare text of each node from one token list of the file. The load of the two trees of `bytes` takes 264 ms (before: 206 ms), and the syntax diff takes 97 ms (before: 80 ms): a lossless parse with its checks has more work than a token stream, and the loader makes the display texts. The check of a step is faster than before (`socket2`: 1.1 s, before: 1.4 s).
+
+### 39.7 Limits
+
+- The display text of a fact text has no plain comment of the node.
+- A fold of equal type changes (`type X → Y in N places`) compares the display texts. Two places with the same tokens and a different format do not fold. No change goes away.
+- A compare text and a token text of a different place can still be different in a corner case that `syn` printed in another form (`| |` and `||` of an empty closure). The two trees of a step use the same rules, so this gives no false edit.
+- The display text of a part with a hole (a header with `{ }` in place of its fields) has the delimiters of the source and one space between them.

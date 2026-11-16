@@ -22,6 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::{Anchor, Category, Claim, ClaimStatus, Compare, Fact};
+use semilla_syntax::rs::UseTree;
 use semilla_syntax::{EditKind, ItemKind, Workspace};
 
 use crate::{BodyOracle, ExprOracle, StepInput, StepOutcome};
@@ -582,23 +583,23 @@ fn module_of<'a>(path: &'a str, workspace: &Workspace) -> Option<&'a str> {
 }
 
 /// The names that a `use` item gives to its module: the name and the path segments.
-fn use_names(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
-    let with = |ident: &syn::Ident| -> Vec<String> {
+fn use_names(tree: &UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
+    let with = |ident: &str| -> Vec<String> {
         // `a::b::{self}` is `a::b`.
         if ident == "self" { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() }
     };
     match tree {
-        syn::UseTree::Path(path) => use_names(&path.tree, &with(&path.ident), out),
-        syn::UseTree::Name(name) => {
-            let path = with(&name.ident);
+        UseTree::Path(ident, tree) => use_names(tree, &with(ident), out),
+        UseTree::Name(ident) => {
+            let path = with(ident);
             if let Some(last) = path.last().cloned() {
                 out.push((last, path));
             }
         }
-        syn::UseTree::Rename(rename) => out.push((rename.rename.to_string(), with(&rename.ident))),
-        syn::UseTree::Group(group) => group.items.iter().for_each(|tree| use_names(tree, prefix, out)),
+        UseTree::Rename(ident, rename) => out.push((rename.clone(), with(ident))),
+        UseTree::Group(items) => items.iter().for_each(|tree| use_names(tree, prefix, out)),
         // A glob import gives no name that the text shows.
-        syn::UseTree::Glob(_) => {}
+        UseTree::Glob => {}
     }
 }
 
@@ -615,7 +616,7 @@ fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> O
     }
     let mut found: Vec<Vec<String>> = Vec::new();
     for import in workspace.items.values().filter(|item| item.kind == ItemKind::Use && owner(&item.path) == module) {
-        let Ok(parsed) = syn::parse_str::<syn::ItemUse>(&import.source) else { return None };
+        let Some(parsed) = semilla_syntax::rs::parse_use(&import.source) else { return None };
         let mut names = Vec::new();
         use_names(&parsed.tree, &[], &mut names);
         found.extend(names.into_iter().filter(|(local, _)| local == name).map(|(_, path)| path));
@@ -647,41 +648,32 @@ fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> O
 /// first segment of each path, with its item. A name that the item binds (a parameter, a `let`,
 /// a generic parameter), a macro name, and a name with no clear target give no entry.
 pub fn name_targets(item: &semilla_syntax::Item, workspace: &Workspace) -> BTreeMap<String, String> {
-    use syn::visit::Visit;
-    #[derive(Default)]
-    struct Names {
-        used: BTreeSet<String>,
-        bound: BTreeSet<String>,
-    }
-    impl<'ast> Visit<'ast> for Names {
-        fn visit_path(&mut self, path: &'ast syn::Path) {
-            if path.leading_colon.is_none() {
-                if let Some(first) = path.segments.first() {
-                    self.used.insert(first.ident.to_string());
-                }
-            }
-            syn::visit::visit_path(self, path);
-        }
-        fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
-            self.bound.insert(pat.ident.to_string());
-            syn::visit::visit_pat_ident(self, pat);
-        }
-        fn visit_generic_param(&mut self, param: &'ast syn::GenericParam) {
-            match param {
-                syn::GenericParam::Type(param) => drop(self.bound.insert(param.ident.to_string())),
-                syn::GenericParam::Const(param) => drop(self.bound.insert(param.ident.to_string())),
-                syn::GenericParam::Lifetime(_) => {}
-            }
-            syn::visit::visit_generic_param(self, param);
-        }
-        // The name of a macro is in another name space. Its tokens are not parsed code.
-        fn visit_macro(&mut self, _: &'ast syn::Macro) {}
-    }
+    use semilla_syntax::rs::{AstNode, SyntaxKind, ast};
+    use ast::HasName;
     let mut out = BTreeMap::new();
-    let (Some(module), Ok(parsed)) = (module_of(&item.path, workspace), syn::parse_str::<syn::Item>(&item.source)) else { return out };
-    let mut names = Names::default();
-    names.visit_item(&parsed);
-    for name in names.used.difference(&names.bound) {
+    let (Some(module), Some(parsed)) = (module_of(&item.path, workspace), semilla_syntax::rs::parse_item(&item.source)) else { return out };
+    let (mut used, mut bound) = (BTreeSet::new(), BTreeSet::new());
+    for node in parsed.syntax().descendants() {
+        if let Some(path) = ast::Path::cast(node.clone()) {
+            // The name of a macro is in another name space. Its tokens are not parsed code.
+            if node.ancestors().any(|ancestor| ancestor.kind() == SyntaxKind::MACRO_CALL) {
+                continue;
+            }
+            let first = path.first_segment();
+            if let Some(name) = first.as_ref().filter(|segment| segment.coloncolon_token().is_none()).and_then(|segment| segment.name_ref()) {
+                used.insert(name.text().to_string());
+            }
+        } else if let Some(pat) = ast::IdentPat::cast(node.clone()) {
+            bound.extend(pat.name().map(|name| name.text().to_string()));
+        } else if let Some(param) = ast::TypeParam::cast(node.clone()) {
+            bound.extend(param.name().map(|name| name.text().to_string()));
+        } else if let Some(param) = ast::ConstParam::cast(node) {
+            bound.extend(param.name().map(|name| name.text().to_string()));
+        }
+    }
+    let names = (used, bound);
+    let (used, bound) = (&names.0, &names.1);
+    for name in used.difference(bound) {
         if matches!(name.as_str(), "self" | "Self" | "crate" | "super") {
             continue;
         }

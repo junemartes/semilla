@@ -854,9 +854,11 @@ fn local_const_change(edit: &Edit, function: &str) -> Option<String> {
         return None;
     }
     let parts = |text: &Option<String>| -> Option<(String, String, String)> {
-        match syn::parse_str::<syn::Item>(text.as_deref()?).ok()? {
-            syn::Item::Const(item) => Some((item.ident.to_string(), semilla_syntax::tree::tokens(&item.ty), semilla_syntax::tree::tokens(&item.expr))),
-            syn::Item::Static(item) => Some((item.ident.to_string(), semilla_syntax::tree::tokens(&item.ty), semilla_syntax::tree::tokens(&item.expr))),
+        use semilla_syntax::rs::{ast, compare_opt};
+        use ast::HasName;
+        match semilla_syntax::rs::parse_item(text.as_deref()?)? {
+            ast::Item::Const(item) => Some((item.name()?.text().to_string(), compare_opt(item.ty().as_ref()), compare_opt(item.body().as_ref()))),
+            ast::Item::Static(item) => Some((item.name()?.text().to_string(), compare_opt(item.ty().as_ref()), compare_opt(item.body().as_ref()))),
             _ => None,
         }
     };
@@ -878,23 +880,27 @@ fn local_member_order(edit: &Edit, function: &str) -> Option<(String, Option<Str
     // The name, the member names, the attribute text, and the text with the members in the
     // order of their names.
     let parts = |text: &Option<String>| -> Option<(String, bool, Vec<String>, String, String)> {
-        match syn::parse_str::<syn::Item>(text.as_deref()?).ok()? {
-            syn::Item::Enum(mut item) => {
-                let names: Vec<String> = item.variants.iter().map(|variant| variant.ident.to_string()).collect();
-                let attrs = item.attrs.iter().map(semilla_syntax::tree::tokens).collect::<Vec<_>>().join(" ");
-                let mut members: Vec<syn::Variant> = item.variants.iter().cloned().collect();
-                members.sort_by_key(|variant| variant.ident.to_string());
-                item.variants = members.into_iter().collect();
-                Some((item.ident.to_string(), true, names, attrs, semilla_syntax::tree::tokens(&item)))
+        use semilla_syntax::rs::{AstNode, SyntaxNode, ast, compare};
+        use ast::{HasAttrs, HasName};
+        // The text with the members in the order of their names.
+        let sorted = |item: &SyntaxNode, list: &SyntaxNode, mut members: Vec<(String, String)>| -> String {
+            members.sort();
+            let head = semilla_syntax::tt::text_without(item, &[list.text_range().cover_offset(item.text_range().end())]);
+            format!("{head} {{ {} }}", members.into_iter().map(|(_, text)| text).collect::<Vec<_>>().join(" , "))
+        };
+        let attrs = |item: &dyn HasAttrs| item.attrs_with_doc().map(|attr| compare(&attr)).collect::<Vec<_>>().join(" ");
+        match semilla_syntax::rs::parse_item(text.as_deref()?)? {
+            ast::Item::Enum(item) => {
+                let list = item.variant_list()?;
+                let names: Vec<String> = list.variants().map(|variant| variant.name().map(|name| name.text().to_string()).unwrap_or_default()).collect();
+                let members = list.variants().map(|variant| (variant.name().map(|name| name.text().to_string()).unwrap_or_default(), compare(&variant))).collect();
+                Some((item.name()?.text().to_string(), true, names, attrs(&item), sorted(item.syntax(), list.syntax(), members)))
             }
-            syn::Item::Struct(mut item) => {
-                let attrs = item.attrs.iter().map(semilla_syntax::tree::tokens).collect::<Vec<_>>().join(" ");
-                let syn::Fields::Named(fields) = &mut item.fields else { return None };
-                let names: Vec<String> = fields.named.iter().filter_map(|field| field.ident.as_ref().map(|ident| ident.to_string())).collect();
-                let mut members: Vec<syn::Field> = fields.named.iter().cloned().collect();
-                members.sort_by_key(|field| field.ident.as_ref().map(|ident| ident.to_string()));
-                fields.named = members.into_iter().collect();
-                Some((item.ident.to_string(), false, names, attrs, semilla_syntax::tree::tokens(&item)))
+            ast::Item::Struct(item) => {
+                let Some(ast::FieldList::RecordFieldList(list)) = item.field_list() else { return None };
+                let names: Vec<String> = list.fields().filter_map(|field| field.name().map(|name| name.text().to_string())).collect();
+                let members = list.fields().map(|field| (field.name().map(|name| name.text().to_string()).unwrap_or_default(), compare(&field))).collect();
+                Some((item.name()?.text().to_string(), false, names, attrs(&item), sorted(item.syntax(), list.syntax(), members)))
             }
             _ => None,
         }
@@ -960,7 +966,13 @@ fn type_change(fact: &Fact) -> Option<(String, String, Vec<String>)> {
         }
         "parameter" => {
             let (old, new) = pair(fact.description.strip_prefix(&format!("parameter of `{}` ", at.item))?)?;
-            let ((old_name, old_type), (new_name, new_type)) = (old.split_once(" : ")?, new.split_once(" : ")?);
+            // The name and the type of a parameter text: `id: u32` (a `:` that is not `::`).
+            let split = |text: &str| -> Option<(String, String)> {
+                let bytes = text.as_bytes();
+                let at = (0..bytes.len()).find(|&i| bytes[i] == b':' && bytes.get(i + 1) != Some(&b':') && (i == 0 || bytes[i - 1] != b':'))?;
+                Some((text[..at].trim().to_string(), text[at + 1..].trim().to_string()))
+            };
+            let ((old_name, old_type), (new_name, new_type)) = (split(&old)?, split(&new)?);
             (old_name == new_name).then(|| (old_type.to_string(), new_type.to_string(), vec![format!("parameter `{old_name}` of `{}`", at.item)]))
         }
         "return type" => {

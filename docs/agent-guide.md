@@ -36,7 +36,7 @@ You write nothing for a fact. There is one fact for each source change. A fact l
       affected bodies: semver::identifier::<Identifier as Clone>::clone
       ! unsafe code: the changed body has an `unsafe` block
   ◆ f1 derived: renamed `semver::eval::matches_caret` → `semver::eval::matches_caret_op` [rename · code equal]
-  ◆ f1 derived: visibility of `semver::eval::matches_caret`: `private` → `pub (crate)` [visibility · code equal]
+  ◆ f1 derived: visibility of `semver::eval::matches_caret`: `private` → `pub(crate)` [visibility · code equal]
 ```
 
 | Category | The change |

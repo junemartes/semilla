@@ -22,7 +22,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
-use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
+use semilla_syntax::rs::{AstNode, SyntaxNode, ast};
+use semilla_syntax::tt::{Delimiter, Spacing, TokenStream, TokenTree};
+use ast::{HasGenericArgs, HasGenericParams, HasName, HasTypeBounds};
 use semilla_syntax::{Item, ItemKind, Workspace};
 
 use crate::srcconfig::{compact, Scan, KEYWORDS, MACRO_FREE};
@@ -191,7 +193,7 @@ fn colons(trees: &[TokenTree], at: usize) -> bool {
     matches!(trees.get(at), Some(TokenTree::Punct(punct)) if punct.as_char() == ':' && punct.spacing() == Spacing::Joint) && is_punct(trees.get(at + 1), ':')
 }
 
-fn ident_text(ident: &proc_macro2::Ident) -> String {
+fn ident_text(ident: &semilla_syntax::tt::Ident) -> String {
     ident.to_string().trim_start_matches("r#").to_string()
 }
 
@@ -584,36 +586,63 @@ struct ImplParts {
     parsed: bool,
 }
 
+/// The segments of a path, from the first one.
+fn path_segments(path: &ast::Path) -> Vec<ast::PathSegment> {
+    let mut out = Vec::new();
+    let mut next = Some(path.clone());
+    while let Some(path) = next {
+        out.extend(path.segment());
+        next = path.qualifier();
+    }
+    out.reverse();
+    out
+}
+
+/// The segments of a plain path type (no `<T as Trait>::` start). `None` for another type.
+fn plain_type_path(ty: &ast::Type) -> Option<Vec<ast::PathSegment>> {
+    let ast::Type::PathType(path) = ty else { return None };
+    let segments = path_segments(&path.path()?);
+    segments.iter().all(|segment| segment.type_anchor().is_none() && segment.name_ref().is_some()).then_some(segments)
+}
+
+/// The name of a path segment, without `r#`.
+fn segment_name(segment: &ast::PathSegment) -> String {
+    segment.name_ref().map(|name| name.text().trim_start_matches("r#").to_string()).unwrap_or_default()
+}
+
+/// The name of a node with a name, without `r#`.
+fn own_name(node: &impl HasName) -> String {
+    node.name().map(|name| name.text().trim_start_matches("r#").to_string()).unwrap_or_default()
+}
+
 fn impl_parts(item: &Item) -> ImplParts {
-    let Ok(value) = syn::parse_str::<syn::ItemImpl>(&item.text) else {
+    let Some(ast::Item::Impl(value)) = semilla_syntax::rs::parse_item(&item.text) else {
         let (head, of_trait) = impl_self(item);
         return ImplParts { head, of_trait: of_trait.then(|| "?".to_string()), ..ImplParts::default() };
     };
-    let (head, qualified) = match &*value.self_ty {
-        syn::Type::Path(path) if path.qself.is_none() => {
-            (path.path.segments.last().map(|segment| ident_text(&segment.ident)), (path.path.segments.len() > 1).then(|| path.path.segments.first().map(|segment| ident_text(&segment.ident))).flatten())
-        }
-        _ => (None, None),
+    let (head, qualified) = match value.self_ty().as_ref().and_then(plain_type_path) {
+        Some(segments) => (segments.last().map(segment_name), (segments.len() > 1).then(|| segments.first().map(segment_name)).flatten()),
+        None => (None, None),
     };
-    ImplParts {
-        head,
-        qualified,
-        of_trait: value.trait_.as_ref().map(|(_, path, _)| path.segments.last().map(|segment| ident_text(&segment.ident)).unwrap_or_else(|| "?".to_string())),
-        params: value.generics.type_params().map(|param| ident_text(&param.ident)).collect(),
-        parsed: true,
-    }
+    let of_trait = value.trait_().map(|path| match &path {
+        ast::Type::PathType(path) => path.path().and_then(|path| path.segment()).map(|segment| segment_name(&segment)).unwrap_or_else(|| "?".to_string()),
+        _ => "?".to_string(),
+    });
+    let params = value.generic_param_list().into_iter().flat_map(|list| list.generic_params()).filter_map(|param| match param {
+        ast::GenericParam::TypeParam(param) => Some(own_name(&param)),
+        _ => None,
+    });
+    ImplParts { head, qualified, of_trait, params: params.collect(), parsed: true }
 }
 
 /// The words of a type, and of them the words that are only behind a pointer. A pointer
 /// keeps the layout and the drop code of the pointee out of the owner.
-fn type_words(ty: &syn::Type, behind: bool, direct: &mut BTreeSet<String>, shielded: &mut BTreeSet<String>) {
-    use quote::ToTokens;
+fn type_words(ty: &ast::Type, behind: bool, direct: &mut BTreeSet<String>, shielded: &mut BTreeSet<String>) {
     let pointer = match ty {
-        syn::Type::Reference(_) | syn::Type::Ptr(_) => true,
-        syn::Type::Path(path) => path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == "NonNull"),
-        _ => false,
+        ast::Type::RefType(_) | ast::Type::PtrType(_) => true,
+        other => plain_type_path(other).and_then(|segments| segments.last().map(segment_name)).is_some_and(|name| name == "NonNull"),
     };
-    let text = ty.to_token_stream().to_string();
+    let text = semilla_syntax::rs::compare(ty);
     let target = if behind || pointer { shielded } else { direct };
     target.extend(idents(&text).map(str::to_string));
 }
@@ -621,65 +650,78 @@ fn type_words(ty: &syn::Type, behind: bool, direct: &mut BTreeSet<String>, shiel
 /// True if the type has no drop code and has a value in each configuration. `calm`: the
 /// types of the workspace with this property. `shadow`: the names that the workspace gives a
 /// different meaning.
-fn plain_data(ty: &syn::Type, calm: &BTreeSet<String>, shadow: &BTreeSet<String>) -> bool {
+fn plain_data(ty: &ast::Type, calm: &BTreeSet<String>, shadow: &BTreeSet<String>) -> bool {
     match ty {
-        syn::Type::Reference(_) | syn::Type::Ptr(_) => true,
-        syn::Type::Array(array) => plain_data(&array.elem, calm, shadow),
-        syn::Type::Tuple(tuple) => tuple.elems.iter().all(|elem| plain_data(elem, calm, shadow)),
-        syn::Type::Paren(paren) => plain_data(&paren.elem, calm, shadow),
-        syn::Type::Path(path) if path.qself.is_none() => {
-            let Some(last) = path.path.segments.last() else { return false };
-            let name = ident_text(&last.ident);
-            match &last.arguments {
-                syn::PathArguments::None => (PLAIN.contains(&name.as_str()) && !shadow.contains(&name)) || (path.path.segments.len() == 1 && calm.contains(&name)),
-                syn::PathArguments::AngleBracketed(args) => {
-                    name == "Option" && !shadow.contains(&name) && args.args.len() == 1 && matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if plain_data(inner, calm, shadow))
+        ast::Type::RefType(_) | ast::Type::PtrType(_) => true,
+        ast::Type::ArrayType(array) => array.ty().is_some_and(|elem| plain_data(&elem, calm, shadow)),
+        ast::Type::TupleType(tuple) => tuple.fields().all(|elem| plain_data(&elem, calm, shadow)),
+        ast::Type::ParenType(paren) => paren.ty().is_some_and(|elem| plain_data(&elem, calm, shadow)),
+        other => {
+            let Some(segments) = plain_type_path(other) else { return false };
+            let Some(last) = segments.last() else { return false };
+            let name = segment_name(last);
+            match (last.generic_arg_list(), last.parenthesized_arg_list()) {
+                (None, None) => (PLAIN.contains(&name.as_str()) && !shadow.contains(&name)) || (segments.len() == 1 && calm.contains(&name)),
+                (Some(args), None) => {
+                    let args: Vec<ast::GenericArg> = args.generic_args().collect();
+                    name == "Option" && !shadow.contains(&name) && args.len() == 1 && matches!(args.first(), Some(ast::GenericArg::TypeArg(inner)) if inner.ty().is_some_and(|inner| plain_data(&inner, calm, shadow)))
                 }
                 _ => false,
             }
         }
-        _ => false,
     }
 }
 
 /// True for a type that has a size and a value in each configuration.
-fn anchor(ty: &syn::Type, shadow: &BTreeSet<String>) -> bool {
+fn anchor(ty: &ast::Type, shadow: &BTreeSet<String>) -> bool {
     match ty {
-        syn::Type::Reference(_) | syn::Type::Ptr(_) => true,
-        syn::Type::Path(path) if path.qself.is_none() && path.path.segments.len() == 1 => {
-            let name = ident_text(&path.path.segments[0].ident);
-            PLAIN.contains(&name.as_str()) && !shadow.contains(&name)
-        }
-        _ => false,
+        ast::Type::RefType(_) | ast::Type::PtrType(_) => true,
+        other => match plain_type_path(other).as_deref() {
+            Some([segment]) => {
+                let name = segment_name(segment);
+                PLAIN.contains(&name.as_str()) && !shadow.contains(&name)
+            }
+            _ => false,
+        },
     }
 }
 
-fn selects(attrs: &[syn::Attribute]) -> bool {
-    use quote::ToTokens;
-    attrs.iter().any(|attr| attr_of(&attr.to_token_stream().to_string()).is_some_and(|kind| !matches!(kind, Attr::Covered)))
+/// True if an attribute of the node can remove the node (a `cfg` that a unit can make false).
+fn selects(node: &SyntaxNode) -> bool {
+    semilla_syntax::load::attribute_texts(node).iter().any(|(_, text)| attr_of(text).is_some_and(|kind| !matches!(kind, Attr::Covered)))
+}
+
+/// The fields of a field list: the node and the type of each field.
+fn field_types(fields: Option<ast::FieldList>) -> Vec<(SyntaxNode, Option<ast::Type>)> {
+    match fields {
+        Some(ast::FieldList::RecordFieldList(list)) => list.fields().map(|field| (field.syntax().clone(), field.ty())).collect(),
+        Some(ast::FieldList::TupleFieldList(list)) => list.fields().map(|field| (field.syntax().clone(), field.ty())).collect(),
+        None => Vec::new(),
+    }
 }
 
 /// The fields of a struct or an enum: for each one, true if the field or its variant is
 /// below `cfg`, and the type. Then the count of the variants with no `cfg` (1 for a struct).
-fn fields_of(item: &Item) -> Option<(Vec<(bool, syn::Type)>, usize, bool)> {
+fn fields_of(item: &Item) -> Option<(Vec<(bool, ast::Type)>, usize, bool)> {
     let _at = crate::cfgcond::at(&item.file);
     let mut out = Vec::new();
-    let mut add = |fields: &syn::Fields, below: bool| {
-        for field in fields {
-            out.push((below || selects(&field.attrs), field.ty.clone()));
+    let mut add = |fields: Option<ast::FieldList>, below: bool| -> Option<()> {
+        for (node, ty) in field_types(fields) {
+            out.push((below || selects(&node), ty?));
         }
+        Some(())
     };
-    match syn::parse_str::<syn::Item>(&item.text).ok()? {
-        syn::Item::Struct(value) => {
-            add(&value.fields, false);
+    match semilla_syntax::rs::parse_item(&item.text)? {
+        ast::Item::Struct(value) => {
+            add(value.field_list(), false)?;
             Some((out, 1, true))
         }
-        syn::Item::Enum(value) => {
+        ast::Item::Enum(value) => {
             let mut count = 0;
-            for variant in &value.variants {
-                let below = selects(&variant.attrs);
+            for variant in value.variant_list()?.variants() {
+                let below = selects(variant.syntax());
                 count += usize::from(!below);
-                add(&variant.fields, below);
+                add(variant.field_list(), below)?;
             }
             Some((out, count, false))
         }
@@ -964,11 +1006,12 @@ impl Shadow {
         let mut edges: Vec<(String, String)> = Vec::new();
         for item in all().filter(|item| item.kind == ItemKind::Other) {
             let own = segments(&item.path)[0].to_string();
-            let Ok(syn::Item::ExternCrate(value)) = syn::parse_str::<syn::Item>(&item.text) else { continue };
-            let name = value.ident.to_string();
-            let macro_use = value.attrs.iter().any(|attr| attr.path().is_ident("macro_use")) || item.attrs.iter().any(|attr| attr.contains("macro_use"));
+            let Some(ast::Item::ExternCrate(value)) = semilla_syntax::rs::parse_item(&item.text) else { continue };
+            let Some(name) = value.name_ref().map(|name| name.text().to_string()) else { continue };
+            let macro_use = semilla_syntax::load::attribute_texts(value.syntax()).iter().any(|(path, _)| path == "macro_use") || item.attrs.iter().any(|attr| attr.contains("macro_use"));
             // `extern crate x as serde;` gives a trusted name to a different crate.
-            let renamed = value.rename.as_ref().is_some_and(|(_, rename)| *rename != name && TRUSTED_CRATES.contains(&rename.to_string().as_str()));
+            let rename = value.rename().map(|rename| rename.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into()));
+            let renamed = rename.is_some_and(|rename| rename != name && TRUSTED_CRATES.contains(&rename.as_str()));
             if renamed || (macro_use && !TRUSTED_CRATES.contains(&name.as_str()) && !crates.contains(&name)) {
                 shadow.crates.insert(own);
             } else if macro_use && crates.contains(&name) && name != own {
@@ -1013,45 +1056,51 @@ impl Shadow {
 /// trait of the compiler (`Sized`, `Send`) is not in the list: the kinds `auto` and `open`
 /// cover it. `None`: Semilla cannot read the text.
 fn trait_bounds(text: &str) -> Option<Vec<String>> {
-    fn add(bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>, out: &mut Vec<String>) -> Option<()> {
-        for bound in bounds {
-            match bound {
-                syn::TypeParamBound::Trait(bound) => {
-                    let name = bound.path.segments.last()?.ident.to_string();
-                    if !matches!(bound.modifier, syn::TraitBoundModifier::Maybe(_)) && !["Sized", "Send", "Sync", "Unpin"].contains(&name.as_str()) {
+    fn add(bounds: Option<ast::TypeBoundList>, out: &mut Vec<String>) -> Option<()> {
+        for bound in bounds.iter().flat_map(|list| list.bounds()) {
+            match (bound.ty(), bound.lifetime()) {
+                (Some(ty), None) if bound.use_bound_generic_args().is_none() => {
+                    let ast::Type::PathType(path) = ty else { return None };
+                    let name = path.path()?.segment()?.name_ref()?.text().to_string();
+                    if bound.question_mark_token().is_none() && !["Sized", "Send", "Sync", "Unpin"].contains(&name.as_str()) {
                         out.push(name);
                     }
                 }
-                syn::TypeParamBound::Lifetime(_) => {}
+                (None, Some(_)) => {}
                 _ => return None,
             }
         }
         Some(())
     }
-    fn generics(generics: &syn::Generics, out: &mut Vec<String>) -> Option<()> {
-        for param in generics.type_params() {
-            add(&param.bounds, out)?;
+    fn generics(params: Option<ast::GenericParamList>, clause: Option<ast::WhereClause>, out: &mut Vec<String>) -> Option<()> {
+        for param in params.iter().flat_map(|list| list.generic_params()) {
+            if let ast::GenericParam::TypeParam(param) = param {
+                add(param.type_bound_list(), out)?;
+            }
         }
-        for predicate in generics.where_clause.iter().flat_map(|clause| &clause.predicates) {
-            match predicate {
-                syn::WherePredicate::Type(predicate) => add(&predicate.bounds, out)?,
-                syn::WherePredicate::Lifetime(_) => {}
+        for predicate in clause.iter().flat_map(|clause| clause.predicates()) {
+            match (predicate.ty(), predicate.lifetime()) {
+                (Some(_), None) => add(predicate.type_bound_list(), out)?,
+                (None, Some(_)) => {}
                 _ => return None,
             }
         }
         Some(())
     }
-    let item = syn::parse_str::<syn::ItemTrait>(text).ok()?;
+    let Some(ast::Item::Trait(item)) = semilla_syntax::rs::parse_item(text) else { return None };
+    if item.eq_token().is_some() {
+        return None;
+    }
     let mut out = Vec::new();
-    add(&item.supertraits, &mut out)?;
-    generics(&item.generics, &mut out)?;
-    for member in &item.items {
+    add(item.type_bound_list(), &mut out)?;
+    generics(item.generic_param_list(), item.where_clause(), &mut out)?;
+    for member in item.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()) {
         match member {
-            syn::TraitItem::Type(member) => {
-                add(&member.bounds, &mut out)?;
-                generics(&member.generics, &mut out)?;
+            ast::AssocItem::TypeAlias(member) => {
+                add(member.type_bound_list(), &mut out)?;
+                generics(member.generic_param_list(), member.where_clause(), &mut out)?;
             }
-            syn::TraitItem::Fn(_) | syn::TraitItem::Const(_) => {}
+            ast::AssocItem::Fn(_) | ast::AssocItem::Const(_) => {}
             // A macro call or an unknown member can make an associated type.
             _ => return None,
         }
@@ -1061,36 +1110,37 @@ fn trait_bounds(text: &str) -> Option<Vec<String>> {
 
 /// The imports of a `use` item. `None`: Semilla cannot read the text.
 pub(crate) fn use_imports(text: &str) -> Option<Vec<Import>> {
-    fn walk(tree: &syn::UseTree, prefix: &mut Vec<String>, rooted: bool, out: &mut Vec<Import>) {
-        let name = |ident: &syn::Ident| ident.to_string().trim_start_matches("r#").to_string();
+    use semilla_syntax::rs::UseTree;
+    fn walk(tree: &UseTree, prefix: &mut Vec<String>, rooted: bool, out: &mut Vec<Import>) {
+        let name = |ident: &str| ident.trim_start_matches("r#").to_string();
         let first = |prefix: &[String], leaf: &str| prefix.first().cloned().unwrap_or_else(|| leaf.to_string());
         match tree {
-            syn::UseTree::Path(path) => {
-                prefix.push(name(&path.ident));
-                walk(&path.tree, prefix, rooted, out);
+            UseTree::Path(ident, tree) => {
+                prefix.push(name(ident));
+                walk(tree, prefix, rooted, out);
                 prefix.pop();
             }
             // `use a::b::{self}` gives the name `b` from the scope `a`.
-            syn::UseTree::Name(leaf) if leaf.ident == "self" && !prefix.is_empty() => {
+            UseTree::Name(ident) if ident == "self" && !prefix.is_empty() => {
                 let given = prefix.last().cloned().unwrap_or_default();
                 out.push(Import { first: prefix[0].clone(), leaf: Some(given.clone()), source: given, prefix: prefix[..prefix.len() - 1].to_vec(), rooted });
             }
-            syn::UseTree::Name(leaf) => {
-                let leaf = name(&leaf.ident);
+            UseTree::Name(ident) => {
+                let leaf = name(ident);
                 out.push(Import { first: first(prefix, &leaf), leaf: Some(leaf.clone()), source: leaf, prefix: prefix.clone(), rooted });
             }
-            syn::UseTree::Rename(leaf) => out.push(Import { first: first(prefix, &name(&leaf.ident)), leaf: Some(name(&leaf.rename)), source: name(&leaf.ident), prefix: prefix.clone(), rooted }),
-            syn::UseTree::Glob(_) => out.push(Import { first: first(prefix, ""), leaf: None, source: String::new(), prefix: prefix.clone(), rooted }),
-            syn::UseTree::Group(group) => {
-                for tree in &group.items {
+            UseTree::Rename(ident, rename) => out.push(Import { first: first(prefix, &name(ident)), leaf: Some(name(rename)), source: name(ident), prefix: prefix.clone(), rooted }),
+            UseTree::Glob => out.push(Import { first: first(prefix, ""), leaf: None, source: String::new(), prefix: prefix.clone(), rooted }),
+            UseTree::Group(items) => {
+                for tree in items {
                     walk(tree, prefix, rooted, out);
                 }
             }
         }
     }
-    let item = syn::parse_str::<syn::ItemUse>(text).ok()?;
+    let item = semilla_syntax::rs::parse_use(text)?;
     let mut out = Vec::new();
-    walk(&item.tree, &mut Vec::new(), item.leading_colon.is_some(), &mut out);
+    walk(&item.tree, &mut Vec::new(), item.leading_colon, &mut out);
     Some(out)
 }
 
@@ -1150,32 +1200,36 @@ fn members(item: &Item) -> Vec<(String, String)> {
 /// value: the name, true for a type, and the text of the value (batch 5p). An item that
 /// Semilla cannot read gives its full text for each member.
 fn member_values(item: &Item) -> Vec<(String, bool, String)> {
-    use quote::ToTokens;
-    let text = |tokens: &dyn ToTokens| tokens.to_token_stream().to_string();
+    let text = |node: Option<&dyn AstNode>| node.map(|node| semilla_syntax::tt::compare_text(node.syntax()));
     if !idents(&item.text).any(|word| word == "const" || word == "type") {
         return Vec::new();
     }
-    if let Ok(value) = syn::parse_str::<syn::ItemImpl>(&item.text) {
-        return value
-            .items
-            .iter()
-            .filter_map(|member| match member {
-                syn::ImplItem::Const(constant) => Some((ident_text(&constant.ident), false, format!("{} = {}", text(&constant.ty), text(&constant.expr)))),
-                syn::ImplItem::Type(ty) => Some((ident_text(&ty.ident), true, text(&ty.ty))),
-                _ => None,
-            })
-            .collect();
-    }
-    if let Ok(value) = syn::parse_str::<syn::ItemTrait>(&item.text) {
-        return value
-            .items
-            .iter()
-            .filter_map(|member| match member {
-                syn::TraitItem::Const(constant) => constant.default.as_ref().map(|(_, expr)| (ident_text(&constant.ident), false, format!("{} = {}", text(&constant.ty), text(expr)))),
-                syn::TraitItem::Type(ty) => ty.default.as_ref().map(|(_, value)| (ident_text(&ty.ident), true, text(value))),
-                _ => None,
-            })
-            .collect();
+    match semilla_syntax::rs::parse_item(&item.text) {
+        Some(ast::Item::Impl(value)) => {
+            return value
+                .assoc_item_list()
+                .into_iter()
+                .flat_map(|list| list.assoc_items())
+                .filter_map(|member| match member {
+                    ast::AssocItem::Const(constant) => Some((own_name(&constant), false, format!("{} = {}", text(constant.ty().as_ref().map(|n| n as &dyn AstNode))?, text(constant.body().as_ref().map(|n| n as &dyn AstNode))?))),
+                    ast::AssocItem::TypeAlias(ty) => Some((own_name(&ty), true, text(ty.ty().as_ref().map(|n| n as &dyn AstNode))?)),
+                    _ => None,
+                })
+                .collect();
+        }
+        Some(ast::Item::Trait(value)) if value.eq_token().is_none() => {
+            return value
+                .assoc_item_list()
+                .into_iter()
+                .flat_map(|list| list.assoc_items())
+                .filter_map(|member| match member {
+                    ast::AssocItem::Const(constant) => constant.body().map(|expr| (own_name(&constant), false, format!("{} = {}", text(constant.ty().as_ref().map(|n| n as &dyn AstNode)).unwrap_or_default(), semilla_syntax::rs::compare(&expr)))),
+                    ast::AssocItem::TypeAlias(ty) => ty.ty().map(|value| (own_name(&ty), true, semilla_syntax::rs::compare(&value))),
+                    _ => None,
+                })
+                .collect();
+        }
+        _ => {}
     }
     members(item).into_iter().filter(|(kind, _)| kind != "fn").map(|(kind, name)| (name, kind == "type", item.text.clone())).collect()
 }
@@ -1270,29 +1324,31 @@ fn const_default(item: &Item) -> bool {
     if !kinds.contains(&item.kind) && item.kind != ItemKind::Other {
         return false;
     }
-    let generics = match syn::parse_str::<syn::Item>(&item.text) {
-        Ok(syn::Item::Struct(value)) => value.generics,
-        Ok(syn::Item::Enum(value)) => value.generics,
-        Ok(syn::Item::Union(value)) => value.generics,
-        Ok(syn::Item::Trait(value)) => value.generics,
-        Ok(syn::Item::TraitAlias(value)) => value.generics,
-        Ok(syn::Item::Type(value)) => value.generics,
-        Ok(_) => return false,
+    let generics = match semilla_syntax::rs::parse_item(&item.text) {
+        Some(ast::Item::Struct(value)) => value.generic_param_list(),
+        Some(ast::Item::Enum(value)) => value.generic_param_list(),
+        Some(ast::Item::Union(value)) => value.generic_param_list(),
+        Some(ast::Item::Trait(value)) => value.generic_param_list(),
+        Some(ast::Item::TypeAlias(value)) => value.generic_param_list(),
+        Some(_) => return false,
         // No syntax tree: the default is not known.
-        Err(_) => return kinds.contains(&item.kind) && item.text.contains("const"),
+        None => return kinds.contains(&item.kind) && item.text.contains("const"),
     };
-    fn literal(expr: &syn::Expr) -> bool {
+    fn literal(expr: &ast::Expr) -> bool {
         match expr {
-            syn::Expr::Lit(_) => true,
-            syn::Expr::Unary(unary) => matches!(unary.op, syn::UnOp::Neg(_)) && literal(&unary.expr),
-            syn::Expr::Block(block) => match block.block.stmts.as_slice() {
-                [syn::Stmt::Expr(inner, None)] => block.label.is_none() && literal(inner),
-                _ => false,
+            ast::Expr::Literal(_) => true,
+            ast::Expr::PrefixExpr(unary) => unary.op_kind() == Some(ast::UnaryOp::Neg) && unary.expr().is_some_and(|inner| literal(&inner)),
+            ast::Expr::BlockExpr(block) if block.modifier().is_none() => match block.stmt_list() {
+                Some(list) => list.statements().next().is_none() && list.tail_expr().is_some_and(|inner| literal(&inner)),
+                None => false,
             },
             _ => false,
         }
     }
-    generics.const_params().any(|param| param.default.as_ref().is_some_and(|default| !literal(default)))
+    generics.iter().flat_map(|list| list.generic_params()).any(|param| match param {
+        ast::GenericParam::ConstParam(param) => param.default_val().is_some_and(|default| !default.expr().is_some_and(|expr| literal(&expr))),
+        _ => false,
+    })
 }
 
 fn module_of(item: &Item) -> String {
@@ -1946,7 +2002,7 @@ impl<'a> Opaque<'a> {
                         let sources = glob_sources(&item.text);
                         if !sources.is_empty() {
                             // A text that does not parse: not private (the safe side).
-                            let private = syn::parse_str::<syn::ItemUse>(&item.text).is_ok_and(|parsed| matches!(parsed.vis, syn::Visibility::Inherited));
+                            let private = semilla_syntax::rs::parse_use(&item.text).is_some_and(|parsed| parsed.vis.is_empty());
                             if !private {
                                 opaque.glob_pub.entry(module.clone()).or_default().extend(sources.iter().cloned());
                             }
@@ -2022,9 +2078,9 @@ impl<'a> Opaque<'a> {
             let good = item.kind == ItemKind::Enum
                 && !droppers.contains(&short(item))
                 && fields_of(item).is_some_and(|(fields, count, _)| count >= 1 && fields.iter().all(|(_, ty)| plain_data(ty, &empty, &shadow)))
-                && syn::parse_str::<syn::ItemEnum>(&item.text).is_ok_and(|value| {
-                    let plain_variant = |variant: &syn::Variant| !selects(&variant.attrs) && variant.fields.iter().all(|field| !selects(&field.attrs));
-                    value.generics.params.is_empty() && value.variants.iter().any(plain_variant)
+                && matches!(semilla_syntax::rs::parse_item(&item.text), Some(ast::Item::Enum(value)) if {
+                    let plain_variant = |variant: &ast::Variant| !selects(variant.syntax()) && field_types(variant.field_list()).iter().all(|(field, _)| !selects(field));
+                    value.generic_param_list().is_none_or(|list| list.generic_params().next().is_none()) && value.variant_list().is_some_and(|list| list.variants().any(|variant| plain_variant(&variant)))
                 });
             if good { &mut calm } else { &mut not_calm }.insert(short(item));
         }

@@ -15,8 +15,9 @@
 
 use std::collections::BTreeSet;
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
-use quote::ToTokens;
+use semilla_syntax::rs::{AstNode, Direction, SyntaxKind, SyntaxNode, TextRange, ast, compare, compare_opt};
+use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
+use ast::{HasGenericParams, HasName, HasTypeBounds};
 use semilla_syntax::{Item, ItemKind, Workspace};
 
 type Pair = (String, String);
@@ -33,42 +34,47 @@ struct Form {
     in_where: BTreeSet<Pair>,
 }
 
-fn text(tokens: &impl ToTokens) -> String {
-    tokens.to_token_stream().to_string()
-}
-
-/// Takes the bounds out of the generics. `None` for a predicate of a kind that Semilla does
-/// not know.
-fn take(generics: &mut syn::Generics) -> Option<(Vec<Pair>, BTreeSet<Pair>)> {
+/// Takes the bounds out of the generics of a declaration: the text of the declaration with no
+/// bound in the parameter list and with no `where` clause, the pairs, and the pairs of the
+/// `where` clause. `None` for a predicate of a kind that Semilla does not know.
+fn take(node: &SyntaxNode, params: Option<ast::GenericParamList>, clause: Option<ast::WhereClause>) -> Option<(String, Vec<Pair>, BTreeSet<Pair>)> {
     let mut all = Vec::new();
     let mut in_where = BTreeSet::new();
-    for param in generics.params.iter_mut() {
-        match param {
-            syn::GenericParam::Lifetime(param) => {
-                let name = text(&param.lifetime);
-                all.extend(param.bounds.iter().map(|bound| (name.clone(), text(bound))));
-                param.bounds.clear();
-                param.colon_token = None;
+    let mut skip: Vec<TextRange> = Vec::new();
+    // A bound list with the `:` before it.
+    let mut drop_bounds = |bounds: Option<ast::TypeBoundList>| {
+        if let Some(bounds) = bounds {
+            let colon = bounds.syntax().siblings_with_tokens(Direction::Prev).skip(1).find(|element| !element.kind().is_trivia()).filter(|element| element.kind() == SyntaxKind::COLON);
+            skip.push(colon.map_or(bounds.syntax().text_range(), |colon| colon.text_range().cover(bounds.syntax().text_range())));
+        }
+    };
+    for param in params.iter().flat_map(|list| list.generic_params()) {
+        match &param {
+            ast::GenericParam::LifetimeParam(param) => {
+                let name = compare_opt(param.lifetime().as_ref());
+                all.extend(param.type_bound_list().into_iter().flat_map(|list| list.bounds()).map(|bound| (name.clone(), compare(&bound))));
+                drop_bounds(param.type_bound_list());
             }
-            syn::GenericParam::Type(param) => {
-                let name = param.ident.to_string();
-                all.extend(param.bounds.iter().map(|bound| (name.clone(), text(bound))));
-                param.bounds.clear();
-                param.colon_token = None;
+            ast::GenericParam::TypeParam(param) => {
+                let name = param.name().map(|name| name.text().to_string()).unwrap_or_default();
+                all.extend(param.type_bound_list().into_iter().flat_map(|list| list.bounds()).map(|bound| (name.clone(), compare(&bound))));
+                drop_bounds(param.type_bound_list());
             }
-            syn::GenericParam::Const(_) => {}
+            ast::GenericParam::ConstParam(_) => {}
         }
     }
-    if let Some(clause) = generics.where_clause.take() {
-        for predicate in &clause.predicates {
-            let (bounded, bounds): (String, Vec<String>) = match predicate {
-                syn::WherePredicate::Lifetime(predicate) => (text(&predicate.lifetime), predicate.bounds.iter().map(text).collect()),
-                syn::WherePredicate::Type(predicate) => {
-                    let binder = predicate.lifetimes.as_ref().map(|binder| format!("{} ", text(binder))).unwrap_or_default();
-                    (format!("{binder}{}", text(&predicate.bounded_ty)), predicate.bounds.iter().map(text).collect())
+    if let Some(clause) = &clause {
+        skip.push(clause.syntax().text_range());
+        for predicate in clause.predicates() {
+            let bounded = match (predicate.lifetime(), predicate.ty()) {
+                (Some(lifetime), None) => compare(&lifetime),
+                (None, Some(ty)) => {
+                    let binder = predicate.for_binder().map(|binder| format!("{} ", compare(&binder))).unwrap_or_default();
+                    format!("{binder}{}", compare(&ty))
                 }
                 _ => return None,
             };
+            let bounds: Vec<String> = predicate.type_bound_list().into_iter().flat_map(|list| list.bounds()).map(|bound| compare(&bound)).collect();
             // A predicate with no bound (`where Vec<T>:`) says that the type is well formed.
             // It is a pair with an empty bound.
             let bounds = if bounds.is_empty() { vec![String::new()] } else { bounds };
@@ -78,27 +84,27 @@ fn take(generics: &mut syn::Generics) -> Option<(Vec<Pair>, BTreeSet<Pair>)> {
             }
         }
     }
-    Some((all, in_where))
+    Some((semilla_syntax::tt::text_without(node, &skip), all, in_where))
 }
 
 /// The form of a function, a method, a struct, an enum, a union, a trait, or an `impl`.
 fn form(item: &Item) -> Option<Form> {
-    let (rest, (all, in_where)) = if item.kind == ItemKind::Fn {
-        let mut signature: syn::Signature = syn::parse_str(&item.signature).ok()?;
-        let pairs = take(&mut signature.generics)?;
-        (text(&signature), pairs)
+    let (rest, all, in_where) = if item.kind == ItemKind::Fn {
+        let signature = semilla_syntax::rs::parse_signature(&item.signature)?;
+        // The parse adds a `;` to the signature text.
+        let (rest, all, in_where) = take(signature.syntax(), signature.generic_param_list(), signature.where_clause())?;
+        (rest.strip_suffix(" ;").map(str::to_string).unwrap_or(rest), all, in_where)
     } else {
-        let mut parsed: syn::Item = syn::parse_str(&item.signature).ok()?;
-        let generics = match &mut parsed {
-            syn::Item::Struct(value) => &mut value.generics,
-            syn::Item::Enum(value) => &mut value.generics,
-            syn::Item::Union(value) => &mut value.generics,
-            syn::Item::Trait(value) => &mut value.generics,
-            syn::Item::Impl(value) => &mut value.generics,
+        let parsed = semilla_syntax::rs::parse_item(&item.signature)?;
+        let (params, clause) = match &parsed {
+            ast::Item::Struct(value) => (value.generic_param_list(), value.where_clause()),
+            ast::Item::Enum(value) => (value.generic_param_list(), value.where_clause()),
+            ast::Item::Union(value) => (value.generic_param_list(), value.where_clause()),
+            ast::Item::Trait(value) if value.eq_token().is_none() => (value.generic_param_list(), value.where_clause()),
+            ast::Item::Impl(value) => (value.generic_param_list(), value.where_clause()),
             _ => return None,
         };
-        let pairs = take(generics)?;
-        (text(&parsed), pairs)
+        take(parsed.syntax(), params, clause)?
     };
     Some(Form { rest, all, in_where })
 }
