@@ -39,4 +39,10 @@ jobs:
       # The SMT tests need Z3. The pinned release needs glibc 2.39 (Ubuntu 24.04).
       - name: Install Z3
         run: scripts/fetch-z3.sh
+      # The e2e tests make commits and git notes in temporary repositories.
+      # Git refuses both when it has no author identity.
+      - name: Set a git identity
+        run: |
+          git config --global user.name "semilla CI"
+          git config --global user.email "ci@semilla.invalid"
       - run: cargo test --workspace --locked
