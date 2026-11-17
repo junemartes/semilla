@@ -381,7 +381,17 @@ fn check_units_and_records(scratch: &Path, before: &Levels) {
             .find(|unit| unit.target.starts_with(prefix))
             .unwrap_or_else(|| panic!("no unit {prefix}: {units:?}"))
     };
-    let (lib, test, bin) = (unit("app_b.lib."), unit("app_b.test."), unit("app_b.bin."));
+    let (lib, bin) = (unit("app_b.lib."), unit("app_b.bin."));
+    // `app_b` has two test units: one for the lib and one for the bin. A file name ends in a
+    // hash of the build paths, so the order of the two files changes from machine to machine.
+    let app_tests: Vec<_> = units.iter().filter(|unit| unit.target.starts_with("app_b.test.")).collect();
+    let mut test_roots: Vec<&str> = app_tests.iter().map(|unit| unit.root.as_str()).collect();
+    test_roots.sort_unstable();
+    assert_eq!(test_roots, ["app_b/src/lib.rs", "app_b/src/main.rs"], "{units:?}");
+    let test = app_tests
+        .into_iter()
+        .find(|unit| unit.root == lib.root)
+        .expect("the test unit of the lib");
     assert!(lib.cfg.contains("debug_assertions") && !lib.cfg.contains("test"), "{lib:?}");
     assert!(test.cfg.contains("test") && test.cfg.contains("debug_assertions"), "{test:?}");
     assert_eq!(
