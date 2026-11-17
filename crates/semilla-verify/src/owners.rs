@@ -57,6 +57,10 @@ pub struct Input<'a> {
     pub made_listed: &'a BTreeSet<usize>,
     /// The statement maps of the bodies (design 41), for the MIR check of each map.
     pub maps: &'a semilla_syntax::BodyMaps,
+    /// The definitions of the two sides (design 44), for the symbol links.
+    pub defs: &'a [crate::DefMap; 2],
+    /// The old path → the new path of each item that N1 maps.
+    pub renames: &'a BTreeMap<String, String>,
 }
 
 /// The owner of one changed body.
@@ -99,7 +103,36 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     // The map from the MIR elements that differ to the edits (design 40.3).
     // The edits of the refactoring facts (design 41.7): a move, a variable, a rename of a local.
     let refactoring: BTreeSet<usize> = (0..input.edits.len()).filter(|&edit| input.fact_of[edit].and_then(|fact| report.facts.get(fact)).is_some_and(|fact| matches!(fact.category, Category::Move | Category::Rename) && fact.part != "indirect change")).collect();
-    let mut map = crate::mirmap::MirMap::with_refactoring(input.before, input.after, input.edits, &refactoring);
+    // The changed definitions of the step and the symbol links (design 44).
+    // The edits with the same meaning change no definition (design 44): a new order of the members
+    // of an `impl` or a trait, a new order of bounds, source text with no other fact.
+    let mut no_change = refactoring.clone();
+    for (index, edit) in input.edits.iter().enumerate() {
+        let fact = input.fact_of[index].and_then(|fact| report.facts.get(fact));
+        let same_bounds = fact.is_some_and(|fact| [": order only", ": moved to the `where` clause", ": moved out of the `where` clause", ": moved between the parameter list and the `where` clause", ": a duplicate bound only"].iter().any(|end| fact.description.ends_with(end) || fact.description.contains(&format!("{end} ("))));
+        let text_only = fact.is_some_and(|fact| fact.category == Category::Text);
+        let member_order = edit.kind == EditKind::Members && [(&edit.before, input.before), (&edit.after, input.after)].iter().all(|(anchor, ws)| anchor.as_ref().and_then(|anchor| ws.items.get(&anchor.item)).is_some_and(|item| matches!(item.kind, ItemKind::Impl | ItemKind::Trait)))
+            && {
+                let sorted = |anchor: &Option<semilla_core::Anchor>, ws: &Workspace| -> Option<Vec<String>> {
+                    let mut list = ws.items.get(&anchor.as_ref()?.item)?.members.clone();
+                    list.sort();
+                    Some(list)
+                };
+                sorted(&edit.before, input.before).is_some() && sorted(&edit.before, input.before) == sorted(&edit.after, input.after)
+            };
+        if same_bounds || text_only || member_order {
+            no_change.insert(index);
+        }
+    }
+    // One key for each definition: the renames of N1 and the derived moves and renames.
+    let mut renames = input.renames.clone();
+    for (_, old, new) in input.identity_pairs {
+        renames.entry(old.clone()).or_insert_with(|| new.clone());
+    }
+    let links = crate::links::Links::new(input.before, input.after, input.edits, &no_change, renames, [&input.defs[0], &input.defs[1]]);
+    let mut map = crate::mirmap::MirMap::with_refactoring(input.before, input.after, input.edits, &refactoring).with_links(&links);
+    // The symbols of the links of each fact, with the bodies (design 44).
+    let mut through_of: BTreeMap<usize, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
     // The elements that each fact owns, for the branch mark (design 40.4).
     let mut branch_of: BTreeMap<usize, [Vec<crate::MirElement>; 2]> = BTreeMap::new();
     // The nodes of the elements with no owner: the body, and true if the body has an edit.
@@ -163,15 +196,29 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 }
             }
             map.owning.extend(own.owns.keys().copied());
+            note_through(input, &own, &name, &mut through_of);
+            map.counts.linked += own.linked;
             let idle: Vec<usize> = text_edits.iter().copied().filter(|edit| !own.owns.contains_key(edit)).collect();
             // An element that a refactoring took by its region (design 41.7) can be the effect
             // of a different edit: such an edit keeps the doubt rule.
             let complete = complete && !(own.by_region && idle.iter().any(|edit| !refactoring.contains(edit)));
-            let idle = idle.into_iter();
             if complete {
-                map.idle_equal.extend(idle);
-                found = owning;
+                // Safety (design 44): a link can take an element that an edit of a different
+                // place changes (a type, a path, a pattern, a signature, a bound, a `use` line).
+                // With a link in the body, such an edit keeps the doubt rule.
+                let (risky, safe): (Vec<usize>, Vec<usize>) = idle.into_iter().partition(|edit| own.linked > 0 && remote_form(&input.edits[*edit]));
+                map.idle_equal.extend(safe);
+                map.idle_doubt.extend(risky.iter().copied());
+                let mut kept = owning;
+                for edit in risky {
+                    let owner = owner_of_edit(input, edit);
+                    if !kept.contains(&owner) {
+                        kept.push(owner);
+                    }
+                }
+                found = kept;
             } else {
+                let idle = idle.into_iter();
                 map.idle_doubt.extend(idle);
                 for owner in owning {
                     if !found.contains(&owner) {
@@ -185,11 +232,55 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 entry.1.extend(text_edits.iter().copied());
             }
         }
+        // A body with no edit of its text (design 44): the symbol links own its elements. If each
+        // element that differs has a link, the body needs no other owner.
+        let symbols = matches!((&body.status, &body.elements), (BodyStatus::Different { .. }, Some(diff)) if !diff.no_symbols);
+        // An element at the place of the edit of a macro (a `macro_rules` body) keeps the macro
+        // rules. An element at the place of a different edit (a field that a derive reads) belongs
+        // to that edit.
+        let is_macro = |edit: &usize| [(&input.edits[*edit].before, input.before), (&input.edits[*edit].after, input.after)].iter().any(|(anchor, ws)| anchor.as_ref().and_then(|anchor| ws.items.get(&anchor.item)).is_some_and(|item| item.kind == ItemKind::Macro));
+        let diff_own = (text_edits.is_empty() && symbols && found.is_empty()).then(|| body.elements.as_ref().map(|diff| (diff, map.own(diff)))).flatten().filter(|(_, own)| !own.positional.iter().any(is_macro));
+        if let Some((diff, mut own)) = diff_own {
+            map.counts.linked += own.linked;
+            // The signature line (`other`) with a changed symbol of the function.
+            let other_owned = !(diff.other || (diff.old.is_empty() && diff.new.is_empty())) || !own.other_links.is_empty();
+            for (edit, symbols) in std::mem::take(&mut own.other_links) {
+                own.owns.entry(edit).or_default();
+                own.through.entry(edit).or_default().extend(symbols);
+            }
+            note_through(input, &own, &name, &mut through_of);
+            let owning: Vec<Owner> = own.owns.keys().map(|edit| owner_of_edit(input, *edit)).fold(Vec::new(), |mut list, owner| {
+                if !list.contains(&owner) {
+                    list.push(owner);
+                }
+                list
+            });
+            for (edit, elements) in &own.owns {
+                if let Some(fact) = input.fact_of[*edit].filter(|_| input.owners[*edit].is_none()) {
+                    let entry = branch_of.entry(fact).or_default();
+                    entry[0].extend(elements[0].iter().cloned());
+                    entry[1].extend(elements[1].iter().cloned());
+                }
+            }
+            map.owning.extend(own.owns.keys().copied());
+            for owner in &owning {
+                record(report, *owner, &name);
+            }
+            if !owning.is_empty() && own.unowned.is_empty() && own.lost == 0 && other_owned {
+                owned.insert(name, owning[0]);
+                continue;
+            }
+        }
         // A new name of a local or a parameter does not change the code. When the body has a
         // different edit fact, the body goes to that fact (design 36.1, rule 7). With no such
         // fact, the rename fact keeps the body and gets the mismatch mark.
+        // Since design 44, only a fact of an edit of the text of the body counts: a link is not
+        // such a fact. A type change that the mapper sees as a new name (`u32` → `u16`) must not
+        // get `code equal` from a link in the same body.
         let local_renames: Vec<Owner> = found.iter().copied().filter(|owner| matches!(owner, Owner::Fact(index) if report.facts.get(*index).is_some_and(|fact| fact.category == semilla_core::Category::Rename && matches!(fact.part.as_str(), "body" | "parameter rename")))).collect();
-        if local_renames.len() < found.len() {
+        let text_owners: Vec<Owner> = text_edits.iter().map(|edit| owner_of_edit(input, *edit)).collect();
+        let other_text = found.iter().any(|owner| text_owners.contains(owner) && !local_renames.contains(owner));
+        if !local_renames.is_empty() && other_text {
             for owner in &local_renames {
                 if let Owner::Fact(index) = owner {
                     report.facts[*index].affected.retain(|body| *body != name);
@@ -214,8 +305,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 continue;
             }
         }
-        // F5: a fact whose entity the body uses (computed in `facts::derive`).
-        if let Some(index) = report.facts.iter().position(|fact| fact.affected.contains(&name)) {
+        // F5: a fact whose entity the body uses (computed in `facts::derive`). Since design 44,
+        // only for a body with no symbol data: else the links decide.
+        if let Some(index) = report.facts.iter().position(|fact| fact.affected.contains(&name)).filter(|_| !symbols) {
             owned.insert(name, Owner::Fact(index));
             continue;
         }
@@ -240,7 +332,13 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         for (body, name) in pending {
             // Batch 5n, A1: with no other evidence, a callee whose MIR signature changed in this
             // step is the cause. The fact of the callee says so.
-            let found = evidence(input, report, body, &name, &owned, &assoc).or_else(|| {
+            // Since design 44, a body with symbol data has the links: the named constants, the
+            // `const fn` chain, a new callee, and a changed MIR signature are symbol links.
+            let symbols = matches!(&body.elements, Some(diff) if !diff.no_symbols) && matches!(body.status, BodyStatus::Different { .. });
+            let found = evidence(input, report, body, &name, &owned, &assoc, symbols).or_else(|| {
+                if symbols {
+                    return None;
+                }
                 let (owner, callee) = changed_callee(input, &name, &owned)?;
                 note_signature(report, owner, &callee);
                 Some(owner)
@@ -339,9 +437,8 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
     // Design 40.3: the elements with no owner in a body with an edit. The edits keep the doubt
     // rule, so the fact has no spotlight: it names the places of the change.
-    for (name, (nodes, edits)) in &unowned_of {
-        let causes = type_path_causes(input, report, edits);
-        body_fact(input, report, name, nodes, false, &causes);
+    for (name, (nodes, _)) in &unowned_of {
+        body_fact(input, report, name, nodes, false);
     }
     // The bodies with no edit and with nodes: one fact for each body, at most `CRATE_BODIES`
     // in a crate; else one fact for the crate (design 40.3).
@@ -381,7 +478,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -403,7 +500,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     for (krate, bodies) in no_edit {
         if bodies.len() <= CRATE_BODIES {
             for (name, nodes) in &bodies {
-                body_fact(input, report, name, nodes, true, "");
+                body_fact(input, report, name, nodes, true);
             }
             continue;
         }
@@ -423,6 +520,18 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             reason: input.step.reasons.get(&anchor.to_string()).cloned(),
             ..Default::default()
         });
+    }
+    // The symbols of the links (design 44): "through: `T` (2 bodies)".
+    for (fact, symbols) in through_of {
+        if let Some(fact) = report.facts.get_mut(fact) {
+            for (symbol, bodies) in symbols {
+                let list = fact.through.entry(symbol).or_default();
+                list.extend(bodies.into_iter().filter(|body| fact.affected.contains(body)));
+                list.sort();
+                list.dedup();
+            }
+            fact.through.retain(|_, bodies| !bodies.is_empty());
+        }
     }
     // The branch mark (design 40.4) of each fact whose elements change the branches.
     for (fact, elements) in branch_of {
@@ -447,28 +556,38 @@ const CRATE_BODIES: usize = 3;
 /// The most display texts in the fact of a body (design 40.3).
 const BODY_TEXTS: usize = 3;
 
-/// The facts of the edits of a body that change a type or a path (design 40.3): the elements of
-/// the body with no edit at their place can follow such a change. Empty if there is none.
-fn type_path_causes(input: &Input, report: &StepReport, edits: &BTreeSet<usize>) -> String {
-    let mut ids: Vec<String> = Vec::new();
-    for edit in edits {
-        let edit_ref = &input.edits[*edit];
-        let kinds = [edit_ref.node_before, edit_ref.node_after];
-        let role = edit_ref.anchor().and_then(|anchor| anchor.path.last()).map(|segment| segment.to_string()).unwrap_or_default();
-        let typed = kinds.iter().flatten().any(|kind| matches!(*kind, "path" | "type" | "signature" | "pattern")) || role == "ty" || role == "callee" || role.starts_with("param");
-        if let Some(fact) = input.fact_of[*edit].filter(|_| typed).and_then(|fact| report.facts.get(fact)) {
-            if !ids.contains(&fact.id) {
-                ids.push(fact.id.clone());
-            }
+/// True for an edit of a form that can change the code at a different place (design 44, the
+/// safety rule): a path, a type, a signature, a pattern, a callee, a parameter, a bound, a
+/// generic parameter, or a `use` line. The old hint of design 40.3 used the same forms.
+fn remote_form(edit: &Edit) -> bool {
+    let kinds = [edit.node_before, edit.node_after];
+    let role = edit.anchor().and_then(|anchor| anchor.path.last()).map(|segment| segment.to_string()).unwrap_or_default();
+    let first = edit.anchor().and_then(|anchor| anchor.path.first()).map(|segment| segment.to_string()).unwrap_or_default();
+    kinds.iter().flatten().any(|kind| matches!(*kind, "path" | "type" | "signature" | "pattern" | "use" | "generics" | "where"))
+        || matches!(edit.kind, EditKind::Signature)
+        || first == "sig"
+        || role == "ty"
+        || role == "pat"
+        || role == "callee"
+        || role.starts_with("param")
+        || edit.attr_before.as_deref() == Some("use")
+        || edit.attr_after.as_deref() == Some("use")
+}
+
+/// Adds the symbols of the links of a body to the facts of their edits (design 44).
+fn note_through(input: &Input, own: &crate::mirmap::Ownership, body: &str, through_of: &mut BTreeMap<usize, BTreeMap<String, BTreeSet<String>>>) {
+    for (edit, symbols) in &own.through {
+        let Some(fact) = input.fact_of[*edit] else { continue };
+        for symbol in symbols {
+            through_of.entry(fact).or_default().entry(symbol.clone()).or_default().insert(body.to_string());
         }
     }
-    if ids.is_empty() { String::new() } else { format!("; a type or a path changes in {} of this body", ids.join(", ")) }
 }
 
 /// The fact of the nodes of the MIR elements with no owner in one body (design 40.3): the
 /// outermost nodes, at most `BODY_TEXTS` display texts, and the lines in a note. With
 /// `spotlight`, the fact needs a reason (a body with no edit).
-fn body_fact(input: &Input, report: &mut StepReport, name: &str, nodes: &BTreeSet<(usize, crate::mirmap::Mapped)>, spotlight: bool, causes: &str) {
+fn body_fact(input: &Input, report: &mut StepReport, name: &str, nodes: &BTreeSet<(usize, crate::mirmap::Mapped)>, spotlight: bool) {
     let anchor = Anchor::item(name);
     let place = anchor.to_string();
     // The outermost nodes of each side, and a node with the same text on the two sides one time
@@ -503,7 +622,7 @@ fn body_fact(input: &Input, report: &mut StepReport, name: &str, nodes: &BTreeSe
         at: Some(anchor),
         file: kept.first().map(|(_, node)| node.file.clone()),
         part: "indirect change".into(),
-        description: format!("the compiled code of `{name}` changes with no edit at its place: {list}{causes}"),
+        description: format!("the compiled code of `{name}` changes with no edit at its place: {list}"),
         status: "derived".into(),
         category: Category::Indirect,
         affected: vec![name.to_string()],
@@ -684,7 +803,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),
@@ -780,7 +899,7 @@ fn text_edits(input: &Input, body: &BodyComparison, name: &str) -> Vec<usize> {
 }
 
 /// A fact or a claim that causes the change of a body with no text edit, by evidence.
-fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &str, owned: &BTreeMap<String, Owner>, assoc: &BTreeMap<String, (String, String)>) -> Option<Owner> {
+fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &str, owned: &BTreeMap<String, Owner>, assoc: &BTreeMap<String, (String, String)>, symbols: bool) -> Option<Owner> {
     let item = input.after.items.get(name).or_else(|| input.before.items.get(name));
     // An associated constant has no item: its text comes from the impl or the trait.
     let text = item.map(|item| item.text.as_str()).or_else(|| assoc.get(name).map(|(_, text)| text.as_str())).unwrap_or("");
@@ -794,8 +913,9 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
         }
     }
 
-    // 1. A named const or static whose MIR changed: its value is inside this body.
-    for (other, owner) in owned {
+    // 1. A named const or static whose MIR changed: its value is inside this body. Since design
+    //    44, only for a body with no symbol data (rules 1, 1b, and 4 are symbol links).
+    for (other, owner) in owned.iter().filter(|_| !symbols) {
         let kind = input.after.items.get(other).or_else(|| input.before.items.get(other)).map(|item| item.kind);
         if matches!(kind, Some(ItemKind::Const | ItemKind::Static)) || assoc.contains_key(other) {
             let short = other.rsplit("::").next().unwrap_or(other);
@@ -810,7 +930,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
     //     holds the value, and not the call. The path is: the text of the constant names a
     //     `const fn`, and the MIR callee lists go from that function to the changed function.
     let constant = item.is_some_and(|item| matches!(item.kind, ItemKind::Const | ItemKind::Static)) || assoc.contains_key(name);
-    if let Some(map) = input.callees.filter(|_| constant) {
+    if let Some(map) = input.callees.filter(|_| constant && !symbols) {
         let is_const_fn = |it: &semilla_syntax::Item| it.kind == ItemKind::Fn && it.text.split("fn ").next().is_some_and(|head| crate::hints::words(head).contains(&"const"));
         let mut reached: Vec<&str> = input.after.items.values().filter(|it| is_const_fn(it) && words.contains(&it.path.rsplit("::").next().unwrap_or(&it.path))).map(|it| it.path.as_str()).collect();
         let mut next = 0;
@@ -863,7 +983,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
 
     // 4. A new item that the body now calls (a new method that method selection picks, a new
     //    trait impl). The MIR callee list is the evidence.
-    if let Some(facts) = input.callees.and_then(|map| map.get(name)) {
+    if let Some(facts) = input.callees.and_then(|map| map.get(name)).filter(|_| !symbols) {
         for callee in facts.callees.iter().chain(&facts.externals) {
             let new = input.edits.iter().position(|edit| edit.kind == EditKind::ItemAdded && edit.item().is_some_and(|added| added == callee || callee.starts_with(&format!("{added}::"))));
             if let Some(index) = new {

@@ -262,9 +262,12 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
     }
 
     // 4. The facts, in the order of their first edit, with the affected bodies (F5) and the class.
+    // Since design 44, a changed body with symbol data gets its owners from the element rules and
+    // the symbol links, not from F5 (a type fact owned each body that named its type).
     let changed: Vec<(String, String)> = bodies
         .iter()
         .filter(|b| !matches!(b.status, BodyStatus::Equal { .. }))
+        .filter(|b| !(matches!(b.status, BodyStatus::Different { .. }) && b.elements.as_ref().is_some_and(|diff| !diff.no_symbols)))
         .map(|b| (b.name.clone(), body_index.item_of(b).unwrap_or_else(|| b.name.clone())))
         .collect();
     let mut attributed = std::collections::BTreeSet::new();
@@ -327,7 +330,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
             && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
@@ -1216,6 +1219,11 @@ const NO_MIR: &[&str] = &["doc", "allow", "warn", "deny", "forbid", "expect", "m
 const NO_SPOTLIGHT: &[&str] = &["doc", "allow", "warn", "deny", "forbid", "expect", "must_use", "inline", "cold", "rustfmt::skip", "deprecated", "derive"];
 
 /// True for an attribute of a lint tool (`clippy::…`, `diagnostic::…`, `rustfmt::…`).
+/// True for an attribute that changes no MIR (design 44): the allow list of [`harmless_attribute_edit`].
+pub(crate) fn harmless_attribute_name(name: &str) -> bool {
+    NO_MIR.contains(&name) || is_lint_tool(name)
+}
+
 pub(crate) fn is_lint_tool(name: &str) -> bool {
     ["clippy::", "diagnostic::", "rustfmt::"].iter().any(|prefix| name.starts_with(prefix))
 }

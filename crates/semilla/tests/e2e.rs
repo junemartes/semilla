@@ -2006,7 +2006,10 @@ fn a_member_edit_that_changes_the_indexes_is_not_a_neutral_rewrite() {
     let out = run(repo, &["step", "reorder Pair and read b"], 0);
     let edit = fact_line(&out, "`p.a` → `p.b`");
     assert!(edit.ends_with("code different]"), "{out}");
-    assert!(fact_line(&out, "member order of `shop_core::members::Pair`").ends_with("code different]"), "{out}");
+    // Design 44: no element of a changed body names the order (the reader has its own edit),
+    // so the order has no compare result of its own: the MIR does not show each effect of an
+    // order. Before 44, the type fact owned each changed body that named the type.
+    assert!(fact_line(&out, "member order of `shop_core::members::Pair`").ends_with("no compare]"), "{out}");
     assert!(!out.contains("code equal"), "{out}");
 
     // Case 2: a new field `c` between `a` and `b`, and the reader changes from `t.b` to `t.c`.
@@ -2023,6 +2026,8 @@ fn a_member_edit_that_changes_the_indexes_is_not_a_neutral_rewrite() {
     write(repo, "crates/shop-core/src/members.rs", &code);
     let out = run(repo, &["step", "reorder Kind and swap the patterns"], 0);
     let order = fact_line(&out, "member order of `shop_core::members::Kind`");
+    // Design 44 (fix round 1): the pattern edits own the elements of `weight` by their place,
+    // and a link adds the order as a second cause (the signature of `weight` names `Kind`).
     assert!(order.contains("the discriminant values") && order.ends_with("code different]"), "{out}");
     assert!(!out.contains("code equal"), "{out}");
     assert!(out.contains("affected bodies: shop_core::members::weight") && !out.contains("shop_core::members::small"), "the caller with no edit is equal by name: {out}");
@@ -6409,7 +6414,8 @@ fn an_edit_whose_only_effect_is_the_place_of_a_drop_is_code_different() {
     // at the end of the scope. The drop at the end of the scope is a glue element with no
     // owner; the drop at the statement belongs to the edit. The edit is `code different`. The
     // overflow check of `a + 1` now unwinds through a drop of the guard: a real change with no
-    // edit at its place, and its fact names the pattern edit as a possible cause.
+    // edit at its place. Since design 44, the fact names no possible cause: a type or a path edit
+    // is a cause (a link), or it is not.
     let dir = setup();
     let repo = &dir.path().join("repo");
     let base = "pub mod cart;\n\npub struct Guard;\n\nimpl Drop for Guard {\n    fn drop(&mut self) {\n        println!(\"done\");\n    }\n}\n\npub fn guard() -> Guard {\n    Guard\n}\n\npub fn work(a: u32) -> u32 {\n    let _ = guard();\n    a + 1\n}\n";
@@ -6418,7 +6424,7 @@ fn an_edit_whose_only_effect_is_the_place_of_a_drop_is_code_different() {
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("let _ = guard();", "let _g = guard();"));
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains("changed pattern `_` → `_g` at `shop_core::work/S0/pat` [semantics · code different]") && !out.contains("code equal]"), "{out}");
-    assert!(out.contains("the compiled code of `shop_core::work` changes with no edit at its place: `a + 1`; a type or a path changes in f1 of this body [indirect · code different]"), "{out}");
+    assert!(out.contains("the compiled code of `shop_core::work` changes with no edit at its place: `a + 1` [indirect · code different]") && !out.contains("a type or a path changes"), "{out}");
     assert_eq!(out.matches("◆").count(), 2, "{out}");
 }
 
@@ -6457,4 +6463,200 @@ fn the_statement_mapper_gives_one_fact_for_each_refactoring_and_keeps_each_chang
     run(repo, &["step", "probe"], 0);
     let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
     assert!(out.contains("; statement map: "), "{out}");
+}
+
+/// Design 44 (batch 8f): the symbol links. A changed constant, alias, field type, `Drop` impl,
+/// and `use` line change the compiled code of the bodies that name them, with no edit at their
+/// place: each body goes to the edit of its symbol, also in a different crate. A change of
+/// behavior next to a changed symbol keeps its own fact (the needle).
+#[test]
+fn the_symbol_links_give_each_changed_body_to_the_edit_of_its_symbol() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub const LIMIT: u32 = 10;\npub type Num = u32;\n\npub struct P {\n    pub x: u32,\n}\n\npub struct G {\n    pub v: u32,\n}\n\npub mod a {\n    pub fn f() -> u32 {\n        1\n    }\n}\n\npub mod b {\n    pub fn f() -> u32 {\n        2\n    }\n}\n\npub fn over(x: u32) -> bool {\n    x > LIMIT\n}\n\npub fn inc(a: Num) -> Num {\n    a + 1\n}\n\npub fn big(p: &P) -> bool {\n    p.x > 10\n}\n\npub fn use_g() -> u32 {\n    let g = G { v: 1 };\n    g.v + 1\n}\n\npub fn both(x: u32, y: u32) -> u32 {\n    let s = x + LIMIT;\n    s * y\n}\n";
+    let pick = "use crate::links::a::f;\n\npub fn g() -> u32 {\n    f() + 1\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod links;\npub mod pick;\n");
+    write(repo, "crates/shop-core/src/links.rs", base);
+    write(repo, "crates/shop-core/src/pick.rs", pick);
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V0.replace("fn main() {\n", "fn main() {\n    println!(\"{}\", shop_core::links::LIMIT);\n"));
+    commit_all(repo, "links");
+    let after = base
+        .replace("LIMIT: u32 = 10", "LIMIT: u32 = 12")
+        .replace("type Num = u32", "type Num = u64")
+        .replace("pub x: u32", "pub x: u64")
+        .replace("pub mod a {", "impl Drop for G {\n    fn drop(&mut self) {\n        self.v = 0;\n    }\n}\n\npub mod a {")
+        .replace("s * y", "s + y");
+    write(repo, "crates/shop-core/src/links.rs", &after);
+    write(repo, "crates/shop-core/src/pick.rs", &pick.replace("a::f", "b::f"));
+    let (code, out) = run_env(repo, &["step", "links"], &[]);
+    assert_eq!(code, 1, "the new `Drop` impl needs a reason\n{out}");
+    let out = run(repo, &["step", "links", "--reason", "shop_core::links::impl <G as Drop>=the guard clears the value"], 0);
+    assert!(!out.contains("[indirect") && !out.contains("cause not known"), "each changed body has a link\n{out}");
+    let block = |text: &str| -> String {
+        let lines: Vec<&str> = out.lines().collect();
+        let start = lines.iter().position(|line| line.contains('◆') && line.contains(text)).unwrap_or_else(|| panic!("no fact `{text}`\n{out}"));
+        let end = lines[start + 1..].iter().position(|line| line.contains('◆')).map_or(lines.len(), |at| start + 1 + at);
+        lines[start..end].join("\n")
+    };
+    let value = block("value of `shop_core::links::LIMIT` changed");
+    assert!(value.contains("code different]") && value.contains("shop_core::links::over") && value.contains("shop_core::links::both") && value.contains("shop_app::main"), "{value}\n{out}");
+    assert!(value.contains("through: `shop_core::links::LIMIT`"), "{value}");
+    assert!(block("type of `shop_core::links::Num`").contains("shop_core::links::inc"), "{out}");
+    assert!(block("type of `shop_core::links::P.x`").contains("shop_core::links::big"), "{out}");
+    assert!(block("trait impl `<G as Drop>` added").contains("shop_core::links::use_g"), "{out}");
+    assert!(block("added `use` line: `use crate::links::b::f;`").contains("shop_core::pick::g"), "{out}");
+    // The needle: the change of behavior keeps its own fact and its own result.
+    let needle = block("`s * y` → `s + y`");
+    assert!(needle.contains("code different]") && needle.contains("affected bodies: shop_core::links::both"), "{needle}\n{out}");
+}
+
+/// Runs a step with new texts of files, returns the output, and goes back to the base: `undo` and
+/// the base texts of the files (fix round 1 of batch 8f).
+fn step_and_undo(repo: &Path, base: &[(&str, &str)], new: &[(&str, &str)], intent: &str) -> String {
+    for (file, text) in new {
+        write(repo, file, text);
+    }
+    let out = run(repo, &["step", intent], 0);
+    run(repo, &["undo"], 0);
+    for (file, text) in base {
+        write(repo, file, text);
+    }
+    for (file, _) in new.iter().filter(|(file, _)| !base.iter().any(|(known, _)| known == file)) {
+        std::fs::remove_file(repo.join(file)).unwrap();
+    }
+    out
+}
+
+/// Design 44, fix round 1 (D2, D4): a link adds a cause; it never takes the elements of a moved
+/// statement. A changed impl set of a type (a `derive` list, a new impl) is no cause of a field
+/// read: only a call that resolves to an impl, a drop, or a projection follows it.
+#[test]
+fn a_link_never_takes_the_elements_of_a_moved_statement_and_an_impl_set_is_no_cause_of_a_field_read() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "#[derive(Clone)]\npub struct Counter {\n    pub n: u32,\n    pub m: u32,\n}\n\nimpl Counter {\n    pub fn step(&mut self) -> u32 {\n        let v = self.n + self.m;\n        self.m = self.n.wrapping_add(7);\n        v\n    }\n}\n\n#[derive(PartialEq)]\npub struct Name(pub u32);\n\npub fn same(a: &Name, b: &Name) -> bool {\n    a == b\n}\n";
+    let file = "crates/shop-core/src/counter.rs";
+    let lib = ("crates/shop-core/src/lib.rs", "pub mod cart;\npub mod counter;\n");
+    write(repo, lib.0, lib.1);
+    write(repo, file, base);
+    commit_all(repo, "counter");
+    let swapped = base.replace("        let v = self.n + self.m;\n        self.m = self.n.wrapping_add(7);\n", "        self.m = self.n.wrapping_add(7);\n        let v = self.n + self.m;\n");
+    let derive = swapped.replace("#[derive(Clone)]", "#[derive(Clone, Debug)]");
+    let with_impl = format!("{swapped}\nimpl Default for Counter {{\n    fn default() -> Self {{\n        Counter {{ n: 1, m: 2 }}\n    }}\n}}\n");
+    for (text, form) in [(derive.as_str(), "a derive"), (with_impl.as_str(), "an impl")] {
+        let out = step_and_undo(repo, &[(file, base)], &[(file, text)], "swap");
+        assert!(fact_line(&out, "moved statement `let v = self.n + self.m;`").ends_with("[semantics · code different]"), "{form}\n{out}");
+        assert!(!out.contains("through: `shop_core::counter::Counter`"), "a field read does not resolve through {form}\n{out}");
+    }
+    // D4: a marker impl changes no compiled code.
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &format!("{base}\nimpl Eq for Name {{}}\n"))], "a marker");
+    let marker = fact_line(&out, "trait impl `<Name as Eq>` added");
+    assert!(!marker.is_empty() && !marker.ends_with("code different]"), "{out}");
+}
+
+/// Design 44, fix round 1 (D3): a new order or a new path is not a change of a definition. A
+/// `use` line is a cause only when the target of a path through it differs.
+#[test]
+fn an_order_or_a_path_is_no_change_of_a_definition() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let lib = "pub mod cart;\npub mod forms;\npub mod user;\n";
+    let forms = "pub mod a {\n    pub fn f() -> u32 {\n        1\n    }\n\n    pub const LIMIT: u32 = 10;\n}\n\npub mod b {\n    pub fn f() -> u32 {\n        2\n    }\n}\n\npub mod c {\n    pub fn f() -> u32 {\n        3\n    }\n}\n\npub struct Wrap<T> {\n    pub v: T,\n}\n\nimpl<T: Clone + Default> Wrap<T> {\n    pub fn get(&self) -> T {\n        self.v.clone()\n    }\n}\n\npub struct P {\n    pub x: u32,\n}\n\nimpl P {\n    pub fn new() -> P {\n        P { x: P::X }\n    }\n\n    pub const X: u32 = 1;\n}\n";
+    let user = "use crate::forms::{a, b, c};\nuse crate::forms::a::LIMIT;\n\npub fn g(w: &crate::forms::Wrap<u32>) -> u32 {\n    a::f() + b::f() + c::f() + w.get() + crate::forms::P::new().x + LIMIT\n}\n";
+    let (lib_file, forms_file, user_file) = ("crates/shop-core/src/lib.rs", "crates/shop-core/src/forms.rs", "crates/shop-core/src/user.rs");
+    write(repo, lib_file, lib);
+    write(repo, forms_file, forms);
+    write(repo, user_file, user);
+    commit_all(repo, "forms");
+    let base = [(forms_file, forms), (user_file, user)];
+    // A new order of a `use` list.
+    let out = step_and_undo(repo, &base, &[(user_file, &user.replace("{a, b, c}", "{c, a, b}"))], "use order");
+    assert!(fact_line(&out, "changed `use` line").ends_with("[import · code equal]"), "{out}");
+    // A new order of the bounds of an impl.
+    let out = step_and_undo(repo, &base, &[(forms_file, &forms.replace("T: Clone + Default", "T: Default + Clone"))], "bounds order");
+    assert!(fact_line(&out, "order only").ends_with("code equal]"), "{out}");
+    // A new order of the members of an impl.
+    let reordered = forms.replace("    pub fn new() -> P {\n        P { x: P::X }\n    }\n\n    pub const X: u32 = 1;\n", "    pub const X: u32 = 1;\n\n    pub fn new() -> P {\n        P { x: P::X }\n    }\n");
+    let out = step_and_undo(repo, &base, &[(forms_file, &reordered)], "member order");
+    assert!(!out.contains("code different]"), "{out}");
+    // A moved constant with a new value: the value fact owns the change; the move has one key.
+    let moved = forms.replace("\n    pub const LIMIT: u32 = 10;\n", "").replace("pub mod b {\n", "pub mod b {\n    pub const LIMIT: u32 = 12;\n\n");
+    let out = step_and_undo(repo, &base, &[(forms_file, &moved), (user_file, &user.replace("forms::a::LIMIT", "forms::b::LIMIT"))], "move the limit");
+    assert!(fact_line(&out, "moved `shop_core::forms::a::LIMIT` → `shop_core::forms::b::LIMIT`").contains("code equal]") && !out.contains("! the compiled code changes"), "{out}");
+    assert!(fact_line(&out, "value of `shop_core::forms::b::LIMIT` changed").ends_with("code different]") && !out.contains("through: `shop_core::forms::a::LIMIT`"), "{out}");
+    // A `use` line that routes a call to a different function is a cause.
+    let routed = "use crate::forms::{b as a, a as b, c};\nuse crate::forms::a::LIMIT;\n\npub fn g(w: &crate::forms::Wrap<u32>) -> u32 {\n    a::f() + b::f() + c::f() + w.get() + crate::forms::P::new().x + LIMIT\n}\n";
+    let out = step_and_undo(repo, &base, &[(user_file, routed)], "route");
+    // The mismatch mark of an import names the body (design 35.2).
+    assert!(fact_line(&out, "`use` line").ends_with("[import · code different]") && out.contains("! the compiled code changes: shop_core::user::g"), "{out}");
+}
+
+/// Design 44, fix round 1 (D5): a link explains a changed element that the two sides have at
+/// one place. New code at the place of an edit gets its cause from that edit only.
+#[test]
+fn new_code_gets_its_cause_from_its_edit_and_a_changed_constructor_from_the_new_field() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/shapes.rs";
+    let base = "pub struct P {\n    pub x: u32,\n}\n\npub fn origin() -> P {\n    P { x: 0 }\n}\n\npub fn f(x: u32) -> u32 {\n    x + 1\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod shapes;\n");
+    write(repo, file, base);
+    commit_all(repo, "shapes");
+    // An added struct that only new code uses: no compiled code of its own.
+    let added = base.replace("pub fn f(x: u32) -> u32 {\n    x + 1\n}", "pub struct S {\n    pub v: u32,\n}\n\npub fn f(x: u32) -> u32 {\n    let s = S { v: x };\n    s.v + 1\n}");
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &added)], "a new struct");
+    assert!(fact_line(&out, "added `shop_core::shapes::S`").ends_with("[added · no code]"), "{out}");
+    // An added field: the constructor of a user changes.
+    let field = base.replace("    pub x: u32,\n}", "    pub x: u32,\n    pub y: u32,\n}").replace("P { x: 0 }", "P { x: 0, y: 0 }");
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &field)], "a new field");
+    assert!(fact_line(&out, "field `shop_core::shapes::P.y` added").ends_with("[added · code different]"), "{out}");
+}
+
+/// Design 44, fix round 1 (D1): a constant follows the chain of `const fn` calls of its value to
+/// the edit of a body. The step is accepted with no `indirect` fact.
+#[test]
+fn a_constant_follows_a_chain_of_const_fn_to_a_changed_body() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/table.rs";
+    let base = "pub const fn build(x: u32) -> u32 {\n    x + 1\n}\n\npub const fn make(x: u32) -> u32 {\n    build(x) * 2\n}\n\npub const A: u32 = make(3);\n\npub fn f(y: u32) -> u32 {\n    y + A\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod table;\n");
+    write(repo, file, base);
+    commit_all(repo, "table");
+    write(repo, file, &base.replace("x + 1", "x + 2"));
+    let out = run(repo, &["step", "a new table"], 0);
+    assert!(!out.contains("[indirect") && fact_line(&out, "changed literal `1` → `2`").ends_with("code different]") && out.contains("shop_core::table::f"), "{out}");
+}
+
+/// Design 44, fix round 2: an associated constant follows the `const fn` of its value (R1); an
+/// added `use` line for a moved item is no cause (R2); the receiver of a method call follows
+/// the call (R3); the code of a derive belongs to the edit of its list (R4).
+#[test]
+fn associated_constants_new_use_lines_receivers_and_derive_lists_have_their_causes() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/round.rs";
+    let lib = ("crates/shop-core/src/lib.rs", "pub mod cart;\npub mod round;\n");
+    let table = "pub struct Table {\n    pub enc: [u8; 4],\n}\n\nimpl Table {\n    pub const FIRST: &'static Self = &Self::make_unwrap(b\"abcd\");\n    pub const SECOND: &'static Self = Self::FIRST;\n\n    pub const fn make(base: &[u8; 4]) -> Result<Self, ()> {\n        let mut enc = [0; 4];\n        let mut i = 0;\n        while i < 4 {\n            enc[i] = base[i];\n            i += 1;\n        }\n        Ok(Table { enc })\n    }\n\n    pub const fn make_unwrap(base: &[u8; 4]) -> Self {\n        match Self::make(base) {\n            Ok(table) => table,\n            Err(()) => panic!(\"bad table\"),\n        }\n    }\n}\n\npub fn first() -> u8 {\n    Table::SECOND.enc[0]\n}\n";
+    let show = "use std::fmt;\n\npub struct Wrapper<T>(pub T);\n\nimpl fmt::Display for Wrapper<&str> {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        write!(f, \"[{}]\", self.0)\n    }\n}\n\npub fn show(text: &str) -> String {\n    Wrapper(text).to_string()\n}\n\n#[derive(Copy, Clone, Debug)]\npub struct Pair {\n    pub x: u32,\n}\n\npub mod a {\n    const LIMIT: u64 = 400;\n\n    pub fn cycle() -> u64 {\n        LIMIT\n    }\n}\n";
+    let base = format!("{table}\n{show}");
+    write(repo, lib.0, lib.1);
+    write(repo, file, &base);
+    commit_all(repo, "round");
+    let accepted = |out: &str| out.starts_with("accepted") && !out.contains("[indirect");
+    // R1: the edit of the body of `make`, with the three bodies in its affected bodies.
+    let out = step_and_undo(repo, &[(file, &base)], &[(file, &base.replace("enc[i] = base[i];", "enc[i] = base[i] + 1;"))], "R1");
+    assert!(accepted(&out) && out.contains("shop_core::round::Table::FIRST, shop_core::round::Table::SECOND") && out.contains("shop_core::round::first"), "{out}");
+    // R2: a moved constant with a new value and a new `use` line.
+    let moved = base.replace("pub mod a {\n    const LIMIT: u64 = 400;\n\n", "pub mod b {\n    pub(crate) const LIMIT: u64 = 401;\n}\n\npub mod a {\n    use super::b::LIMIT;\n\n");
+    let out = step_and_undo(repo, &[(file, &base)], &[(file, &moved)], "R2");
+    assert!(fact_line(&out, "moved `shop_core::round::a::LIMIT` → `shop_core::round::b::LIMIT`").ends_with("[move · code equal]") && !out.contains("! the compiled code changes"), "{out}");
+    assert!(fact_line(&out, "value of `shop_core::round::b::LIMIT` changed").ends_with("code different]"), "{out}");
+    // R3: a new trait method that the call of `show` resolves to.
+    let trait_added = format!("{base}\npub trait Show {{\n    fn to_string(self) -> String;\n}}\n\nimpl Show for Wrapper<&str> {{\n    fn to_string(self) -> String {{\n        String::new()\n    }}\n}}\n");
+    let out = step_and_undo(repo, &[(file, &base)], &[(file, &trait_added)], "R3");
+    assert!(accepted(&out) && fact_line(&out, "trait impl `<Wrapper<&str> as Show>` added").ends_with("code different]"), "{out}");
+    // R4: a derive list without `Copy`: the derived `clone` belongs to the edit of the list.
+    let out = step_and_undo(repo, &[(file, &base)], &[(file, &base.replace("#[derive(Copy, Clone, Debug)]", "#[derive(Clone, Debug)]"))], "R4");
+    assert!(accepted(&out) && fact_line(&out, "derive removed: Copy").ends_with("code different]"), "{out}");
 }

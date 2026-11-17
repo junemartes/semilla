@@ -252,6 +252,10 @@ pub struct UnitRecord {
     /// The target triple.
     #[serde(default)]
     pub triple: String,
+    /// The definitions of the crate and the symbols that each one names (design 44). At n0
+    /// only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defs: Option<elements::RecordDefs>,
 }
 
 #[derive(Deserialize)]

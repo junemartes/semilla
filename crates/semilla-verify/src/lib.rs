@@ -24,6 +24,7 @@ pub mod owners;
 pub mod scope;
 mod bounds;
 mod joint;
+pub mod links;
 pub mod made;
 pub mod mirmap;
 mod opaque;
@@ -99,8 +100,30 @@ pub struct MirElement {
     pub exit: bool,
     /// True for `goto`, `return`, `resume`, `unreachable`, and `drop`: the glue of the blocks
     /// (design 40.3).
-    pub glue: bool,    /// True for `goto`, `return`, `resume`, and `unreachable`: a jump with no value.
+    pub glue: bool,
+    /// True for `goto`, `return`, `resume`, and `unreachable`: a jump with no value.
     pub jump: bool,
+    /// The symbols that the element names (design 44).
+    pub symbols: Vec<Sym>,
+}
+
+/// A symbol that a MIR element or a definition names (design 44): the def path, and the place
+/// of the definition in a file of the workspace (the file and the byte range).
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Sym {
+    pub path: String,
+    pub place: Option<MirPlace>,
+}
+
+/// The definitions of one side of a step (design 44), by the def path of each definition.
+pub type DefMap = BTreeMap<String, Def>;
+
+/// A definition of a record (design 44): its place, and the symbols that it names with the
+/// flags of the driver ([`links::EVALUATED`], [`links::BODY`], [`links::SELF_TYPE`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Def {
+    pub place: Option<MirPlace>,
+    pub named: Vec<(Sym, u8)>,
 }
 
 /// The MIR elements that differ in a changed body, in each checked configuration together.
@@ -113,6 +136,14 @@ pub struct MirDiff {
     /// The token ranges of the aligned element pairs (old, new), for the MIR check of the
     /// statement map (design 41.8).
     pub pairs: Vec<(MirPlace, MirPlace)>,
+    /// True if a record of the body has no symbol data (design 44). Then the body keeps the
+    /// rules of the evidence of design 40.3.
+    pub no_symbols: bool,
+    /// The symbol of the function of the body on each side (0: old, 1: new): the signature line
+    /// (`other`) names it (design 44).
+    pub own: Vec<(usize, Sym)>,
+    /// True for a body that rustc evaluates at compile time: a constant or a static (design 44).
+    pub evaluated: bool,
 }
 
 /// One compile unit of a checked build, from the record of the compiler (batch 5t, part A).
@@ -350,6 +381,12 @@ pub trait BodyOracle {
     /// macro. `None`: the oracle cannot list the items.
     fn made(&self, _step: &Step) -> anyhow::Result<Option<[made::Made; 2]>> {
         Ok(None)
+    }
+
+    /// The definitions of the workspace before the step and after it (design 44): each
+    /// definition with the symbols that it names. Empty: no data.
+    fn defs(&self, _step: &Step) -> anyhow::Result<[DefMap; 2]> {
+        Ok(Default::default())
     }
 
     /// The MIR facts of the bodies after a step. `None` when the MIR is not available (phase 1).
@@ -1187,7 +1224,11 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     });
     let made = if made_edit && body_index.available { oracle.made(step).ok().flatten() } else { None };
     let made_outcome = made::apply(step, &edits, &fact_of, input.before, input.after, made.as_ref(), &mut report);
+    // The definitions of the two sides, for the symbol links (design 44).
+    let defs = if body_index.available { oracle.defs(step).unwrap_or_default() } else { Default::default() };
     let owner_input = owners::Input {
+        defs: &defs,
+        renames: &renames.items,
         made: made.as_ref(),
         made_listed: &made_outcome.listed,
         tests: tests.as_ref(),

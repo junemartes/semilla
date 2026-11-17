@@ -2878,7 +2878,7 @@ Batch 7b. The model of 35.1 stays (the user decided only that model). The rule a
 4. Each difference of the pair that the new name does not force is its own fact at the new path: "changed operator `ver.minor > minor` → `ver.minor >= minor` at `semver::eval::matches_caret_op/S3/then/S0/then/S0/value` [logic · code different]" (since 42: `semantics`). This applies to a signature, a visibility, an attribute, a doc comment, a member, and each edit of a body.
 5. A changed body with an edit fact goes to that fact. A changed body that no fact explains goes to the identity fact. Then the identity fact has `code different` and the mismatch mark.
 6. A type moves with its `impl` blocks: "moved `semver::error::QuotedChar` → `semver::quoted::QuotedChar`, with 1 impl and 2 `use` line(s) [move · code equal]". No "trait impl removed" fact and no "trait impl added" fact shows.
-7. A renamed local or parameter with a second edit in the same body gives one `rename` fact and one fact for each other edit.
+7. A renamed local or parameter with a second edit in the same body gives one `rename` fact and one fact for each other edit. (Since 44: only a fact of an edit of the text of the body takes the body from the rename fact, not a symbol link; 44.5.)
 8. A pair that Semilla does not derive shows as removed and added. The note gives the cause: "… show(s) as removed and added: Semilla does not derive the rename (…)". The pair warning shows only for such a pair. The text "Semilla derives a rename only in a step with no other change" is gone.
 
 **The limits.**
@@ -3322,7 +3322,7 @@ The rule above each other rule stays: no change of the code is without a fact, a
 
 ### 40.2 The node of a range
 
-- Semilla maps each range to the smallest node of the lossless tree of its side (old MIR to the old tree, new MIR to the new tree) that contains the full range (`mirmap.rs`). A range that does not start and end at token boundaries of the tree is a map error. `semilla status --verbose` shows the count and the first five examples: "step 0: MIR map: 0 map error(s); …".
+- Semilla maps each range to the smallest node of the lossless tree of its side (old MIR to the old tree, new MIR to the new tree) that contains the full range (`mirmap.rs`; since 44: the tree has the edition of the package of the file). A range that does not start and end at token boundaries of the tree is a map error. `semilla status --verbose` shows the count and the first five examples: "step 0: MIR map: 0 map error(s); …".
 - **Decided by Claude:** a range inside one token is the range of the token in two cases: the token is a string literal (`rustc` gives each placeholder of a format string, `{:?}`, a span inside the literal), or the range is the last character of the token (the `end_point` of a span; a derive and a cast use it). Before these rules, `bytes` had 4 map errors, `nu-ansi-term` 1, and `quickcheck-2` 2. Each other range inside a token stays a map error.
 - **Decided by Claude:** an empty range (the end of a block, the unit value of an `if` with no `else`) belongs to the token that ends at it, if that token is not a space or a comment.
 - The byte range of a body finds its item: the smallest function that contains the range (`checks::find_item_by_range`). The search by lines and by name stays for a body with no range (a body from a macro). Each body of a `cfg` twin gets its own item by its range.
@@ -3349,7 +3349,7 @@ If all elements align and `other` is not set, the texts are equal after a renumb
 
 1. The smallest edit whose node contains the node of the element, on its side.
    - **Decided by Claude (1b):** else, each edit whose node is inside the node of the element. Cause: the MIR statement of a call has the range of the full call, and the changed literal of an argument is inside it. A block whose tail is replaced gives an element of the block (fix round 1, D2): the edits in the block own it, and it never says "no edit at its place".
-2. Else, the edit of a macro definition or a constant whose node contains the tokens of the element (the element of a `macro_rules` body).
+2. Else, the edit of a macro definition or a constant whose node contains the tokens of the element (the element of a `macro_rules` body). (Since 44: each edit at the tokens; a constant owns the elements of its users by a symbol link, 44.4.)
 3. Else, no owner.
 
 The place of an element is its token range if the tokens are inside the macro call (a macro input), else the range of the call.
@@ -3367,12 +3367,12 @@ The place of an element is its token range if the tokens are inside the macro ca
 - Else the result of design 38 (the doubt rule). A body that is different with no element that differs is a doubt.
 - A body that is equal gives `code equal` to each of its edits, as before.
 - "affected bodies" lists only the bodies where the edit owns an element that differs. The doubt rule keeps the old list.
-- **Decided by Claude:** a body with no edit of its text keeps the rules of the evidence (a changed constant, a macro, a build input, a generic). The rules of a changed macro need their reason.
+- **Decided by Claude:** a body with no edit of its text keeps the rules of the evidence (a changed constant, a macro, a build input, a generic). The rules of a changed macro need their reason. (Since 44: the symbol links come first, 44.4.)
 
 **The facts of the elements with no owner (fix round 1, D3).** **Decided by Claude:**
 
 - One fact for each body: "the compiled code of `demo::f` changes with no edit at its place: `a * 2`, `b * 3`, `x + y`, and 1 more". The fact keeps the outermost nodes (a node inside a different node of the list does not show) and shows at most 3 display texts. A node of the old tree says "(before the step)"; a node with the same text on the two sides shows one time. The lines go to the note ("note: lines 2, 3, 4, 5"), so the fact text does not change when a step moves the body.
-- A type or a path that an edit of the same body changes: the fact names the edit as a possible cause: "…; a type or a path changes in f3 of this body". An edit of a path, a type, a signature, or a pattern counts. The edit does not get the elements: the text cannot prove that the type causes them.
+- A type or a path that an edit of the same body changes: the fact names the edit as a possible cause: "…; a type or a path changes in f3 of this body". An edit of a path, a type, a signature, or a pattern counts. The edit does not get the elements: the text cannot prove that the type causes them. (Since 44: the hint is gone. A link is a cause; the forms are the safety rule of 44.5.)
 - In a body with an edit, the fact has no spotlight: the edits of the body keep the doubt rule, so no change hides.
 - A body with no edit and no known cause: one fact with the spotlight for each body, up to 3 bodies of one crate. More bodies of a crate give one fact: "the compiled code of 4 bodies of the crate `demo` changes with no edit of their text: `demo::f1`, `demo::f2`, `demo::f3`, and 1 more". Its affected bodies list each body (`semilla status --verbose` shows each name), and one reason with the key of the crate (`--reason 'demo=…'`) covers it.
 
@@ -3415,7 +3415,7 @@ Before the shared data and the kept diffs, the warm step of `quickcheck-2` took 
 ### 40.7 Limits
 
 - An element whose node is a block or the body belongs to each edit in it (rule 1b). So an element of the whole body makes each edit of the body `code different`.
-- A change of a type in a declaration (a field type, a signature) changes the elements at each use. These elements have no edit at their place: they give `indirect` facts and the doubt rule for the edits of the body.
+- A change of a type in a declaration (a field type, a signature) changes the elements at each use. These elements have no edit at their place: they give `indirect` facts and the doubt rule for the edits of the body. (Since 44: a symbol link gives them to the edit of the declaration.)
 - A new local, a removed local, or a new form of a statement can break the map of the locals for a later element with the same text. That element differs, and with no edit at its place it is a doubt.
 - The map does not follow a body into a different file (`include!`): the call owns the elements of the included file.
 - The alignment is an order-preserving one. A statement that moves gives elements that differ on the two sides: the move edit owns them.
@@ -3540,7 +3540,7 @@ On the ten fixtures of 7c, the first line, the runs, and the reasons are the sam
 ### 42.2 The rule
 
 - `Category::Value`, `Category::Logic`, and `Category::ControlFlow` are one variant, `Category::Semantics`. Its name in each output is `semantics`. The list has 16 entries.
-- Each op that is not a property has a fixed category. The ops that gave `value`, `logic`, or `control flow`, and the ops with a computed category (`COMPUTED`), give `semantics`. An edit with no op gets `semantics`. `edits::syntax_category` and `checks::computed_category` are gone.
+- Each op that is not a property has a fixed category. The ops that gave `value`, `logic`, or `control flow`, and the ops with a computed category (`COMPUTED`), give `semantics` (since 44: `extract-variable`, `inline-variable`, `extract-function`, and `inline-function` give `move`). An edit with no op gets `semantics`. `edits::syntax_category` and `checks::computed_category` are gone.
 - Also `semantics`: the value of a constant (`part_category`), a constant in a body, a moved statement (41.7), an item rewrite, a changed condition with an SMT effect hint, and a body difference of a pair (`identity::edit_category`).
 - `expects_equal`: no. `semantics` predicts a change of the code, as the three did. No mismatch mark.
 - `role`: `Core`. `weight`: 6, the highest weight of the three.
@@ -3584,3 +3584,99 @@ Each rule: **Decided by Claude.**
 ### 42.6 The measure
 
 On the ten fixtures of 7c, the 8c binaries and the 8d binaries give the same first line, the same runs (2) and reasons, the same count of facts, and the same compare result of each fact. The count of `semantics` facts is the sum of the `value`, `logic`, and `control flow` facts of 8c in each fixture: no fact folds in a different way. After the replacement of the three old names with `semantics` in the 8c output, the outputs are equal, apart from the 5 cut lines of 42.5. The warm step time of `bytes` and `quickcheck-2` is the same (the median of 5 runs: +0.4% and −0.2%).
+
+## 44. Batch 8f: symbol links from each compiled element to the changed definitions
+
+### 44.1 The decisions and the core rules
+
+**User decisions (2026-11-17).** The user asked to "take a step back and figure out if our general rules are correct", then: "Maybe keeping the symbols in the compiled code would help?" and "Could we use the symbol maps from the HIR inside the MIR?" An audit of the 153 rules gave the six core rules (2026-11-17):
+
+1. Coverage: each change of the text is in a fact.
+2. Attribution: a changed MIR element is caused (a) by the edit at its place, (b) by a changed element that it depends on in the same body (batch 8g), or (c) by a changed definition that it names (this batch). Else it is an `indirect` fact.
+3. Compare: an edit gets `code different` if it causes a changed element. It gets `code equal` only if it causes none and each changed element of its bodies has a cause. Else the doubt rule.
+4. No hiding: a doubt never makes a result more equal than it is.
+5. The category comes from the form of the edit.
+6. Semilla rejects a step only when no change of the text can explain a change.
+
+**The cause.** At N0, rustc copies no body into a different body. So the compiled code of a body changes with no edit at its place only through a symbol that the body names. Before 44, special rules found these causes by text (the classes S of the audit). The hint "a type or a path changes in fN of this body" was not a cause: the body got the doubt rule. On the ten fixtures of 7c, 8d gave 88 `indirect` facts and 154 edits with the doubt rule.
+
+### 44.2 The records of the driver
+
+- **The symbols of each element** (`symbols.rs`). For each element of a body (the order of `spans.rs`), the driver records the `DefId` of each symbol that the element names: the callee of a call and the types of its generic arguments; for a trait method, the method and the `impl` that `Instance::resolve` gives; each named constant (`Unevaluated`, before the printer evaluates it; the compare text keeps the value); each static and each function in a constant in memory; each field and variant of a place or an aggregate; each struct, enum, union, trait object trait, closure (and its parent), and opaque type (and its function) in the types of the operands and the places; the `Drop` impl of each type with drop glue in a dropped place, also for the drops of the cleanup path that an unwind edge enters.
+- **The function itself** (Decided by Claude). Each element of a function names the function: the signature gives the types of the arguments and of the return place, and these types go into each element, also through temporaries. The record gives the symbol of the function (`o`), and the signature line (`other`) names it too.
+- **The HIR supplement.** For each element, the driver adds each path of the source inside the range of the element: a type alias, a constant, a function, a type, a variant, a trait; a type-relative path and a method call (by the type check); a field access and the fields of a struct expression; the `use` item of the module that the first segment of a path comes through; and, for a call, the impls of the workspace that normalize a projection of the signature of the callee for its concrete arguments (also in the MIR call). The join is by the source range, as in 40.2. A body of a constant, a static, or a constant block has the flag `c` (evaluated).
+- **The definitions** (a unit record at N0, `defs`). For each definition of the local crate: the types and the bounds of a signature, the type and the value of a constant or a static (flag `EVALUATED`), the field types of a struct, an enum, or a union, the aliased type, the header and the items of an `impl` (the self type has the flag `SELF_TYPE`), the items of a trait, the body of a `const fn` (flag `BODY`), and for each `use` item the imported name (`USE_NAME`) and its targets (`USE_TARGET`). The driver uses the HIR, so a definition with no MIR body has a record.
+- **The form** (Decided by Claude). A symbol is the def path of the driver (the form of the MIR body names, `k::Pair.a` for a field) and the place of its definition: a file of the workspace and the byte range (`source_span` for a local definition, `def_span` for a different crate of the workspace). The verifier finds the item of a symbol by its place: the smallest item of its side that contains it. The rename and move map of N1 gives the key of an old item. So the form of an `impl` path does not have to agree with the item keys. A symbol outside the workspace is not recorded. The record has a symbol table for each body (`el.s`) and runs of symbol lists (`el.y`).
+- **The size.** The cache folder of `bytes` (all configurations, two trees) is 792 944 kB with the 8d driver and 829 164 kB with this driver (+4.6 %); `quickcheck-2`: 526 420 kB → 538 524 kB (+2.3 %).
+
+### 44.3 The changed definitions of a step
+
+`links.rs`, Decided by Claude where the brief gives no rule:
+
+1. Each edit changes the item of its anchor on each side. These edits change no definition: a doc, a comment, a visibility, a file, a harmless attribute (a `derive` list does change the impl set, rule 3); a rename or a move that N1 or the item map derives; an edit with the same meaning (fix round 1, D3): a new order of the members of an `impl` or a trait, a new order of bounds ("order only", "moved to the `where` clause", "a duplicate bound only"), changed source text with no other fact. A derived move gives one key for the two sides, as an N1 rename does.
+2. An edit in the body of a function does not change the function for its callers. Exceptions: a `const fn` that a constant evaluates, directly or through a chain of `const fn` calls (the flag `BODY` counts at each step of such a chain, fix round 1, D1), and a function with `impl Trait` in its signature. The elements of a constant, a static, or a constant block are evaluated too: the body of each `const fn` that they call counts.
+3. A change of a field or a variant is also a change of its type. An added or removed member of an `impl` is also a change of the `impl`. **Fix round 1, D4:** a changed `derive` list changes the impl set of its type, not its content. An impl change explains an element only when the element resolves through the impl: a call that resolves to a method of the impl, a drop that runs its `Drop` impl, or a projection type that the impl normalizes (`<Dog as Speak>::Out` in the signature of `call::<Dog>`). A mention of the type (a field read, a constructor, an operand type) is not enough. The first 8f rule (a changed impl changes its self type) is gone.
+4. **Chains.** A definition that names a changed definition is changed through it. The chain has at most 4 steps (`MAX_DEPTH`, Decided by Claude: the deepest chain of the fixtures and the cases has 2 steps). The cause is the edit at the end of the chain. The memo has the depth in its key, so a cut chain does not change a shorter chain. **Fix round 2 (R1):** the definition record of a constant and of a `const fn` resolves a type-relative path (`Self::make`, `Self::FIRST`) and a method call by the type check, so a chain goes through an associated constant and an associated `const fn`.
+5. **A `use` item** (fix round 1, D3) is a cause only when the target of its name differs on the two sides after the rename and move map: the definition records of the driver give the name and the targets of each import. A new order of a `use` list, or a new path to a moved item, is no cause. A changed or a removed `use` line that routes a call to a different function stays a cause. **Fix round 2 (R2):** a name with no `use` item on the other side resolves to the item of the module with that name (an added `use` line for a moved constant has the same target).
+
+### 44.4 The link rule
+
+- **Local causes first** (fix round 1, D2). Rules 1, 1b, and 2 of 40.3 (since 44, rule 2 is each edit at the tokens of the element, for example a field that a derive reads), the jump waiver, the region of a move or a variable (41.7), and the glue waiver run first. A link never removes a local cause.
+- **The link adds a cause** to a changed element that the two sides have at one place: an element with no local owner, an element whose node contains an edit (rule 1b), or an element in the region of a move. Each cause counts the element for its compare. An element of one side only at the place of an edit (rules 1 and 2: new code or deleted code) gets its cause from that edit only (fix round 1, D5, Decided by Claude). For an element with a local owner, the link uses only the symbols that a changed element of the other side names too: a symbol of the new code inside it (`s.v` in `s.v + 1` with a new struct `S`) is no cause.
+- **The counterpart** (Decided by Claude). An element with no cause takes the links of an element of the other side with the same node text (outer parentheses removed). Cause: a new `Drop` impl adds an unwind edge to the overflow check before the drop; the old check names no changed symbol. **Fix round 2 (R3):** an element at the receiver of a method call (an auto-ref, the temporary, its drop) takes the links of the call: a new trait method changes `ToString::to_string(&tmp)` into `Show::to_string(tmp)`.
+- **An attribute list** (fix round 2, R4). An edit of the attributes of an item has the place of each attribute of its side. So the code of a derive (its tokens are in the list) belongs to the edit by rule 1.
+- **A body with no edit.** If the links own each element that differs, and the signature line or an order of the blocks (a body that differs with no element that differs) follows the symbol of the function, the body needs no other owner. A body whose elements are at the place of a macro edit keeps the macro rules.
+- **`complete`** (40.3) stays: a lost element, an element with no owner, or `other` keeps the doubt rule for the edits of a body with an edit.
+
+### 44.5 Safety: a link never gives `code equal` to an edit that changes the code
+
+1. **An edit with no element of its own** (a type of a `let`, a pattern, a bound, a path, a signature, a `use` line). In a body with a linked element, such an idle edit keeps the doubt rule (`remote_form`). Test `a_link_never_gives_code_equal_to_an_edit_of_a_type_or_a_pattern_in_the_body`.
+2. **A type change that the mapper sees as a new name** (`let x: u32` → `let x: u16` gave "renamed local `u32` → `u16`"). Rule 7 of 36.1 drops the rename only for a different fact of an edit of the text of the body, not for a link. The same test covers it.
+3. **The needle.** An edit at the place of an element keeps it: the link comes after each local rule and never removes a local cause (fix round 1, D2: a moved statement keeps its region; tests `a_link_never_takes_the_elements_of_a_moved_statement_and_an_impl_set_is_no_cause_of_a_field_read`, `new_code_gets_its_cause_from_its_edit_and_a_changed_constructor_from_the_new_field`). Test `an_element_that_names_a_changed_constant_is_linked_to_the_edit_of_the_constant`, the e2e test `the_symbol_links_give_each_changed_body_to_the_edit_of_its_symbol`, and the 9 needle cases of 44.9.
+4. **A body edit of a callee** links nothing (rule 2 of 44.3). Test `a_function_body_edit_is_not_a_change_of_the_function_for_its_callers`.
+5. **A record with no symbol data** (`v` = 0): the body keeps the rules of 8d (F5 and the evidence).
+
+### 44.6 The fact text
+
+The `indirect` fact stays only for an element with no cause. A linked body is in "affected bodies". Decided by Claude: a line under the fact names the symbols, at most 3: "through: `shop_core::links::LIMIT` (3 bodies), and 1 more". The line asks for no reason. `semilla status --verbose` adds "N linked element(s)" to the MIR map line. The hint "a type or a path changes in fN of this body" is gone.
+
+### 44.7 The rows of class S
+
+| Row | 44 | The cause |
+|---|---|---|
+| O8 rule 2 (a constant owns the elements in its range) | replaced | a link to the constant; rule 2 is now each edit at the tokens of the element |
+| O19 (only the edits of its item can change a body) | extended | the links add the edits of the changed definitions that the elements name |
+| O20 (special owners) | kept | a derived body of a renamed type shows the name as a string, not a symbol; the body of an associated constant is at the place of the edit of its `impl`; a body of a macro call keeps the macro rules |
+| O22 (a body with the old or new name of a pair in its text) | kept | a string (a derive, `stringify!`) is not a symbol, and N1 maps only symbols |
+| O23 (a type fact owns each changed body that uses its entity) | replaced | for a changed body with symbol data; kept for a body on one side only and a body with no symbol data |
+| O24, O25 (the affected bodies of a type fact) | fixed | a type fact lists only the bodies where its edit owns an element |
+| O26 (owners by evidence) | partly replaced | a named constant or static, a `const fn` chain, a new callee, and a changed MIR signature are links; an `include!` file, a macro, and a package key stay (not symbols) |
+| O29 (the sites of a changed order of generic parameters; the readers of an `include!` file) | kept | a site keeps its text and its MIR, so no element differs; an included file is not a symbol |
+| I3, I4 (the hint) | removed | the forms are now the safety rule of 44.5 |
+| I8 (the evidence texts) | replaced for links | "through:" replaces the text of a changed MIR signature; the texts of a macro and a build input stay |
+
+### 44.8 The FIX items
+
+- **FIX 1** (O4, O5). The MIR map parses a file with the edition of its package (`Workspace::editions`, from the loader). Test `the_mir_map_parses_a_file_with_the_edition_of_its_package`. Decided by Claude: a range inside a byte string or a C string token is the range of the token, as for a string (a 2015 file splits `c"abc"` into two tokens, the lossless tree keeps one). Case `c15_ed2015`: 2 map errors and 1 doubt before, none after.
+- **FIX 3** (R25, R26). A "pair diff" fact gets the result of the fact of its own edit under the name map, as each other edit. With no such result, the result of the whole new item, as before.
+- **FIX 4** (K3). The claim ops `extract-variable`, `inline-variable`, `extract-function`, and `inline-function` are `move`, as the derived facts. Test `the_claims_of_an_extracted_or_an_inlined_variable_or_function_are_move`.
+
+### 44.9 The measure
+
+29 small cases (the 8d binaries, then these binaries): facts 66 → 43, `indirect` facts 24 → 1, edits with the doubt rule 7 → 1. The case left is the `let` type of 44.5 (the old elements of the `let` name no changed symbol). Each needle keeps its fact with `code different`. No case has `code equal`.
+
+The ten fixtures of 7c: the same first line, runs (2), and reasons (one fewer in `rand_chacha-2`: a build input lost its bodies to links). `indirect` facts 88 → 11, edits with the doubt rule 154 → 35, 620 linked elements. Two facts change from `code different` to `code equal` (`nu-ansi-term`: the qualifier `const` of `Style::prefix` and `Style::suffix`): before, F5 gave them the callers; the callers' only changed element belongs to their own edit, and the body of `prefix` does not change.
+
+**Fix round 1** (D1 to D5 of the coordinator). The 29 cases give the same facts as the first 8f. The ten fixtures, first 8f → fix round 1: `indirect` facts 11 → 8, edits with the doubt rule 35 → 27, linked elements 620 → 680. 13 facts change from `code different` to `code equal`, each to the result of 8d: 12 new operator impls of `Rgb` in `nu-ansi-term` (no element resolves through them; before, a mention of `Rgb` linked them, D4) and `use std::ffi::OsString;` → `use std::ffi::{CString, OsString};` in `quickcheck-2` (the target of `OsString` is the same, D3).
+
+**Fix round 2** (R1 to R4). The 29 cases and the 10 forms of round 1 give the same facts. The 5 new forms (an associated constant chain with a reference and with a value, an added `use` line for a moved constant, a new trait method that a call resolves to, a removed `Copy` in a derive list) are accepted with no `indirect` fact.
+
+Time (one run at a time; empty cache, then warm cache): `bytes` 20.9 s → 22.1 s, 8.9 s → 9.0 s; `quickcheck-2` 13.8 s → 14.4 s, 2.7 s → 2.3 s; `socket2` 3.5 s → 3.7 s, 1.7 s → 1.7 s; `rand_xoshiro` 6.4 s → 6.5 s, 6.5 s → 6.5 s.
+
+### 44.10 Limits
+
+- A local dependence (a temporary, a changed type of a local) is batch 8g. The function symbol covers the types of the arguments and the return place; a different local keeps the doubt rule.
+- A cross-crate symbol has the head of its definition only (`def_span`): the verifier uses the smallest item that contains it. An associated constant of a different crate falls back to its `impl`.
+- A generic call names the impls that normalize a projection of its signature, not each impl that its bounds select (a method call on a type parameter inside the callee). A projection of a generic impl (`impl<T> Tr for Vec<T>`) is not matched.
+- An element can name a changed symbol and also change for an outside cause (a new version of a dependency). The link takes it before a build input (the order of 40.3); the dependency fact keeps `no compare`.
+- The counterpart rule and the filter of the symbols of 44.4 compare node texts and def paths: a renamed symbol inside a changed element is no cause of it.

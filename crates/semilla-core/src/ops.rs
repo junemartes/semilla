@@ -267,8 +267,8 @@ ops! {
     "remove-item",            Item,       Identity,    X, Core, [],                "Remove an item.";
     "change-signature",       Item,       OwnContent,  D, Interface,   [],                "Change an item signature that no fact covers: a const or static value, a `macro_rules!` body.";
     "edit-doc",               Item,       OwnContent,  O, Docs,        [],                "Change doc comments.";
-    "extract-function",       Item,       AcrossNodes, S, Mechanical,  ["new"],           "Move statements or an expression into a new function.";
-    "inline-function",        Item,       AcrossNodes, S, Mechanical,  [],                "Replace a call with the body of the function.";
+    "extract-function",       Item,       AcrossNodes, M, Mechanical,  ["new"],           "Move statements or an expression into a new function.";
+    "inline-function",        Item,       AcrossNodes, M, Mechanical,  [],                "Replace a call with the body of the function.";
     "rewrite-item",           Item,       Free,        S, Core, ["note"],          "Rewrite an item as a whole (optional `new`: its new path). Always in the spotlight.";
     // ----- files -----
     // ----- statements: add -----
@@ -287,8 +287,8 @@ ops! {
     "move-statement",         Statement,  OwnContent,  S, Core, ["to"],            "Move a statement in its block or to another block.";
     "wrap-statements",        Statement,  OwnContent,  S, Core,        ["count", "with"], "Put statements inside a new if, loop, block, or unsafe block.";
     "unwrap-statements",      Statement,  OwnContent,  S, Core,        [],                "Remove a construct and keep its body.";
-    "extract-variable",       Statement,  OwnContent,  S, Mechanical,  ["name"],          "Move an expression into a new let.";
-    "inline-variable",        Statement,  OwnContent,  S, Mechanical,  [],                "Replace a variable with its value.";
+    "extract-variable",       Statement,  OwnContent,  M, Mechanical,  ["name"],          "Move an expression into a new let.";
+    "inline-variable",        Statement,  OwnContent,  M, Mechanical,  [],                "Replace a variable with its value.";
     "rename-local",           Statement,  Identity,    R, Mechanical,  ["to"],            "Rename a local variable, or a parameter (optional `from`: the old name; the anchor is then the function).";
     "change-mutability",      Statement,  OwnContent,  S, Mechanical,  [],                "Add or remove `mut`.";
     "change-type-annotation", Statement,  OwnContent,  S, Mechanical,  [],                "Add, remove, or change a type annotation on a let.";

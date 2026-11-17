@@ -342,6 +342,19 @@ fn passes(outcome: &StepOutcome, claims: &[Claim]) -> Result<(), String> {
     Ok(())
 }
 
+/// The compare result (true: `code different`) and the affected bodies of a "pair diff" fact
+/// (design 44, FIX 3): the result of the fact of the edit under the name map, as for each other
+/// edit. With no such fact, or a result that is not known, the result of the whole new item
+/// (`item_changed`, the path `new`).
+pub(crate) fn pair_diff_result(report: &semilla_core::StepReport, fact_of: &[Option<usize>], edit: usize, item_changed: bool, new: &str) -> (bool, Vec<String>) {
+    let own = fact_of.get(edit).copied().flatten().and_then(|fact| report.facts.get(fact)).filter(|fact| matches!(fact.compare, Compare::CodeEqual | Compare::CodeDifferent));
+    match own {
+        Some(fact) if fact.compare == Compare::CodeDifferent => (true, fact.affected.clone()),
+        Some(_) => (false, Vec::new()),
+        None => (item_changed, if item_changed { vec![new.to_string()] } else { Vec::new() }),
+    }
+}
+
 /// Tries the derived identity on the plain outcome of a step with no identity claim.
 pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut plain: StepOutcome) -> StepOutcome {
     let (pairs, notes) = candidates(input.before, input.after);
@@ -405,7 +418,7 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                 // Under the name map, each edit that is left inside the new item is a real
                 // difference: the map hides the forced edits of the name.
                 let changed = failed.bodies.iter().any(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. }));
-                for edit in failed.edits.iter().filter(|e| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved)) {
+                for (edit_index, edit) in failed.edits.iter().enumerate().filter(|(_, e)| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved)) {
                     let text = crate::edits::display_text(edit);
                     if known.iter().any(|k| k.ends_with(&text)) {
                         continue;
@@ -413,6 +426,7 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                     // A doc test is code (brief 5h, B1). Semilla does not compile it: the fact
                     // has no compare, with the cause.
                     let doc_test = edit.anchor().and_then(|anchor| crate::facts::doc_test_fact(&anchor.item, edit));
+                    let (changed, affected) = pair_diff_result(&failed.report, &failed.fact_of, edit_index, changed, &pair.new);
                     extra.push(Fact {
                         at: edit.anchor().cloned(),
                         file: edit.file.clone(),
@@ -423,7 +437,7 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
                         category: if doc_test.is_some() { Category::Docs } else { edit_category(edit) },
                         compare: if doc_test.is_some() { Compare::NoCompare } else if changed { Compare::CodeDifferent } else { Compare::CodeEqual },
                         note: doc_test.as_ref().map(|_| format!("{} Semilla does not compile a doc test", crate::uncompiled::NO_COMPARE)),
-                        affected: if changed { vec![pair.new.clone()] } else { Vec::new() },
+                        affected,
                         ..Default::default()
                     });
                 }

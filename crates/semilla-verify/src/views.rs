@@ -11,6 +11,9 @@ pub type Mark = (Option<Category>, Option<Compare>);
 
 /// Joins two marks. The category with the highest weight stays. The compare result that comes
 /// first in the report order stays.
+/// The most symbols of the "through:" line of a fact (design 44).
+const THROUGH_LIMIT: usize = 3;
+
 pub fn merge_marks(old: Mark, new: Mark) -> Mark {
     let category = match (old.0, new.0) {
         (Some(a), Some(b)) => Some(if b.weight() > a.weight() { b } else { a }),
@@ -830,6 +833,12 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     }
     if !fact.equal_sites.is_empty() {
         put(&format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
+    }
+    // The symbol links (design 44): the line asks for no reason.
+    if !fact.through.is_empty() {
+        let list: Vec<String> = fact.through.iter().take(THROUGH_LIMIT).map(|(symbol, bodies)| format!("`{symbol}` ({} {})", bodies.len(), if bodies.len() == 1 { "body" } else { "bodies" })).collect();
+        let more = if fact.through.len() > THROUGH_LIMIT { format!(", and {} more", fact.through.len() - THROUGH_LIMIT) } else { String::new() };
+        put(&format!("      through: {}{more}", list.join(", ")));
     }
     // The branch mark (design 40.4): the line asks for no reason.
     if let Some(branches) = &fact.branches {

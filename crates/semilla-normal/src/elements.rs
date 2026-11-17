@@ -70,6 +70,57 @@ pub struct Element {
     /// True for a jump with no value: `goto`, `return`, `resume`, `unreachable` (fix round 2).
     #[serde(default)]
     pub jump: bool,
+    /// The symbols that the element names (design 44), with the place of each definition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<Symbol>,
+}
+
+/// A symbol that an element or a definition names (design 44): the def path, and the place of
+/// the definition in a file of the workspace.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Symbol {
+    pub path: String,
+    pub place: Option<Place>,
+}
+
+/// A symbol of a record: the def path, the file (an index into the file list), the start, and
+/// the end.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RecordSymbol(pub String, pub i64, pub i64, pub i64);
+
+/// The symbol of a record entry, with its place. `None` for an entry that is not valid.
+pub fn record_symbol(files: &[String], symbol: &RecordSymbol) -> Option<Symbol> {
+    let RecordSymbol(path, file, start, end) = symbol;
+    let place = match usize::try_from(*file) {
+        Ok(file) => Some(Place { file: files.get(file)?.clone(), start: usize::try_from(*start).ok()?, end: usize::try_from(*end).ok()? }),
+        Err(_) => None,
+    };
+    Some(Symbol { path: path.clone(), place })
+}
+
+/// The definitions of a crate and the symbols that each one names (design 44): the record of
+/// the driver.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordDefs {
+    pub f: Vec<String>,
+    pub s: Vec<RecordSymbol>,
+    /// Each definition: the index of its symbol, then pairs of a named symbol and its flags.
+    pub d: Vec<Vec<u32>>,
+}
+
+impl RecordDefs {
+    /// Each definition with the symbols that it names, and the flags of each one.
+    pub fn entries(&self) -> Vec<(Symbol, Vec<(Symbol, u8)>)> {
+        let symbol = |index: &u32| self.s.get(*index as usize).and_then(|found| record_symbol(&self.f, found));
+        self.d
+            .iter()
+            .filter_map(|entry| {
+                let own = symbol(entry.first()?)?;
+                let named = entry[1..].chunks(2).filter_map(|pair| Some((symbol(pair.first()?)?, u8::try_from(*pair.get(1)?).ok()?))).collect();
+                Some((own, named))
+            })
+            .collect()
+    }
 }
 
 /// The elements that differ in a changed body, on each side.
@@ -86,6 +137,17 @@ pub struct ElementDiff {
     /// statement map (design 41.8).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<(Place, Place)>,
+    /// True if a record of the body has no symbol data (design 44): a driver before 8f.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_symbols: bool,
+    /// The symbol of the function of the body on each side (design 44): the signature line
+    /// (`other`) names it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own: Vec<(usize, Symbol)>,
+    /// True for a body that rustc evaluates at compile time (design 44): the body of a
+    /// `const fn` that it names counts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub evaluated: bool,
 }
 
 impl ElementDiff {
@@ -98,6 +160,13 @@ impl ElementDiff {
         self.new.sort();
         self.new.dedup();
         self.other |= other.other;
+        self.no_symbols |= other.no_symbols;
+        self.evaluated |= other.evaluated;
+        for own in other.own {
+            if !self.own.contains(&own) {
+                self.own.push(own);
+            }
+        }
         self.pairs.extend(other.pairs);
         self.pairs.sort();
         self.pairs.dedup();
@@ -115,9 +184,38 @@ pub struct RecordElements {
     /// `[call file, call start, call end]` for a span from a macro call. `file` is `-1` if the
     /// tokens have no source range.
     pub r: Vec<Vec<i64>>,
+    /// The symbol table of the body (design 44).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub s: Vec<RecordSymbol>,
+    /// The symbols of the elements: runs `[first, count, symbol…]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub y: Vec<Vec<u32>>,
+    /// The version of the symbol data: 1 since batch 8f, 0 for a record with no symbol data.
+    #[serde(default)]
+    pub v: u8,
+    /// The index of the symbol of the function of the body in `s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub o: Option<u32>,
+    /// True for a body that rustc evaluates at compile time (a constant, a static).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c: bool,
 }
 
 impl RecordElements {
+    /// The symbols of each element (design 44). `None` if the data is not valid.
+    pub fn symbols(&self) -> Option<Vec<Vec<Symbol>>> {
+        let table: Vec<Option<Symbol>> = self.s.iter().map(|symbol| record_symbol(&self.f, symbol)).collect();
+        let mut out = vec![Vec::new(); self.n];
+        for run in &self.y {
+            let (first, count) = (*run.first()? as usize, *run.get(1)? as usize);
+            let list: Vec<Symbol> = run[2..].iter().filter_map(|index| table.get(*index as usize).cloned().flatten()).collect();
+            for index in first..first.checked_add(count)? {
+                *out.get_mut(index)? = list.clone();
+            }
+        }
+        Some(out)
+    }
+
     /// The ranges of each element: the tokens and the outermost macro call. `None` if the
     /// data is not valid.
     pub fn ranges(&self) -> Option<Vec<(Option<Place>, Option<Place>)>> {
@@ -450,6 +548,9 @@ pub fn diff_cached(old: (&str, &RecordElements), new: (&str, &RecordElements)) -
 /// Compares two canonical texts with their element ranges. `None` if the ranges do not fit the
 /// texts (an old record, or a text with a line that is not an element).
 pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Option<ElementDiff> {
+    let no_symbols = old.1.v == 0 || new.1.v == 0;
+    let (old_record, new_record) = (old.1, new.1);
+    let symbols = [old.1.symbols().unwrap_or_default(), new.1.symbols().unwrap_or_default()];
     let sides = [old, new].map(|(text, elements)| (parse(text), elements.ranges()));
     for (parsed, ranges) in &sides {
         if ranges.as_ref().is_none_or(|ranges| ranges.len() != parsed.elements.len()) {
@@ -584,7 +685,7 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
             }
         }
     }
-    let element = |parsed: &Parsed, ranges: &[(Option<Place>, Option<Place>)], index: usize| {
+    let element = |parsed: &Parsed, ranges: &[(Option<Place>, Option<Place>)], symbols: &[Vec<Symbol>], index: usize| {
         let (targets, exit) = branch(parsed.elements[index].0);
         // An element with no range (a value that the driver wraps as opaque just before its
         // use) gets the range of the next element of its block with a range, else of the next
@@ -597,12 +698,16 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
         let text = parsed.elements[index].0;
         let jump = text.starts_with("goto -> ") || matches!(text, "return" | "resume" | "unreachable");
         let glue = jump || text.starts_with("drop(");
-        Element { tokens, call, targets, exit, glue, jump }
+        let symbols = symbols.get(index).cloned().unwrap_or_default();
+        Element { tokens, call, targets, exit, glue, jump, symbols }
     };
     let mut out = ElementDiff {
-        old: (0..old.elements.len()).filter(|i| !same[*i]).map(|i| element(&old, &old_ranges, i)).collect(),
-        new: (0..new.elements.len()).filter(|i| !same_new[*i]).map(|i| element(&new, &new_ranges, i)).collect(),
+        old: (0..old.elements.len()).filter(|i| !same[*i]).map(|i| element(&old, &old_ranges, &symbols[0], i)).collect(),
+        new: (0..new.elements.len()).filter(|i| !same_new[*i]).map(|i| element(&new, &new_ranges, &symbols[1], i)).collect(),
         other: old.other != new.other || old.args != new.args,
+        no_symbols,
+        evaluated: old_record.c || new_record.c,
+        own: [&old_record, &new_record].iter().enumerate().filter_map(|(side, record)| Some((side, record_symbol(&record.f, record.s.get(record.o? as usize)?)?))).collect(),
         pairs: partner.iter().enumerate().filter_map(|(a, b)| Some((old_ranges[a].0.clone()?, new_ranges[(*b)?].0.clone()?))).collect(),
     };
     out.old.sort();
@@ -619,7 +724,7 @@ mod tests {
     use super::*;
 
     fn record(n: usize) -> RecordElements {
-        RecordElements { n, f: vec!["src/lib.rs".into()], r: (0..n).map(|i| vec![i as i64, 1, 0, i as i64 * 10, i as i64 * 10 + 5]).collect() }
+        RecordElements { n, f: vec!["src/lib.rs".into()], r: (0..n).map(|i| vec![i as i64, 1, 0, i as i64 * 10, i as i64 * 10 + 5]).collect(), ..Default::default() }
     }
 
     fn text(elements: &[&str]) -> String {
@@ -687,7 +792,7 @@ mod tests {
     fn ranges_that_do_not_fit_give_no_diff() {
         let old = text(&["_0 = _1", "return"]);
         assert!(diff((&old, &record(3)), (&old, &record(2))).is_none());
-        let runs = RecordElements { n: 2, f: vec!["a.rs".into()], r: vec![vec![0, 2, 0, 4, 9, 0, 1, 20]] };
+        let runs = RecordElements { n: 2, f: vec!["a.rs".into()], r: vec![vec![0, 2, 0, 4, 9, 0, 1, 20]], ..Default::default() };
         let ranges = runs.ranges().unwrap();
         assert_eq!(ranges[1].0.as_ref().unwrap().start, 4);
         assert_eq!(ranges[1].1.as_ref().unwrap().end, 20);
@@ -695,7 +800,7 @@ mod tests {
 
     /// The element ranges with the given starts (each range has the length 5).
     fn record_at(starts: &[usize]) -> RecordElements {
-        RecordElements { n: starts.len(), f: vec!["src/lib.rs".into()], r: starts.iter().enumerate().map(|(i, start)| vec![i as i64, 1, 0, *start as i64, *start as i64 + 5]).collect() }
+        RecordElements { n: starts.len(), f: vec!["src/lib.rs".into()], r: starts.iter().enumerate().map(|(i, start)| vec![i as i64, 1, 0, *start as i64, *start as i64 + 5]).collect(), ..Default::default() }
     }
 
     /// A text with explicit blocks.

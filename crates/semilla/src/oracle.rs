@@ -842,9 +842,10 @@ fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
 /// The MIR elements that differ, in the form of the verifier.
 fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirDiff {
     let place = |place: Option<semilla_normal::elements::Place>| place.map(|place| (place.file, place.start, place.end));
-    let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement { tokens: place(element.tokens), call: place(element.call), targets: element.targets, exit: element.exit, glue: element.glue, jump: element.jump };
+    let symbol = |symbol: semilla_normal::elements::Symbol| semilla_verify::Sym { path: symbol.path, place: place(symbol.place) };
+    let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement { tokens: place(element.tokens), call: place(element.call), targets: element.targets, exit: element.exit, glue: element.glue, jump: element.jump, symbols: element.symbols.into_iter().map(symbol).collect() };
     let pairs = diff.pairs.into_iter().map(|(old, new)| ((old.file, old.start, old.end), (new.file, new.start, new.end))).collect();
-    semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs }
+    semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs, no_symbols: diff.no_symbols, evaluated: diff.evaluated, own: diff.own.into_iter().map(|(side, own)| (side, symbol(own))).collect() }
 }
 
 /// The answer with no syntax tree: each input is opaque.
@@ -863,6 +864,29 @@ impl semilla_verify::OpaqueInputs for AllOpaque {
 impl BodyOracle for NormalOracle {
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
         self.compare_with(step, renames, added, &AllOpaque)
+    }
+
+    fn defs(&self, step: &Step) -> Result<[semilla_verify::DefMap; 2]> {
+        let checked = self.checked(step)?;
+        let place = |place: Option<semilla_normal::elements::Place>| place.map(|place| (place.file, place.start, place.end));
+        Ok([&step.tree_before, &step.tree_after].map(|tree| {
+            let mut map = semilla_verify::DefMap::new();
+            for config in &checked {
+                for unit in self.units(tree, config).into_iter().flatten() {
+                    for (own, named) in unit.defs.iter().flat_map(|defs| defs.entries()) {
+                        let def = map.entry(own.path).or_default();
+                        def.place = def.place.take().or(place(own.place));
+                        for (symbol, flag) in named {
+                            let entry = (semilla_verify::Sym { path: symbol.path, place: place(symbol.place) }, flag);
+                            if !def.named.contains(&entry) {
+                                def.named.push(entry);
+                            }
+                        }
+                    }
+                }
+            }
+            map
+        }))
     }
 
     fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<BodyComparison>> {

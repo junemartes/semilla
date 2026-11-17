@@ -141,6 +141,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.skip.contains(&step.index) { Ok(None) } else { self.inner.made(step) }
     }
 
+    fn defs(&self, step: &Step) -> Result<[semilla_verify::DefMap; 2]> {
+        if self.skip.contains(&step.index) { Ok(Default::default()) } else { self.inner.defs(step) }
+    }
+
     fn build_code_files(&self, step: &Step) -> Vec<(String, String)> {
         self.code.host_files(step)
     }

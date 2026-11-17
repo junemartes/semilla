@@ -136,7 +136,8 @@ fn a_claim_of_a_rewrite_checks_the_shape_only() {
     let extract = || vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))];
     let category = |report: &StepReport| report.claims.iter().find(|result| result.claim == "c1").unwrap().category;
     // An equal result above N1 is not a result of the compare.
-    for (status, expected) in [(equal("n0"), Category::Semantics), (equal("n2"), Category::Semantics), (different(false), Category::Semantics), (different(true), Category::Semantics)] {
+    // Design 44 (FIX 4): the claim of an extracted variable is `move`, as the derived fact.
+    for (status, expected) in [(equal("n0"), Category::Move), (equal("n2"), Category::Move), (different(false), Category::Move), (different(true), Category::Move)] {
         let report = run(PLAIN, EXTRACTED, extract(), &[("demo::f", status)], None);
         assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "shape".into() });
         assert_eq!(category(&report), Some(expected), "{report:#?}");
@@ -1886,7 +1887,7 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
     let maps = semilla_syntax::BodyMaps::default();
-    let input = owners::Input { maps: &maps, made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None };
+    let input = owners::Input { maps: &maps, made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None, defs: &Default::default(), renames: &BTreeMap::new() };
     let mut report = StepReport::default();
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
     // A fact that does not list the body is not an owner.
@@ -6948,7 +6949,7 @@ fn run_elements(before: &str, after: &str, claims: Vec<Claim>, oracle: &ElementB
 }
 
 fn changed_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
-    BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false, pairs: Vec::new() }) }
+    BodyComparison { name: name.into(), span: None, status: different(false), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), range: None, elements: Some(MirDiff { old, new, other: false, pairs: Vec::new(), no_symbols: true, own: Vec::new(), evaluated: false }) }
 }
 
 const COUNT_BEFORE: &str = "pub fn f(v: &Vec<u32>) -> usize {\n    let n = v.len();\n    n + 1\n}\n";
@@ -7025,8 +7026,8 @@ fn a_body_with_no_edit_names_the_node_of_each_changed_element() {
 #[test]
 fn a_body_gets_one_fact_with_its_outermost_nodes() {
     // Fix round 1, D3: one fact for each body. A node inside a different node of the list
-    // does not show; at most three texts show, then "and N more". The lines go to the note. An
-    // edit of a path in the body is a possible cause, and the fact names it.
+    // does not show; at most three texts show, then "and N more". The lines go to the note.
+    // Since design 44, the fact names no possible cause: a path edit is a cause (a link), or not.
     let before = "pub fn f(a: u32, b: u32) -> u32 {\n    let x = a * 2;\n    let y = b * 3;\n    let z = x + y;\n    let w = z * 5;\n    g(w)\n}\npub fn g(a: u32) -> u32 {\n    a\n}\npub fn h(a: u32) -> u32 {\n    a\n}\n";
     let after = before.replace("    g(w)\n}\npub fn g", "    h(w)\n}\npub fn g");
     let new = |part: &str| element_at(&after, part);
@@ -7036,8 +7037,8 @@ fn a_body_gets_one_fact_with_its_outermost_nodes() {
     let report = run_elements(before, &after, Vec::new(), &ElementBodies(vec![body]));
     let facts: Vec<&Fact> = report.facts.iter().filter(|fact| fact.category == Category::Indirect).collect();
     assert_eq!(facts.len(), 1, "{report:#?}");
-    let path = report.facts.iter().find(|fact| fact.description.contains("`g` → `h`")).unwrap();
-    assert_eq!(facts[0].description, format!("the compiled code of `demo::f` changes with no edit at its place: `a * 2`, `b * 3`, `x + y`, and 1 more; a type or a path changes in {} of this body", path.id));
+    assert!(report.facts.iter().any(|fact| fact.description.contains("`g` → `h`")), "{report:#?}");
+    assert_eq!(facts[0].description, "the compiled code of `demo::f` changes with no edit at its place: `a * 2`, `b * 3`, `x + y`, and 1 more");
     assert_eq!(facts[0].note.as_deref(), Some("lines 2, 3, 4, 5"));
 }
 
@@ -7265,4 +7266,244 @@ fn a_fact_with_changed_branches_does_not_fold_with_a_fact_whose_branches_stay() 
     let texts: Vec<(&str, Option<&str>)> = facts.iter().map(|fact| (fact.description.as_str(), fact.branches.as_deref())).collect();
     assert_eq!(texts, [("2 site(s): changed operator `a > b` → `a >= b`", None), ("changed operator `a > b` → `a >= b` at `demo::g/S0/cond`", Some(branches))], "{texts:#?}");
     assert_eq!(fact_of, [Some(0), Some(1), Some(0)]);
+}
+
+// Batch 8f (design 44): the symbol links.
+
+/// A body oracle with fixed comparisons and the definitions of the two sides.
+struct LinkBodies(Vec<BodyComparison>, [DefMap; 2]);
+
+impl BodyOracle for LinkBodies {
+    fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
+        Ok(self.0.clone())
+    }
+
+    fn defs(&self, _: &Step) -> anyhow::Result<[DefMap; 2]> {
+        Ok(self.1.clone())
+    }
+}
+
+/// A symbol whose definition is the first `part` of `text`.
+fn sym_at(text: &str, path: &str, part: &str) -> Sym {
+    let start = text.find(part).unwrap_or_else(|| panic!("no `{part}`"));
+    Sym { path: path.into(), place: Some(("src/lib.rs".into(), start, start + part.len())) }
+}
+
+/// A MIR element at the first `part` of `text` that names the symbols.
+fn named_at(text: &str, part: &str, symbols: Vec<Sym>) -> MirElement {
+    MirElement { symbols, ..element_at(text, part) }
+}
+
+/// A changed body with symbol data.
+fn linked_body(name: &str, old: Vec<MirElement>, new: Vec<MirElement>) -> BodyComparison {
+    let mut body = changed_body(name, old, new);
+    body.elements.as_mut().unwrap().no_symbols = false;
+    body
+}
+
+fn run_links(before: &str, after: &str, oracle: &LinkBodies) -> StepReport {
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let step = step(Vec::new());
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, oracle, &NoOracle, true).report
+}
+
+const LIMIT_BEFORE: &str = "pub const LIMIT: u32 = 10;\n\npub fn a(x: u32) -> u32 {\n    x + LIMIT\n}\n\npub fn b(x: u32, y: u32) -> u32 {\n    let s = x + LIMIT;\n    s * y\n}\n";
+
+#[test]
+fn an_element_that_names_a_changed_constant_is_linked_to_the_edit_of_the_constant() {
+    // Design 44, part 3: `a` has no edit; its element names `LIMIT`. The link owns it: the
+    // value fact is `code different` with `a` in its affected bodies, and no `indirect` fact.
+    // The needle: `b` has its own change of behavior (`*` → `+`); its edit keeps its own
+    // element and its own result. The element of `b` that names `LIMIT` goes to the constant.
+    let after = LIMIT_BEFORE.replace("= 10;", "= 12;").replace("s * y", "s + y");
+    let limit = |text: &str| sym_at(text, "demo::LIMIT", "pub const LIMIT: u32 = 1");
+    let a = linked_body("demo::a", vec![named_at(LIMIT_BEFORE, "x + LIMIT", vec![limit(LIMIT_BEFORE)])], vec![named_at(&after, "x + LIMIT", vec![limit(&after)])]);
+    let b_use = |text: &str| named_at(text, "x + LIMIT;", vec![limit(text)]);
+    let b = linked_body("demo::b", vec![b_use(LIMIT_BEFORE), element_at(LIMIT_BEFORE, "s * y")], vec![b_use(&after), element_at(&after, "s + y")]);
+    let report = run_links(LIMIT_BEFORE, &after, &LinkBodies(vec![a, b], Default::default()));
+    let fact = |text: &str| report.facts.iter().find(|fact| fact.description.contains(text)).unwrap_or_else(|| panic!("{text}: {report:#?}"));
+    let value = fact("value of `demo::LIMIT` changed");
+    assert_eq!((value.compare, value.affected.clone()), (Compare::CodeDifferent, vec!["demo::a".to_string(), "demo::b".to_string()]), "{report:#?}");
+    assert_eq!(value.through.get("demo::LIMIT").cloned(), Some(vec!["demo::a".to_string(), "demo::b".to_string()]));
+    let operator = fact("`s * y` → `s + y`");
+    assert_eq!((operator.compare, operator.affected.clone()), (Compare::CodeDifferent, vec!["demo::b".to_string()]));
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+    assert_eq!((report.mir_map.linked, report.mir_map.doubt), (4, 0));
+
+    // With no symbol data (a driver before 8f), the element has no link: the body of `a` keeps
+    // the rules of the evidence.
+    let a = changed_body("demo::a", vec![element_at(LIMIT_BEFORE, "x + LIMIT")], vec![element_at(&after, "x + LIMIT")]);
+    let report = run_links(LIMIT_BEFORE, &after, &LinkBodies(vec![a], Default::default()));
+    assert_eq!(report.mir_map.linked, 0);
+    assert!(report.facts.iter().any(|fact| fact.description.contains("value of `demo::LIMIT` changed") && fact.affected == ["demo::a"]), "{report:#?}");
+}
+
+#[test]
+fn a_definition_that_names_a_changed_definition_changes_through_it() {
+    // Design 44, part 2.4: `A = B + 1` with a changed `B`. The element of `f` names `A`; the
+    // record of `A` names `B` (a value: rustc evaluates it). The cause is the edit of `B`.
+    let before = "pub const B: u32 = 4;\npub const A: u32 = B + 1;\n\npub fn f(x: u32) -> u32 {\n    x * A\n}\n";
+    let after = before.replace("= 4;", "= 5;");
+    let defs = |text: &str| DefMap::from([("demo::A".to_string(), Def { place: sym_at(text, "demo::A", "pub const A").place, named: vec![(sym_at(text, "demo::B", "pub const B: u32 = "), links::EVALUATED)] })]);
+    let f = |text: &str| named_at(text, "x * A", vec![sym_at(text, "demo::A", "pub const A: u32 = B + 1;")]);
+    let body = linked_body("demo::f", vec![f(before)], vec![f(&after)]);
+    let report = run_links(before, &after, &LinkBodies(vec![body.clone()], [defs(before), defs(&after)]));
+    let value = report.facts.iter().find(|fact| fact.description.contains("value of `demo::B` changed")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!((value.compare, value.affected.clone()), (Compare::CodeDifferent, vec!["demo::f".to_string()]), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+    // With no record of the definitions, the chain stops: the body has an element with no cause.
+    let report = run_links(before, &after, &LinkBodies(vec![body], Default::default()));
+    assert!(report.facts.iter().any(|fact| fact.category == Category::Indirect && fact.spotlight), "{report:#?}");
+}
+
+#[test]
+fn a_function_body_edit_is_not_a_change_of_the_function_for_its_callers() {
+    // Design 44, part 2.3: at N0 a caller does not change with the body of its callee. An
+    // element that differs and names the callee has no link from a body edit of the callee.
+    let before = "pub fn helper(x: u32) -> u32 {\n    x + 1\n}\n\npub fn one() -> u32 {\n    helper(1)\n}\n";
+    let after = before.replace("x + 1", "x + 2");
+    let call = |text: &str| named_at(text, "helper(1)", vec![sym_at(text, "demo::helper", "pub fn helper")]);
+    let body = linked_body("demo::one", vec![call(before)], vec![call(&after)]);
+    let report = run_links(before, &after, &LinkBodies(vec![body], Default::default()));
+    assert_eq!(report.mir_map.linked, 0, "{report:#?}");
+    assert!(report.facts.iter().any(|fact| fact.category == Category::Indirect && fact.description.contains("demo::one")), "{report:#?}");
+}
+
+#[test]
+fn a_link_never_gives_code_equal_to_an_edit_of_a_type_or_a_pattern_in_the_body() {
+    // Design 44, part 3.4 (the safety rule): `conv` returns `u16`, and the `let` of `f` gets
+    // the type `u16`. The element of the call names `conv`: the link takes it. The type edit of
+    // the `let` owns no element. Each element has an owner, but the type of the `let` can change
+    // the code at a different place: the edit keeps the doubt rule, never `code equal`.
+    let before = "pub fn conv(a: u8) -> u32 {\n    a.into()\n}\n\npub fn f(a: u8) -> u64 {\n    let x: u32 = conv(a);\n    x as u64\n}\n";
+    let after = before.replace("-> u32 {", "-> u16 {").replace("let x: u32", "let x: u16");
+    let call = |text: &str| named_at(text, "conv(a)", vec![sym_at(text, "demo::conv", "pub fn conv")]);
+    let body = linked_body("demo::f", vec![call(before)], vec![call(&after)]);
+    let report = run_links(before, &after, &LinkBodies(vec![body], Default::default()));
+    let annotation = report.facts.iter().find(|fact| fact.at.as_ref().is_some_and(|at| at.item == "demo::f")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(annotation.compare, Compare::CodeDifferent, "{report:#?}");
+    assert_eq!(report.mir_map.doubt, 1, "{report:#?}");
+    let ret = report.facts.iter().find(|fact| fact.description.contains("return type of `demo::conv`")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert!(ret.affected.contains(&"demo::f".to_string()), "{report:#?}");
+}
+
+#[test]
+fn the_signature_line_of_a_body_with_no_edit_follows_a_changed_alias() {
+    // Design 44: `dbl` names the alias `Num` in its signature (the record of `dbl`). Its
+    // element and its signature line (`other`) name the function itself: the link goes through
+    // the record to the alias edit.
+    let before = "pub type Num = u32;\n\npub fn dbl(a: Num) -> Num {\n    a * 2\n}\n";
+    let after = before.replace("= u32;", "= u64;");
+    let own = |text: &str| sym_at(text, "demo::dbl", "pub fn dbl");
+    let defs = |text: &str| DefMap::from([("demo::dbl".to_string(), Def { place: own(text).place, named: vec![(sym_at(text, "demo::Num", "pub type Num"), 0)] })]);
+    let mut body = linked_body("demo::dbl", vec![named_at(before, "a * 2", vec![own(before)])], vec![named_at(&after, "a * 2", vec![own(&after)])]);
+    let diff = body.elements.as_mut().unwrap();
+    diff.other = true;
+    diff.own = vec![(0, own(before)), (1, own(&after))];
+    let report = run_links(before, &after, &LinkBodies(vec![body], [defs(before), defs(&after)]));
+    let alias = report.facts.iter().find(|fact| fact.description.contains("`demo::Num`")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!((alias.compare, alias.affected.clone()), (Compare::CodeDifferent, vec!["demo::dbl".to_string()]), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+}
+
+#[test]
+fn the_mir_map_parses_a_file_with_the_edition_of_its_package() {
+    // Design 44, FIX 1: in a 2015 file, `async` is a name. The 2021 parse makes it a keyword,
+    // and the node of `async + 5` is a different node.
+    let text = "pub fn g(async: u32) -> u32 {\n    async + 5\n}\n";
+    let start = text.find("async + 5").unwrap();
+    let node = |edition: semilla_syntax::rs::Edition| {
+        let mut ws = Workspace::default();
+        ws.rust_files.insert("src/lib.rs".into(), text.into());
+        ws.editions.insert("src/lib.rs".into(), edition);
+        let mut map = mirmap::MirMap::new(&ws, &ws, &[]);
+        map.node(1, &("src/lib.rs".to_string(), start, start + "async + 5".len())).map(|node| node.text)
+    };
+    assert_eq!(node(semilla_syntax::rs::Edition::Edition2015).as_deref(), Some("async + 5"));
+    assert_ne!(node(semilla_syntax::rs::Edition::Edition2015), node(semilla_syntax::rs::Edition::Edition2021));
+}
+
+#[test]
+fn the_claims_of_an_extracted_or_an_inlined_variable_or_function_are_move() {
+    // Design 44, FIX 4: one form gets one category. The derived facts of these forms are
+    // `move` (design 41.7), so the claim ops are `move` too.
+    for name in ["extract-variable", "inline-variable", "extract-function", "inline-function"] {
+        assert_eq!(semilla_core::ops::op(name).and_then(|op| op.category), Some(Category::Move), "{name}");
+    }
+}
+
+// Batch 8f fix round 1 (design 44).
+
+/// The chain `c1` … `cN` of `const fn` calls: `c1` calls `c2`, …; the last one returns `x + 1`.
+fn const_fn_chain(count: usize) -> String {
+    let mut text = String::new();
+    for index in 1..count {
+        text.push_str(&format!("pub const fn c{index}(x: u32) -> u32 {{\n    c{}(x) * 2\n}}\n\n", index + 1));
+    }
+    text.push_str(&format!("pub const fn c{count}(x: u32) -> u32 {{\n    x + 1\n}}\n\npub const A: u32 = c1(3);\n\npub fn f(y: u32) -> u32 {{\n    y + A\n}}\n"));
+    text
+}
+
+/// The definition records of a chain: `A` evaluates `c1`, and `cN` calls `cN+1` in its body.
+fn chain_defs(text: &str, count: usize) -> DefMap {
+    let mut defs = DefMap::from([("demo::A".to_string(), Def { place: sym_at(text, "demo::A", "pub const A").place, named: vec![(sym_at(text, "demo::c1", "pub const fn c1("), links::EVALUATED)] })]);
+    for index in 1..count {
+        let next = format!("pub const fn c{}(", index + 1);
+        defs.insert(format!("demo::c{index}"), Def { place: sym_at(text, &format!("demo::c{index}"), &format!("pub const fn c{index}(")).place, named: vec![(sym_at(text, &format!("demo::c{}", index + 1), &next), links::BODY)] });
+    }
+    defs
+}
+
+#[test]
+fn a_constant_follows_each_const_fn_of_its_value_to_the_edit_of_a_body() {
+    // Fix round 1, D1: `A = c1(3)`; `c1` calls `c2` in its body; the step changes only the body
+    // of `c2`. The users of `A` and the body of `A` itself (rustc evaluates it) link to the edit.
+    let before = const_fn_chain(2);
+    let after = before.replace("x + 1", "x + 2");
+    let user = |text: &str| named_at(text, "y + A", vec![sym_at(text, "demo::A", "pub const A")]);
+    let f = linked_body("demo::f", vec![user(&before)], vec![user(&after)]);
+    let call = |text: &str| named_at(text, "c1(3)", vec![sym_at(text, "demo::c1", "pub const fn c1(")]);
+    let mut a = linked_body("demo::A", vec![call(&before)], vec![call(&after)]);
+    a.elements.as_mut().unwrap().evaluated = true;
+    let report = run_links(&before, &after, &LinkBodies(vec![f, a], [chain_defs(&before, 2), chain_defs(&after, 2)]));
+    let literal = report.facts.iter().find(|fact| fact.description.contains("`1` → `2`")).unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!((literal.compare, literal.affected.clone()), (Compare::CodeDifferent, vec!["demo::A".to_string(), "demo::f".to_string()]), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+}
+
+#[test]
+fn a_chain_of_const_fn_longer_than_the_limit_keeps_the_indirect_fact() {
+    // Fix round 1, D1: the chain from a user of `A` has at most `MAX_DEPTH` steps. An edit of
+    // `c{MAX_DEPTH}` is in reach; an edit of `c{MAX_DEPTH + 1}` is not: the fact stays.
+    let count = links::MAX_DEPTH + 1;
+    let base = const_fn_chain(count);
+    let user = |text: &str| named_at(text, "y + A", vec![sym_at(text, "demo::A", "pub const A")]);
+    for (edited, reached) in [(links::MAX_DEPTH, true), (links::MAX_DEPTH + 1, false)] {
+        let mark = format!("pub const fn c{edited}(x: u32) -> u32 {{\n    ");
+        let at = base.find(&mark).unwrap() + mark.len();
+        let end = at + base[at..].find('\n').unwrap();
+        // The new body: `x + 2` for the last function, `cN+1(x) * 3` for each other one.
+        let new_body = if edited == count { "x + 2".to_string() } else { format!("c{}(x) * 3", edited + 1) };
+        let after = format!("{}{new_body}{}", &base[..at], &base[end..]);
+        let body = linked_body("demo::f", vec![user(&base)], vec![user(&after)]);
+        let report = run_links(&base, &after, &LinkBodies(vec![body], [chain_defs(&base, count), chain_defs(&after, count)]));
+        let indirect = report.facts.iter().any(|fact| fact.category == Category::Indirect);
+        assert_eq!(indirect, !reached, "an edit of c{edited}: {report:#?}");
+    }
+}
+
+#[test]
+fn a_pair_diff_fact_gets_the_result_of_its_own_edit() {
+    // Design 44, FIX 3: each edit of a pair diff has the result of its fact under the name map.
+    // With no fact of its own, the result of the whole new item.
+    let mut report = StepReport::default();
+    report.facts.push(Fact { compare: Compare::CodeEqual, ..Default::default() });
+    report.facts.push(Fact { compare: Compare::CodeDifferent, affected: vec!["demo::g".into()], ..Default::default() });
+    report.facts.push(Fact { compare: Compare::Pending, ..Default::default() });
+    let fact_of = [Some(0), Some(1), None, Some(2)];
+    assert_eq!(identity::pair_diff_result(&report, &fact_of, 0, true, "demo::g"), (false, Vec::new()));
+    assert_eq!(identity::pair_diff_result(&report, &fact_of, 1, true, "demo::g"), (true, vec!["demo::g".to_string()]));
+    assert_eq!(identity::pair_diff_result(&report, &fact_of, 2, true, "demo::g"), (true, vec!["demo::g".to_string()]));
+    assert_eq!(identity::pair_diff_result(&report, &fact_of, 3, false, "demo::g"), (false, Vec::new()));
 }

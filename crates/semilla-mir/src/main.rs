@@ -21,6 +21,7 @@
 
 #![feature(rustc_private)]
 
+extern crate rustc_abi;
 extern crate rustc_attr_ir;
 extern crate rustc_crate_store;
 extern crate rustc_data_structures;
@@ -47,6 +48,7 @@ mod print;
 mod reach;
 mod rival;
 mod spans;
+mod symbols;
 mod term;
 mod traits;
 
@@ -527,6 +529,9 @@ impl rustc_driver::Callbacks for Callbacks {
         let mut text = String::new();
         let mut unit = UnitLine { unit: unit_record(tcx, &target) };
         unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
+        if level == Level::N0 {
+            unit.unit.defs = rustc_middle::ty::print::with_resolve_crate_name!(rustc_middle::ty::print::with_no_trimmed_paths!(guarded(|| symbols::defs(tcx))));
+        }
         text.push_str(&serde_json::to_string(&unit).expect("a unit record is valid JSON"));
         text.push('\n');
         for record in &records {
@@ -574,6 +579,9 @@ struct UnitRecord {
     /// Each item of the expanded code, with the place of the macro call that makes it (batch
     /// 6b, part 2). `None`: the driver cannot list the items.
     made: Option<Vec<made::MadeItem>>,
+    /// The definitions of the crate and the symbols that each one names (design 44). At n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    defs: Option<symbols::Defs>,
 }
 
 /// The line of a unit record in the output.
@@ -635,6 +643,7 @@ fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
         root,
         triple: tcx.sess.opts.target_triple.to_string(),
         made: None,
+        defs: None,
     }
 }
 
@@ -711,7 +720,7 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                     if level == Level::N3 {
                         return None;
                     }
-                    let mut found = record(name.clone(), body, level, target, &[], &generics_text(*item));
+                    let mut found = record(name.clone(), body, level, target, &[], &generics_text(*item), Some(item.def_id()));
                     if level == Level::N0 {
                         add_reach(&mut found, *item, body);
                         found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
@@ -785,7 +794,7 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                         inline::inline_calls(body, callees, scope).unwrap_or_else(|| body.clone()),
                     );
                 }
-                let mut found = record(name.clone(), &full, level, target, &tries, &generics_text(*item));
+                let mut found = record(name.clone(), &full, level, target, &tries, &generics_text(*item), Some(item.def_id()));
                 inlined.sort();
                 found.inlined = inlined;
                 Some(found)
@@ -863,7 +872,7 @@ fn config_record(name: String, identity: String, span: rustc_public::ty::Span, l
 /// The record of the `main` function of the test harness. The text names the test runner and not
 /// the list of the tests (see `harness.rs`). A body with an unknown form keeps its full text.
 fn harness_record(name: String, body: &Body, level: Level, target: &str) -> BodyRecord {
-    let mut found = record(name, body, level, target, &[], "");
+    let mut found = record(name, body, level, target, &[], "", None);
     if let Some(text) = harness::text(body) {
         found.shape = text.clone();
         found.text = text;
@@ -877,7 +886,7 @@ fn harness_record(name: String, body: &Body, level: Level, target: &str) -> Body
 
 /// Runs `f`. Returns `None` if it panics. A panic in rustc_public for one body must not stop the
 /// compile of the crate.
-fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
+pub(crate) fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
     catch_unwind(AssertUnwindSafe(f)).ok()
 }
 
@@ -965,6 +974,7 @@ fn record(
     target: &str,
     term_tries: &[Body],
     generics: &str,
+    item: Option<rustc_public::DefId>,
 ) -> BodyRecord {
     let canonical = normalize::canonical_body(body);
     let mut printed = normalize::canonical_text(&canonical);
@@ -1060,7 +1070,7 @@ fn record(
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: printed.config,
-        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical)) } else { None },
+        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical, item)) } else { None },
     }
 }
 
@@ -1100,7 +1110,7 @@ fn add_reach(record: &mut BodyRecord, item: CrateItem, body: &Body) {
 
 /// True if a type or its arguments contain a type parameter, a `const` parameter, or an alias (a
 /// generic type).
-fn is_generic<T: rustc_public::visitor::Visitable>(item: &T) -> bool {
+pub(crate) fn is_generic<T: rustc_public::visitor::Visitable>(item: &T) -> bool {
     struct Find;
     impl rustc_public::visitor::Visitor for Find {
         type Break = ();

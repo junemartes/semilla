@@ -13,9 +13,14 @@
 //!    argument: the MIR statement of the call has the range of the full call; a block with a
 //!    deleted statement). A glue element (a `goto`, a `drop`) whose node is a block needs no
 //!    owner, so this rule does not give it to the edits of the block;
-//! 2. else, the edit of a macro definition or a constant whose node contains the source range of
-//!    the tokens of the element (an element from a `macro_rules` body);
-//! 3. else, no owner.
+//! 2. else, the edit whose node contains the source range of the tokens of the element, when the
+//!    tokens are outside the macro call (an element from a `macro_rules` body, or from a field
+//!    that a derive reads);
+//! 3. else, the link (design 44): each edit that changes a symbol that the element names (a
+//!    changed definition of the step, see `links.rs`); a link also adds a cause to a changed
+//!    element with a local owner, and an element at the receiver of a method call takes the
+//!    links of the call;
+//! 4. else, no owner.
 //!
 //! A moved statement (design 41.7) owns the elements of its nodes on the two sides. An element
 //! whose smallest owner is a move also goes to each edit inside its node: a change inside a
@@ -40,6 +45,9 @@ pub struct Mapped {
     pub text: String,
     /// True if the node contains no statement list.
     pub block_free: bool,
+    /// The display text of the method call whose receiver is the node (fix round 2, R3): the
+    /// auto-ref, the temporary, and the drop of a receiver belong to the call.
+    pub call: Option<String>,
 }
 
 /// The lossless tree of one file of one side, with its line index.
@@ -54,8 +62,6 @@ struct EditPlace {
     edit: usize,
     start: Pos,
     end: Pos,
-    /// True for an edit of a macro definition or of a constant (rule 2).
-    definition: bool,
     /// True for a moved statement (design 41.7).
     wide: bool,
     /// True for a statement that a move passes over: the place owns only an element with no
@@ -81,6 +87,8 @@ pub struct MirMap<'a> {
     /// (`code equal`), and with an element with no owner (the doubt rule).
     pub idle_equal: BTreeSet<usize>,
     pub idle_doubt: BTreeSet<usize>,
+    /// The symbol links of the step (design 44).
+    links: Option<&'a crate::links::Links<'a>>,
 }
 
 /// The most examples of map errors that the report keeps.
@@ -100,6 +108,15 @@ pub struct Ownership {
     /// True if a move or a variable took an element by its region (design 41.7). Then an edit
     /// of the body that is not a refactoring never gets `code equal` from the owner rule.
     pub by_region: bool,
+    /// The count of the elements that a symbol link owns (design 44).
+    pub linked: usize,
+    /// The symbols of the links of each edit (design 44).
+    pub through: BTreeMap<usize, BTreeSet<String>>,
+    /// The edits that own an element by its place (rules 1, 1b, and 2).
+    pub positional: BTreeSet<usize>,
+    /// The edits of the changed symbol of the function of the body, for a changed part that
+    /// is not an element (`other`: the signature line), with the symbols (design 44).
+    pub other_links: BTreeMap<usize, BTreeSet<String>>,
 }
 
 impl Ownership {
@@ -127,17 +144,27 @@ impl<'a> MirMap<'a> {
                 let Some(anchor) = anchor else { continue };
                 let ws = sides[side];
                 let Some(item) = ws.items.get(&anchor.item) else { continue };
-                let definition = matches!(item.kind, ItemKind::Const | ItemKind::Static) || (item.kind == ItemKind::Macro && item.source.contains("macro_rules!"));
+                // Since design 44, a constant owns the elements of its users by a symbol link.
+                let whole = matches!(item.kind, ItemKind::Const | ItemKind::Static) || (item.kind == ItemKind::Macro && item.source.contains("macro_rules!"));
                 let (start, end) = match semilla_syntax::resolve(ws, anchor) {
                     Some(semilla_syntax::Resolved::Node(_, node)) => (node.start, node.end),
                     // The place of an edit of a whole item: an added or a removed item, or the
                     // value of a constant or a macro definition. An edit of the header of a
                     // container (its generics, its attributes) does not contain its bodies.
-                    Some(semilla_syntax::Resolved::Item(item)) if definition || matches!(edit.kind, EditKind::ItemAdded | EditKind::ItemRemoved) => ((item.line_start, item.col_start), (item.line_end, item.col_end)),
+                    Some(semilla_syntax::Resolved::Item(item)) if whole || matches!(edit.kind, EditKind::ItemAdded | EditKind::ItemRemoved) => ((item.line_start, item.col_start), (item.line_end, item.col_end)),
+                    // A changed attribute list (fix round 2, R4): the place of each attribute of
+                    // the side, so that the code of a derive belongs to the edit of its list.
+                    Some(semilla_syntax::Resolved::Item(item)) if edit.kind == EditKind::Attrs => {
+                        let text = if side == 0 { edit.source_before.as_deref() } else { edit.source_after.as_deref() };
+                        for (start, end) in attribute_places(ws, item, text.unwrap_or("")) {
+                            places[side].entry(item.file.clone()).or_default().push(EditPlace { edit: index, start, end, wide: false, jump: false });
+                        }
+                        continue;
+                    }
                     _ => continue,
                 };
                 let wide = matches!(edit.refactor, Some(semilla_syntax::Refactor::Moved { .. }));
-                places[side].entry(item.file.clone()).or_default().push(EditPlace { edit: index, start, end, definition, wide, jump: false });
+                places[side].entry(item.file.clone()).or_default().push(EditPlace { edit: index, start, end, wide, jump: false });
             }
         }
         // The statements that a move passes over, with no other edit in them (design 41.7). The
@@ -154,12 +181,18 @@ impl<'a> MirMap<'a> {
                 for &(start, end) in &region[side] {
                     let other = list.iter().any(|place| !place.jump && place.edit != index && !refactoring.contains(&place.edit) && start <= place.start && place.end <= end);
                     if !other {
-                        list.push(EditPlace { edit: index, start, end, definition: false, wide: true, jump: true });
+                        list.push(EditPlace { edit: index, start, end, wide: true, jump: true });
                     }
                 }
             }
         }
-        MirMap { sides, trees: [BTreeMap::new(), BTreeMap::new()], places, errors: 0, examples: Vec::new(), counts: Default::default(), owning: BTreeSet::new(), idle_equal: BTreeSet::new(), idle_doubt: BTreeSet::new() }
+        MirMap { sides, trees: [BTreeMap::new(), BTreeMap::new()], places, errors: 0, examples: Vec::new(), counts: Default::default(), owning: BTreeSet::new(), idle_equal: BTreeSet::new(), idle_doubt: BTreeSet::new(), links: None }
+    }
+
+    /// The map with the symbol links of the step (design 44).
+    pub fn with_links(mut self, links: &'a crate::links::Links<'a>) -> MirMap<'a> {
+        self.links = Some(links);
+        self
     }
 
     /// The node of a source range on one side. `None` for a file that the side does not have,
@@ -169,7 +202,8 @@ impl<'a> MirMap<'a> {
         let ws = self.sides[side];
         let tree = self.trees[side].entry(file.clone()).or_insert_with(|| {
             let text = ws.rust_files.get(file)?;
-            let parsed = rs::ast::SourceFile::parse(text, rs::Edition::Edition2021).tree();
+            // The edition of the package of the file (design 40; FIX 1 of design 44).
+            let parsed = rs::ast::SourceFile::parse(text, ws.editions.get(file).copied().unwrap_or(rs::Edition::Edition2021)).tree();
             Some(FileTree { lines: rs::Lines::new(text), root: parsed.syntax().clone() })
         });
         let tree = tree.as_ref()?;
@@ -191,7 +225,10 @@ impl<'a> MirMap<'a> {
             Some(token) if !boundary(start) && usize::from(token.text_range().end()) >= end => {
                 let (first, last) = (usize::from(token.text_range().start()), usize::from(token.text_range().end()));
                 let last_char = end == last && tree.lines.text().get(start..end).is_some_and(|part| part.chars().count() == 1);
-                if token.kind() == rs::SyntaxKind::STRING || last_char { (first, last) } else { (start, end) }
+                // A byte string and a C string too: a 2015 file can split `c"…"` into two tokens
+                // that the lossless tree keeps as one (design 44).
+                let string = matches!(token.kind(), rs::SyntaxKind::STRING | rs::SyntaxKind::BYTE_STRING | rs::SyntaxKind::C_STRING);
+                if string || last_char { (first, last) } else { (start, end) }
             }
             _ => (start, end),
         };
@@ -219,20 +256,20 @@ impl<'a> MirMap<'a> {
         // A node with only trivia in the range keeps the range itself.
         let (from, to) = if code.start <= start && end <= code.end { (code.start, code.end) } else { (start, end) };
         let text = semilla_syntax::tree::short(&rs::display_syntax(&node), 60);
-        Some(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free })
+        let call = node.parent().and_then(rs::ast::MethodCallExpr::cast).filter(|call| call.receiver().is_some_and(|receiver| receiver.syntax() == &node)).map(|call| semilla_syntax::tree::short(&rs::display_syntax(call.syntax()), 60));
+        Some(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free, call })
     }
 
-    /// The smallest edit whose node contains a node on one side. With `definition`, only an
-    /// edit of a macro definition or a constant.
-    fn owner(&self, side: usize, node: &Mapped, definition: bool) -> Option<usize> {
-        self.owner_place(side, node, definition).map(|place| place.edit)
+    /// The smallest edit whose node contains a node on one side.
+    fn owner(&self, side: usize, node: &Mapped) -> Option<usize> {
+        self.owner_place(side, node).map(|place| place.edit)
     }
 
-    fn owner_place(&self, side: usize, node: &Mapped, definition: bool) -> Option<&EditPlace> {
+    fn owner_place(&self, side: usize, node: &Mapped) -> Option<&EditPlace> {
         let places = self.places[side].get(&node.file)?;
         places
             .iter()
-            .filter(|place| !place.jump && (!definition || place.definition))
+            .filter(|place| !place.jump)
             .filter(|place| place.start <= node.start && node.end <= place.end)
             .max_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)))
     }
@@ -255,6 +292,12 @@ impl<'a> MirMap<'a> {
     /// The owner of each element that differs in a body.
     pub fn own(&mut self, diff: &MirDiff) -> Ownership {
         let mut out = Ownership::default();
+        // Pass 1: the local causes (rules 1, 1b, 2, the region of a move, and the waivers of a
+        // jump and of glue). A link never removes a local cause (design 44).
+        // Each element with its node, its local owners, and true if it is new or deleted code at
+        // the place of an edit (rule 1: the node of the edit contains the node of the element;
+        // rule 2: the tokens of the element are at the place of the edit).
+        let mut checked: Vec<(usize, MirElement, Option<Mapped>, Vec<usize>, bool)> = Vec::new();
         for (side, elements) in [&diff.old, &diff.new].into_iter().enumerate() {
             for element in elements {
                 // The place of the element in the body: its tokens if they are in the body
@@ -267,7 +310,7 @@ impl<'a> MirMap<'a> {
                     (None, None) => (None, None),
                 };
                 let node = own.and_then(|place| self.node(side, place));
-                let first = node.as_ref().and_then(|node| self.owner_place(side, node, false)).map(|place| (place.edit, place.wide));
+                let first = node.as_ref().and_then(|node| self.owner_place(side, node)).map(|place| (place.edit, place.wide));
                 let mut owners: Vec<usize> = first.map(|(edit, _)| edit).into_iter().collect();
                 // A move owns the elements of its statement, and each change inside the node of
                 // the element owns them too (design 41.7).
@@ -292,11 +335,16 @@ impl<'a> MirMap<'a> {
                     out.glue += 1;
                     continue;
                 }
+                // Rule 2: the tokens of the element are at the place of an edit (a `macro_rules`
+                // body, a field of a type that a derive reads). Since design 44, each edit counts:
+                // the element comes from the text of the edit.
+                let mut at_edit = first.is_some();
                 if owners.is_empty()
                     && let Some(place) = definition
                     && let Some(found) = self.node(side, place)
                 {
-                    owners.extend(self.owner(side, &found, true));
+                    owners.extend(self.owner(side, &found));
+                    at_edit |= !owners.is_empty();
                 }
                 // An element in a statement that a move passes over (design 41.7).
                 if owners.is_empty()
@@ -313,21 +361,83 @@ impl<'a> MirMap<'a> {
                     out.glue += 1;
                     continue;
                 }
-                match (owners.is_empty(), node) {
-                    (false, _) => {
-                        for edit in owners {
-                            out.owns.entry(edit).or_default()[side].push(element.clone());
-                        }
-                    }
-                    (true, Some(node)) => {
-                        out.unowned.insert((side, node));
-                    }
-                    (true, None) => out.lost += 1,
+                out.positional.extend(owners.iter().copied());
+                checked.push((side, element.clone(), node, owners, at_edit));
+            }
+        }
+        // Pass 2 (design 44): the links. A link adds a cause to a changed element that the two
+        // sides have at one place: an element with no local owner, or with an edit inside its
+        // node (rule 1b), or in the region of a move. New code or deleted code at the place of an
+        // edit (rules 1 and 2) gets its cause from that edit only. An element with a local owner
+        // keeps only the symbols that a changed element of the other side names too: a symbol of
+        // the new code inside it (`s.v` in `s.v + 1`) is no cause of the element.
+        let named: [BTreeSet<String>; 2] = [0, 1].map(|side| checked.iter().filter(|(found, ..)| *found == side).flat_map(|(_, element, ..)| element.symbols.iter().map(|symbol| symbol.path.clone())).collect());
+        // The links of each side by node text, for the counterpart rule.
+        let mut linked_at: [BTreeMap<String, BTreeMap<usize, BTreeSet<String>>>; 2] = [BTreeMap::new(), BTreeMap::new()];
+        let mut deferred: Vec<(usize, MirElement, Option<Mapped>)> = Vec::new();
+        for (side, element, node, mut owners, at_edit) in checked {
+            if let Some(links) = self.links.filter(|_| !at_edit) {
+                let mut kept = element.clone();
+                if !owners.is_empty() {
+                    kept.symbols.retain(|symbol| named[1 - side].contains(&symbol.path));
                 }
+                let found = links.element(side, &kept, diff.evaluated);
+                if !found.is_empty() {
+                    out.linked += 1;
+                    for (edit, symbols) in found {
+                        if let Some(node) = &node {
+                            linked_at[side].entry(bare(&node.text).to_string()).or_default().entry(edit).or_default().extend(symbols.iter().cloned());
+                        }
+                        if !owners.contains(&edit) {
+                            owners.push(edit);
+                        }
+                        out.through.entry(edit).or_default().extend(symbols);
+                    }
+                }
+            }
+            if owners.is_empty() {
+                deferred.push((side, element, node));
+                continue;
+            }
+            for edit in owners {
+                out.owns.entry(edit).or_default()[side].push(element.clone());
+            }
+        }
+        // A changed part that is not an element (`other`), or a body that differs with no element
+        // that differs (the order of its blocks): the function of the body names the types of
+        // the signature line (design 44).
+        if (diff.other || (diff.old.is_empty() && diff.new.is_empty()))
+            && let Some(links) = self.links
+        {
+            for (side, own) in &diff.own {
+                for edit in links.edits_of(*side, own) {
+                    out.other_links.entry(edit).or_default().insert(own.path.clone());
+                }
+            }
+        }
+        // The counterpart (design 44): a changed element with no cause whose counterpart on the
+        // other side (the same node text) has a link takes that link (a new drop adds an unwind
+        // edge to the element before it; the old element names no changed symbol).
+        for (side, element, node) in deferred {
+            // A receiver (an auto-ref, a temporary, a drop) takes the links of its method call.
+            let counterpart = node.as_ref().and_then(|node| linked_at[1 - side].get(bare(&node.text)).or_else(|| node.call.as_ref().and_then(|call| linked_at[1 - side].get(bare(call)).or_else(|| linked_at[side].get(bare(call))))));
+            match (counterpart, node) {
+                (Some(edits), _) => {
+                    out.linked += 1;
+                    for (edit, symbols) in edits {
+                        out.owns.entry(*edit).or_default()[side].push(element.clone());
+                        out.through.entry(*edit).or_default().extend(symbols.iter().cloned());
+                    }
+                }
+                (None, Some(node)) => {
+                    out.unowned.insert((side, node));
+                }
+                (None, None) => out.lost += 1,
             }
         }
         out
     }
+
 }
 
 impl MirMap<'_> {
@@ -336,7 +446,7 @@ impl MirMap<'_> {
         let ws = self.sides[side];
         let tree = self.trees[side].entry(place.0.clone()).or_insert_with(|| {
             let text = ws.rust_files.get(&place.0)?;
-            let parsed = rs::ast::SourceFile::parse(text, rs::Edition::Edition2021).tree();
+            let parsed = rs::ast::SourceFile::parse(text, ws.editions.get(&place.0).copied().unwrap_or(rs::Edition::Edition2021)).tree();
             Some(FileTree { lines: rs::Lines::new(text), root: parsed.syntax().clone() })
         });
         let tree = tree.as_ref()?;
@@ -385,6 +495,29 @@ impl MirMap<'_> {
             }
         }
     }
+}
+
+/// The places of the attributes of an item on one side: each line of `text` that the source of
+/// the file has in the range of the item.
+fn attribute_places(ws: &Workspace, item: &semilla_syntax::Item, text: &str) -> Vec<(Pos, Pos)> {
+    let Some(source) = ws.rust_files.get(&item.file) else { return Vec::new() };
+    let lines = rs::Lines::new(source);
+    let (from, to) = ((item.line_start, item.col_start), (item.line_end, item.col_end));
+    let mut out = Vec::new();
+    for attribute in text.lines().map(str::trim).filter(|line| line.starts_with("#[")) {
+        let found = source.match_indices(attribute).map(|(at, _)| (lines.pos(at), lines.pos(at + attribute.len()))).find(|(start, end)| from <= *start && *end <= to);
+        out.extend(found);
+    }
+    out
+}
+
+/// A node text with no outer parentheses: `(x as u32)` and `x as u32` are one place.
+fn bare(text: &str) -> &str {
+    let mut text = text.trim();
+    while text.starts_with('(') && text.ends_with(')') && text.len() > 1 {
+        text = text[1..text.len() - 1].trim();
+    }
+    text
 }
 
 /// The change of the branch structure of the elements of an edit (design 40.4): the text of

@@ -143,6 +143,10 @@ pub struct Workspace {
     /// The items with a body by file ([`Workspace::body_items`]), made at the first use.
     #[serde(skip)]
     pub body_index: BodyIndex,
+    /// The edition of the package of each parsed file (design 39.1). The MIR map parses a
+    /// file again with it (design 44, FIX 1).
+    #[serde(skip)]
+    pub editions: BTreeMap<String, Edition>,
 }
 
 /// One function, constant, or static of a file, for [`Workspace::body_items`].
@@ -353,7 +357,7 @@ impl Workspace {
                 // name of the package (`benches/hex.rs` of the package `hex`).
                 let main = *file == package.dir.join("src/main.rs");
                 let module = if kind == "lib" || main { package.name.clone() } else { format!("{}::{}", package.name, name.replace('-', "_")) };
-                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, parse_errors: &mut workspace.parse_errors, crate_name: &package.name, edition: package.edition };
+                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition };
                 loader.load_file(file, &module, matches!(kind.as_str(), "test" | "bench"))?;
             }
         }
@@ -980,6 +984,7 @@ struct Loader<'a> {
     inner_attrs: &'a mut BTreeMap<String, (String, Vec<String>)>,
     inner_attrs_display: &'a mut BTreeMap<String, Vec<String>>,
     parse_errors: &'a mut BTreeMap<String, String>,
+    editions: &'a mut BTreeMap<String, Edition>,
     crate_name: &'a str,
     edition: Edition,
 }
@@ -1001,6 +1006,7 @@ impl Loader<'_> {
     /// Parses the text of a file. A file that does not parse does not stop the load (design
     /// 37.5, 39.4): the map of the parse errors gets the reason, and the result is `None`.
     fn parse(&mut self, rel: &str, text: &str) -> Option<ast::SourceFile> {
+        self.editions.insert(rel.to_string(), self.edition);
         match rs::parse_file(text, self.edition) {
             Ok(parsed) => Some(parsed),
             Err(reason) => {

@@ -26,13 +26,36 @@ pub struct Elements {
     pub f: Vec<String>,
     /// The runs of elements with the same ranges.
     pub r: Vec<Vec<i64>>,
+    /// The symbol table of the body (design 44): the def path, the file (an index into `f`),
+    /// and the byte range of the definition.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub s: Vec<crate::symbols::Symbol>,
+    /// The symbols of the elements: runs `[first, count, symbol…]` of elements with the same
+    /// symbol list. An element with no symbol has no entry.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub y: Vec<Vec<u32>>,
+    /// The version of the symbol data: 1 for a body with symbol data (design 44).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub v: u8,
+    /// The index of the symbol of the function of the body in `s` (design 44).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub o: Option<u32>,
+    /// True for a body that rustc evaluates at compile time (a constant, a static, a constant
+    /// block): its symbols are evaluated, so the body of a `const fn` counts (design 44).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub c: bool,
+}
+
+fn is_zero(value: &u8) -> bool {
+    *value == 0
 }
 
 /// One source range: the index of the file, the start, and the end.
 type Range = (i64, i64, i64);
 
-/// Returns the ranges of the elements of a canonical body.
-pub fn elements(body: &Body) -> Elements {
+/// Returns the ranges of the elements of a canonical body, and the symbols of each element of
+/// the body of `item` (design 44).
+pub fn elements(body: &Body, item: Option<rustc_public::DefId>) -> Elements {
     let mut out = Elements::default();
     let spans: Vec<rustc_public::ty::Span> = body
         .blocks
@@ -63,6 +86,27 @@ pub fn elements(body: &Body) -> Elements {
             out.r.push(run);
         }
     });
+    if let Some(item) = item
+        && let Some((symbols, per, own, evaluated)) = crate::guarded(|| crate::symbols::elements(body, item, &mut out.f))
+    {
+        out.s = symbols;
+        out.o = own;
+        out.c = evaluated;
+        out.v = 1;
+        let mut index = 0;
+        while index < per.len() {
+            let mut end = index + 1;
+            while end < per.len() && per[end] == per[index] {
+                end += 1;
+            }
+            if !per[index].is_empty() {
+                let mut run = vec![index as u32, (end - index) as u32];
+                run.extend(&per[index]);
+                out.y.push(run);
+            }
+            index = end;
+        }
+    }
     out
 }
 
@@ -89,7 +133,7 @@ fn ranges(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, files: &mut Vec<String>
 /// The range of a span in a file of the workspace, in the file as written. `None` for a span
 /// with no place, and for a file outside the workspace (the standard library, a registry
 /// crate).
-fn range(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, files: &mut Vec<String>) -> Option<Range> {
+pub(crate) fn range(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, files: &mut Vec<String>) -> Option<Range> {
     if span.is_dummy() {
         return None;
     }

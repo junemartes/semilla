@@ -218,6 +218,9 @@ pub struct MirMapCounts {
     pub composites: usize,
     #[serde(default)]
     pub gap_pairs: usize,
+    /// The MIR elements that a symbol link owns (design 44).
+    #[serde(default)]
+    pub linked: usize,
     /// The bodies above the limit of the statement mapper (design 41.9).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mapper_skipped: Vec<String>,
@@ -231,6 +234,9 @@ impl MirMapCounts {
     /// The line of `semilla status --verbose`.
     pub fn line(&self) -> String {
         let mut line = format!("MIR map: {} map error(s); {} edit(s) own a changed MIR element; {} edit(s) with equal code in a changed body; {} edit(s) with the doubt rule", self.errors, self.owners, self.equal, self.doubt);
+        if self.linked > 0 {
+            line.push_str(&format!("; {} linked element(s)", self.linked));
+        }
         if !self.examples.is_empty() {
             line.push_str(&format!(" (first map errors: {})", self.examples.join(", ")));
         }
@@ -339,6 +345,10 @@ pub struct Fact {
     /// is not a mismatch mark, and it asks for no reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branches: Option<String>,
+    /// The symbol links of the fact (design 44): each changed symbol that a body of `affected`
+    /// names, with the bodies. Each output shows "through: `T` (2 bodies)".
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub through: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// The kinds of spotlight that one reason can cover (design 37.19): the name for a reason
