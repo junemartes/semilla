@@ -40,19 +40,23 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::OnceLock;
 
 use rustc_attr_ir::{Attribute, AttributeKind};
 use rustc_data_structures::steal::Steal;
-use rustc_hir::def::DefKind;
+use rustc_hir::def::{DefKind, Res};
+use rustc_hir::intravisit::{self, Visitor as HirVisitor};
+use rustc_hir::{ExprKind, PatKind, QPath};
 use rustc_middle::mir::visit::{MutVisitor, Visitor};
 use rustc_middle::mir::{
-    self, BasicBlock, BasicBlockData, Body, CallSource, Const, Local, LocalDecl, Location, Operand, Place, Rvalue,
-    SourceInfo, StatementKind, Terminator, TerminatorKind, UnwindAction,
+    self, BasicBlock, BasicBlockData, Body, CallSource, Const, Local, LocalDecl, Location, Operand, Place, Rvalue, SourceInfo, StatementKind,
+    Terminator, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_span::hygiene::{ExpnKind, MacroKind};
+use rustc_span::symbol::{Ident, kw};
 use rustc_span::{DUMMY_SP, Span};
 
 /// The built-in function-like macros that do not read the build configuration. Each other
@@ -85,7 +89,7 @@ const NOT_CONFIG: [&str; 7] = ["include_str", "include_bytes", "include", "line"
 
 /// Where the value of a constant comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Source {
+pub(crate) enum Source {
     /// Configuration-free.
     Free,
     /// A built-in macro that is not on the allow list, or a proc macro. `identity` is the
@@ -104,19 +108,23 @@ pub enum Source {
 
 impl Source {
     /// The line of the body record for a use that gets the "build configuration" spotlight.
-    pub fn config_line(&self) -> Option<String> {
+    pub(crate) fn config_line(&self) -> Option<String> {
         match self {
             Source::Macro { identity, quiet: false } => Some(identity.clone()),
             Source::Static { path, text } => {
                 let name = path.rsplit("::").next().unwrap_or(path);
-                Some(if text.is_empty() { format!("static `{name}`") } else { format!("static `{name}` (`{text}`)") })
+                Some(if text.is_empty() {
+                    format!("static `{name}`")
+                } else {
+                    format!("static `{name}` (`{text}`)")
+                })
             }
             _ => None,
         }
     }
 
     /// The text that the printer adds to the constant.
-    pub fn suffix(&self) -> Option<String> {
+    pub(crate) fn suffix(&self) -> Option<String> {
         match self {
             Source::Free => None,
             Source::Macro { identity, .. } => Some(format!(" @{identity}")),
@@ -130,14 +138,14 @@ impl Source {
 static DEFAULT_MIR: OnceLock<for<'tcx> fn(TyCtxt<'tcx>, LocalDefId) -> &'tcx Steal<Body<'tcx>>> = OnceLock::new();
 
 /// Puts the pass `make_opaque` between the borrow check and the optimizer of rustc.
-pub fn install(config: &mut rustc_interface::interface::Config) {
+pub(crate) fn install(config: &mut rustc_interface::interface::Config) {
     config.override_queries = Some(|_session, providers| {
         let _ = DEFAULT_MIR.set(providers.queries.mir_drops_elaborated_and_const_checked);
         providers.queries.mir_drops_elaborated_and_const_checked = opaque_mir;
     });
 }
 
-fn opaque_mir<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> &'tcx Steal<Body<'tcx>> {
+fn opaque_mir(tcx: TyCtxt<'_>, def: LocalDefId) -> &Steal<Body<'_>> {
     let default = DEFAULT_MIR.get().expect("the default provider is stored");
     let steal = default(tcx, def);
     // The body of a constant or a static runs only at compile time. Its value is the input of
@@ -150,7 +158,12 @@ fn opaque_mir<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> &'tcx Steal<Body<'tcx
     }
     // The `main` function of the test harness has no code of the user: it gives the list of
     // the tests to the test runner. The driver reads its form (`harness.rs`).
-    if tcx.sess.is_test_crate() && matches!(tcx.def_span(def).ctxt().outer_expn_data().kind, ExpnKind::AstPass(rustc_span::hygiene::AstPass::TestHarness)) {
+    if tcx.sess.is_test_crate()
+        && matches!(
+            tcx.def_span(def).ctxt().outer_expn_data().kind,
+            ExpnKind::AstPass(rustc_span::hygiene::AstPass::TestHarness)
+        )
+    {
         return steal;
     }
     let mut body = steal.steal();
@@ -160,20 +173,23 @@ fn opaque_mir<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId) -> &'tcx Steal<Body<'tcx
 }
 
 /// True for the intrinsic `core::intrinsics::black_box`.
-pub fn is_black_box(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+pub(crate) fn is_black_box(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     tcx.intrinsic(def_id).is_some_and(|intrinsic| intrinsic.name.as_str() == "black_box")
 }
 
 fn black_box_def(tcx: TyCtxt<'_>) -> Option<DefId> {
     thread_local! {
-        static FOUND: RefCell<Option<Option<DefId>>> = const { RefCell::new(None) };
+        static FOUND: std::cell::OnceCell<Option<DefId>> = const { std::cell::OnceCell::new() };
     }
-    if let Some(found) = FOUND.with(|found| *found.borrow()) {
+    if let Some(found) = FOUND.with(|found| found.get().copied()) {
         return found;
     }
     let found = (|| {
         let core = tcx.crates(()).iter().copied().find(|krate| tcx.crate_name(*krate).as_str() == "core")?;
-        let root = DefId { krate: core, index: rustc_span::def_id::CRATE_DEF_INDEX };
+        let root = DefId {
+            krate: core,
+            index: rustc_span::def_id::CRATE_DEF_INDEX,
+        };
         let child = |module: DefId, name: &str| {
             tcx.module_children(module)
                 .iter()
@@ -184,8 +200,7 @@ fn black_box_def(tcx: TyCtxt<'_>) -> Option<DefId> {
         let def = child(intrinsics, "black_box")?;
         is_black_box(tcx, def).then_some(def)
     })();
-    FOUND.with(|slot| *slot.borrow_mut() = Some(found));
-    found
+    FOUND.with(|slot| *slot.get_or_init(|| found))
 }
 
 /// The built-in name of a macro (`#[rustc_builtin_macro]`), if it is a built-in macro.
@@ -223,24 +238,23 @@ fn macro_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
                 let mut no_spotlight = false;
                 let free = match data.macro_def_id {
                     // A built-in derive makes its literals from the names of the item.
-                    Some(def_id) => match builtin_name(tcx, def_id, name) {
-                        Some(builtin) => {
+                    Some(def_id) => {
+                        if let Some(builtin) = builtin_name(tcx, def_id, name) {
                             no_spotlight = NOT_CONFIG.contains(&builtin.as_str());
                             kind != MacroKind::Bang || PURE_BUILTIN.contains(&builtin.as_str())
-                        }
-                        // A proc macro is code that runs in the build: its output is not source
-                        // text. A `macro_rules!` macro only moves source text.
-                        None => {
+                        } else {
                             no_spotlight = true;
                             !is_proc_macro(tcx, def_id)
                         }
-                    },
+                    }
                     None => false,
                 };
-                if let Some(def_id) = data.macro_def_id {
-                    if found.is_some() && tcx.crate_name(def_id.krate).as_str() == "core" && DEBUG_ASSERT.contains(&tcx.item_name(def_id).as_str()) {
-                        quiet = true;
-                    }
+                if let Some(def_id) = data.macro_def_id
+                    && found.is_some()
+                    && tcx.crate_name(def_id.krate).as_str() == "core"
+                    && DEBUG_ASSERT.contains(&tcx.item_name(def_id).as_str())
+                {
+                    quiet = true;
                 }
                 if !free && found.is_none() {
                     found = Some(call_text(tcx, data.call_site, name));
@@ -269,19 +283,28 @@ fn hidden_call(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
         return None;
     }
     let text = tcx.sess.source_map().span_to_snippet(span).ok()?;
-    is_call_text(&text).then(|| Source::Macro { identity: call_text(tcx, span, rustc_span::sym::line), quiet: true })
+    is_call_text(&text).then(|| Source::Macro {
+        identity: call_text(tcx, span, rustc_span::sym::line),
+        quiet: true,
+    })
 }
 
 /// True if `text` has the form of one macro call: a path, `!`, and one group in delimiters.
 fn is_call_text(text: &str) -> bool {
     let text = text.trim();
-    let Some((path, rest)) = text.split_once('!') else { return false };
+    let Some((path, rest)) = text.split_once('!') else {
+        return false;
+    };
     let path = path.trim_end();
     let is_path = !path.is_empty()
         && !path.starts_with(|first: char| first.is_ascii_digit())
-        && path.chars().all(|part| part.is_alphanumeric() || part == '_' || part == ':' || part == '$');
+        && path
+            .chars()
+            .all(|part| part.is_alphanumeric() || part == '_' || part == ':' || part == '$');
     let rest = rest.trim_start();
-    let group = [('(', ')'), ('[', ']'), ('{', '}')].iter().any(|(open, close)| rest.starts_with(*open) && rest.ends_with(*close));
+    let group = [('(', ')'), ('[', ']'), ('{', '}')]
+        .iter()
+        .any(|(open, close)| rest.starts_with(*open) && rest.ends_with(*close));
     is_path && group
 }
 
@@ -299,7 +322,11 @@ fn call_text(tcx: TyCtxt<'_>, call_site: Span, name: rustc_span::Symbol) -> Stri
         Ok(text) => {
             let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
             let text = text.strip_prefix("$crate::").unwrap_or(&text).to_string();
-            if text.chars().count() > 120 { format!("{}…", text.chars().take(120).collect::<String>()) } else { text }
+            if text.chars().count() > 120 {
+                format!("{}…", text.chars().take(120).collect::<String>())
+            } else {
+                text
+            }
         }
         Err(_) => format!("{name}!"),
     }
@@ -310,20 +337,17 @@ thread_local! {
     /// constant that is not configuration-free, and a pattern constant.
     static NOTED: RefCell<HashMap<Span, Source>> = RefCell::new(HashMap::new());
     /// The pattern constants of each body that are not configuration-free.
-    static PATTERNS: RefCell<HashMap<LocalDefId, std::rc::Rc<Vec<(Span, String)>>>> = RefCell::new(HashMap::new());
+    static PATTERNS: RefCell<HashMap<LocalDefId, PatternConstants>> = RefCell::new(HashMap::new());
 }
+
+/// The pattern constants of a body that are not configuration-free: the span and the text.
+type PatternConstants = std::rc::Rc<Vec<(Span, String)>>;
 
 /// Reads the HIR of a body. It keeps the source of each path to a named constant that is not
 /// configuration-free (`NOTED`). It returns the pattern constants that are not
 /// configuration-free: the span and the text.
-fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, String)>> {
-    use rustc_hir::def::Res;
-    use rustc_hir::intravisit::{self, Visitor as HirVisitor};
-    use rustc_hir::{Expr, ExprKind, PatExpr, PatExprKind};
-    if let Some(found) = PATTERNS.with(|patterns| patterns.borrow().get(&def).cloned()) {
-        return found;
-    }
-    let _reader = Reader::set(Some(def));
+fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> PatternConstants {
+    use rustc_hir::{Expr, PatExpr, PatExprKind};
     struct Sources<'tcx> {
         tcx: TyCtxt<'tcx>,
         typeck: &'tcx ty::TypeckResults<'tcx>,
@@ -335,7 +359,7 @@ fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, Strin
         /// configuration-free.
         fn named(&self, path: &rustc_hir::QPath<'tcx>, hir_id: rustc_hir::HirId) -> Option<Source> {
             match self.typeck.qpath_res(path, hir_id) {
-                Res::Def(DefKind::Const { .. } | DefKind::AssocConst { .. }, def_id) => {
+                Res::Def(DefKind::Const | DefKind::AssocConst, def_id) => {
                     (!def_is_free(self.tcx, def_id, !self.typeck.node_args(hir_id).is_empty())).then(|| Source::Named(def_path(self.tcx, def_id)))
                 }
                 Res::Def(DefKind::Static { .. }, def_id) => (!def_is_free(self.tcx, def_id, false)).then(|| static_source(self.tcx, def_id)),
@@ -345,10 +369,10 @@ fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, Strin
     }
     impl<'tcx> HirVisitor<'tcx> for Sources<'tcx> {
         fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-            if let ExprKind::Path(path) = &expr.kind {
-                if let Some(source) = self.named(path, expr.hir_id) {
-                    self.paths.push((expr.span, source));
-                }
+            if let ExprKind::Path(path) = &expr.kind
+                && let Some(source) = self.named(path, expr.hir_id)
+            {
+                self.paths.push((expr.span, source));
             }
             intravisit::walk_expr(self, expr);
         }
@@ -358,7 +382,7 @@ fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, Strin
                 && match &expr.kind {
                     PatExprKind::Lit { .. } => true,
                     PatExprKind::Path(path) => match self.typeck.qpath_res(path, expr.hir_id) {
-                        Res::Def(DefKind::Const { .. } | DefKind::AssocConst { .. }, _) => self.named(path, expr.hir_id).is_none(),
+                        Res::Def(DefKind::Const | DefKind::AssocConst, _) => self.named(path, expr.hir_id).is_none(),
                         // A unit struct or a unit variant.
                         Res::Def(DefKind::Ctor(..) | DefKind::Struct | DefKind::Variant, _) | Res::SelfCtor(_) => true,
                         _ => false,
@@ -367,38 +391,55 @@ fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, Strin
                     _ => false,
                 };
             if !free {
-                let text = self.tcx.sess.source_map().span_to_snippet(expr.span).unwrap_or_else(|_| "a pattern".to_string());
+                let text = self
+                    .tcx
+                    .sess
+                    .source_map()
+                    .span_to_snippet(expr.span)
+                    .unwrap_or_else(|_| "a pattern".to_string());
                 self.patterns.push((expr.span, text.split_whitespace().collect::<Vec<_>>().join(" ")));
             }
             intravisit::walk_pat_expr(self, expr);
         }
     }
+    if let Some(found) = PATTERNS.with(|patterns| patterns.borrow().get(&def).cloned()) {
+        return found;
+    }
+    let _reader = Reader::set(Some(def));
     let mut patterns = Vec::new();
-    if let Some(body) = tcx.hir_maybe_body_owned_by(def) {
-        if tcx.has_typeck_results(def) {
-            let mut sources = Sources { tcx, typeck: tcx.typeck(def), patterns: Vec::new(), paths: Vec::new() };
-            sources.visit_body(body);
-            // The `main` function of the test harness names each test descriptor (a static) with
-            // the span of the test function. The record of this `main` does not show its MIR
-            // (see `harness.rs`). A note for this span marks each constant of the descriptor,
-            // and only if the compiler reads the `main` function first (batch 5s).
-            let harness = tcx.sess.is_test_crate()
-                && matches!(tcx.def_span(def).ctxt().outer_expn_data().kind, ExpnKind::AstPass(rustc_span::hygiene::AstPass::TestHarness))
-                && tcx.entry_fn(()).is_some_and(|(entry, _)| entry == def.to_def_id());
-            if harness {
-                sources.paths.clear();
-            }
-            NOTED.with(|noted| {
-                let mut noted = noted.borrow_mut();
-                for (span, source) in sources.paths {
-                    noted.insert(span, source);
-                }
-                for (span, text) in &sources.patterns {
-                    noted.insert(*span, Source::Named(format!("pattern {text}")));
-                }
-            });
-            patterns = sources.patterns;
+    if let Some(body) = tcx.hir_maybe_body_owned_by(def)
+        && tcx.has_typeck_results(def)
+    {
+        let mut sources = Sources {
+            tcx,
+            typeck: tcx.typeck(def),
+            patterns: Vec::new(),
+            paths: Vec::new(),
+        };
+        sources.visit_body(body);
+        // The `main` function of the test harness names each test descriptor (a static) with
+        // the span of the test function. The record of this `main` does not show its MIR
+        // (see `harness.rs`). A note for this span marks each constant of the descriptor,
+        // and only if the compiler reads the `main` function first (batch 5s).
+        let harness = tcx.sess.is_test_crate()
+            && matches!(
+                tcx.def_span(def).ctxt().outer_expn_data().kind,
+                ExpnKind::AstPass(rustc_span::hygiene::AstPass::TestHarness)
+            )
+            && tcx.entry_fn(()).is_some_and(|(entry, _)| entry == def.to_def_id());
+        if harness {
+            sources.paths.clear();
         }
+        NOTED.with(|noted| {
+            let mut noted = noted.borrow_mut();
+            for (span, source) in sources.paths {
+                noted.insert(span, source);
+            }
+            for (span, text) in &sources.patterns {
+                noted.insert(*span, Source::Named(format!("pattern {text}")));
+            }
+        });
+        patterns = sources.patterns;
     }
     let patterns = std::rc::Rc::new(patterns);
     PATTERNS.with(|found| found.borrow_mut().insert(def, patterns.clone()));
@@ -406,7 +447,7 @@ fn hir_sources(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<(Span, Strin
 }
 
 /// The lines `config pattern: ..` of the body at `span`, for its text.
-pub fn pattern_lines(span: Span) -> Vec<String> {
+pub(crate) fn pattern_lines(span: Span) -> Vec<String> {
     let mut lines: Vec<String> = PATTERNS.with(|patterns| {
         patterns
             .borrow()
@@ -423,7 +464,7 @@ pub fn pattern_lines(span: Span) -> Vec<String> {
 /// Reads the HIR of each body of the local crate (`hir_sources`). The printer needs the
 /// result. Call it before the printer runs: the pass does not run for a body that rustc takes
 /// from its incremental data.
-pub fn note_local_bodies(tcx: TyCtxt<'_>) {
+pub(crate) fn note_local_bodies(tcx: TyCtxt<'_>) {
     for def in tcx.mir_keys(()).iter().copied() {
         hir_sources(tcx, def);
     }
@@ -440,16 +481,18 @@ const FREE_FILE: &str = "semilla-free";
 /// metadata of a crate does not tell where a literal comes from. The driver writes the file
 /// before rustc writes the metadata file, so a user of the crate always finds it.
 fn write_free_constants(tcx: TyCtxt<'_>) {
-    let rustc_session::config::OutFileName::Real(metadata) = tcx.output_filenames(()).path(rustc_session::config::OutputType::Metadata) else { return };
+    let rustc_session::config::OutFileName::Real(metadata) = tcx.output_filenames(()).path(rustc_session::config::OutputType::Metadata) else {
+        return;
+    };
     let mut lines = String::new();
     // The reader is in another crate: a constant below a `cfg` attribute is not in the list.
     let _reader = Reader::set(None);
     for def in tcx.hir_body_owners() {
-        if !matches!(tcx.def_kind(def), DefKind::Const { .. } | DefKind::AssocConst { .. } | DefKind::Static { .. }) {
+        if !matches!(tcx.def_kind(def), DefKind::Const | DefKind::AssocConst | DefKind::Static { .. }) {
             continue;
         }
         if tcx.generics_of(def).count() == 0 && def_is_free(tcx, def.to_def_id(), false) {
-            lines.push_str(&format!("{:?}\n", tcx.def_path_hash(def.to_def_id())));
+            let _ = writeln!(lines, "{:?}", tcx.def_path_hash(def.to_def_id()));
         }
     }
     // Without the file, each constant of this crate is opaque for its users.
@@ -467,35 +510,45 @@ thread_local! {
 fn foreign_is_free(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let known = FOREIGN_FREE.with(|lists| lists.borrow().get(&def_id.krate).is_some());
     if !known {
-        let list = tcx.used_crate_source(def_id.krate).paths().find_map(|path| std::fs::read_to_string(path.with_extension(FREE_FILE)).ok());
+        let list = tcx
+            .used_crate_source(def_id.krate)
+            .paths()
+            .find_map(|path| std::fs::read_to_string(path.with_extension(FREE_FILE)).ok());
         let list = list.map(|text| text.lines().map(str::to_string).collect());
         FOREIGN_FREE.with(|lists| lists.borrow_mut().insert(def_id.krate, list));
     }
     let hash = format!("{:?}", tcx.def_path_hash(def_id));
-    FOREIGN_FREE.with(|lists| lists.borrow().get(&def_id.krate).is_some_and(|list| list.as_ref().is_some_and(|list| list.contains(&hash))))
+    FOREIGN_FREE.with(|lists| {
+        lists
+            .borrow()
+            .get(&def_id.krate)
+            .is_some_and(|list| list.as_ref().is_some_and(|list| list.contains(&hash)))
+    })
 }
 
 /// True for a crate that the driver compiles: the local crate or a workspace crate (it has a
 /// list of free constants). The source rule of the verifier reads the source of such a crate.
-pub fn is_workspace_crate(tcx: TyCtxt<'_>, krate: rustc_span::def_id::CrateNum) -> bool {
+pub(crate) fn is_workspace_crate(tcx: TyCtxt<'_>, krate: rustc_span::def_id::CrateNum) -> bool {
     if krate == rustc_span::def_id::LOCAL_CRATE {
         return true;
     }
     // The lookup of the list is the test for a workspace crate.
     let _ = foreign_is_free(tcx, krate.as_def_id());
-    FOREIGN_FREE.with(|lists| lists.borrow().get(&krate).is_some_and(|list| list.is_some()))
+    FOREIGN_FREE.with(|lists| lists.borrow().get(&krate).is_some_and(std::option::Option::is_some))
 }
 
 /// Each local constant whose initializer is one literal from a macro that reads the build
 /// configuration: the def path, the macro call, and the span of the item. rustc keeps no MIR
 /// body for such a constant, so the driver makes its record from this list.
-pub fn literal_constants(tcx: TyCtxt<'_>) -> Vec<(String, String, Span)> {
+pub(crate) fn literal_constants(tcx: TyCtxt<'_>) -> Vec<(String, String, Span)> {
     let mut found = Vec::new();
     for def in tcx.hir_body_owners() {
-        if !matches!(tcx.def_kind(def), DefKind::Const { .. } | DefKind::AssocConst { .. }) {
+        if !matches!(tcx.def_kind(def), DefKind::Const | DefKind::AssocConst) {
             continue;
         }
-        let Some(body) = tcx.hir_maybe_body_owned_by(def) else { continue };
+        let Some(body) = tcx.hir_maybe_body_owned_by(def) else {
+            continue;
+        };
         if let Some(Source::Macro { identity, .. }) = macro_source(tcx, body.value.span) {
             found.push((def_path(tcx, def.to_def_id()), identity, tcx.def_span(def)));
         }
@@ -504,7 +557,7 @@ pub fn literal_constants(tcx: TyCtxt<'_>) -> Vec<(String, String, Span)> {
 }
 
 /// Where the value of a constant operand comes from.
-pub fn source_of<'tcx>(tcx: TyCtxt<'tcx>, span: Span, constant: &Const<'tcx>) -> Source {
+pub(crate) fn source_of<'tcx>(tcx: TyCtxt<'tcx>, span: Span, constant: &Const<'tcx>) -> Source {
     // A function item and a unit value have no value that a configuration can change.
     if matches!(constant.ty().kind(), ty::FnDef(..)) {
         return Source::Free;
@@ -554,7 +607,10 @@ fn static_source(tcx: TyCtxt<'_>, def_id: DefId) -> Source {
         .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|text| text.chars().count() <= 40 && !text.contains('`'))
         .unwrap_or_default();
-    Source::Static { path: def_path(tcx, def_id), text }
+    Source::Static {
+        path: def_path(tcx, def_id),
+        text,
+    }
 }
 
 fn def_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
@@ -565,8 +621,11 @@ fn def_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
 
 thread_local! {
     /// The result for each constant. `None` while the check of the constant runs.
-    static FREE: RefCell<HashMap<(DefId, Option<u32>), Option<bool>>> = RefCell::new(HashMap::new());
+    static FREE: RefCell<HashMap<FreeKey, Option<bool>>> = RefCell::new(HashMap::new());
 }
+
+/// A constant: its def id, and the index of the promoted constant in its body.
+type FreeKey = (DefId, Option<u32>);
 
 fn unevaluated_is_free<'tcx>(tcx: TyCtxt<'tcx>, unevaluated: &mir::UnevaluatedConst<'tcx>) -> bool {
     let Some(promoted) = unevaluated.promoted else {
@@ -579,7 +638,9 @@ fn unevaluated_is_free<'tcx>(tcx: TyCtxt<'tcx>, unevaluated: &mir::UnevaluatedCo
     FREE.with(|free| free.borrow_mut().insert(key, None));
     // A promoted constant of a local body: its MIR decides.
     let result = unevaluated.def.as_local().is_some_and(|local| {
-        tcx.promoted_mir(local.to_def_id()).get(promoted).is_some_and(|body| body_is_free(tcx, body))
+        tcx.promoted_mir(local.to_def_id())
+            .get(promoted)
+            .is_some_and(|body| body_is_free(tcx, body))
     });
     FREE.with(|free| free.borrow_mut().insert(key, Some(result)));
     result
@@ -590,8 +651,13 @@ fn unevaluated_is_free<'tcx>(tcx: TyCtxt<'tcx>, unevaluated: &mir::UnevaluatedCo
 /// The reason for each entry: the standard library has one definition of the alias, with no
 /// `cfg`, and its target is `Result` with an error type of the standard library. The paths are
 /// the definition paths of the pinned toolchain. A path that a new toolchain moves is opaque.
-const FREE_ALIASES: [&str; 5] =
-    ["core::io::error::Result", "core::fmt::Result", "std::thread::Result", "std::sync::poison::LockResult", "std::sync::poison::TryLockResult"];
+const FREE_ALIASES: [&str; 5] = [
+    "core::io::error::Result",
+    "core::fmt::Result",
+    "std::thread::Result",
+    "std::sync::poison::LockResult",
+    "std::sync::poison::TryLockResult",
+];
 
 thread_local! {
     /// The result of `aliases` for each item.
@@ -603,33 +669,34 @@ thread_local! {
 /// of such an alias (`core::ffi::c_long`), and the MIR shows only the target. An alias of the
 /// local crate or of a workspace crate is free here: the source rule of the verifier reads its
 /// text. A workspace crate is a crate with a list of free constants.
-pub fn aliases(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<String>> {
-    use rustc_hir::def::Res;
-    use rustc_hir::intravisit::{self, Visitor as HirVisitor};
-    if let Some(found) = ALIASES.with(|aliases| aliases.borrow().get(&def).cloned()) {
-        return found;
-    }
+pub(crate) fn aliases(tcx: TyCtxt<'_>, def: LocalDefId) -> std::rc::Rc<Vec<String>> {
     struct Paths<'tcx> {
         tcx: TyCtxt<'tcx>,
         found: std::collections::BTreeSet<String>,
     }
     impl<'tcx> HirVisitor<'tcx> for Paths<'tcx> {
         fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, _id: rustc_hir::HirId) {
-            if let Res::Def(DefKind::TyAlias, def_id) = path.res {
-                if !def_id.is_local() {
-                    let text = def_path(self.tcx, def_id);
-                    // The lookup of the list is the test for a workspace crate.
-                    let _ = foreign_is_free(self.tcx, def_id);
-                    let workspace = FOREIGN_FREE.with(|lists| lists.borrow().get(&def_id.krate).is_some_and(|list| list.is_some()));
-                    if !workspace && !FREE_ALIASES.contains(&text.as_str()) {
-                        self.found.insert(text);
-                    }
+            if let Res::Def(DefKind::TyAlias, def_id) = path.res
+                && !def_id.is_local()
+            {
+                let text = def_path(self.tcx, def_id);
+                // The lookup of the list is the test for a workspace crate.
+                let _ = foreign_is_free(self.tcx, def_id);
+                let workspace = FOREIGN_FREE.with(|lists| lists.borrow().get(&def_id.krate).is_some_and(std::option::Option::is_some));
+                if !workspace && !FREE_ALIASES.contains(&text.as_str()) {
+                    self.found.insert(text);
                 }
             }
             intravisit::walk_path(self, path);
         }
     }
-    let mut paths = Paths { tcx, found: Default::default() };
+    if let Some(found) = ALIASES.with(|aliases| aliases.borrow().get(&def).cloned()) {
+        return found;
+    }
+    let mut paths = Paths {
+        tcx,
+        found: std::collections::BTreeSet::default(),
+    };
     let node = tcx.hir_node_by_def_id(def);
     if let Some(decl) = node.fn_decl() {
         paths.visit_fn_decl(decl);
@@ -662,8 +729,8 @@ fn def_is_free(tcx: TyCtxt<'_>, def_id: DefId, generic: bool) -> bool {
     }
     FREE.with(|free| free.borrow_mut().insert(key, None));
     let result = match tcx.def_kind(def_id) {
-        DefKind::AssocConst { .. } if is_fixed_int_const(tcx, def_id) => true,
-        DefKind::Const { .. } | DefKind::AssocConst { .. } => match def_id.as_local() {
+        DefKind::AssocConst if is_fixed_int_const(tcx, def_id) => true,
+        DefKind::Const | DefKind::AssocConst => match def_id.as_local() {
             Some(local) => {
                 // The constant is the reader of the constants in its initializer.
                 let _reader = Reader::set(Some(local));
@@ -677,7 +744,11 @@ fn def_is_free(tcx: TyCtxt<'_>, def_id: DefId, generic: bool) -> bool {
             let plain = !tcx.is_mutable_static(def_id)
                 && !tcx.is_foreign_item(def_id)
                 && !tcx.is_thread_local_static(def_id)
-                && tcx.type_of(def_id).instantiate_identity().skip_norm_wip().is_freeze(tcx, ty::TypingEnv::fully_monomorphized());
+                && tcx
+                    .type_of(def_id)
+                    .instantiate_identity()
+                    .skip_norm_wip()
+                    .is_freeze(tcx, ty::TypingEnv::fully_monomorphized());
             plain
                 && match def_id.as_local() {
                     Some(local) => {
@@ -731,10 +802,10 @@ thread_local! {
 }
 
 /// Sets the body that reads the constants, until the value goes out of scope.
-pub struct Reader(Option<LocalDefId>);
+pub(crate) struct Reader(Option<LocalDefId>);
 
 impl Reader {
-    pub fn set(reader: Option<LocalDefId>) -> Reader {
+    pub(crate) fn set(reader: Option<LocalDefId>) -> Reader {
         Reader(READER.with(|cell| cell.replace(reader)))
     }
 }
@@ -771,7 +842,9 @@ fn has_trace(tcx: TyCtxt<'_>, def: LocalDefId, attr: bool) -> bool {
         }
         hir_id = tcx.parent_hir_id(hir_id);
     };
-    let Some(reader) = READER.with(|cell| cell.get()) else { return true };
+    let Some(reader) = READER.with(std::cell::Cell::get) else {
+        return true;
+    };
     let mut hir_id = tcx.local_def_id_to_hir_id(reader);
     loop {
         if hir_id == scope {
@@ -787,8 +860,186 @@ fn has_trace(tcx: TyCtxt<'_>, def: LocalDefId, attr: bool) -> bool {
 /// True if a `#[cfg]` attribute selects the item `def_id` of the local crate (the item or a
 /// parent has the attribute), and the reader is not inside the item with the attribute
 /// (batch 5o). A `#[cfg_attr]` is not a cause here: the verifier reads its content.
-pub fn cfg_selects(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+pub(crate) fn cfg_selects(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     def_id.as_local().is_some_and(|local| has_trace(tcx, local, false))
+}
+
+/// The HIR walk of `uses`.
+struct Uses<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'tcx ty::TypeckResults<'tcx>,
+    out: std::collections::BTreeSet<String>,
+}
+impl<'tcx> Uses<'tcx> {
+    fn def(&mut self, def_id: DefId) {
+        if cfg_selects(self.tcx, def_id) {
+            self.out.insert(format!("cfg {}", crate::reach::real_path(self.tcx, def_id)));
+        }
+        // A member of an `impl`: the body uses the self type of the `impl`, also if the
+        // text names the type by an alias.
+        if matches!(self.tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy)
+            && let Some(parent) = self
+                .tcx
+                .opt_parent(def_id)
+                .filter(|parent| matches!(self.tcx.def_kind(*parent), DefKind::Impl { .. }))
+        {
+            let ty = self.tcx.type_of(parent).instantiate_identity().skip_norm_wip();
+            self.ty(ty);
+        }
+    }
+    fn adt(&mut self, def_id: DefId, touch: bool) {
+        let path = crate::reach::real_path(self.tcx, def_id);
+        if crate::reach::is_std(self.tcx.crate_name(def_id.krate).as_str()) {
+            self.out.insert(format!("std {path}"));
+            return;
+        }
+        self.def(def_id);
+        if !def_id.is_local() && !is_workspace_crate(self.tcx, def_id.krate) {
+            self.out.insert(format!("foreign {path}"));
+        } else {
+            self.out.insert(if touch { format!("touch {path}") } else { path });
+        }
+    }
+    fn ty(&mut self, ty: Ty<'tcx>) {
+        for arg in ty.walk() {
+            if let Some(ty::Adt(adt, _)) = arg.as_type().map(rustc_middle::ty::Ty::kind) {
+                self.adt(adt.did(), false);
+            }
+        }
+    }
+    /// The code reads a part of a value of the type `ty`.
+    fn touch(&mut self, ty: Ty<'tcx>) {
+        if let ty::Adt(adt, _) = ty.peel_refs().kind() {
+            self.adt(adt.did(), true);
+        }
+    }
+    fn res(&mut self, res: Res) {
+        match res {
+            Res::Def(kind, def_id) => {
+                self.def(def_id);
+                let owner = match kind {
+                    DefKind::Struct | DefKind::Enum | DefKind::Union => Some(def_id),
+                    DefKind::Variant => self.tcx.opt_parent(def_id),
+                    DefKind::Ctor(..) => self.tcx.opt_parent(def_id).map(|parent| {
+                        if self.tcx.def_kind(parent) == DefKind::Variant {
+                            self.tcx.parent(parent)
+                        } else {
+                            parent
+                        }
+                    }),
+                    _ => None,
+                };
+                if let Some(owner) = owner {
+                    self.adt(owner, false);
+                }
+            }
+            Res::SelfTyAlias { alias_to, .. } | Res::SelfCtor(alias_to) => {
+                let ty = self.tcx.type_of(alias_to).instantiate_identity().skip_norm_wip();
+                self.ty(ty);
+            }
+            _ => {}
+        }
+    }
+}
+impl<'tcx> HirVisitor<'tcx> for Uses<'tcx> {
+    fn visit_nested_body(&mut self, id: rustc_hir::BodyId) {
+        let old = std::mem::replace(&mut self.typeck, self.tcx.typeck_body(id));
+        self.visit_body(self.tcx.hir_body(id));
+        self.typeck = old;
+    }
+    fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, _id: rustc_hir::HirId) {
+        self.res(path.res);
+        intravisit::walk_path(self, path);
+    }
+    fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
+        for ty in [self.typeck.expr_ty_opt(expr), self.typeck.expr_ty_adjusted_opt(expr)]
+            .into_iter()
+            .flatten()
+        {
+            self.ty(ty);
+        }
+        // Each step of an adjustment: the method lookup tries the methods of each of these
+        // types.
+        for adjustment in self.typeck.expr_adjustments(expr) {
+            self.ty(adjustment.target);
+        }
+        if let Some(args) = self.typeck.node_args_opt(expr.hir_id) {
+            for ty in args.types() {
+                self.ty(ty);
+            }
+        }
+        // A method call, an operator of a trait, an index.
+        if let Some(def_id) = self.typeck.type_dependent_def_id(expr.hir_id) {
+            self.def(def_id);
+        }
+        match expr.kind {
+            ExprKind::Path(ref qpath) => {
+                let res = self.typeck.qpath_res(qpath, expr.hir_id);
+                self.res(res);
+            }
+            ExprKind::Struct(qpath, _, tail) => {
+                let res = self.typeck.qpath_res(qpath, expr.hir_id);
+                self.res(res);
+                // A base (`..base`) or a default copies fields that the text does not name.
+                if !matches!(tail, rustc_hir::StructTailExpr::None)
+                    && let Some(ty) = self.typeck.expr_ty_opt(expr)
+                {
+                    self.touch(ty);
+                }
+            }
+            // A field of a struct: the name selects the field in each configuration. A field
+            // of a union reads the layout.
+            ExprKind::Field(base, _) => {
+                if let Some(ty) = self
+                    .typeck
+                    .expr_ty_adjusted_opt(base)
+                    .filter(|ty| !matches!(ty.peel_refs().kind(), ty::Adt(adt, _) if adt.is_struct()))
+                {
+                    self.touch(ty);
+                }
+            }
+            ExprKind::Cast(source, _) => {
+                if let Some(ty) = self.typeck.expr_ty_opt(source) {
+                    self.touch(ty);
+                }
+            }
+            ExprKind::OffsetOf(..) => {
+                if let Some(args) = self.typeck.node_args_opt(expr.hir_id) {
+                    for ty in args.types() {
+                        self.touch(ty);
+                    }
+                }
+                self.out.insert("?".to_string());
+            }
+            _ => {}
+        }
+        intravisit::walk_expr(self, expr);
+    }
+    fn visit_pat(&mut self, pat: &'tcx rustc_hir::Pat<'tcx>) {
+        let ty = self.typeck.node_type_opt(pat.hir_id);
+        if let Some(ty) = ty {
+            self.ty(ty);
+        }
+        match pat.kind {
+            PatKind::Wild | PatKind::Binding(..) | PatKind::Or(..) | PatKind::Tuple(..) | PatKind::Ref(..) => {}
+            PatKind::Struct(ref qpath, ..) | PatKind::TupleStruct(ref qpath, ..) => {
+                let res = self.typeck.qpath_res(qpath, pat.hir_id);
+                self.res(res);
+                // A pattern of an enum reads the discriminant. A pattern of a struct only
+                // names fields.
+                if let Some(ty) = ty.filter(|ty| !matches!(ty.peel_refs().kind(), ty::Adt(adt, _) if adt.is_struct())) {
+                    self.touch(ty);
+                }
+            }
+            // A constant, a range, a slice, and each other kind.
+            _ => {
+                if let Some(ty) = ty {
+                    self.touch(ty);
+                }
+            }
+        }
+        intravisit::walk_pat(self, pat);
+    }
 }
 
 /// The items and the types that the code of the item `def` uses, by the name resolution and
@@ -802,175 +1053,16 @@ pub fn cfg_selects(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 /// - `foreign PATH`: a type of a crate outside the workspace.
 ///
 /// The walk includes each closure and each constant block of the item.
-pub fn uses(tcx: TyCtxt<'_>, def: LocalDefId) -> Vec<String> {
-    use rustc_hir::def::Res;
-    use rustc_hir::intravisit::{self, Visitor as HirVisitor};
-    use rustc_hir::{ExprKind, PatKind};
-    struct Uses<'tcx> {
-        tcx: TyCtxt<'tcx>,
-        typeck: &'tcx ty::TypeckResults<'tcx>,
-        out: std::collections::BTreeSet<String>,
-    }
-    impl<'tcx> Uses<'tcx> {
-        fn def(&mut self, def_id: DefId) {
-            if cfg_selects(self.tcx, def_id) {
-                self.out.insert(format!("cfg {}", crate::reach::real_path(self.tcx, def_id)));
-            }
-            // A member of an `impl`: the body uses the self type of the `impl`, also if the
-            // text names the type by an alias.
-            if matches!(self.tcx.def_kind(def_id), DefKind::AssocFn | DefKind::AssocConst | DefKind::AssocTy) {
-                if let Some(parent) = self.tcx.opt_parent(def_id).filter(|parent| matches!(self.tcx.def_kind(*parent), DefKind::Impl { .. })) {
-                    let ty = self.tcx.type_of(parent).instantiate_identity().skip_norm_wip();
-                    self.ty(ty);
-                }
-            }
-        }
-        fn adt(&mut self, def_id: DefId, touch: bool) {
-            let path = crate::reach::real_path(self.tcx, def_id);
-            if crate::reach::is_std(self.tcx.crate_name(def_id.krate).as_str()) {
-                self.out.insert(format!("std {path}"));
-                return;
-            }
-            self.def(def_id);
-            if !def_id.is_local() && !is_workspace_crate(self.tcx, def_id.krate) {
-                self.out.insert(format!("foreign {path}"));
-            } else {
-                self.out.insert(if touch { format!("touch {path}") } else { path });
-            }
-        }
-        fn ty(&mut self, ty: Ty<'tcx>) {
-            for arg in ty.walk() {
-                if let Some(ty::Adt(adt, _)) = arg.as_type().map(|ty| ty.kind()) {
-                    self.adt(adt.did(), false);
-                }
-            }
-        }
-        /// The code reads a part of a value of the type `ty`.
-        fn touch(&mut self, ty: Ty<'tcx>) {
-            if let ty::Adt(adt, _) = ty.peel_refs().kind() {
-                self.adt(adt.did(), true);
-            }
-        }
-        fn res(&mut self, res: Res) {
-            match res {
-                Res::Def(kind, def_id) => {
-                    self.def(def_id);
-                    let owner = match kind {
-                        DefKind::Struct | DefKind::Enum | DefKind::Union => Some(def_id),
-                        DefKind::Variant => self.tcx.opt_parent(def_id),
-                        DefKind::Ctor(..) => self.tcx.opt_parent(def_id).map(|parent| if self.tcx.def_kind(parent) == DefKind::Variant { self.tcx.parent(parent) } else { parent }),
-                        _ => None,
-                    };
-                    if let Some(owner) = owner {
-                        self.adt(owner, false);
-                    }
-                }
-                Res::SelfTyAlias { alias_to, .. } | Res::SelfCtor(alias_to) => {
-                    let ty = self.tcx.type_of(alias_to).instantiate_identity().skip_norm_wip();
-                    self.ty(ty);
-                }
-                _ => {}
-            }
-        }
-    }
-    impl<'tcx> HirVisitor<'tcx> for Uses<'tcx> {
-        fn visit_nested_body(&mut self, id: rustc_hir::BodyId) {
-            let old = std::mem::replace(&mut self.typeck, self.tcx.typeck_body(id));
-            self.visit_body(self.tcx.hir_body(id));
-            self.typeck = old;
-        }
-        fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, _id: rustc_hir::HirId) {
-            self.res(path.res);
-            intravisit::walk_path(self, path);
-        }
-        fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
-            for ty in [self.typeck.expr_ty_opt(expr), self.typeck.expr_ty_adjusted_opt(expr)].into_iter().flatten() {
-                self.ty(ty);
-            }
-            // Each step of an adjustment: the method lookup tries the methods of each of these
-            // types.
-            for adjustment in self.typeck.expr_adjustments(expr) {
-                self.ty(adjustment.target);
-            }
-            if let Some(args) = self.typeck.node_args_opt(expr.hir_id) {
-                for ty in args.types() {
-                    self.ty(ty);
-                }
-            }
-            // A method call, an operator of a trait, an index.
-            if let Some(def_id) = self.typeck.type_dependent_def_id(expr.hir_id) {
-                self.def(def_id);
-            }
-            match expr.kind {
-                ExprKind::Path(ref qpath) => {
-                    let res = self.typeck.qpath_res(qpath, expr.hir_id);
-                    self.res(res);
-                }
-                ExprKind::Struct(qpath, _, tail) => {
-                    let res = self.typeck.qpath_res(qpath, expr.hir_id);
-                    self.res(res);
-                    // A base (`..base`) or a default copies fields that the text does not name.
-                    if !matches!(tail, rustc_hir::StructTailExpr::None) {
-                        if let Some(ty) = self.typeck.expr_ty_opt(expr) {
-                            self.touch(ty);
-                        }
-                    }
-                }
-                // A field of a struct: the name selects the field in each configuration. A field
-                // of a union reads the layout.
-                ExprKind::Field(base, _) => {
-                    if let Some(ty) = self.typeck.expr_ty_adjusted_opt(base).filter(|ty| !matches!(ty.peel_refs().kind(), ty::Adt(adt, _) if adt.is_struct())) {
-                        self.touch(ty);
-                    }
-                }
-                ExprKind::Cast(source, _) => {
-                    if let Some(ty) = self.typeck.expr_ty_opt(source) {
-                        self.touch(ty);
-                    }
-                }
-                ExprKind::OffsetOf(..) => {
-                    if let Some(args) = self.typeck.node_args_opt(expr.hir_id) {
-                        for ty in args.types() {
-                            self.touch(ty);
-                        }
-                    }
-                    self.out.insert("?".to_string());
-                }
-                _ => {}
-            }
-            intravisit::walk_expr(self, expr);
-        }
-        fn visit_pat(&mut self, pat: &'tcx rustc_hir::Pat<'tcx>) {
-            let ty = self.typeck.node_type_opt(pat.hir_id);
-            if let Some(ty) = ty {
-                self.ty(ty);
-            }
-            match pat.kind {
-                PatKind::Wild | PatKind::Binding(..) | PatKind::Or(..) | PatKind::Tuple(..) | PatKind::Ref(..) => {}
-                PatKind::Struct(ref qpath, ..) | PatKind::TupleStruct(ref qpath, ..) => {
-                    let res = self.typeck.qpath_res(qpath, pat.hir_id);
-                    self.res(res);
-                    // A pattern of an enum reads the discriminant. A pattern of a struct only
-                    // names fields.
-                    if let Some(ty) = ty.filter(|ty| !matches!(ty.peel_refs().kind(), ty::Adt(adt, _) if adt.is_struct())) {
-                        self.touch(ty);
-                    }
-                }
-                // A constant, a range, a slice, and each other kind.
-                _ => {
-                    if let Some(ty) = ty {
-                        self.touch(ty);
-                    }
-                }
-            }
-            intravisit::walk_pat(self, pat);
-        }
-    }
+pub(crate) fn uses(tcx: TyCtxt<'_>, def: LocalDefId) -> Vec<String> {
     // A constructor has a MIR body and no HIR body: `reach::adts` reports its types.
     if tcx.hir_maybe_body_owned_by(def).is_none() {
         return Vec::new();
     }
-    let mut uses = Uses { tcx, typeck: tcx.typeck(def), out: Default::default() };
+    let mut uses = Uses {
+        tcx,
+        typeck: tcx.typeck(def),
+        out: std::collections::BTreeSet::default(),
+    };
     let node = tcx.hir_node_by_def_id(def);
     if let Some(decl) = node.fn_decl() {
         uses.visit_fn_decl(decl);
@@ -988,7 +1080,7 @@ pub fn uses(tcx: TyCtxt<'_>, def: LocalDefId) -> Vec<String> {
 /// or the type check of the compiler gives a meaning. The form fields have the meaning of the
 /// token scan of the verifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NameUse {
+pub(crate) struct NameUse {
     pub word: String,
     /// After `.` or `::`: a method call, a field, a segment of a path that is not the first.
     pub member: bool,
@@ -1009,6 +1101,219 @@ pub struct NameUse {
     pub rival: Option<String>,
 }
 
+/// The HIR walk of `names`.
+struct Names<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    /// The type check results of the body that the walk is in.
+    typeck: Option<&'tcx ty::TypeckResults<'tcx>>,
+    out: std::collections::BTreeMap<NameUse, usize>,
+    /// The path of the type before the last segment of a path `Type::name`: its last
+    /// segment is before `::`.
+    tail: Option<*const ()>,
+}
+impl<'tcx> Names<'tcx> {
+    /// The type check results that have the node. A signature of a nested item is not
+    /// a part of the body around it: it has no result.
+    fn results(&self, id: rustc_hir::HirId) -> Option<&'tcx ty::TypeckResults<'tcx>> {
+        self.typeck.filter(|typeck| typeck.hir_owner == id.owner)
+    }
+    /// The outermost macro call and the line of a name. `None`: the name comes from a
+    /// desugaring.
+    fn origin(&self, span: Span) -> Option<(Option<String>, usize)> {
+        let (mut span, mut mac, mut first) = (span, None, true);
+        for _ in 0..64 {
+            let ctxt = span.ctxt();
+            if ctxt.is_root() {
+                break;
+            }
+            let data = ctxt.outer_expn_data();
+            match data.kind {
+                ExpnKind::Desugaring(_) if first => return None,
+                ExpnKind::Macro(_, name) => {
+                    let name = name.to_string();
+                    mac = Some(name.rsplit("::").next().unwrap_or(&name).to_string());
+                }
+                ExpnKind::Root | ExpnKind::Desugaring(_) => {}
+                // A change of the compiler to the syntax tree, and a new kind.
+                #[allow(unreachable_patterns)]
+                ExpnKind::AstPass(_) => mac = Some("?".to_string()),
+            }
+            first = false;
+            span = data.call_site;
+        }
+        // An expansion with more than 64 levels: the name has no known place.
+        if !span.ctxt().is_root() {
+            mac = Some("?".to_string());
+        }
+        let line = if span.is_dummy() {
+            0
+        } else {
+            self.tcx.sess.source_map().lookup_char_pos(span.lo()).line
+        };
+        Some((mac, line))
+    }
+    fn add(&mut self, ident: Ident, member: bool, qual: Option<String>, prefix: bool) {
+        self.add_rival(ident, member, qual, prefix, None);
+    }
+    fn add_rival(&mut self, ident: Ident, member: bool, qual: Option<String>, prefix: bool, rival: Option<String>) {
+        let word = ident.name.to_string();
+        // A position of a tuple (`pair.0`) is not a name.
+        if word.is_empty() || word.starts_with(|c: char| c.is_ascii_digit()) || word == "_" {
+            return;
+        }
+        let Some((mac, line)) = self.origin(ident.span) else {
+            return;
+        };
+        let word = word.strip_prefix("r#").unwrap_or(&word).to_string();
+        *self
+            .out
+            .entry(NameUse {
+                word,
+                member,
+                qual,
+                prefix,
+                mac,
+                line,
+                rival,
+            })
+            .or_default() += 1;
+    }
+    /// The qualifier that the segment gives to the next segment.
+    fn qual_of(&self, segment: &rustc_hir::PathSegment<'tcx>) -> String {
+        let name = segment.ident.name;
+        if name == kw::PathRoot {
+            return String::new();
+        }
+        let foreign = |krate| !is_workspace_crate(self.tcx, krate);
+        if let Res::Def(DefKind::Mod, def_id) = segment.res {
+            if name == kw::DollarCrate {
+                return match def_id.krate {
+                    rustc_span::def_id::LOCAL_CRATE => "crate".to_string(),
+                    krate if foreign(krate) => "$".to_string(),
+                    krate => self.tcx.crate_name(krate).to_string(),
+                };
+            }
+            if !def_id.is_local() && foreign(def_id.krate) {
+                return "$".to_string();
+            }
+        }
+        match name {
+            kw::DollarCrate | kw::Crate => "crate".to_string(),
+            kw::SelfLower => "self".to_string(),
+            kw::Super => "super".to_string(),
+            _ => name.to_string(),
+        }
+    }
+}
+/// Two entries of a name: one line for each.
+fn join(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}\n{second}")),
+        (first, second) => first.or(second),
+    }
+}
+impl<'tcx> HirVisitor<'tcx> for Names<'tcx> {
+    type NestedFilter = rustc_middle::hir::nested_filter::All;
+    fn maybe_tcx(&mut self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+    fn visit_nested_body(&mut self, id: rustc_hir::BodyId) {
+        let old = self.typeck.replace(self.tcx.typeck_body(id));
+        self.visit_body(self.tcx.hir_body(id));
+        self.typeck = old;
+    }
+    fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, id: rustc_hir::HirId) {
+        let tail = self.tail.take_if(|tail| std::ptr::eq(*tail, std::ptr::from_ref(path).cast::<()>()));
+        let count = path.segments.len();
+        for (index, segment) in path.segments.iter().enumerate() {
+            if segment.ident.is_path_segment_keyword() {
+                continue;
+            }
+            let qual = index.checked_sub(1).map(|before| self.qual_of(&path.segments[before]));
+            // A full path to an item of a trait: the selection of the `impl` uses trait
+            // facts (batch 5q, part C1).
+            let uses = match (index + 1 == count && tail.is_none(), self.results(id), path.res) {
+                (true, Some(typeck), rustc_hir::def::Res::Def(DefKind::AssocFn | DefKind::AssocConst, item)) => {
+                    crate::rival::Finder { tcx: self.tcx, typeck }.uses(id, "path", item)
+                }
+                _ => None,
+            };
+            self.add_rival(segment.ident, index > 0, qual, index + 1 < count || tail.is_some(), uses);
+        }
+        intravisit::walk_path(self, path);
+    }
+    fn visit_qpath(&mut self, qpath: &'tcx QPath<'tcx>, id: rustc_hir::HirId, span: Span) {
+        if let QPath::TypeRelative(qself, segment) = qpath {
+            let qual = match qself.kind {
+                rustc_hir::TyKind::Path(QPath::Resolved(_, path)) => {
+                    self.tail = Some(std::ptr::from_ref(path).cast::<()>());
+                    path.segments.last().map_or_else(|| ">".to_string(), |last| self.qual_of(last))
+                }
+                rustc_hir::TyKind::Path(QPath::TypeRelative(_, inner)) => inner.ident.name.to_string(),
+                _ => ">".to_string(),
+            };
+            // A function or a constant of a type: the lookup of the compiler gives the
+            // meaning. A path in a type has no such meaning.
+            let rival = self.results(id).and_then(|typeck| match typeck.type_dependent_def(id) {
+                Some((DefKind::AssocFn | DefKind::AssocConst, winner)) => {
+                    let finder = crate::rival::Finder { tcx: self.tcx, typeck };
+                    join(
+                        join(finder.path_item(id, segment.ident.name, winner), finder.uses(id, "path", winner)),
+                        finder.feature("path", winner),
+                    )
+                }
+                _ => None,
+            });
+            self.add_rival(segment.ident, true, Some(qual), false, rival);
+        }
+        intravisit::walk_qpath(self, qpath, id);
+        let _ = span;
+        self.tail = None;
+    }
+    fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
+        match expr.kind {
+            ExprKind::MethodCall(segment, receiver, ..) => {
+                let rival = match self.results(expr.hir_id) {
+                    Some(typeck) => {
+                        let finder = crate::rival::Finder { tcx: self.tcx, typeck };
+                        let winner = typeck.type_dependent_def_id(expr.hir_id);
+                        let uses = winner.and_then(|winner| finder.uses(expr.hir_id, "call", winner));
+                        let feature = winner.and_then(|winner| finder.feature("call", winner));
+                        join(join(finder.method(expr, segment.ident.name, receiver), uses), feature)
+                    }
+                    None => Some("open|the call has no type check result".to_string()),
+                };
+                self.add_rival(segment.ident, true, None, false, rival);
+            }
+            ExprKind::Field(_, ident) => self.add(ident, true, None, false),
+            ExprKind::Struct(_, fields, _) => {
+                for field in fields {
+                    self.add(field.ident, false, Some(".".to_string()), false);
+                }
+            }
+            _ => {}
+        }
+        intravisit::walk_expr(self, expr);
+    }
+    fn visit_pat(&mut self, pat: &'tcx rustc_hir::Pat<'tcx>) {
+        match pat.kind {
+            // An inactive constant with this name makes the binding a constant pattern.
+            PatKind::Binding(_, _, ident, _) => self.add(ident, false, None, false),
+            PatKind::Struct(_, fields, _) => {
+                for field in fields {
+                    self.add(field.ident, false, Some(".".to_string()), false);
+                }
+            }
+            _ => {}
+        }
+        intravisit::walk_pat(self, pat);
+    }
+    fn visit_assoc_item_constraint(&mut self, constraint: &'tcx rustc_hir::AssocItemConstraint<'tcx>) {
+        self.add(constraint.ident, true, Some(">".to_string()), false);
+        intravisit::walk_assoc_item_constraint(self, constraint);
+    }
+}
+
 /// The names in the expanded code of the item `def` (batch 5p): its signature, its body, each
 /// closure, each constant block, and each item in the body. The source text of a body does not
 /// have the names that a macro puts into it, so the name rule of the verifier reads this list.
@@ -1019,207 +1324,17 @@ pub struct NameUse {
 /// items. No item of the workspace can change its meaning.
 ///
 /// A closure and a constant block have no list of their own: the list of the item has them.
-pub fn names(tcx: TyCtxt<'_>, def: LocalDefId) -> Vec<(NameUse, usize)> {
-    use rustc_hir::def::Res;
-    use rustc_hir::intravisit::{self, Visitor as HirVisitor};
-    use rustc_hir::{ExprKind, PatKind, QPath, TyKind};
-    use rustc_span::symbol::{Ident, kw};
-    struct Names<'tcx> {
-        tcx: TyCtxt<'tcx>,
-        /// The type check results of the body that the walk is in.
-        typeck: Option<&'tcx ty::TypeckResults<'tcx>>,
-        out: std::collections::BTreeMap<NameUse, usize>,
-        /// The path of the type before the last segment of a path `Type::name`: its last
-        /// segment is before `::`.
-        tail: Option<*const ()>,
-    }
-    impl<'tcx> Names<'tcx> {
-        /// The type check results that have the node. A signature of a nested item is not
-        /// a part of the body around it: it has no result.
-        fn results(&self, id: rustc_hir::HirId) -> Option<&'tcx ty::TypeckResults<'tcx>> {
-            self.typeck.filter(|typeck| typeck.hir_owner == id.owner)
-        }
-        /// The outermost macro call and the line of a name. `None`: the name comes from a
-        /// desugaring.
-        fn origin(&self, span: Span) -> Option<(Option<String>, usize)> {
-            let (mut span, mut mac, mut first) = (span, None, true);
-            for _ in 0..64 {
-                let ctxt = span.ctxt();
-                if ctxt.is_root() {
-                    break;
-                }
-                let data = ctxt.outer_expn_data();
-                match data.kind {
-                    ExpnKind::Desugaring(_) if first => return None,
-                    ExpnKind::Macro(_, name) => {
-                        let name = name.to_string();
-                        mac = Some(name.rsplit("::").next().unwrap_or(&name).to_string());
-                    }
-                    ExpnKind::Root | ExpnKind::Desugaring(_) => {}
-                    // A change of the compiler to the syntax tree, and a new kind.
-                    #[allow(unreachable_patterns)]
-                    _ => mac = Some("?".to_string()),
-                }
-                first = false;
-                span = data.call_site;
-            }
-            // An expansion with more than 64 levels: the name has no known place.
-            if !span.ctxt().is_root() {
-                mac = Some("?".to_string());
-            }
-            let line = if span.is_dummy() { 0 } else { self.tcx.sess.source_map().lookup_char_pos(span.lo()).line };
-            Some((mac, line))
-        }
-        fn add(&mut self, ident: Ident, member: bool, qual: Option<String>, prefix: bool) {
-            self.add_rival(ident, member, qual, prefix, None);
-        }
-        fn add_rival(&mut self, ident: Ident, member: bool, qual: Option<String>, prefix: bool, rival: Option<String>) {
-            let word = ident.name.to_string();
-            // A position of a tuple (`pair.0`) is not a name.
-            if word.is_empty() || word.starts_with(|c: char| c.is_ascii_digit()) || word == "_" {
-                return;
-            }
-            let Some((mac, line)) = self.origin(ident.span) else { return };
-            let word = word.strip_prefix("r#").unwrap_or(&word).to_string();
-            *self.out.entry(NameUse { word, member, qual, prefix, mac, line, rival }).or_default() += 1;
-        }
-        /// The qualifier that the segment gives to the next segment.
-        fn qual_of(&self, segment: &rustc_hir::PathSegment<'tcx>) -> String {
-            let name = segment.ident.name;
-            if name == kw::PathRoot {
-                return String::new();
-            }
-            let foreign = |krate| !is_workspace_crate(self.tcx, krate);
-            if let Res::Def(DefKind::Mod, def_id) = segment.res {
-                if name == kw::DollarCrate {
-                    return match def_id.krate {
-                        rustc_span::def_id::LOCAL_CRATE => "crate".to_string(),
-                        krate if foreign(krate) => "$".to_string(),
-                        krate => self.tcx.crate_name(krate).to_string(),
-                    };
-                }
-                if !def_id.is_local() && foreign(def_id.krate) {
-                    return "$".to_string();
-                }
-            }
-            match name {
-                kw::DollarCrate | kw::Crate => "crate".to_string(),
-                kw::SelfLower => "self".to_string(),
-                kw::Super => "super".to_string(),
-                _ => name.to_string(),
-            }
-        }
-    }
-    /// Two entries of a name: one line for each.
-    fn join(first: Option<String>, second: Option<String>) -> Option<String> {
-        match (first, second) {
-            (Some(first), Some(second)) => Some(format!("{first}\n{second}")),
-            (first, second) => first.or(second),
-        }
-    }
-    impl<'tcx> HirVisitor<'tcx> for Names<'tcx> {
-        type NestedFilter = rustc_middle::hir::nested_filter::All;
-        fn maybe_tcx(&mut self) -> TyCtxt<'tcx> {
-            self.tcx
-        }
-        fn visit_nested_body(&mut self, id: rustc_hir::BodyId) {
-            let old = std::mem::replace(&mut self.typeck, Some(self.tcx.typeck_body(id)));
-            self.visit_body(self.tcx.hir_body(id));
-            self.typeck = old;
-        }
-        fn visit_path(&mut self, path: &rustc_hir::Path<'tcx>, id: rustc_hir::HirId) {
-            let tail = self.tail.take_if(|tail| std::ptr::eq(*tail, path as *const _ as *const ()));
-            let count = path.segments.len();
-            for (index, segment) in path.segments.iter().enumerate() {
-                if segment.ident.is_path_segment_keyword() {
-                    continue;
-                }
-                let qual = index.checked_sub(1).map(|before| self.qual_of(&path.segments[before]));
-                // A full path to an item of a trait: the selection of the `impl` uses trait
-                // facts (batch 5q, part C1).
-                let uses = match (index + 1 == count && tail.is_none(), self.results(id), path.res) {
-                    (true, Some(typeck), rustc_hir::def::Res::Def(DefKind::AssocFn | DefKind::AssocConst, item)) => {
-                        crate::rival::Finder { tcx: self.tcx, typeck }.uses(id, "path", item)
-                    }
-                    _ => None,
-                };
-                self.add_rival(segment.ident, index > 0, qual, index + 1 < count || tail.is_some(), uses);
-            }
-            intravisit::walk_path(self, path);
-        }
-        fn visit_qpath(&mut self, qpath: &'tcx QPath<'tcx>, id: rustc_hir::HirId, span: Span) {
-            if let QPath::TypeRelative(qself, segment) = qpath {
-                let qual = match qself.kind {
-                    TyKind::Path(QPath::Resolved(_, path)) => {
-                        self.tail = Some(path as *const _ as *const ());
-                        path.segments.last().map(|last| self.qual_of(last)).unwrap_or_else(|| ">".to_string())
-                    }
-                    TyKind::Path(QPath::TypeRelative(_, inner)) => inner.ident.name.to_string(),
-                    _ => ">".to_string(),
-                };
-                // A function or a constant of a type: the lookup of the compiler gives the
-                // meaning. A path in a type has no such meaning.
-                let rival = self.results(id).and_then(|typeck| match typeck.type_dependent_def(id) {
-                    Some((DefKind::AssocFn | DefKind::AssocConst, winner)) => {
-                        let finder = crate::rival::Finder { tcx: self.tcx, typeck };
-                        join(join(finder.path_item(id, segment.ident.name, winner), finder.uses(id, "path", winner)), finder.feature("path", winner))
-                    }
-                    _ => None,
-                });
-                self.add_rival(segment.ident, true, Some(qual), false, rival);
-            }
-            intravisit::walk_qpath(self, qpath, id);
-            let _ = span;
-            self.tail = None;
-        }
-        fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) {
-            match expr.kind {
-                ExprKind::MethodCall(segment, receiver, ..) => {
-                    let rival = match self.results(expr.hir_id) {
-                        Some(typeck) => {
-                            let finder = crate::rival::Finder { tcx: self.tcx, typeck };
-                            let winner = typeck.type_dependent_def_id(expr.hir_id);
-                            let uses = winner.and_then(|winner| finder.uses(expr.hir_id, "call", winner));
-                            let feature = winner.and_then(|winner| finder.feature("call", winner));
-                            join(join(finder.method(expr, segment.ident.name, receiver), uses), feature)
-                        }
-                        None => Some("open|the call has no type check result".to_string()),
-                    };
-                    self.add_rival(segment.ident, true, None, false, rival);
-                }
-                ExprKind::Field(_, ident) => self.add(ident, true, None, false),
-                ExprKind::Struct(_, fields, _) => {
-                    for field in fields {
-                        self.add(field.ident, false, Some(".".to_string()), false);
-                    }
-                }
-                _ => {}
-            }
-            intravisit::walk_expr(self, expr);
-        }
-        fn visit_pat(&mut self, pat: &'tcx rustc_hir::Pat<'tcx>) {
-            match pat.kind {
-                // An inactive constant with this name makes the binding a constant pattern.
-                PatKind::Binding(_, _, ident, _) => self.add(ident, false, None, false),
-                PatKind::Struct(_, fields, _) => {
-                    for field in fields {
-                        self.add(field.ident, false, Some(".".to_string()), false);
-                    }
-                }
-                _ => {}
-            }
-            intravisit::walk_pat(self, pat);
-        }
-        fn visit_assoc_item_constraint(&mut self, constraint: &'tcx rustc_hir::AssocItemConstraint<'tcx>) {
-            self.add(constraint.ident, true, Some(">".to_string()), false);
-            intravisit::walk_assoc_item_constraint(self, constraint);
-        }
-    }
+pub(crate) fn names(tcx: TyCtxt<'_>, def: LocalDefId) -> Vec<(NameUse, usize)> {
     if tcx.typeck_root_def_id(def.to_def_id()) != def.to_def_id() {
         return Vec::new();
     }
     let typeck = tcx.hir_maybe_body_owned_by(def).map(|_| tcx.typeck(def));
-    let mut names = Names { tcx, typeck, out: Default::default(), tail: None };
+    let mut names = Names {
+        tcx,
+        typeck,
+        out: std::collections::BTreeMap::default(),
+        tail: None,
+    };
     let node = tcx.hir_node_by_def_id(def);
     if let Some(decl) = node.fn_decl() {
         names.visit_fn_decl(decl);
@@ -1239,7 +1354,7 @@ pub fn names(tcx: TyCtxt<'_>, def: LocalDefId) -> Vec<(NameUse, usize)> {
 /// True if the item or one of its parents has a `#[cfg]` or a `#[cfg_attr]` attribute (batch
 /// 5l). The compiler selected this item by the build configuration, so no normal form looks
 /// into it from a different body.
-pub fn under_cfg(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+pub(crate) fn under_cfg(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     let _reader = Reader::set(None);
     def_id.as_local().is_some_and(|local| has_cfg(tcx, local))
 }
@@ -1261,7 +1376,7 @@ fn body_is_free<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
                     }
                 }
                 #[allow(unreachable_patterns)]
-                _ => self.free = false,
+                Operand::RuntimeChecks(_) => self.free = false,
             }
         }
         fn visit_statement(&mut self, statement: &mir::Statement<'tcx>, location: Location) {
@@ -1273,12 +1388,19 @@ fn body_is_free<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
         }
         fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, location: Location) {
             let allowed = match rvalue {
-                Rvalue::Use(..) | Rvalue::Repeat(..) | Rvalue::Ref(..) | Rvalue::RawPtr(..) | Rvalue::Aggregate(..) => true,
-                Rvalue::CopyForDeref(..) | Rvalue::Discriminant(..) => true,
+                Rvalue::Use(..)
+                | Rvalue::Repeat(..)
+                | Rvalue::Ref(..)
+                | Rvalue::RawPtr(..)
+                | Rvalue::Aggregate(..)
+                | Rvalue::CopyForDeref(..)
+                | Rvalue::Discriminant(..) => true,
                 Rvalue::BinaryOp(..) | Rvalue::UnaryOp(..) => !has_target_width(rvalue.ty(self.body, self.tcx)),
                 Rvalue::Cast(kind, _, ty) => {
-                    matches!(kind, mir::CastKind::IntToInt | mir::CastKind::IntToFloat | mir::CastKind::FloatToInt | mir::CastKind::FloatToFloat)
-                        && !has_target_width(*ty)
+                    matches!(
+                        kind,
+                        mir::CastKind::IntToInt | mir::CastKind::IntToFloat | mir::CastKind::FloatToInt | mir::CastKind::FloatToFloat
+                    ) && !has_target_width(*ty)
                 }
                 _ => false,
             };
@@ -1313,9 +1435,15 @@ fn body_is_free<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> bool {
 /// makes the statement (batch 5v). The macro decides the variant: `option_env!` gives `Some` or
 /// `None`, and a proc macro can give each variant. The variant is not a constant operand.
 fn is_macro_variant<'tcx>(tcx: TyCtxt<'tcx>, statement: &mir::Statement<'tcx>) -> bool {
-    let StatementKind::Assign(assign) = &statement.kind else { return false };
-    let Rvalue::Aggregate(kind, _) = &assign.1 else { return false };
-    let mir::AggregateKind::Adt(def_id, ..) = **kind else { return false };
+    let StatementKind::Assign(assign) = &statement.kind else {
+        return false;
+    };
+    let Rvalue::Aggregate(kind, _) = &assign.1 else {
+        return false;
+    };
+    let mir::AggregateKind::Adt(def_id, ..) = **kind else {
+        return false;
+    };
     tcx.adt_def(def_id).is_enum() && macro_source(tcx, statement.source_info.span).is_some()
 }
 
@@ -1324,7 +1452,7 @@ fn is_macro_variant<'tcx>(tcx: TyCtxt<'tcx>, statement: &mir::Statement<'tcx>) -
 /// is in the result, and the write is not an operation that this pass makes opaque.
 fn maybe_const<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> Vec<bool> {
     struct Reads<'a>(&'a [bool], bool);
-    impl<'tcx> Visitor<'tcx> for Reads<'_> {
+    impl Visitor<'_> for Reads<'_> {
         fn visit_local(&mut self, local: Local, _context: mir::visit::PlaceContext, _location: Location) {
             if !self.0[local.as_usize()] {
                 self.1 = false;
@@ -1394,9 +1522,10 @@ fn is_target_operation<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, rvalue: &Rval
 /// with an array.
 fn is_array_unsize<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, rvalue: &Rvalue<'tcx>) -> bool {
     match rvalue {
-        Rvalue::Cast(mir::CastKind::PointerCoercion(ty::adjustment::PointerCoercion::Unsize, _), operand, _) => {
-            operand.ty(body, tcx).walk().any(|part| part.as_type().is_some_and(|ty| matches!(ty.kind(), ty::Array(..))))
-        }
+        Rvalue::Cast(mir::CastKind::PointerCoercion(ty::adjustment::PointerCoercion::Unsize, _), operand, _) => operand
+            .ty(body, tcx)
+            .walk()
+            .any(|part| part.as_type().is_some_and(|ty| matches!(ty.kind(), ty::Array(..)))),
         _ => false,
     }
 }
@@ -1438,7 +1567,9 @@ fn mark_of<'tcx>(tcx: TyCtxt<'tcx>, constant: &mir::ConstOperand<'tcx>) -> Optio
 
 /// For a promoted constant of the form `&CONSTANT`: the operand of the constant.
 fn promoted_inner<'tcx>(tcx: TyCtxt<'tcx>, constant: &Const<'tcx>) -> Option<mir::ConstOperand<'tcx>> {
-    let Const::Unevaluated(unevaluated, _) = constant else { return None };
+    let Const::Unevaluated(unevaluated, _) = constant else {
+        return None;
+    };
     let promoted = unevaluated.promoted?;
     let body = tcx.promoted_mir(unevaluated.def.as_local()?.to_def_id()).get(promoted)?;
     let mut found = None;
@@ -1466,13 +1597,13 @@ fn promoted_inner<'tcx>(tcx: TyCtxt<'tcx>, constant: &Const<'tcx>) -> Option<mir
 }
 
 /// The source that the span of an opaque call gives, for the printer.
-pub fn span_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
+pub(crate) fn span_source(tcx: TyCtxt<'_>, span: Span) -> Option<Source> {
     macro_source(tcx, span).or_else(|| NOTED.with(|noted| noted.borrow().get(&span).cloned()))
 }
 
 /// The computation behind an opaque call whose span gives no source (batch 5s, part E).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Origin {
+pub(crate) enum Origin {
     /// A promoted constant: the body that owns it, and its index. Its MIR is the computation.
     Promoted(DefId, u32),
     /// A named constant: its def path.
@@ -1494,7 +1625,10 @@ thread_local! {
 /// takes from its incremental data.
 fn note_origins(tcx: TyCtxt<'_>) {
     for def in tcx.mir_keys(()).iter().copied() {
-        if !matches!(tcx.def_kind(def), DefKind::Fn | DefKind::AssocFn | DefKind::Closure | DefKind::SyntheticCoroutineBody) {
+        if !matches!(
+            tcx.def_kind(def),
+            DefKind::Fn | DefKind::AssocFn | DefKind::Closure | DefKind::SyntheticCoroutineBody
+        ) {
             continue;
         }
         if !tcx.is_mir_available(def.to_def_id()) {
@@ -1503,7 +1637,9 @@ fn note_origins(tcx: TyCtxt<'_>) {
         let body = tcx.optimized_mir(def.to_def_id());
         for block in body.basic_blocks.iter() {
             let Some(terminator) = &block.terminator else { continue };
-            let TerminatorKind::Call { func, args, .. } = &terminator.kind else { continue };
+            let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
+                continue;
+            };
             if !func.const_fn_def().is_some_and(|(def_id, _)| is_black_box(tcx, def_id)) {
                 continue;
             }
@@ -1535,7 +1671,7 @@ fn note_origins(tcx: TyCtxt<'_>) {
 }
 
 /// The origins of the opaque calls at a span that gives no source. An empty list: not known.
-pub fn span_origins(span: Span) -> Vec<Origin> {
+pub(crate) fn span_origins(span: Span) -> Vec<Origin> {
     ORIGINS.with(|origins| origins.borrow().get(&span).cloned().unwrap_or_default())
 }
 
@@ -1563,7 +1699,7 @@ impl<'tcx> MutVisitor<'tcx> for Replace<'_, 'tcx> {
             Operand::Constant(constant) => mark_of(self.tcx, constant).or(self.any.then_some(Mark::Plain)),
             Operand::Copy(_) | Operand::Move(_) => self.any.then_some(Mark::Plain),
             #[allow(unreachable_patterns)]
-            _ => None,
+            Operand::RuntimeChecks(_) => None,
         };
         let Some(mark) = mark else { return };
         let ty = operand.ty(self.locals, self.tcx);
@@ -1581,98 +1717,197 @@ fn make_opaque<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId, body: &mut Body<'tcx>) 
     // A pattern constant that is not free: each switch of the body can use its value.
     let switches = !hir_sources(tcx, def).is_empty();
     let slice_len = tcx.lang_items().slice_len_fn();
-    let mut pass = Pass { tcx, black_box };
-
-    // Step 1: each constant operand that is not configuration-free.
-    let mut index = 0;
-    while index < body.basic_blocks.len() {
-        let block = BasicBlock::from_usize(index);
-        index += 1;
-        if pass.is_opaque_call(body, block) {
-            continue;
-        }
-        let local = Local::from_usize(body.local_decls.len());
-        let count = body.basic_blocks[block].statements.len();
-        for at in 0..=count {
-            let (blocks, locals) = (body.basic_blocks.as_mut(), &body.local_decls);
-            let mut replace = Replace { tcx, locals, local, any: false, found: None };
-            match blocks[block].statements.get_mut(at) {
-                Some(statement) => replace.visit_statement(statement, Location::START),
-                None => replace.visit_terminator(blocks[block].terminator_mut(), Location::START),
-            }
-            if let Some((operand, ty, mark)) = replace.found {
-                pass.before(body, block, at, operand, ty, mark);
-                break;
-            }
-        }
-    }
-
-    // Step 1b (batch 5v): each value of an enum that a macro makes, if the macro is not on the
-    // allow list. `option_env!` gives `Some("..")` or `None`. Step 1 makes the text opaque, but
-    // the variant is not an operand: a `match` on the value reads it. The result is opaque.
-    let mut index = 0;
-    while index < body.basic_blocks.len() {
-        let block = BasicBlock::from_usize(index);
-        index += 1;
-        let found = body.basic_blocks[block].statements.iter().position(|statement| is_macro_variant(tcx, statement));
-        let Some(at) = found else { continue };
-        let source_info = body.basic_blocks[block].statements[at].source_info;
-        let StatementKind::Assign(assign) = &body.basic_blocks[block].statements[at].kind else { unreachable!() };
-        let ty = assign.0.ty(&body.local_decls, tcx).ty;
-        let local = body.local_decls.push(LocalDecl::new(ty, source_info.span));
-        let StatementKind::Assign(assign) = &mut body.basic_blocks.as_mut()[block].statements[at].kind else { unreachable!() };
-        let destination = std::mem::replace(&mut assign.0, Place::from(local));
-        // The span of the call gives the source to the printer. The rest of the block goes to
-        // a new block. The loop reads it later.
-        pass.call(body, block, at + 1, Operand::Move(Place::from(local)), ty, destination, source_info.span);
-    }
-
-    // Step 2: each unsize coercion of an array. The length of the array type becomes a value
-    // here: the result is opaque.
-    let mut index = 0;
-    while index < body.basic_blocks.len() {
-        let block = BasicBlock::from_usize(index);
-        index += 1;
-        let found = body.basic_blocks[block].statements.iter().position(|statement| match &statement.kind {
-            StatementKind::Assign(assign) => is_array_unsize(tcx, body, &assign.1),
-            _ => false,
-        });
-        let Some(at) = found else { continue };
-        let source_info = body.basic_blocks[block].statements[at].source_info;
-        let StatementKind::Assign(assign) = &body.basic_blocks[block].statements[at].kind else { unreachable!() };
-        let ty = assign.0.ty(&body.local_decls, tcx).ty;
-        let local = body.local_decls.push(LocalDecl::new(ty, source_info.span));
-        let StatementKind::Assign(assign) = &mut body.basic_blocks.as_mut()[block].statements[at].kind else { unreachable!() };
-        let destination = std::mem::replace(&mut assign.0, Place::from(local));
-        // The rest of the block goes to a new block. The loop reads it later.
-        pass.call(body, block, at + 1, Operand::Move(Place::from(local)), ty, destination, DUMMY_SP);
-    }
-
-    // Step 3: each operation of the target on values that the optimizer can know. The result
-    // of an opaque call is not such a value, so no value goes through two opaque calls here.
-    let maybe = maybe_const(tcx, body);
-    let known = |operand: &Operand<'tcx>| match operand {
-        Operand::Copy(place) | Operand::Move(place) => maybe.get(place.local.as_usize()).copied().unwrap_or(false),
-        _ => true,
+    let mut pass = Pass {
+        tcx,
+        black_box,
+        switches,
+        slice_len,
     };
-    let mut index = 0;
-    while index < body.basic_blocks.len() {
-        let block = BasicBlock::from_usize(index);
-        index += 1;
-        if pass.is_opaque_call(body, block) {
-            continue;
+    pass.opaque_constants(body);
+    pass.opaque_macro_variants(body);
+    pass.opaque_array_unsizes(body);
+    pass.opaque_target_operations(body);
+}
+
+/// The operands of an rvalue.
+struct Operands<F>(F);
+
+impl<'tcx, F: FnMut(&Operand<'tcx>)> Visitor<'tcx> for Operands<F> {
+    fn visit_operand(&mut self, operand: &Operand<'tcx>, _location: Location) {
+        (self.0)(operand);
+    }
+}
+
+/// A call of `black_box` that `Pass::call` adds: `destination = black_box(operand)`, with the
+/// type of the operand and the span of the call.
+struct BlackBoxCall<'tcx> {
+    operand: Operand<'tcx>,
+    ty: Ty<'tcx>,
+    destination: Place<'tcx>,
+    span: Span,
+}
+
+struct Pass<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    black_box: DefId,
+    /// A pattern constant of the body is not free: each switch of the body can use its value.
+    switches: bool,
+    /// The language item `slice_len_fn`.
+    slice_len: Option<DefId>,
+}
+
+impl<'tcx> Pass<'tcx> {
+    /// Step 1: makes each constant operand opaque that is not configuration-free.
+    fn opaque_constants(&mut self, body: &mut Body<'tcx>) {
+        let mut index = 0;
+        while index < body.basic_blocks.len() {
+            let block = BasicBlock::from_usize(index);
+            index += 1;
+            if self.is_opaque_call(body, block) {
+                continue;
+            }
+            let local = Local::from_usize(body.local_decls.len());
+            let count = body.basic_blocks[block].statements.len();
+            for at in 0..=count {
+                let (blocks, locals) = (body.basic_blocks.as_mut(), &body.local_decls);
+                let mut replace = Replace {
+                    tcx: self.tcx,
+                    locals,
+                    local,
+                    any: false,
+                    found: None,
+                };
+                match blocks[block].statements.get_mut(at) {
+                    Some(statement) => replace.visit_statement(statement, Location::START),
+                    None => replace.visit_terminator(blocks[block].terminator_mut(), Location::START),
+                }
+                if let Some((operand, ty, mark)) = replace.found {
+                    self.before(body, block, at, operand, ty, mark);
+                    break;
+                }
+            }
         }
-        let local = Local::from_usize(body.local_decls.len());
+    }
+
+    /// Step 1b: makes each value of an enum opaque that a macro makes, if the macro is not on
+    /// the allow list.
+    fn opaque_macro_variants(&mut self, body: &mut Body<'tcx>) {
+        // `option_env!` gives `Some("..")` or `None`. Step 1 makes the text opaque, but
+        // the variant is not an operand: a `match` on the value reads it. The result is opaque.
+        let mut index = 0;
+        while index < body.basic_blocks.len() {
+            let block = BasicBlock::from_usize(index);
+            index += 1;
+            let found = body.basic_blocks[block]
+                .statements
+                .iter()
+                .position(|statement| is_macro_variant(self.tcx, statement));
+            let Some(at) = found else { continue };
+            let (operand, ty, destination, span) = self.take_destination(body, block, at);
+            // The span of the call gives the source to the printer. The rest of the block goes to
+            // a new block. The loop reads it later.
+            self.call(
+                body,
+                block,
+                at + 1,
+                BlackBoxCall {
+                    operand,
+                    ty,
+                    destination,
+                    span,
+                },
+            );
+        }
+    }
+
+    /// Step 2: makes each unsize coercion of an array opaque.
+    fn opaque_array_unsizes(&mut self, body: &mut Body<'tcx>) {
+        // The length of the array type becomes a value here: the result is opaque.
+        let mut index = 0;
+        while index < body.basic_blocks.len() {
+            let block = BasicBlock::from_usize(index);
+            index += 1;
+            let found = body.basic_blocks[block].statements.iter().position(|statement| match &statement.kind {
+                StatementKind::Assign(assign) => is_array_unsize(self.tcx, body, &assign.1),
+                _ => false,
+            });
+            let Some(at) = found else { continue };
+            let (operand, ty, destination, _) = self.take_destination(body, block, at);
+            // The rest of the block goes to a new block. The loop reads it later.
+            self.call(
+                body,
+                block,
+                at + 1,
+                BlackBoxCall {
+                    operand,
+                    ty,
+                    destination,
+                    span: DUMMY_SP,
+                },
+            );
+        }
+    }
+
+    /// Moves the destination of the assignment `at` of the block to a new local. Returns a move
+    /// of the new local, its type, the old destination, and the span of the statement.
+    fn take_destination(&self, body: &mut Body<'tcx>, block: BasicBlock, at: usize) -> (Operand<'tcx>, Ty<'tcx>, Place<'tcx>, Span) {
+        let source_info = body.basic_blocks[block].statements[at].source_info;
+        let StatementKind::Assign(assign) = &body.basic_blocks[block].statements[at].kind else {
+            unreachable!()
+        };
+        let ty = assign.0.ty(&body.local_decls, self.tcx).ty;
+        let local = body.local_decls.push(LocalDecl::new(ty, source_info.span));
+        let StatementKind::Assign(assign) = &mut body.basic_blocks.as_mut()[block].statements[at].kind else {
+            unreachable!()
+        };
+        let destination = std::mem::replace(&mut assign.0, Place::from(local));
+        (Operand::Move(Place::from(local)), ty, destination, source_info.span)
+    }
+
+    /// Step 3: makes each operation of the target opaque on values that the optimizer can know.
+    fn opaque_target_operations(&mut self, body: &mut Body<'tcx>) {
+        // The result of an opaque call is not such a value, so no value goes through two opaque
+        // calls here.
+        let maybe = maybe_const(self.tcx, body);
+        let known = |operand: &Operand<'tcx>| match operand {
+            Operand::Copy(place) | Operand::Move(place) => maybe.get(place.local.as_usize()).copied().unwrap_or(false),
+            _ => true,
+        };
+        let mut index = 0;
+        while index < body.basic_blocks.len() {
+            let block = BasicBlock::from_usize(index);
+            index += 1;
+            if self.is_opaque_call(body, block) {
+                continue;
+            }
+            let local = Local::from_usize(body.local_decls.len());
+            if self.opaque_statement_operation(body, block, local, &known) {
+                continue;
+            }
+            self.opaque_terminator_operation(body, block, local, &known);
+        }
+    }
+
+    /// Makes the operands of the first operation of the target in the statements of the
+    /// block opaque. Returns true if it finds one. `local` is the next new local.
+    fn opaque_statement_operation(
+        &mut self,
+        body: &mut Body<'tcx>,
+        block: BasicBlock,
+        local: Local,
+        known: &impl Fn(&Operand<'tcx>) -> bool,
+    ) -> bool {
         let count = body.basic_blocks[block].statements.len();
-        let mut done = false;
         for at in 0..count {
-            let StatementKind::Assign(assign) = &body.basic_blocks[block].statements[at].kind else { continue };
-            if !is_target_operation(tcx, body, &assign.1) {
+            let StatementKind::Assign(assign) = &body.basic_blocks[block].statements[at].kind else {
+                continue;
+            };
+            if !is_target_operation(self.tcx, body, &assign.1) {
                 continue;
             }
             let mut all = true;
             let mut some = false;
-            Operands(&mut |operand| {
+            Operands(|operand: &Operand<'tcx>| {
                 some = true;
                 all &= known(operand);
             })
@@ -1681,33 +1916,48 @@ fn make_opaque<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId, body: &mut Body<'tcx>) 
                 continue;
             }
             let (blocks, locals) = (body.basic_blocks.as_mut(), &body.local_decls);
-            let mut replace = Replace { tcx, locals, local, any: true, found: None };
+            let mut replace = Replace {
+                tcx: self.tcx,
+                locals,
+                local,
+                any: true,
+                found: None,
+            };
             replace.visit_statement(&mut blocks[block].statements[at], Location::START);
             if let Some((operand, ty, _)) = replace.found {
-                pass.before(body, block, at, operand, ty, Mark::Plain);
-                done = true;
-                break;
+                self.before(body, block, at, operand, ty, Mark::Plain);
+                return true;
             }
         }
-        if done {
-            continue;
-        }
+        false
+    }
+
+    /// Makes the operands or the result of an operation of the target opaque in the
+    /// terminator of the block. `local` is the next new local.
+    fn opaque_terminator_operation(&mut self, body: &mut Body<'tcx>, block: BasicBlock, local: Local, known: &impl Fn(&Operand<'tcx>) -> bool) {
+        let count = body.basic_blocks[block].statements.len();
         // The terminator. A call of an intrinsic or of the slice length is an operation of the
         // target: the optimizer replaces it by an operation that it can fold.
         let first_or_result = match &body.basic_blocks[block].terminator().kind {
             TerminatorKind::Call { func, args, target, .. } => match func.const_fn_def() {
-                Some((def_id, _)) if tcx.intrinsic(def_id).is_some() || Some(def_id) == slice_len => {
+                Some((def_id, _)) if self.tcx.intrinsic(def_id).is_some() || Some(def_id) == self.slice_len => {
                     (target.is_some() && args.iter().all(|arg| known(&arg.node))).then_some(!args.is_empty())
                 }
                 _ => None,
             },
-            TerminatorKind::SwitchInt { discr, .. } if switches && known(discr) => Some(true),
+            TerminatorKind::SwitchInt { discr, .. } if self.switches && known(discr) => Some(true),
             _ => None,
         };
         match first_or_result {
             Some(true) => {
                 let (blocks, locals) = (body.basic_blocks.as_mut(), &body.local_decls);
-                let mut replace = Replace { tcx, locals, local, any: true, found: None };
+                let mut replace = Replace {
+                    tcx: self.tcx,
+                    locals,
+                    local,
+                    any: true,
+                    found: None,
+                };
                 match &mut blocks[block].terminator_mut().kind {
                     // Not the function of the call.
                     TerminatorKind::Call { args, .. } => {
@@ -1719,30 +1969,14 @@ fn make_opaque<'tcx>(tcx: TyCtxt<'tcx>, def: LocalDefId, body: &mut Body<'tcx>) 
                     _ => {}
                 }
                 if let Some((operand, ty, _)) = replace.found {
-                    pass.before(body, block, count, operand, ty, Mark::Plain);
+                    self.before(body, block, count, operand, ty, Mark::Plain);
                 }
             }
-            Some(false) => pass.after(body, block, local),
+            Some(false) => self.after(body, block, local),
             None => {}
         }
     }
-}
 
-/// The operands of an rvalue.
-struct Operands<'a, 'tcx>(&'a mut dyn FnMut(&Operand<'tcx>));
-
-impl<'tcx> Visitor<'tcx> for Operands<'_, 'tcx> {
-    fn visit_operand(&mut self, operand: &Operand<'tcx>, _location: Location) {
-        (self.0)(operand)
-    }
-}
-
-struct Pass<'tcx> {
-    tcx: TyCtxt<'tcx>,
-    black_box: DefId,
-}
-
-impl<'tcx> Pass<'tcx> {
     /// True if the block ends with a call of `black_box`.
     fn is_opaque_call(&self, body: &Body<'tcx>, block: BasicBlock) -> bool {
         match &body.basic_blocks[block].terminator().kind {
@@ -1754,16 +1988,13 @@ impl<'tcx> Pass<'tcx> {
     /// Puts `destination = black_box(operand)` before the statement `at` of the block (before
     /// the terminator if `at` is the number of statements). The statements from `at` and the
     /// terminator go to a new block. Returns the new block.
-    fn call(
-        &mut self,
-        body: &mut Body<'tcx>,
-        block: BasicBlock,
-        at: usize,
-        operand: Operand<'tcx>,
-        ty: Ty<'tcx>,
-        destination: Place<'tcx>,
-        span: Span,
-    ) -> BasicBlock {
+    fn call(&mut self, body: &mut Body<'tcx>, block: BasicBlock, at: usize, call: BlackBoxCall<'tcx>) -> BasicBlock {
+        let BlackBoxCall {
+            operand,
+            ty,
+            destination,
+            span,
+        } = call;
         let function = Operand::function_handle(self.tcx, self.black_box, &[ty.into()], span);
         let blocks = body.basic_blocks.as_mut();
         let scope = blocks[block].terminator().source_info.scope;
@@ -1795,10 +2026,30 @@ impl<'tcx> Pass<'tcx> {
         let result = body.local_decls.push(LocalDecl::new(ty, span));
         match mark {
             Mark::At(span) => {
-                self.call(body, block, at, operand, ty, Place::from(result), span);
+                self.call(
+                    body,
+                    block,
+                    at,
+                    BlackBoxCall {
+                        operand,
+                        ty,
+                        destination: Place::from(result),
+                        span,
+                    },
+                );
             }
             Mark::Plain => {
-                self.call(body, block, at, operand, ty, Place::from(result), DUMMY_SP);
+                self.call(
+                    body,
+                    block,
+                    at,
+                    BlackBoxCall {
+                        operand,
+                        ty,
+                        destination: Place::from(result),
+                        span: DUMMY_SP,
+                    },
+                );
             }
             Mark::Unknown => {
                 let operand_span = match &operand {
@@ -1806,13 +2057,46 @@ impl<'tcx> Pass<'tcx> {
                     _ => DUMMY_SP,
                 };
                 let candidates = [operand_span, span, body.span];
-                if let Some(free) = candidates.into_iter().find(|span| !span.is_dummy() && span_source(self.tcx, *span).is_none()) {
-                    self.call(body, block, at, operand, ty, Place::from(result), free);
+                if let Some(free) = candidates
+                    .into_iter()
+                    .find(|span| !span.is_dummy() && span_source(self.tcx, *span).is_none())
+                {
+                    self.call(
+                        body,
+                        block,
+                        at,
+                        BlackBoxCall {
+                            operand,
+                            ty,
+                            destination: Place::from(result),
+                            span: free,
+                        },
+                    );
                     return;
                 }
                 let first = body.local_decls.push(LocalDecl::new(ty, span));
-                let next = self.call(body, block, at, operand, ty, Place::from(first), DUMMY_SP);
-                self.call(body, next, 0, Operand::Move(Place::from(first)), ty, Place::from(result), DUMMY_SP);
+                let next = self.call(
+                    body,
+                    block,
+                    at,
+                    BlackBoxCall {
+                        operand,
+                        ty,
+                        destination: Place::from(first),
+                        span: DUMMY_SP,
+                    },
+                );
+                self.call(
+                    body,
+                    next,
+                    0,
+                    BlackBoxCall {
+                        operand: Operand::Move(Place::from(first)),
+                        ty,
+                        destination: Place::from(result),
+                        span: DUMMY_SP,
+                    },
+                );
             }
         }
     }
@@ -1823,13 +2107,18 @@ impl<'tcx> Pass<'tcx> {
         let source_info = blocks[block].terminator().source_info;
         let is_cleanup = blocks[block].is_cleanup;
         let new_block = BasicBlock::from_usize(blocks.len());
-        let TerminatorKind::Call { destination, target, .. } = &mut blocks[block].terminator_mut().kind else { return };
+        let TerminatorKind::Call { destination, target, .. } = &mut blocks[block].terminator_mut().kind else {
+            return;
+        };
         let old_destination = std::mem::replace(destination, Place::from(local));
         let old_target = target.replace(new_block);
         let ty = old_destination.ty(&body.local_decls, self.tcx).ty;
         let function = Operand::function_handle(self.tcx, self.black_box, &[ty.into()], DUMMY_SP);
         let terminator = Terminator {
-            source_info: SourceInfo { span: DUMMY_SP, scope: source_info.scope },
+            source_info: SourceInfo {
+                span: DUMMY_SP,
+                scope: source_info.scope,
+            },
             kind: TerminatorKind::Call {
                 func: function,
                 args: Box::new([rustc_span::dummy_spanned(Operand::Move(Place::from(local)))]),

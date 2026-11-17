@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Mechanical checks from docs/STYLE.md: clippy pedantic, unreachable_pub,
+  # rustfmt, and the forbidden patterns.
+  style:
+    name: style
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # rustup reads the pinned nightly and its components from rust-toolchain.toml.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/style-check.sh
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # The SMT tests need Z3. The pinned release needs glibc 2.39 (Ubuntu 24.04).
+      - name: Install Z3
+        run: scripts/fetch-z3.sh
+      # The e2e tests make commits and git notes in temporary repositories.
+      # Git refuses both when it has no author identity.
+      - name: Set a git identity
+        run: |
+          git config --global user.name "semilla CI"
+          git config --global user.email "ci@semilla.invalid"
+      - run: cargo test --workspace --locked

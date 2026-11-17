@@ -2,15 +2,17 @@
 //! and the source texts.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use semilla_core::view::{FlowGraph, Status, TreeNode, WorkspaceGraph};
-use semilla_core::{text, Category, ClaimStatus, Compare, StepReport};
+use semilla_core::{Category, ClaimStatus, Compare, StepReport, text};
 
 /// The category and the compare result of an edit or of a tree node (design 35).
 pub type Mark = (Option<Category>, Option<Compare>);
 
 /// Joins two marks. The category with the highest weight stays. The compare result that comes
 /// first in the report order stays.
+#[must_use]
 pub fn merge_marks(old: Mark, new: Mark) -> Mark {
     let category = match (old.0, new.0) {
         (Some(a), Some(b)) => Some(if b.weight() > a.weight() { b } else { a }),
@@ -64,7 +66,10 @@ struct Names<'a>(Vec<&'a BTreeMap<String, String>>);
 impl Names<'_> {
     /// The head path of an item path that is valid before the step at the position `from`.
     fn forward(&self, path: &str, from: usize) -> String {
-        self.0.iter().skip(from).fold(path.to_string(), |path, map| map.get(&path).cloned().unwrap_or(path))
+        self.0
+            .iter()
+            .skip(from)
+            .fold(path.to_string(), |path, map| map.get(&path).cloned().unwrap_or(path))
     }
 
     /// The base path of an item path that is valid before the step at the position `before`.
@@ -84,13 +89,16 @@ impl Names<'_> {
 
 /// The renames of all steps as one set from the base tree to the head tree. The map gives the
 /// step numbers of each renamed base item.
+#[must_use]
 pub fn composed_renames(outcomes: &[StepOutcome]) -> (Renames, BTreeMap<String, Vec<usize>>) {
     let names = Names(outcomes.iter().map(|outcome| &outcome.renames.items).collect());
     let mut renames = Renames::default();
     let mut steps: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (position, outcome) in outcomes.iter().enumerate() {
         for (old, new) in &outcome.renames.items {
-            let Some(base) = names.backward(old, position) else { continue };
+            let Some(base) = names.backward(old, position) else {
+                continue;
+            };
             steps.entry(base.clone()).or_default().push(outcome.report.step);
             renames.items.insert(base, new.clone());
         }
@@ -103,13 +111,13 @@ pub fn composed_renames(outcomes: &[StepOutcome]) -> (Renames, BTreeMap<String, 
                 None => None,
             };
             match renames.idents.iter_mut().find(|(other, _, current)| *other == scope && current == old) {
-                Some(entry) => entry.2 = new.clone(),
+                Some(entry) => entry.2.clone_from(new),
                 None => renames.idents.push((scope, old.clone(), new.clone())),
             }
         }
         for (old, new) in &outcome.renames.fields {
             match renames.fields.iter_mut().find(|(_, current)| current == old) {
-                Some(entry) => entry.1 = new.clone(),
+                Some(entry) => entry.1.clone_from(new),
                 None => renames.fields.push((old.clone(), new.clone())),
             }
         }
@@ -140,11 +148,21 @@ fn step_edits(outcomes: &[StepOutcome]) -> Vec<StepEdit<'_>> {
         marks.extend(outcome.report.facts.iter().map(|f| (f.id.clone(), (Some(f.category), Some(f.compare)))));
         for (index, edit) in outcome.edits.iter().enumerate() {
             // A fact owns its edits like a claim: the tree shows the fact ID (`f1`).
-            let owner = outcome.owners[index].map(|claim| outcome_claim_id(outcome, claim)).or_else(|| fact_id(outcome, index));
+            let owner = outcome.owners[index]
+                .map(|claim| outcome_claim_id(outcome, claim))
+                .or_else(|| fact_id(outcome, index));
             let mark = owner.as_ref().and_then(|id| marks.get(id).copied()).unwrap_or_default();
             let head = edit.after.as_ref().map(|anchor| names.forward(&anchor.item, position + 1));
             let base = edit.before.as_ref().and_then(|anchor| names.backward(&anchor.item, position));
-            all.push(StepEdit { edit, position, step: outcome.report.step, owner, mark, head, base });
+            all.push(StepEdit {
+                edit,
+                position,
+                step: outcome.report.step,
+                owner,
+                mark,
+                head,
+                base,
+            });
         }
     }
     all
@@ -157,7 +175,8 @@ fn step_edits(outcomes: &[StepOutcome]) -> Vec<StepEdit<'_>> {
 fn makers(edit: &Edit, steps: &[StepEdit]) -> Vec<usize> {
     let same_item = |step: &StepEdit| match edit.anchor() {
         Some(_) => {
-            edit.after.as_ref().is_some_and(|anchor| step.head.as_ref() == Some(&anchor.item)) || edit.before.as_ref().is_some_and(|anchor| step.base.as_ref() == Some(&anchor.item))
+            edit.after.as_ref().is_some_and(|anchor| step.head.as_ref() == Some(&anchor.item))
+                || edit.before.as_ref().is_some_and(|anchor| step.base.as_ref() == Some(&anchor.item))
         }
         None => step.edit.anchor().is_none() && step.edit.file == edit.file,
     };
@@ -176,7 +195,11 @@ fn makers(edit: &Edit, steps: &[StepEdit]) -> Vec<usize> {
         return exact;
     }
     let in_body = |edit: &Edit| edit.anchor().is_some_and(|anchor| !anchor.path.is_empty());
-    let level: Vec<usize> = candidates.iter().copied().filter(|&index| in_body(steps[index].edit) == in_body(edit)).collect();
+    let level: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&index| in_body(steps[index].edit) == in_body(edit))
+        .collect();
     if level.is_empty() { candidates } else { level }
 }
 
@@ -193,7 +216,16 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
     let steps = step_edits(outcomes);
     // One step: its edits are the diff, with the exact owners.
     if outcomes.len() <= 1 {
-        let finals = steps.iter().map(|step| FinalEdit { edit: step.edit.clone(), steps: Vec::new(), owners: step.owner.clone().into_iter().collect(), mark: step.mark, covered: step.owner.is_some() }).collect();
+        let finals = steps
+            .iter()
+            .map(|step| FinalEdit {
+                edit: step.edit.clone(),
+                steps: Vec::new(),
+                owners: step.owner.clone().into_iter().collect(),
+                mark: step.mark,
+                covered: step.owner.is_some(),
+            })
+            .collect();
         return (finals, Vec::new());
     }
     let (renames, _) = composed_renames(outcomes);
@@ -209,15 +241,25 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
         let mut mark: Mark = (None, None);
         for &index in &makers {
             shown[index] = true;
-            if let Some(owner) = &steps[index].owner {
-                if !owners.contains(owner) {
-                    owners.push(owner.clone());
-                }
+            if let Some(owner) = &steps[index].owner
+                && !owners.contains(owner)
+            {
+                owners.push(owner.clone());
             }
             mark = merge_marks(mark, steps[index].mark);
         }
-        let covered = if makers.is_empty() { all_covered } else { makers.iter().all(|&index| steps[index].owner.is_some()) };
-        finals.push(FinalEdit { edit, steps: numbers, owners, mark, covered });
+        let covered = if makers.is_empty() {
+            all_covered
+        } else {
+            makers.iter().all(|&index| steps[index].owner.is_some())
+        };
+        finals.push(FinalEdit {
+            edit,
+            steps: numbers,
+            owners,
+            mark,
+            covered,
+        });
     }
     // An uncovered edit of a step stays in view, also if a later step removed it.
     let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
@@ -232,57 +274,84 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
 }
 
 fn new_node(id: &str, label: &str) -> TreeNode {
-    TreeNode { id: id.into(), label: label.into(), status: Status::Changed, category: None, compare: None, build_code: None, claims: Vec::new(), diff: None, steps: Vec::new(), summary: None, children: Vec::new() }
+    TreeNode {
+        id: id.into(),
+        label: label.into(),
+        status: Status::Changed,
+        category: None,
+        compare: None,
+        build_code: None,
+        claims: Vec::new(),
+        diff: None,
+        steps: Vec::new(),
+        summary: None,
+        children: Vec::new(),
+    }
 }
 
-/// Builds the change tree: one diff from the base tree (`before`) to the head tree (`after`), with
-/// the step numbers as labels (brief 5f, D3). `steps` gives the workspaces (before, after) of each
-/// step, for the label of an uncovered edit that a later step removed.
-pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Workspace, steps: &[(&Workspace, &Workspace)]) -> TreeNode {
-    let (finals, hidden) = final_edits_with(outcomes, before, after);
-    let (renames, rename_steps) = composed_renames(outcomes);
-    let many = outcomes.len() > 1;
-    let mut root = new_node("workspace", "workspace");
-    // A removed and an added item with the same path (a changed `use` line) is one changed node
-    // (D12).
-    let removed_paths: std::collections::BTreeSet<&str> = finals.iter().filter(|f| f.edit.kind == EditKind::ItemRemoved).filter_map(|f| f.edit.item()).collect();
-    let replaced: BTreeMap<&str, &FinalEdit> = finals.iter().filter(|f| f.edit.kind == EditKind::ItemAdded).filter_map(|f| Some((f.edit.item()?, f))).filter(|(item, _)| removed_paths.contains(item)).collect();
-    let item_path = |item: &str, ws_after: &Workspace, ws_before: &Workspace| {
-        let parts = semilla_syntax::split_path(item);
-        (1..=parts.len())
-            .map(|depth| {
-                let id = parts[..depth].join("::");
-                let label = if depth == 1 { format!("crate {}", parts[0]) } else { item_label(&id, ws_after, ws_before) };
-                (id, label)
-            })
-            .collect::<Vec<_>>()
-    };
-    // The path of the nodes of an anchor. The statement labels come from the tree of their side.
-    let anchor_path = |anchor: &semilla_core::Anchor, ws: &Workspace, ws_after: &Workspace, ws_before: &Workspace, suffix: &str| {
-        let mut path = item_path(&anchor.item, ws_after, ws_before);
-        let mut node_path = anchor.item.clone();
-        for segment in &anchor.path {
-            node_path = format!("{node_path}/{segment}");
-            let label = node_path
-                .parse()
-                .ok()
-                .and_then(|a| semilla_syntax::resolve_node(ws, &a))
-                .map(|n| format!("{}: {}", segment, short(&n.text)))
-                .unwrap_or_else(|| segment.to_string());
-            path.push((format!("{node_path}{suffix}"), label));
-        }
-        path
-    };
-    for f in &finals {
+/// The node path of an item: the crate, then each module and item below it.
+fn item_path(item: &str, ws_after: &Workspace, ws_before: &Workspace) -> Vec<(String, String)> {
+    let parts = semilla_syntax::split_path(item);
+    (1..=parts.len())
+        .map(|depth| {
+            let id = parts[..depth].join("::");
+            let label = if depth == 1 {
+                format!("crate {}", parts[0])
+            } else {
+                item_label(&id, ws_after, ws_before)
+            };
+            (id, label)
+        })
+        .collect::<Vec<_>>()
+}
+
+/// The path of the nodes of an anchor. The statement labels come from the tree of their side.
+fn anchor_path(anchor: &semilla_core::Anchor, ws: &Workspace, ws_after: &Workspace, ws_before: &Workspace, suffix: &str) -> Vec<(String, String)> {
+    let mut path = item_path(&anchor.item, ws_after, ws_before);
+    let mut node_path = anchor.item.clone();
+    for segment in &anchor.path {
+        node_path = format!("{node_path}/{segment}");
+        let label = node_path
+            .parse()
+            .ok()
+            .and_then(|a| semilla_syntax::resolve_node(ws, &a))
+            .map_or_else(|| segment.to_string(), |n| format!("{}: {}", segment, short(&n.text)));
+        path.push((format!("{node_path}{suffix}"), label));
+    }
+    path
+}
+
+/// The shared inputs of the nodes of the final edits in the change tree.
+struct TreeInputs<'a> {
+    after: &'a Workspace,
+    before: &'a Workspace,
+    renames: &'a Renames,
+    /// The added edit of each item with a removed and an added edit.
+    replaced: &'a BTreeMap<&'a str, &'a FinalEdit>,
+    /// True if the change set has more than one step.
+    many: bool,
+}
+
+impl TreeInputs<'_> {
+    /// Adds the node of one final edit to the change tree.
+    fn add_final(&self, root: &mut TreeNode, f: &FinalEdit) {
+        let (after, before) = (self.after, self.before);
         let edit = &f.edit;
-        if edit.kind == EditKind::ItemAdded && edit.item().is_some_and(|item| replaced.contains_key(item)) {
-            continue;
+        if edit.kind == EditKind::ItemAdded && edit.item().is_some_and(|item| self.replaced.contains_key(item)) {
+            return;
         }
         // The member list of an impl is bookkeeping: the new or removed method has its own node.
-        if edit.kind == EditKind::Members && edit.anchor().is_some_and(|a| semilla_syntax::split_path(&a.item).last().is_some_and(|l| l.starts_with("impl "))) {
-            continue;
+        if edit.kind == EditKind::Members
+            && edit
+                .anchor()
+                .is_some_and(|a| semilla_syntax::split_path(&a.item).last().is_some_and(|l| l.starts_with("impl ")))
+        {
+            return;
         }
-        let pair = edit.item().and_then(|item| replaced.get(item)).filter(|_| edit.kind == EditKind::ItemRemoved);
+        let pair = edit
+            .item()
+            .and_then(|item| self.replaced.get(item))
+            .filter(|_| edit.kind == EditKind::ItemRemoved);
         // A replaced item has the owners and the steps of the two sides.
         let mut owners = f.owners.clone();
         let mut numbers = f.steps.clone();
@@ -293,7 +362,7 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
             numbers.extend(added.steps.iter().copied());
             numbers.sort_unstable();
             numbers.dedup();
-            if many {
+            if self.many {
                 covered &= added.covered;
                 mark = merge_marks(mark, added.mark);
             }
@@ -310,7 +379,10 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
             Some(text) if !text.contains('\n') => Some(text.clone()),
             _ => tokens.clone(),
         };
-        let (shown_before, shown_after) = (one_line(&edit.source_before, &edit.text_before), one_line(&edit.source_after, &edit.text_after));
+        let (shown_before, shown_after) = (
+            one_line(&edit.source_before, &edit.text_before),
+            one_line(&edit.source_after, &edit.text_after),
+        );
         let shown_after = match pair {
             Some(added) => one_line(&added.edit.source_after, &added.edit.text_after),
             None => shown_after,
@@ -318,7 +390,9 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
         let kind = if pair.is_some() { EditKind::Replaced } else { edit.kind };
         let diff = match (kind, &shown_before, &shown_after) {
             // An operator change marks only the operator: `a ⟦<⟧→⟦<=⟧ b`.
-            (EditKind::Modified, Some(_), Some(new)) if edit.attr_before != edit.attr_after && edit.attr_after.as_ref().is_some_and(|a| new.contains(&format!(" {a} "))) => {
+            (EditKind::Modified, Some(_), Some(new))
+                if edit.attr_before != edit.attr_after && edit.attr_after.as_ref().is_some_and(|a| new.contains(&format!(" {a} "))) =>
+            {
                 let (old_attr, new_attr) = (edit.attr_before.clone().unwrap_or_default(), edit.attr_after.clone().unwrap_or_default());
                 Some(short(&new.replacen(&format!(" {new_attr} "), &format!(" ⟦{old_attr}⟧→⟦{new_attr}⟧ "), 1)))
             }
@@ -332,21 +406,67 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
         };
         let Some(anchor) = edit.anchor() else {
             let file = edit.file.clone().unwrap_or_default();
-            insert(&mut root, &[("files".into(), "files".into()), (file.clone(), file)], status, mark, &owners, &numbers, diff);
-            continue;
+            insert(
+                root,
+                &[("files".into(), "files".into()), (file.clone(), file)],
+                status,
+                mark,
+                &owners,
+                &numbers,
+                diff.as_deref(),
+            );
+            return;
         };
         let mut path = anchor_path(anchor, if edit.after.is_some() { after } else { before }, after, before, "");
-        if let Some(old) = renames.items.iter().find(|(_, new)| *new == &anchor.item).map(|(old, _)| old.clone()) {
-            if let Some(last) = path.iter_mut().find(|(id, _)| id == &anchor.item) {
-                last.1 = format!("{} → {}", old.rsplit("::").next().unwrap_or(&old), last.1);
-            }
+        if let Some(old) = self
+            .renames
+            .items
+            .iter()
+            .find(|(_, new)| *new == &anchor.item)
+            .map(|(old, _)| old.clone())
+            && let Some(last) = path.iter_mut().find(|(id, _)| id == &anchor.item)
+        {
+            last.1 = format!("{} → {}", old.rsplit("::").next().unwrap_or(&old), last.1);
         }
-        insert(&mut root, &path, status, mark, &owners, &numbers, diff);
+        insert(root, &path, status, mark, &owners, &numbers, diff.as_deref());
+    }
+}
+
+/// Builds the change tree: one diff from the base tree (`before`) to the head tree (`after`), with
+/// the step numbers as labels (brief 5f, D3). `steps` gives the workspaces (before, after) of each
+/// step, for the label of an uncovered edit that a later step removed.
+pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Workspace, steps: &[(&Workspace, &Workspace)]) -> TreeNode {
+    let (finals, hidden) = final_edits_with(outcomes, before, after);
+    let (renames, rename_steps) = composed_renames(outcomes);
+    let many = outcomes.len() > 1;
+    let mut root = new_node("workspace", "workspace");
+    // A removed and an added item with the same path (a changed `use` line) is one changed node
+    // (D12).
+    let removed_paths: std::collections::BTreeSet<&str> = finals
+        .iter()
+        .filter(|f| f.edit.kind == EditKind::ItemRemoved)
+        .filter_map(|f| f.edit.item())
+        .collect();
+    let replaced: BTreeMap<&str, &FinalEdit> = finals
+        .iter()
+        .filter(|f| f.edit.kind == EditKind::ItemAdded)
+        .filter_map(|f| Some((f.edit.item()?, f)))
+        .filter(|(item, _)| removed_paths.contains(item))
+        .collect();
+    let inputs = TreeInputs {
+        after,
+        before,
+        renames: &renames,
+        replaced: &replaced,
+        many,
+    };
+    for f in &finals {
+        inputs.add_final(&mut root, f);
     }
     // Renames give no edit (the diff applies them first), so they get their own nodes.
     let no_steps = Vec::new();
     for (old, new) in &renames.items {
-        if renames.items.contains_key(&old.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default()) {
+        if renames.items.contains_key(&old.rsplit_once("::").map_or_default(|(p, _)| p.to_string())) {
             continue; // A method of a renamed type: the type node shows the rename.
         }
         let mut path = item_path(new, after, before);
@@ -354,7 +474,22 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
             last.1 = format!("{} → {}", old.rsplit("::").next().unwrap_or(old), last.1);
         }
         let numbers = if many { rename_steps.get(old).unwrap_or(&no_steps) } else { &no_steps };
-        insert(&mut root, &path, Status::Moved, (Some(if old.rsplit_once("::").map(|(p, _)| p) == new.rsplit_once("::").map(|(p, _)| p) { Category::Rename } else { Category::Move }), None), &[], numbers, None);
+        insert(
+            &mut root,
+            &path,
+            Status::Moved,
+            (
+                Some(if old.rsplit_once("::").map(|(p, _)| p) == new.rsplit_once("::").map(|(p, _)| p) {
+                    Category::Rename
+                } else {
+                    Category::Move
+                }),
+                None,
+            ),
+            &[],
+            numbers,
+            None,
+        );
     }
     for (scope, old, new) in &renames.idents {
         if let Some(item) = scope {
@@ -369,18 +504,24 @@ pub fn change_tree_with(outcomes: &[StepOutcome], after: &Workspace, before: &Wo
         let (outcome, edit) = (&outcomes[position], &outcomes[position].edits[index]);
         let (step_before, step_after) = steps.get(position).copied().unwrap_or((before, after));
         let suffix = format!("@{}", outcome.report.step);
-        let path = match edit.anchor() {
-            Some(anchor) => {
-                let mut path = anchor_path(anchor, if edit.after.is_some() { step_after } else { step_before }, step_after, step_before, &suffix);
-                if anchor.path.is_empty() {
-                    path.push((format!("{}{suffix}", anchor.item), format!("{} (step {})", format!("{:?}", edit.kind).to_lowercase(), outcome.report.step)));
-                }
-                path
+        let path = if let Some(anchor) = edit.anchor() {
+            let mut path = anchor_path(
+                anchor,
+                if edit.after.is_some() { step_after } else { step_before },
+                step_after,
+                step_before,
+                &suffix,
+            );
+            if anchor.path.is_empty() {
+                path.push((
+                    format!("{}{suffix}", anchor.item),
+                    format!("{} (step {})", format!("{:?}", edit.kind).to_lowercase(), outcome.report.step),
+                ));
             }
-            None => {
-                let file = edit.file.clone().unwrap_or_default();
-                vec![("files".into(), "files".into()), (format!("{file}{suffix}"), file)]
-            }
+            path
+        } else {
+            let file = edit.file.clone().unwrap_or_default();
+            vec![("files".into(), "files".into()), (format!("{file}{suffix}"), file)]
         };
         insert(&mut root, &path, Status::Uncovered, (None, None), &[], &[outcome.report.step], None);
     }
@@ -411,7 +552,7 @@ fn clear_steps(node: &mut TreeNode) {
 }
 
 fn outcome_claim_id(outcome: &StepOutcome, index: usize) -> String {
-    outcome.report.claims.get(index).map(|c| c.claim.clone()).unwrap_or_default()
+    outcome.report.claims.get(index).map_or_default(|c| c.claim.clone())
 }
 
 fn item_label(path: &str, after: &Workspace, before: &Workspace) -> String {
@@ -427,15 +568,14 @@ fn short(text: &str) -> String {
     semilla_syntax::tree::short(text, 50)
 }
 
-fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, mark: Mark, claims: &[String], steps: &[usize], diff: Option<String>) {
+fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, mark: Mark, claims: &[String], steps: &[usize], diff: Option<&str>) {
     let mut node = root;
     for (depth, (id, label)) in path.iter().enumerate() {
-        let position = match node.children.iter().position(|child| &child.id == id) {
-            Some(position) => position,
-            None => {
-                node.children.push(new_node(id, label));
-                node.children.len() - 1
-            }
+        let position = if let Some(position) = node.children.iter().position(|child| &child.id == id) {
+            position
+        } else {
+            node.children.push(new_node(id, label));
+            node.children.len() - 1
         };
         node = &mut node.children[position];
         if depth + 1 == path.len() {
@@ -455,8 +595,8 @@ fn insert(root: &mut TreeNode, path: &[(String, String)], status: Status, mark: 
                 }
             }
             node.steps.sort_unstable();
-            if diff.is_some() {
-                node.diff = diff.clone();
+            if let Some(diff) = diff {
+                node.diff = Some(diff.to_string());
             }
         }
     }
@@ -497,12 +637,18 @@ fn summarize(node: &mut TreeNode) -> BTreeMap<&'static str, usize> {
 pub fn flows(outcomes: &[StepOutcome], after: &Workspace) -> Vec<FlowGraph> {
     flow_inputs(outcomes)
         .into_iter()
-        .filter_map(|(item, (statuses, removed))| after.items.get(&item).and_then(|item| semilla_syntax::flow::flow_view(item, &statuses, removed)))
+        .filter_map(|(item, (statuses, removed))| {
+            after
+                .items
+                .get(&item)
+                .and_then(|item| semilla_syntax::flow::flow_view(item, &statuses, removed))
+        })
         .collect()
 }
 
 /// The inputs of the flow views: for each changed function, the status of each changed path and
 /// the number of removed statements.
+#[must_use]
 pub fn flow_inputs(outcomes: &[StepOutcome]) -> BTreeMap<String, (BTreeMap<String, Status>, usize)> {
     let mut per_item: BTreeMap<String, (BTreeMap<String, Status>, usize)> = BTreeMap::new();
     for outcome in outcomes {
@@ -518,8 +664,12 @@ pub fn flow_inputs(outcomes: &[StepOutcome]) -> BTreeMap<String, (BTreeMap<Strin
             if anchor.path.is_empty() {
                 continue;
             }
-            let path: Vec<String> = anchor.path.iter().map(|s| s.to_string()).collect();
-            per_item.entry(anchor.item.clone()).or_default().0.insert(path.join("/"), edit_status(edit.kind, covered));
+            let path: Vec<String> = anchor.path.iter().map(std::string::ToString::to_string).collect();
+            per_item
+                .entry(anchor.item.clone())
+                .or_default()
+                .0
+                .insert(path.join("/"), edit_status(edit.kind, covered));
         }
     }
     per_item
@@ -527,6 +677,7 @@ pub fn flow_inputs(outcomes: &[StepOutcome]) -> BTreeMap<String, (BTreeMap<Strin
 
 /// The inputs of the flow views from the final edits: the paths are paths of the head tree, so a
 /// new statement of an early step keeps its `added` status (brief 5f, D3).
+#[must_use]
 pub fn final_flow_inputs(finals: &[FinalEdit]) -> BTreeMap<String, (BTreeMap<String, Status>, usize)> {
     let mut per_item: BTreeMap<String, (BTreeMap<String, Status>, usize)> = BTreeMap::new();
     for f in finals {
@@ -541,8 +692,12 @@ pub fn final_flow_inputs(finals: &[FinalEdit]) -> BTreeMap<String, (BTreeMap<Str
         if anchor.path.is_empty() {
             continue;
         }
-        let path: Vec<String> = anchor.path.iter().map(|s| s.to_string()).collect();
-        per_item.entry(anchor.item.clone()).or_default().0.insert(path.join("/"), edit_status(f.edit.kind, f.covered));
+        let path: Vec<String> = anchor.path.iter().map(std::string::ToString::to_string).collect();
+        per_item
+            .entry(anchor.item.clone())
+            .or_default()
+            .0
+            .insert(path.join("/"), edit_status(f.edit.kind, f.covered));
     }
     per_item
 }
@@ -561,7 +716,11 @@ pub fn graph(outcomes: &[StepOutcome], after: &Workspace) -> WorkspaceGraph {
             let Some(item) = edit.item() else { continue };
             *changes.entry(item.to_string()).or_default() += 1;
             let status = edit_status(edit.kind, outcome.owners[index].is_some() || fact_id(outcome, index).is_some());
-            let status = if edit.anchor().is_some_and(|a| !a.path.is_empty()) && status != Status::Uncovered { Status::Changed } else { status };
+            let status = if edit.anchor().is_some_and(|a| !a.path.is_empty()) && status != Status::Uncovered {
+                Status::Changed
+            } else {
+                status
+            };
             let entry = statuses.entry(item.to_string()).or_insert(status);
             if status == Status::Uncovered {
                 *entry = status;
@@ -580,7 +739,11 @@ fn sources_of(edits: &[&Edit], before: &Workspace, after: &Workspace) -> BTreeMa
     let mut map = BTreeMap::new();
     {
         for edit in edits {
-            let key = edit.anchor().map(|a| a.to_string()).or_else(|| edit.file.clone()).unwrap_or_default();
+            let key = edit
+                .anchor()
+                .map(std::string::ToString::to_string)
+                .or_else(|| edit.file.clone())
+                .unwrap_or_default();
             // An item-level change (docs, signature, members): the whole item on both sides, so that
             // both sides have the same form.
             if let Some(anchor) = edit.anchor().filter(|a| a.path.is_empty()) {
@@ -599,7 +762,11 @@ fn sources_of(edits: &[&Edit], before: &Workspace, after: &Workspace) -> BTreeMa
     // The full source of each changed function, for the flow views. Unchanged functions are not
     // in the map.
     let changed: std::collections::BTreeSet<String> = edits.iter().filter_map(|e| e.item().map(str::to_string)).collect();
-    for item in after.items.values().filter(|i| i.kind == semilla_syntax::ItemKind::Fn && changed.contains(&i.path)) {
+    for item in after
+        .items
+        .values()
+        .filter(|i| i.kind == semilla_syntax::ItemKind::Fn && changed.contains(&i.path))
+    {
         let entry = map.entry(item.path.clone()).or_insert((None, None));
         entry.1 = Some(item.source.clone());
         if entry.0.is_none() {
@@ -617,12 +784,14 @@ fn fact_id(outcome: &StepOutcome, index: usize) -> Option<String> {
 }
 
 /// A text report of the steps, for the CLI and the agent tools (design section 8.15).
+#[must_use]
 pub fn text_report(steps: &[StepReport]) -> String {
     text_report_lists(steps, false, true)
 }
 
 /// The short cause of a claim that is not verified, for a claim list below the full text: the
 /// start of the reason, to the first `:`, `;`, `.`, or `(` that is not in a code span.
+#[must_use]
 pub fn short_cause(status: &ClaimStatus) -> String {
     let (word, reason) = match status {
         ClaimStatus::Verified { proof } => return format!("verified ({proof})"),
@@ -654,20 +823,29 @@ pub fn short_cause(status: &ClaimStatus) -> String {
     if cause.chars().count() > 80 {
         // A long first clause: cut it at a word border.
         let cut: String = cause.chars().take(80).collect();
-        cause = format!("{} …", cut.rsplit_once(' ').map(|(start, _)| start).unwrap_or(&cut));
+        cause = format!("{} …", cut.rsplit_once(' ').map_or(cut.as_str(), |(start, _)| start));
     }
-    if cause.is_empty() { word.to_string() } else { format!("{word}: {cause}") }
+    if cause.is_empty() {
+        word.to_string()
+    } else {
+        format!("{word}: {cause}")
+    }
 }
 
 pub use semilla_core::report::{EQUAL_SITES, LIST_LIMIT};
 
 /// A list of bodies for the text output (batch 5x, part E). A list of more than [`LIST_LIMIT`]
 /// bodies shows the count and the scope. `names` shows each name (`semilla status --verbose`).
+#[must_use]
 pub fn body_list(items: &[String], names: bool) -> String {
     if names || items.len() <= LIST_LIMIT {
         return items.join(", ");
     }
-    format!("{} bodies of {} (`semilla status --verbose` shows the names)", items.len(), semilla_core::report::list_scope(items))
+    format!(
+        "{} bodies of {} (`semilla status --verbose` shows the names)",
+        items.len(),
+        semilla_core::report::list_scope(items)
+    )
 }
 
 /// The shortest spotlight text that the text report prints one time for many facts.
@@ -704,7 +882,7 @@ fn id_list(ids: &[&str]) -> String {
         if end - index >= 2 {
             parts.push(format!("{} to {}", ids[index], ids[end]));
         } else {
-            parts.extend(ids[index..=end].iter().map(|id| id.to_string()));
+            parts.extend(ids[index..=end].iter().map(std::string::ToString::to_string));
         }
         index = end + 1;
     }
@@ -751,7 +929,11 @@ impl<'a> Shared<'a> {
                 }
             }
             if let Some(content) = fact.content.as_deref().filter(|_| fact.build_code_change) {
-                shared.diffs.entry((fact.file.as_deref().unwrap_or(""), content)).or_default().push(&fact.id);
+                shared
+                    .diffs
+                    .entry((fact.file.as_deref().unwrap_or(""), content))
+                    .or_default()
+                    .push(&fact.id);
             }
         }
         shared.spotlights.retain(|_, ids| ids.len() > 1);
@@ -785,7 +967,11 @@ impl<'a> Shared<'a> {
     /// numbers of the facts. Each other fact names the first fact.
     fn spotlight(&self, fact: &semilla_core::report::Fact, why: &str) -> String {
         let (before, name, part) = shared_text(why);
-        match self.spotlights.get(&(part, fact.causes.join(", "))).filter(|ids| ids.contains(&fact.id.as_str())) {
+        match self
+            .spotlights
+            .get(&(part, fact.causes.join(", ")))
+            .filter(|ids| ids.contains(&fact.id.as_str()))
+        {
             Some(ids) if ids[0] == fact.id => format!("{why} (the same text for {})", id_list(&in_order(ids))),
             Some(ids) => format!("{before}{name}the same text as {}", ids[0]),
             None => why.to_string(),
@@ -801,35 +987,23 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     let mut lines: Vec<String> = Vec::new();
     let mut put = |line: &str| lines.push(line.to_string());
     for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
-        if matches!(fact.part.as_str(), "edit" | "body") {
-            // A fold of equal facts: the bodies, with the count of sites in each.
-            let mut items: Vec<(String, usize)> = Vec::new();
-            for site in &group.sites {
-                match items.iter_mut().find(|(item, _)| *item == site.item) {
-                    Some((_, count)) => *count += 1,
-                    None => items.push((site.item.clone(), 1)),
-                }
-            }
-            let shown: Vec<String> = items.iter().take(6).map(|(item, count)| if *count > 1 { format!("{item} ({count})") } else { item.clone() }).collect();
-            let more = if items.len() > 6 { format!(", and {} more", items.len() - 6) } else { String::new() };
-            put(&format!("      in: {}{more}", shown.join(", ")));
-        } else {
-            // The bodies of the sites (D15): a body with a site can be proved equal, so it
-            // is not always in the affected bodies.
-            let mut items: Vec<&str> = group.sites.iter().map(|s| s.item.as_str()).collect();
-            items.dedup();
-            let more = if items.len() > 4 { format!(", and {} more", items.len() - 4) } else { String::new() };
-            items.truncate(4);
-            put(&format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", ")));
-        }
+        put(&group_line(fact, group));
     }
     if !fact.affected.is_empty() {
         // The mismatch mark (design 35.2) replaces the list name. It asks for no reason.
-        let name = if fact.mismatch() { semilla_core::report::MISMATCH } else { "affected bodies:" };
+        let name = if fact.mismatch() {
+            semilla_core::report::MISMATCH
+        } else {
+            "affected bodies:"
+        };
         put(&format!("      {name} {}", shared.bodies(fact, names)));
     }
     if !fact.equal_sites.is_empty() {
-        put(&format!("      {EQUAL_SITES}{}: {}", fact.part_mark(), body_list(&fact.equal_sites, names)));
+        put(&format!(
+            "      {EQUAL_SITES}{}: {}",
+            fact.part_mark(),
+            body_list(&fact.equal_sites, names)
+        ));
     }
     // The branch mark (design 40.4): the line asks for no reason.
     if let Some(branches) = &fact.branches {
@@ -855,19 +1029,35 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
         let why = shared.spotlight(fact, why);
         match &fact.reason {
             Some(reason) => put(&format!("      spotlight: {why}; {}: {}", fact.reason_label(), text::quoted(reason))),
-            None => put(&format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.reason_place())),
+            None => put(&format!(
+                "      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'",
+                fact.reason_place()
+            )),
         }
         // The full list of the causes (design 37.14), one time for each shared text.
         let first = self::shared_text(fact.spotlight_why.as_deref().unwrap_or("")).2;
-        if names && !fact.causes.is_empty() && shared.spotlights.get(&(first, fact.causes.join(", "))).is_none_or(|ids| ids[0] == fact.id) {
+        if names
+            && !fact.causes.is_empty()
+            && shared
+                .spotlights
+                .get(&(first, fact.causes.join(", ")))
+                .is_none_or(|ids| ids[0] == fact.id)
+        {
             put(&format!("      each cause: {}", fact.causes.join(", ")));
         }
     }
     if let Some(content) = fact.content.as_deref().filter(|_| fact.build_code_change) {
-        let ids = shared.diffs.get(&(fact.file.as_deref().unwrap_or(""), content)).map(Vec::as_slice).unwrap_or(&[]);
+        let ids = shared
+            .diffs
+            .get(&(fact.file.as_deref().unwrap_or(""), content))
+            .map_or(&[][..], Vec::as_slice);
         if ids.last().is_none_or(|last| *last == fact.id) {
             if ids.len() > 1 {
-                put(&format!("      diff of `{}` (one time, for {}):", fact.file.as_deref().unwrap_or(""), id_list(&in_order(ids))));
+                put(&format!(
+                    "      diff of `{}` (one time, for {}):",
+                    fact.file.as_deref().unwrap_or(""),
+                    id_list(&in_order(ids))
+                ));
             } else {
                 put("      diff:");
             }
@@ -879,6 +1069,43 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     (head, lines)
 }
 
+/// The line of one group of sites of a fact: the bodies of the sites.
+fn group_line(fact: &semilla_core::report::Fact, group: &semilla_core::report::SiteGroup) -> String {
+    if matches!(fact.part.as_str(), "edit" | "body") {
+        // A fold of equal facts: the bodies, with the count of sites in each.
+        let mut items: Vec<(String, usize)> = Vec::new();
+        for site in &group.sites {
+            match items.iter_mut().find(|(item, _)| *item == site.item) {
+                Some((_, count)) => *count += 1,
+                None => items.push((site.item.clone(), 1)),
+            }
+        }
+        let shown: Vec<String> = items
+            .iter()
+            .take(6)
+            .map(|(item, count)| if *count > 1 { format!("{item} ({count})") } else { item.clone() })
+            .collect();
+        let more = if items.len() > 6 {
+            format!(", and {} more", items.len() - 6)
+        } else {
+            String::new()
+        };
+        format!("      in: {}{more}", shown.join(", "))
+    } else {
+        // The bodies of the sites (D15): a body with a site can be proved equal, so it
+        // is not always in the affected bodies.
+        let mut items: Vec<&str> = group.sites.iter().map(|s| s.item.as_str()).collect();
+        items.dedup();
+        let more = if items.len() > 4 {
+            format!(", and {} more", items.len() - 4)
+        } else {
+            String::new()
+        };
+        items.truncate(4);
+        format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", "))
+    }
+}
+
 /// True for the spotlight line of a fact.
 fn is_spotlight_line(line: &str) -> bool {
     line.starts_with("      spotlight: ") || line.starts_with("      ✗ spotlight: ")
@@ -888,7 +1115,10 @@ fn is_spotlight_line(line: &str) -> bool {
 /// for each fact of a run of two facts or more, the first and the last index of the run.
 fn spotlight_runs(order: &[&semilla_core::report::Fact], names: bool) -> Vec<Option<(usize, usize)>> {
     let none = Shared::default();
-    let lines: Vec<Option<String>> = order.iter().map(|fact| fact_lines(fact, &none, names).1.into_iter().find(|line| is_spotlight_line(line))).collect();
+    let lines: Vec<Option<String>> = order
+        .iter()
+        .map(|fact| fact_lines(fact, &none, names).1.into_iter().find(|line| is_spotlight_line(line)))
+        .collect();
     let mut runs = vec![None; order.len()];
     let mut start = 0;
     while start < order.len() {
@@ -911,14 +1141,15 @@ pub const LINE_MAX: usize = 500;
 /// (items with ", " between them) shows its first items and its last items, with the count of
 /// the items that it does not show. Each other long line shows its start and its end. The cut
 /// says that `semilla status --verbose` shows the full line.
+#[must_use]
 pub fn fit_line(line: &str) -> String {
     const HEAD: usize = 300;
     const TAIL: usize = 100;
+    const FULL: &str = "`semilla status --verbose` shows the full line";
     let count = |text: &str| text.chars().count();
     if count(line) <= LINE_MAX {
         return line.to_string();
     }
-    const FULL: &str = "`semilla status --verbose` shows the full line";
     let parts: Vec<&str> = line.split(", ").collect();
     if parts.len() >= 6 {
         let mut head = 0;
@@ -935,7 +1166,11 @@ pub fn fit_line(line: &str) -> String {
         }
         if head >= 1 && tail >= 1 && head + tail < parts.len() {
             let hidden = parts.len() - head - tail;
-            return format!("{}, … ({hidden} items more; {FULL}) …, {}", parts[..head].join(", "), parts[parts.len() - tail..].join(", "));
+            return format!(
+                "{}, … ({hidden} items more; {FULL}) …, {}",
+                parts[..head].join(", "),
+                parts[parts.len() - tail..].join(", ")
+            );
         }
     }
     let chars: Vec<char> = line.chars().collect();
@@ -944,38 +1179,36 @@ pub fn fit_line(line: &str) -> String {
     format!("{start}… ({} characters more; {FULL}) …{end}", chars.len() - HEAD - TAIL)
 }
 
+/// The head of the build code section (design 28.3): one line names the manifest facts of
+/// each changed file.
+fn build_code_section(out: &mut String, order: &[&semilla_core::report::Fact]) {
+    use text::put_line as put;
+    put(out, &format!("  ! {}", semilla_core::report::BUILD_CODE_SECTION));
+    let mut files: Vec<(&str, Vec<&str>)> = Vec::new();
+    for fact in order.iter().filter(|fact| fact.build_code_change && rank(fact) != 0) {
+        let file = fact.file.as_deref().unwrap_or("");
+        match files.iter_mut().find(|(name, _)| *name == file) {
+            Some((_, ids)) => ids.push(&fact.id),
+            None => files.push((file, vec![&fact.id])),
+        }
+    }
+    for (file, ids) in files {
+        put(
+            out,
+            &format!(
+                "      `{file}`: the manifest facts {} below, with the diff of the file",
+                id_list(&in_order(&ids))
+            ),
+        );
+    }
+}
+
 /// The facts of one step of the text report (design 37.13 to 37.18).
 /// - The order of the facts follows [`rank`]. A fact keeps its number.
 /// - Facts with the same text, the same category, the same compare result, and the same lines
 ///   below are one line with the count, the numbers, and the places.
-/// Returns the build code section (it comes before the claims) and the other facts.
+///   Returns the build code section (it comes before the claims) and the other facts.
 fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, String) {
-    use text::put_line as put;
-    let (mut first, mut rest) = (String::new(), String::new());
-    let out = &mut first;
-    let mut order: Vec<&semilla_core::report::Fact> = facts.iter().collect();
-    order.sort_by_key(|fact| rank(fact));
-    // Design 38.4: a spotlight line that is equal for a run of facts shows one time, after the
-    // last fact of the run, with the fact numbers. The texts of such a run do not share.
-    let runs = spotlight_runs(&order, names);
-    let alone: Vec<&semilla_core::report::Fact> = order.iter().enumerate().filter(|(index, _)| runs[*index].is_none()).map(|(_, fact)| *fact).collect();
-    let shared = Shared::new(&alone, names);
-    // Design 28.3: the build code changes of the step come first, with the diff. The manifest
-    // facts of the change are with the other manifest facts: one line names them here.
-    if facts.iter().any(|fact| fact.build_code_change) {
-        put(out, &format!("  ! {}", semilla_core::report::BUILD_CODE_SECTION));
-        let mut files: Vec<(&str, Vec<&str>)> = Vec::new();
-        for fact in order.iter().filter(|fact| fact.build_code_change && rank(fact) != 0) {
-            let file = fact.file.as_deref().unwrap_or("");
-            match files.iter_mut().find(|(name, _)| *name == file) {
-                Some((_, ids)) => ids.push(&fact.id),
-                None => files.push((file, vec![&fact.id])),
-            }
-        }
-        for (file, ids) in files {
-            put(out, &format!("      `{file}`: the manifest facts {} below, with the diff of the file", id_list(&in_order(&ids))));
-        }
-    }
     struct Line<'a> {
         ids: Vec<&'a str>,
         places: Vec<String>,
@@ -984,6 +1217,26 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
         lines: Vec<String>,
         /// The full texts (design 38.1): facts with a different content stay apart.
         content: Option<&'a str>,
+    }
+    use text::put_line as put;
+    let (mut first, mut rest) = (String::new(), String::new());
+    let out = &mut first;
+    let mut order: Vec<&semilla_core::report::Fact> = facts.iter().collect();
+    order.sort_by_key(|fact| rank(fact));
+    // Design 38.4: a spotlight line that is equal for a run of facts shows one time, after the
+    // last fact of the run, with the fact numbers. The texts of such a run do not share.
+    let runs = spotlight_runs(&order, names);
+    let alone: Vec<&semilla_core::report::Fact> = order
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| runs[*index].is_none())
+        .map(|(_, fact)| *fact)
+        .collect();
+    let shared = Shared::new(&alone, names);
+    // Design 28.3: the build code changes of the step come first, with the diff. The manifest
+    // facts of the change are with the other manifest facts: one line names them here.
+    if facts.iter().any(|fact| fact.build_code_change) {
+        build_code_section(out, &order);
     }
     let mut shown: Vec<Line> = Vec::new();
     for (index, fact) in order.iter().enumerate() {
@@ -999,13 +1252,28 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
                 lines.retain(|line| !is_spotlight_line(line) && !line.starts_with("      each cause: "));
             }
         }
-        let place = fact.at.as_ref().map(|at| at.to_string()).or_else(|| fact.file.clone()).unwrap_or_else(|| fact.part.clone());
-        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref()) {
+        let place = fact
+            .at
+            .as_ref()
+            .map(std::string::ToString::to_string)
+            .or_else(|| fact.file.clone())
+            .unwrap_or_else(|| fact.part.clone());
+        match shown
+            .iter_mut()
+            .find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref())
+        {
             Some(line) => {
                 line.ids.push(&fact.id);
                 line.places.push(place);
             }
-            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines, content: fact.content.as_deref() }),
+            None => shown.push(Line {
+                ids: vec![&fact.id],
+                places: vec![place],
+                rank: rank(fact),
+                head,
+                lines,
+                content: fact.content.as_deref(),
+            }),
         }
     }
     // Design 38.5: no line of the text output is longer than `LINE_MAX` characters. The merge
@@ -1016,7 +1284,16 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
         if line.ids.len() == 1 {
             put(out, &fit(format!("  ◆ {} {}", line.ids[0], line.head)));
         } else {
-            put(out, &fit(format!("  ◆ {} {} × {} (also {})", line.ids[0], line.head, line.ids.len(), id_list(&line.ids[1..]))));
+            put(
+                out,
+                &fit(format!(
+                    "  ◆ {} {} × {} (also {})",
+                    line.ids[0],
+                    line.head,
+                    line.ids.len(),
+                    id_list(&line.ids[1..])
+                )),
+            );
             put(out, &fit(format!("      places: {}", line.places.join(", "))));
         }
         for text in &line.lines {
@@ -1028,6 +1305,7 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
 
 /// The text report. With `short_failures`, a claim that is not verified shows only its status
 /// and a short cause: the caller prints the full text and the hint before the report.
+#[must_use]
 pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
     text_report_lists(steps, short_failures, false)
 }
@@ -1056,15 +1334,19 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
                 continue;
             }
             let detail = claim.status.text();
-            let class = claim.category.map(|c| format!(" [{}]", c.name())).unwrap_or_default();
-            let effect = claim.effect.map(|e| format!(" effect hint: {e:?}").to_lowercase()).unwrap_or_default();
-            let witness = claim.witness.as_ref().map(|w| format!(" (example: {w})")).unwrap_or_default();
-            put(&mut out, &format!("  {mark} {} {detail}{}{class}{effect}{witness}", claim.claim, claim.mark()));
+            let class = claim.category.map_or_default(|c| format!(" [{}]", c.name()));
+            let effect = claim.effect.map_or_default(|e| format!(" effect hint: {e:?}").to_lowercase());
+            let witness = claim.witness.as_ref().map_or_default(|w| format!(" (example: {w})"));
+            put(
+                &mut out,
+                &format!("  {mark} {} {detail}{}{class}{effect}{witness}", claim.claim, claim.mark()),
+            );
             if !claim.affected.is_empty() {
                 put(&mut out, &format!("      changed bodies: {}", body_list(&claim.affected, names)));
             }
             // A property claim states its scope (what Semilla examined, and what it did not).
-            let property = matches!(&claim.status, ClaimStatus::Verified { proof } if matches!(proof.as_str(), "partial" | "mir" | "graph" | "syntax"));
+            let property =
+                matches!(&claim.status, ClaimStatus::Verified { proof } if matches!(proof.as_str(), "partial" | "mir" | "graph" | "syntax"));
             if let Some(scope) = claim.after.as_ref().filter(|_| property) {
                 put(&mut out, &format!("      scope: {scope}"));
             }
@@ -1075,9 +1357,17 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         // The facts: Semilla derives them, the agent writes no claim (design 22.5).
         out.push_str(&facts);
         for uncovered in &step.uncovered {
-            let at = uncovered.at.as_ref().map(|a| a.to_string()).or_else(|| uncovered.file.clone()).unwrap_or_default();
+            let at = uncovered
+                .at
+                .as_ref()
+                .map(std::string::ToString::to_string)
+                .or_else(|| uncovered.file.clone())
+                .unwrap_or_default();
             put(&mut out, &format!("  ✗ uncovered  {at}"));
-            put(&mut out, &format!("       {}: {}", format!("{:?}", uncovered.view).to_lowercase(), uncovered.description));
+            put(
+                &mut out,
+                &format!("       {}: {}", format!("{:?}", uncovered.view).to_lowercase(), uncovered.description),
+            );
             if let Some(hint) = &uncovered.hint {
                 put(&mut out, &format!("       hint: add {hint}"));
             }
@@ -1087,7 +1377,7 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         }
         for error in &step.errors {
             // The output of a tool has more than one line: each next line gets an indent.
-            out.push_str(&format!("  ✗ error: {}\n", text::block_indent(error, "      ")));
+            let _ = writeln!(out, "  ✗ error: {}", text::block_indent(error, "      "));
         }
         for note in &step.notes {
             put(&mut out, &format!("  note: {note}"));

@@ -30,13 +30,26 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: Value) -> Claim {
         at: at.map(|at| at.parse().expect("the fixture anchors are valid")),
         args: match args {
             Value::Object(map) => map,
-            _ => Default::default(),
+            _ => serde_json::Map::default(),
         },
     }
 }
 
 fn result(claim: &str, step: usize, status: ClaimStatus, category: Option<Category>) -> ClaimResult {
-    ClaimResult { build_code: None, claim: claim.to_string(), step, status, category, effect: None, witness: None, hint: None, before: None, after: None, affected: Vec::new(), complete_calls: Vec::new() }
+    ClaimResult {
+        build_code: None,
+        claim: claim.to_string(),
+        step,
+        status,
+        category,
+        effect: None,
+        witness: None,
+        hint: None,
+        before: None,
+        after: None,
+        affected: Vec::new(),
+        complete_calls: Vec::new(),
+    }
 }
 
 fn verified(claim: &str, step: usize, proof: &str, category: Category) -> ClaimResult {
@@ -56,28 +69,38 @@ fn step(index: usize, intent: &str, claims: Vec<Claim>) -> Step {
         claims,
         tree_before: format!("{:040x}", index * 0x1111),
         tree_after: format!("{:040x}", (index + 1) * 0x1111),
-        reasons: Default::default(),
+        reasons: BTreeMap::default(),
     }
 }
 
 fn subgroup(group: &str, role: Role, title: &str, claims: &[&str], edited: bool, why: &str) -> Subgroup {
     // The engine gives each subgroup the ID `<group>:<role>`.
-    let role_name = serde_json::to_value(role).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+    let role_name = serde_json::to_value(role)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default();
     Subgroup {
         id: format!("{group}:{role_name}"),
         group: group.to_string(),
         role,
         title: title.to_string(),
         why: why.to_string(),
-        claims: claims.iter().map(|claim| claim.to_string()).collect(),
+        claims: claims.iter().map(std::string::ToString::to_string).collect(),
         edited,
         new_claims: Vec::new(),
     }
 }
 
-/// Builds the change set: 7 steps, 18 claims, 3 groups, and 10 subgroups.
-pub fn demo_changeset() -> ChangeSet {
-    let steps = vec![
+/// The 7 steps with their 18 claims.
+fn demo_steps() -> Vec<Step> {
+    let mut steps = demo_steps_one_to_five();
+    steps.extend(demo_steps_six_and_seven());
+    steps
+}
+
+/// The steps 1 to 5 with the claims `c1` to `c8`.
+fn demo_steps_one_to_five() -> Vec<Step> {
+    vec![
         step(
             1,
             "Rename Cart::sum to Cart::total and Cart::count to Cart::len",
@@ -90,39 +113,90 @@ pub fn demo_changeset() -> ChangeSet {
             2,
             "Return 0 for an empty cart",
             vec![
-                claim("c3", "add-if", Some(&format!("{TOTAL}/S0")), json!({ "cond": "self.items.is_empty()", "then": "return 0;" })),
-                claim("c4", "change-operator", Some(&format!("{TOTAL}/S1.0/cond")), json!({ "from": ">", "to": ">=" })),
+                claim(
+                    "c3",
+                    "add-if",
+                    Some(&format!("{TOTAL}/S0")),
+                    json!({ "cond": "self.items.is_empty()", "then": "return 0;" }),
+                ),
+                claim(
+                    "c4",
+                    "change-operator",
+                    Some(&format!("{TOTAL}/S1.0/cond")),
+                    json!({ "from": ">", "to": ">=" }),
+                ),
             ],
         ),
         step(
             3,
             "Test the empty cart",
-            vec![claim("c5", "add-item", Some("shop_core::cart::tests::empty_cart_total"), json!({ "kind": "fn", "test": true }))],
+            vec![claim(
+                "c5",
+                "add-item",
+                Some("shop_core::cart::tests::empty_cart_total"),
+                json!({ "kind": "fn", "test": true }),
+            )],
         ),
         step(
             4,
             "Extract the price of a line",
-            vec![claim("c6", "extract-function", Some(&format!("{TOTAL}/S2.1")), json!({ "new": "shop_core::cart::line_total" }))],
+            vec![claim(
+                "c6",
+                "extract-function",
+                Some(&format!("{TOTAL}/S2.1")),
+                json!({ "new": "shop_core::cart::line_total" }),
+            )],
         ),
         step(
             5,
             "Move line_total to the billing module",
             vec![
-                claim("c7", "move-item", Some("shop_core::cart::line_total"), json!({ "to": "shop_core::billing::line_total" })),
+                claim(
+                    "c7",
+                    "move-item",
+                    Some("shop_core::cart::line_total"),
+                    json!({ "to": "shop_core::billing::line_total" }),
+                ),
                 claim("c8", "invert-if", Some("shop_core::billing::line_total/S0"), json!({})),
             ],
         ),
+    ]
+}
+
+/// The steps 6 and 7 with the claims `c9` to `c18`.
+fn demo_steps_six_and_seven() -> Vec<Step> {
+    vec![
         step(
             6,
             "Return Result from Cart::total",
             vec![
                 claim("c9", "add-item", Some("shop_core::cart::CartError"), json!({ "kind": "enum" })),
-                claim("c10", "change-signature", Some(TOTAL), json!({ "from": "-> u32", "to": "-> Result<u32, CartError>" })),
+                claim(
+                    "c10",
+                    "change-signature",
+                    Some(TOTAL),
+                    json!({ "from": "-> u32", "to": "-> Result<u32, CartError>" }),
+                ),
                 claim("c11", "wrap-expression", Some(&format!("{TOTAL}/tail")), json!({ "with": "Ok" })),
-                claim("c12", "wrap-expression", Some(&format!("{TOTAL}/S0/then/S0/value")), json!({ "with": "Ok" })),
+                claim(
+                    "c12",
+                    "wrap-expression",
+                    Some(&format!("{TOTAL}/S0/then/S0/value")),
+                    json!({ "with": "Ok" }),
+                ),
                 claim("c13", "delete-statement", Some(&format!("{TOTAL}/S2.0/then/S0")), json!({})),
-                claim("c14", "add-return", Some(&format!("{TOTAL}/S2.0/then/S0")), json!({ "value": "Err(CartError::TooMany(item.qty))" })),
-                claim("c15", "bump-dependency", None, json!({ "crate": "thiserror", "to": "2.0", "file": "shop_core/Cargo.toml" })),
+                claim(
+                    "c14",
+                    "add-return",
+                    Some(&format!("{TOTAL}/S2.0/then/S0")),
+                    json!({ "value": "Err(CartError::TooMany(item.qty))" }),
+                ),
+                claim(
+                    "c15",
+                    "bump-dependency",
+                    None,
+                    json!({ "crate": "thiserror", "to": "2.0", "file": "shop_core/Cargo.toml" }),
+                ),
             ],
         ),
         step(
@@ -144,8 +218,12 @@ pub fn demo_changeset() -> ChangeSet {
                 claim("c18", "remove-item", Some("shop_core::report::legacy_total"), json!({})),
             ],
         ),
-    ];
-    let groups = vec![
+    ]
+}
+
+/// The 3 groups.
+fn demo_groups() -> Vec<Group> {
+    vec![
         Group {
             id: "G1".into(),
             title: "Return 0 for an empty cart".into(),
@@ -167,7 +245,11 @@ pub fn demo_changeset() -> ChangeSet {
             why: "The billing module gets the price rules, so the cart only adds the lines.".into(),
             steps: vec![4, 5],
         },
-    ];
+    ]
+}
+
+/// The 10 subgroups.
+fn demo_subgroups() -> Vec<Subgroup> {
     // The order here is not the review order: the UI sorts the subgroups by role.
     let subgroups = vec![
         subgroup("G1", Role::Mechanical, "Renames", &["c1", "c2"], false, ""),
@@ -182,11 +264,25 @@ pub fn demo_changeset() -> ChangeSet {
         ),
         subgroup("G1", Role::Tests, "Cover the empty cart", &["c5"], false, ""),
         subgroup("G2", Role::Interface, "Error type and signature", &["c9", "c10"], false, ""),
-        subgroup("G2", Role::Core, "Return errors for bad quantities", &["c11", "c12", "c13", "c14", "c18"], false, ""),
+        subgroup(
+            "G2",
+            Role::Core,
+            "Return errors for bad quantities",
+            &["c11", "c12", "c13", "c14", "c18"],
+            false,
+            "",
+        ),
         subgroup("G2", Role::Config, "Dependency for the error type", &["c15"], false, ""),
         subgroup("G2", Role::Propagation, "Call sites", &["c16", "c17"], false, ""),
         subgroup("G3", Role::Mechanical, "Extract and move line_total", &["c6", "c7"], false, ""),
-        subgroup("G3", Role::Custom, "Discount check", &["c8"], true, "The agent says that the inverted check changes no result."),
+        subgroup(
+            "G3",
+            Role::Custom,
+            "Discount check",
+            &["c8"],
+            true,
+            "The agent says that the inverted check changes no result.",
+        ),
     ];
     let mut subgroups = subgroups;
     for sub in &mut subgroups {
@@ -200,28 +296,41 @@ pub fn demo_changeset() -> ChangeSet {
             sub.new_claims = vec!["c18".into()];
         }
     }
+    subgroups
+}
+
+/// Builds the change set: 7 steps, 18 claims, 3 groups, and 10 subgroups.
+#[must_use]
+pub fn demo_changeset() -> ChangeSet {
     ChangeSet {
         base_tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into(),
         head_tree: "9c1f0e2d3b4a5968778695a4b3c2d1e0f9a8b7c6".into(),
-        steps,
-        groups,
-        subgroups,
+        steps: demo_steps(),
+        groups: demo_groups(),
+        subgroups: demo_subgroups(),
         pair_refusals: Vec::new(),
     }
 }
 
-/// Builds the verification report for [`demo_changeset`].
-pub fn demo_report() -> Report {
+/// The step reports of the 7 steps.
+fn demo_step_reports() -> Vec<StepReport> {
     let mut c4 = texts(verified("c4", 2, "smt", Category::Semantics), "item.qty > MAX_QTY", "item.qty >= MAX_QTY");
     c4.effect = Some(Effect::Widen);
     c4.witness = Some("item.qty = 100, MAX_QTY = 100".into());
     let mut c8 = texts(
-        result("c8", 5, ClaimStatus::Refuted { reason: "the MIR is different: the branches compare a float.".into() }, None),
+        result(
+            "c8",
+            5,
+            ClaimStatus::Refuted {
+                reason: "the MIR is different: the branches compare a float.".into(),
+            },
+            None,
+        ),
         "if item.discount == 0.0 { base } else { base - item.discount }",
         "if item.discount != 0.0 { base - item.discount } else { base }",
     );
     c8.hint = Some("Tag the claim as change-condition (semantics), or keep the old order of the branches.".into());
-    let steps = vec![
+    vec![
         StepReport {
             step: 1,
             intent: "Rename Cart::sum to Cart::total and Cart::count to Cart::len".into(),
@@ -234,7 +343,14 @@ pub fn demo_report() -> Report {
         StepReport {
             step: 2,
             intent: "Return 0 for an empty cart".into(),
-            claims: vec![texts(verified("c3", 2, "shape", Category::Semantics), "", "if self.items.is_empty() {\n    return 0;\n}"), c4],
+            claims: vec![
+                texts(
+                    verified("c3", 2, "shape", Category::Semantics),
+                    "",
+                    "if self.items.is_empty() {\n    return 0;\n}",
+                ),
+                c4,
+            ],
             ..Default::default()
         },
         StepReport {
@@ -250,13 +366,20 @@ pub fn demo_report() -> Report {
         StepReport {
             step: 4,
             intent: "Extract the price of a line".into(),
-            claims: vec![texts(verified("c6", 4, "N1", Category::Semantics), "sum += item.price * item.qty;", "sum += line_total(item);")],
+            claims: vec![texts(
+                verified("c6", 4, "N1", Category::Semantics),
+                "sum += item.price * item.qty;",
+                "sum += line_total(item);",
+            )],
             ..Default::default()
         },
         StepReport {
             step: 5,
             intent: "Move line_total to the billing module".into(),
-            claims: vec![texts(verified("c7", 5, "N1", Category::Move), "cart::line_total", "billing::line_total"), c8],
+            claims: vec![
+                texts(verified("c7", 5, "N1", Category::Move), "cart::line_total", "billing::line_total"),
+                c8,
+            ],
             ..Default::default()
         },
         StepReport {
@@ -272,38 +395,56 @@ pub fn demo_report() -> Report {
                 texts(verified("c11", 6, "shape", Category::Semantics), "sum", "Ok(sum)"),
                 texts(verified("c12", 6, "shape", Category::Semantics), "return 0;", "return Ok(0);"),
                 texts(verified("c13", 6, "shape", Category::Semantics), "continue;", ""),
-                texts(verified("c14", 6, "shape", Category::Semantics), "", "return Err(CartError::TooMany(item.qty));"),
+                texts(
+                    verified("c14", 6, "shape", Category::Semantics),
+                    "",
+                    "return Err(CartError::TooMany(item.qty));",
+                ),
                 texts(verified("c15", 6, "file", Category::Manifest), "", "thiserror = \"2.0\""),
             ],
             ..Default::default()
         },
-        StepReport {
+        step_7_report(),
+    ]
+}
+
+/// The step report of step 7, with one uncovered change.
+fn step_7_report() -> StepReport {
+    StepReport {
+        step: 7,
+        // Removed: the unwrap in shop_cli::run and the expect in legacy_total.
+        panic_delta: -2,
+        intent: "Update the callers of Cart::total".into(),
+        claims: vec![
+            texts(verified("c16", 7, "shape", Category::Semantics), "cart.total()", "cart.total()?"),
+            texts(
+                verified("c17", 7, "free", Category::Semantics),
+                "load_cart(&path).unwrap()",
+                "load_cart(&path)?",
+            ),
+            texts(
+                verified("c18", 7, "shape", Category::Semantics),
+                "pub fn legacy_total(cart: &Cart) -> u32 {\n    cart.total().checked_add(0).expect(\"total\")\n}",
+                "",
+            ),
+        ],
+        uncovered: vec![Uncovered {
             step: 7,
-            // Removed: the unwrap in shop_cli::run and the expect in legacy_total.
-            panic_delta: -2,
-            intent: "Update the callers of Cart::total".into(),
-            claims: vec![
-                texts(verified("c16", 7, "shape", Category::Semantics), "cart.total()", "cart.total()?"),
-                texts(verified("c17", 7, "free", Category::Semantics), "load_cart(&path).unwrap()", "load_cart(&path)?"),
-                texts(
-                    verified("c18", 7, "shape", Category::Semantics),
-                    "pub fn legacy_total(cart: &Cart) -> u32 {\n    cart.total().checked_add(0).expect(\"total\")\n}",
-                    "",
-                ),
-            ],
-            uncovered: vec![Uncovered {
-                step: 7,
-                view: View::Syntax,
-                at: Some("shop_core::report::summary/S0/init".parse().expect("valid anchor")),
-                file: None,
-                description: "cart.total() → cart.total().unwrap_or(0)".into(),
-                hint: Some("Add this site to the rewrite-pattern claim c16, or add a replace-expression claim.".into()),
-            }],
-            ..Default::default()
-        },
-    ];
+            view: View::Syntax,
+            at: Some("shop_core::report::summary/S0/init".parse().expect("valid anchor")),
+            file: None,
+            description: "cart.total() → cart.total().unwrap_or(0)".into(),
+            hint: Some("Add this site to the rewrite-pattern claim c16, or add a replace-expression claim.".into()),
+        }],
+        ..Default::default()
+    }
+}
+
+/// Builds the verification report for [`demo_changeset`].
+#[must_use]
+pub fn demo_report() -> Report {
     let mut report = Report {
-        steps,
+        steps: demo_step_reports(),
         organization: Vec::new(),
         warnings: vec!["G3: the claim c8 is refuted.".into()],
         panic_delta: 0,
@@ -347,7 +488,7 @@ impl TreeExt for TreeNode {
         self
     }
     fn claims(mut self, claims: &[&str]) -> Self {
-        self.claims = claims.iter().map(|claim| claim.to_string()).collect();
+        self.claims = claims.iter().map(std::string::ToString::to_string).collect();
         self
     }
     fn diff(mut self, diff: &str) -> Self {
@@ -364,10 +505,10 @@ impl TreeExt for TreeNode {
     }
 }
 
-/// Builds the change tree of the whole change set (design section 11.4).
-pub fn demo_tree() -> TreeNode {
+/// The change tree of `Cart::total`.
+fn total_tree() -> TreeNode {
     let t = |path: &str| format!("{TOTAL}/{path}");
-    let total = tree(TOTAL, "fn Cart::sum → Cart::total", Status::Changed)
+    tree(TOTAL, "fn Cart::sum → Cart::total", Status::Changed)
         .claims(&["c1"])
         .summary("8 semantics · 1 extract · 1 rename")
         .children(vec![
@@ -375,36 +516,63 @@ pub fn demo_tree() -> TreeNode {
                 .mark(Category::Semantics, Compare::CodeDifferent)
                 .claims(&["c10"])
                 .diff("⟦-> u32⟧→⟦-> Result<u32, CartError>⟧"),
-            tree(&t("S0"), "if self.items.is_empty() { return Ok(0) }", Status::Added).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c3", "c12"]),
+            tree(&t("S0"), "if self.items.is_empty() { return Ok(0) }", Status::Added)
+                .mark(Category::Semantics, Compare::CodeDifferent)
+                .claims(&["c3", "c12"]),
             tree(&t("S1"), "let mut sum = 0;", Status::Same),
-            tree(&t("S2"), "for item in &self.items", Status::Changed).summary("3 semantics · 1 extract").children(vec![
-                tree(&t("S2/body/S0"), "if item.qty >= MAX_QTY …", Status::Changed).mark(Category::Semantics, Compare::CodeDifferent).children(vec![
-                    tree(&t("S2/body/S0/cond"), "cond", Status::Changed)
+            tree(&t("S2"), "for item in &self.items", Status::Changed)
+                .summary("3 semantics · 1 extract")
+                .children(vec![
+                    tree(&t("S2/body/S0"), "if item.qty >= MAX_QTY …", Status::Changed)
                         .mark(Category::Semantics, Compare::CodeDifferent)
-                        .claims(&["c4"])
-                        .diff("item.qty ⟦>⟧→⟦>=⟧ MAX_QTY"),
-                    tree(&t("S2/body/S0/then/S0"), "continue;", Status::Removed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c13"]),
-                    tree(&t("S2/body/S0/then/S1"), "return Err(CartError::TooMany(item.qty));", Status::Added)
-                        .mark(Category::Semantics, Compare::CodeDifferent)
-                        .claims(&["c14"]),
+                        .children(vec![
+                            tree(&t("S2/body/S0/cond"), "cond", Status::Changed)
+                                .mark(Category::Semantics, Compare::CodeDifferent)
+                                .claims(&["c4"])
+                                .diff("item.qty ⟦>⟧→⟦>=⟧ MAX_QTY"),
+                            tree(&t("S2/body/S0/then/S0"), "continue;", Status::Removed)
+                                .mark(Category::Semantics, Compare::CodeDifferent)
+                                .claims(&["c13"]),
+                            tree(&t("S2/body/S0/then/S1"), "return Err(CartError::TooMany(item.qty));", Status::Added)
+                                .mark(Category::Semantics, Compare::CodeDifferent)
+                                .claims(&["c14"]),
+                        ]),
+                    tree(&t("S2/body/S1"), "sum += item.price * item.qty  →  line_total(item)", Status::Extracted)
+                        .mark(Category::Semantics, Compare::CodeEqual)
+                        .claims(&["c6"]),
                 ]),
-                tree(&t("S2/body/S1"), "sum += item.price * item.qty  →  line_total(item)", Status::Extracted)
-                    .mark(Category::Semantics, Compare::CodeEqual)
-                    .claims(&["c6"]),
-            ]),
-            tree(&t("tail"), "tail", Status::Changed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c11"]).diff("⟦sum⟧→⟦Ok(sum)⟧"),
+            tree(&t("tail"), "tail", Status::Changed)
+                .mark(Category::Semantics, Compare::CodeDifferent)
+                .claims(&["c11"])
+                .diff("⟦sum⟧→⟦Ok(sum)⟧"),
+        ])
+}
+
+/// Builds the change tree of the whole change set (design section 11.4).
+#[must_use]
+pub fn demo_tree() -> TreeNode {
+    let total = total_tree();
+    let cart = tree("shop_core::cart", "mod cart", Status::Changed)
+        .summary("10 code different · 3 code equal")
+        .children(vec![
+            total,
+            tree("shop_core::cart::Cart::len", "fn Cart::count → Cart::len", Status::Moved)
+                .mark(Category::Rename, Compare::CodeEqual)
+                .claims(&["c2"]),
+            tree("shop_core::cart::CartError", "enum CartError", Status::Added)
+                .mark(Category::Semantics, Compare::CodeDifferent)
+                .claims(&["c9"]),
+            tree("shop_core::cart::tests", "mod tests", Status::Changed)
+                .summary("1 new test")
+                .children(vec![
+                    tree("shop_core::cart::tests::empty_cart_total", "fn empty_cart_total", Status::Added)
+                        .mark(Category::Semantics, Compare::CodeDifferent)
+                        .claims(&["c5"]),
+                    tree("shop_core::cart::tests::len_counts_items", "fn len_counts_items", Status::Same),
+                ]),
+            tree("shop_core::cart::Cart", "struct Cart", Status::Same),
+            tree("shop_core::cart::MAX_QTY", "const MAX_QTY", Status::Same),
         ]);
-    let cart = tree("shop_core::cart", "mod cart", Status::Changed).summary("10 code different · 3 code equal").children(vec![
-        total,
-        tree("shop_core::cart::Cart::len", "fn Cart::count → Cart::len", Status::Moved).mark(Category::Rename, Compare::CodeEqual).claims(&["c2"]),
-        tree("shop_core::cart::CartError", "enum CartError", Status::Added).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c9"]),
-        tree("shop_core::cart::tests", "mod tests", Status::Changed).summary("1 new test").children(vec![
-            tree("shop_core::cart::tests::empty_cart_total", "fn empty_cart_total", Status::Added).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c5"]),
-            tree("shop_core::cart::tests::len_counts_items", "fn len_counts_items", Status::Same),
-        ]),
-        tree("shop_core::cart::Cart", "struct Cart", Status::Same),
-        tree("shop_core::cart::MAX_QTY", "const MAX_QTY", Status::Same),
-    ]);
     let billing = tree("shop_core::billing", "mod billing", Status::Added).children(vec![
         tree("shop_core::billing::line_total", "fn line_total   ⤴ from Cart::total", Status::Extracted)
             .mark(Category::Move, Compare::CodeEqual)
@@ -416,13 +584,17 @@ pub fn demo_tree() -> TreeNode {
                     .diff("if ⟦item.discount == 0.0⟧→⟦item.discount != 0.0⟧, branches swapped"),
             ]),
     ]);
-    let report = tree("shop_core::report", "mod report", Status::Changed).summary("1 uncovered · 1 semantics").children(vec![
-        tree("shop_core::report::summary", "fn summary", Status::Uncovered).children(vec![
-            tree("shop_core::report::summary/S0", "let total = …", Status::Uncovered).diff("⟦cart.total()⟧→⟦cart.total().unwrap_or(0)⟧"),
-        ]),
-        tree("shop_core::report::legacy_total", "fn legacy_total", Status::Removed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c18"]),
-        tree("shop_core::report::format_line", "fn format_line", Status::Same),
-    ]);
+    let report = tree("shop_core::report", "mod report", Status::Changed)
+        .summary("1 uncovered · 1 semantics")
+        .children(vec![
+            tree("shop_core::report::summary", "fn summary", Status::Uncovered).children(vec![
+                tree("shop_core::report::summary/S0", "let total = …", Status::Uncovered).diff("⟦cart.total()⟧→⟦cart.total().unwrap_or(0)⟧"),
+            ]),
+            tree("shop_core::report::legacy_total", "fn legacy_total", Status::Removed)
+                .mark(Category::Semantics, Compare::CodeDifferent)
+                .claims(&["c18"]),
+            tree("shop_core::report::format_line", "fn format_line", Status::Same),
+        ]);
     let core = tree("shop_core", "crate shop_core", Status::Changed)
         .summary("11 code different · 3 code equal · 1 no code · 1 uncovered")
         .children(vec![
@@ -440,7 +612,10 @@ pub fn demo_tree() -> TreeNode {
                 .mark(Category::Semantics, Compare::CodeDifferent)
                 .claims(&["c17"])
                 .diff("load_cart(&path)⟦.unwrap()⟧→⟦?⟧"),
-            tree("shop_cli::run/S1", "let total = …", Status::Changed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c16"]).diff("cart.total()⟦⟧→⟦?⟧"),
+            tree("shop_cli::run/S1", "let total = …", Status::Changed)
+                .mark(Category::Semantics, Compare::CodeDifferent)
+                .claims(&["c16"])
+                .diff("cart.total()⟦⟧→⟦?⟧"),
             tree("shop_cli::run/S2", "println!(\"{}\", report::summary(&cart))", Status::Same),
         ]),
         tree("shop_cli::main", "fn main", Status::Same),
@@ -450,17 +625,29 @@ pub fn demo_tree() -> TreeNode {
 }
 
 fn flow_node(id: &str, label: &str, kind: FlowKind, status: Status, anchor: Option<&str>) -> FlowNode {
-    FlowNode { id: id.to_string(), label: label.to_string(), kind, status, anchor: anchor.map(str::to_string) }
+    FlowNode {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind,
+        status,
+        anchor: anchor.map(str::to_string),
+    }
 }
 
 fn flow_edge(from: &str, to: &str, label: Option<&str>, status: Status) -> FlowEdge {
-    FlowEdge { from: from.to_string(), to: to.to_string(), label: label.map(str::to_string), status }
+    FlowEdge {
+        from: from.to_string(),
+        to: to.to_string(),
+        label: label.map(str::to_string),
+        status,
+    }
 }
 
 /// Builds two flow views: `Cart::total` and `shop_cli::run`.
+#[must_use]
 pub fn demo_flows() -> Vec<FlowGraph> {
-    use FlowKind::*;
-    use Status::*;
+    use FlowKind::{Branch, Entry, Exit, Loop, Statement, Stub, Summary};
+    use Status::{Added, Changed, Extracted, Removed, Same, Uncovered};
     let t = |path: &str| format!("{TOTAL}/{path}");
     let total = FlowGraph {
         function: TOTAL.to_string(),
@@ -503,7 +690,13 @@ pub fn demo_flows() -> Vec<FlowGraph> {
         nodes: vec![
             flow_node("n0", "from: main", Stub, Same, Some("shop_cli::main")),
             flow_node("n1", "entry: run", Entry, Same, None),
-            flow_node("n2", "let cart = load_cart(&path)⟦.unwrap()⟧→⟦?⟧", Statement, Changed, Some("shop_cli::run/S0")),
+            flow_node(
+                "n2",
+                "let cart = load_cart(&path)⟦.unwrap()⟧→⟦?⟧",
+                Statement,
+                Changed,
+                Some("shop_cli::run/S0"),
+            ),
             flow_node("n3", "to: load_cart", Stub, Same, Some("shop_cli::load_cart")),
             flow_node("n4", "return Err (from ?)", Exit, Added, Some("shop_cli::run/S0")),
             flow_node("n5", "let total = cart.total()⟦⟧→⟦?⟧", Statement, Changed, Some("shop_cli::run/S1")),
@@ -529,17 +722,8 @@ pub fn demo_flows() -> Vec<FlowGraph> {
     vec![total, run]
 }
 
-#[allow(clippy::too_many_arguments)]
-fn graph_node(
-    id: &str,
-    label: &str,
-    kind: GraphNodeKind,
-    parent: Option<&str>,
-    status: Status,
-    changes: usize,
-    entry: bool,
-    test: bool,
-) -> GraphNode {
+/// A graph node that is not an entry point and not a test.
+fn graph_node(id: &str, label: &str, kind: GraphNodeKind, parent: Option<&str>, status: Status, changes: usize) -> GraphNode {
     GraphNode {
         file: file_of(id),
         id: id.to_string(),
@@ -549,8 +733,24 @@ fn graph_node(
         status,
         changes,
         badges: Vec::new(),
-        entry,
-        test,
+        entry: false,
+        test: false,
+    }
+}
+
+trait GraphNodeExt {
+    fn entry(self) -> Self;
+    fn test(self) -> Self;
+}
+
+impl GraphNodeExt for GraphNode {
+    fn entry(mut self) -> Self {
+        self.entry = true;
+        self
+    }
+    fn test(mut self) -> Self {
+        self.test = true;
+        self
     }
 }
 
@@ -573,31 +773,37 @@ fn file_of(id: &str) -> Option<String> {
 }
 
 fn external(id: &str, badges: &[&str]) -> GraphNode {
-    let mut node = graph_node(id, id, GraphNodeKind::External, None, Status::Same, 0, false, false);
-    node.badges = badges.iter().map(|badge| badge.to_string()).collect();
+    let mut node = graph_node(id, id, GraphNodeKind::External, None, Status::Same, 0);
+    node.badges = badges.iter().map(std::string::ToString::to_string).collect();
     node
 }
 
 fn edge(from: &str, to: &str, kind: GraphEdgeKind, status: Status) -> GraphEdge {
-    GraphEdge { from: from.to_string(), to: to.to_string(), kind, status }
+    GraphEdge {
+        from: from.to_string(),
+        to: to.to_string(),
+        kind,
+        status,
+    }
 }
 
 /// Builds the workspace graph: 2 crates, 5 modules, 13 items, and 3 external functions.
+#[must_use]
 pub fn demo_graph() -> WorkspaceGraph {
-    use GraphNodeKind::*;
-    use Status::*;
+    use GraphNodeKind::{Crate, Function, Module, Other, Type};
+    use Status::{Added, Changed, Extracted, Moved, Removed, Same, Uncovered};
     let nodes = vec![
-        graph_node("shop_core", "shop_core", Crate, None, Changed, 16, false, false),
-        graph_node("shop_cli", "shop_cli", Crate, None, Changed, 2, false, false),
-        graph_node("shop_core::cart", "cart", Module, Some("shop_core"), Changed, 13, false, false),
-        graph_node("shop_core::cart::tests", "tests", Module, Some("shop_core::cart"), Changed, 1, false, true),
-        graph_node("shop_core::billing", "billing", Module, Some("shop_core"), Added, 3, false, false),
-        graph_node("shop_core::report", "report", Module, Some("shop_core"), Changed, 2, false, false),
-        graph_node("shop_core::cart::Cart", "Cart", Type, Some("shop_core::cart"), Same, 0, true, false),
-        graph_node("shop_core::cart::MAX_QTY", "MAX_QTY", Other, Some("shop_core::cart"), Same, 0, true, false),
-        graph_node("shop_core::cart::CartError", "CartError", Type, Some("shop_core::cart"), Added, 1, true, false),
-        graph_node(TOTAL, "Cart::total", Function, Some("shop_core::cart"), Changed, 9, true, false),
-        graph_node("shop_core::cart::Cart::len", "Cart::len", Function, Some("shop_core::cart"), Moved, 1, true, false),
+        graph_node("shop_core", "shop_core", Crate, None, Changed, 16),
+        graph_node("shop_cli", "shop_cli", Crate, None, Changed, 2),
+        graph_node("shop_core::cart", "cart", Module, Some("shop_core"), Changed, 13),
+        graph_node("shop_core::cart::tests", "tests", Module, Some("shop_core::cart"), Changed, 1).test(),
+        graph_node("shop_core::billing", "billing", Module, Some("shop_core"), Added, 3),
+        graph_node("shop_core::report", "report", Module, Some("shop_core"), Changed, 2),
+        graph_node("shop_core::cart::Cart", "Cart", Type, Some("shop_core::cart"), Same, 0).entry(),
+        graph_node("shop_core::cart::MAX_QTY", "MAX_QTY", Other, Some("shop_core::cart"), Same, 0).entry(),
+        graph_node("shop_core::cart::CartError", "CartError", Type, Some("shop_core::cart"), Added, 1).entry(),
+        graph_node(TOTAL, "Cart::total", Function, Some("shop_core::cart"), Changed, 9).entry(),
+        graph_node("shop_core::cart::Cart::len", "Cart::len", Function, Some("shop_core::cart"), Moved, 1).entry(),
         graph_node(
             "shop_core::cart::tests::empty_cart_total",
             "empty_cart_total",
@@ -605,9 +811,9 @@ pub fn demo_graph() -> WorkspaceGraph {
             Some("shop_core::cart::tests"),
             Added,
             1,
-            true,
-            true,
-        ),
+        )
+        .entry()
+        .test(),
         graph_node(
             "shop_core::cart::tests::len_counts_items",
             "len_counts_items",
@@ -615,16 +821,39 @@ pub fn demo_graph() -> WorkspaceGraph {
             Some("shop_core::cart::tests"),
             Same,
             0,
-            true,
-            true,
+        )
+        .entry()
+        .test(),
+        graph_node(
+            "shop_core::billing::line_total",
+            "line_total",
+            Function,
+            Some("shop_core::billing"),
+            Extracted,
+            3,
+        )
+        .entry(),
+        graph_node("shop_core::report::summary", "summary", Function, Some("shop_core::report"), Uncovered, 1).entry(),
+        graph_node(
+            "shop_core::report::format_line",
+            "format_line",
+            Function,
+            Some("shop_core::report"),
+            Same,
+            0,
         ),
-        graph_node("shop_core::billing::line_total", "line_total", Function, Some("shop_core::billing"), Extracted, 3, true, false),
-        graph_node("shop_core::report::summary", "summary", Function, Some("shop_core::report"), Uncovered, 1, true, false),
-        graph_node("shop_core::report::format_line", "format_line", Function, Some("shop_core::report"), Same, 0, false, false),
-        graph_node("shop_core::report::legacy_total", "legacy_total", Function, Some("shop_core::report"), Removed, 1, true, false),
-        graph_node("shop_cli::main", "main", Function, Some("shop_cli"), Same, 0, true, false),
-        graph_node("shop_cli::run", "run", Function, Some("shop_cli"), Changed, 2, false, false),
-        graph_node("shop_cli::load_cart", "load_cart", Function, Some("shop_cli"), Same, 0, false, false),
+        graph_node(
+            "shop_core::report::legacy_total",
+            "legacy_total",
+            Function,
+            Some("shop_core::report"),
+            Removed,
+            1,
+        )
+        .entry(),
+        graph_node("shop_cli::main", "main", Function, Some("shop_cli"), Same, 0).entry(),
+        graph_node("shop_cli::run", "run", Function, Some("shop_cli"), Changed, 2),
+        graph_node("shop_cli::load_cart", "load_cart", Function, Some("shop_cli"), Same, 0),
         external("std::fs::read_to_string", &["err"]),
         external("serde_json::from_str", &["err"]),
         external("std::process::exit", &["never"]),
@@ -643,16 +872,25 @@ pub fn demo_graph() -> WorkspaceGraph {
         edge("shop_core::report::legacy_total", TOTAL, GraphEdgeKind::Call, Removed),
         edge(TOTAL, "shop_core::billing::line_total", GraphEdgeKind::Call, Added),
         edge("shop_core::cart::tests::empty_cart_total", TOTAL, GraphEdgeKind::Call, Added),
-        edge("shop_core::cart::tests::len_counts_items", "shop_core::cart::Cart::len", GraphEdgeKind::Call, Same),
+        edge(
+            "shop_core::cart::tests::len_counts_items",
+            "shop_core::cart::Cart::len",
+            GraphEdgeKind::Call,
+            Same,
+        ),
     ];
     WorkspaceGraph { nodes, edges }
 }
 
 fn pair(before: Option<&str>, after: Option<&str>) -> SourcePair {
-    SourcePair { before: before.map(str::to_string), after: after.map(str::to_string) }
+    SourcePair {
+        before: before.map(str::to_string),
+        after: after.map(str::to_string),
+    }
 }
 
 /// Builds the source text before and after, by anchor text.
+#[must_use]
 pub fn demo_sources() -> BTreeMap<String, SourcePair> {
     let mut sources = BTreeMap::new();
     let mut add = |key: &str, value: SourcePair| {
@@ -669,7 +907,10 @@ pub fn demo_sources() -> BTreeMap<String, SourcePair> {
             ),
         ),
     );
-    add(&format!("{TOTAL}/S2/body/S0/cond"), pair(Some("item.qty > MAX_QTY"), Some("item.qty >= MAX_QTY")));
+    add(
+        &format!("{TOTAL}/S2/body/S0/cond"),
+        pair(Some("item.qty > MAX_QTY"), Some("item.qty >= MAX_QTY")),
+    );
     add(
         "shop_core::cart::Cart::len",
         pair(
@@ -688,10 +929,12 @@ pub fn demo_sources() -> BTreeMap<String, SourcePair> {
     );
     add(
         "shop_core::cart::tests::empty_cart_total",
-        pair(None, Some("#[test]\nfn empty_cart_total() {\n    assert_eq!(Cart::default().total(), Ok(0));\n}")),
+        pair(
+            None,
+            Some("#[test]\nfn empty_cart_total() {\n    assert_eq!(Cart::default().total(), Ok(0));\n}"),
+        ),
     );
-    let len_test =
-        "#[test]\nfn len_counts_items() {\n    let cart = Cart::with_items(vec![Item::new(10, 2)]);\n    assert_eq!(cart.len(), 1);\n}";
+    let len_test = "#[test]\nfn len_counts_items() {\n    let cart = Cart::with_items(vec![Item::new(10, 2)]);\n    assert_eq!(cart.len(), 1);\n}";
     add("shop_core::cart::tests::len_counts_items", pair(Some(len_test), Some(len_test)));
     add(
         "shop_core::billing::line_total",
@@ -706,14 +949,15 @@ pub fn demo_sources() -> BTreeMap<String, SourcePair> {
         "shop_core::report::summary",
         pair(
             Some("pub fn summary(cart: &Cart) -> String {\n    let total = cart.total();\n    format_line(\"total\", total)\n}"),
-            Some(
-                "pub fn summary(cart: &Cart) -> String {\n    let total = cart.total().unwrap_or(0);\n    format_line(\"total\", total)\n}",
-            ),
+            Some("pub fn summary(cart: &Cart) -> String {\n    let total = cart.total().unwrap_or(0);\n    format_line(\"total\", total)\n}"),
         ),
     );
     add(
         "shop_core::report::legacy_total",
-        pair(Some("pub fn legacy_total(cart: &Cart) -> u32 {\n    cart.total().checked_add(0).expect(\"total\")\n}"), None),
+        pair(
+            Some("pub fn legacy_total(cart: &Cart) -> u32 {\n    cart.total().checked_add(0).expect(\"total\")\n}"),
+            None,
+        ),
     );
     let format_line = "fn format_line(name: &str, value: u32) -> String {\n    let bytes = format!(\"{name}: {value}\").into_bytes();\n    // SAFETY: format! gives valid UTF-8.\n    unsafe { String::from_utf8_unchecked(bytes) }\n}";
     add("shop_core::report::format_line", pair(Some(format_line), Some(format_line)));
@@ -732,11 +976,18 @@ pub fn demo_sources() -> BTreeMap<String, SourcePair> {
     );
     let load = "fn load_cart(path: &str) -> Result<Cart, Box<dyn Error>> {\n    let text = std::fs::read_to_string(path)?;\n    Ok(serde_json::from_str(&text)?)\n}";
     add("shop_cli::load_cart", pair(Some(load), Some(load)));
-    add("shop_core/Cargo.toml", pair(Some("[dependencies]\nserde = \"1\""), Some("[dependencies]\nserde = \"1\"\nthiserror = \"2.0\"")));
+    add(
+        "shop_core/Cargo.toml",
+        pair(
+            Some("[dependencies]\nserde = \"1\""),
+            Some("[dependencies]\nserde = \"1\"\nthiserror = \"2.0\""),
+        ),
+    );
     sources
 }
 
 /// Builds the full demo data set.
+#[must_use]
 pub fn demo_data() -> UiData {
     UiData {
         changeset: demo_changeset(),
@@ -745,6 +996,6 @@ pub fn demo_data() -> UiData {
         flows: demo_flows(),
         graph: demo_graph(),
         sources: demo_sources(),
-        fact_sources: Default::default(),
+        fact_sources: BTreeMap::default(),
     }
 }

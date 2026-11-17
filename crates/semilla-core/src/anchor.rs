@@ -51,29 +51,42 @@ pub struct Anchor {
 
 impl Anchor {
     pub fn item(item: impl Into<String>) -> Anchor {
-        Anchor { item: item.into(), path: Vec::new() }
+        Anchor {
+            item: item.into(),
+            path: Vec::new(),
+        }
     }
 
     /// Returns a new anchor with one more segment.
+    #[must_use]
     pub fn child(&self, segment: Segment) -> Anchor {
         let mut path = self.path.clone();
         path.push(segment);
-        Anchor { item: self.item.clone(), path }
+        Anchor {
+            item: self.item.clone(),
+            path,
+        }
     }
 
     /// Returns true if `self` is `other` or an ancestor of `other`.
+    #[must_use]
     pub fn contains(&self, other: &Anchor) -> bool {
         self.item == other.item && other.path.starts_with(&self.path)
     }
 
     /// Returns the parent anchor, or `None` for an item anchor.
+    #[must_use]
     pub fn parent(&self) -> Option<Anchor> {
         let mut path = self.path.clone();
         path.pop()?;
-        Some(Anchor { item: self.item.clone(), path })
+        Some(Anchor {
+            item: self.item.clone(),
+            path,
+        })
     }
 
     /// The number of segments between `self` and a descendant `other`.
+    #[must_use]
     pub fn depth_to(&self, other: &Anchor) -> Option<usize> {
         self.contains(other).then(|| other.path.len() - self.path.len())
     }
@@ -106,7 +119,10 @@ impl FromStr for Anchor {
 
     fn from_str(text: &str) -> Result<Anchor, AnchorError> {
         let mut parts = text.split('/');
-        let item = parts.next().filter(|item| !item.is_empty()).ok_or_else(|| AnchorError(text.to_string()))?;
+        let item = parts
+            .next()
+            .filter(|item| !item.is_empty())
+            .ok_or_else(|| AnchorError(text.to_string()))?;
         let mut path = Vec::new();
         for part in parts {
             if part.is_empty() {
@@ -129,7 +145,10 @@ impl FromStr for Anchor {
                 path.push(Segment::Role(part.to_string()));
             }
         }
-        Ok(Anchor { item: item.to_string(), path })
+        Ok(Anchor {
+            item: item.to_string(),
+            path,
+        })
     }
 }
 

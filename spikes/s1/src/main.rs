@@ -70,18 +70,14 @@ fn main() -> ExitCode {
         .collect();
     case_dirs.sort();
 
-    println!(
-        "| case | expect | n0 | n1 | n2 | n3 | n4 | design level | proved at | result | note |"
-    );
+    println!("| case | expect | n0 | n1 | n2 | n3 | n4 | design level | proved at | result | note |");
     println!("|---|---|---|---|---|---|---|---|---|---|---|");
     let mut failures = 0;
     let (mut neutral, mut proved) = (0, 0);
     for dir in &case_dirs {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-        let case: Case = toml::from_str(
-            &std::fs::read_to_string(dir.join("case.toml")).expect("each case has a case.toml"),
-        )
-        .unwrap_or_else(|error| panic!("{name}/case.toml: {error}"));
+        let case: Case = toml::from_str(&std::fs::read_to_string(dir.join("case.toml")).expect("each case has a case.toml"))
+            .unwrap_or_else(|error| panic!("{name}/case.toml: {error}"));
 
         let before = run_levels(&driver, &lib, &dir.join("before.rs"));
         let after = run_levels(&driver, &lib, &dir.join("after.rs"));
@@ -89,8 +85,7 @@ fn main() -> ExitCode {
         write_bodies(&out_root.join(&name), "after", &after);
 
         let results = semilla_normal::compare(&before, &after, &case.rename, &case.added);
-        let all_equal =
-            results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. }));
+        let all_equal = results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. }));
         let passed = match case.expect {
             Expect::Neutral => all_equal,
             Expect::Changed => !all_equal,
@@ -127,14 +122,10 @@ fn main() -> ExitCode {
         );
     }
     println!();
-    println!(
-        "Summary: {proved} of {neutral} neutral cases are proved. {failures} negative control(s) failed."
-    );
+    println!("Summary: {proved} of {neutral} neutral cases are proved. {failures} negative control(s) failed.");
 
     if failures > 0 {
-        eprintln!(
-            "{failures} negative control(s) became equal: a normalization or rewrite rule is unsound."
-        );
+        eprintln!("{failures} negative control(s) became equal: a normalization or rewrite rule is unsound.");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -156,7 +147,11 @@ fn cell(results: &[BodyComparison], level: &str) -> String {
             _ => Some(short(&result.name)),
         })
         .collect();
-    if open.is_empty() { "equal".to_string() } else { format!("diff: {}", open.join(", ")) }
+    if open.is_empty() {
+        "equal".to_string()
+    } else {
+        format!("diff: {}", open.join(", "))
+    }
 }
 
 /// The highest level that the proof needs, with the N4 rules.
@@ -199,13 +194,12 @@ fn run_driver(driver: &Path, lib: &Path, file: &Path, level: &str) -> Vec<BodyRe
         .env("LD_LIBRARY_PATH", lib)
         .output()
         .expect("the driver starts");
-    if !output.status.success() {
-        panic!(
-            "the driver failed on {}:\n{}",
-            file.display(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    assert!(
+        output.status.success(),
+        "the driver failed on {}:\n{}",
+        file.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let text = String::from_utf8(output.stdout).expect("the driver output is UTF-8");
     semilla_normal::parse_records(&text).expect("the driver output is a list of records")
 }
@@ -230,11 +224,9 @@ fn write_bodies(dir: &Path, side: &str, levels: &Levels) {
         std::fs::create_dir_all(&folder).expect("the output folder can be created");
         for record in records {
             let stem = short(&record.name).replace("::", "__");
-            std::fs::write(folder.join(format!("{stem}.mir")), &record.text)
-                .expect("the output file can be written");
+            std::fs::write(folder.join(format!("{stem}.mir")), &record.text).expect("the output file can be written");
             if let Some(term) = &record.term {
-                std::fs::write(folder.join(format!("{stem}.term")), term)
-                    .expect("the output file can be written");
+                std::fs::write(folder.join(format!("{stem}.term")), term).expect("the output file can be written");
             }
         }
     }

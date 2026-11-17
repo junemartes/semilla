@@ -17,17 +17,35 @@ pub struct Build {
 }
 
 /// The configuration of the check build of Semilla: a 64-bit target with overflow checks.
-pub const CHECK: Build = Build { pointer_bits: 64, overflow_checks: true };
+pub const CHECK: Build = Build {
+    pointer_bits: 64,
+    overflow_checks: true,
+};
 
 /// Each configuration: the pointer widths of the Rust targets, with and without overflow
 /// checks. The first one is [`CHECK`].
 pub const ALL: [Build; 6] = [
     CHECK,
-    Build { pointer_bits: 64, overflow_checks: false },
-    Build { pointer_bits: 32, overflow_checks: true },
-    Build { pointer_bits: 32, overflow_checks: false },
-    Build { pointer_bits: 16, overflow_checks: true },
-    Build { pointer_bits: 16, overflow_checks: false },
+    Build {
+        pointer_bits: 64,
+        overflow_checks: false,
+    },
+    Build {
+        pointer_bits: 32,
+        overflow_checks: true,
+    },
+    Build {
+        pointer_bits: 32,
+        overflow_checks: false,
+    },
+    Build {
+        pointer_bits: 16,
+        overflow_checks: true,
+    },
+    Build {
+        pointer_bits: 16,
+        overflow_checks: false,
+    },
 ];
 
 thread_local! {
@@ -36,7 +54,7 @@ thread_local! {
 
 /// The configuration of the encoding on this thread.
 pub(crate) fn current() -> Build {
-    CURRENT.with(|current| current.get())
+    CURRENT.with(std::cell::Cell::get)
 }
 
 /// Runs `f` with the encoding of `build`.
@@ -49,6 +67,11 @@ pub(crate) fn with<T>(build: Build, f: impl FnOnce() -> T) -> T {
 
 impl std::fmt::Display for Build {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "a pointer width of {} bits, {} overflow checks", self.pointer_bits, if self.overflow_checks { "with" } else { "no" })
+        write!(
+            f,
+            "a pointer width of {} bits, {} overflow checks",
+            self.pointer_bits,
+            if self.overflow_checks { "with" } else { "no" }
+        )
     }
 }

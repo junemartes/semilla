@@ -47,11 +47,18 @@ fn fence(content: &str) -> Option<&str> {
 
 /// The code part of a doc text: the lines that can be code of a doc test, and the attributes of
 /// the code blocks.
+#[must_use]
 pub fn code_part(docs: &str) -> (Vec<String>, Vec<String>) {
     let lines: Vec<&str> = docs.lines().collect();
     let contents: Vec<Option<&str>> = lines.iter().map(|line| doc_content(line)).collect();
     let indent = |content: &str| content.chars().take_while(|c| *c == ' ').count();
-    let smallest = contents.iter().flatten().filter(|content| !content.trim().is_empty()).map(|content| indent(content)).min().unwrap_or(0);
+    let smallest = contents
+        .iter()
+        .flatten()
+        .filter(|content| !content.trim().is_empty())
+        .map(|content| indent(content))
+        .min()
+        .unwrap_or(0);
     let mut code = Vec::new();
     let mut attributes = Vec::new();
     let mut fenced = false;
@@ -79,6 +86,7 @@ pub fn code_part(docs: &str) -> (Vec<String>, Vec<String>) {
 
 /// The doc test change between two doc texts, or `None` if the code part is equal (a change of
 /// the text only).
+#[must_use]
 pub fn doc_test_change(before: &str, after: &str) -> Option<DocTestChange> {
     let ((old, old_attributes), (new, attributes)) = (code_part(before), code_part(after));
     if old == new {
@@ -86,7 +94,10 @@ pub fn doc_test_change(before: &str, after: &str) -> Option<DocTestChange> {
     }
     Some(match (old.is_empty(), new.is_empty()) {
         (true, _) => DocTestChange { what: "added", attributes },
-        (_, true) => DocTestChange { what: "removed", attributes: old_attributes },
+        (_, true) => DocTestChange {
+            what: "removed",
+            attributes: old_attributes,
+        },
         _ => DocTestChange { what: "changed", attributes },
     })
 }
@@ -97,7 +108,10 @@ mod tests {
 
     #[test]
     fn a_text_change_is_not_a_doc_test_change() {
-        assert_eq!(doc_test_change("/// The fee rules.", "/// The fee rules of the ledger.\n// a plain comment"), None);
+        assert_eq!(
+            doc_test_change("/// The fee rules.", "/// The fee rules of the ledger.\n// a plain comment"),
+            None
+        );
         // The text before the first code block can change.
         let old = "/// The fee.\n///\n/// ```\n/// assert_eq!(fee(1), 2);\n/// ```";
         assert_eq!(doc_test_change(old, &old.replace("The fee.", "The fee of an amount.")), None);
@@ -126,15 +140,30 @@ mod tests {
     fn each_form_of_a_code_block_counts() {
         let text = "/// The fee.";
         // A tilde fence, a fence in a list, a fence in a quote, and a fence with no end.
-        for block in ["/// ~~~\n/// code();\n/// ~~~", "/// - item\n///   ```\n///   code();\n///   ```", "/// > ```\n/// > code();", "/// ```\n/// code();"] {
+        for block in [
+            "/// ~~~\n/// code();\n/// ~~~",
+            "/// - item\n///   ```\n///   code();\n///   ```",
+            "/// > ```\n/// > code();",
+            "/// ```\n/// code();",
+        ] {
             assert_eq!(doc_test_change(text, &format!("{text}\n{block}")).unwrap().what, "added", "{block}");
         }
         // An indented code block, with spaces or with a tab.
         assert_eq!(doc_test_change(text, "/// The fee.\n///\n///     code();").unwrap().what, "added");
         assert_eq!(doc_test_change(text, "/// The fee.\n///\n///\tcode();").unwrap().what, "added");
         // An inner doc comment and a doc attribute with a computed text.
-        assert_eq!(doc_test_change("//! The crate.", "//! The crate.\n//! ```\n//! code();\n//! ```").unwrap().what, "added");
-        assert_eq!(doc_test_change(text, "/// The fee.\n# [doc = concat ! (\"```\\n\" , \"code();\")]").unwrap().what, "added");
+        assert_eq!(
+            doc_test_change("//! The crate.", "//! The crate.\n//! ```\n//! code();\n//! ```")
+                .unwrap()
+                .what,
+            "added"
+        );
+        assert_eq!(
+            doc_test_change(text, "/// The fee.\n# [doc = concat ! (\"```\\n\" , \"code();\")]")
+                .unwrap()
+                .what,
+            "added"
+        );
         // A change of the text after the first fence is a change of the code part: this reader
         // does not decide where a block ends.
         let old = "/// ```\n/// code();\n/// ```\n/// The end.";

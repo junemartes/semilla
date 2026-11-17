@@ -1,7 +1,7 @@
 //! The statement mapper of a body (design 41).
 //!
 //! The mapper works on the whole body of a pair of matched functions, not on one block at a
-//! time. It follows the refactoring-aware AST diff of RefactoringMiner (Alikhanifard and
+//! time. It follows the refactoring-aware AST diff of `RefactoringMiner` (Alikhanifard and
 //! Tsantalis, 2024):
 //! 1. Leaf statements first (a statement with no block), in rounds. Each round maps only the
 //!    statements that no earlier round mapped:
@@ -22,25 +22,25 @@ use crate::tree::Node;
 
 /// The most statement pairs that the mapper scores in one body (the rename votes, round 3, and
 /// the composites). Above the limit, the body keeps the alignment of batch 8b. Decided by Claude.
-pub const MAX_SCORED: usize = 20_000;
+pub(crate) const MAX_SCORED: usize = 20_000;
 /// The smallest score of a pair in round 3: the share of the tokens that need no replacement.
 /// Decided by Claude.
-pub const MIN_SCORE: f64 = 0.6;
+pub(crate) const MIN_SCORE: f64 = 0.6;
 /// The smallest share of the children of two composites that map to each other. Decided by
 /// Claude.
-pub const MIN_SHARE: f64 = 0.5;
+pub(crate) const MIN_SHARE: f64 = 0.5;
 /// The smallest share of equal words (names and literals) of a pair in round 3: the punctuation
 /// of a short statement does not make a pair. Decided by Claude.
-pub const MIN_WORDS: f64 = 0.5;
+pub(crate) const MIN_WORDS: f64 = 0.5;
 /// The preference of round 3 for a pair whose parents correspond (the same block): a pair at a
 /// different place wins only with a score that is higher by more than this value. Decided by
 /// Claude.
-pub const LOCAL_BONUS: f64 = 0.2;
+pub(crate) const LOCAL_BONUS: f64 = 0.2;
 /// The smallest score of a pair of round 3 at a different place (the parents do not
 /// correspond). Decided by Claude.
-pub const FAR_SCORE: f64 = 0.7;
+pub(crate) const FAR_SCORE: f64 = 0.7;
 /// The smallest similarity of two different headers of a composite pair. Decided by Claude.
-pub const MIN_HEADER: f64 = 0.5;
+pub(crate) const MIN_HEADER: f64 = 0.5;
 
 /// One statement of a body.
 pub(crate) struct Stmt<'a> {
@@ -96,13 +96,13 @@ pub(crate) struct BodyMap<'a> {
 
 impl BodyMap<'_> {
     /// The old text of a node with the local renames (`text` has the renames of the claims).
-    pub fn old_text(&self, text: &str) -> String {
+    pub(crate) fn old_text(&self, text: &str) -> String {
         rename_tokens(text, &self.renames)
     }
 
     /// The variable of an extract use (`old` is `E`, `new` is `v`) or an inline use (`old` is
     /// `v`, `new` is `E`), if the pair is one.
-    pub fn variable_use(&self, old_text: &str, old: &Node, new: &Node) -> Option<usize> {
+    pub(crate) fn variable_use(&self, old_text: &str, old: &Node, new: &Node) -> Option<usize> {
         self.variables.iter().position(|variable| {
             if variable.inline {
                 old.kind == "path" && same_expr(&old.text, &variable.var) && same_expr(&new.text, &variable.expr)
@@ -115,7 +115,11 @@ impl BodyMap<'_> {
 
 /// True if a text is the expression, also in parentheses.
 fn same_expr(text: &str, expr: &str) -> bool {
-    text == expr || text.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')).is_some_and(|inner| inner.trim() == expr)
+    text == expr
+        || text
+            .strip_prefix('(')
+            .and_then(|rest| rest.strip_suffix(')'))
+            .is_some_and(|inner| inner.trim() == expr)
 }
 
 /// The tokens of a compare text: the parts between spaces, with each bracket as its own token
@@ -129,7 +133,7 @@ pub(crate) fn tokens(text: &str) -> Vec<&str> {
                 if start < at {
                     out.push(&piece[start..at]);
                 }
-                out.push(&piece[at..at + 1]);
+                out.push(&piece[at..=at]);
                 start = at + 1;
             }
         }
@@ -144,7 +148,11 @@ fn is_ident(token: &str) -> bool {
     token.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && token.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
-const KEYWORDS: &[&str] = &["mut", "ref", "box", "true", "false", "self", "Self", "crate", "super", "let", "if", "else", "match", "in", "for", "while", "loop", "return", "break", "continue", "as", "move", "async", "await", "unsafe", "const", "static", "fn", "impl", "dyn", "where", "struct", "enum", "type", "use", "pub", "mod", "trait"];
+const KEYWORDS: &[&str] = &[
+    "mut", "ref", "box", "true", "false", "self", "Self", "crate", "super", "let", "if", "else", "match", "in", "for", "while", "loop", "return",
+    "break", "continue", "as", "move", "async", "await", "unsafe", "const", "static", "fn", "impl", "dyn", "where", "struct", "enum", "type", "use",
+    "pub", "mod", "trait",
+];
 
 /// The text with each local rename applied to each identifier token. The text keeps its form.
 /// A name after `.` is a field or a method, not a local.
@@ -238,7 +246,19 @@ fn block_stmts<'a>(block: &'a Node, prefix: &[String], parent: Option<usize>, bl
         let mut path = prefix.to_vec();
         path.push(child.role.clone());
         let at = out.len();
-        out.push(Stmt { node: child, path: path.clone(), parent, block: block_path.to_string(), index, end: at + 1, leaf: !child.has_block(), depth, key: String::new(), header: String::new(), words: String::new() });
+        out.push(Stmt {
+            node: child,
+            path: path.clone(),
+            parent,
+            block: block_path.to_string(),
+            index,
+            end: at + 1,
+            leaf: !child.has_block(),
+            depth,
+            key: String::new(),
+            header: String::new(),
+            words: String::new(),
+        });
         inner_blocks(child, &path, &mut Vec::new(), at, depth + 1, out);
         out[at].end = out.len();
     }
@@ -260,15 +280,24 @@ fn inner_blocks<'a>(node: &'a Node, path: &[String], rel: &mut Vec<String>, owne
 
 /// The header of a node: its text without the statements of its blocks. The parts have spaces
 /// around them, so a token replacement works on the header too.
-fn header(node: &Node, text: &dyn Fn(&str) -> String) -> String {
+fn header(node: &Node, text: &impl Fn(&str) -> String) -> String {
     if node.kind == "block" {
         return "{…}".into();
     }
     if !node.has_block() {
         return text(&node.text);
     }
-    let parts: Vec<String> = node.children.iter().map(|child| format!("{} = {}", child.role, header(child, text))).collect();
-    format!("{} < {} > ( {} )", node.kind, node.attr.as_deref().map(text).unwrap_or_default(), parts.join(" ; "))
+    let parts: Vec<String> = node
+        .children
+        .iter()
+        .map(|child| format!("{} = {}", child.role, header(child, text)))
+        .collect();
+    format!(
+        "{} < {} > ( {} )",
+        node.kind,
+        node.attr.as_deref().map_or_default(text),
+        parts.join(" ; ")
+    )
 }
 
 /// The text of a node with the text of each block replaced by `{…}`: the part of a composite
@@ -291,7 +320,7 @@ pub(crate) fn shell(node: &Node) -> String {
 }
 
 /// The words of a header: the kind and the texts of the parts that have no block.
-fn header_words(node: &Node, text: &dyn Fn(&str) -> String) -> String {
+fn header_words(node: &Node, text: &impl Fn(&str) -> String) -> String {
     if node.kind == "block" {
         return String::new();
     }
@@ -300,7 +329,12 @@ fn header_words(node: &Node, text: &dyn Fn(&str) -> String) -> String {
     }
     let mut out = vec![node.kind.to_string()];
     out.extend(node.attr.as_deref().map(text));
-    out.extend(node.children.iter().map(|child| header_words(child, text)).filter(|words| !words.is_empty()));
+    out.extend(
+        node.children
+            .iter()
+            .map(|child| header_words(child, text))
+            .filter(|words| !words.is_empty()),
+    );
     out.join(" ")
 }
 
@@ -316,7 +350,15 @@ fn lcs_len(a: &[&str], b: &[&str]) -> usize {
         for token in a {
             *counts.entry(token).or_default() += 1;
         }
-        return b.iter().filter(|token| counts.get_mut(*token).is_some_and(|count| { *count -= 1; *count >= 0 })).count();
+        return b
+            .iter()
+            .filter(|token| {
+                counts.get_mut(*token).is_some_and(|count| {
+                    *count -= 1;
+                    *count >= 0
+                })
+            })
+            .count();
     }
     let mut row = vec![0usize; m + 1];
     for token in a {
@@ -331,6 +373,8 @@ fn lcs_len(a: &[&str], b: &[&str]) -> usize {
 }
 
 /// The share of tokens that need no replacement (0 to 1).
+// A token count is far below 2^52, so the `f64` value is exact.
+#[allow(clippy::cast_precision_loss)]
 fn score(a: &str, b: &str) -> f64 {
     let (a, b): (Vec<&str>, Vec<&str>) = (tokens(a), tokens(b));
     let longest = a.len().max(b.len());
@@ -361,7 +405,7 @@ type Candidate = (String, String, bool);
 /// statements of the blocks. The tokens inside a replaced sub-expression are replaced tokens.
 /// Exceptions: a use of an extract or inline candidate (`E` and `v`) and a consistent rename of a
 /// local (`old_text` applies it) count as equal.
-fn matched(old: &Node, new: &Node, old_text: &dyn Fn(&str) -> String, variables: &[Candidate]) -> usize {
+fn matched(old: &Node, new: &Node, old_text: &impl Fn(&str) -> String, variables: &[Candidate]) -> usize {
     if old.kind == "block" || new.kind == "block" {
         return 0;
     }
@@ -380,26 +424,49 @@ fn matched(old: &Node, new: &Node, old_text: &dyn Fn(&str) -> String, variables:
         return size(old).max(size(new));
     }
     // A leaf with a different text, or a different form: each token is replaced.
-    if old.kind != new.kind || old.children.is_empty() || old.children.len() != new.children.len() || old.children.iter().zip(&new.children).any(|(a, b)| a.role != b.role) {
+    if old.kind != new.kind
+        || old.children.is_empty()
+        || old.children.len() != new.children.len()
+        || old.children.iter().zip(&new.children).any(|(a, b)| a.role != b.role)
+    {
         return 0;
     }
     let attr_changed = old.attr.as_deref().map(old_text) != new.attr;
     let own = own_tokens(old).min(own_tokens(new)).saturating_sub(usize::from(attr_changed));
-    own + old.children.iter().zip(&new.children).map(|(a, b)| matched(a, b, old_text, variables)).sum::<usize>()
+    own + old
+        .children
+        .iter()
+        .zip(&new.children)
+        .map(|(a, b)| matched(a, b, old_text, variables))
+        .sum::<usize>()
 }
 
 /// The structural score of a node pair: the share of the tokens that need no replacement (0 to
 /// 1), without the statements of the blocks.
-fn structural(old: &Node, new: &Node, old_text: &dyn Fn(&str) -> String, variables: &[Candidate]) -> f64 {
+// A token count is far below 2^52, so the `f64` value is exact.
+#[allow(clippy::cast_precision_loss)]
+fn structural(old: &Node, new: &Node, old_text: &impl Fn(&str) -> String, variables: &[Candidate]) -> f64 {
     let longest = size(old).max(size(new));
-    if longest == 0 { 1.0 } else { matched(old, new, old_text, variables) as f64 / longest as f64 }
+    if longest == 0 {
+        1.0
+    } else {
+        matched(old, new, old_text, variables) as f64 / longest as f64
+    }
 }
 
 /// The share of equal words (names and literals, not keywords) of two texts (0 to 1). Each
 /// word that is a candidate variable counts as the words of its expression (on the new side for
 /// an extract, on the old side for an inline).
+// A token count is far below 2^52, so the `f64` value is exact.
+#[allow(clippy::cast_precision_loss)]
 fn word_score(a: &str, b: &str, variables: &[Candidate]) -> f64 {
-    let word = |token: &&str| token.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '"' || c == '\'') && !KEYWORDS.contains(token);
+    let word = |token: &&str| {
+        token
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '"' || c == '\'')
+            && !KEYWORDS.contains(token)
+    };
     let words = |text: &str, inline: bool| -> Vec<String> {
         let mut out = Vec::new();
         for token in tokens(text).into_iter().filter(word) {
@@ -418,12 +485,12 @@ fn word_score(a: &str, b: &str, variables: &[Candidate]) -> f64 {
 
 /// The address of a node: the key of the node maps.
 pub(crate) fn at(node: &Node) -> *const Node {
-    node as *const Node
+    std::ptr::from_ref::<Node>(node)
 }
 
-struct Mapper<'a, 'f> {
+struct Mapper<'a, 'f, F> {
     /// The old text of a node with the renames of the claims and the local renames.
-    old_text: &'f dyn Fn(&str) -> String,
+    old_text: &'f F,
     old: Vec<Stmt<'a>>,
     new: Vec<Stmt<'a>>,
     pair_old: Vec<Option<usize>>,
@@ -434,7 +501,7 @@ struct Mapper<'a, 'f> {
     composites: usize,
 }
 
-impl Mapper<'_, '_> {
+impl<F: Fn(&str) -> String> Mapper<'_, '_, F> {
     fn map(&mut self, o: usize, n: usize) {
         self.pair_old[o] = Some(n);
         self.pair_new[n] = Some(o);
@@ -500,6 +567,8 @@ impl Mapper<'_, '_> {
     }
 
     /// Maps the pairs with equal texts of two lists, the nearest pair first.
+    // The parent score is in 0 to 1, so `parents * 1000.0` is in 0 to 1000 with no sign.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn nearest(&mut self, old_list: &[usize], new_list: &[usize]) {
         let mut by_key: BTreeMap<&str, (Vec<usize>, Vec<usize>)> = BTreeMap::new();
         for &o in old_list.iter().filter(|&&o| self.pair_old[o].is_none()) {
@@ -542,8 +611,12 @@ impl Mapper<'_, '_> {
     /// Round 3: the leaf pairs with the best score after the replacements. `variables`: the
     /// extract and inline candidates (`(var, expr, inline)`): a use counts as equal.
     fn round_replacements(&mut self, variables: &[Candidate], skip_old: &BTreeSet<usize>, skip_new: &BTreeSet<usize>) -> bool {
-        let olds: Vec<usize> = (0..self.old.len()).filter(|&o| self.old[o].leaf && self.pair_old[o].is_none() && !skip_old.contains(&o)).collect();
-        let news: Vec<usize> = (0..self.new.len()).filter(|&n| self.new[n].leaf && self.pair_new[n].is_none() && !skip_new.contains(&n)).collect();
+        let olds: Vec<usize> = (0..self.old.len())
+            .filter(|&o| self.old[o].leaf && self.pair_old[o].is_none() && !skip_old.contains(&o))
+            .collect();
+        let news: Vec<usize> = (0..self.new.len())
+            .filter(|&n| self.new[n].leaf && self.pair_new[n].is_none() && !skip_new.contains(&n))
+            .collect();
         let pairs = olds.len() * news.len();
         if pairs > self.budget {
             return false;
@@ -552,7 +625,9 @@ impl Mapper<'_, '_> {
         let mut candidates: Vec<(f64, bool, usize, usize, usize)> = Vec::new();
         for &o in &olds {
             for &n in &news {
-                if !crate::diff::same_kind(self.old[o].node, self.new[n].node) || word_score(&self.old[o].key, &self.new[n].key, variables) < MIN_WORDS {
+                if !crate::diff::same_kind(self.old[o].node, self.new[n].node)
+                    || word_score(&self.old[o].key, &self.new[n].key, variables) < MIN_WORDS
+                {
                     continue;
                 }
                 let score = structural(self.old[o].node, self.new[n].node, self.old_text, variables);
@@ -564,7 +639,13 @@ impl Mapper<'_, '_> {
                 }
             }
         }
-        candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)).then(a.4.cmp(&b.4)));
+        candidates.sort_by(|a, b| {
+            b.0.total_cmp(&a.0)
+                .then(b.1.cmp(&a.1))
+                .then(a.2.cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+                .then(a.4.cmp(&b.4))
+        });
         for (_, _, _, o, n) in candidates {
             if self.pair_old[o].is_none() && self.pair_new[n].is_none() {
                 self.map(o, n);
@@ -582,7 +663,12 @@ impl Mapper<'_, '_> {
 
     /// The composites: the same kind and child roles, an equal or similar header, and a large
     /// share of mapped children.
+    // A statement count is far below 2^52, so the `f64` value is exact.
+    #[allow(clippy::cast_precision_loss)]
     fn round_composites(&mut self, variables: &[Candidate]) -> bool {
+        fn roles(node: &Node) -> Vec<&str> {
+            node.children.iter().map(|child| child.role.as_str()).collect()
+        }
         for _ in 0..2 {
             let olds: Vec<usize> = (0..self.old.len()).filter(|&o| !self.old[o].leaf && self.pair_old[o].is_none()).collect();
             let news: Vec<usize> = (0..self.new.len()).filter(|&n| !self.new[n].leaf && self.pair_new[n].is_none()).collect();
@@ -591,9 +677,6 @@ impl Mapper<'_, '_> {
                 return false;
             }
             self.budget -= pairs;
-            fn roles(node: &Node) -> Vec<&str> {
-                node.children.iter().map(|child| child.role.as_str()).collect()
-            }
             let mut candidates: Vec<(f64, bool, usize, usize, usize)> = Vec::new();
             for &o in &olds {
                 for &n in &news {
@@ -606,13 +689,23 @@ impl Mapper<'_, '_> {
                     let share = if size == 0 { 0.0 } else { mapped as f64 / size as f64 };
                     // The header score counts the tokens of a replaced part as replaced (design
                     // 41.3), as in round 3.
-                    let similar = if a.header == b.header { 1.0 } else { structural(a.node, b.node, self.old_text, variables) };
+                    let similar = if a.header == b.header {
+                        1.0
+                    } else {
+                        structural(a.node, b.node, self.old_text, variables)
+                    };
                     if share >= MIN_SHARE && similar >= MIN_HEADER {
                         candidates.push((share + similar, self.parents_map(o, n), self.distance(o, n), o, n));
                     }
                 }
             }
-            candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)).then(a.4.cmp(&b.4)));
+            candidates.sort_by(|a, b| {
+                b.0.total_cmp(&a.0)
+                    .then(b.1.cmp(&a.1))
+                    .then(a.2.cmp(&b.2))
+                    .then(a.3.cmp(&b.3))
+                    .then(a.4.cmp(&b.4))
+            });
             for (_, _, _, o, n) in candidates {
                 if self.pair_old[o].is_none() && self.pair_new[n].is_none() {
                     self.pair_old[o] = Some(n);
@@ -623,6 +716,37 @@ impl Mapper<'_, '_> {
         }
         true
     }
+    /// The candidates of an extract and an inline: a `let v = E;` with no partner, whose name
+    /// the other side does not have.
+    fn variable_candidates(&self, old_words: &BTreeSet<String>, new_words: &BTreeSet<&str>, renames: &BTreeMap<String, String>) -> Vec<Variable> {
+        let mut candidates: Vec<Variable> = Vec::new();
+        for (n, stmt) in self.new.iter().enumerate() {
+            if let Some((var, init)) = simple_let(stmt.node).filter(|_| self.pair_new[n].is_none())
+                && !old_words.contains(&var)
+            {
+                candidates.push(Variable {
+                    var,
+                    expr: init.text.clone(),
+                    stmt: n,
+                    inline: false,
+                });
+            }
+        }
+        for (o, stmt) in self.old.iter().enumerate() {
+            if let Some((var, init)) = simple_let(stmt.node).filter(|_| self.pair_old[o].is_none())
+                && !new_words.contains(var.as_str())
+                && !renames.contains_key(&var)
+            {
+                candidates.push(Variable {
+                    var,
+                    expr: (self.old_text)(&init.text),
+                    stmt: o,
+                    inline: true,
+                });
+            }
+        }
+        candidates
+    }
 }
 
 /// The `let v = E;` of a statement: the name and the compare text of `E`. Only a plain name
@@ -632,34 +756,45 @@ fn simple_let(node: &Node) -> Option<(String, &Node)> {
         return None;
     }
     let (pat, init) = (&node.children[0], &node.children[1]);
-    (pat.role == "pat" && init.role == "init" && is_ident(&pat.text) && !KEYWORDS.contains(&pat.text.as_str()) && pat.text != "_").then(|| (pat.text.clone(), init))
+    (pat.role == "pat" && init.role == "init" && is_ident(&pat.text) && !KEYWORDS.contains(&pat.text.as_str()) && pat.text != "_")
+        .then(|| (pat.text.clone(), init))
 }
 
-/// Maps the statements of two bodies. `old_text` applies the renames of the claims to an old
-/// text. `None` if the body is above the limit of [`MAX_SCORED`].
-pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dyn Fn(&str) -> String) -> Option<BodyMap<'a>> {
-    let mut old = collect(old_body);
-    let mut new = collect(new_body);
-    let mut budget = MAX_SCORED;
+/// The token lists of the leaf statements that can vote for a local rename, grouped by the kind
+/// and the token count: the old lists and the new lists.
+type TokenGroups<'t> = BTreeMap<(&'t str, usize), (Vec<Vec<&'t str>>, Vec<Vec<&'t str>>)>;
 
-    // The local renames: the votes of the leaf pairs whose only differences are names that the
-    // two sides bind. A rename holds only if the old name is not in the new body and the new
-    // name is not in the old body: each use is renamed.
-    let (old_bound, new_bound) = (bindings(old_body), bindings(new_body));
-    let old_words: BTreeSet<String> = tokens(&old_text(&old_body.text)).into_iter().filter(|t| is_ident(t)).map(str::to_string).collect();
-    let new_words: BTreeSet<&str> = tokens(&new_body.text).into_iter().filter(|t| is_ident(t)).collect();
-    let mut renames: BTreeMap<String, String> = BTreeMap::new();
-    let old_keys: Vec<String> = old.iter().map(|stmt| old_text(if stmt.leaf { &stmt.node.text } else { "" })).collect();
-    {
+/// The inputs of the vote for the local renames of two bodies.
+struct LocalRenames<'s, 'a> {
+    old: &'s [Stmt<'a>],
+    new: &'s [Stmt<'a>],
+    /// The old text of each old statement with the renames of the claims (empty for a composite).
+    old_keys: &'s [String],
+    old_bound: &'s BTreeSet<String>,
+    new_bound: &'s BTreeSet<String>,
+    old_words: &'s BTreeSet<String>,
+    new_words: &'s BTreeSet<&'s str>,
+}
+
+impl LocalRenames<'_, '_> {
+    /// The local renames: the votes of the leaf pairs whose only differences are names that the
+    /// two sides bind. `None` if the votes need more than `budget` pairs.
+    fn renames(&self, budget: &mut usize) -> Option<BTreeMap<String, String>> {
+        let mut renames: BTreeMap<String, String> = BTreeMap::new();
         // Only the statements whose text the other side does not have can vote.
-        let old_texts: BTreeSet<&str> = old_keys.iter().map(String::as_str).collect();
-        let new_texts: BTreeSet<&str> = new.iter().filter(|stmt| stmt.leaf).map(|stmt| stmt.node.text.as_str()).collect();
-        let mut groups: BTreeMap<(&str, usize), (Vec<Vec<&str>>, Vec<Vec<&str>>)> = BTreeMap::new();
-        for (o, stmt) in old.iter().enumerate().filter(|(o, stmt)| stmt.leaf && !new_texts.contains(old_keys[*o].as_str())) {
-            let list: Vec<&str> = tokens(&old_keys[o]);
+        let old_texts: BTreeSet<&str> = self.old_keys.iter().map(String::as_str).collect();
+        let new_texts: BTreeSet<&str> = self.new.iter().filter(|stmt| stmt.leaf).map(|stmt| stmt.node.text.as_str()).collect();
+        let mut groups: TokenGroups = BTreeMap::new();
+        for (o, stmt) in self
+            .old
+            .iter()
+            .enumerate()
+            .filter(|(o, stmt)| stmt.leaf && !new_texts.contains(self.old_keys[*o].as_str()))
+        {
+            let list: Vec<&str> = tokens(&self.old_keys[o]);
             groups.entry((stmt.node.kind, list.len())).or_default().0.push(list);
         }
-        for stmt in new.iter().filter(|stmt| stmt.leaf && !old_texts.contains(stmt.node.text.as_str())) {
+        for stmt in self.new.iter().filter(|stmt| stmt.leaf && !old_texts.contains(stmt.node.text.as_str())) {
             let list: Vec<&str> = tokens(&stmt.node.text);
             if let Some(entry) = groups.get_mut(&(stmt.node.kind, list.len())) {
                 entry.1.push(list);
@@ -668,14 +803,14 @@ pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dy
         let mut votes: BTreeMap<(String, String), usize> = BTreeMap::new();
         for (olds, news) in groups.values() {
             let pairs = olds.len() * news.len();
-            if pairs > budget {
+            if pairs > *budget {
                 return None;
             }
-            budget -= pairs;
+            *budget -= pairs;
             for a in olds {
                 for b in news {
                     let differ: Vec<(&str, &str)> = a.iter().zip(b).filter(|(x, y)| x != y).map(|(x, y)| (*x, *y)).collect();
-                    if !differ.is_empty() && differ.iter().all(|(x, y)| old_bound.contains(*x) && new_bound.contains(*y)) {
+                    if !differ.is_empty() && differ.iter().all(|(x, y)| self.old_bound.contains(*x) && self.new_bound.contains(*y)) {
                         for (x, y) in differ {
                             *votes.entry((x.to_string(), y.to_string())).or_default() += 1;
                         }
@@ -687,50 +822,73 @@ pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dy
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let mut used: BTreeSet<String> = BTreeSet::new();
         for ((x, y), _) in ranked {
-            if renames.contains_key(&x) || used.contains(&y) || new_words.contains(x.as_str()) || old_words.contains(&y) {
+            if renames.contains_key(&x) || used.contains(&y) || self.new_words.contains(x.as_str()) || self.old_words.contains(&y) {
                 continue;
             }
             used.insert(y.clone());
             renames.insert(x, y);
         }
+        Some(renames)
     }
+}
+
+/// Maps the statements of two bodies. `old_text` applies the renames of the claims to an old
+/// text. `None` if the body is above the limit of [`MAX_SCORED`].
+pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &impl Fn(&str) -> String) -> Option<BodyMap<'a>> {
+    let mut old = collect(old_body);
+    let mut new = collect(new_body);
+    let mut budget = MAX_SCORED;
+
+    // The local renames: the votes of the leaf pairs whose only differences are names that the
+    // two sides bind. A rename holds only if the old name is not in the new body and the new
+    // name is not in the old body: each use is renamed.
+    let (old_bound, new_bound) = (bindings(old_body), bindings(new_body));
+    let old_words: BTreeSet<String> = tokens(&old_text(&old_body.text))
+        .into_iter()
+        .filter(|t| is_ident(t))
+        .map(str::to_string)
+        .collect();
+    let new_words: BTreeSet<&str> = tokens(&new_body.text).into_iter().filter(|t| is_ident(t)).collect();
+    let old_keys: Vec<String> = old.iter().map(|stmt| old_text(if stmt.leaf { &stmt.node.text } else { "" })).collect();
+    let renames = LocalRenames {
+        old: &old,
+        new: &new,
+        old_keys: &old_keys,
+        old_bound: &old_bound,
+        new_bound: &new_bound,
+        old_words: &old_words,
+        new_words: &new_words,
+    }
+    .renames(&mut budget)?;
     let full_old = |text: &str| rename_tokens(&old_text(text), &renames);
-    for stmt in old.iter_mut() {
+    for stmt in &mut old {
         stmt.key = full_old(&stmt.node.text);
         stmt.header = header(stmt.node, &full_old);
         stmt.words = header_words(stmt.node, &full_old);
     }
-    for stmt in new.iter_mut() {
+    for stmt in &mut new {
         stmt.key = stmt.node.text.clone();
         stmt.header = header(stmt.node, &|text: &str| text.to_string());
         stmt.words = header_words(stmt.node, &|text: &str| text.to_string());
     }
     let (n_old, n_new) = (old.len(), new.len());
-    let mut mapper = Mapper { old_text: &full_old, old, new, pair_old: vec![None; n_old], pair_new: vec![None; n_new], budget, round3: 0, composites: 0 };
+    let mut mapper = Mapper {
+        old_text: &full_old,
+        old,
+        new,
+        pair_old: vec![None; n_old],
+        pair_new: vec![None; n_new],
+        budget,
+        round3: 0,
+        composites: 0,
+    };
 
     // Round 1 and round 2.
     mapper.round_same_parent();
     let (all_old, all_new): (Vec<usize>, Vec<usize>) = ((0..n_old).collect(), (0..n_new).collect());
     mapper.nearest(&all_old, &all_new);
 
-    // The candidates of an extract and an inline: a `let v = E;` with no partner, whose name
-    // the other side does not have.
-    let mut candidates: Vec<Variable> = Vec::new();
-    for (n, stmt) in mapper.new.iter().enumerate() {
-        if let Some((var, init)) = simple_let(stmt.node).filter(|_| mapper.pair_new[n].is_none())
-            && !old_words.contains(&var)
-        {
-            candidates.push(Variable { var, expr: init.text.clone(), stmt: n, inline: false });
-        }
-    }
-    for (o, stmt) in mapper.old.iter().enumerate() {
-        if let Some((var, init)) = simple_let(stmt.node).filter(|_| mapper.pair_old[o].is_none())
-            && !new_words.contains(var.as_str())
-            && !renames.contains_key(&var)
-        {
-            candidates.push(Variable { var, expr: full_old(&init.text), stmt: o, inline: true });
-        }
-    }
+    let candidates = mapper.variable_candidates(&old_words, &new_words, &renames);
     // The `let` of a candidate takes part in round 3 as each other statement: a candidate that
     // maps to a statement is not a variable (fix round 1, D3: `let enum_name = &self.name;`
     // was left out, so `let name = &self.name;` mapped to a different statement).
@@ -742,7 +900,13 @@ pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dy
     // A candidate with no partner and with a use in a mapped pair is an extracted or an inlined
     // variable. Each other statement with no partner goes to a second round 3.
     let mut variables = Vec::new();
-    for variable in candidates.into_iter().filter(|v| if v.inline { mapper.pair_old[v.stmt].is_none() } else { mapper.pair_new[v.stmt].is_none() }) {
+    for variable in candidates.into_iter().filter(|v| {
+        if v.inline {
+            mapper.pair_old[v.stmt].is_none()
+        } else {
+            mapper.pair_new[v.stmt].is_none()
+        }
+    }) {
         let count: usize = (0..n_old)
             .filter_map(|o| mapper.pair_old[o].map(|n| (o, n)))
             // Only the parts of the statement itself: the statements inside have their own pairs.
@@ -759,12 +923,31 @@ pub(crate) fn map_body<'a>(old_body: &'a Node, new_body: &'a Node, old_text: &dy
     }
     let old_at = mapper.old.iter().enumerate().map(|(i, stmt)| (at(stmt.node), i)).collect();
     let new_at = mapper.new.iter().enumerate().map(|(i, stmt)| (at(stmt.node), i)).collect();
-    let Mapper { old, new, pair_old, pair_new, round3, composites, .. } = mapper;
-    Some(BodyMap { old, new, pair_old, pair_new, old_at, new_at, renames, variables, round3, composites })
+    let Mapper {
+        old,
+        new,
+        pair_old,
+        pair_new,
+        round3,
+        composites,
+        ..
+    } = mapper;
+    Some(BodyMap {
+        old,
+        new,
+        pair_old,
+        pair_new,
+        old_at,
+        new_at,
+        renames,
+        variables,
+        round3,
+        composites,
+    })
 }
 
 /// The uses of a variable in a statement pair, without the statements of the inner blocks.
-fn shallow_uses(old: &Node, new: &Node, old_text: &dyn Fn(&str) -> String, variable: &Variable) -> usize {
+fn shallow_uses(old: &Node, new: &Node, old_text: &impl Fn(&str) -> String, variable: &Variable) -> usize {
     if old.kind == "block" || new.kind == "block" {
         return 0;
     }
@@ -779,7 +962,12 @@ fn shallow_uses(old: &Node, new: &Node, old_text: &dyn Fn(&str) -> String, varia
     if text == new.text || old.kind != new.kind || old.children.len() != new.children.len() {
         return 0;
     }
-    old.children.iter().zip(&new.children).filter(|(a, b)| a.role == b.role).map(|(a, b)| shallow_uses(a, b, old_text, variable)).sum()
+    old.children
+        .iter()
+        .zip(&new.children)
+        .filter(|(a, b)| a.role == b.role)
+        .map(|(a, b)| shallow_uses(a, b, old_text, variable))
+        .sum()
 }
 
 #[cfg(test)]
@@ -793,14 +981,20 @@ mod tests {
         let (_d1, old) = crate::tests::workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)]);
         let (_d2, new) = crate::tests::workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
         let (edits, maps) = diff_maps(&old, &new, &Renames::default());
-        let text = |anchor: &Option<semilla_core::Anchor>| anchor.as_ref().map(|a| a.to_string()).unwrap_or_else(|| "-".into());
+        let text = |anchor: &Option<semilla_core::Anchor>| anchor.as_ref().map_or_else(|| "-".into(), std::string::ToString::to_string);
         let mark = |refactor: &Option<Refactor>| match refactor {
             Some(Refactor::Moved { .. }) => " (move)".to_string(),
             Some(Refactor::Extract { var, .. }) => format!(" (extract {var})"),
             Some(Refactor::Inline { var, .. }) => format!(" (inline {var})"),
             None => String::new(),
         };
-        (edits.iter().map(|e| format!("{:?} {} → {}{}", e.kind, text(&e.before), text(&e.after), mark(&e.refactor))).collect(), maps)
+        (
+            edits
+                .iter()
+                .map(|e| format!("{:?} {} → {}{}", e.kind, text(&e.before), text(&e.after), mark(&e.refactor)))
+                .collect(),
+            maps,
+        )
     }
 
     fn body(lines: &str) -> String {
@@ -816,10 +1010,28 @@ mod tests {
         assert_eq!(edits(&out, &into).0, ["Moved demo::f/S1 → demo::f/S1/then/S0 (move)"]);
         assert_eq!(edits(&into, &out).0, ["Moved demo::f/S1/then/S0 → demo::f/S1 (move)"]);
         // Into and out of a closure body, a loop, and a match arm.
-        let closure = |inside: bool| if inside { body("    v.iter().map(|x| {\n        let k = a * 2;\n        x + k\n    }).sum()\n") } else { body("    let k = a * 2;\n    v.iter().map(|x| {\n        x + k\n    }).sum()\n") };
-        assert_eq!(edits(&closure(false), &closure(true)).0, ["Moved demo::f/S0 → demo::f/tail/recv/args[0]/body/S0 (move)"]);
-        assert_eq!(edits(&closure(true), &closure(false)).0, ["Moved demo::f/tail/recv/args[0]/body/S0 → demo::f/S0 (move)"]);
-        let arm = |inside: bool| body(&format!("    let mut s = b;\n{}    match a % 3 {{\n        0 => {{\n{}            s *= 2;\n        }}\n        _ => {{\n            s += 1;\n        }}\n    }}\n    s\n", if inside { "" } else { "    s += a;\n" }, if inside { "            s += a;\n" } else { "" }));
+        let closure = |inside: bool| {
+            if inside {
+                body("    v.iter().map(|x| {\n        let k = a * 2;\n        x + k\n    }).sum()\n")
+            } else {
+                body("    let k = a * 2;\n    v.iter().map(|x| {\n        x + k\n    }).sum()\n")
+            }
+        };
+        assert_eq!(
+            edits(&closure(false), &closure(true)).0,
+            ["Moved demo::f/S0 → demo::f/tail/recv/args[0]/body/S0 (move)"]
+        );
+        assert_eq!(
+            edits(&closure(true), &closure(false)).0,
+            ["Moved demo::f/tail/recv/args[0]/body/S0 → demo::f/S0 (move)"]
+        );
+        let arm = |inside: bool| {
+            body(&format!(
+                "    let mut s = b;\n{}    match a % 3 {{\n        0 => {{\n{}            s *= 2;\n        }}\n        _ => {{\n            s += 1;\n        }}\n    }}\n    s\n",
+                if inside { "" } else { "    s += a;\n" },
+                if inside { "            s += a;\n" } else { "" }
+            ))
+        };
         assert_eq!(edits(&arm(false), &arm(true)).0, ["Moved demo::f/S1 → demo::f/S1/arm[0].body/S0 (move)"]);
     }
 
@@ -843,7 +1055,13 @@ mod tests {
         // edit, at the place before the step.
         let before = body("    let p = a + 1;\n    let q = b + 2;\n    let r = a * b;\n    p + q + r\n");
         let after = body("    let q = b + 2;\n    let r = a * b;\n    let p = a + 2;\n    p + q + r\n");
-        assert_eq!(edits(&before, &after).0, ["Moved demo::f/S0 → demo::f/S2 (move)", "Replaced demo::f/S0/init/rhs → demo::f/S2/init/rhs"]);
+        assert_eq!(
+            edits(&before, &after).0,
+            [
+                "Moved demo::f/S0 → demo::f/S2 (move)",
+                "Replaced demo::f/S0/init/rhs → demo::f/S2/init/rhs"
+            ]
+        );
     }
 
     #[test]
@@ -853,11 +1071,21 @@ mod tests {
         let before = body("    let total = a + b;\n    let m = a * 2;\n    total + m\n");
         let after = body("    let m = a * 2;\n    let sum = a + b;\n    sum + m\n");
         let (found, _) = edits(&before, &after);
-        assert_eq!(found, ["Moved demo::f/S0 → demo::f/S1 (move)", "Replaced demo::f/S0/pat → demo::f/S1/pat", "Replaced demo::f/tail/lhs → demo::f/tail/lhs"]);
+        assert_eq!(
+            found,
+            [
+                "Moved demo::f/S0 → demo::f/S1 (move)",
+                "Replaced demo::f/S0/pat → demo::f/S1/pat",
+                "Replaced demo::f/tail/lhs → demo::f/tail/lhs"
+            ]
+        );
         // A rename with a different use of the old name is not consistent: no rename map.
         let before = body("    let total = a + b;\n    total * 2\n");
         let after = body("    let sum = a + b;\n    sum * 2 + total(a)\n");
-        let (found, _) = edits(&before.replace("pub fn f", "pub fn total(x: u32) -> u32 { x }\npub fn f"), &after.replace("pub fn f", "pub fn total(x: u32) -> u32 { x }\npub fn f"));
+        let (found, _) = edits(
+            &before.replace("pub fn f", "pub fn total(x: u32) -> u32 { x }\npub fn f"),
+            &after.replace("pub fn f", "pub fn total(x: u32) -> u32 { x }\npub fn f"),
+        );
         assert!(!found.iter().any(|e| e.contains("(move)")), "{found:?}");
     }
 
@@ -866,15 +1094,27 @@ mod tests {
         // Design 41.5: a new `let v = E;` whose `E` is `v` in a mapped statement.
         let before = body("    if a * b + 1 > 10 {\n        return a * b + 1;\n    }\n    0\n");
         let after = body("    let area = a * b + 1;\n    if area > 10 {\n        return area;\n    }\n    0\n");
-        let extract = ["Inserted - → demo::f/S0 (extract area)", "Replaced demo::f/S0/cond/lhs → demo::f/S1/cond/lhs (extract area)", "Replaced demo::f/S0/then/S0/value → demo::f/S1/then/S0/value (extract area)"];
+        let extract = [
+            "Inserted - → demo::f/S0 (extract area)",
+            "Replaced demo::f/S0/cond/lhs → demo::f/S1/cond/lhs (extract area)",
+            "Replaced demo::f/S0/then/S0/value → demo::f/S1/then/S0/value (extract area)",
+        ];
         assert_eq!(edits(&before, &after).0, extract);
-        let inline = ["Replaced demo::f/S1/cond/lhs → demo::f/S0/cond/lhs (inline area)", "Deleted demo::f/S0 → - (inline area)", "Replaced demo::f/S1/then/S0/value → demo::f/S0/then/S0/value (inline area)"];
+        let inline = [
+            "Replaced demo::f/S1/cond/lhs → demo::f/S0/cond/lhs (inline area)",
+            "Deleted demo::f/S0 → - (inline area)",
+            "Replaced demo::f/S1/then/S0/value → demo::f/S0/then/S0/value (inline area)",
+        ];
         assert_eq!(edits(&after, &before).0, inline);
         // A use in parentheses, and one use that also changes in a different way: the change
         // is its own edit at the condition.
         let after = body("    let area = a * b + 1;\n    if area >= 10 {\n        return (area);\n    }\n    0\n");
         let (found, _) = edits(&before.replace("return a * b + 1", "return (a * b + 1)"), &after);
-        assert!(found.contains(&"Modified demo::f/S0/cond → demo::f/S1/cond".to_string()) && found.iter().filter(|e| e.contains("(extract area)")).count() == 3, "{found:?}");
+        assert!(
+            found.contains(&"Modified demo::f/S0/cond → demo::f/S1/cond".to_string())
+                && found.iter().filter(|e| e.contains("(extract area)")).count() == 3,
+            "{found:?}"
+        );
     }
 
     #[test]
@@ -891,32 +1131,63 @@ mod tests {
     #[test]
     fn a_body_above_the_limit_keeps_the_rules_of_batch_8b() {
         // Design 41.9: more than `MAX_SCORED` statement pairs to score.
-        let lines = |offset: u32| (0..150).map(|i| format!("    let x{i} = a + {};\n", i + offset)).collect::<String>();
+        let lines = |offset: u32| {
+            (0..150)
+                .map(|i| format!("    let x{i} = a + {};\n", i + offset))
+                .collect::<Vec<_>>()
+                .concat()
+        };
         let (_, maps) = edits(&body(&format!("{}    0\n", lines(0))), &body(&format!("{}    0\n", lines(1))));
         assert_eq!(maps.over_limit, ["demo::f"]);
         let (found, maps) = edits(&body("    let x = a + 1;\n    x\n"), &body("    let x = a + 2;\n    x\n"));
-        assert!(maps.over_limit.is_empty() && found == ["Replaced demo::f/S0/init/rhs → demo::f/S0/init/rhs"], "{found:?}");
+        assert!(
+            maps.over_limit.is_empty() && found == ["Replaced demo::f/S0/init/rhs → demo::f/S0/init/rhs"],
+            "{found:?}"
+        );
     }
 
     #[test]
     fn an_edit_inside_a_moved_statement_has_its_new_place() {
         // Fix round 1, D1: `transpositions /= 2;` moves into the `else` of a new `if`, and its
         // literal changes. The edit of the literal has the new place on its new side.
-        let before = "pub fn jaro(a: u32, mut transpositions: u32) -> u32 {\n    let m = a + 1;\n    transpositions /= 2;\n    m + transpositions\n}\n";
+        let before =
+            "pub fn jaro(a: u32, mut transpositions: u32) -> u32 {\n    let m = a + 1;\n    transpositions /= 2;\n    m + transpositions\n}\n";
         let after = "pub fn jaro(a: u32, mut transpositions: u32) -> u32 {\n    let m = a + 1;\n    if a == 0 {\n        transpositions = 0;\n    } else {\n        transpositions /= 3;\n    }\n    m + transpositions\n}\n";
-        assert_eq!(edits(before, after).0, ["Inserted - → demo::jaro/S1", "Moved demo::jaro/S1 → demo::jaro/S1/else/S0 (move)", "Replaced demo::jaro/S1/rhs → demo::jaro/S1/else/S0/rhs"]);
+        assert_eq!(
+            edits(before, after).0,
+            [
+                "Inserted - → demo::jaro/S1",
+                "Moved demo::jaro/S1 → demo::jaro/S1/else/S0 (move)",
+                "Replaced demo::jaro/S1/rhs → demo::jaro/S1/else/S0/rhs"
+            ]
+        );
     }
 
     #[test]
     fn round_three_prefers_the_changed_twin_at_the_same_place() {
         // Fix round 1, D2: the old `return` keeps its place with two changed parts. A similar new
         // `return` in a different block has a higher score, but not by more than `LOCAL_BONUS`.
-        let source = |after: bool| format!("pub enum E {{ Invalid {{ name: &'static str, value: String, span_start: Option<u32>, span_end: Option<u32> }} }}\npub fn parse(year: i32, year_span: u32, sign: Option<u32>, week: u8, w_span: u32) -> Result<i32, E> {{\n    let x = 1;\n    if year > 9999 {{\n        return Err(E::Invalid {{ name: \"year\", value: {}, span_start: Some({}), span_end: Some(year_span) }});\n    }}\n{}    Ok(year + x)\n}}\n",
-            if after { "format!(\"{}\", year)" } else { "year.to_string()" },
-            if after { "year_span.min(1)" } else { "sign.unwrap_or(year_span)" },
-            if after { "    if week > 53 {\n        return Err(E::Invalid { name: \"week\", value: week.to_string(), span_start: Some(sign.unwrap_or(w_span)), span_end: Some(w_span) });\n    }\n" } else { "" });
+        let source = |after: bool| {
+            format!(
+                "pub enum E {{ Invalid {{ name: &'static str, value: String, span_start: Option<u32>, span_end: Option<u32> }} }}\npub fn parse(year: i32, year_span: u32, sign: Option<u32>, week: u8, w_span: u32) -> Result<i32, E> {{\n    let x = 1;\n    if year > 9999 {{\n        return Err(E::Invalid {{ name: \"year\", value: {}, span_start: Some({}), span_end: Some(year_span) }});\n    }}\n{}    Ok(year + x)\n}}\n",
+                if after { "format!(\"{}\", year)" } else { "year.to_string()" },
+                if after { "year_span.min(1)" } else { "sign.unwrap_or(year_span)" },
+                if after {
+                    "    if week > 53 {\n        return Err(E::Invalid { name: \"week\", value: week.to_string(), span_start: Some(sign.unwrap_or(w_span)), span_end: Some(w_span) });\n    }\n"
+                } else {
+                    ""
+                }
+            )
+        };
         let (found, maps) = edits(&source(false), &source(true));
-        assert_eq!(found, ["Replaced demo::parse/S1/then/S0/value/args[0]/fields[value] → demo::parse/S1/then/S0/value/args[0]/fields[value]", "Replaced demo::parse/S1/then/S0/value/args[0]/fields[span_start]/args[0] → demo::parse/S1/then/S0/value/args[0]/fields[span_start]/args[0]", "Inserted - → demo::parse/S2"]);
+        assert_eq!(
+            found,
+            [
+                "Replaced demo::parse/S1/then/S0/value/args[0]/fields[value] → demo::parse/S1/then/S0/value/args[0]/fields[value]",
+                "Replaced demo::parse/S1/then/S0/value/args[0]/fields[span_start]/args[0] → demo::parse/S1/then/S0/value/args[0]/fields[span_start]/args[0]",
+                "Inserted - → demo::parse/S2"
+            ]
+        );
         assert_eq!((maps.round3, maps.composites), (1, 1));
     }
 
@@ -926,8 +1197,12 @@ mod tests {
         // round 3. A candidate of an extract takes part in round 3: `let name = &self.name;` maps
         // to `let enum_name = &self.name;`, not to `let variant_values = &self.variant_values;`.
         let head = "pub struct S { name: String, variant_values: Vec<String> }\nimpl S {\n    pub fn to_tokens(&self) -> String {\n";
-        let before = format!("{head}        let name = &self.name;\n        let expect_string = format!(\"attempted to convert invalid {{}} into JSValue\", name);\n        format!(\"{{}}{{}}\", name, expect_string)\n    }}\n}}\n");
-        let after = format!("{head}        let enum_name = &self.name;\n        let variant_values = &self.variant_values;\n        format!(\"{{}}{{}}\", enum_name, variant_values.len())\n    }}\n}}\n");
+        let before = format!(
+            "{head}        let name = &self.name;\n        let expect_string = format!(\"attempted to convert invalid {{}} into JSValue\", name);\n        format!(\"{{}}{{}}\", name, expect_string)\n    }}\n}}\n"
+        );
+        let after = format!(
+            "{head}        let enum_name = &self.name;\n        let variant_values = &self.variant_values;\n        format!(\"{{}}{{}}\", enum_name, variant_values.len())\n    }}\n}}\n"
+        );
         let (found, maps) = edits(&before, &after);
         assert_eq!(found[0], "Replaced demo::S::to_tokens/S0/pat → demo::S::to_tokens/S0/pat", "{found:?}");
         // The round 3 pair is `name` → `enum_name` only. The other `let` pair comes from the gap

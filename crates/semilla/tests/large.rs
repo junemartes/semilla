@@ -8,6 +8,7 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -16,7 +17,9 @@ use std::time::Instant;
 const SEED: u64 = 0x5E41_11A7;
 
 /// The modules of the fixture crate.
-const MODULES: [&str; 12] = ["ledger", "stock", "price", "route", "batch", "audit", "quota", "index", "cache", "queue", "shape", "merge"];
+const MODULES: [&str; 12] = [
+    "ledger", "stock", "price", "route", "batch", "audit", "quota", "index", "cache", "queue", "shape", "merge",
+];
 
 /// The files of a tree: the path from the repository root, and the text.
 type Tree = BTreeMap<String, String>;
@@ -53,7 +56,8 @@ fn type_name(module: usize) -> String {
 /// The mark of a function: a literal that only this function has. Each other literal of the
 /// generator is less than 1000. A test finds a function by its mark.
 fn mark(module: usize, slot: u32) -> u32 {
-    1000 + 20 * module as u32 + slot
+    let module = u32::try_from(module).expect("a module index fits in u32");
+    1000 + 20 * module + slot
 }
 
 // The slots of the functions of a module.
@@ -72,84 +76,171 @@ const SUM: u32 = 12;
 /// can call.
 fn body(module: usize, slot: u32, a: &str, b: &str, blocks: usize, indent: &str, calls: &[String]) -> String {
     let mut numbers = Numbers::of(module, slot);
-    let mut lines = vec![format!("let mut acc = {a}.wrapping_mul({}).wrapping_add({b});", numbers.range(3, 900)), format!("acc = acc.wrapping_add({});", mark(module, slot))];
+    let mut lines = vec![
+        format!("let mut acc = {a}.wrapping_mul({}).wrapping_add({b});", numbers.range(3, 900)),
+        format!("acc = acc.wrapping_add({});", mark(module, slot)),
+    ];
     for (index, call) in calls.iter().enumerate() {
         lines.push(format!("acc = {call}(acc, {});", numbers.range(2, 90) + index as u64));
     }
     for _ in 0..blocks {
-        let (c, d, k) = (numbers.range(3, 900), numbers.range(3, 900), numbers.range(2, 9));
+        let (first, second, divisor) = (numbers.range(3, 900), numbers.range(3, 900), numbers.range(2, 9));
         match numbers.range(0, 5) {
             0 => {
                 lines.push(format!("for step in 0..{} {{", numbers.range(2, 9)));
-                lines.push(format!("    if step % {k} == 0 {{"));
-                lines.push(format!("        acc = acc.wrapping_add(step * {c});"));
+                lines.push(format!("    if step % {divisor} == 0 {{"));
+                lines.push(format!("        acc = acc.wrapping_add(step * {first});"));
                 lines.push("    } else {".to_string());
-                lines.push(format!("        acc ^= {d};"));
+                lines.push(format!("        acc ^= {second};"));
                 lines.push("    }".to_string());
                 lines.push("}".to_string());
             }
             1 => {
-                lines.push(format!("match acc % {} {{", k.max(3)));
-                lines.push(format!("    0 => acc = acc.wrapping_add({c}),"));
+                lines.push(format!("match acc % {} {{", divisor.max(3)));
+                lines.push(format!("    0 => acc = acc.wrapping_add({first}),"));
                 lines.push(format!("    1 => acc = acc.rotate_left({}),", numbers.range(1, 30)));
-                lines.push(format!("    _ => acc ^= {d},"));
+                lines.push(format!("    _ => acc ^= {second},"));
                 lines.push("}".to_string());
             }
             2 => {
-                lines.push(format!("while acc > {} {{", 10_000 + c * 100));
-                lines.push(format!("    acc /= {k};"));
+                lines.push(format!("while acc > {} {{", 10_000 + first * 100));
+                lines.push(format!("    acc /= {divisor};"));
                 lines.push("}".to_string());
             }
             3 => {
-                lines.push(format!("if acc % {} < {} {{", k + 2, numbers.range(1, k + 1)));
-                lines.push(format!("    acc = acc.wrapping_mul({c});"));
+                lines.push(format!("if acc % {} < {} {{", divisor + 2, numbers.range(1, divisor + 1)));
+                lines.push(format!("    acc = acc.wrapping_mul({first});"));
                 lines.push("} else {".to_string());
                 lines.push(format!("    acc = acc.wrapping_sub({b});"));
                 lines.push("}".to_string());
             }
-            _ => lines.push(format!("acc = acc.wrapping_mul({c}).wrapping_add({b} ^ {d});")),
+            _ => lines.push(format!("acc = acc.wrapping_mul({first}).wrapping_add({b} ^ {second});")),
         }
     }
     lines.push("acc".to_string());
-    lines.iter().map(|line| format!("{indent}{line}\n")).collect()
+    lines.iter().fold(String::new(), |mut out, line| {
+        let _ = writeln!(out, "{indent}{line}");
+        out
+    })
 }
 
 /// The text of one module of the base tree.
 fn module_text(module: usize) -> String {
     let name = MODULES[module];
-    let ty = type_name(module);
     let before = MODULES[(module + MODULES.len() - 1) % MODULES.len()];
     let mut numbers = Numbers::of(module, 99);
     let mut out = String::new();
-    out += &format!("//! The {name} part of the depot. The numbers have no meaning.\n\n");
-    out += &format!("use crate::{before}::{before}_step0;\nuse std::fmt;\n\n");
+    let _ = write!(out, "//! The {name} part of the depot. The numbers have no meaning.\n\n");
+    let _ = write!(out, "use crate::{before}::{before}_step0;\nuse std::fmt;\n\n");
+    write_record(&mut out, module);
+    write_score_pair_holder(&mut out, module, &mut numbers);
+    write_functions_and_tests(&mut out, module, &mut numbers);
+    out
+}
 
-    // The record, its impl, and a trait impl of the standard library.
-    out += &format!("/// A record of the {name} part.\n#[derive(Debug, Clone, PartialEq)]\npub struct {ty}Record {{\n    pub id: u32,\n    pub weight: u32,\n    pub marks: Vec<u32>,\n}}\n\n");
-    out += &format!("impl {ty}Record {{\n    /// Makes a record with no marks.\n    pub fn new(id: u32, weight: u32) -> Self {{\n        Self {{ id, weight, marks: Vec::new() }}\n    }}\n\n");
-    out += &format!("    /// Gives the total of the marks that are less than the limit.\n    pub fn total(&self, limit: u32) -> u32 {{\n        let mut sum = {};\n        for value in &self.marks {{\n            if *value < limit {{\n                sum += *value;\n            }}\n        }}\n        sum\n    }}\n\n", mark(module, TOTAL));
-    out += &format!("    /// Mixes the weight with a factor, and keeps the result as the new weight.\n    pub fn scale(&mut self, factor: u32) -> u32 {{\n{}        self.weight = acc;\n        self.weight\n    }}\n}}\n\n", body(module, SCALE, "self.weight", "factor", 1, "        ", &[]).replace("        acc\n", ""));
-    out += &format!("impl fmt::Display for {ty}Record {{\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {{\n        write!(f, \"{{}}:{{}}\", self.id, self.weight)\n    }}\n}}\n\n");
+/// Writes the record of a module: the type, its impl, and a trait impl of the standard library.
+fn write_record(out: &mut String, module: usize) {
+    let name = MODULES[module];
+    let ty = type_name(module);
+    let _ = write!(
+        out,
+        "/// A record of the {name} part.\n#[derive(Debug, Clone, PartialEq)]\npub struct {ty}Record {{\n    pub id: u32,\n    pub weight: u32,\n    pub marks: Vec<u32>,\n}}\n\n"
+    );
+    let _ = write!(
+        out,
+        "impl {ty}Record {{\n    /// Makes a record with no marks.\n    pub fn new(id: u32, weight: u32) -> Self {{\n        Self {{ id, weight, marks: Vec::new() }}\n    }}\n\n"
+    );
+    let _ = write!(
+        out,
+        "    /// Gives the total of the marks that are less than the limit.\n    pub fn total(&self, limit: u32) -> u32 {{\n        let mut sum = {};\n        for value in &self.marks {{\n            if *value < limit {{\n                sum += *value;\n            }}\n        }}\n        sum\n    }}\n\n",
+        mark(module, TOTAL)
+    );
+    let _ = write!(
+        out,
+        "    /// Mixes the weight with a factor, and keeps the result as the new weight.\n    pub fn scale(&mut self, factor: u32) -> u32 {{\n{}        self.weight = acc;\n        self.weight\n    }}\n}}\n\n",
+        body(module, SCALE, "self.weight", "factor", 1, "        ", &[]).replace("        acc\n", "")
+    );
+    let _ = write!(
+        out,
+        "impl fmt::Display for {ty}Record {{\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {{\n        write!(f, \"{{}}:{{}}\", self.id, self.weight)\n    }}\n}}\n\n"
+    );
+}
 
+/// Writes the trait with a default method and its impl, the generic pair, and the holder.
+fn write_score_pair_holder(out: &mut String, module: usize, numbers: &mut Numbers) {
+    let name = MODULES[module];
+    let ty = type_name(module);
     // A trait with a default method, and its impl.
-    out += &format!("/// The score of a value of the {name} part.\npub trait {ty}Score {{\n    /// Gives the score for a seed.\n    fn score(&self, seed: u32) -> u32;\n\n    /// Gives the grade: a small number from the score.\n    fn grade(&self, seed: u32) -> u32 {{\n        let mut acc = self.score(seed);\n        acc = acc.wrapping_add({});\n        acc % {}\n    }}\n}}\n\n", mark(module, GRADE), numbers.range(5, 40));
-    out += &format!("impl {ty}Score for {ty}Record {{\n    fn score(&self, seed: u32) -> u32 {{\n{}    }}\n}}\n\n", body(module, SCORE, "self.weight", "seed", 1, "        ", &[]));
+    let _ = write!(
+        out,
+        "/// The score of a value of the {name} part.\npub trait {ty}Score {{\n    /// Gives the score for a seed.\n    fn score(&self, seed: u32) -> u32;\n\n    /// Gives the grade: a small number from the score.\n    fn grade(&self, seed: u32) -> u32 {{\n        let mut acc = self.score(seed);\n        acc = acc.wrapping_add({});\n        acc % {}\n    }}\n}}\n\n",
+        mark(module, GRADE),
+        numbers.range(5, 40)
+    );
+    let _ = write!(
+        out,
+        "impl {ty}Score for {ty}Record {{\n    fn score(&self, seed: u32) -> u32 {{\n{}    }}\n}}\n\n",
+        body(module, SCORE, "self.weight", "seed", 1, "        ", &[])
+    );
 
     // A generic type with a generic impl.
-    out += &format!("/// Two values of one type.\n#[derive(Debug, Clone, Copy)]\npub struct {ty}Pair<T> {{\n    pub left: T,\n    pub right: T,\n}}\n\n");
-    out += &format!("impl<T: Copy + PartialOrd> {ty}Pair<T> {{\n    /// Gives the larger value.\n    pub fn larger(&self) -> T {{\n        if self.left < self.right {{ self.right }} else {{ self.left }}\n    }}\n\n");
-    out += &format!("    /// Counts the values that are above the limit, with a fixed start.\n    pub fn count_above(&self, limit: T) -> u32 {{\n        let mut acc = {};\n        if self.left > limit {{\n            acc += 1;\n        }}\n        if self.right > limit {{\n            acc += {};\n        }}\n        acc\n    }}\n}}\n\n", mark(module, COUNT_ABOVE), numbers.range(2, 9));
-    out += &format!("/// Uses a pair of two numbers.\npub fn {name}_pair_use(a: u32, b: u32) -> u32 {{\n    let pair = {ty}Pair {{ left: a, right: b }};\n    pair.count_above({}).wrapping_add(pair.larger())\n}}\n\n", numbers.range(2, 90));
+    let _ = write!(
+        out,
+        "/// Two values of one type.\n#[derive(Debug, Clone, Copy)]\npub struct {ty}Pair<T> {{\n    pub left: T,\n    pub right: T,\n}}\n\n"
+    );
+    let _ = write!(
+        out,
+        "impl<T: Copy + PartialOrd> {ty}Pair<T> {{\n    /// Gives the larger value.\n    pub fn larger(&self) -> T {{\n        if self.left < self.right {{ self.right }} else {{ self.left }}\n    }}\n\n"
+    );
+    let _ = write!(
+        out,
+        "    /// Counts the values that are above the limit, with a fixed start.\n    pub fn count_above(&self, limit: T) -> u32 {{\n        let mut acc = {};\n        if self.left > limit {{\n            acc += 1;\n        }}\n        if self.right > limit {{\n            acc += {};\n        }}\n        acc\n    }}\n}}\n\n",
+        mark(module, COUNT_ABOVE),
+        numbers.range(2, 9)
+    );
+    let _ = write!(
+        out,
+        "/// Uses a pair of two numbers.\npub fn {name}_pair_use(a: u32, b: u32) -> u32 {{\n    let pair = {ty}Pair {{ left: a, right: b }};\n    pair.count_above({}).wrapping_add(pair.larger())\n}}\n\n",
+        numbers.range(2, 90)
+    );
 
     // A type that holds a value.
-    out += &format!("/// A value with a count of its reads.\n#[derive(Debug, Clone)]\npub struct {ty}Holder {{\n    pub value: u32,\n    pub count: u32,\n}}\n\n");
-    out += &format!("impl {ty}Holder {{\n    /// Makes a holder with no reads.\n    pub fn new(value: u32) -> Self {{\n        Self {{ value, count: 0 }}\n    }}\n\n    /// Reads the value.\n    pub fn get(&mut self) -> u32 {{\n        self.count += 1;\n        self.value\n    }}\n\n");
-    out += &format!("    /// Mixes the count with a value.\n    pub fn bump(&mut self, value: u32) -> u32 {{\n{}    }}\n}}\n\n", body(module, BUMP, "self.count", "value", 1, "        ", &[]));
-    out += &format!("/// Uses a holder of a number.\npub fn {name}_holder_use(x: u32) -> u32 {{\n    let mut holder = {ty}Holder::new(x);\n    holder.bump({}).wrapping_add(holder.get())\n}}\n\n", numbers.range(2, 90));
+    let _ = write!(
+        out,
+        "/// A value with a count of its reads.\n#[derive(Debug, Clone)]\npub struct {ty}Holder {{\n    pub value: u32,\n    pub count: u32,\n}}\n\n"
+    );
+    let _ = write!(
+        out,
+        "impl {ty}Holder {{\n    /// Makes a holder with no reads.\n    pub fn new(value: u32) -> Self {{\n        Self {{ value, count: 0 }}\n    }}\n\n    /// Reads the value.\n    pub fn get(&mut self) -> u32 {{\n        self.count += 1;\n        self.value\n    }}\n\n"
+    );
+    let _ = write!(
+        out,
+        "    /// Mixes the count with a value.\n    pub fn bump(&mut self, value: u32) -> u32 {{\n{}    }}\n}}\n\n",
+        body(module, BUMP, "self.count", "value", 1, "        ", &[])
+    );
+    let _ = write!(
+        out,
+        "/// Uses a holder of a number.\npub fn {name}_holder_use(x: u32) -> u32 {{\n    let mut holder = {ty}Holder::new(x);\n    holder.bump({}).wrapping_add(holder.get())\n}}\n\n",
+        numbers.range(2, 90)
+    );
+}
 
+/// Writes the generic functions, the plain functions, the macro, and the tests of a module.
+fn write_functions_and_tests(out: &mut String, module: usize, numbers: &mut Numbers) {
+    let name = MODULES[module];
+    let ty = type_name(module);
+    let before = MODULES[(module + MODULES.len() - 1) % MODULES.len()];
     // Generic functions.
-    out += &format!("/// Gives the larger of two values.\npub fn {name}_pick<T: Copy + PartialOrd>(a: T, b: T) -> T {{\n    if a < b {{ b }} else {{ a }}\n}}\n\n");
-    out += &format!("/// Mixes each item into one number.\npub fn {name}_fold<T: Copy + Into<u64>>(items: &[T]) -> u64 {{\n    let mut acc = {}u64;\n    for item in items {{\n        acc = acc.wrapping_mul({}).wrapping_add((*item).into());\n    }}\n    acc\n}}\n\n", mark(module, FOLD), numbers.range(3, 900));
+    let _ = write!(
+        out,
+        "/// Gives the larger of two values.\npub fn {name}_pick<T: Copy + PartialOrd>(a: T, b: T) -> T {{\n    if a < b {{ b }} else {{ a }}\n}}\n\n"
+    );
+    let _ = write!(
+        out,
+        "/// Mixes each item into one number.\npub fn {name}_fold<T: Copy + Into<u64>>(items: &[T]) -> u64 {{\n    let mut acc = {}u64;\n    for item in items {{\n        acc = acc.wrapping_mul({}).wrapping_add((*item).into());\n    }}\n    acc\n}}\n\n",
+        mark(module, FOLD),
+        numbers.range(3, 900)
+    );
 
     // Plain functions. Step 1 calls step 0. Step 2 calls a different module.
     for step in 0..3u32 {
@@ -160,34 +251,62 @@ fn module_text(module: usize) -> String {
         if step == 2 {
             calls.push(format!("{before}_step0"));
         }
-        out += &format!("/// Step {step} of the {name} part.\npub fn {name}_step{step}(x: u32, y: u32) -> u32 {{\n{}}}\n\n", body(module, STEP0 + step, "x", "y", 1 + (step / 2) as usize, "    ", &calls));
+        let _ = write!(
+            out,
+            "/// Step {step} of the {name} part.\npub fn {name}_step{step}(x: u32, y: u32) -> u32 {{\n{}}}\n\n",
+            body(module, STEP0 + step, "x", "y", 1 + (step / 2) as usize, "    ", &calls)
+        );
     }
 
     // A macro and its calls.
-    out += &format!("/// Adds each value to a fixed start value.\nmacro_rules! {name}_sum {{\n    ($($value:expr),*) => {{\n        {}u32$(.wrapping_add($value))*\n    }};\n}}\n\n", mark(module, SUM));
-    out += &format!("/// Adds two numbers and a fixed number to the start value.\npub fn {name}_sum_of(x: u32, y: u32) -> u32 {{\n    {name}_sum!(x, y, {})\n}}\n\n/// Adds a number two times to the start value.\npub fn {name}_sum_twice(x: u32) -> u32 {{\n    {name}_sum!(x, x)\n}}\n\n", numbers.range(2, 90));
+    let _ = write!(
+        out,
+        "/// Adds each value to a fixed start value.\nmacro_rules! {name}_sum {{\n    ($($value:expr),*) => {{\n        {}u32$(.wrapping_add($value))*\n    }};\n}}\n\n",
+        mark(module, SUM)
+    );
+    let _ = write!(
+        out,
+        "/// Adds two numbers and a fixed number to the start value.\npub fn {name}_sum_of(x: u32, y: u32) -> u32 {{\n    {name}_sum!(x, y, {})\n}}\n\n/// Adds a number two times to the start value.\npub fn {name}_sum_twice(x: u32) -> u32 {{\n    {name}_sum!(x, x)\n}}\n\n",
+        numbers.range(2, 90)
+    );
 
     // The tests of the module.
-    out += "#[cfg(test)]\nmod tests {\n    use super::*;\n\n";
-    out += &format!("    #[test]\n    fn the_record_keeps_its_fields() {{\n        let record = {ty}Record::new(3, 4);\n        assert_eq!(record.id, 3);\n        assert_eq!(record.weight, 4);\n        assert_eq!(record.total(9), {});\n    }}\n\n", mark(module, TOTAL));
-    out += &format!("    #[test]\n    fn each_step_gives_the_same_result_for_the_same_input() {{\n        for x in 0..5 {{\n            assert_eq!({name}_step0(x, 2), {name}_step0(x, 2));\n            assert_eq!({name}_step2(x, 2), {name}_step2(x, 2));\n        }}\n    }}\n\n");
-    out += &format!("    #[test]\n    fn the_sum_starts_at_the_fixed_value() {{\n        assert_eq!({name}_sum_twice(0), {});\n    }}\n}}\n", mark(module, SUM));
-    out
+    *out += "#[cfg(test)]\nmod tests {\n    use super::*;\n\n";
+    let _ = write!(
+        out,
+        "    #[test]\n    fn the_record_keeps_its_fields() {{\n        let record = {ty}Record::new(3, 4);\n        assert_eq!(record.id, 3);\n        assert_eq!(record.weight, 4);\n        assert_eq!(record.total(9), {});\n    }}\n\n",
+        mark(module, TOTAL)
+    );
+    let _ = write!(
+        out,
+        "    #[test]\n    fn each_step_gives_the_same_result_for_the_same_input() {{\n        for x in 0..5 {{\n            assert_eq!({name}_step0(x, 2), {name}_step0(x, 2));\n            assert_eq!({name}_step2(x, 2), {name}_step2(x, 2));\n        }}\n    }}\n\n"
+    );
+    let _ = write!(
+        out,
+        "    #[test]\n    fn the_sum_starts_at_the_fixed_value() {{\n        assert_eq!({name}_sum_twice(0), {});\n    }}\n}}\n",
+        mark(module, SUM)
+    );
 }
 
 /// The base tree of the fixture: a workspace with the crate `depot`.
 fn base_tree() -> Tree {
     let mut tree = Tree::new();
-    tree.insert("Cargo.toml".to_string(), "[workspace]\nresolver = \"2\"\nmembers = [\"depot\"]\n".to_string());
+    tree.insert(
+        "Cargo.toml".to_string(),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"depot\"]\n".to_string(),
+    );
     tree.insert(".gitignore".to_string(), "/target\n/.semilla/\n".to_string());
-    tree.insert("depot/Cargo.toml".to_string(), "[package]\nname = \"depot\"\nversion = \"0.1.0\"\nedition = \"2021\"\ndescription = \"A fixture crate\"\n".to_string());
+    tree.insert(
+        "depot/Cargo.toml".to_string(),
+        "[package]\nname = \"depot\"\nversion = \"0.1.0\"\nedition = \"2021\"\ndescription = \"A fixture crate\"\n".to_string(),
+    );
     let mut lib = "//! The depot crate: a fixture that a generator makes.\n\n".to_string();
     for name in MODULES {
-        lib += &format!("pub mod {name};\n");
+        let _ = writeln!(lib, "pub mod {name};");
     }
     lib += "\n/// Runs the last step of each part.\npub fn run(seed: u32) -> u32 {\n    let mut acc = seed;\n";
     for name in MODULES {
-        lib += &format!("    acc = {name}::{name}_step2(acc, 1);\n");
+        let _ = writeln!(lib, "    acc = {name}::{name}_step2(acc, 1);");
     }
     lib += "    acc\n}\n";
     tree.insert("depot/src/lib.rs".to_string(), lib);
@@ -245,7 +364,9 @@ fn item_range(text: &str, head: &str) -> (usize, usize) {
     let first_end = at + text[at..].find('\n').unwrap();
     let first_line = &text[at..first_end];
     let mut end = first_end + 1;
-    if !first_line.ends_with(';') && !(first_line.ends_with('}') && !first_line.ends_with("{}") && first_line.matches('{').count() == first_line.matches('}').count()) {
+    if !(first_line.ends_with(';')
+        || first_line.ends_with('}') && !first_line.ends_with("{}") && first_line.matches('{').count() == first_line.matches('}').count())
+    {
         let close = format!("\n{indent}}}\n");
         end = first_end + text[first_end..].find(&close).unwrap_or_else(|| panic!("no end of `{head}`")) + close.len();
     }
@@ -299,12 +420,55 @@ struct Change {
 }
 
 fn expect(category: &'static str, compare: &'static str, has: &[&str]) -> Expect {
-    Expect { category, compare, has: has.iter().map(|text| text.to_string()).collect() }
+    Expect {
+        category,
+        compare,
+        has: has.iter().map(std::string::ToString::to_string).collect(),
+    }
 }
 
 /// A function with a generated body, for an added item.
 fn generated_fn(doc: &str, name: &str, module: usize, slot: u32, blocks: usize) -> String {
-    format!("/// {doc}\npub fn {name}(x: u32, y: u32) -> u32 {{\n{}}}\n\n", body(module, slot, "x", "y", blocks, "    ", &[]))
+    format!(
+        "/// {doc}\npub fn {name}(x: u32, y: u32) -> u32 {{\n{}}}\n\n",
+        body(module, slot, "x", "y", blocks, "    ", &[])
+    )
+}
+
+/// The path of the file of each module of the fixture.
+struct Files {
+    ledger: String,
+    stock: String,
+    price: String,
+    route: String,
+    batch: String,
+    audit: String,
+    quota: String,
+    index: String,
+    cache: String,
+    queue: String,
+    shape: String,
+    merge: String,
+}
+
+impl Files {
+    fn new() -> Files {
+        let [ledger, stock, price, route, batch, audit, quota, index, cache, queue, shape, merge] = MODULES.map(file);
+        Files {
+            ledger,
+            stock,
+            price,
+            route,
+            batch,
+            audit,
+            quota,
+            index,
+            cache,
+            queue,
+            shape,
+            merge,
+        }
+    }
 }
 
 /// The tree after the step, and the list of the changes.
@@ -312,140 +476,583 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     let mut tree = base_tree();
     let t = &mut tree;
     let mut changes = Vec::new();
-    let [ledger, stock, price, route, batch, audit, quota, index, cache, queue, shape, merge] = MODULES.map(file);
+    let files = Files::new();
+    rename_and_move_changes(t, &files, &mut changes);
+    body_value_and_logic_changes(t, &files, &mut changes);
+    body_statement_changes(t, &files, &mut changes);
+    added_item_changes(t, &files, &mut changes);
+    test_and_removed_changes(t, &files, &mut changes);
+    declaration_changes(t, &files, &mut changes);
+    doc_import_manifest_changes(t, &files, &mut changes);
+    (tree, changes)
+}
 
+/// Adds the renames, the moves, and the new generic parameter of a type.
+fn rename_and_move_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files {
+        price,
+        route,
+        batch,
+        audit,
+        quota,
+        index,
+        ..
+    } = files;
     // Three renames: a function with callers in two modules, a type with three impls, and a
     // method of a generic impl.
     replace_name(t, "ledger_step0", "ledger_first_step");
-    changes.push(Change { name: "rename a function", facts: vec![expect("rename", "code equal", &["renamed `depot::ledger::ledger_step0` → `depot::ledger::ledger_first_step`"])] });
+    changes.push(Change {
+        name: "rename a function",
+        facts: vec![expect(
+            "rename",
+            "code equal",
+            &["renamed `depot::ledger::ledger_step0` → `depot::ledger::ledger_first_step`"],
+        )],
+    });
     replace_name(t, "StockRecord", "StockEntry");
-    changes.push(Change { name: "rename a type with impls", facts: vec![expect("rename", "code different", &["renamed `depot::stock::StockRecord` → `depot::stock::StockEntry`"])] });
-    for (from, to) in [("pub fn count_above(&self, limit: T)", "pub fn count_over(&self, limit: T)"), ("pair.count_above(", "pair.count_over(")] {
-        replace_one(t, &price, from, to);
+    changes.push(Change {
+        name: "rename a type with impls",
+        facts: vec![expect(
+            "rename",
+            "code different",
+            &["renamed `depot::stock::StockRecord` → `depot::stock::StockEntry`"],
+        )],
+    });
+    for (from, to) in [
+        ("pub fn count_above(&self, limit: T)", "pub fn count_over(&self, limit: T)"),
+        ("pair.count_above(", "pair.count_over("),
+    ] {
+        replace_one(t, price, from, to);
     }
-    changes.push(Change { name: "rename a method of a generic impl", facts: vec![expect("rename", "code equal", &["renamed `depot::price::PricePair::count_above` → `depot::price::PricePair::count_over`"])] });
+    changes.push(Change {
+        name: "rename a method of a generic impl",
+        facts: vec![expect(
+            "rename",
+            "code equal",
+            &["renamed `depot::price::PricePair::count_above` → `depot::price::PricePair::count_over`"],
+        )],
+    });
 
     // Two moves of a function to a different module. The second function needs an import.
-    let item = take_item(t, &route, "pub fn route_step1(");
-    put_before(t, &batch, "pub fn batch_step0(", &item);
-    changes.push(Change { name: "move a function", facts: vec![expect("move", "code equal", &["moved `depot::route::route_step1` → `depot::batch::route_step1`"])] });
-    let item = take_item(t, &audit, "pub fn audit_holder_use(");
-    put_before(t, &quota, "pub fn quota_holder_use(", &item);
-    replace_one(t, &quota, "use std::fmt;\n", "use crate::audit::AuditHolder;\nuse std::fmt;\n");
-    changes.push(Change { name: "move a function that needs an import", facts: vec![expect("move", "code equal", &["moved `depot::audit::audit_holder_use` → `depot::quota::audit_holder_use`", "with 1 `use` line(s)"])] });
+    let item = take_item(t, route, "pub fn route_step1(");
+    put_before(t, batch, "pub fn batch_step0(", &item);
+    changes.push(Change {
+        name: "move a function",
+        facts: vec![expect(
+            "move",
+            "code equal",
+            &["moved `depot::route::route_step1` → `depot::batch::route_step1`"],
+        )],
+    });
+    let item = take_item(t, audit, "pub fn audit_holder_use(");
+    put_before(t, quota, "pub fn quota_holder_use(", &item);
+    replace_one(t, quota, "use std::fmt;\n", "use crate::audit::AuditHolder;\nuse std::fmt;\n");
+    changes.push(Change {
+        name: "move a function that needs an import",
+        facts: vec![expect(
+            "move",
+            "code equal",
+            &[
+                "moved `depot::audit::audit_holder_use` → `depot::quota::audit_holder_use`",
+                "with 1 `use` line(s)",
+            ],
+        )],
+    });
 
     // A type gets a generic parameter.
-    replace_one(t, &index, "pub struct IndexHolder {\n    pub value: u32,", "pub struct IndexHolder<T> {\n    pub value: T,");
-    replace_one(t, &index, "impl IndexHolder {", "impl<T: Copy> IndexHolder<T> {");
-    replace_one(t, &index, "pub fn new(value: u32) -> Self {", "pub fn new(value: T) -> Self {");
-    replace_one(t, &index, "pub fn get(&mut self) -> u32 {", "pub fn get(&mut self) -> T {");
-    changes.push(Change { name: "a type gets a generic parameter", facts: vec![expect("declaration", "code different", &["generics of `depot::index::IndexHolder`: `struct IndexHolder { }` → `struct IndexHolder<T> { }`"]), expect("declaration", "code different", &["type `u32` → `T` in 3 places: `depot::index::IndexHolder.value`, return type of `depot::index::IndexHolder::get`, parameter `value` of `depot::index::IndexHolder::new`"]), expect("declaration", "code different", &["generics of `depot::index::impl IndexHolder`: `impl IndexHolder { }` → `impl<T: Copy> IndexHolder<T> { }`"])] });
+    replace_one(
+        t,
+        index,
+        "pub struct IndexHolder {\n    pub value: u32,",
+        "pub struct IndexHolder<T> {\n    pub value: T,",
+    );
+    replace_one(t, index, "impl IndexHolder {", "impl<T: Copy> IndexHolder<T> {");
+    replace_one(t, index, "pub fn new(value: u32) -> Self {", "pub fn new(value: T) -> Self {");
+    replace_one(t, index, "pub fn get(&mut self) -> u32 {", "pub fn get(&mut self) -> T {");
+    changes.push(Change {
+        name: "a type gets a generic parameter",
+        facts: vec![
+            expect(
+                "declaration",
+                "code different",
+                &["generics of `depot::index::IndexHolder`: `struct IndexHolder { }` → `struct IndexHolder<T> { }`"],
+            ),
+            expect(
+                "declaration",
+                "code different",
+                &["type `u32` → `T` in 3 places: `depot::index::IndexHolder.value`, return type of `depot::index::IndexHolder::get`, parameter `value` of `depot::index::IndexHolder::new`"],
+            ),
+            expect(
+                "declaration",
+                "code different",
+                &["generics of `depot::index::impl IndexHolder`: `impl IndexHolder { }` → `impl<T: Copy> IndexHolder<T> { }`"],
+            ),
+        ],
+    });
+}
 
+/// Adds the body edits of a value and of the logic of a function.
+fn body_value_and_logic_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files { cache, queue, shape, .. } = files;
     // Six body edits: two of a value, two of the logic, two of the control flow. The category
     // of each one is `semantics` (design 42). A statement that moves into a new `if`
     // keeps its compiled code: the `if` owns the change (design 40.3).
-    replace_one(t, &cache, &format!("acc = acc.wrapping_add({});", mark(8, STEP0)), &format!("acc = acc.wrapping_add({});", mark(8, STEP0) + 1000));
-    changes.push(Change { name: "body edit: a value in a function", facts: vec![expect("semantics", "code different", &["changed literal `1160` → `2160` at `depot::cache::cache_step0/S1/rhs/args[0]`"])] });
-    replace_one(t, &shape, &format!("acc = acc.wrapping_add({});", mark(10, GRADE)), &format!("acc = acc.wrapping_add({});", mark(10, GRADE) + 1000));
-    changes.push(Change { name: "body edit: a value in a default method of a trait", facts: vec![expect("semantics", "code different", &["changed literal `1208` → `2208` at `depot::shape::ShapeScore::grade/S1/rhs/args[0]`"])] });
-    replace_one(t, &queue, &format!("acc = acc.wrapping_add({});", mark(9, STEP0 + 1)), &format!("acc = acc.wrapping_sub({});", mark(9, STEP0 + 1)));
-    changes.push(Change { name: "body edit: the logic of a function", facts: vec![expect("semantics", "code different", &["changed expression `acc.wrapping_add(1181)` → `acc.wrapping_sub(1181)` at `depot::queue::queue_step1/S1/rhs`"])] });
-    let line = format!("        acc = acc.wrapping_add({});\n", mark(11, SCALE));
-    replace_one(t, &merge, &line, &format!("{line}        acc = acc.rotate_left(3);\n"));
-    changes.push(Change { name: "body edit: a new statement in a method", facts: vec![expect("semantics", "code different", &["added statement `acc = acc.rotate_left(3)` at `depot::merge::MergeRecord::scale/S2`"])] });
-    replace_one(t, &quota, &format!("acc = acc.wrapping_add({});", mark(6, SCALE)), &format!("acc = acc.wrapping_add({}) ^ 5;", mark(6, SCALE)));
-    changes.push(Change { name: "body edit: the logic of a method", facts: vec![expect("semantics", "code different", &["changed expression `acc.wrapping_add(1125)` → `acc.wrapping_add(1125) ^ 5` at `depot::quota::QuotaRecord::scale/S1/rhs`"])] });
-    let line = format!("    acc = acc.wrapping_add({});\n", mark(10, STEP0 + 2));
-    replace_one(t, &shape, &line, &format!("{line}    if acc > 4000 {{\n        return acc;\n    }}\n"));
-    changes.push(Change { name: "body edit: the control flow of a function", facts: vec![expect("semantics", "code different", &["added early exit `if acc > 4000 { return acc; }` at `depot::shape::shape_step2/S2`"])] });
-    let line = format!("        acc = acc.wrapping_add({});\n", mark(8, SCORE));
-    replace_one(t, &cache, &line, &format!("        if seed > 3 {{\n    {line}        }}\n"));
-    // Design 41: the statement moves into the new `if`. The move and the new `if` are two facts.
-    changes.push(Change { name: "body edit: the control flow of a trait method", facts: vec![expect("semantics", "code equal", &["moved statement `acc = acc.wrapping_add(1167)` from `depot::cache::<CacheRecord as CacheScore>::score/S1` to `depot::cache::<CacheRecord as CacheScore>::score/S1/then/S0`"]), expect("semantics", "code different", &["added `if` `if seed > 3 { acc = acc.wrapping_add(1167); }` (each inner statement is a moved statement of the body) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"])] });
+    replace_one(
+        t,
+        cache,
+        &format!("acc = acc.wrapping_add({});", mark(8, STEP0)),
+        &format!("acc = acc.wrapping_add({});", mark(8, STEP0) + 1000),
+    );
+    changes.push(Change {
+        name: "body edit: a value in a function",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["changed literal `1160` → `2160` at `depot::cache::cache_step0/S1/rhs/args[0]`"],
+        )],
+    });
+    replace_one(
+        t,
+        shape,
+        &format!("acc = acc.wrapping_add({});", mark(10, GRADE)),
+        &format!("acc = acc.wrapping_add({});", mark(10, GRADE) + 1000),
+    );
+    changes.push(Change {
+        name: "body edit: a value in a default method of a trait",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["changed literal `1208` → `2208` at `depot::shape::ShapeScore::grade/S1/rhs/args[0]`"],
+        )],
+    });
+    replace_one(
+        t,
+        queue,
+        &format!("acc = acc.wrapping_add({});", mark(9, STEP0 + 1)),
+        &format!("acc = acc.wrapping_sub({});", mark(9, STEP0 + 1)),
+    );
+    changes.push(Change {
+        name: "body edit: the logic of a function",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["changed expression `acc.wrapping_add(1181)` → `acc.wrapping_sub(1181)` at `depot::queue::queue_step1/S1/rhs`"],
+        )],
+    });
+}
 
+/// Adds the body edits of a statement and of the control flow.
+fn body_statement_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files {
+        quota, cache, shape, merge, ..
+    } = files;
+    let line = format!("        acc = acc.wrapping_add({});\n", mark(11, SCALE));
+    replace_one(t, merge, &line, &format!("{line}        acc = acc.rotate_left(3);\n"));
+    changes.push(Change {
+        name: "body edit: a new statement in a method",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["added statement `acc = acc.rotate_left(3)` at `depot::merge::MergeRecord::scale/S2`"],
+        )],
+    });
+    replace_one(
+        t,
+        quota,
+        &format!("acc = acc.wrapping_add({});", mark(6, SCALE)),
+        &format!("acc = acc.wrapping_add({}) ^ 5;", mark(6, SCALE)),
+    );
+    changes.push(Change {
+        name: "body edit: the logic of a method",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["changed expression `acc.wrapping_add(1125)` → `acc.wrapping_add(1125) ^ 5` at `depot::quota::QuotaRecord::scale/S1/rhs`"],
+        )],
+    });
+    let line = format!("    acc = acc.wrapping_add({});\n", mark(10, STEP0 + 2));
+    replace_one(t, shape, &line, &format!("{line}    if acc > 4000 {{\n        return acc;\n    }}\n"));
+    changes.push(Change {
+        name: "body edit: the control flow of a function",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["added early exit `if acc > 4000 { return acc; }` at `depot::shape::shape_step2/S2`"],
+        )],
+    });
+    let line = format!("        acc = acc.wrapping_add({});\n", mark(8, SCORE));
+    replace_one(t, cache, &line, &format!("        if seed > 3 {{\n    {line}        }}\n"));
+    // Design 41: the statement moves into the new `if`. The move and the new `if` are two facts.
+    changes.push(Change {
+        name: "body edit: the control flow of a trait method",
+        facts: vec![
+            expect(
+                "semantics",
+                "code equal",
+                &["moved statement `acc = acc.wrapping_add(1167)` from `depot::cache::<CacheRecord as CacheScore>::score/S1` to `depot::cache::<CacheRecord as CacheScore>::score/S1/then/S0`"],
+            ),
+            expect(
+                "semantics",
+                "code different",
+                &["added `if` `if seed > 3 { acc = acc.wrapping_add(1167); }` (each inner statement is a moved statement of the body) at `depot::cache::<CacheRecord as CacheScore>::score/S1`"],
+            ),
+        ],
+    });
+}
+
+/// Adds the new items: functions, a type with an impl, a method, a constant, and a trait impl.
+fn added_item_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files {
+        stock,
+        route,
+        audit,
+        cache,
+        queue,
+        shape,
+        merge,
+        ..
+    } = files;
     // Added items: functions, a type with an impl, a method, a constant, and a trait impl.
-    let blend = generated_fn("Blends two numbers. The larger number goes first.", "cache_blend", 8, 13, 9).replace("-> u32 {\n", "-> u32 {\n    let (x, y) = match x.cmp(&y) {\n        Ordering::Less => (y, x),\n        Ordering::Equal | Ordering::Greater => (x, y),\n    };\n");
-    put_before(t, &cache, "macro_rules! cache_sum {", &blend);
-    changes.push(Change { name: "add a function", facts: vec![expect("added", "code different", &["added `depot::cache::cache_blend`"])] });
+    let blend = generated_fn("Blends two numbers. The larger number goes first.", "cache_blend", 8, 13, 9).replace(
+        "-> u32 {\n",
+        "-> u32 {\n    let (x, y) = match x.cmp(&y) {\n        Ordering::Less => (y, x),\n        Ordering::Equal | Ordering::Greater => (x, y),\n    };\n",
+    );
+    put_before(t, cache, "macro_rules! cache_sum {", &blend);
+    changes.push(Change {
+        name: "add a function",
+        facts: vec![expect("added", "code different", &["added `depot::cache::cache_blend`"])],
+    });
     let window = format!(
         "/// A window of the last values.\n#[derive(Debug, Clone, Default)]\npub struct QueueWindow {{\n    pub values: Vec<u32>,\n    pub size: usize,\n}}\n\nimpl QueueWindow {{\n    /// Adds a value. Removes the oldest value first if the window is full.\n    pub fn push(&mut self, value: u32) -> u32 {{\n        if self.values.len() == self.size && !self.values.is_empty() {{\n            self.values.remove(0);\n        }}\n        self.values.push(value);\n{}    }}\n\n    /// Mixes each value of the window.\n    pub fn mix(&self, seed: u32) -> u32 {{\n        let mut acc = seed;\n        for value in &self.values {{\n            acc = acc.wrapping_mul(31).wrapping_add(*value);\n        }}\n        acc\n    }}\n}}\n\n",
         body(9, 14, "value", "self.size as u32", 6, "        ", &[])
     );
-    put_before(t, &queue, "pub fn queue_pick<", &window);
-    changes.push(Change { name: "add a type with an impl", facts: vec![expect("added", "code different", &["added `depot::queue::QueueWindow`"]), expect("added", "code different", &["added `depot::queue::impl QueueWindow` with: `fn push`, `fn mix`"])] });
-    put_before(t, &shape, "    pub fn total(", "    /// Removes each mark. Gives the count of the removed marks.\n    pub fn reset(&mut self) -> usize {\n        let count = self.marks.len();\n        self.marks.clear();\n        count\n    }\n\n");
-    changes.push(Change { name: "add a method", facts: vec![expect("added", "code different", &["added `depot::shape::ShapeRecord::reset`"])] });
-    put_before(t, &merge, "pub fn merge_step0(", "/// The largest input that a caller can give.\npub const MERGE_LIMIT: u32 = 77;\n\n");
-    changes.push(Change { name: "add a constant", facts: vec![expect("added", "no code", &["added `depot::merge::MERGE_LIMIT`"])] });
-    put_before(t, &merge, "pub fn merge_holder_use(", "impl Default for MergeHolder {\n    fn default() -> Self {\n        Self::new(0)\n    }\n}\n\n");
-    changes.push(Change { name: "add a trait impl", facts: vec![expect("added", "code different", &["trait impl `<MergeHolder as Default>` added with: `fn default`"])] });
-    put_before(t, &route, "macro_rules! route_sum {", &generated_fn("Mixes two numbers in many steps.", "route_long_mix", 3, 13, 22));
-    changes.push(Change { name: "add a second function", facts: vec![expect("added", "code different", &["added `depot::route::route_long_mix`"])] });
-    put_before(t, &audit, "macro_rules! audit_sum {", &generated_fn("Mixes two numbers in many steps.", "audit_long_mix", 5, 13, 22));
-    changes.push(Change { name: "add a third function", facts: vec![expect("added", "code different", &["added `depot::audit::audit_long_mix`"])] });
-    put_before(t, &stock, "macro_rules! stock_sum {", &generated_fn("Mixes two numbers in many steps.", "stock_long_mix", 1, 13, 22));
-    changes.push(Change { name: "add a fourth function", facts: vec![expect("added", "code different", &["added `depot::stock::stock_long_mix`"])] });
+    put_before(t, queue, "pub fn queue_pick<", &window);
+    changes.push(Change {
+        name: "add a type with an impl",
+        facts: vec![
+            expect("added", "code different", &["added `depot::queue::QueueWindow`"]),
+            expect(
+                "added",
+                "code different",
+                &["added `depot::queue::impl QueueWindow` with: `fn push`, `fn mix`"],
+            ),
+        ],
+    });
+    put_before(
+        t,
+        shape,
+        "    pub fn total(",
+        "    /// Removes each mark. Gives the count of the removed marks.\n    pub fn reset(&mut self) -> usize {\n        let count = self.marks.len();\n        self.marks.clear();\n        count\n    }\n\n",
+    );
+    changes.push(Change {
+        name: "add a method",
+        facts: vec![expect("added", "code different", &["added `depot::shape::ShapeRecord::reset`"])],
+    });
+    put_before(
+        t,
+        merge,
+        "pub fn merge_step0(",
+        "/// The largest input that a caller can give.\npub const MERGE_LIMIT: u32 = 77;\n\n",
+    );
+    changes.push(Change {
+        name: "add a constant",
+        facts: vec![expect("added", "no code", &["added `depot::merge::MERGE_LIMIT`"])],
+    });
+    put_before(
+        t,
+        merge,
+        "pub fn merge_holder_use(",
+        "impl Default for MergeHolder {\n    fn default() -> Self {\n        Self::new(0)\n    }\n}\n\n",
+    );
+    changes.push(Change {
+        name: "add a trait impl",
+        facts: vec![expect(
+            "added",
+            "code different",
+            &["trait impl `<MergeHolder as Default>` added with: `fn default`"],
+        )],
+    });
+    put_before(
+        t,
+        route,
+        "macro_rules! route_sum {",
+        &generated_fn("Mixes two numbers in many steps.", "route_long_mix", 3, 13, 22),
+    );
+    changes.push(Change {
+        name: "add a second function",
+        facts: vec![expect("added", "code different", &["added `depot::route::route_long_mix`"])],
+    });
+    put_before(
+        t,
+        audit,
+        "macro_rules! audit_sum {",
+        &generated_fn("Mixes two numbers in many steps.", "audit_long_mix", 5, 13, 22),
+    );
+    changes.push(Change {
+        name: "add a third function",
+        facts: vec![expect("added", "code different", &["added `depot::audit::audit_long_mix`"])],
+    });
+    put_before(
+        t,
+        stock,
+        "macro_rules! stock_sum {",
+        &generated_fn("Mixes two numbers in many steps.", "stock_long_mix", 1, 13, 22),
+    );
+    changes.push(Change {
+        name: "add a fourth function",
+        facts: vec![expect("added", "code different", &["added `depot::stock::stock_long_mix`"])],
+    });
+}
 
-    for (path, name, call) in [(&index, "the_long_way_gives_the_same_result", "index_step1"), (&queue, "the_window_keeps_the_last_values", "queue_step2")] {
-        let test = format!(
+/// Adds the new tests and the removed items.
+fn test_and_removed_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files {
+        batch,
+        audit,
+        quota,
+        index,
+        queue,
+        ..
+    } = files;
+    for (path, name, call) in [
+        (index, "the_long_way_gives_the_same_result", "index_step1"),
+        (queue, "the_window_keeps_the_last_values", "queue_step2"),
+    ] {
+        let test_text = format!(
             "\n    #[test]\n    fn {name}() {{\n        let mut seen = Vec::new();\n        for x in 0..7 {{\n            let value = {call}(x, 3);\n            assert_eq!(value, {call}(x, 3));\n            seen.push(value);\n        }}\n        assert_eq!(seen.len(), 7);\n        seen.dedup();\n        assert!(!seen.is_empty());\n    }}\n}}\n"
         );
         let text = t.get_mut(path).unwrap();
         assert!(text.ends_with("    }\n}\n"), "{path}");
         text.truncate(text.len() - 2);
-        text.push_str(&test);
+        text.push_str(&test_text);
     }
-    changes.push(Change { name: "add a test", facts: vec![expect("added", "code different", &["added `depot::index::tests::the_long_way_gives_the_same_result`"])] });
-    changes.push(Change { name: "add a second test", facts: vec![expect("added", "code different", &["added `depot::queue::tests::the_window_keeps_the_last_values`"])] });
+    changes.push(Change {
+        name: "add a test",
+        facts: vec![expect(
+            "added",
+            "code different",
+            &["added `depot::index::tests::the_long_way_gives_the_same_result`"],
+        )],
+    });
+    changes.push(Change {
+        name: "add a second test",
+        facts: vec![expect(
+            "added",
+            "code different",
+            &["added `depot::queue::tests::the_window_keeps_the_last_values`"],
+        )],
+    });
 
     // Removed items: a function, a generic function, and a trait impl with its import.
-    take_item(t, &audit, "pub fn audit_pair_use(");
-    changes.push(Change { name: "remove a function", facts: vec![expect("removed", "code different", &["removed `depot::audit::audit_pair_use`"])] });
-    take_item(t, &quota, "pub fn quota_pick<");
-    changes.push(Change { name: "remove a generic function", facts: vec![expect("removed", "code different", &["removed `depot::quota::quota_pick`"])] });
-    take_item(t, &batch, "impl fmt::Display for BatchRecord {");
-    changes.push(Change { name: "remove a trait impl", facts: vec![expect("removed", "code different", &["trait impl `<BatchRecord as fmt::Display>` removed with: `fn fmt`"])] });
-    replace_one(t, &batch, "use std::fmt;\n", "");
-    changes.push(Change { name: "import: remove an import", facts: vec![expect("import", "code equal", &["removed `use` line: `use std::fmt;`"])] });
+    take_item(t, audit, "pub fn audit_pair_use(");
+    changes.push(Change {
+        name: "remove a function",
+        facts: vec![expect("removed", "code different", &["removed `depot::audit::audit_pair_use`"])],
+    });
+    take_item(t, quota, "pub fn quota_pick<");
+    changes.push(Change {
+        name: "remove a generic function",
+        facts: vec![expect("removed", "code different", &["removed `depot::quota::quota_pick`"])],
+    });
+    take_item(t, batch, "impl fmt::Display for BatchRecord {");
+    changes.push(Change {
+        name: "remove a trait impl",
+        facts: vec![expect(
+            "removed",
+            "code different",
+            &["trait impl `<BatchRecord as fmt::Display>` removed with: `fn fmt`"],
+        )],
+    });
+    replace_one(t, batch, "use std::fmt;\n", "");
+    changes.push(Change {
+        name: "import: remove an import",
+        facts: vec![expect("import", "code equal", &["removed `use` line: `use std::fmt;`"])],
+    });
+}
 
+/// Adds the declaration changes.
+fn declaration_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files {
+        ledger, stock, route, cache, ..
+    } = files;
     // Declaration changes.
-    replace_one(t, &ledger, "pub fn ledger_sum_of(x: u32, y: u32) -> u32 {", "pub fn ledger_sum_of(x: u32, y: u32, z: u32) -> u32 {");
-    let text = t.get(&ledger).unwrap().clone();
+    replace_one(
+        t,
+        ledger,
+        "pub fn ledger_sum_of(x: u32, y: u32) -> u32 {",
+        "pub fn ledger_sum_of(x: u32, y: u32, z: u32) -> u32 {",
+    );
+    let text = t.get(ledger).unwrap().clone();
     let (start, end) = item_range(&text, "pub fn ledger_sum_of(");
     let call = text[start..end].lines().find(|line| line.contains("ledger_sum!(")).unwrap().to_string();
-    replace_one(t, &ledger, &call, "    ledger_sum!(x, y, z)");
-    changes.push(Change { name: "declaration: a function gets a parameter", facts: vec![expect("declaration", "code different", &["parameter of `depot::ledger::ledger_sum_of` added: `z: u32`"]), expect("macro", "code different", &[&format!("replace macro input `{}` → `ledger_sum!(x, y, z)` at `depot::ledger::ledger_sum_of/tail`", call.trim())])] });
-    replace_one(t, &stock, "pub fn stock_fold<T: Copy + Into<u64>>(", "pub fn stock_fold<T: Copy + Into<u64> + PartialOrd>(");
-    changes.push(Change { name: "declaration: a generic function gets a bound", facts: vec![expect("declaration", "code equal", &["generics of `depot::stock::stock_fold` `<T: Copy + Into<u64>>` → `<T: Copy + Into<u64> + PartialOrd>`"])] });
-    replace_one(t, &route, "pub fn route_pick<T: Copy + PartialOrd>(a: T, b: T) -> T {", "pub fn route_pick<T>(a: T, b: T) -> T\nwhere\n    T: Copy + PartialOrd,\n{");
-    changes.push(Change { name: "declaration: the bounds go to a `where` clause", facts: vec![expect("declaration", "code equal", &["bounds of `depot::route::route_pick`: moved to the `where` clause"])] });
-    replace_one(t, &cache, "pub struct CacheHolder {\n    pub value: u32,\n    pub count: u32,\n", "pub struct CacheHolder {\n    pub value: u32,\n    pub count: u32,\n    pub limit: u32,\n");
-    replace_one(t, &cache, "Self { value, count: 0 }", "Self { value, count: 0, limit: 9 }");
-    changes.push(Change { name: "declaration: a type gets a field", facts: vec![expect("added", "code different", &["field `depot::cache::CacheHolder.limit` added: `u32`"])] });
+    replace_one(t, ledger, &call, "    ledger_sum!(x, y, z)");
+    changes.push(Change {
+        name: "declaration: a function gets a parameter",
+        facts: vec![
+            expect(
+                "declaration",
+                "code different",
+                &["parameter of `depot::ledger::ledger_sum_of` added: `z: u32`"],
+            ),
+            expect(
+                "macro",
+                "code different",
+                &[&format!(
+                    "replace macro input `{}` → `ledger_sum!(x, y, z)` at `depot::ledger::ledger_sum_of/tail`",
+                    call.trim()
+                )],
+            ),
+        ],
+    });
+    replace_one(
+        t,
+        stock,
+        "pub fn stock_fold<T: Copy + Into<u64>>(",
+        "pub fn stock_fold<T: Copy + Into<u64> + PartialOrd>(",
+    );
+    changes.push(Change {
+        name: "declaration: a generic function gets a bound",
+        facts: vec![expect(
+            "declaration",
+            "code equal",
+            &["generics of `depot::stock::stock_fold` `<T: Copy + Into<u64>>` → `<T: Copy + Into<u64> + PartialOrd>`"],
+        )],
+    });
+    replace_one(
+        t,
+        route,
+        "pub fn route_pick<T: Copy + PartialOrd>(a: T, b: T) -> T {",
+        "pub fn route_pick<T>(a: T, b: T) -> T\nwhere\n    T: Copy + PartialOrd,\n{",
+    );
+    changes.push(Change {
+        name: "declaration: the bounds go to a `where` clause",
+        facts: vec![expect(
+            "declaration",
+            "code equal",
+            &["bounds of `depot::route::route_pick`: moved to the `where` clause"],
+        )],
+    });
+    replace_one(
+        t,
+        cache,
+        "pub struct CacheHolder {\n    pub value: u32,\n    pub count: u32,\n",
+        "pub struct CacheHolder {\n    pub value: u32,\n    pub count: u32,\n    pub limit: u32,\n",
+    );
+    replace_one(t, cache, "Self { value, count: 0 }", "Self { value, count: 0, limit: 9 }");
+    changes.push(Change {
+        name: "declaration: a type gets a field",
+        facts: vec![expect(
+            "added",
+            "code different",
+            &["field `depot::cache::CacheHolder.limit` added: `u32`"],
+        )],
+    });
+}
 
+/// Adds the doc changes, the import changes, and the manifest change.
+fn doc_import_manifest_changes(t: &mut Tree, files: &Files, changes: &mut Vec<Change>) {
+    let Files {
+        stock,
+        price,
+        route,
+        audit,
+        quota,
+        cache,
+        merge,
+        ..
+    } = files;
     // Doc changes.
-    replace_one(t, &route, "/// Step 0 of the route part.", "/// Step 0 of the route part: the first mix.");
-    changes.push(Change { name: "docs: a function", facts: vec![expect("docs", "no code", &["changed docs `/// Step 0 of the route part.` → `/// Step 0 of the route part: the first mix.`"])] });
-    replace_one(t, &audit, "//! The audit part of the depot. The numbers have no meaning.", "//! The audit part of the depot. The numbers have no meaning at all.");
-    changes.push(Change { name: "docs: a module", facts: vec![expect("docs", "no code", &["changed docs `…numbers have no meaning.` → `…numbers have no meaning at all.`"])] });
-    replace_one(t, &quota, "/// A record of the quota part.", "/// One record of the quota part.");
-    changes.push(Change { name: "docs: a type", facts: vec![expect("docs", "no code", &["changed docs `/// A record of the quota part.` → `/// One record of the quota part.`"])] });
-    replace_one(t, &merge, "    /// Makes a record with no marks.", "    /// Makes a new record with no marks.");
-    changes.push(Change { name: "docs: a method", facts: vec![expect("docs", "no code", &["changed docs `/// Makes a record with no marks.` → `/// Makes a new record with no marks.`"])] });
-    replace_one(t, &price, "/// The score of a value of the price part.", "/// The score of one value of the price part.");
-    changes.push(Change { name: "docs: a trait", facts: vec![expect("docs", "no code", &["changed docs `/// The score of a value of the price part.` → `/// The score of one value of the price part.`"])] });
+    replace_one(t, route, "/// Step 0 of the route part.", "/// Step 0 of the route part: the first mix.");
+    changes.push(Change {
+        name: "docs: a function",
+        facts: vec![expect(
+            "docs",
+            "no code",
+            &["changed docs `/// Step 0 of the route part.` → `/// Step 0 of the route part: the first mix.`"],
+        )],
+    });
+    replace_one(
+        t,
+        audit,
+        "//! The audit part of the depot. The numbers have no meaning.",
+        "//! The audit part of the depot. The numbers have no meaning at all.",
+    );
+    changes.push(Change {
+        name: "docs: a module",
+        facts: vec![expect(
+            "docs",
+            "no code",
+            &["changed docs `…numbers have no meaning.` → `…numbers have no meaning at all.`"],
+        )],
+    });
+    replace_one(t, quota, "/// A record of the quota part.", "/// One record of the quota part.");
+    changes.push(Change {
+        name: "docs: a type",
+        facts: vec![expect(
+            "docs",
+            "no code",
+            &["changed docs `/// A record of the quota part.` → `/// One record of the quota part.`"],
+        )],
+    });
+    replace_one(
+        t,
+        merge,
+        "    /// Makes a record with no marks.",
+        "    /// Makes a new record with no marks.",
+    );
+    changes.push(Change {
+        name: "docs: a method",
+        facts: vec![expect(
+            "docs",
+            "no code",
+            &["changed docs `/// Makes a record with no marks.` → `/// Makes a new record with no marks.`"],
+        )],
+    });
+    replace_one(
+        t,
+        price,
+        "/// The score of a value of the price part.",
+        "/// The score of one value of the price part.",
+    );
+    changes.push(Change {
+        name: "docs: a trait",
+        facts: vec![expect(
+            "docs",
+            "no code",
+            &["changed docs `/// The score of a value of the price part.` → `/// The score of one value of the price part.`"],
+        )],
+    });
 
     // Import changes. The removed import is above, with the removed impl.
-    replace_one(t, &cache, "use std::fmt;\n", "use std::cmp::Ordering;\nuse std::fmt;\n");
-    changes.push(Change { name: "import: add an import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::cmp::Ordering;`"])] });
-    replace_one(t, &stock, "use std::fmt;\n", "use std::fmt::{self, Formatter};\n");
-    replace_one(t, &stock, "f: &mut fmt::Formatter<'_>", "f: &mut Formatter<'_>");
-    changes.push(Change { name: "import: use a name through a new import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::fmt::{self, Formatter};`"]), expect("declaration", "code equal", &["parameter of `depot::stock::<StockEntry as fmt::Display>::fmt` `f: &mut fmt::Formatter<'_>` → `f: &mut Formatter<'_>`"])] });
+    replace_one(t, cache, "use std::fmt;\n", "use std::cmp::Ordering;\nuse std::fmt;\n");
+    changes.push(Change {
+        name: "import: add an import",
+        facts: vec![expect("import", "code equal", &["added `use` line: `use std::cmp::Ordering;`"])],
+    });
+    replace_one(t, stock, "use std::fmt;\n", "use std::fmt::{self, Formatter};\n");
+    replace_one(t, stock, "f: &mut fmt::Formatter<'_>", "f: &mut Formatter<'_>");
+    changes.push(Change {
+        name: "import: use a name through a new import",
+        facts: vec![
+            expect("import", "code equal", &["added `use` line: `use std::fmt::{self, Formatter};`"]),
+            expect(
+                "declaration",
+                "code equal",
+                &["parameter of `depot::stock::<StockEntry as fmt::Display>::fmt` `f: &mut fmt::Formatter<'_>` → `f: &mut Formatter<'_>`"],
+            ),
+        ],
+    });
 
     // A manifest change.
     replace_one(t, "depot/Cargo.toml", "version = \"0.1.0\"", "version = \"0.2.0\"");
-    changes.push(Change { name: "manifest: the version", facts: vec![expect("manifest", "no code", &["depot/Cargo.toml: package.version \"0.1.0\" → \"0.2.0\""])] });
-    (tree, changes)
+    changes.push(Change {
+        name: "manifest: the version",
+        facts: vec![expect(
+            "manifest",
+            "no code",
+            &["depot/Cargo.toml: package.version \"0.1.0\" → \"0.2.0\""],
+        )],
+    });
 }
 
 /// The tree with 300 changed lines in one file (design 37.10): the file of the `ledger` part.
@@ -455,25 +1062,97 @@ fn one_file_tree() -> (Tree, Vec<Change>) {
     let mut changes = Vec::new();
     let ledger = file("ledger");
     for (name, slot) in [("ledger_wide_mix", 13), ("ledger_deep_mix", 14)] {
-        put_before(t, &ledger, "macro_rules! ledger_sum {", &generated_fn("Mixes two numbers in many steps.", name, 0, slot, 28));
-        changes.push(Change { name: "add a long function", facts: vec![Expect { category: "added", compare: "code different", has: vec![format!("added `depot::ledger::{name}`")] }] });
+        put_before(
+            t,
+            &ledger,
+            "macro_rules! ledger_sum {",
+            &generated_fn("Mixes two numbers in many steps.", name, 0, slot, 28),
+        );
+        changes.push(Change {
+            name: "add a long function",
+            facts: vec![Expect {
+                category: "added",
+                compare: "code different",
+                has: vec![format!("added `depot::ledger::{name}`")],
+            }],
+        });
     }
     take_item(t, &ledger, "pub fn ledger_pair_use(");
-    changes.push(Change { name: "remove a function", facts: vec![expect("removed", "code different", &["removed `depot::ledger::ledger_pair_use`"])] });
+    changes.push(Change {
+        name: "remove a function",
+        facts: vec![expect("removed", "code different", &["removed `depot::ledger::ledger_pair_use`"])],
+    });
     take_item(t, &ledger, "impl fmt::Display for LedgerRecord {");
     replace_one(t, &ledger, "use std::fmt;\n", "");
-    changes.push(Change { name: "remove a trait impl and its import", facts: vec![expect("removed", "code different", &["trait impl `<LedgerRecord as fmt::Display>` removed with: `fn fmt`"]), expect("import", "code equal", &["removed `use` line: `use std::fmt;`"])] });
-    replace_in_item(t, &ledger, "pub fn ledger_step1(", &format!("acc = acc.wrapping_add({});", mark(0, STEP0 + 1)), &format!("acc = acc.wrapping_add({});", mark(0, STEP0 + 1) + 1000));
-    changes.push(Change { name: "body edit: a value", facts: vec![expect("semantics", "code different", &["changed literal `1001` → `2001` at `depot::ledger::ledger_step1/S1/rhs/args[0]`"])] });
-    replace_in_item(t, &ledger, "    pub fn scale(", &format!("acc = acc.wrapping_add({});", mark(0, SCALE)), &format!("acc = acc.wrapping_sub({});", mark(0, SCALE)));
-    changes.push(Change { name: "body edit: the logic", facts: vec![expect("semantics", "code different", &["changed expression `acc.wrapping_add(1005)` → `acc.wrapping_sub(1005)` at `depot::ledger::LedgerRecord::scale/S1/rhs`"])] });
+    changes.push(Change {
+        name: "remove a trait impl and its import",
+        facts: vec![
+            expect(
+                "removed",
+                "code different",
+                &["trait impl `<LedgerRecord as fmt::Display>` removed with: `fn fmt`"],
+            ),
+            expect("import", "code equal", &["removed `use` line: `use std::fmt;`"]),
+        ],
+    });
+    replace_in_item(
+        t,
+        &ledger,
+        "pub fn ledger_step1(",
+        &format!("acc = acc.wrapping_add({});", mark(0, STEP0 + 1)),
+        &format!("acc = acc.wrapping_add({});", mark(0, STEP0 + 1) + 1000),
+    );
+    changes.push(Change {
+        name: "body edit: a value",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["changed literal `1001` → `2001` at `depot::ledger::ledger_step1/S1/rhs/args[0]`"],
+        )],
+    });
+    replace_in_item(
+        t,
+        &ledger,
+        "    pub fn scale(",
+        &format!("acc = acc.wrapping_add({});", mark(0, SCALE)),
+        &format!("acc = acc.wrapping_sub({});", mark(0, SCALE)),
+    );
+    changes.push(Change {
+        name: "body edit: the logic",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["changed expression `acc.wrapping_add(1005)` → `acc.wrapping_sub(1005)` at `depot::ledger::LedgerRecord::scale/S1/rhs`"],
+        )],
+    });
     let line = format!("    acc = acc.wrapping_add({});\n", mark(0, STEP0 + 2));
     replace_one(t, &ledger, &line, &format!("{line}    if acc > 4000 {{\n        return acc;\n    }}\n"));
-    changes.push(Change { name: "body edit: the control flow", facts: vec![expect("semantics", "code different", &["added early exit `if acc > 4000 { return acc; }` at `depot::ledger::ledger_step2/S2`"])] });
+    changes.push(Change {
+        name: "body edit: the control flow",
+        facts: vec![expect(
+            "semantics",
+            "code different",
+            &["added early exit `if acc > 4000 { return acc; }` at `depot::ledger::ledger_step2/S2`"],
+        )],
+    });
     replace_name(t, "ledger_sum_twice", "ledger_sum_double");
-    changes.push(Change { name: "rename a function", facts: vec![expect("rename", "", &["renamed `depot::ledger::ledger_sum_twice` → `depot::ledger::ledger_sum_double`"])] });
+    changes.push(Change {
+        name: "rename a function",
+        facts: vec![expect(
+            "rename",
+            "",
+            &["renamed `depot::ledger::ledger_sum_twice` → `depot::ledger::ledger_sum_double`"],
+        )],
+    });
     replace_one(t, &ledger, "/// A record of the ledger part.", "/// One record of the ledger part.");
-    changes.push(Change { name: "docs: a type", facts: vec![expect("docs", "no code", &["changed docs `/// A record of the ledger part.` → `/// One record of the ledger part.`"])] });
+    changes.push(Change {
+        name: "docs: a type",
+        facts: vec![expect(
+            "docs",
+            "no code",
+            &["changed docs `/// A record of the ledger part.` → `/// One record of the ledger part.`"],
+        )],
+    });
     (tree, changes)
 }
 
@@ -492,22 +1171,94 @@ struct Needle {
 /// The needles: each is one edit of the tree after the step.
 fn needles() -> Vec<Needle> {
     let add = |module: usize, slot: u32| format!("acc = acc.wrapping_add({});", mark(module, slot));
-    let value = |name, module: usize, slot: u32, shows, item| Needle { name, module: MODULES[module], from: add(module, slot), to: add(module, slot).replace('(', "(9"), shows, item };
-    let new_statement = |name, module: usize, text: String, indent: &str, statement: &str, shows, item| Needle { name, module: MODULES[module], to: format!("{text}\n{indent}{statement}"), from: text, shows, item };
+    let value = |name, module: usize, slot: u32, shows, item| Needle {
+        name,
+        module: MODULES[module],
+        from: add(module, slot),
+        to: add(module, slot).replace('(', "(9"),
+        shows,
+        item,
+    };
+    let new_statement = |name, module: usize, text: String, indent: &str, statement: &str, shows, item| Needle {
+        name,
+        module: MODULES[module],
+        to: format!("{text}\n{indent}{statement}"),
+        from: text,
+        shows,
+        item,
+    };
     vec![
         value("a function that the list does not change", 11, STEP0, "91220", "merge_step0"),
-        Needle { name: "a second function that the list does not change", module: "price", from: add(2, STEP0 + 2), to: add(2, STEP0 + 2).replace("wrapping_add", "wrapping_sub"), shows: "wrapping_sub(1042)", item: "price_step2" },
-        new_statement("a method that the list does not change", 5, add(5, SCALE), "        ", "acc ^= 90003;", "90003", "AuditRecord::scale"),
-        new_statement("a function that the list changes", 8, add(8, STEP0).replace("1160", "2160"), "    ", "acc ^= 90004;", "90004", "cache_step0"),
+        Needle {
+            name: "a second function that the list does not change",
+            module: "price",
+            from: add(2, STEP0 + 2),
+            to: add(2, STEP0 + 2).replace("wrapping_add", "wrapping_sub"),
+            shows: "wrapping_sub(1042)",
+            item: "price_step2",
+        },
+        new_statement(
+            "a method that the list does not change",
+            5,
+            add(5, SCALE),
+            "        ",
+            "acc ^= 90003;",
+            "90003",
+            "AuditRecord::scale",
+        ),
+        new_statement(
+            "a function that the list changes",
+            8,
+            add(8, STEP0).replace("1160", "2160"),
+            "    ",
+            "acc ^= 90004;",
+            "90004",
+            "cache_step0",
+        ),
         value("a second function that the list changes", 10, STEP0 + 2, "91202", "shape_step2"),
         value("a renamed function", 0, STEP0, "91000", "ledger_first_step"),
-        Needle { name: "a renamed method", module: "price", from: format!("let mut acc = {};", mark(2, COUNT_ABOVE)), to: format!("let mut acc = 9{};", mark(2, COUNT_ABOVE)), shows: "91050", item: "count_over" },
+        Needle {
+            name: "a renamed method",
+            module: "price",
+            from: format!("let mut acc = {};", mark(2, COUNT_ABOVE)),
+            to: format!("let mut acc = 9{};", mark(2, COUNT_ABOVE)),
+            shows: "91050",
+            item: "count_over",
+        },
         value("a method of a renamed type", 1, SCALE, "91025", "StockEntry"),
-        Needle { name: "a moved function", module: "batch", from: add(3, STEP0 + 1), to: add(3, STEP0 + 1).replace('(', "(9"), shows: "91061", item: "route_step1" },
-        Needle { name: "a moved function with an import", module: "quota", from: "let mut holder = AuditHolder::new(x);".to_string(), to: "let mut holder = AuditHolder::new(x ^ 90010);".to_string(), shows: "90010", item: "audit_holder_use" },
+        Needle {
+            name: "a moved function",
+            module: "batch",
+            from: add(3, STEP0 + 1),
+            to: add(3, STEP0 + 1).replace('(', "(9"),
+            shows: "91061",
+            item: "route_step1",
+        },
+        Needle {
+            name: "a moved function with an import",
+            module: "quota",
+            from: "let mut holder = AuditHolder::new(x);".to_string(),
+            to: "let mut holder = AuditHolder::new(x ^ 90010);".to_string(),
+            shows: "90010",
+            item: "audit_holder_use",
+        },
         value("a member of the impl with the new generic parameter", 7, BUMP, "91151", "IndexHolder"),
-        Needle { name: "a second member of the impl with the new generic parameter", module: "index", from: "self.count += 1;".to_string(), to: "self.count += 90012;".to_string(), shows: "90012", item: "IndexHolder" },
-        Needle { name: "a macro body", module: "shape", from: format!("{}u32$(", mark(10, SUM)), to: format!("9{}u32$(", mark(10, SUM)), shows: "91212", item: "shape_sum" },
+        Needle {
+            name: "a second member of the impl with the new generic parameter",
+            module: "index",
+            from: "self.count += 1;".to_string(),
+            to: "self.count += 90012;".to_string(),
+            shows: "90012",
+            item: "IndexHolder",
+        },
+        Needle {
+            name: "a macro body",
+            module: "shape",
+            from: format!("{}u32$(", mark(10, SUM)),
+            to: format!("9{}u32$(", mark(10, SUM)),
+            shows: "91212",
+            item: "shape_sum",
+        },
         value("a method of a trait impl", 9, SCORE, "91187", "QueueRecord"),
     ]
 }
@@ -543,7 +1294,10 @@ fn shell(repo: &Path, line: &str) -> (i32, String) {
     let binary = Path::new(env!("CARGO_BIN_EXE_semilla"));
     let mut command = Command::new("sh");
     with_env(&mut command, repo);
-    command.env("PATH", format!("{}:{}", binary.parent().unwrap().display(), std::env::var("PATH").unwrap_or_default()));
+    command.env(
+        "PATH",
+        format!("{}:{}", binary.parent().unwrap().display(), std::env::var("PATH").unwrap_or_default()),
+    );
     let output = command.args(["-c", line]).output().unwrap();
     (output.status.code().unwrap_or(-1), String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -565,7 +1319,11 @@ fn write_tree(folder: &Path, tree: &Tree) {
 /// Makes a repository with the base tree in one commit. The folder `repo` has the repository.
 fn setup() -> common::TestDir {
     // The MIR driver is a separate binary of the workspace.
-    let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
+    let status = Command::new("cargo")
+        .current_dir(workspace_root())
+        .args(["build", "-q", "-p", "semilla-mir"])
+        .status()
+        .unwrap();
     assert!(status.success(), "build the MIR driver");
     let dir = common::TestDir::new();
     let repo = &dir.path().join("repo");
@@ -578,7 +1336,15 @@ fn setup() -> common::TestDir {
 
 /// The count of the changed lines of the work tree: the added lines and the removed lines.
 fn changed_lines(repo: &Path) -> usize {
-    git(repo, &["diff", "--numstat"]).lines().flat_map(|line| line.split_whitespace().take(2).map(|count| count.parse::<usize>().unwrap()).collect::<Vec<_>>()).sum()
+    git(repo, &["diff", "--numstat"])
+        .lines()
+        .flat_map(|line| {
+            line.split_whitespace()
+                .take(2)
+                .map(|count| count.parse::<usize>().unwrap())
+                .collect::<Vec<_>>()
+        })
+        .sum()
 }
 
 /// One fact line of the output: `◆ f1 derived: TEXT [category · compare]`.
@@ -593,18 +1359,26 @@ struct Fact {
 fn facts(output: &str) -> Vec<Fact> {
     let mut facts = Vec::new();
     for line in output.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("◆ f") else { continue };
+        let Some(rest) = line.trim_start().strip_prefix("◆ f") else {
+            continue;
+        };
         let (_, rest) = rest.split_once(": ").expect("a fact line has its source and its text");
         let (text, class) = rest.rsplit_once(" [").expect("a fact line has its category");
         let (category, compare) = class.trim_end_matches(']').split_once(" · ").expect("a fact line has its compare result");
-        facts.push(Fact { text: text.to_string(), category: category.to_string(), compare: compare.to_string() });
+        facts.push(Fact {
+            text: text.to_string(),
+            category: category.to_string(),
+            compare: compare.to_string(),
+        });
     }
     facts
 }
 
 impl Expect {
     fn fits(&self, fact: &Fact) -> bool {
-        fact.category == self.category && (self.compare.is_empty() || fact.compare == self.compare) && self.has.iter().all(|text| fact.text.contains(text.as_str()))
+        fact.category == self.category
+            && (self.compare.is_empty() || fact.compare == self.compare)
+            && self.has.iter().all(|text| fact.text.contains(text.as_str()))
     }
 }
 
@@ -616,7 +1390,10 @@ fn accept(repo: &Path, intent: &str) -> (usize, String) {
         return (1, output);
     }
     assert_eq!(code, 1, "{output}");
-    let line = output.lines().find_map(|line| line.strip_prefix("run again: ")).unwrap_or_else(|| panic!("a rejected step prints the next command:\n{output}"));
+    let line = output
+        .lines()
+        .find_map(|line| line.strip_prefix("run again: "))
+        .unwrap_or_else(|| panic!("a rejected step prints the next command:\n{output}"));
     let (code, output) = shell(repo, &line.replace("<why>", "the test gives this reason"));
     assert_eq!(code, 0, "the second run must pass:\n{output}");
     (2, output)
@@ -631,11 +1408,20 @@ fn check_step(repo: &Path, changes: &[Change]) -> (usize, Vec<Fact>) {
     for change in changes {
         for expect in &change.facts {
             let count = facts.iter().filter(|fact| expect.fits(fact)).count();
-            assert_eq!(count, 1, "the change \"{}\" needs one fact [{} · {}] with {:?}:\n{output}", change.name, expect.category, expect.compare, expect.has);
+            assert_eq!(
+                count, 1,
+                "the change \"{}\" needs one fact [{} · {}] with {:?}:\n{output}",
+                change.name, expect.category, expect.compare, expect.has
+            );
         }
     }
     // The output is small: at most two facts for each change, and no very long line.
-    assert!(facts.len() <= 2 * changes.len(), "{} facts for {} changes:\n{output}", facts.len(), changes.len());
+    assert!(
+        facts.len() <= 2 * changes.len(),
+        "{} facts for {} changes:\n{output}",
+        facts.len(),
+        changes.len()
+    );
     let longest = output.lines().map(|line| line.chars().count()).max().unwrap_or(0);
     // Design 38.5: no line of the text output has more than 500 characters.
     assert!(longest <= 500, "a line has {longest} characters:\n{output}");
@@ -644,22 +1430,32 @@ fn check_step(repo: &Path, changes: &[Change]) -> (usize, Vec<Fact>) {
 
 #[test]
 fn the_generator_gives_the_same_tree_for_the_same_seed() {
-    let (base, (changed, changes)) = (base_tree(), changed_tree());
+    let (base, (new_tree, changes)) = (base_tree(), changed_tree());
     assert_eq!(base, base_tree());
-    assert_eq!(changed, changed_tree().0);
+    assert_eq!(new_tree, changed_tree().0);
     assert_eq!(base.len(), 4 + MODULES.len());
     let lines = |tree: &Tree| tree.values().map(|text| text.lines().count()).sum::<usize>();
     assert!((2500..=3100).contains(&lines(&base)), "{}", lines(&base));
     // The list has each kind of change that the test needs.
     let count = |start: &str| changes.iter().filter(|change| change.name.starts_with(start)).count();
-    assert!(count("rename") >= 3 && count("move") >= 2 && count("body edit") >= 6 && count("add") >= 5 && count("remove") >= 3, "{:?}", changes.iter().map(|change| change.name).collect::<Vec<_>>());
-    assert!(count("declaration") >= 4 && count("docs") >= 5 && count("import") >= 3 && count("manifest") >= 1 && count("a type gets a generic parameter") == 1);
+    assert!(
+        count("rename") >= 3 && count("move") >= 2 && count("body edit") >= 6 && count("add") >= 5 && count("remove") >= 3,
+        "{:?}",
+        changes.iter().map(|change| change.name).collect::<Vec<_>>()
+    );
+    assert!(
+        count("declaration") >= 4
+            && count("docs") >= 5
+            && count("import") >= 3
+            && count("manifest") >= 1
+            && count("a type gets a generic parameter") == 1
+    );
     // A different seed gives a different tree: the seed is in use.
-    assert!(Numbers::of(0, 0).next() != Numbers(SEED ^ 1).next());
+    assert_ne!(Numbers::of(0, 0).next(), Numbers(SEED ^ 1).next());
     // A developer can look at the trees: `SEMILLA_LARGE_DUMP=<folder>` writes them.
     if let Ok(folder) = std::env::var("SEMILLA_LARGE_DUMP") {
         write_tree(&Path::new(&folder).join("base"), &base);
-        write_tree(&Path::new(&folder).join("changed"), &changed);
+        write_tree(&Path::new(&folder).join("changed"), &new_tree);
         write_tree(&Path::new(&folder).join("one-file"), &one_file_tree().0);
     }
 }
@@ -677,8 +1473,20 @@ fn a_step_of_pr_size_is_accepted_and_each_change_has_its_fact() {
     let (runs, facts) = check_step(repo, &changes);
     assert!(runs <= 2);
     // A rename or a move is one identity fact. It does not show as a removed and an added item.
-    for name in ["ledger_step0", "ledger_first_step", "StockRecord", "StockEntry", "count_above", "count_over", "route_step1", "audit_holder_use"] {
-        let wrong: Vec<&Fact> = facts.iter().filter(|fact| ["added", "removed"].contains(&fact.category.as_str()) && fact.text.contains(name)).collect();
+    for name in [
+        "ledger_step0",
+        "ledger_first_step",
+        "StockRecord",
+        "StockEntry",
+        "count_above",
+        "count_over",
+        "route_step1",
+        "audit_holder_use",
+    ] {
+        let wrong: Vec<&Fact> = facts
+            .iter()
+            .filter(|fact| ["added", "removed"].contains(&fact.category.as_str()) && fact.text.contains(name))
+            .collect();
         assert!(wrong.is_empty(), "{wrong:?}");
     }
     // A method with the name of the renamed method in a different type has no fact (design
@@ -687,7 +1495,11 @@ fn a_step_of_pr_size_is_accepted_and_each_change_has_its_fact() {
     // The time of the step with a cold cache, on a machine with other work.
     let time = start.elapsed().as_secs();
     assert!(time < 120, "the step needs {time} s");
-    println!("{lines} changed lines, {} changes, {} facts, {runs} run(s), {time} s", changes.len(), facts.len());
+    println!(
+        "{lines} changed lines, {} changes, {} facts, {runs} run(s), {time} s",
+        changes.len(),
+        facts.len()
+    );
 }
 
 #[test]
@@ -701,7 +1513,12 @@ fn a_derived_body_of_a_renamed_type_goes_to_the_rename() {
     write_tree(repo, &tree);
     let (code, output) = semilla(repo, &["step", "rename a type"]);
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("renamed `depot::stock::StockRecord` → `depot::stock::StockEntry` [rename · code different]\n      ! the compiled code changes: <depot::stock::StockEntry as std::fmt::Debug>::fmt\n"), "{output}");
+    assert!(
+        output.contains(
+            "renamed `depot::stock::StockRecord` → `depot::stock::StockEntry` [rename · code different]\n      ! the compiled code changes: <depot::stock::StockEntry as std::fmt::Debug>::fmt\n"
+        ),
+        "{output}"
+    );
     assert!(!output.contains("indirect"), "{output}");
 
     // A new package version changes the hash in each target name. The bodies stay equal.
@@ -711,7 +1528,10 @@ fn a_derived_body_of_a_renamed_type_goes_to_the_rename() {
     write_tree(repo, &tree);
     let (code, output) = semilla(repo, &["step", "a new version"]);
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("depot/Cargo.toml: package.version \"0.1.0\" → \"0.2.0\" [manifest · no code]") && !output.contains("spotlight"), "{output}");
+    assert!(
+        output.contains("depot/Cargo.toml: package.version \"0.1.0\" → \"0.2.0\" [manifest · no code]") && !output.contains("spotlight"),
+        "{output}"
+    );
 }
 
 #[test]
@@ -750,7 +1570,12 @@ fn check_needles(part: usize) {
     let plain = step(repo);
     let needles = needles();
     assert!(needles.len() >= 12);
-    for needle in needles.iter().enumerate().filter(|(index, _)| index % 3 == part).map(|(_, needle)| needle) {
+    for needle in needles
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % 3 == part)
+        .map(|(_, needle)| needle)
+    {
         let path = file(needle.module);
         let mut with = tree.clone();
         replace_one(&mut with, &path, &needle.from, &needle.to);
@@ -760,11 +1585,28 @@ fn check_needles(part: usize) {
 
         let new: Vec<&Fact> = found.difference(&plain).collect();
         let gone: Vec<&Fact> = plain.difference(&found).collect();
-        assert!(new.iter().any(|fact| fact.text.contains(needle.shows) && fact.compare == "code different"), "the needle in {} needs a fact with `{}`:\nnew: {new:#?}\ngone: {gone:#?}", needle.name, needle.shows);
+        assert!(
+            new.iter()
+                .any(|fact| fact.text.contains(needle.shows) && fact.compare == "code different"),
+            "the needle in {} needs a fact with `{}`:\nnew: {new:#?}\ngone: {gone:#?}",
+            needle.name,
+            needle.shows
+        );
         for fact in new.iter().chain(&gone) {
-            assert!(fact.text.contains(needle.item), "the needle in {} changes a fact of a different item:\nnew: {new:#?}\ngone: {gone:#?}", needle.name);
+            assert!(
+                fact.text.contains(needle.item),
+                "the needle in {} changes a fact of a different item:\nnew: {new:#?}\ngone: {gone:#?}",
+                needle.name
+            );
         }
-        println!("the needle in {}: {}", needle.name, new.iter().map(|fact| format!("{} [{} · {}]", fact.text, fact.category, fact.compare)).collect::<Vec<_>>().join(" | "));
+        println!(
+            "the needle in {}: {}",
+            needle.name,
+            new.iter()
+                .map(|fact| format!("{} [{} · {}]", fact.text, fact.category, fact.compare))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
     }
     let time = start.elapsed().as_secs();
     assert!(time < 240, "the needles of part {part} need {time} s");

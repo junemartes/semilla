@@ -8,7 +8,7 @@ use semilla_core::{Category, Claim, ClaimResult, Group, Role, Step, Subgroup, op
 use crate::{SourcePair, UiData, review};
 
 /// The ID of a group for steps that no group contains.
-pub const UNGROUPED: &str = "ungrouped";
+pub(crate) const UNGROUPED: &str = "ungrouped";
 
 /// A subgroup with its ID. The ID is `Subgroup.id` when it is not empty. Else it is
 /// `<group>:<n>`, where `n` is the position of the subgroup in the group, in the order of the
@@ -43,22 +43,98 @@ pub struct Ctx {
     pub tree_index: HashMap<String, Vec<usize>>,
 }
 
+/// The groups with the synthetic group, and the group of each step.
+struct GroupLookup {
+    groups: Vec<Group>,
+    step_group: HashMap<usize, String>,
+    synthetic_groups: Vec<String>,
+}
+
+/// The subgroups with the synthetic subgroups, and the subgroup of each claim.
+struct SubgroupLookup {
+    subgroups: Vec<SubgroupRef>,
+    claim_subgroup: HashMap<String, String>,
+}
+
+/// The call edges in the two directions.
+struct CallLookup {
+    /// Caller -> callees.
+    callees: BTreeMap<String, Vec<String>>,
+    /// Callee -> callers.
+    callers: BTreeMap<String, Vec<String>>,
+}
+
 impl Ctx {
+    #[must_use]
     pub fn new(data: UiData) -> Ctx {
+        let results = Self::claim_results(&data);
+        let claim_step = Self::claim_steps(&data);
+        let GroupLookup {
+            groups,
+            step_group,
+            synthetic_groups,
+        } = Self::group_lookup(&data);
+        let SubgroupLookup { subgroups, claim_subgroup } = Self::subgroup_lookup(&data, &groups);
+
+        let graph_index = data
+            .graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id.clone(), index))
+            .collect();
+        let calls = Self::call_lookup(&data);
+
+        let mut tree_index = HashMap::new();
+        index_tree(&data.tree, &mut Vec::new(), &mut tree_index);
+
+        let mut ctx = Ctx {
+            data,
+            groups,
+            synthetic_groups,
+            subgroups,
+            results,
+            claim_step,
+            step_group,
+            claim_subgroup,
+            claim_hashes: HashMap::new(),
+            graph_index,
+            callees: calls.callees,
+            callers: calls.callers,
+            tree_index,
+        };
+        let hashes = ctx
+            .all_claims()
+            .map(|(_, claim)| (claim.id.clone(), review::claim_hash(&ctx, claim)))
+            .collect();
+        ctx.claim_hashes = hashes;
+        ctx
+    }
+
+    /// The result of each claim, by claim ID. A later result for the same claim wins.
+    fn claim_results(data: &UiData) -> HashMap<String, ClaimResult> {
         let mut results = HashMap::new();
         for step in &data.report.steps {
             for result in &step.claims {
                 results.insert(result.claim.clone(), result.clone());
             }
         }
+        results
+    }
+
+    /// The step index of each claim, by claim ID.
+    fn claim_steps(data: &UiData) -> HashMap<String, usize> {
         let mut claim_step = HashMap::new();
         for step in &data.changeset.steps {
             for claim in &step.claims {
                 claim_step.insert(claim.id.clone(), step.index);
             }
         }
+        claim_step
+    }
 
-        // Groups. Steps without a group go into a synthetic group.
+    /// The groups. Steps without a group go into a synthetic group.
+    fn group_lookup(data: &UiData) -> GroupLookup {
         let mut groups = data.changeset.groups.clone();
         let mut step_group = HashMap::new();
         for group in &groups {
@@ -66,8 +142,13 @@ impl Ctx {
                 step_group.entry(*step).or_insert_with(|| group.id.clone());
             }
         }
-        let loose: Vec<usize> =
-            data.changeset.steps.iter().map(|step| step.index).filter(|index| !step_group.contains_key(index)).collect();
+        let loose: Vec<usize> = data
+            .changeset
+            .steps
+            .iter()
+            .map(|step| step.index)
+            .filter(|index| !step_group.contains_key(index))
+            .collect();
         let mut synthetic_groups = Vec::new();
         if !loose.is_empty() {
             for index in &loose {
@@ -82,9 +163,16 @@ impl Ctx {
             });
             synthetic_groups.push(UNGROUPED.to_string());
         }
+        GroupLookup {
+            groups,
+            step_group,
+            synthetic_groups,
+        }
+    }
 
-        // Subgroups. Each claim goes into its first subgroup. Claims without a subgroup go
-        // into a synthetic subgroup of their group.
+    /// The subgroups. Each claim goes into its first subgroup. Claims without a subgroup go
+    /// into a synthetic subgroup of their group.
+    fn subgroup_lookup(data: &UiData, groups: &[Group]) -> SubgroupLookup {
         let mut subgroups = Vec::new();
         let mut claim_subgroup = HashMap::new();
         let mut counters: HashMap<String, usize> = HashMap::new();
@@ -93,9 +181,13 @@ impl Ctx {
             let counter = counters.entry(subgroup.group.clone()).or_insert(0);
             let fallback = format!("{}:{}", subgroup.group, counter);
             *counter += 1;
-            // The ID of the data, if it has one. Old data has no ID: then `<group>:<n>`.
+            // The ID of the data, if it has one. Data without an ID gets `<group>:<n>`.
             // A second subgroup with the same ID also gets the fallback.
-            let mut id = if subgroup.id.is_empty() || used.contains(&subgroup.id) { fallback } else { subgroup.id.clone() };
+            let mut id = if subgroup.id.is_empty() || used.contains(&subgroup.id) {
+                fallback
+            } else {
+                subgroup.id.clone()
+            };
             while used.contains(&id) {
                 id.push('~');
             }
@@ -103,9 +195,13 @@ impl Ctx {
             for claim in &subgroup.claims {
                 claim_subgroup.entry(claim.clone()).or_insert_with(|| id.clone());
             }
-            subgroups.push(SubgroupRef { id, subgroup: subgroup.clone(), synthetic: false });
+            subgroups.push(SubgroupRef {
+                id,
+                subgroup: subgroup.clone(),
+                synthetic: false,
+            });
         }
-        for group in &groups {
+        for group in groups {
             let loose: Vec<String> = group
                 .steps
                 .iter()
@@ -140,62 +236,55 @@ impl Ctx {
                 synthetic: true,
             });
         }
+        SubgroupLookup { subgroups, claim_subgroup }
+    }
 
-        let graph_index = data.graph.nodes.iter().enumerate().map(|(index, node)| (node.id.clone(), index)).collect();
-        let mut callees: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut callers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    /// The call edges in the two directions, each list in edge order without duplicates.
+    fn call_lookup(data: &UiData) -> CallLookup {
+        let mut out_edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut in_edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for edge in data.graph.edges.iter().filter(|edge| edge.kind == GraphEdgeKind::Call) {
-            let out = callees.entry(edge.from.clone()).or_default();
+            let out = out_edges.entry(edge.from.clone()).or_default();
             if !out.contains(&edge.to) {
                 out.push(edge.to.clone());
             }
-            let into = callers.entry(edge.to.clone()).or_default();
+            let into = in_edges.entry(edge.to.clone()).or_default();
             if !into.contains(&edge.from) {
                 into.push(edge.from.clone());
             }
         }
-
-        let mut tree_index = HashMap::new();
-        index_tree(&data.tree, &mut Vec::new(), &mut tree_index);
-
-        let mut ctx = Ctx {
-            data,
-            groups,
-            synthetic_groups,
-            subgroups,
-            results,
-            claim_step,
-            step_group,
-            claim_subgroup,
-            claim_hashes: HashMap::new(),
-            graph_index,
-            callees,
-            callers,
-            tree_index,
-        };
-        let hashes = ctx.all_claims().map(|(_, claim)| (claim.id.clone(), review::claim_hash(&ctx, claim))).collect();
-        ctx.claim_hashes = hashes;
-        ctx
+        CallLookup {
+            callees: out_edges,
+            callers: in_edges,
+        }
     }
 
     /// All claims with their steps, in step order.
     pub fn all_claims(&self) -> impl Iterator<Item = (&Step, &Claim)> {
-        self.data.changeset.steps.iter().flat_map(|step| step.claims.iter().map(move |claim| (step, claim)))
+        self.data
+            .changeset
+            .steps
+            .iter()
+            .flat_map(|step| step.claims.iter().map(move |claim| (step, claim)))
     }
 
+    #[must_use]
     pub fn claim(&self, id: &str) -> Option<&Claim> {
         self.data.changeset.claim(id).map(|(_, claim)| claim)
     }
 
+    #[must_use]
     pub fn group(&self, id: &str) -> Option<&Group> {
         self.groups.iter().find(|group| group.id == id)
     }
 
+    #[must_use]
     pub fn subgroup(&self, id: &str) -> Option<&SubgroupRef> {
         self.subgroups.iter().find(|subgroup| subgroup.id == id)
     }
 
     /// The claim IDs of a group, in step order.
+    #[must_use]
     pub fn group_claims(&self, group: &str) -> Vec<String> {
         self.all_claims()
             .filter(|(step, _)| self.step_group.get(&step.index).map(String::as_str) == Some(group))
@@ -211,20 +300,30 @@ impl Ctx {
     /// The category of a claim (design 35). The verifier result has priority. A verified claim
     /// with no category in its result gets the category of the rule table. Other claims have
     /// no category.
+    #[must_use]
     pub fn claim_category(&self, claim: &Claim) -> Option<Category> {
         let result = self.results.get(&claim.id)?;
-        result.category.or_else(|| if result.status.is_verified() { ops::op(&claim.op).and_then(|info| info.category) } else { None })
+        result.category.or_else(|| {
+            if result.status.is_verified() {
+                ops::op(&claim.op).and_then(|info| info.category)
+            } else {
+                None
+            }
+        })
     }
 
     /// True if the claim is verified.
+    #[must_use]
     pub fn is_verified(&self, claim: &Claim) -> bool {
         self.results.get(&claim.id).is_some_and(|result| result.status.is_verified())
     }
 
+    #[must_use]
     pub fn graph_node(&self, id: &str) -> Option<&GraphNode> {
         self.graph_index.get(id).map(|index| &self.data.graph.nodes[*index])
     }
 
+    #[must_use]
     pub fn tree_node(&self, id: &str) -> Option<&TreeNode> {
         let path = self.tree_index.get(id)?;
         let mut node = &self.data.tree;
@@ -235,6 +334,7 @@ impl Ctx {
     }
 
     /// The parent of a tree node.
+    #[must_use]
     pub fn tree_parent(&self, id: &str) -> Option<&TreeNode> {
         let path = self.tree_index.get(id)?;
         let (_, parent) = path.split_last()?;
@@ -246,6 +346,7 @@ impl Ctx {
     }
 
     /// The source pair of a node: the exact anchor text, then the item of the anchor.
+    #[must_use]
     pub fn source(&self, id: &str) -> Option<(&str, &SourcePair)> {
         if let Some((key, pair)) = self.data.sources.get_key_value(id) {
             return Some((key.as_str(), pair));
@@ -256,19 +357,30 @@ impl Ctx {
 
     /// The flow view that shows a node: the frame of the function, then a frame that contains
     /// the anchor, then a frame with a node at the anchor.
+    #[must_use]
     pub fn flow_for(&self, id: &str) -> Option<&FlowGraph> {
         let flows = &self.data.flows;
         flows
             .iter()
             .find(|flow| flow.function == id)
-            .or_else(|| flows.iter().filter(|flow| id.starts_with(&format!("{}/", flow.function))).max_by_key(|flow| flow.function.len()))
+            .or_else(|| {
+                flows
+                    .iter()
+                    .filter(|flow| id.starts_with(&format!("{}/", flow.function)))
+                    .max_by_key(|flow| flow.function.len())
+            })
             .or_else(|| {
                 // A stub points to code outside its frame, so it does not count.
-                flows.iter().find(|flow| flow.nodes.iter().any(|node| node.kind != FlowKind::Stub && node.anchor.as_deref() == Some(id)))
+                flows.iter().find(|flow| {
+                    flow.nodes
+                        .iter()
+                        .any(|node| node.kind != FlowKind::Stub && node.anchor.as_deref() == Some(id))
+                })
             })
     }
 
     /// The function that has a flow view for this node, if one exists.
+    #[must_use]
     pub fn flow_function(&self, id: &str) -> Option<String> {
         self.flow_for(id).map(|flow| flow.function.clone())
     }
@@ -276,17 +388,23 @@ impl Ctx {
     /// The file of an item: the file of its graph node, or of the nearest ancestor with a file.
     /// An item that is not in the graph (for example the old name of a rename) uses the nearest
     /// prefix of its path that is in the graph.
+    #[must_use]
     pub fn item_file(&self, item: &str) -> Option<String> {
         let mut path = item_of(item);
         loop {
             if self.graph_node(path).is_some() {
-                return self.graph_ancestors(path).iter().rev().find_map(|id| self.graph_node(id).and_then(|node| node.file.clone()));
+                return self
+                    .graph_ancestors(path)
+                    .iter()
+                    .rev()
+                    .find_map(|id| self.graph_node(id).and_then(|node| node.file.clone()));
             }
             path = path.rsplit_once("::")?.0;
         }
     }
 
     /// The breadcrumb of graph node IDs, from the crate to the node.
+    #[must_use]
     pub fn graph_ancestors(&self, id: &str) -> Vec<String> {
         let mut chain = Vec::new();
         let mut current = self.graph_node(id);
@@ -312,23 +430,26 @@ fn index_tree(node: &TreeNode, path: &mut Vec<usize>, out: &mut HashMap<String, 
 }
 
 /// The item part of an anchor text: the text before the first `/`.
-pub fn item_of(id: &str) -> &str {
+pub(crate) fn item_of(id: &str) -> &str {
     id.split('/').next().unwrap_or(id)
 }
 
 /// The last segment of an item path, for example `total` for `cart::Cart::total`.
-pub fn last_segment(id: &str) -> &str {
+pub(crate) fn last_segment(id: &str) -> &str {
     item_of(id).rsplit("::").next().unwrap_or(id)
 }
 
 /// True if the node `id` contains the anchor text `anchor`: the same node, a node inside the
 /// item, or an item inside the module or crate.
-pub fn contains(id: &str, anchor: &str) -> bool {
-    anchor == id || anchor.strip_prefix(id).is_some_and(|rest| rest.starts_with('/') || (!id.contains('/') && rest.starts_with("::")))
+pub(crate) fn contains(id: &str, anchor: &str) -> bool {
+    anchor == id
+        || anchor
+            .strip_prefix(id)
+            .is_some_and(|rest| rest.starts_with('/') || (!id.contains('/') && rest.starts_with("::")))
 }
 
 /// The display label of a role.
-pub fn role_label(role: Role) -> &'static str {
+pub(crate) fn role_label(role: Role) -> &'static str {
     match role {
         Role::Interface => "Interface",
         Role::Core => "Core logic",
@@ -343,6 +464,6 @@ pub fn role_label(role: Role) -> &'static str {
 
 /// The label of the category of a claim in a badge (design 35). A claim with no category
 /// shows "unknown".
-pub fn category_label(category: Option<Category>) -> &'static str {
+pub(crate) fn category_label(category: Option<Category>) -> &'static str {
     category.map_or("unknown", Category::name)
 }

@@ -11,14 +11,14 @@ use std::time::Duration;
 
 /// A temporary folder. The drop waits for each background worker of the folder, then it
 /// removes the folder.
-pub struct TestDir(Option<tempfile::TempDir>);
+pub(crate) struct TestDir(Option<tempfile::TempDir>);
 
 impl TestDir {
-    pub fn new() -> TestDir {
+    pub(crate) fn new() -> TestDir {
         TestDir(Some(tempfile::tempdir().unwrap()))
     }
 
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.0.as_ref().unwrap().path()
     }
 }

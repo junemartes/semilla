@@ -49,12 +49,12 @@ fn owner(path: &str) -> &str {
         let _ = field;
         return owner;
     }
-    path.rsplit_once("::").map(|(parent, _)| parent).unwrap_or("")
+    path.rsplit_once("::").map_or("", |(parent, _)| parent)
 }
 
 fn name(path: &str) -> &str {
     let last = path.rsplit("::").next().unwrap_or(path);
-    last.rsplit_once('.').map(|(_, field)| field).unwrap_or(last)
+    last.rsplit_once('.').map_or(last, |(_, field)| field)
 }
 
 fn kind_name(kind: ItemKind) -> &'static str {
@@ -79,11 +79,30 @@ fn kind_name(kind: ItemKind) -> &'static str {
 /// `open` (batch 5x, part B): the new modules that are not a renamed or moved module. An item of
 /// such a module can be a moved item, so it is a candidate.
 fn only_in<'a>(side: &'a Workspace, other: &Workspace, open: &BTreeSet<&str>) -> Vec<(&'a str, ItemKind)> {
-    let paths: BTreeSet<&str> = side.items.keys().filter(|path| !other.items.contains_key(*path)).map(String::as_str).collect();
+    let paths: BTreeSet<&str> = side
+        .items
+        .keys()
+        .filter(|path| !other.items.contains_key(*path))
+        .map(String::as_str)
+        .collect();
     side.items
         .values()
         .filter(|item| paths.contains(item.path.as_str()))
-        .filter(|item| matches!(item.kind, ItemKind::Fn | ItemKind::Struct | ItemKind::Enum | ItemKind::Trait | ItemKind::Const | ItemKind::Static | ItemKind::Type | ItemKind::Mod | ItemKind::Field | ItemKind::Variant))
+        .filter(|item| {
+            matches!(
+                item.kind,
+                ItemKind::Fn
+                    | ItemKind::Struct
+                    | ItemKind::Enum
+                    | ItemKind::Trait
+                    | ItemKind::Const
+                    | ItemKind::Static
+                    | ItemKind::Type
+                    | ItemKind::Mod
+                    | ItemKind::Field
+                    | ItemKind::Variant
+            )
+        })
         // A tuple field has no name to change.
         .filter(|item| !(item.kind == ItemKind::Field && name(&item.path).chars().all(|c| c.is_ascii_digit())))
         .filter(|item| {
@@ -116,7 +135,9 @@ fn without_docs(text: &str) -> String {
             escaped = !escaped && *c == '\\';
             quote
         });
-        let Some(tail) = end.and_then(|(end, _)| literal[end + 1..].strip_prefix(']')) else { break };
+        let Some(tail) = end.and_then(|(end, _)| literal[end + 1..].strip_prefix(']')) else {
+            break;
+        };
         out.push_str(&rest[..at]);
         rest = tail;
     }
@@ -166,7 +187,9 @@ fn without_free_parts(text: &str) -> Vec<String> {
         match tokens[at] {
             "#" if tokens.get(at + 1) == Some(&"[") => at = group_end(at + 1, "[", "]"),
             "#" if tokens.get(at + 1) == Some(&"!") && tokens.get(at + 2) == Some(&"[") => at = group_end(at + 2, "[", "]"),
-            "pub" if tokens.get(at + 1) == Some(&"(") && matches!(tokens.get(at + 2), Some(&"crate" | &"super" | &"self" | &"in")) => at = group_end(at + 1, "(", ")"),
+            "pub" if tokens.get(at + 1) == Some(&"(") && matches!(tokens.get(at + 2), Some(&"crate" | &"super" | &"self" | &"in")) => {
+                at = group_end(at + 1, "(", ")");
+            }
             "pub" => at += 1,
             token => {
                 out.push(token.to_string());
@@ -178,10 +201,15 @@ fn without_free_parts(text: &str) -> Vec<String> {
 }
 
 /// The similarity of two item texts, with the own name of each item as one token `$name`.
+// A token count is at most 4_000_000 here, so each cast to `f64` is exact.
+#[allow(clippy::cast_precision_loss)]
 fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
     let tokens = |item: &semilla_syntax::Item| -> Vec<String> {
         let own = name(&item.path);
-        without_free_parts(&without_docs(&item.text)).into_iter().map(|t| if t == own { "$name".to_string() } else { t }).collect()
+        without_free_parts(&without_docs(&item.text))
+            .into_iter()
+            .map(|t| if t == own { "$name".to_string() } else { t })
+            .collect()
     };
     let (x, y) = (tokens(a), tokens(b));
     if x.is_empty() || y.is_empty() || x.len() * y.len() > 4_000_000 {
@@ -191,7 +219,11 @@ fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
     for token in &x {
         let mut current = vec![0usize; y.len() + 1];
         for (j, other) in y.iter().enumerate() {
-            current[j + 1] = if token == other { previous[j] + 1 } else { current[j].max(previous[j + 1]) };
+            current[j + 1] = if token == other {
+                previous[j] + 1
+            } else {
+                current[j].max(previous[j + 1])
+            };
         }
         previous = current;
     }
@@ -206,7 +238,11 @@ pub fn candidates(before: &Workspace, after: &Workspace) -> (Vec<Candidate>, Vec
     let first = pairs_of(before, after, &removed, &added);
     // A new module that is not the new side of a pair: its items can be moved items (batch 5x,
     // part B). The check of the step decides if the module is a part of the move.
-    let open: BTreeSet<&str> = added.iter().filter(|(path, kind)| *kind == ItemKind::Mod && !first.0.iter().any(|pair| pair.new == *path)).map(|(path, _)| *path).collect();
+    let open: BTreeSet<&str> = added
+        .iter()
+        .filter(|(path, kind)| *kind == ItemKind::Mod && !first.0.iter().any(|pair| pair.new == *path))
+        .map(|(path, _)| *path)
+        .collect();
     if open.is_empty() {
         return first;
     }
@@ -228,8 +264,15 @@ fn pairs_of(before: &Workspace, after: &Workspace, removed: &[(&str, ItemKind)],
         let (r, a) = groups.get(&(kind_name(kind), owner(path))).copied().unwrap_or_default();
         let over = r > MAX_GROUP || a > MAX_GROUP;
         if over {
-            let place = if owner(path).is_empty() { "the crate root".to_string() } else { format!("`{}`", owner(path)) };
-            notes.insert(format!("{r} removed and {a} added {}(s) in {place}: Semilla derives no rename or move above {MAX_GROUP}, so the items show as removed and added", kind_name(kind)));
+            let place = if owner(path).is_empty() {
+                "the crate root".to_string()
+            } else {
+                format!("`{}`", owner(path))
+            };
+            notes.insert(format!(
+                "{r} removed and {a} added {}(s) in {place}: Semilla derives no rename or move above {MAX_GROUP}, so the items show as removed and added",
+                kind_name(kind)
+            ));
         }
         over
     };
@@ -259,7 +302,11 @@ fn pairs_of(before: &Workspace, after: &Workspace, removed: &[(&str, ItemKind)],
             if similarity(&before.items[*old], &after.items[*new]) < crate::PAIR_THRESHOLD {
                 continue;
             }
-            found.push(Candidate { old: old.to_string(), new: new.to_string(), op });
+            found.push(Candidate {
+                old: old.to_string(),
+                new: new.to_string(),
+                op,
+            });
         }
     }
     (found, notes.into_iter().collect())
@@ -268,7 +315,14 @@ fn pairs_of(before: &Workspace, after: &Workspace, removed: &[(&str, ItemKind)],
 /// The name maps: the matchings of the pairs with the most pairs (each entity in one pair at most).
 /// `None` when there are more than [`MAX_MAPS`].
 fn maps(pairs: &[Candidate]) -> Option<Vec<Vec<Candidate>>> {
-    fn walk(pairs: &[Candidate], at: usize, used: &mut BTreeSet<String>, current: &mut Vec<Candidate>, out: &mut Vec<Vec<Candidate>>, best: &mut usize) -> bool {
+    fn walk(
+        pairs: &[Candidate],
+        at: usize,
+        used: &mut BTreeSet<String>,
+        current: &mut Vec<Candidate>,
+        out: &mut Vec<Vec<Candidate>>,
+        best: &mut usize,
+    ) -> bool {
         if out.len() > MAX_MAPS * 4 {
             return false;
         }
@@ -314,10 +368,19 @@ fn claims_of(map: &[Candidate]) -> Vec<Claim> {
     map.iter()
         .enumerate()
         .map(|(index, pair)| {
-            let to = if pair.op == "rename" { name(&pair.new).to_string() } else { pair.new.clone() };
+            let to = if pair.op == "rename" {
+                name(&pair.new).to_string()
+            } else {
+                pair.new.clone()
+            };
             let mut args = serde_json::Map::new();
             args.insert("to".into(), serde_json::Value::String(to));
-            Claim { id: format!("derived-identity-{}", index + 1), op: pair.op.to_string(), at: Some(Anchor::item(&pair.old)), args }
+            Claim {
+                id: format!("derived-identity-{}", index + 1),
+                op: pair.op.to_string(),
+                at: Some(Anchor::item(&pair.old)),
+                args,
+            }
         })
         .collect()
 }
@@ -343,7 +406,7 @@ fn passes(outcome: &StepOutcome, claims: &[Claim]) -> Result<(), String> {
 }
 
 /// Tries the derived identity on the plain outcome of a step with no identity claim.
-pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut plain: StepOutcome) -> StepOutcome {
+pub fn derive(input: &StepInput, bodies: &(impl BodyOracle + ?Sized), exprs: &impl ExprOracle, mut plain: StepOutcome) -> StepOutcome {
     let (pairs, notes) = candidates(input.before, input.after);
     plain.report.notes.extend(notes);
     if pairs.is_empty() {
@@ -351,17 +414,27 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
     }
     plain.report.identity_candidates = true;
     let Some(mut maps) = maps(&pairs) else {
-        plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the rename or the move (the pairs have more than {MAX_MAPS} name maps)", pair_text(&pairs)));
+        plain.report.notes.push(format!(
+            "{} show(s) as removed and added: Semilla does not derive the rename or the move (the pairs have more than {MAX_MAPS} name maps)",
+            pair_text(&pairs)
+        ));
         return plain;
     };
     // Phase 1 has no MIR: the derivation waits for phase 2.
     if plain.bodies.is_empty() {
-        plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the derivation", pair_text(&maps[0])));
+        plain.report.notes.push(format!(
+            "a rename or a move is possible ({}): phase 2 tries the derivation",
+            pair_text(&maps[0])
+        ));
         return plain;
     }
     // The score of a map: the sum of the similar scores of its pairs. The map with the highest
     // score that passes the check gives the facts (design 36.1).
-    let score = |map: &[Candidate]| -> f64 { map.iter().map(|pair| similarity(&input.before.items[&pair.old], &input.after.items[&pair.new])).sum() };
+    let score = |map: &[Candidate]| -> f64 {
+        map.iter()
+            .map(|pair| similarity(&input.before.items[&pair.old], &input.after.items[&pair.new]))
+            .sum()
+    };
     let mut scored: Vec<(f64, Vec<Candidate>)> = maps.drain(..).map(|map| (score(&map), map)).collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut passed: Vec<(f64, Vec<Candidate>, Vec<Claim>, StepOutcome)> = Vec::new();
@@ -374,7 +447,17 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
         let mut step = input.step.clone();
         let claims = claims_of(map);
         step.claims.extend(claims.iter().cloned());
-        let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true);
+        let outcome = crate::verify_core(
+            &StepInput {
+                step: &step,
+                before: input.before,
+                after: input.after,
+            },
+            bodies,
+            exprs,
+            true,
+            true,
+        );
         match passes(&outcome, &claims) {
             Ok(()) => passed.push((*score, map.clone(), claims, outcome)),
             Err(reason) => failures.push((map.clone(), reason, outcome)),
@@ -383,14 +466,21 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
     // Maps with the same score: the map that leaves the smallest number of other facts wins
     // (a wrong map of two fields leaves a change of the member order).
     let left = |outcome: &StepOutcome| outcome.report.facts.len() + outcome.report.uncovered.len();
-    if let Some(least) = passed.iter().map(|(_, _, _, outcome)| left(outcome)).min() {
-        if passed.iter().filter(|(_, _, _, outcome)| left(outcome) == least).count() == 1 {
-            passed.retain(|(_, _, _, outcome)| left(outcome) == least);
-        }
+    if let Some(least) = passed.iter().map(|(_, _, _, outcome)| left(outcome)).min()
+        && passed.iter().filter(|(_, _, _, outcome)| left(outcome) == least).count() == 1
+    {
+        passed.retain(|(_, _, _, outcome)| left(outcome) == least);
     }
     if passed.len() > 1 {
-        let list = passed.iter().map(|(_, map, _, _)| format!("({})", pair_text(map))).collect::<Vec<_>>().join(" or ");
-        plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map has the same similar score and the same number of other facts: {list})", pair_text(&passed[0].1)));
+        let list = passed
+            .iter()
+            .map(|(_, map, _, _)| format!("({})", pair_text(map)))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        plain.report.notes.push(format!(
+            "{} show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map has the same similar score and the same number of other facts: {list})",
+            pair_text(&passed[0].1)
+        ));
         return plain;
     }
     let Some((_, map, claims, outcome)) = passed.pop() else {
@@ -398,50 +488,74 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
         // under the name map and shows each edit as a fact under the pair, so that a hidden
         // change (a changed literal) has its own fact (trial 3, A2).
         if let Some((map, _, failed)) = failures.first() {
-            let known: BTreeSet<String> = plain.report.facts.iter().map(|f| f.description.clone()).collect();
-            let mut extra = Vec::new();
-            for pair in map {
-                let inside = |item: &str| item == pair.new || item.starts_with(&format!("{}::", pair.new)) || item.starts_with(&format!("{}.", pair.new));
-                // Under the name map, each edit that is left inside the new item is a real
-                // difference: the map hides the forced edits of the name.
-                let changed = failed.bodies.iter().any(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. }));
-                for edit in failed.edits.iter().filter(|e| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved)) {
-                    let text = crate::edits::display_text(edit);
-                    if known.iter().any(|k| k.ends_with(&text)) {
-                        continue;
-                    }
-                    // A doc test is code (brief 5h, B1). Semilla does not compile it: the fact
-                    // has no compare, with the cause.
-                    let doc_test = edit.anchor().and_then(|anchor| crate::facts::doc_test_fact(&anchor.item, edit));
-                    extra.push(Fact {
-                        at: edit.anchor().cloned(),
-                        file: edit.file.clone(),
-                        part: "pair diff".into(),
-                        description: format!("`{}` differs from the removed `{}`: {text}", name(&pair.new), name(&pair.old)),
-                        status: "derived".into(),
-                        content: doc_test.as_ref().map(|(_, content)| content.clone()),
-                        category: if doc_test.is_some() { Category::Docs } else { edit_category(edit) },
-                        compare: if doc_test.is_some() { Compare::NoCompare } else if changed { Compare::CodeDifferent } else { Compare::CodeEqual },
-                        note: doc_test.as_ref().map(|_| format!("{} Semilla does not compile a doc test", crate::uncompiled::NO_COMPARE)),
-                        affected: if changed { vec![pair.new.clone()] } else { Vec::new() },
-                        ..Default::default()
-                    });
-                }
-            }
-            let start = plain.report.facts.len();
-            for (index, mut fact) in extra.into_iter().enumerate() {
-                fact.id = format!("f{}", start + index + 1);
-                plain.report.facts.push(fact);
-            }
+            add_pair_diffs(&mut plain.report, map, failed);
         }
         // The note gives the cause (design 36.1). The pair warning of the change set reads it.
         for (map, reason, _) in failures.iter().take(1) {
             let what = if map.iter().all(|c| c.op == "move-item") { "move" } else { "rename" };
-            plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the {what} ({reason})", pair_text(map)));
+            plain.report.notes.push(format!(
+                "{} show(s) as removed and added: Semilla does not derive the {what} ({reason})",
+                pair_text(map)
+            ));
         }
         return plain;
     };
     convert(input, &map, &claims, outcome)
+}
+
+/// Adds a fact for each edit inside the new item of each pair of a failed name map: under the
+/// name map, the edit is a real difference.
+fn add_pair_diffs(report: &mut semilla_core::StepReport, map: &[Candidate], failed: &StepOutcome) {
+    let known: BTreeSet<String> = report.facts.iter().map(|f| f.description.clone()).collect();
+    let mut extra = Vec::new();
+    for pair in map {
+        let inside = |item: &str| item == pair.new || item.starts_with(&format!("{}::", pair.new)) || item.starts_with(&format!("{}.", pair.new));
+        // Under the name map, each edit that is left inside the new item is a real
+        // difference: the map hides the forced edits of the name.
+        let changed = failed
+            .bodies
+            .iter()
+            .any(|b| inside(&b.name) && !matches!(b.status, crate::BodyStatus::Equal { .. }));
+        for edit in failed
+            .edits
+            .iter()
+            .filter(|e| e.anchor().is_some_and(|a| inside(&a.item)) && !matches!(e.kind, EditKind::ItemAdded | EditKind::ItemRemoved))
+        {
+            let text = crate::edits::display_text(edit);
+            if known.iter().any(|k| k.ends_with(&text)) {
+                continue;
+            }
+            // A doc test is code (brief 5h, B1). Semilla does not compile it: the fact
+            // has no compare, with the cause.
+            let doc_test = edit.anchor().and_then(|anchor| crate::facts::doc_test_fact(&anchor.item, edit));
+            extra.push(Fact {
+                at: edit.anchor().cloned(),
+                file: edit.file.clone(),
+                part: "pair diff".into(),
+                description: format!("`{}` differs from the removed `{}`: {text}", name(&pair.new), name(&pair.old)),
+                status: "derived".into(),
+                content: doc_test.as_ref().map(|(_, content)| content.clone()),
+                category: if doc_test.is_some() { Category::Docs } else { edit_category(edit) },
+                compare: if doc_test.is_some() {
+                    Compare::NoCompare
+                } else if changed {
+                    Compare::CodeDifferent
+                } else {
+                    Compare::CodeEqual
+                },
+                note: doc_test
+                    .as_ref()
+                    .map(|_| format!("{} Semilla does not compile a doc test", crate::uncompiled::NO_COMPARE)),
+                affected: if changed { vec![pair.new.clone()] } else { Vec::new() },
+                ..Default::default()
+            });
+        }
+    }
+    let start = report.facts.len();
+    for (index, mut fact) in extra.into_iter().enumerate() {
+        fact.id = format!("f{}", start + index + 1);
+        report.facts.push(fact);
+    }
 }
 
 /// The category of the fact for one difference of a pair, from the kind of the edit.
@@ -456,6 +570,71 @@ fn edit_category(edit: &semilla_syntax::Edit) -> Category {
     }
 }
 
+/// The count of the `use` lines that the identity of the claim `claim` explains (batch 6a, B1).
+/// They are no facts to read. The count is the larger of the removed lines and the added lines
+/// of each module.
+fn use_lines(edits: &[semilla_syntax::Edit], owners: &[Option<usize>], claim: usize) -> usize {
+    let mut lines: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for (edit, _) in edits
+        .iter()
+        .zip(owners)
+        .filter(|(edit, owner)| **owner == Some(claim) && (edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use")))
+    {
+        if let Some(anchor) = edit.before.as_ref().or(edit.after.as_ref()) {
+            let entry = lines.entry(owner(&anchor.item)).or_default();
+            if edit.before.is_some() {
+                entry.0 += 1;
+            } else {
+                entry.1 += 1;
+            }
+        }
+    }
+    lines.values().map(|(removed, added)| (*removed).max(*added)).sum()
+}
+
+/// The count of the `impl` blocks that move with the type (`checks::moved_impls`, design 36.1).
+fn moved_impls(renames: &semilla_syntax::Renames, pair: &Candidate) -> usize {
+    let start = format!("{}::impl ", owner(&pair.old));
+    let own = name(&pair.old);
+    renames
+        .items
+        .keys()
+        .filter(|_| pair.op == "move-item")
+        .filter_map(|old| old.strip_prefix(&start))
+        .filter(|tail| {
+            // The name of a block: `Name`, or `<Name as Trait>` (the trait can have a path).
+            let block = tail.rsplit_once('#').map_or(*tail, |(block, _)| block);
+            block == own
+                || (block.ends_with('>')
+                    && block
+                        .strip_prefix('<')
+                        .and_then(|rest| rest.strip_prefix(own))
+                        .is_some_and(|rest| rest.starts_with(" as ")))
+        })
+        .count()
+}
+
+/// A new name with a character outside ASCII can look the same as a different name (batch 5k,
+/// D7): the fact shows the escape form and needs a reason. The cause for the spotlight, if the
+/// new name has such a character that the old name does not have.
+fn non_ascii_cause(pair: &Candidate) -> Option<String> {
+    let old_names: Vec<String> = crate::facts::non_ascii_names(&pair.old).into_iter().map(|(_, name)| name).collect();
+    let mut odd: Vec<String> = Vec::new();
+    for (_, name) in crate::facts::non_ascii_names(&pair.new) {
+        if !old_names.contains(&name) && !odd.contains(&name) {
+            odd.push(name);
+        }
+    }
+    if odd.is_empty() {
+        return None;
+    }
+    let list: Vec<String> = odd
+        .iter()
+        .map(|name| format!("`{name}` (`{}`)", semilla_core::text::ascii_form(name).unwrap_or_default()))
+        .collect();
+    Some(format!("{}: {}", crate::facts::NON_ASCII, list.join(", ")))
+}
+
 /// Makes the results of the derived claims into facts. The edits and the bodies of each claim go
 /// to its fact.
 fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: StepOutcome) -> StepOutcome {
@@ -465,39 +644,12 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
     // A rename or a move changes the text of each body that has the name. Each such body gives
     // its conditions to the note of the first fact of the rename or the move (design 35).
     let body_index = crate::checks::BodyIndex::new(&outcome.bodies, input.after, input.before);
-    let mut note = crate::facts::stop_note(body_index.stopped_items(), &body_index, &Default::default());
+    let mut note = crate::facts::stop_note(body_index.stopped_items(), &body_index, &BTreeSet::default());
     for (index, (pair, claim)) in map.iter().zip(claims).enumerate() {
         let result = report.claims.iter().find(|r| r.claim == claim.id).cloned();
         let Some(result) = result else { continue };
-        // The `use` lines that the identity explains (batch 6a, B1). They are no facts to read.
-        // The count is the larger of the removed lines and the added lines of each module.
-        let mut lines: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
-        for (edit, _) in outcome.edits.iter().zip(&outcome.owners).filter(|(edit, owner)| **owner == Some(first + index) && (edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use"))) {
-            if let Some(anchor) = edit.before.as_ref().or(edit.after.as_ref()) {
-                let entry = lines.entry(owner(&anchor.item)).or_default();
-                if edit.before.is_some() {
-                    entry.0 += 1;
-                } else {
-                    entry.1 += 1;
-                }
-            }
-        }
-        let lines: usize = lines.values().map(|(removed, added)| (*removed).max(*added)).sum();
-        // The `impl` blocks that move with the type (`checks::moved_impls`, design 36.1).
-        let start = format!("{}::impl ", owner(&pair.old));
-        let own = name(&pair.old);
-        let impls = outcome
-            .renames
-            .items
-            .keys()
-            .filter(|_| pair.op == "move-item")
-            .filter_map(|old| old.strip_prefix(&start))
-            .filter(|tail| {
-                // The name of a block: `Name`, or `<Name as Trait>` (the trait can have a path).
-                let block = tail.rsplit_once('#').map_or(*tail, |(block, _)| block);
-                block == own || (block.ends_with('>') && block.strip_prefix('<').and_then(|rest| rest.strip_prefix(own)).is_some_and(|rest| rest.starts_with(" as ")))
-            })
-            .count();
+        let lines = use_lines(&outcome.edits, &outcome.owners, first + index);
+        let impls = moved_impls(&outcome.renames, pair);
         let with_lines = match (impls, lines) {
             (0, 0) => String::new(),
             (0, _) => format!(", with {lines} `use` line(s)"),
@@ -506,25 +658,18 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
         };
         let verb = if pair.op == "rename" { "renamed" } else { "moved" };
         let mut spotlight_why = outcome.identity_reason.clone().filter(|_| identity_facts.is_empty());
-        // A new name with a character outside ASCII can look the same as a different name
-        // (batch 5k, D7): the fact shows the escape form and needs a reason.
-        let old_names: Vec<String> = crate::facts::non_ascii_names(&pair.old).into_iter().map(|(_, name)| name).collect();
-        let mut odd: Vec<String> = Vec::new();
-        for (_, name) in crate::facts::non_ascii_names(&pair.new) {
-            if !old_names.contains(&name) && !odd.contains(&name) {
-                odd.push(name);
-            }
-        }
-        if !odd.is_empty() {
-            let list: Vec<String> = odd.iter().map(|name| format!("`{name}` (`{}`)", semilla_core::text::ascii_form(name).unwrap_or_default())).collect();
-            let cause = format!("{}: {}", crate::facts::NON_ASCII, list.join(", "));
+        if let Some(cause) = non_ascii_cause(pair) {
             spotlight_why = Some(match spotlight_why.take() {
                 Some(why) => format!("{why}; {cause}"),
                 None => cause,
             });
         }
         let function = |ws: &Workspace, path: &str| ws.items.get(path).is_some_and(|item| item.kind == ItemKind::Fn && item.body.is_some());
-        let uncompiled = body_index.available && function(input.before, &pair.old) && function(input.after, &pair.new) && !body_index.has_body(&pair.new) && !body_index.has_body(&pair.old);
+        let uncompiled = body_index.available
+            && function(input.before, &pair.old)
+            && function(input.after, &pair.new)
+            && !body_index.has_body(&pair.new)
+            && !body_index.has_body(&pair.old);
         if uncompiled {
             let text = format!("{} no checked configuration compiles `{}`", crate::uncompiled::NO_COMPARE, pair.new);
             note = Some(match note.take() {
@@ -541,7 +686,13 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
             category: if pair.op == "rename" { Category::Rename } else { Category::Move },
             // The bodies of the fact are the derived bodies that show the name (design 35). A
             // function that no checked configuration compiles has no compare (design 38.10).
-            compare: if !result.affected.is_empty() { Compare::CodeDifferent } else if uncompiled { Compare::NoCompare } else { Compare::CodeEqual },
+            compare: if !result.affected.is_empty() {
+                Compare::CodeDifferent
+            } else if uncompiled {
+                Compare::NoCompare
+            } else {
+                Compare::CodeEqual
+            },
             affected: result.affected.clone(),
             spotlight: spotlight_why.is_some(),
             spotlight_why,
@@ -586,7 +737,11 @@ fn module_of<'a>(path: &'a str, workspace: &Workspace) -> Option<&'a str> {
 fn use_names(tree: &UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
     let with = |ident: &str| -> Vec<String> {
         // `a::b::{self}` is `a::b`.
-        if ident == "self" { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() }
+        if ident == "self" {
+            prefix.to_vec()
+        } else {
+            prefix.iter().cloned().chain([ident.to_string()]).collect()
+        }
     };
     match tree {
         UseTree::Path(ident, tree) => use_names(tree, &with(ident), out),
@@ -608,15 +763,23 @@ fn use_names(tree: &UseTree, prefix: &[String], out: &mut Vec<(String, Vec<Strin
 /// full path). `None` when these rules do not give one item of the workspace.
 fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> Option<String> {
     let direct = format!("{module}::{name}");
-    if workspace.items.get(&direct).is_some_and(|item| !matches!(item.kind, ItemKind::Use | ItemKind::Impl)) {
+    if workspace
+        .items
+        .get(&direct)
+        .is_some_and(|item| !matches!(item.kind, ItemKind::Use | ItemKind::Impl))
+    {
         return Some(direct);
     }
     if depth == 0 {
         return None;
     }
     let mut found: Vec<Vec<String>> = Vec::new();
-    for import in workspace.items.values().filter(|item| item.kind == ItemKind::Use && owner(&item.path) == module) {
-        let Some(parsed) = semilla_syntax::rs::parse_use(&import.source) else { return None };
+    for import in workspace
+        .items
+        .values()
+        .filter(|item| item.kind == ItemKind::Use && owner(&item.path) == module)
+    {
+        let parsed = semilla_syntax::rs::parse_use(&import.source)?;
         let mut names = Vec::new();
         use_names(&parsed.tree, &[], &mut names);
         found.extend(names.into_iter().filter(|(local, _)| local == name).map(|(_, path)| path));
@@ -630,13 +793,24 @@ fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> O
         "self" => module.to_string(),
         "super" => owner(module).to_string(),
         other if workspace.crates.iter().any(|krate| krate.name == other) => other.to_string(),
-        other if workspace.items.get(&format!("{module}::{other}")).is_some_and(|item| item.kind == ItemKind::Mod) => format!("{module}::{other}"),
+        other
+            if workspace
+                .items
+                .get(&format!("{module}::{other}"))
+                .is_some_and(|item| item.kind == ItemKind::Mod) =>
+        {
+            format!("{module}::{other}")
+        }
         // A crate outside the workspace.
         _ => return None,
     };
     let (last, middle) = rest.split_last()?;
     for segment in middle {
-        start = if segment == "super" { owner(&start).to_string() } else { format!("{start}::{segment}") };
+        start = if segment == "super" {
+            owner(&start).to_string()
+        } else {
+            format!("{start}::{segment}")
+        };
         if start.is_empty() {
             return None;
         }
@@ -648,10 +822,12 @@ fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> O
 /// first segment of each path, with its item. A name that the item binds (a parameter, a `let`,
 /// a generic parameter), a macro name, and a name with no clear target give no entry.
 pub fn name_targets(item: &semilla_syntax::Item, workspace: &Workspace) -> BTreeMap<String, String> {
-    use semilla_syntax::rs::{AstNode, SyntaxKind, ast};
     use ast::HasName;
+    use semilla_syntax::rs::{AstNode, SyntaxKind, ast};
     let mut out = BTreeMap::new();
-    let (Some(module), Some(parsed)) = (module_of(&item.path, workspace), semilla_syntax::rs::parse_item(&item.source)) else { return out };
+    let (Some(module), Some(parsed)) = (module_of(&item.path, workspace), semilla_syntax::rs::parse_item(&item.source)) else {
+        return out;
+    };
     let (mut used, mut bound) = (BTreeSet::new(), BTreeSet::new());
     for node in parsed.syntax().descendants() {
         if let Some(path) = ast::Path::cast(node.clone()) {
@@ -660,7 +836,11 @@ pub fn name_targets(item: &semilla_syntax::Item, workspace: &Workspace) -> BTree
                 continue;
             }
             let first = path.first_segment();
-            if let Some(name) = first.as_ref().filter(|segment| segment.coloncolon_token().is_none()).and_then(|segment| segment.name_ref()) {
+            if let Some(name) = first
+                .as_ref()
+                .filter(|segment| segment.coloncolon_token().is_none())
+                .and_then(semilla_syntax::rs::ast::PathSegment::name_ref)
+            {
                 used.insert(name.text().to_string());
             }
         } else if let Some(pat) = ast::IdentPat::cast(node.clone()) {
@@ -711,11 +891,18 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
             if twins.items.contains_key(base) || found.len() < 2 || single.items.keys().any(|key| twin_base(key) == Some(base)) {
                 continue;
             }
-            let inner = |ws: &Workspace, path: &str| ws.items.keys().any(|key| key.len() > path.len() && key.starts_with(path) && matches!(key.as_bytes()[path.len()], b':' | b'.'));
+            let inner = |ws: &Workspace, path: &str| {
+                ws.items
+                    .keys()
+                    .any(|key| key.len() > path.len() && key.starts_with(path) && matches!(key.as_bytes()[path.len()], b':' | b'.'))
+            };
             if inner(single, base) {
                 continue;
             }
-            let same: Vec<&&semilla_syntax::Item> = found.iter().filter(|item| item.kind == old.kind && text(item) == text(old) && !inner(twins, &item.path)).collect();
+            let same: Vec<&&semilla_syntax::Item> = found
+                .iter()
+                .filter(|item| item.kind == old.kind && text(item) == text(old) && !inner(twins, &item.path))
+                .collect();
             if let [twin] = same[..] {
                 out.push((base.to_string(), twin.path.clone()));
             }
@@ -730,11 +917,11 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
         let mut ws = ws.clone();
         for (base, key) in keys {
             if let Some(mut item) = ws.items.remove(key) {
-                item.path = base.clone();
+                item.path.clone_from(base);
                 ws.items.insert(base.clone(), item);
             }
         }
-        ws.body_index = Default::default();
+        ws.body_index = semilla_syntax::load::BodyIndex::default();
         ws
     };
     Some((apply(before, &from_after), apply(after, &from_before)))
@@ -766,7 +953,11 @@ pub(crate) fn twin_text(ws: &Workspace, path: &str) -> Option<(String, Option<St
         conditions.push(format!("`{}`", &tail[..end]));
         rest = &tail[end..];
     }
-    let under = if conditions.is_empty() { String::new() } else { format!(" under {}", conditions.join(" and ")) };
+    let under = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" under {}", conditions.join(" and "))
+    };
     let body = item.body.as_ref().map(|_| {
         let at = source.find('{').unwrap_or(0);
         source[at..].to_string()
@@ -787,6 +978,9 @@ const BODY_TEXT: usize = 200;
 
 /// A source text on one line, with no doc comment line.
 fn one_line_source(source: &str) -> String {
-    let lines: Vec<&str> = source.lines().filter(|line| !line.trim_start().starts_with("///") && !line.trim_start().starts_with("//!")).collect();
+    let lines: Vec<&str> = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("///") && !line.trim_start().starts_with("//!"))
+        .collect();
     semilla_syntax::tree::one_line(&lines.join("\n"))
 }

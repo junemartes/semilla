@@ -66,6 +66,10 @@ pub fn router(data: UiData, review_file: PathBuf) -> axum::Router {
 }
 
 /// Starts the HTTP server on `addr` and runs it until Ctrl-C.
+///
+/// # Errors
+///
+/// Returns an error if the bind to `addr` fails or the server fails.
 pub async fn serve(data: UiData, review_file: PathBuf, addr: SocketAddr) -> anyhow::Result<()> {
     let app = router(data, review_file);
     let listener = tokio::net::TcpListener::bind(addr).await?;

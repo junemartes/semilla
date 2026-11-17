@@ -1,5 +1,7 @@
 //! Unit tests for `compare` and `suggest_renames`.
 
+use std::fmt::Write as _;
+
 use super::*;
 
 fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
@@ -8,7 +10,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         level: level.to_string(),
         text: text.to_string(),
         shape: "0:return->".to_string(),
-        callees: callees.iter().map(|callee| callee.to_string()).collect(),
+        callees: callees.iter().map(std::string::ToString::to_string).collect(),
         loop_free: true,
         term: None,
         span: None,
@@ -61,7 +63,10 @@ fn equal_text_is_n0() {
     let results = compare(&before, &after, &no_renames(), &[]);
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n0".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
     );
 }
 
@@ -79,11 +84,17 @@ fn rename_map_gives_n1() {
     let results = compare(&before, &after, &renames, &[]);
     assert_eq!(
         status_of(&results, "k::add_one"),
-        &BodyStatus::Equal { level: "n0".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
     );
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n1".into(), proof: vec!["rename-map".into()] }
+        &BodyStatus::Equal {
+            level: "n1".into(),
+            proof: vec!["rename-map".into()]
+        }
     );
     assert_eq!(results.len(), 2, "{results:?}");
 }
@@ -101,7 +112,10 @@ fn content_hash_gives_n1_without_a_claim() {
     let results = compare(&before, &after, &no_renames(), &[]);
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n1".into(), proof: vec!["content-hash".into()] }
+        &BodyStatus::Equal {
+            level: "n1".into(),
+            proof: vec!["content-hash".into()]
+        }
     );
     // Without a claim, the renamed function itself is uncovered.
     assert_eq!(status_of(&results, "k::helper"), &BodyStatus::BeforeOnly);
@@ -127,14 +141,17 @@ fn content_hash_sees_a_changed_callee() {
     // The caller text is the same after the rename: the call is the same call.
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n1".into(), proof: vec!["rename-map".into()] }
+        &BodyStatus::Equal {
+            level: "n1".into(),
+            proof: vec!["rename-map".into()]
+        }
     );
     // The callee changed.
     assert!(matches!(status_of(&results, "k::add_one"), BodyStatus::Different { .. }));
     // Without the claim, the hashes differ, so the caller is not equal.
     let results = compare(&before, &after, &no_renames(), &[]);
     assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }));
-    assert!(suggest_renames(&before, &after).is_empty());
+    assert_eq!(suggest_renames(&before, &after), [] as [(std::string::String, std::string::String); 0]);
 }
 
 #[test]
@@ -167,11 +184,17 @@ fn levels_are_tried_in_order() {
     let results = compare(&before, &after, &no_renames(), &[]);
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n2".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n2".into(),
+            proof: vec![]
+        }
     );
     assert_eq!(
         status_of(&results, "k::g"),
-        &BodyStatus::Equal { level: "n3".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n3".into(),
+            proof: vec![]
+        }
     );
 }
 
@@ -210,7 +233,10 @@ fn duplicate_names_must_match_as_sets() {
     let results = compare(&before, &same, &no_renames(), &[]);
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n0".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
     );
     let results = compare(&before, &other, &no_renames(), &[]);
     assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }));
@@ -219,7 +245,12 @@ fn duplicate_names_must_match_as_sets() {
 #[test]
 fn records_round_trip_as_json_lines() {
     let mut first = record("k::f", "n0", "a\nb", &["k::g"]);
-    first.span = Some(SpanInfo { file: "src/lib.rs".into(), line_start: 1, line_end: 3, range: None });
+    first.span = Some(SpanInfo {
+        file: "src/lib.rs".into(),
+        line_start: 1,
+        line_end: 3,
+        range: None,
+    });
     let text = format!(
         "{}\n\n{}\n",
         serde_json::to_string(&first).unwrap(),
@@ -262,10 +293,7 @@ fn swapped_names_are_applied() {
         record("k::a", "n0", "x + 2", &[]),
         record("k::f", "n0", "call {k::b}(x) {k::a}", &["k::a", "k::b"]),
     ]);
-    let renames = BTreeMap::from([
-        ("k::a".to_string(), "k::b".to_string()),
-        ("k::b".to_string(), "k::a".to_string()),
-    ]);
+    let renames = BTreeMap::from([("k::a".to_string(), "k::b".to_string()), ("k::b".to_string(), "k::a".to_string())]);
     let results = compare(&before, &after, &renames, &[]);
     assert!(
         results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. })),
@@ -291,7 +319,10 @@ fn targets_keep_lib_and_test_apart() {
     let results = compare(&before, &before.clone(), &no_renames(), &[]);
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n0".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
     );
 }
 
@@ -326,7 +357,10 @@ fn missing_n3_records_use_n2_of_the_same_target() {
     let results = compare(&before, &after, &no_renames(), &[]);
     assert_eq!(
         status_of(&results, "k::f"),
-        &BodyStatus::Equal { level: "n3".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n3".into(),
+            proof: vec![]
+        }
     );
 }
 
@@ -349,7 +383,10 @@ fn a_body_that_moves_to_another_crate_is_equal() {
     let results = compare(&before, &after(text, text), &renames, &[]);
     assert_eq!(
         status_of(&results, "app::over"),
-        &BodyStatus::Equal { level: "n0".into(), proof: vec![] }
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
     );
     // A changed body is different, also in one target only.
     let changed = "fn _(_1: &core::Account) -> bool { Ge(_1.1, const 10) }";
@@ -363,7 +400,10 @@ fn a_body_that_moves_to_another_crate_is_equal() {
 fn a_new_hash_in_each_target_name_keeps_equal_bodies_equal() {
     // Design 37.12. A new package version gives each target a new hash. The debug text and the
     // release text of a test body are different, so the body has two texts on each side.
-    let (debug, release) = ("fn _() -> u32 { AddWithOverflow(const 1, const 2) }", "fn _() -> u32 { Add(const 1, const 2) }");
+    let (debug, release) = (
+        "fn _() -> u32 { AddWithOverflow(const 1, const 2) }",
+        "fn _() -> u32 { Add(const 1, const 2) }",
+    );
     let side = |texts: [&str; 2], hashes: [&str; 2]| {
         levels(vec![
             in_target(record("k::tests::t", "n0", texts[0], &[]), &format!("k.test.{}", hashes[0])),
@@ -373,7 +413,13 @@ fn a_new_hash_in_each_target_name_keeps_equal_bodies_equal() {
     let before = side([debug, release], ["480693c09eb877f6", "351971ccb5242ec3"]);
     let after = side([debug, release], ["51634368b8893aa1", "d7a1077ee0ccfb6b"]);
     let results = compare(&before, &after, &no_renames(), &[]);
-    assert_eq!(status_of(&results, "k::tests::t"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    assert_eq!(
+        status_of(&results, "k::tests::t"),
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
+    );
     // A changed text in one target is different.
     let changed = "fn _() -> u32 { Add(const 1, const 3) }";
     let after = side([debug, changed], ["51634368b8893aa1", "d7a1077ee0ccfb6b"]);
@@ -395,10 +441,21 @@ fn the_source_position_of_a_test_is_not_behavior() {
     let desc = |line: u32| test_desc(false, line, "");
     let before = levels(vec![record("k::tests::t", "n0", &desc(59), &[])]);
     let after = levels(vec![record("k::tests::t", "n0", &desc(64), &[])]);
-    assert_eq!(status_of(&compare(&before, &after, &no_renames(), &[]), "k::tests::t"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    assert_eq!(
+        status_of(&compare(&before, &after, &no_renames(), &[]), "k::tests::t"),
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
+    );
     // Other constants still count.
     let other = |n: u32| format!("_5 = adt k::Desc fields {{k::Desc.start_line: const usize = {n}}};");
-    let results = compare(&levels(vec![record("k::f", "n0", &other(1), &[])]), &levels(vec![record("k::f", "n0", &other(2), &[])]), &no_renames(), &[]);
+    let results = compare(
+        &levels(vec![record("k::f", "n0", &other(1), &[])]),
+        &levels(vec![record("k::f", "n0", &other(2), &[])]),
+        &no_renames(),
+        &[],
+    );
     assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }));
 }
 
@@ -409,8 +466,16 @@ fn the_settings_key_follows_the_outer_cargo_configuration() {
     std::fs::create_dir_all(&build).unwrap();
     let before = cargo::settings_key(&build, None);
     std::fs::create_dir_all(dir.path().join("repo/.cargo")).unwrap();
-    std::fs::write(dir.path().join("repo/.cargo/config.toml"), "[build]\nrustflags = [\"-Coverflow-checks=off\"]\n").unwrap();
-    assert_ne!(cargo::settings_key(&build, None), before, "a parent cargo configuration is a build setting");
+    std::fs::write(
+        dir.path().join("repo/.cargo/config.toml"),
+        "[build]\nrustflags = [\"-Coverflow-checks=off\"]\n",
+    )
+    .unwrap();
+    assert_ne!(
+        cargo::settings_key(&build, None),
+        before,
+        "a parent cargo configuration is a build setting"
+    );
     // Each configuration file of the key is on the read list of the sandbox, and no other one.
     assert_eq!(cargo::outer_configs(&build).iter().filter(|file| file.starts_with(dir.path())).count(), 1);
 }
@@ -439,7 +504,12 @@ fn an_ignored_test_changes_the_test_descriptor() {
     assert!(matches!(status_of(&results, "k::tests::t"), BodyStatus::Equal { .. }), "{results:?}");
     // Only the four position fields are masked: another `usize` constant on the line counts.
     let extra = |n: u32| test_desc(false, 1, &format!(", test::TestDesc.z_extra: const usize = {n}"));
-    let results = compare(&levels(vec![record("k::tests::u", "n0", &extra(1), &[])]), &levels(vec![record("k::tests::u", "n0", &extra(2), &[])]), &no_renames(), &[]);
+    let results = compare(
+        &levels(vec![record("k::tests::u", "n0", &extra(1), &[])]),
+        &levels(vec![record("k::tests::u", "n0", &extra(2), &[])]),
+        &no_renames(),
+        &[],
+    );
     assert!(matches!(status_of(&results, "k::tests::u"), BodyStatus::Different { .. }), "{results:?}");
 }
 
@@ -447,8 +517,19 @@ fn an_ignored_test_changes_the_test_descriptor() {
 fn a_renamed_test_has_the_new_name_in_its_descriptor() {
     // The `TestName` string follows the rename map, so the rename of a test stays neutral after
     // the T5 fix (the descriptor is compared now).
-    let hex = |text: &str| text.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-    let desc = |name: &str| format!("fn _() -> test::TestDescAndFn {{\n_1 = adt test::TestName variant test::TestName::StaticTestName fields {{test::TestName::StaticTestName.0: const &str = [0000 @0=memory [{}] align 1 Not] align 8 Mut}};\n{}\n}}", hex(name), test_desc(false, 1, ""));
+    let hex = |text: &str| {
+        text.bytes().fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+    };
+    let desc = |name: &str| {
+        format!(
+            "fn _() -> test::TestDescAndFn {{\n_1 = adt test::TestName variant test::TestName::StaticTestName fields {{test::TestName::StaticTestName.0: const &str = [0000 @0=memory [{}] align 1 Not] align 8 Mut}};\n{}\n}}",
+            hex(name),
+            test_desc(false, 1, "")
+        )
+    };
     let before = levels(vec![record("k::tests::t", "n0", &desc("tests::t"), &[])]);
     let after = levels(vec![record("k::tests::u", "n0", &desc("tests::u"), &[])]);
     let renames: BTreeMap<String, String> = [("k::tests::t".to_string(), "k::tests::u".to_string())].into();
@@ -461,7 +542,9 @@ fn a_renamed_test_has_the_new_name_in_its_descriptor() {
 
 /// A `TestDesc` aggregate in the form of the driver (batch 5e: the fields by name, sorted).
 fn test_desc(ignore: bool, line: u32, extra: &str) -> String {
-    format!("_5 = adt test::TestDesc fields {{test::TestDesc.compile_fail: const bool = false, test::TestDesc.end_col: const usize = 29, test::TestDesc.end_line: const usize = {line}, test::TestDesc.ignore: const bool = {ignore}, test::TestDesc.ignore_message: _2, test::TestDesc.name: _1, test::TestDesc.no_run: const bool = false, test::TestDesc.should_panic: _3, test::TestDesc.source_file: const &str = [file], test::TestDesc.start_col: const usize = 8, test::TestDesc.start_line: const usize = {line}, test::TestDesc.test_type: _4{extra}}};")
+    format!(
+        "_5 = adt test::TestDesc fields {{test::TestDesc.compile_fail: const bool = false, test::TestDesc.end_col: const usize = 29, test::TestDesc.end_line: const usize = {line}, test::TestDesc.ignore: const bool = {ignore}, test::TestDesc.ignore_message: _2, test::TestDesc.name: _1, test::TestDesc.no_run: const bool = false, test::TestDesc.should_panic: _3, test::TestDesc.source_file: const &str = [file], test::TestDesc.start_col: const usize = 8, test::TestDesc.start_line: const usize = {line}, test::TestDesc.test_type: _4{extra}}};"
+    )
 }
 
 #[test]
@@ -469,20 +552,35 @@ fn a_rename_sorts_the_named_operands_again() {
     // Batch 5e: the driver sorts the operands of an ADT aggregate by the field path. A field
     // rename can change the order, so the compare sorts them again after the rename map.
     let text = |a: &str, b: &str, first: &str| {
-        let mut parts = [format!("k::Pair.{a}: {}", if first == a { "_1" } else { "_2" }), format!("k::Pair.{b}: {}", if first == a { "_2" } else { "_1" })];
+        let mut parts = [
+            format!("k::Pair.{a}: {}", if first == a { "_1" } else { "_2" }),
+            format!("k::Pair.{b}: {}", if first == a { "_2" } else { "_1" }),
+        ];
         parts.sort();
-        format!("fn _(_1: u64, _2: u64) -> k::Pair {{\n    bb0: {{\n        _0 = adt k::Pair fields {{{}}};\n        return;\n    }}\n}}\n", parts.join(", "))
+        format!(
+            "fn _(_1: u64, _2: u64) -> k::Pair {{\n    bb0: {{\n        _0 = adt k::Pair fields {{{}}};\n        return;\n    }}\n}}\n",
+            parts.join(", ")
+        )
     };
     // `a` → `z`: `{k::Pair.a: _1, k::Pair.b: _2}` becomes `{k::Pair.b: _2, k::Pair.z: _1}`.
     let before = levels(vec![record("k::make", "n0", &text("a", "b", "a"), &[])]);
     let after = levels(vec![record("k::make", "n0", &text("z", "b", "z"), &[])]);
     let renames: BTreeMap<String, String> = [("k::Pair.a".to_string(), "k::Pair.z".to_string())].into();
-    assert!(matches!(status_of(&compare(&before, &after, &renames, &[]), "k::make"), BodyStatus::Equal { .. }));
+    assert!(matches!(
+        status_of(&compare(&before, &after, &renames, &[]), "k::make"),
+        BodyStatus::Equal { .. }
+    ));
     // The operands swap: not equal.
     let swapped = levels(vec![record("k::make", "n0", &text("z", "b", "b"), &[])]);
-    assert!(matches!(status_of(&compare(&before, &swapped, &renames, &[]), "k::make"), BodyStatus::Different { .. }));
+    assert!(matches!(
+        status_of(&compare(&before, &swapped, &renames, &[]), "k::make"),
+        BodyStatus::Different { .. }
+    ));
     // A nested list and a constant with brackets stay whole.
-    assert_eq!(super::sort_aggregates("x = adt k::P fields {k::P.b: const &[u8] = [01, 02], k::P.a: f({1, 2})};"), "x = adt k::P fields {k::P.a: f({1, 2}), k::P.b: const &[u8] = [01, 02]};");
+    assert_eq!(
+        super::sort_aggregates("x = adt k::P fields {k::P.b: const &[u8] = [01, 02], k::P.a: f({1, 2})};"),
+        "x = adt k::P fields {k::P.a: f({1, 2}), k::P.b: const &[u8] = [01, 02]};"
+    );
 }
 
 #[test]
@@ -491,21 +589,58 @@ fn a_variant_rename_sorts_the_switch_targets_again() {
     // rename of a variant can change the order, so the compare sorts them again after the
     // rename map. The same rule applies to a discriminant table.
     let text = |arms: &str, table: &str| {
-        format!("fn _(_1: &k::E) -> u8 {{\n    bb0: {{\n        _2 = discriminant((*_1));\n        _3 = discriminant((*_1)) cast of k::E values [{table}];\n        switchInt(_2) -> [{arms}, otherwise: bb9];\n    }}\n}}\n")
+        format!(
+            "fn _(_1: &k::E) -> u8 {{\n    bb0: {{\n        _2 = discriminant((*_1));\n        _3 = discriminant((*_1)) cast of k::E values [{table}];\n        switchInt(_2) -> [{arms}, otherwise: bb9];\n    }}\n}}\n"
+        )
     };
-    let before = levels(vec![record("k::f", "n0", &text("k::E::Frozen: bb8, k::E::Low: bb1", "k::E::Frozen = 1, k::E::Low = 0"), &[])]);
-    let after = levels(vec![record("k::f", "n0", &text("k::E::Low: bb1, k::E::Stopped: bb8", "k::E::Low = 0, k::E::Stopped = 1"), &[])]);
+    let before = levels(vec![record(
+        "k::f",
+        "n0",
+        &text("k::E::Frozen: bb8, k::E::Low: bb1", "k::E::Frozen = 1, k::E::Low = 0"),
+        &[],
+    )]);
+    let after = levels(vec![record(
+        "k::f",
+        "n0",
+        &text("k::E::Low: bb1, k::E::Stopped: bb8", "k::E::Low = 0, k::E::Stopped = 1"),
+        &[],
+    )]);
     let renames: BTreeMap<String, String> = [("k::E::Frozen".to_string(), "k::E::Stopped".to_string())].into();
-    assert!(matches!(status_of(&compare(&before, &after, &renames, &[]), "k::f"), BodyStatus::Equal { .. }));
+    assert!(matches!(
+        status_of(&compare(&before, &after, &renames, &[]), "k::f"),
+        BodyStatus::Equal { .. }
+    ));
     // The targets swap: not equal.
-    let swapped = levels(vec![record("k::f", "n0", &text("k::E::Low: bb8, k::E::Stopped: bb1", "k::E::Low = 0, k::E::Stopped = 1"), &[])]);
-    assert!(matches!(status_of(&compare(&before, &swapped, &renames, &[]), "k::f"), BodyStatus::Different { .. }));
+    let swapped = levels(vec![record(
+        "k::f",
+        "n0",
+        &text("k::E::Low: bb8, k::E::Stopped: bb1", "k::E::Low = 0, k::E::Stopped = 1"),
+        &[],
+    )]);
+    assert!(matches!(
+        status_of(&compare(&before, &swapped, &renames, &[]), "k::f"),
+        BodyStatus::Different { .. }
+    ));
     // The values of the table swap: not equal.
-    let values = levels(vec![record("k::f", "n0", &text("k::E::Low: bb1, k::E::Stopped: bb8", "k::E::Low = 1, k::E::Stopped = 0"), &[])]);
-    assert!(matches!(status_of(&compare(&before, &values, &renames, &[]), "k::f"), BodyStatus::Different { .. }));
+    let values = levels(vec![record(
+        "k::f",
+        "n0",
+        &text("k::E::Low: bb1, k::E::Stopped: bb8", "k::E::Low = 1, k::E::Stopped = 0"),
+        &[],
+    )]);
+    assert!(matches!(
+        status_of(&compare(&before, &values, &renames, &[]), "k::f"),
+        BodyStatus::Different { .. }
+    ));
     // `otherwise` stays last, and a switch with number targets keeps its order.
-    assert_eq!(super::sort_variant_lists("switchInt(_2) -> [k::E::B: bb1, k::E::A: bb2, otherwise: bb3];"), "switchInt(_2) -> [k::E::A: bb2, k::E::B: bb1, otherwise: bb3];");
-    assert_eq!(super::sort_variant_lists("switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];"), "switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];");
+    assert_eq!(
+        super::sort_variant_lists("switchInt(_2) -> [k::E::B: bb1, k::E::A: bb2, otherwise: bb3];"),
+        "switchInt(_2) -> [k::E::A: bb2, k::E::B: bb1, otherwise: bb3];"
+    );
+    assert_eq!(
+        super::sort_variant_lists("switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];"),
+        "switchInt(move _2) -> [10: bb1, 9: bb2, otherwise: bb3];"
+    );
     // Batch 5x, part B: the entry `otherwise` does not make a number switch a named switch.
     let numbers = "switchInt(move _2) -> [1: bb1, 2: bb2, 10: bb3, otherwise: bb4];";
     assert_eq!(super::sort_variant_lists(numbers), numbers);
@@ -516,15 +651,31 @@ fn a_caller_with_a_number_switch_is_equal_after_the_move_of_its_callee() {
     // Batch 5x, part B (trial 7 on humantime): the caller has no text edit. Its MIR differs
     // only by the path of the moved item, and it has a switch on numbers with `otherwise`.
     let text = |callee: &str| {
-        format!("fn _(_1: u64) -> bool {{\n    bb0: {{\n        switchInt(_1) -> [1: bb1, 2: bb2, 10: bb3, 11: bb4, otherwise: bb5];\n    }}\n    bb1: {{\n        _0 = {callee}(_1);\n    }}\n}}\n")
+        format!(
+            "fn _(_1: u64) -> bool {{\n    bb0: {{\n        switchInt(_1) -> [1: bb1, 2: bb2, 10: bb3, 11: bb4, otherwise: bb5];\n    }}\n    bb1: {{\n        _0 = {callee}(_1);\n    }}\n}}\n"
+        )
     };
     let before = levels(vec![record("k::date::parse", "n0", &text("k::date::is_leap"), &[])]);
     let after = levels(vec![record("k::date::parse", "n0", &text("k::calendar::is_leap"), &[])]);
     let renames: BTreeMap<String, String> = [("k::date::is_leap".to_string(), "k::calendar::is_leap".to_string())].into();
-    assert_eq!(status_of(&compare(&before, &after, &renames, &[]), "k::date::parse"), &BodyStatus::Equal { level: "n1".to_string(), proof: vec!["rename-map".to_string()] });
+    assert_eq!(
+        status_of(&compare(&before, &after, &renames, &[]), "k::date::parse"),
+        &BodyStatus::Equal {
+            level: "n1".to_string(),
+            proof: vec!["rename-map".to_string()]
+        }
+    );
     // A different target of a number is a real change.
-    let swapped = levels(vec![record("k::date::parse", "n0", &text("k::calendar::is_leap").replace("10: bb3, 11: bb4", "10: bb4, 11: bb3"), &[])]);
-    assert!(matches!(status_of(&compare(&before, &swapped, &renames, &[]), "k::date::parse"), BodyStatus::Different { .. }));
+    let swapped = levels(vec![record(
+        "k::date::parse",
+        "n0",
+        &text("k::calendar::is_leap").replace("10: bb3, 11: bb4", "10: bb4, 11: bb3"),
+        &[],
+    )]);
+    assert!(matches!(
+        status_of(&compare(&before, &swapped, &renames, &[]), "k::date::parse"),
+        BodyStatus::Different { .. }
+    ));
 }
 
 #[test]
@@ -539,9 +690,20 @@ fn one_unit_gives_one_record_file() {
     ]
     .join("\n");
     let names: Vec<String> = cargo::unit_files(&stdout).into_iter().collect();
-    assert_eq!(names, ["k_core.lib.0a.jsonl", "k_core.lib.0b.jsonl", "k_core.test.0b.jsonl", "speed.bin.0c.jsonl", "speed.test.0c.jsonl"]);
+    assert_eq!(
+        names,
+        [
+            "k_core.lib.0a.jsonl",
+            "k_core.lib.0b.jsonl",
+            "k_core.test.0b.jsonl",
+            "speed.bin.0c.jsonl",
+            "speed.test.0c.jsonl"
+        ]
+    );
     // The driver makes one file for each unit. Two files for one unit: Semilla uses none.
-    let files = ["k_core.lib.0a.jsonl", "k_core.test.0b.jsonl", "speed.bin.0c.jsonl", "speed.test.0c.jsonl"].map(str::to_string).to_vec();
+    let files = ["k_core.lib.0a.jsonl", "k_core.test.0b.jsonl", "speed.bin.0c.jsonl", "speed.test.0c.jsonl"]
+        .map(str::to_string)
+        .to_vec();
     let (single, double) = cargo::one_file_each(files);
     assert_eq!(single, ["k_core.lib.0a.jsonl", "k_core.test.0b.jsonl"]);
     assert_eq!(double, ["speed.bin.0c.jsonl", "speed.test.0c.jsonl"]);
@@ -555,16 +717,30 @@ fn a_fresh_unit_with_no_record_file_needs_a_new_build() {
     let (workspace, out) = (dir.path().join("build"), dir.path().join("records"));
     std::fs::create_dir_all(&out).unwrap();
     let unit = |fresh: bool, manifest: &str, kind: &str, file: &str| {
-        format!(r#"{{"reason":"compiler-artifact","manifest_path":"{manifest}","target":{{"name":"k-core","kind":["{kind}"],"crate_types":["lib"]}},"profile":{{"test":false}},"filenames":["{file}"],"fresh":{fresh}}}"#)
+        format!(
+            r#"{{"reason":"compiler-artifact","manifest_path":"{manifest}","target":{{"name":"k-core","kind":["{kind}"],"crate_types":["lib"]}},"profile":{{"test":false}},"filenames":["{file}"],"fresh":{fresh}}}"#
+        )
     };
     let member = workspace.join("k-core/Cargo.toml").display().to_string();
     let fresh = unit(true, &member, "lib", "/t/libk_core-0a.rmeta");
     assert!(cargo::fresh_without_records(&fresh, &workspace, &out));
     // A unit that cargo compiled, a unit with its record file, a build script, and a crate
     // outside the build folder need no new build.
-    assert!(!cargo::fresh_without_records(&unit(false, &member, "lib", "/t/libk_core-0a.rmeta"), &workspace, &out));
-    assert!(!cargo::fresh_without_records(&unit(true, &member, "custom-build", "/t/build/k-core-0d/build-script-build"), &workspace, &out));
-    assert!(!cargo::fresh_without_records(&unit(true, "/registry/k-core/Cargo.toml", "lib", "/t/libk_core-0a.rmeta"), &workspace, &out));
+    assert!(!cargo::fresh_without_records(
+        &unit(false, &member, "lib", "/t/libk_core-0a.rmeta"),
+        &workspace,
+        &out
+    ));
+    assert!(!cargo::fresh_without_records(
+        &unit(true, &member, "custom-build", "/t/build/k-core-0d/build-script-build"),
+        &workspace,
+        &out
+    ));
+    assert!(!cargo::fresh_without_records(
+        &unit(true, "/registry/k-core/Cargo.toml", "lib", "/t/libk_core-0a.rmeta"),
+        &workspace,
+        &out
+    ));
     std::fs::write(out.join("k_core.lib.0a.jsonl"), "").unwrap();
     assert!(!cargo::fresh_without_records(&fresh, &workspace, &out));
 }
@@ -584,7 +760,10 @@ fn the_cargo_error_text_has_the_first_error_with_its_cause() {
     let stderr = "error: could not compile `ledger_core` (test \"notes.md\") due to 1 previous error\n";
     let text = cargo::error_text(&stdout, stderr);
     assert!(text.starts_with("error: invalid character `.` in crate name: `notes.md`\n"), "{text}");
-    assert!(text.contains("= help: you can either pass") && text.contains("could not compile `ledger_core`"), "{text}");
+    assert!(
+        text.contains("= help: you can either pass") && text.contains("could not compile `ledger_core`"),
+        "{text}"
+    );
     assert!(!text.contains("unused variable") && !text.contains("aborting"), "{text}");
     // With no JSON message, the text is the `error` lines of the standard error.
     assert_eq!(cargo::error_text("", stderr).trim_end(), stderr.trim_end());
@@ -594,9 +773,18 @@ fn the_cargo_error_text_has_the_first_error_with_its_cause() {
 fn an_opaque_body_is_not_an_input_of_a_proof() {
     // Batch 5l: the build configuration selects `k::add_one`. The content hash does not use its
     // text, so the call of a different path is a different call.
-    let before = levels(vec![record("k::helper", "n0", "x + 1", &[]), record("k::f", "n0", "call {k::helper}(x)", &["k::helper"])]);
-    let after = levels(vec![record("k::add_one", "n0", "x + 1", &[]), record("k::f", "n0", "call {k::add_one}(x)", &["k::add_one"])]);
-    let marks = |opaque: &[&str], stop: &[&str]| Marks { opaque: opaque.iter().map(|name| name.to_string()).collect(), stop: stop.iter().map(|name| name.to_string()).collect() };
+    let before = levels(vec![
+        record("k::helper", "n0", "x + 1", &[]),
+        record("k::f", "n0", "call {k::helper}(x)", &["k::helper"]),
+    ]);
+    let after = levels(vec![
+        record("k::add_one", "n0", "x + 1", &[]),
+        record("k::f", "n0", "call {k::add_one}(x)", &["k::add_one"]),
+    ]);
+    let marks = |opaque: &[&str], stop: &[&str]| Marks {
+        opaque: opaque.iter().map(std::string::ToString::to_string).collect(),
+        stop: stop.iter().map(std::string::ToString::to_string).collect(),
+    };
     let results = compare_with(&before, &after, &no_renames(), &[], &Marks::default(), &marks(&["k::add_one"], &[]));
     assert!(matches!(status_of(&results, "k::f"), BodyStatus::Different { .. }), "{results:?}");
     let results = compare_with(&before, &after, &no_renames(), &[], &marks(&["k::helper"], &[]), &Marks::default());
@@ -610,18 +798,44 @@ fn an_opaque_body_is_not_an_input_of_a_proof() {
     unknown.inlined = vec!["k::no_record".to_string()];
     let mut free = record("k::h", "n3", "x + 1", &[]);
     free.inlined = vec!["k::f".to_string()];
-    let mut all = levels(vec![record("k::add_one", "n0", "x + 1", &[]), record("k::f", "n0", "call {k::add_one}(x)", &["k::add_one"]), inlined, unknown, free]);
+    let mut all = levels(vec![
+        record("k::add_one", "n0", "x + 1", &[]),
+        record("k::f", "n0", "call {k::add_one}(x)", &["k::add_one"]),
+        inlined,
+        unknown,
+        free,
+    ]);
     drop_opaque_inlines(&mut all, &marks(&["k::add_one"], &[]));
     assert_eq!(all["n3"].iter().map(|record| record.name.as_str()).collect::<Vec<_>>(), vec!["k::h"]);
 
     // A body that gets no proof: equal only with the same N0 text.
-    let before = levels(vec![record("k::f", "n0", "a", &[]), record("k::f", "n2", "c", &[]), record("k::g", "n0", "a", &[])]);
-    let after = levels(vec![record("k::f", "n0", "b", &[]), record("k::f", "n2", "c", &[]), record("k::g", "n0", "a", &[])]);
+    let before = levels(vec![
+        record("k::f", "n0", "a", &[]),
+        record("k::f", "n2", "c", &[]),
+        record("k::g", "n0", "a", &[]),
+    ]);
+    let after = levels(vec![
+        record("k::f", "n0", "b", &[]),
+        record("k::f", "n2", "c", &[]),
+        record("k::g", "n0", "a", &[]),
+    ]);
     let results = compare(&before, &after, &no_renames(), &[]);
-    assert_eq!(status_of(&results, "k::f"), &BodyStatus::Equal { level: "n2".into(), proof: Vec::new() });
+    assert_eq!(
+        status_of(&results, "k::f"),
+        &BodyStatus::Equal {
+            level: "n2".into(),
+            proof: Vec::new()
+        }
+    );
     let results = compare_with(&before, &after, &no_renames(), &[], &Marks::default(), &marks(&[], &["k::f", "k::g"]));
     assert_eq!(status_of(&results, "k::f"), &BodyStatus::Different { cfg_changed: true });
-    assert_eq!(status_of(&results, "k::g"), &BodyStatus::Equal { level: "n0".into(), proof: Vec::new() });
+    assert_eq!(
+        status_of(&results, "k::g"),
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: Vec::new()
+        }
+    );
 }
 
 /// Batch 5t, part A: the first line of a record file is the record of the compile unit.
@@ -654,7 +868,9 @@ fn a_record_file_starts_with_the_unit_record() {
 #[test]
 fn a_rename_key_matches_a_body_name_with_generic_arguments() {
     let body = "fn allocate(_1: &mut Map<V>) -> () { return; }";
-    let caller = |callee: &str, other: &str| format!("_2 = {{k::Map::<V>::{callee}}}(move _1); _3 = {{k::Map::<u32>::{callee}}}(move _4); _5 = {{k::Map::<V>::{other}}}(move _1);");
+    let caller = |callee: &str, other: &str| {
+        format!("_2 = {{k::Map::<V>::{callee}}}(move _1); _3 = {{k::Map::<u32>::{callee}}}(move _4); _5 = {{k::Map::<V>::{other}}}(move _1);")
+    };
     let before = levels(vec![
         record("k::Map::<V>::allocate", "n0", body, &[]),
         record("k::Map::<V>::insert", "n0", &caller("allocate", "len"), &["k::Map::<V>::allocate"]),
@@ -667,20 +883,41 @@ fn a_rename_key_matches_a_body_name_with_generic_arguments() {
     ]);
     let renames = BTreeMap::from([("k::Map::allocate".to_string(), "k::Map::allocate_x".to_string())]);
     let results = compare(&before, &after, &renames, &[]);
-    let equal = BodyStatus::Equal { level: "n1".into(), proof: vec!["rename-map".into()] };
-    assert_eq!(status_of(&results, "k::Map::<V>::allocate_x"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] }, "{results:?}");
+    let equal = BodyStatus::Equal {
+        level: "n1".into(),
+        proof: vec!["rename-map".into()],
+    };
+    assert_eq!(
+        status_of(&results, "k::Map::<V>::allocate_x"),
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        },
+        "{results:?}"
+    );
     // The call with other generic arguments (`Map::<u32>`) is a call of the same function.
     assert_eq!(status_of(&results, "k::Map::<V>::insert"), &equal, "{results:?}");
-    assert!(results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. })), "{results:?}");
+    assert!(
+        results.iter().all(|result| matches!(result.status, BodyStatus::Equal { .. })),
+        "{results:?}"
+    );
 
     // A rename with a real change of the body keeps the result "different".
     let changed = levels(vec![
-        record("k::Map::<V>::allocate_x", "n0", "fn allocate(_1: &mut Map<V>) -> () { _2 = const 1_u8; return; }", &[]),
+        record(
+            "k::Map::<V>::allocate_x",
+            "n0",
+            "fn allocate(_1: &mut Map<V>) -> () { _2 = const 1_u8; return; }",
+            &[],
+        ),
         record("k::Map::<V>::insert", "n0", &caller("allocate_x", "len"), &["k::Map::<V>::allocate_x"]),
         record("k::Map::<V>::len", "n0", "return;", &[]),
     ]);
     let results = compare(&before, &changed, &renames, &[]);
-    assert!(matches!(status_of(&results, "k::Map::<V>::allocate_x"), BodyStatus::Different { .. }), "{results:?}");
+    assert!(
+        matches!(status_of(&results, "k::Map::<V>::allocate_x"), BodyStatus::Different { .. }),
+        "{results:?}"
+    );
 
     // Two bodies fit one key: the match is not unique, and Semilla does not use the key.
     let twins = |name: &str| {
@@ -700,13 +937,18 @@ fn a_rename_key_matches_a_body_name_with_generic_arguments() {
     assert_eq!(status_of(&results, "k::Map::<V>::allocate"), &BodyStatus::BeforeOnly, "{results:?}");
 
     // A move to a different module keeps the list at the type: the same distance from the end.
-    let moved = levels(vec![
-        record("k::m::Map::<V>::allocate_x", "n0", body, &[]),
-    ]);
+    let moved = levels(vec![record("k::m::Map::<V>::allocate_x", "n0", body, &[])]);
     let single = levels(vec![record("k::Map::<V>::allocate", "n0", body, &[])]);
     let renames = BTreeMap::from([("k::Map::allocate".to_string(), "k::m::Map::allocate_x".to_string())]);
     let results = compare(&single, &moved, &renames, &[]);
-    assert_eq!(status_of(&results, "k::m::Map::<V>::allocate_x"), &BodyStatus::Equal { level: "n0".into(), proof: vec![] }, "{results:?}");
+    assert_eq!(
+        status_of(&results, "k::m::Map::<V>::allocate_x"),
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        },
+        "{results:?}"
+    );
 }
 
 #[test]
@@ -714,7 +956,10 @@ fn a_generic_key_matches_only_a_whole_path_with_a_list() {
     let pairs = [(format!("{}a::T::m", paths::GENERIC_KEY), "a::T::n".to_string())];
     let rename = |text: &str| paths::rename(text, &pairs);
     assert_eq!(rename("{a::T::<A, B>::m}(x)"), "{a::T::<A, B>::n}(x)");
-    assert_eq!(rename("a::T::<fn(u8) -> Vec<u8>>::m::{closure#0}"), "a::T::<fn(u8) -> Vec<u8>>::n::{closure#0}");
+    assert_eq!(
+        rename("a::T::<fn(u8) -> Vec<u8>>::m::{closure#0}"),
+        "a::T::<fn(u8) -> Vec<u8>>::n::{closure#0}"
+    );
     // No list: the plain key is the key for this text.
     assert_eq!(rename("a::T::m"), "a::T::m");
     // A longer name, a longer path before, and a different segment do not match.
@@ -736,15 +981,33 @@ fn two_body_names_that_differ_only_in_a_lifetime_are_one_body() {
     assert_eq!(paths::no_lifetimes("a::T::<'x'>::m"), "a::T::<'x'>::m");
     assert_eq!(paths::no_lifetimes("a::Walk::<'a>::len"), "a::Walk::len");
     assert_eq!(paths::no_lifetimes("<a::Walk<'a> as a::P<B, 'b>>::f"), "<a::Walk as a::P<B>>::f");
-    let before = levels(vec![record(old, "n0", "body", &[]), record("<(dyn a::Shape + 'a)>::area", "n0", "one", &[])]);
-    let after = levels(vec![record(new, "n0", "body", &[]), record("<(dyn a::Shape + 'static)>::area", "n0", "two", &[])]);
+    let before = levels(vec![
+        record(old, "n0", "body", &[]),
+        record("<(dyn a::Shape + 'a)>::area", "n0", "one", &[]),
+    ]);
+    let after = levels(vec![
+        record(new, "n0", "body", &[]),
+        record("<(dyn a::Shape + 'static)>::area", "n0", "two", &[]),
+    ]);
     let results = compare_with(&before, &after, &BTreeMap::new(), &[], &Marks::default(), &Marks::default());
     assert_eq!(results.len(), 2, "{results:?}");
-    assert_eq!(status_of(&results, new), &BodyStatus::Equal { level: "n0".into(), proof: vec![] });
+    assert_eq!(
+        status_of(&results, new),
+        &BodyStatus::Equal {
+            level: "n0".into(),
+            proof: vec![]
+        }
+    );
     // A body with a change stays different.
-    assert!(matches!(status_of(&results, "<(dyn a::Shape + 'static)>::area"), BodyStatus::Different { .. }));
+    assert!(matches!(
+        status_of(&results, "<(dyn a::Shape + 'static)>::area"),
+        BodyStatus::Different { .. }
+    ));
     // Two names of one tree fit: no pair.
-    let before = levels(vec![record("<&'a a::Node as a::P>::f", "n0", "body", &[]), record("<&'b a::Node as a::P>::f", "n0", "body", &[])]);
+    let before = levels(vec![
+        record("<&'a a::Node as a::P>::f", "n0", "body", &[]),
+        record("<&'b a::Node as a::P>::f", "n0", "body", &[]),
+    ]);
     let after = levels(vec![record("<&a::Node as a::P>::f", "n0", "body", &[])]);
     let results = compare_with(&before, &after, &BTreeMap::new(), &[], &Marks::default(), &Marks::default());
     assert_eq!(status_of(&results, "<&'a a::Node as a::P>::f"), &BodyStatus::BeforeOnly);
@@ -757,19 +1020,39 @@ fn two_body_names_that_differ_only_in_a_lifetime_are_one_body() {
 fn a_rename_in_an_impl_with_new_parameter_names_is_equal() {
     let get = "fn _(_1: &k::W<T>) -> T generics <T#0> { _0 = ((*_1).k::W.0: T); }";
     let call = |name: &str| format!("fn _(_1: &k::W<u32>) -> u32 {{ _3 = const fn(&k::W<u32>) -> u32 {{k::W::<u32>::{name}}}(_1); }}");
-    let before = levels(vec![record("k::W::<T>::get", "n0", get, &[]), record("k::twice", "n0", &call("get"), &["k::W::<T>::get"])]);
+    let before = levels(vec![
+        record("k::W::<T>::get", "n0", get, &[]),
+        record("k::twice", "n0", &call("get"), &["k::W::<T>::get"]),
+    ]);
     let value = get.replace('T', "U");
-    let after = |value: &str| levels(vec![record("k::W::<U>::value", "n0", value, &[]), record("k::twice", "n0", &call("value"), &["k::W::<U>::value"])]);
+    let after = |value: &str| {
+        levels(vec![
+            record("k::W::<U>::value", "n0", value, &[]),
+            record("k::twice", "n0", &call("value"), &["k::W::<U>::value"]),
+        ])
+    };
     let renames: BTreeMap<String, String> = [("k::W::get".to_string(), "k::W::value".to_string())].into();
     let results = compare(&before, &after(&value), &renames, &[]);
     assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Equal { .. }), "{results:?}");
     assert!(matches!(status_of(&results, "k::twice"), BodyStatus::Equal { .. }), "{results:?}");
     // A needle in the renamed body: different.
     let results = compare(&before, &after(&value.replace(".0: U", ".1: U")), &renames, &[]);
-    assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Different { .. }), "{results:?}");
+    assert!(
+        matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Different { .. }),
+        "{results:?}"
+    );
     // A new name that the old body has as a word: no new names, so the compare stays different.
     let both = "fn _(_1: &k::W<T>, _2: U) -> T generics <T#0> { _0 = ((*_1).k::W.0: T); }";
-    let before = levels(vec![record("k::W::<T>::get", "n0", both, &[]), record("k::twice", "n0", &call("get"), &["k::W::<T>::get"])]);
+    let before = levels(vec![
+        record("k::W::<T>::get", "n0", both, &[]),
+        record("k::twice", "n0", &call("get"), &["k::W::<T>::get"]),
+    ]);
     let results = compare(&before, &after(&both.replace('T', "U")), &renames, &[]);
-    assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Different { .. } | BodyStatus::BeforeOnly | BodyStatus::AfterOnly), "{results:?}");
+    assert!(
+        matches!(
+            status_of(&results, "k::W::<U>::value"),
+            BodyStatus::Different { .. } | BodyStatus::BeforeOnly | BodyStatus::AfterOnly
+        ),
+        "{results:?}"
+    );
 }

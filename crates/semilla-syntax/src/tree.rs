@@ -34,9 +34,28 @@ pub struct Node {
 }
 
 /// The node kinds that contain statements. A free edit must not contain them (design 5.6).
-pub const BLOCK_LIKE: &[&str] = &["block", "if", "match", "for", "while", "loop", "block_expr", "unsafe", "async", "closure_block", "const_block"];
+pub const BLOCK_LIKE: &[&str] = &[
+    "block",
+    "if",
+    "match",
+    "for",
+    "while",
+    "loop",
+    "block_expr",
+    "unsafe",
+    "async",
+    "closure_block",
+    "const_block",
+];
 
 impl Node {
+    /// The node with the attribute `attr`.
+    fn with_attr(mut self, attr: String) -> Node {
+        self.attr = Some(attr);
+        self
+    }
+
+    #[must_use]
     pub fn child(&self, role: &str) -> Option<&Node> {
         self.children.iter().find(|child| child.role == role)
     }
@@ -47,6 +66,7 @@ impl Node {
     }
 
     /// True if the position is inside the node.
+    #[must_use]
     pub fn contains_pos(&self, pos: Pos) -> bool {
         self.start <= pos && pos <= self.end
     }
@@ -57,12 +77,13 @@ impl Node {
     }
 
     /// A short label for views: the first line of the text, at most 60 characters.
+    #[must_use]
     pub fn label(&self) -> String {
         short(&self.text, 60)
     }
 
     /// Visits the node and all its descendants, with the role path from this node.
-    pub fn walk<'a>(&'a self, path: &mut Vec<String>, visit: &mut dyn FnMut(&[String], &'a Node)) {
+    pub fn walk<'a, F: FnMut(&[String], &'a Node)>(&'a self, path: &mut Vec<String>, visit: &mut F) {
         visit(path, self);
         for child in &self.children {
             path.push(child.role.clone());
@@ -75,6 +96,7 @@ impl Node {
 /// The tokens of a source text for a display: `(white space before, text)`. A string literal, a
 /// char literal, and a comment are one token with their exact text. A word (a name, a number, a
 /// keyword) is one token. Each other character is one token.
+#[must_use]
 pub fn display_tokens(text: &str) -> Vec<(bool, String)> {
     let chars: Vec<char> = text.chars().collect();
     let word = |c: char| c.is_alphanumeric() || c == '_';
@@ -117,7 +139,9 @@ pub fn display_tokens(text: &str) -> Vec<(bool, String)> {
         } else if c == '/' && chars.get(i + 1) == Some(&'/') {
             (i..chars.len()).find(|at| chars[*at] == '\n').unwrap_or(chars.len())
         } else if c == '/' && chars.get(i + 1) == Some(&'*') {
-            (i + 2..chars.len()).find(|at| chars[*at] == '*' && chars.get(at + 1) == Some(&'/')).map_or(chars.len(), |at| at + 2)
+            (i + 2..chars.len())
+                .find(|at| chars[*at] == '*' && chars.get(at + 1) == Some(&'/'))
+                .map_or(chars.len(), |at| at + 2)
         } else if word(c) {
             let end = (i..chars.len()).find(|at| !word(chars[*at])).unwrap_or(chars.len());
             let name: String = chars[i..end].iter().collect();
@@ -141,6 +165,7 @@ pub fn display_tokens(text: &str) -> Vec<(bool, String)> {
 
 /// A source text on one line: each run of white space between two tokens is one space. The
 /// white space in a literal does not change (batch 5k, D6).
+#[must_use]
 pub fn one_line(text: &str) -> String {
     let mut line = String::new();
     for (space, token) in display_tokens(text) {
@@ -153,6 +178,7 @@ pub fn one_line(text: &str) -> String {
 }
 
 /// Shortens a text to `max` characters on one line.
+#[must_use]
 pub fn short(text: &str, max: usize) -> String {
     let line = one_line(text);
     if line.chars().count() <= max {
@@ -176,13 +202,24 @@ pub struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
+    #[must_use]
     pub fn new(lines: &'a Lines, edition: Edition) -> Builder<'a> {
-        Builder { lines, shift: 0, edition, tokens: &[] }
+        Builder {
+            lines,
+            shift: 0,
+            edition,
+            tokens: &[],
+        }
     }
 
     /// A builder that reads the compare texts from the tokens of the file.
     pub(crate) fn with_tokens(lines: &'a Lines, edition: Edition, tokens: &'a [Flat]) -> Builder<'a> {
-        Builder { lines, shift: 0, edition, tokens }
+        Builder {
+            lines,
+            shift: 0,
+            edition,
+            tokens,
+        }
     }
 
     /// The compare text of a node: the text of its slice of the tokens of the file.
@@ -194,10 +231,11 @@ impl<'a> Builder<'a> {
     }
 
     fn pos(&self, offset: usize) -> Pos {
-        self.lines.pos((offset as isize + self.shift).max(0) as usize)
+        self.lines.pos(usize::try_from(offset.cast_signed() + self.shift).unwrap_or(0))
     }
 
     /// The start and the end of the code of a node (without its leading comments).
+    #[must_use]
     pub fn range(&self, node: &SyntaxNode) -> (Pos, Pos) {
         let range = code_range(node);
         (self.pos(range.start), self.pos(range.end))
@@ -205,33 +243,73 @@ impl<'a> Builder<'a> {
 
     fn node(&self, kind: &'static str, role: impl Into<String>, value: &SyntaxNode, children: Vec<Node>) -> Node {
         let (start, end) = self.range(value);
-        Node { kind, role: role.into(), text: self.text(value), attr: None, stmt: false, start, end, children }
+        Node {
+            kind,
+            role: role.into(),
+            text: self.text(value),
+            attr: None,
+            stmt: false,
+            start,
+            end,
+            children,
+        }
     }
 
     /// The signature of a function as a node (design 22.3, A5). The children are its parts:
     /// `qualifiers` (`const`, `async`, `unsafe`, `extern`), `generics` (the parameters with their
     /// inline bounds), `where`, one `param[NAME]` for each parameter (`param[self]` for the
     /// receiver; a pattern parameter has its pattern text as the name), and `ret`.
+    #[must_use]
     pub fn signature(&self, function: &ast::Fn) -> Node {
-        let at_fn = function.fn_token().map(|token| usize::from(token.text_range().start())).unwrap_or_else(|| code_range(function.syntax()).start);
+        let at_fn = function
+            .fn_token()
+            .map_or_else(|| code_range(function.syntax()).start, |token| usize::from(token.text_range().start()));
         let place = |node: Option<&SyntaxNode>| match node {
             Some(node) => self.range(node),
             None => (self.pos(at_fn), self.pos(at_fn)),
         };
         let part = |kind: &'static str, role: String, text: String, node: Option<&SyntaxNode>| {
             let (start, end) = place(node);
-            Node { kind, role, text, attr: None, stmt: false, start, end, children: Vec::new() }
+            Node {
+                kind,
+                role,
+                text,
+                attr: None,
+                stmt: false,
+                start,
+                end,
+                children: Vec::new(),
+            }
         };
-        let word = |token: Option<SyntaxToken>| token.map(|token| token.text().to_string()).unwrap_or_default();
-        let qualifiers = [word(function.const_token()), word(function.async_token()), word(function.unsafe_token()), compare_opt(function.abi().as_ref())].into_iter().filter(|q| !q.is_empty()).collect::<Vec<_>>().join(" ");
+        let word = |token: Option<SyntaxToken>| token.map_or_default(|token| token.text().to_string());
+        let qualifiers = [
+            word(function.const_token()),
+            word(function.async_token()),
+            word(function.unsafe_token()),
+            compare_opt(function.abi().as_ref()),
+        ]
+        .into_iter()
+        .filter(|q| !q.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
         let mut qualifier = part("qualifiers", "qualifiers".into(), qualifiers, None);
         (qualifier.start, qualifier.end) = (self.pos(at_fn), self.pos(at_fn + 2));
         let generics = function.generic_param_list();
         let where_clause = function.where_clause();
         let mut children = vec![
             qualifier,
-            part("generics", "generics".into(), compare_opt(generics.as_ref()), generics.as_ref().map(|node| node.syntax())),
-            part("where", "where".into(), compare_opt(where_clause.as_ref()), where_clause.as_ref().map(|node| node.syntax())),
+            part(
+                "generics",
+                "generics".into(),
+                compare_opt(generics.as_ref()),
+                generics.as_ref().map(ra_ap_syntax::AstNode::syntax),
+            ),
+            part(
+                "where",
+                "where".into(),
+                compare_opt(where_clause.as_ref()),
+                where_clause.as_ref().map(ra_ap_syntax::AstNode::syntax),
+            ),
         ];
         if let Some(list) = function.param_list() {
             if let Some(receiver) = list.self_param() {
@@ -241,7 +319,9 @@ impl<'a> Builder<'a> {
             }
             for param in list.params().filter(|param| param.dotdotdot_token().is_none()) {
                 let name = match param.pat() {
-                    Some(ast::Pat::IdentPat(ident)) if ident.pat().is_none() || ident.at_token().is_some() => ident.name().map(|name| name.text().to_string()).unwrap_or_default(),
+                    Some(ast::Pat::IdentPat(ident)) if ident.pat().is_none() || ident.at_token().is_some() => {
+                        ident.name().map_or_default(|name| name.text().to_string())
+                    }
                     Some(other) => compare(&other).replace(' ', ""),
                     None => String::new(),
                 };
@@ -251,13 +331,27 @@ impl<'a> Builder<'a> {
             }
         }
         let ret = function.ret_type();
-        children.push(part("ret", "ret".into(), compare_opt(ret.as_ref()), ret.as_ref().map(|node| node.syntax())));
+        children.push(part(
+            "ret",
+            "ret".into(),
+            compare_opt(ret.as_ref()),
+            ret.as_ref().map(ra_ap_syntax::AstNode::syntax),
+        ));
         let tokens = signature_tokens(function);
         let (start, end) = match (tokens.first(), tokens.last()) {
             (Some(first), Some(last)) => (self.pos(first.start), self.pos(last.end)),
             _ => self.range(function.syntax()),
         };
-        Node { kind: "signature", role: "sig".into(), text: flat_text(&tokens), attr: None, stmt: false, start, end, children }
+        Node {
+            kind: "signature",
+            role: "sig".into(),
+            text: flat_text(&tokens),
+            attr: None,
+            stmt: false,
+            start,
+            end,
+            children,
+        }
     }
 
     /// Builds the node of a block. Statements get the roles `S0`, `S1`, …; a final expression
@@ -303,9 +397,24 @@ impl<'a> Builder<'a> {
                     // The pattern with its type annotation (`x: u32`), as one node.
                     let end = local.ty().map_or(pat.syntax().text_range().end(), |ty| ty.syntax().text_range().end());
                     let start = pat.syntax().text_range().start();
-                    let tokens: Vec<Flat> = flat_tokens(local.syntax()).into_iter().filter(|token| token.start >= usize::from(start) && token.end <= usize::from(end)).collect();
-                    let (from, to) = (tokens.first().map_or(usize::from(start), |t| t.start), tokens.last().map_or(usize::from(end), |t| t.end));
-                    children.push(Node { kind: "pattern", role: "pat".into(), text: flat_text(&tokens), attr: None, stmt: false, start: self.pos(from), end: self.pos(to), children: Vec::new() });
+                    let tokens: Vec<Flat> = flat_tokens(local.syntax())
+                        .into_iter()
+                        .filter(|token| token.start >= usize::from(start) && token.end <= usize::from(end))
+                        .collect();
+                    let (from, to) = (
+                        tokens.first().map_or(usize::from(start), |t| t.start),
+                        tokens.last().map_or(usize::from(end), |t| t.end),
+                    );
+                    children.push(Node {
+                        kind: "pattern",
+                        role: "pat".into(),
+                        text: flat_text(&tokens),
+                        attr: None,
+                        stmt: false,
+                        start: self.pos(from),
+                        end: self.pos(to),
+                        children: Vec::new(),
+                    });
                 }
                 if let Some(init) = local.initializer() {
                     children.push(self.expr_node("init", &init));
@@ -352,12 +461,6 @@ impl<'a> Builder<'a> {
         use ast::Expr;
         let role = role.into();
         let syntax = expr.syntax();
-        let with_attr = |mut node: Node, attr: String| {
-            node.attr = Some(attr);
-            node
-        };
-        let list = |prefix: &str, exprs: &mut dyn Iterator<Item = ast::Expr>| -> Vec<Node> { exprs.enumerate().map(|(index, arg)| self.expr_node(format!("{prefix}[{index}]"), &arg)).collect() };
-        let token_text = |token: Option<SyntaxToken>| token.map(|token| token.text().to_string()).unwrap_or_default();
         match expr {
             Expr::ParenExpr(inner) => match inner.expr() {
                 Some(value) => {
@@ -370,47 +473,89 @@ impl<'a> Builder<'a> {
             Expr::Literal(_) => self.node("lit", role, syntax, Vec::new()),
             Expr::PathExpr(_) => self.node("path", role, syntax, Vec::new()),
             Expr::BinExpr(binary) => {
-                let children = [self.opt_expr("lhs", binary.lhs()), self.opt_expr("rhs", binary.rhs())].into_iter().flatten().collect();
+                let children = [self.opt_expr("lhs", binary.lhs()), self.opt_expr("rhs", binary.rhs())]
+                    .into_iter()
+                    .flatten()
+                    .collect();
                 match binary.op_kind() {
                     Some(ast::BinaryOp::Assignment { op: None }) => self.node("assign", role, syntax, children),
-                    _ => with_attr(self.node("binary", role, syntax, children), token_text(binary.op_token())),
+                    _ => Node::with_attr(self.node("binary", role, syntax, children), token_text(binary.op_token())),
                 }
             }
-            Expr::PrefixExpr(unary) => with_attr(self.node("unary", role, syntax, self.opt_expr("operand", unary.expr()).into_iter().collect()), token_text(unary.op_token())),
+            Expr::PrefixExpr(unary) => Node::with_attr(
+                self.node("unary", role, syntax, self.opt_expr("operand", unary.expr()).into_iter().collect()),
+                token_text(unary.op_token()),
+            ),
             Expr::TryExpr(inner) => self.node("try", role, syntax, self.opt_expr("operand", inner.expr()).into_iter().collect()),
             Expr::RefExpr(inner) if inner.raw_token().is_none() => {
                 let attr = if inner.mut_token().is_some() { "&mut" } else { "&" };
-                with_attr(self.node("ref", role, syntax, self.opt_expr("operand", inner.expr()).into_iter().collect()), attr.to_string())
+                Node::with_attr(
+                    self.node("ref", role, syntax, self.opt_expr("operand", inner.expr()).into_iter().collect()),
+                    attr.to_string(),
+                )
             }
-            Expr::CastExpr(cast) => with_attr(self.node("cast", role, syntax, self.opt_expr("operand", cast.expr()).into_iter().collect()), compare_opt(cast.ty().as_ref())),
+            Expr::CastExpr(cast) => Node::with_attr(
+                self.node("cast", role, syntax, self.opt_expr("operand", cast.expr()).into_iter().collect()),
+                compare_opt(cast.ty().as_ref()),
+            ),
             Expr::CallExpr(call) => {
                 let mut children: Vec<Node> = self.opt_expr("callee", call.expr()).into_iter().collect();
-                children.extend(list("args", &mut call.arg_list().into_iter().flat_map(|args| args.args())));
+                children.extend(self.expr_list("args", call.arg_list().into_iter().flat_map(|args| args.args())));
                 self.node("call", role, syntax, children)
             }
             Expr::MethodCallExpr(call) => {
                 let mut children: Vec<Node> = self.opt_expr("recv", call.receiver()).into_iter().collect();
-                children.extend(list("args", &mut call.arg_list().into_iter().flat_map(|args| args.args())));
-                with_attr(self.node("method_call", role, syntax, children), call.name_ref().map(|name| name.text().to_string()).unwrap_or_default())
+                children.extend(self.expr_list("args", call.arg_list().into_iter().flat_map(|args| args.args())));
+                Node::with_attr(
+                    self.node("method_call", role, syntax, children),
+                    call.name_ref().map_or_default(|name| name.text().to_string()),
+                )
             }
-            Expr::FieldExpr(field) => {
-                with_attr(self.node("field", role, syntax, self.opt_expr("base", field.expr()).into_iter().collect()), field.name_ref().map(|name| name.text().to_string()).unwrap_or_default())
-            }
-            Expr::IndexExpr(index) => self.node("index", role, syntax, [self.opt_expr("base", index.base()), self.opt_expr("index", index.index())].into_iter().flatten().collect()),
+            Expr::FieldExpr(field) => Node::with_attr(
+                self.node("field", role, syntax, self.opt_expr("base", field.expr()).into_iter().collect()),
+                field.name_ref().map_or_default(|name| name.text().to_string()),
+            ),
+            Expr::IndexExpr(index) => self.node(
+                "index",
+                role,
+                syntax,
+                [self.opt_expr("base", index.base()), self.opt_expr("index", index.index())]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            ),
             Expr::RecordExpr(lit) => {
                 let children = lit
                     .record_expr_field_list()
                     .into_iter()
-                    .flat_map(|fields| fields.fields())
+                    .flat_map(|field_list| field_list.fields())
                     .filter_map(|field| {
-                        let name = field.field_name().map(|name| name.text().to_string()).unwrap_or_default();
+                        let name = field.field_name().map_or_default(|name| name.text().to_string());
                         field.expr().map(|value| self.expr_node(format!("fields[{name}]"), &value))
                     })
                     .collect();
-                with_attr(self.node("struct", role, syntax, children), compare_opt(lit.path().as_ref()))
+                Node::with_attr(self.node("struct", role, syntax, children), compare_opt(lit.path().as_ref()))
             }
-            Expr::TupleExpr(tuple) => self.node("tuple", role, syntax, list("elems", &mut tuple.fields())),
-            Expr::ArrayExpr(array) if array.semicolon_token().is_none() => self.node("array", role, syntax, list("elems", &mut array.exprs())),
+            Expr::TupleExpr(tuple) => self.node("tuple", role, syntax, self.expr_list("elems", tuple.fields())),
+            Expr::ArrayExpr(array) if array.semicolon_token().is_none() => self.node("array", role, syntax, self.expr_list("elems", array.exprs())),
+            _ => self.control_node(role, expr),
+        }
+    }
+
+    /// The nodes of a list of expressions, with the roles `prefix[0]`, `prefix[1]`, …
+    fn expr_list(&self, prefix: &str, exprs: impl Iterator<Item = ast::Expr>) -> Vec<Node> {
+        exprs
+            .enumerate()
+            .map(|(index, arg)| self.expr_node(format!("{prefix}[{index}]"), &arg))
+            .collect()
+    }
+
+    /// Builds the node of a control flow expression, a closure, a jump, a range, an `await`, or
+    /// a macro call. Each other expression is an `other` leaf.
+    fn control_node(&self, role: String, expr: &ast::Expr) -> Node {
+        use ast::Expr;
+        let syntax = expr.syntax();
+        match expr {
             Expr::IfExpr(expr_if) => {
                 let mut children: Vec<Node> = self.opt_expr("cond", expr_if.condition()).into_iter().collect();
                 children.extend(expr_if.then_branch().map(|then| self.block("then", &then)));
@@ -422,32 +567,43 @@ impl<'a> Builder<'a> {
                 self.node("if", role, syntax, children)
             }
             Expr::LetExpr(expr_let) => {
-                let children = [expr_let.pat().map(|pat| self.pattern_node("pat", &pat)), self.opt_expr("scrutinee", expr_let.expr())].into_iter().flatten().collect();
+                let children = [
+                    expr_let.pat().map(|pat| self.pattern_node("pat", &pat)),
+                    self.opt_expr("scrutinee", expr_let.expr()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 self.node("let_cond", role, syntax, children)
             }
-            Expr::MatchExpr(expr_match) => {
-                let mut children: Vec<Node> = self.opt_expr("scrutinee", expr_match.expr()).into_iter().collect();
-                for (index, arm) in expr_match.match_arm_list().into_iter().flat_map(|arms| arms.arms()).enumerate() {
-                    children.extend(arm.pat().map(|pat| self.pattern_node(&format!("arm[{index}].pat"), &pat)));
-                    if let Some(guard) = arm.guard().and_then(|guard| guard.condition()) {
-                        children.push(self.expr_node(format!("arm[{index}].guard"), &guard));
-                    }
-                    children.extend(arm.expr().map(|body| match &body {
-                        Expr::BlockExpr(block) if block.modifier().is_none() && block.attrs().next().is_none() => self.block(format!("arm[{index}].body"), block),
-                        other => self.expr_node(format!("arm[{index}].body"), other),
-                    }));
-                }
-                self.node("match", role, syntax, children)
-            }
+            Expr::MatchExpr(expr_match) => self.match_node(role, syntax, expr_match),
             Expr::ForExpr(for_loop) => {
-                let children = [for_loop.pat().map(|pat| self.pattern_node("pat", &pat)), self.opt_expr("iter", for_loop.iterable()), for_loop.loop_body().map(|body| self.block("body", &body))].into_iter().flatten().collect();
+                let children = [
+                    for_loop.pat().map(|pat| self.pattern_node("pat", &pat)),
+                    self.opt_expr("iter", for_loop.iterable()),
+                    for_loop.loop_body().map(|body| self.block("body", &body)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 self.node("for", role, syntax, children)
             }
             Expr::WhileExpr(while_loop) => {
-                let children = [self.opt_expr("cond", while_loop.condition()), while_loop.loop_body().map(|body| self.block("body", &body))].into_iter().flatten().collect();
+                let children = [
+                    self.opt_expr("cond", while_loop.condition()),
+                    while_loop.loop_body().map(|body| self.block("body", &body)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 self.node("while", role, syntax, children)
             }
-            Expr::LoopExpr(loop_expr) => self.node("loop", role, syntax, loop_expr.loop_body().map(|body| self.block("body", &body)).into_iter().collect()),
+            Expr::LoopExpr(loop_expr) => self.node(
+                "loop",
+                role,
+                syntax,
+                loop_expr.loop_body().map(|body| self.block("body", &body)).into_iter().collect(),
+            ),
             Expr::BlockExpr(block_expr) => {
                 let kind = match block_expr.modifier() {
                     None | Some(ast::BlockModifier::Label(_)) => "block_expr",
@@ -459,28 +615,17 @@ impl<'a> Builder<'a> {
                 let body = block_expr.stmt_list().map(|list| self.stmt_list("body", &list));
                 self.node(kind, role, syntax, body.into_iter().collect())
             }
-            Expr::ClosureExpr(closure) => {
-                let body = closure.body();
-                let block = match &body {
-                    Some(Expr::BlockExpr(block)) if matches!(block.modifier(), None | Some(ast::BlockModifier::Label(_))) => Some(block),
-                    _ => None,
-                };
-                let kind = if block.is_some() { "closure_block" } else { "closure" };
-                let child = match (block, &body) {
-                    (Some(block), _) => Some(self.block("body", block)),
-                    (None, Some(other)) => Some(self.expr_node("body", other)),
-                    (None, None) => None,
-                };
-                let params: Vec<String> = closure.param_list().into_iter().flat_map(|list| list.params()).map(|param| compare(&param)).collect();
-                with_attr(self.node(kind, role, syntax, child.into_iter().collect()), params.join(", "))
-            }
+            Expr::ClosureExpr(closure) => self.closure_node(role, syntax, closure),
             Expr::ReturnExpr(ret) => self.node("return", role, syntax, self.opt_expr("value", ret.expr()).into_iter().collect()),
             Expr::BreakExpr(brk) => self.node("break", role, syntax, self.opt_expr("value", brk.expr()).into_iter().collect()),
             Expr::ContinueExpr(_) => self.node("continue", role, syntax, Vec::new()),
             Expr::RangeExpr(range) => {
                 use ast::RangeItem;
-                let children = [self.opt_expr("start", range.start()), self.opt_expr("end", range.end())].into_iter().flatten().collect();
-                with_attr(self.node("range", role, syntax, children), token_text(range.op_token()))
+                let children = [self.opt_expr("start", range.start()), self.opt_expr("end", range.end())]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                Node::with_attr(self.node("range", role, syntax, children), token_text(range.op_token()))
             }
             Expr::AwaitExpr(await_expr) => self.node("await", role, syntax, self.opt_expr("operand", await_expr.expr()).into_iter().collect()),
             Expr::MacroExpr(mac) => match mac.macro_call() {
@@ -489,6 +634,50 @@ impl<'a> Builder<'a> {
             },
             _ => self.node("other", role, syntax, Vec::new()),
         }
+    }
+
+    /// Builds the node of a `match` expression: the scrutinee, and the pattern, the guard, and
+    /// the body of each arm.
+    fn match_node(&self, role: String, syntax: &SyntaxNode, expr_match: &ast::MatchExpr) -> Node {
+        use ast::Expr;
+        let mut children: Vec<Node> = self.opt_expr("scrutinee", expr_match.expr()).into_iter().collect();
+        for (index, arm) in expr_match.match_arm_list().into_iter().flat_map(|arms| arms.arms()).enumerate() {
+            children.extend(arm.pat().map(|pat| self.pattern_node(&format!("arm[{index}].pat"), &pat)));
+            if let Some(guard) = arm.guard().and_then(|guard| guard.condition()) {
+                children.push(self.expr_node(format!("arm[{index}].guard"), &guard));
+            }
+            children.extend(arm.expr().map(|body| match &body {
+                Expr::BlockExpr(block) if block.modifier().is_none() && block.attrs().next().is_none() => {
+                    self.block(format!("arm[{index}].body"), block)
+                }
+                other => self.expr_node(format!("arm[{index}].body"), other),
+            }));
+        }
+        self.node("match", role, syntax, children)
+    }
+
+    /// Builds the node of a closure. A closure with a plain block body is a `closure_block`.
+    /// The attribute of the node has the parameters.
+    fn closure_node(&self, role: String, syntax: &SyntaxNode, closure: &ast::ClosureExpr) -> Node {
+        use ast::Expr;
+        let body = closure.body();
+        let block = match &body {
+            Some(Expr::BlockExpr(block)) if matches!(block.modifier(), None | Some(ast::BlockModifier::Label(_))) => Some(block),
+            _ => None,
+        };
+        let kind = if block.is_some() { "closure_block" } else { "closure" };
+        let child = match (block, &body) {
+            (Some(block), _) => Some(self.block("body", block)),
+            (None, Some(other)) => Some(self.expr_node("body", other)),
+            (None, None) => None,
+        };
+        let params: Vec<String> = closure
+            .param_list()
+            .into_iter()
+            .flat_map(|list| list.params())
+            .map(|param| compare(&param))
+            .collect();
+        Node::with_attr(self.node(kind, role, syntax, child.into_iter().collect()), params.join(", "))
     }
 
     /// A macro call. The arguments of a known `std` macro become children (`args[0]`, …). Other
@@ -527,16 +716,34 @@ impl<'a> Builder<'a> {
         }
         // The offsets of the new text: the input starts after the open delimiter.
         let inner_start = usize::from(tree.syntax().text_range().start()) + 1;
-        let builder = Builder { lines: self.lines, shift: self.shift + inner_start as isize - HEAD.len() as isize, edition: self.edition, tokens: &[] };
-        Some(args.args().enumerate().map(|(index, arg)| builder.expr_node(format!("args[{index}]"), &arg)).collect())
+        let builder = Builder {
+            lines: self.lines,
+            shift: self.shift + inner_start.cast_signed() - HEAD.len().cast_signed(),
+            edition: self.edition,
+            tokens: &[],
+        };
+        Some(
+            args.args()
+                .enumerate()
+                .map(|(index, arg)| builder.expr_node(format!("args[{index}]"), &arg))
+                .collect(),
+        )
     }
+}
+
+/// The text of a token, or an empty text.
+fn token_text(token: Option<SyntaxToken>) -> String {
+    token.map_or_default(|token| token.text().to_string())
 }
 
 fn is_block_like_expr(expr: &ast::Expr) -> bool {
     use ast::Expr;
     match expr {
         Expr::IfExpr(_) | Expr::MatchExpr(_) | Expr::ForExpr(_) | Expr::WhileExpr(_) | Expr::LoopExpr(_) => true,
-        Expr::BlockExpr(block) => matches!(block.modifier(), None | Some(ast::BlockModifier::Label(_)) | Some(ast::BlockModifier::Unsafe(_))),
+        Expr::BlockExpr(block) => matches!(
+            block.modifier(),
+            None | Some(ast::BlockModifier::Label(_) | ast::BlockModifier::Unsafe(_))
+        ),
         _ => false,
     }
 }
@@ -556,41 +763,84 @@ pub(crate) fn tokens_in<'a>(tokens: &'a [Flat], node: &SyntaxNode) -> Option<&'a
 /// A macro call with braces as an expression: `m! { … }`.
 fn brace_macro(expr: &ast::Expr) -> bool {
     let ast::Expr::MacroExpr(mac) = expr else { return false };
-    mac.macro_call().and_then(|call| call.token_tree()).and_then(|tree| tree.l_curly_token()).is_some()
+    mac.macro_call()
+        .and_then(|call| call.token_tree())
+        .and_then(|tree| tree.l_curly_token())
+        .is_some()
 }
 
 /// The tokens of the signature of a function: from the first qualifier (or `fn`) to the end of
 /// the `where` clause, the return type, or the parameters.
 pub(crate) fn signature_tokens(function: &ast::Fn) -> Vec<Flat> {
-    let start = [function.const_token(), function.async_token(), function.unsafe_token(), function.fn_token()]
+    let start = [
+        function.const_token(),
+        function.async_token(),
+        function.unsafe_token(),
+        function.fn_token(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|token| usize::from(token.text_range().start()))
+    .chain(function.abi().map(|abi| usize::from(abi.syntax().text_range().start())))
+    .min();
+    let end = [
+        function.where_clause().map(|n| n.syntax().clone()),
+        function.ret_type().map(|n| n.syntax().clone()),
+        function.param_list().map(|n| n.syntax().clone()),
+        function.generic_param_list().map(|n| n.syntax().clone()),
+        function.name().map(|n| n.syntax().clone()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|node| usize::from(node.text_range().end()))
+    .max();
+    let (Some(start), Some(end)) = (start, end) else {
+        return Vec::new();
+    };
+    flat_tokens(function.syntax())
         .into_iter()
-        .flatten()
-        .map(|token| usize::from(token.text_range().start()))
-        .chain(function.abi().map(|abi| usize::from(abi.syntax().text_range().start())))
-        .min();
-    let end = [function.where_clause().map(|n| n.syntax().clone()), function.ret_type().map(|n| n.syntax().clone()), function.param_list().map(|n| n.syntax().clone()), function.generic_param_list().map(|n| n.syntax().clone()), function.name().map(|n| n.syntax().clone())]
-        .into_iter()
-        .flatten()
-        .map(|node| usize::from(node.text_range().end()))
-        .max();
-    let (Some(start), Some(end)) = (start, end) else { return Vec::new() };
-    flat_tokens(function.syntax()).into_iter().filter(|token| token.start >= start && token.end <= end).collect()
+        .filter(|token| token.start >= start && token.end <= end)
+        .collect()
 }
 
 /// The node of an expression text (for a claim pattern). The places are in the text.
+#[must_use]
 pub fn expr_text_node(role: &str, text: &str) -> Option<Node> {
     let expr = crate::rs::parse_expr(text)?;
     // The text is at an offset in the wrapper of the parse.
     let start = usize::from(expr.syntax().text_range().start()) - (text.len() - text.trim_start().len());
     let lines = Lines::new(text);
-    let builder = Builder { lines: &lines, shift: -(start as isize), edition: Edition::Edition2021, tokens: &[] };
+    let builder = Builder {
+        lines: &lines,
+        shift: -start.cast_signed(),
+        edition: Edition::Edition2021,
+        tokens: &[],
+    };
     Some(builder.expr_node(role, &expr))
 }
 
 /// The `std` macros whose input is a list of expressions (design 4.1).
 const EXPRESSION_MACROS: &[&str] = &[
-    "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "panic", "assert", "assert_eq",
-    "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "vec", "dbg", "todo", "unimplemented", "unreachable",
+    "println",
+    "print",
+    "eprintln",
+    "eprint",
+    "format",
+    "format_args",
+    "write",
+    "writeln",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "vec",
+    "dbg",
+    "todo",
+    "unimplemented",
+    "unreachable",
 ];
 
 #[cfg(test)]

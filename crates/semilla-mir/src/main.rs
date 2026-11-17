@@ -21,12 +21,12 @@
 
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
+extern crate rustc_ast_pretty;
 extern crate rustc_attr_ir;
 extern crate rustc_crate_store;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
-extern crate rustc_ast;
-extern crate rustc_ast_pretty;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_infer;
@@ -121,7 +121,11 @@ fn inherited_checks(args: &[String]) -> Vec<String> {
     let value = |key: &str| -> Option<String> {
         let mut found = None;
         for (index, arg) in args.iter().enumerate() {
-            let flag = if arg == "-C" { args.get(index + 1).map(String::as_str) } else { arg.strip_prefix("-C") };
+            let flag = if arg == "-C" {
+                args.get(index + 1).map(String::as_str)
+            } else {
+                arg.strip_prefix("-C")
+            };
             if let Some(rest) = flag.and_then(|f| f.strip_prefix(key)) {
                 found = Some(rest.trim_start_matches('=').to_string());
             }
@@ -130,8 +134,8 @@ fn inherited_checks(args: &[String]) -> Vec<String> {
     };
     let on = |text: &str| matches!(text, "" | "y" | "yes" | "on" | "true");
     let opt_zero = value("opt-level").is_none_or(|level| level == "0");
-    let debug = value("debug-assertions").map(|v| on(&v)).unwrap_or(opt_zero);
-    let overflow = value("overflow-checks").map(|v| on(&v)).unwrap_or(debug);
+    let debug = value("debug-assertions").map_or(opt_zero, |v| on(&v));
+    let overflow = value("overflow-checks").map_or(debug, |v| on(&v));
     let flag = |name: &str, on: bool| format!("-C{name}={}", if on { "on" } else { "off" });
     vec![flag("debug-assertions", debug), flag("overflow-checks", overflow)]
 }
@@ -272,8 +276,12 @@ struct External {
 /// True for the function of an opaque value (see `config.rs`): the intrinsic `black_box`. It
 /// is not a call of the source.
 pub(crate) fn is_opaque_wrap(func: &rustc_public::mir::Operand) -> bool {
-    let rustc_public::mir::Operand::Constant(constant) = func else { return false };
-    let TyKind::RigidTy(RigidTy::FnDef(def, _)) = constant.const_.ty().kind() else { return false };
+    let rustc_public::mir::Operand::Constant(constant) = func else {
+        return false;
+    };
+    let TyKind::RigidTy(RigidTy::FnDef(def, _)) = constant.const_.ty().kind() else {
+        return false;
+    };
     rustc_middle::ty::tls::with(|tcx| config::is_black_box(tcx, rustc_public::rustc_internal::internal(tcx, def.def_id())))
 }
 
@@ -282,10 +290,14 @@ fn external_calls(body: &Body) -> Vec<External> {
     use rustc_public::mir::{Mutability, Safety, TerminatorKind};
     let mut found = std::collections::BTreeSet::new();
     for block in &body.blocks {
-        let TerminatorKind::Call { func, .. } = &block.terminator.kind else { continue };
+        let TerminatorKind::Call { func, .. } = &block.terminator.kind else {
+            continue;
+        };
         let Ok(ty) = func.ty(body.locals()) else { continue };
         let kind = ty.kind();
-        let TyKind::RigidTy(RigidTy::FnDef(def, _)) = &kind else { continue };
+        let TyKind::RigidTy(RigidTy::FnDef(def, _)) = &kind else {
+            continue;
+        };
         if def.krate().is_local || is_opaque_wrap(func) {
             continue;
         }
@@ -293,17 +305,15 @@ fn external_calls(body: &Body) -> Vec<External> {
         if let Some(signature) = kind.fn_sig() {
             let signature = signature.skip_binder();
             match signature.output().kind() {
-                TyKind::RigidTy(RigidTy::Adt(adt, _))
-                    if adt.name().ends_with("::Result") || adt.name().ends_with("::Option") =>
-                {
-                    badges.push("err")
-                }
+                TyKind::RigidTy(RigidTy::Adt(adt, _)) if adt.name().ends_with("::Result") || adt.name().ends_with("::Option") => badges.push("err"),
                 TyKind::RigidTy(RigidTy::Never) => badges.push("never"),
                 _ => {}
             }
-            if signature.inputs().iter().any(|input| {
-                matches!(input.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut)))
-            }) {
+            if signature
+                .inputs()
+                .iter()
+                .any(|input| matches!(input.kind(), TyKind::RigidTy(RigidTy::Ref(_, _, Mutability::Mut))))
+            {
                 badges.push("mut");
             }
             if signature.safety == Safety::Unsafe {
@@ -312,7 +322,12 @@ fn external_calls(body: &Body) -> Vec<External> {
         }
         let (krate, real) = rustc_middle::ty::tls::with(|tcx| reach::origin(rustc_public::rustc_internal::internal(tcx, def.def_id())));
         let path = rustc_middle::ty::tls::with(|tcx| reach::extern_crate_path(tcx, def.name()));
-        found.insert(External { path, badges, krate, def: real });
+        found.insert(External {
+            path,
+            badges,
+            krate,
+            def: real,
+        });
     }
     found.into_iter().collect()
 }
@@ -374,28 +389,31 @@ fn wrapper_mode(args: &[String]) -> ExitCode {
 /// the messages of cargo name. A binary of the user with such a name gets no record: its facts
 /// stay facts to read.
 fn is_build_script(args: &[String]) -> bool {
-    let value = |key: &str| args.iter().position(|arg| arg == key).and_then(|index| args.get(index + 1)).map(String::as_str);
+    let value = |key: &str| {
+        args.iter()
+            .position(|arg| arg == key)
+            .and_then(|index| args.get(index + 1))
+            .map(String::as_str)
+    };
     value("--crate-name").is_some_and(|name| name.starts_with("build_script_")) && value("--crate-type") == Some("bin")
 }
 
 /// Returns true for a rustc call that does not compile a crate: a version query, a `--print`
 /// query, or a call without a source file.
 fn is_probe(args: &[String]) -> bool {
-    let query = args.iter().any(|arg| {
-        arg == "-vV"
-            || arg == "-V"
-            || arg == "--version"
-            || arg == "-"
-            || arg.starts_with("--print")
-    });
-    let has_source = args.iter().any(|arg| !arg.starts_with('-') && arg.ends_with(".rs"));
+    let query = args
+        .iter()
+        .any(|arg| arg == "-vV" || arg == "-V" || arg == "--version" || arg == "-" || arg.starts_with("--print"));
+    let has_source = args
+        .iter()
+        .any(|arg| !arg.starts_with('-') && arg.rsplit_once('.').is_some_and(|(_, found)| found == "rs"));
     query || !has_source
 }
 
 /// Runs the real rustc with the same arguments, and returns its exit code.
 fn pass_through(rustc: &str, args: &[String]) -> ExitCode {
     match Command::new(rustc).args(args).status() {
-        Ok(status) => ExitCode::from(status.code().unwrap_or(1).clamp(0, 255) as u8),
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(1).clamp(0, 255)).unwrap_or(u8::MAX)),
         Err(error) => {
             eprintln!("semilla-mir-driver: cannot run {rustc}: {error}");
             ExitCode::FAILURE
@@ -406,9 +424,7 @@ fn pass_through(rustc: &str, args: &[String]) -> ExitCode {
 /// Returns a file name that is different for each target of a crate: the crate name, the crate
 /// kind (`lib`, `bin`, `test`, ...), and the metadata hash that cargo gives.
 fn output_file_name(args: &[String]) -> String {
-    let value_of = |flag: &str| {
-        args.iter().position(|arg| arg == flag).and_then(|index| args.get(index + 1)).cloned()
-    };
+    let value_of = |flag: &str| args.iter().position(|arg| arg == flag).and_then(|index| args.get(index + 1)).cloned();
     let crate_name = value_of("--crate-name").unwrap_or_else(|| "unknown".to_string());
     let kind = if args.iter().any(|arg| arg == "--test") {
         "test".to_string()
@@ -444,15 +460,18 @@ fn output_file_name(args: &[String]) -> String {
 fn run_compiler(level: Level, rustc_args: &[String], output: Output) -> ExitCode {
     let mut full_args = vec!["rustc".to_string()];
     full_args.extend(rustc_args.iter().cloned());
-    full_args.extend(level.rustc_flags().iter().map(|flag| flag.to_string()));
+    full_args.extend(level.rustc_flags().iter().map(std::string::ToString::to_string));
     // A new opt-level changes the rustc defaults of the debug assertions and the overflow checks.
     // Keep the values of the build that cargo asked for (from the profile of the tree).
     full_args.extend(inherited_checks(rustc_args));
 
-    let mut callbacks = Callbacks { level, output, error: None, made: None };
-    let result = rustc_driver::catch_fatal_errors(|| {
-        rustc_driver::compiler_entrypoint(&full_args, &mut callbacks)
-    });
+    let mut callbacks = Callbacks {
+        level,
+        output,
+        error: None,
+        made: None,
+    };
+    let result = rustc_driver::catch_fatal_errors(|| rustc_driver::compiler_entrypoint(&full_args, &mut callbacks));
     if let Some(error) = callbacks.error {
         eprintln!("semilla-mir-driver: {error}");
         return ExitCode::FAILURE;
@@ -475,24 +494,16 @@ struct Callbacks {
 impl rustc_driver::Callbacks for Callbacks {
     fn config(&mut self, config: &mut interface::Config) {
         config::install(config);
-        let tracked: Vec<(String, Option<String>)> =
-            TRACKED_ENV.iter().map(|name| (name.to_string(), std::env::var(name).ok())).collect();
+        let tracked: Vec<(String, Option<String>)> = TRACKED_ENV.iter().map(|name| (name.to_string(), std::env::var(name).ok())).collect();
         config.track_state = Some(Box::new(move |sess| {
             let mut env = sess.env_depinfo.lock();
             for (name, value) in &tracked {
-                env.insert((
-                    rustc_span::Symbol::intern(name),
-                    value.as_deref().map(rustc_span::Symbol::intern),
-                ));
+                env.insert((rustc_span::Symbol::intern(name), value.as_deref().map(rustc_span::Symbol::intern)));
             }
         }));
     }
 
-    fn after_expansion<'tcx>(
-        &mut self,
-        _compiler: &interface::Compiler,
-        tcx: TyCtxt<'tcx>,
-    ) -> Compilation {
+    fn after_expansion(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         // The list is large, and Semilla reads it only from the N0 records.
         if self.level == Level::N0 {
             self.made = guarded(|| made::collect(tcx));
@@ -500,11 +511,7 @@ impl rustc_driver::Callbacks for Callbacks {
         Compilation::Continue
     }
 
-    fn after_analysis<'tcx>(
-        &mut self,
-        _compiler: &interface::Compiler,
-        tcx: TyCtxt<'tcx>,
-    ) -> Compilation {
+    fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         if let Err(error) = traits::write(tcx) {
             self.error = Some(format!("cannot write the trait table: {error}"));
             return Compilation::Stop;
@@ -512,9 +519,7 @@ impl rustc_driver::Callbacks for Callbacks {
         let level = self.level;
         let target = match &self.output {
             Output::Stdout => String::new(),
-            Output::File(path) => {
-                path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
-            }
+            Output::File(path) => path.file_stem().map_or_default(|stem| stem.to_string_lossy().into_owned()),
         };
         let records = match rustc_public::rustc_internal::run(tcx, || collect(level, &target)) {
             Ok(records) => records,
@@ -525,7 +530,9 @@ impl rustc_driver::Callbacks for Callbacks {
         };
         // The first line is the record of the compile unit (batch 5t, part A).
         let mut text = String::new();
-        let mut unit = UnitLine { unit: unit_record(tcx, &target) };
+        let mut unit = UnitLine {
+            unit: unit_record(tcx, &target),
+        };
         unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
         text.push_str(&serde_json::to_string(&unit).expect("a unit record is valid JSON"));
         text.push('\n');
@@ -629,7 +636,7 @@ fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
     UnitRecord {
         target: target.to_string(),
         package: std::env::var("CARGO_PKG_NAME").unwrap_or_default(),
-        folder: std::env::var("CARGO_MANIFEST_DIR").map(|folder| workspace_path(std::path::Path::new(&folder))).unwrap_or_default(),
+        folder: std::env::var("CARGO_MANIFEST_DIR").map_or_default(|folder| workspace_path(std::path::Path::new(&folder))),
         cfg,
         files: files.into_iter().collect(),
         root,
@@ -648,11 +655,72 @@ fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     std::fs::rename(&temporary, path)
 }
 
+/// Adds the facts of the N0 record of a body: the reach, the callees, the ADTs, the aliases,
+/// the uses, and the names of the expanded code.
+fn add_n0_facts(found: &mut BodyRecord, item: CrateItem, body: &Body, by_def: &std::collections::HashMap<rustc_public::DefId, &Body>) {
+    add_reach(found, item, body);
+    found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, by_def)).flatten();
+    if let Some((sure, ends)) = guarded(|| reach::sure_callees(item.def_id(), body, by_def)).flatten() {
+        found.sure_callees = Some(sure);
+        found.sure_ends = Some(ends).filter(|ends| !ends.is_empty());
+    }
+    // No list: the driver failed. The marker makes the body opaque.
+    found.adts = guarded(|| reach::adts(body)).unwrap_or_else(|| vec!["?".to_string()]);
+    // A type alias of a crate outside the workspace: an entry `alias PATH`.
+    let aliases = guarded(|| {
+        rustc_middle::ty::tls::with(|tcx| {
+            let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
+            local.map(|local| config::aliases(tcx, local).iter().map(|path| format!("alias {path}")).collect::<Vec<_>>())
+        })
+    });
+    found.adts.extend(aliases.flatten().unwrap_or_else(|| vec!["?".to_string()]));
+    // The items and the types by the resolution of the compiler (batch 5o).
+    let uses = guarded(|| {
+        rustc_middle::ty::tls::with(|tcx| {
+            let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
+            local.map(|local| config::uses(tcx, local))
+        })
+    });
+    for entry in uses.flatten().unwrap_or_else(|| vec!["?".to_string()]) {
+        if !found.adts.contains(&entry) {
+            found.adts.push(entry);
+        }
+    }
+    // The names of the expanded code (batch 5p). No list: the marker `?` in
+    // `adts` makes the body opaque.
+    let names = guarded(|| {
+        rustc_middle::ty::tls::with(|tcx| {
+            let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
+            local.map(|local| config::names(tcx, local))
+        })
+    });
+    match names.flatten() {
+        Some(names) => {
+            found.names = names
+                .into_iter()
+                .map(|(name, count)| NameRecord {
+                    word: name.word,
+                    member: name.member,
+                    qual: name.qual,
+                    prefix: name.prefix,
+                    mac: name.mac,
+                    line: name.line,
+                    count,
+                    rival: name.rival,
+                })
+                .collect();
+        }
+        None => {
+            if !found.adts.iter().any(|entry| entry == "?") {
+                found.adts.push("?".to_string());
+            }
+        }
+    }
+}
+
 /// Returns the records of all local bodies. Paths print in full, with the crate name first.
 fn collect(level: Level, target: &str) -> Vec<BodyRecord> {
-    rustc_middle::ty::print::with_resolve_crate_name!(
-        rustc_middle::ty::print::with_no_trimmed_paths!(collect_bodies(level, target))
-    )
+    rustc_middle::ty::print::with_resolve_crate_name!(rustc_middle::ty::print::with_no_trimmed_paths!(collect_bodies(level, target)))
 }
 
 /// At N3, a body without an inlined call gets no record: its N3 body is its N2 body, and the
@@ -668,9 +736,16 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
         .collect();
     // The `main` function of the test harness (see `harness.rs`). A failure of the test must not
     // hide a body: then the item keeps its def path and its full text.
-    let harness: HashSet<rustc_public::DefId> =
-        bodies.iter().map(|(item, _)| item.def_id()).filter(|def| guarded(|| harness::is_harness_main(*def)).unwrap_or(false)).collect();
-    let callees = if level == Level::N3 { guarded(|| inline_candidates(&bodies, &harness)) } else { None };
+    let harness: HashSet<rustc_public::DefId> = bodies
+        .iter()
+        .map(|(item, _)| item.def_id())
+        .filter(|def| guarded(|| harness::is_harness_main(*def)).unwrap_or(false))
+        .collect();
+    let callees = if level == Level::N3 {
+        guarded(|| inline_candidates(&bodies, &harness))
+    } else {
+        None
+    };
     let by_def: std::collections::HashMap<rustc_public::DefId, &Body> = bodies.iter().map(|(item, body)| (item.def_id(), body)).collect();
 
     // A constant with a literal initializer has no MIR body. If the literal comes from the
@@ -679,13 +754,15 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
     let literal: Vec<BodyRecord> = if level == Level::N3 {
         Vec::new()
     } else {
-        guarded(|| rustc_middle::ty::tls::with(|tcx| {
-            config::literal_constants(tcx)
-                .into_iter()
-                .filter(|(name, _, _)| !known.contains(name))
-                .map(|(name, identity, span)| config_record(name, identity, rustc_public::rustc_internal::stable(span), level, target))
-                .collect()
-        }))
+        guarded(|| {
+            rustc_middle::ty::tls::with(|tcx| {
+                config::literal_constants(tcx)
+                    .into_iter()
+                    .filter(|(name, _, _)| !known.contains(name))
+                    .map(|(name, identity, span)| config_record(name, identity, rustc_public::rustc_internal::stable(span), level, target))
+                    .collect()
+            })
+        })
         .unwrap_or_default()
     };
 
@@ -706,62 +783,15 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
             let test_crate = guarded(|| test_crate_path(*item)).flatten();
             guarded(|| {
                 // The printer reads the constants of this body.
-                let _reader = rustc_middle::ty::tls::with(|tcx| config::Reader::set(rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local()));
+                let _reader =
+                    rustc_middle::ty::tls::with(|tcx| config::Reader::set(rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local()));
                 let Some(callees) = &callees else {
                     if level == Level::N3 {
                         return None;
                     }
                     let mut found = record(name.clone(), body, level, target, &[], &generics_text(*item));
                     if level == Level::N0 {
-                        add_reach(&mut found, *item, body);
-                        found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
-                        if let Some((sure, ends)) = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten() {
-                            found.sure_callees = Some(sure);
-                            found.sure_ends = Some(ends).filter(|ends| !ends.is_empty());
-                        }
-                        // No list: the driver failed. The marker makes the body opaque.
-                        found.adts = guarded(|| reach::adts(body)).unwrap_or_else(|| vec!["?".to_string()]);
-                        // A type alias of a crate outside the workspace: an entry `alias PATH`.
-                        let aliases = guarded(|| {
-                            rustc_middle::ty::tls::with(|tcx| {
-                                let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
-                                local.map(|local| config::aliases(tcx, local).iter().map(|path| format!("alias {path}")).collect::<Vec<_>>())
-                            })
-                        });
-                        found.adts.extend(aliases.flatten().unwrap_or_else(|| vec!["?".to_string()]));
-                        // The items and the types by the resolution of the compiler (batch 5o).
-                        let uses = guarded(|| {
-                            rustc_middle::ty::tls::with(|tcx| {
-                                let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
-                                local.map(|local| config::uses(tcx, local))
-                            })
-                        });
-                        for entry in uses.flatten().unwrap_or_else(|| vec!["?".to_string()]) {
-                            if !found.adts.contains(&entry) {
-                                found.adts.push(entry);
-                            }
-                        }
-                        // The names of the expanded code (batch 5p). No list: the marker `?` in
-                        // `adts` makes the body opaque.
-                        let names = guarded(|| {
-                            rustc_middle::ty::tls::with(|tcx| {
-                                let local = rustc_public::rustc_internal::internal(tcx, item.def_id()).as_local();
-                                local.map(|local| config::names(tcx, local))
-                            })
-                        });
-                        match names.flatten() {
-                            Some(names) => {
-                                found.names = names
-                                    .into_iter()
-                                    .map(|(name, count)| NameRecord { word: name.word, member: name.member, qual: name.qual, prefix: name.prefix, mac: name.mac, line: name.line, count, rival: name.rival })
-                                    .collect();
-                            }
-                            None => {
-                                if !found.adts.iter().any(|entry| entry == "?") {
-                                    found.adts.push("?".to_string());
-                                }
-                            }
-                        }
+                        add_n0_facts(&mut found, *item, body, &by_def);
                     }
                     return Some(found);
                 };
@@ -776,14 +806,8 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                 if normalize::is_loop_free(&full) {
                     tries.push(full.clone());
                 }
-                for scope in [
-                    inline::Scope::LoopFree,
-                    inline::Scope::SmallLoopFree,
-                    inline::Scope::TinyLoopFree,
-                ] {
-                    tries.push(
-                        inline::inline_calls(body, callees, scope).unwrap_or_else(|| body.clone()),
-                    );
+                for scope in [inline::Scope::LoopFree, inline::Scope::SmallLoopFree, inline::Scope::TinyLoopFree] {
+                    tries.push(inline::inline_calls(body, callees, scope).unwrap_or_else(|| body.clone()));
                 }
                 let mut found = record(name.clone(), &full, level, target, &tries, &generics_text(*item));
                 inlined.sort();
@@ -826,9 +850,14 @@ fn test_crate_path(item: CrateItem) -> Option<String> {
         if !matches!(tcx.def_kind(def), DefKind::Static { .. } | DefKind::Const) {
             return None;
         }
-        let rustc_middle::ty::Adt(adt, _) = tcx.type_of(def).instantiate_identity().skip_norm_wip().kind() else { return None };
+        let rustc_middle::ty::Adt(adt, _) = tcx.type_of(def).instantiate_identity().skip_norm_wip().kind() else {
+            return None;
+        };
         let krate = adt.did().krate;
-        if krate == rustc_span::def_id::LOCAL_CRATE || tcx.crate_name(krate) != rustc_span::sym::test || tcx.item_name(adt.did()).as_str() != "TestDescAndFn" {
+        if krate == rustc_span::def_id::LOCAL_CRATE
+            || tcx.crate_name(krate) != rustc_span::sym::test
+            || tcx.item_name(adt.did()).as_str() != "TestDescAndFn"
+        {
             return None;
         }
         let path = tcx.def_path_str(krate.as_def_id());
@@ -854,7 +883,12 @@ fn config_record(name: String, identity: String, span: rustc_public::ty::Span, l
     found.loop_free = true;
     found.span = guarded(|| {
         let lines = span.get_lines();
-        SpanInfo { file: span.get_filename(), line_start: lines.start_line, line_end: lines.end_line, range: None }
+        SpanInfo {
+            file: span.get_filename(),
+            line_start: lines.start_line,
+            line_end: lines.end_line,
+            range: None,
+        }
     });
     found.config = vec![identity];
     found
@@ -865,7 +899,7 @@ fn config_record(name: String, identity: String, span: rustc_public::ty::Span, l
 fn harness_record(name: String, body: &Body, level: Level, target: &str) -> BodyRecord {
     let mut found = record(name, body, level, target, &[], "");
     if let Some(text) = harness::text(body) {
-        found.shape = text.clone();
+        found.shape.clone_from(&text);
         found.text = text;
         found.term = None;
     }
@@ -875,7 +909,7 @@ fn harness_record(name: String, body: &Body, level: Level, target: &str) -> Body
     found
 }
 
-/// Runs `f`. Returns `None` if it panics. A panic in rustc_public for one body must not stop the
+/// Runs `f`. Returns `None` if it panics. A panic in `rustc_public` for one body must not stop the
 /// compile of the crate.
 fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
     catch_unwind(AssertUnwindSafe(f)).ok()
@@ -897,7 +931,11 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         target: target.to_string(),
         externals: Vec::new(),
         // A property claim must not read a body with no record as examined.
-        indirect: if level == Level::N0 { vec!["the driver failed to read a body".into()] } else { Vec::new() },
+        indirect: if level == Level::N0 {
+            vec!["the driver failed to read a body".into()]
+        } else {
+            Vec::new()
+        },
         reach_types: Vec::new(),
         drop_types: Vec::new(),
         drop_calls: Vec::new(),
@@ -938,7 +976,11 @@ fn generics_text(item: CrateItem) -> String {
         params.reverse();
         params
     });
-    if params.is_empty() { String::new() } else { format!(" generics <{}>", params.join(", ")) }
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!(" generics <{}>", params.join(", "))
+    }
 }
 
 /// Returns the body of an item. For an item without generic parameters, this is the body of its
@@ -947,10 +989,10 @@ fn item_body(item: CrateItem) -> Option<Body> {
     if !item.has_body() {
         return None;
     }
-    if !item.requires_monomorphization() {
-        if let Some(body) = Instance::try_from(item).ok().and_then(|instance| instance.body()) {
-            return Some(body);
-        }
+    if !item.requires_monomorphization()
+        && let Some(body) = Instance::try_from(item).ok().and_then(|instance| instance.body())
+    {
+        return Some(body);
     }
     item.body()
 }
@@ -958,21 +1000,14 @@ fn item_body(item: CrateItem) -> Option<Body> {
 /// Builds the record of a body. The term comes from the first body of `term_tries` that is
 /// loop-free and gives a term (each one has the same behavior as `body`). Without tries, the
 /// term comes from `body`.
-fn record(
-    name: String,
-    body: &Body,
-    level: Level,
-    target: &str,
-    term_tries: &[Body],
-    generics: &str,
-) -> BodyRecord {
+fn record(name: String, body: &Body, level: Level, target: &str, term_tries: &[Body], generics: &str) -> BodyRecord {
     let canonical = normalize::canonical_body(body);
     let mut printed = normalize::canonical_text(&canonical);
     // The generic parameters go on the first line (the signature).
-    if !generics.is_empty() {
-        if let Some(end) = printed.text.find(" {\n") {
-            printed.text.insert_str(end, generics);
-        }
+    if !generics.is_empty()
+        && let Some(end) = printed.text.find(" {\n")
+    {
+        printed.text.insert_str(end, generics);
     }
     // A pattern constant that is not configuration-free has no operand: the text names it, and
     // the body gets no term (see `config.rs`).
@@ -1034,7 +1069,11 @@ fn record(
         loop_free,
         term,
         span,
-        site: if level == Level::N0 { guarded(|| body_site(body)).flatten() } else { None },
+        site: if level == Level::N0 {
+            guarded(|| body_site(body)).flatten()
+        } else {
+            None
+        },
         target: target.to_string(),
         externals: if level == Level::N0 {
             guarded(|| external_calls(&canonical)).unwrap_or_default()
@@ -1060,7 +1099,11 @@ fn record(
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: printed.config,
-        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical)) } else { None },
+        elements: if level == Level::N0 {
+            guarded(|| spans::elements(&canonical))
+        } else {
+            None
+        },
     }
 }
 
@@ -1079,7 +1122,12 @@ fn add_reach(record: &mut BodyRecord, item: CrateItem, body: &Body) {
         let path = reach::printed_path(def_id);
         if !record.externals.iter().any(|external| external.path == path) {
             let (krate, def) = reach::origin(def_id);
-            record.externals.push(External { path, badges: Vec::new(), krate, def });
+            record.externals.push(External {
+                path,
+                badges: Vec::new(),
+                krate,
+                def,
+            });
         }
     }
     record.indirect.extend(found.gaps);
@@ -1107,7 +1155,7 @@ fn is_generic<T: rustc_public::visitor::Visitable>(item: &T) -> bool {
         fn visit_ty(&mut self, ty: &rustc_public::ty::Ty) -> std::ops::ControlFlow<()> {
             match ty.kind() {
                 TyKind::Param(_) | TyKind::Alias(..) | TyKind::Bound(..) => std::ops::ControlFlow::Break(()),
-                _ => rustc_public::visitor::Visitable::super_visit(ty, self),
+                TyKind::RigidTy(_) => rustc_public::visitor::Visitable::super_visit(ty, self),
             }
         }
         // A `const` parameter is generic too (`[usize; N]`). rustc stops with an internal error
@@ -1131,7 +1179,9 @@ fn indirect_calls(body: &Body) -> Vec<String> {
     use rustc_public::ty::{AssocContainer, GenericArgKind};
     let mut found = Vec::new();
     for block in &body.blocks {
-        let TerminatorKind::Call { func, .. } = &block.terminator.kind else { continue };
+        let TerminatorKind::Call { func, .. } = &block.terminator.kind else {
+            continue;
+        };
         let Ok(ty) = func.ty(body.locals()) else {
             found.push("a call with no known type".to_string());
             continue;
@@ -1151,7 +1201,7 @@ fn indirect_calls(body: &Body) -> Vec<String> {
                     Some(TyKind::RigidTy(RigidTy::Dynamic(..))) => found.push(format!("a call of `{}` on a trait object", def.name())),
                     Some(TyKind::RigidTy(RigidTy::FnPtr(_))) => found.push(format!("a call of `{}` on a function pointer", def.name())),
                     Some(TyKind::RigidTy(RigidTy::Ref(_, inner, _))) if matches!(inner.kind(), TyKind::RigidTy(RigidTy::Dynamic(..))) => {
-                        found.push(format!("a call of `{}` on a trait object", def.name()))
+                        found.push(format!("a call of `{}` on a trait object", def.name()));
                     }
                     _ if is_generic(&args) => found.push(format!("a call of `{}` on a type parameter", def.name())),
                     _ => {}
@@ -1170,16 +1220,20 @@ fn resolved_callees(body: &Body) -> Vec<String> {
     use rustc_public::ty::AssocContainer;
     let mut found = Vec::new();
     for block in &body.blocks {
-        let TerminatorKind::Call { func, .. } = &block.terminator.kind else { continue };
+        let TerminatorKind::Call { func, .. } = &block.terminator.kind else {
+            continue;
+        };
         let Ok(ty) = func.ty(body.locals()) else { continue };
-        let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else { continue };
+        let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else {
+            continue;
+        };
         if !def.associated_item().is_some_and(|item| item.container == AssocContainer::Trait) || is_generic(&args) {
             continue;
         }
-        if let Ok(instance) = Instance::resolve(def, &args) {
-            if instance.def.krate().is_local {
-                found.push(instance.def.name());
-            }
+        if let Ok(instance) = Instance::resolve(def, &args)
+            && instance.def.krate().is_local
+        {
+            found.push(instance.def.name());
         }
     }
     found
@@ -1202,10 +1256,15 @@ fn body_term(canonical: &Body, generics: &str) -> Option<String> {
 fn inline_candidates(bodies: &[(CrateItem, Body)], harness: &HashSet<rustc_public::DefId>) -> inline::Callees {
     let names: Vec<String> = bodies
         .iter()
-        .map(|(item, _)| if harness.contains(&item.def_id()) { format!("{}::{{test-harness-main}}", item.name()) } else { item.name() })
+        .map(|(item, _)| {
+            if harness.contains(&item.def_id()) {
+                format!("{}::{{test-harness-main}}", item.name())
+            } else {
+                item.name()
+            }
+        })
         .collect();
-    let index: HashMap<&str, usize> =
-        names.iter().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
+    let index: HashMap<&str, usize> = names.iter().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
     let edges: Vec<Vec<usize>> = bodies
         .iter()
         .map(|(_, body)| {
@@ -1237,14 +1296,14 @@ fn inline_candidates(bodies: &[(CrateItem, Body)], harness: &HashSet<rustc_publi
             continue;
         }
         // An item that the build configuration selects is opaque (batch 5l).
-        let selected = guarded(|| rustc_middle::ty::tls::with(|tcx| config::under_cfg(tcx, rustc_public::rustc_internal::internal(tcx, item.def_id())))).unwrap_or(true);
+        let selected =
+            guarded(|| rustc_middle::ty::tls::with(|tcx| config::under_cfg(tcx, rustc_public::rustc_internal::internal(tcx, item.def_id()))))
+                .unwrap_or(true);
         if selected {
             continue;
         }
         let statements: usize = body.blocks.iter().map(|block| block.statements.len()).sum();
-        if body.blocks.len() > inline::MAX_CALLEE_BLOCKS
-            || statements > inline::MAX_CALLEE_STATEMENTS
-        {
+        if body.blocks.len() > inline::MAX_CALLEE_BLOCKS || statements > inline::MAX_CALLEE_STATEMENTS {
             continue;
         }
         if normalize::is_loop_free(body) {

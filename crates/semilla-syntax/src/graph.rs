@@ -15,83 +15,117 @@ use crate::tree::Node;
 /// Builds the workspace graph. `statuses` maps item paths to their status in the change set, and
 /// `changes` maps item paths to their number of changes.
 pub fn workspace_graph(workspace: &Workspace, statuses: &BTreeMap<String, Status>, changes: &BTreeMap<String, usize>) -> WorkspaceGraph {
-    let mut graph = WorkspaceGraph::default();
-    let mut modules = BTreeSet::new();
-    for krate in &workspace.crates {
-        graph.nodes.push(GraphNode {
-            id: krate.name.clone(),
-            label: krate.name.clone(),
-            kind: GraphNodeKind::Crate,
-            parent: None,
-            status: Status::Same,
-            changes: 0,
-            badges: Vec::new(),
-            entry: false,
-            test: false,
-            file: None,
-        });
-        modules.insert(krate.name.clone());
-        for dep in &krate.deps {
-            graph.edges.push(GraphEdge { from: krate.name.clone(), to: dep.clone(), kind: GraphEdgeKind::Depends, status: Status::Same });
+    let mut builder = GraphBuilder {
+        workspace,
+        graph: WorkspaceGraph::default(),
+        modules: BTreeSet::new(),
+    };
+    builder.add_crates();
+    builder.add_modules();
+    let functions: Vec<&crate::Item> = workspace.items.values().filter(|item| item.kind == ItemKind::Fn).collect();
+    builder.add_items(statuses, changes);
+    builder.add_calls(&functions);
+    builder.count_changes();
+    builder.graph
+}
+
+/// The state of the build of a workspace graph: the graph so far and the paths of the crates
+/// and the modules.
+struct GraphBuilder<'a> {
+    workspace: &'a Workspace,
+    graph: WorkspaceGraph,
+    modules: BTreeSet<String>,
+}
+
+impl GraphBuilder<'_> {
+    /// Adds a node for each crate and an edge for each dependency of a crate.
+    fn add_crates(&mut self) {
+        for krate in &self.workspace.crates {
+            self.graph.nodes.push(GraphNode {
+                id: krate.name.clone(),
+                label: krate.name.clone(),
+                kind: GraphNodeKind::Crate,
+                parent: None,
+                status: Status::Same,
+                changes: 0,
+                badges: Vec::new(),
+                entry: false,
+                test: false,
+                file: None,
+            });
+            self.modules.insert(krate.name.clone());
+            for dep in &krate.deps {
+                self.graph.edges.push(GraphEdge {
+                    from: krate.name.clone(),
+                    to: dep.clone(),
+                    kind: GraphEdgeKind::Depends,
+                    status: Status::Same,
+                });
+            }
         }
     }
 
-    for item in workspace.items.values().filter(|item| item.kind == ItemKind::Mod) {
-        let parent = item.path.rsplit_once("::").map(|(parent, _)| parent.to_string());
-        modules.insert(item.path.clone());
-        graph.nodes.push(GraphNode {
-            id: item.path.clone(),
-            label: item.path.rsplit("::").next().unwrap_or(&item.path).to_string(),
-            kind: GraphNodeKind::Module,
-            parent,
-            status: Status::Same,
-            changes: 0,
-            badges: Vec::new(),
-            entry: false,
-            test: item.test,
-            file: Some(item.file.clone()),
-        });
+    /// Adds a node for each module.
+    fn add_modules(&mut self) {
+        for item in self.workspace.items.values().filter(|item| item.kind == ItemKind::Mod) {
+            let parent = item.path.rsplit_once("::").map(|(parent, _)| parent.to_string());
+            self.modules.insert(item.path.clone());
+            self.graph.nodes.push(GraphNode {
+                id: item.path.clone(),
+                label: item.path.rsplit("::").next().unwrap_or(&item.path).to_string(),
+                kind: GraphNodeKind::Module,
+                parent,
+                status: Status::Same,
+                changes: 0,
+                badges: Vec::new(),
+                entry: false,
+                test: item.test,
+                file: Some(item.file.clone()),
+            });
+        }
     }
 
-    let functions: Vec<&crate::Item> = workspace.items.values().filter(|item| item.kind == ItemKind::Fn).collect();
-    for item in workspace.items.values() {
-        let kind = match item.kind {
-            ItemKind::Fn => GraphNodeKind::Function,
-            ItemKind::Struct | ItemKind::Enum | ItemKind::Type => GraphNodeKind::Type,
-            ItemKind::Trait => GraphNodeKind::Trait,
-            _ => continue,
-        };
-        let parent = owner_module(&item.path, &modules);
-        let name = item.path.strip_prefix(&format!("{parent}::")).unwrap_or(&item.path).to_string();
-        let lib = workspace.crates.iter().any(|k| k.name == item.crate_name);
-        let entry = item.kind == ItemKind::Fn && (name == "main" || item.test || (item.vis == "pub" && lib));
-        graph.nodes.push(GraphNode {
-            id: item.path.clone(),
-            label: name,
-            kind,
-            parent: Some(parent),
-            status: statuses.get(&item.path).copied().unwrap_or(Status::Same),
-            changes: changes.get(&item.path).copied().unwrap_or(0),
-            badges: Vec::new(),
-            entry,
-            test: item.test,
-            file: Some(item.file.clone()),
-        });
+    /// Adds a node for each function, type, and trait.
+    fn add_items(&mut self, statuses: &BTreeMap<String, Status>, changes: &BTreeMap<String, usize>) {
+        for item in self.workspace.items.values() {
+            let kind = match item.kind {
+                ItemKind::Fn => GraphNodeKind::Function,
+                ItemKind::Struct | ItemKind::Enum | ItemKind::Type => GraphNodeKind::Type,
+                ItemKind::Trait => GraphNodeKind::Trait,
+                _ => continue,
+            };
+            let parent = owner_module(&item.path, &self.modules);
+            let name = item.path.strip_prefix(&format!("{parent}::")).unwrap_or(&item.path).to_string();
+            let lib = self.workspace.crates.iter().any(|k| k.name == item.crate_name);
+            let entry = item.kind == ItemKind::Fn && (name == "main" || item.test || (item.vis == "pub" && lib));
+            self.graph.nodes.push(GraphNode {
+                id: item.path.clone(),
+                label: name,
+                kind,
+                parent: Some(parent),
+                status: statuses.get(&item.path).copied().unwrap_or(Status::Same),
+                changes: changes.get(&item.path).copied().unwrap_or(0),
+                badges: Vec::new(),
+                entry,
+                test: item.test,
+                file: Some(item.file.clone()),
+            });
+        }
     }
 
-    let mut externals: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut edges = BTreeSet::new();
-    for item in &functions {
-        let Some(body) = &item.body else { continue };
-        let mut calls = Vec::new();
-        collect_calls(body, false, &mut calls);
-        for call in calls {
-            let target = resolve_call(&call, item, &functions);
-            match target {
-                Some(target) => {
+    /// Adds an edge for each call, and a node for each external callee.
+    fn add_calls(&mut self, functions: &[&crate::Item]) {
+        let mut externals: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut edges = BTreeSet::new();
+        for item in functions {
+            let Some(body) = &item.body else { continue };
+            let mut calls = Vec::new();
+            collect_calls(body, false, &mut calls);
+            for call in calls {
+                let target = resolve_call(&call, item, functions);
+                if let Some(target) = target {
                     edges.insert((item.path.clone(), target));
-                }
-                None => {
+                } else {
                     let id = format!("ext::{}", call.name);
                     let badges = externals.entry(id.clone()).or_default();
                     if call.tried {
@@ -107,35 +141,52 @@ pub fn workspace_graph(workspace: &Workspace, statuses: &BTreeMap<String, Status
                 }
             }
         }
-    }
-    for (id, badges) in externals {
-        graph.nodes.push(GraphNode {
-            id: id.clone(),
-            label: id.trim_start_matches("ext::").to_string(),
-            kind: GraphNodeKind::External,
-            parent: None,
-            status: Status::Same,
-            changes: 0,
-            badges: badges.into_iter().collect(),
-            entry: false,
-            test: false,
-            file: None,
-        });
-    }
-    for (from, to) in edges {
-        graph.edges.push(GraphEdge { from, to, kind: GraphEdgeKind::Call, status: Status::Same });
-    }
-
-    // Each module and crate counts the changes inside it.
-    let counts: Vec<(String, usize)> = graph.nodes.iter().filter(|n| n.changes > 0).map(|n| (n.id.clone(), n.changes)).collect();
-    for node in graph.nodes.iter_mut().filter(|n| matches!(n.kind, GraphNodeKind::Module | GraphNodeKind::Crate)) {
-        let prefix = format!("{}::", node.id);
-        node.changes = counts.iter().filter(|(id, _)| id.starts_with(&prefix)).map(|(_, count)| count).sum();
-        if node.changes > 0 {
-            node.status = Status::Changed;
+        for (id, badges) in externals {
+            self.graph.nodes.push(GraphNode {
+                id: id.clone(),
+                label: id.trim_start_matches("ext::").to_string(),
+                kind: GraphNodeKind::External,
+                parent: None,
+                status: Status::Same,
+                changes: 0,
+                badges: badges.into_iter().collect(),
+                entry: false,
+                test: false,
+                file: None,
+            });
+        }
+        for (from, to) in edges {
+            self.graph.edges.push(GraphEdge {
+                from,
+                to,
+                kind: GraphEdgeKind::Call,
+                status: Status::Same,
+            });
         }
     }
-    graph
+
+    /// Each module and crate counts the changes inside it.
+    fn count_changes(&mut self) {
+        let counts: Vec<(String, usize)> = self
+            .graph
+            .nodes
+            .iter()
+            .filter(|n| n.changes > 0)
+            .map(|n| (n.id.clone(), n.changes))
+            .collect();
+        for node in self
+            .graph
+            .nodes
+            .iter_mut()
+            .filter(|n| matches!(n.kind, GraphNodeKind::Module | GraphNodeKind::Crate))
+        {
+            let prefix = format!("{}::", node.id);
+            node.changes = counts.iter().filter(|(id, _)| id.starts_with(&prefix)).map(|(_, count)| count).sum();
+            if node.changes > 0 {
+                node.status = Status::Changed;
+            }
+        }
+    }
 }
 
 fn owner_module(path: &str, modules: &BTreeSet<String>) -> String {
@@ -149,11 +200,21 @@ fn owner_module(path: &str, modules: &BTreeSet<String>) -> String {
     path.split("::").next().unwrap_or(path).to_string()
 }
 
+/// The kind of the callee of a call.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Callee {
+    /// A path call: `helper()`, `crate::a::f()`.
+    Path,
+    /// A method call: `value.name()`.
+    Method,
+}
+
 /// A call site in a body.
 struct Call {
     /// The callee path text (`helper`, `crate::a::f`, `Vec::new`) or the method name.
     name: String,
-    method: bool,
+    /// The kind of the callee: a path or a method name.
+    callee: Callee,
     tried: bool,
     mut_arg: bool,
     awaited: bool,
@@ -164,13 +225,28 @@ fn collect_calls(node: &Node, tried: bool, out: &mut Vec<Call>) {
     match node.kind {
         "call" => {
             if let Some(callee) = node.child("callee").filter(|callee| callee.kind == "path") {
-                let mut_arg = node.children.iter().any(|child| child.kind == "ref" && child.attr.as_deref() == Some("&mut"));
-                out.push(Call { name: callee.text.replace(' ', ""), method: false, tried, mut_arg, awaited: false });
+                let mut_arg = node
+                    .children
+                    .iter()
+                    .any(|child| child.kind == "ref" && child.attr.as_deref() == Some("&mut"));
+                out.push(Call {
+                    name: callee.text.replace(' ', ""),
+                    callee: Callee::Path,
+                    tried,
+                    mut_arg,
+                    awaited: false,
+                });
             }
         }
         "method_call" => {
             if let Some(name) = &node.attr {
-                out.push(Call { name: name.clone(), method: true, tried, mut_arg: false, awaited: false });
+                out.push(Call {
+                    name: name.clone(),
+                    callee: Callee::Method,
+                    tried,
+                    mut_arg: false,
+                    awaited: false,
+                });
             }
         }
         "await" => {
@@ -191,16 +267,23 @@ fn collect_calls(node: &Node, tried: bool, out: &mut Vec<Call>) {
 }
 
 fn resolve_call(call: &Call, caller: &crate::Item, functions: &[&crate::Item]) -> Option<String> {
-    if call.method {
+    if call.callee == Callee::Method {
         let suffix = format!("::{}", call.name);
-        let candidates: Vec<&&crate::Item> = functions.iter().filter(|f| f.path.ends_with(&suffix) && f.path.matches("::").count() >= 2).collect();
+        let candidates: Vec<&&crate::Item> = functions
+            .iter()
+            .filter(|f| f.path.ends_with(&suffix) && f.path.matches("::").count() >= 2)
+            .collect();
         return match candidates.as_slice() {
             [single] => Some(single.path.clone()),
             many if !many.is_empty() && many.len() <= 3 => many.iter().find(|f| f.crate_name == caller.crate_name).map(|f| f.path.clone()),
             _ => None,
         };
     }
-    let name = call.name.trim_start_matches("crate::").trim_start_matches("self::").trim_start_matches("super::");
+    let name = call
+        .name
+        .trim_start_matches("crate::")
+        .trim_start_matches("self::")
+        .trim_start_matches("super::");
     let suffix = format!("::{name}");
     let mut candidates: Vec<&&crate::Item> = functions.iter().filter(|f| f.path.ends_with(&suffix) || f.path == name).collect();
     candidates.sort_by_key(|f| (f.crate_name != caller.crate_name, f.path.len()));
@@ -216,8 +299,14 @@ mod tests {
     fn calls_and_externals() {
         let (_dir, ws) = workspace(&[
             ("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"),
-            ("src/lib.rs", "pub mod a;\npub fn top(s: &str) -> Result<u32, std::num::ParseIntError> { let n = s.parse::<u32>()?; Ok(a::helper(n)) }\n"),
-            ("src/a.rs", "pub fn helper(x: u32) -> u32 { x + 1 }\n#[test]\nfn t() { let _ = helper(1); }\n"),
+            (
+                "src/lib.rs",
+                "pub mod a;\npub fn top(s: &str) -> Result<u32, std::num::ParseIntError> { let n = s.parse::<u32>()?; Ok(a::helper(n)) }\n",
+            ),
+            (
+                "src/a.rs",
+                "pub fn helper(x: u32) -> u32 { x + 1 }\n#[test]\nfn t() { let _ = helper(1); }\n",
+            ),
         ]);
         let statuses = BTreeMap::from([("demo::a::helper".to_string(), Status::Changed)]);
         let changes = BTreeMap::from([("demo::a::helper".to_string(), 2)]);

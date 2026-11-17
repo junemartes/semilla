@@ -23,12 +23,12 @@
 
 use std::collections::BTreeSet;
 
-use semilla_syntax::tt::{Delimiter, LineColumn, Spacing, TokenStream, TokenTree};
 use semilla_syntax::Workspace;
+use semilla_syntax::tt::{Delimiter, LineColumn, Spacing, TokenStream, TokenTree};
 
+use crate::ConfigTruth;
 use crate::cfgcond::{self, Pred};
 use crate::checks::BodyIndex;
-use crate::ConfigTruth;
 
 /// The start of the text of the spotlight.
 pub(crate) const START: &str = "inactive code: ";
@@ -69,7 +69,9 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
             let group = if is_punct(trees.get(index + 1), '!') { index + 2 } else { index + 1 };
             if let Some(TokenTree::Group(found)) = trees.get(group) {
                 let content: Vec<TokenTree> = found.stream().into_iter().take(2).collect();
-                let doc = found.delimiter() == Delimiter::Bracket && matches!(content.first(), Some(TokenTree::Ident(name)) if name == "doc") && is_punct(content.get(1), '=');
+                let doc = found.delimiter() == Delimiter::Bracket
+                    && matches!(content.first(), Some(TokenTree::Ident(name)) if name == "doc")
+                    && is_punct(content.get(1), '=');
                 if doc {
                     index = group + 1;
                     continue;
@@ -85,16 +87,28 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
                     Delimiter::None => ("", ""),
                 };
                 if !open.is_empty() {
-                    out.push(Token { text: open.into(), at: at(group.span_open().start()) });
+                    out.push(Token {
+                        text: open.into(),
+                        at: at(group.span_open().start()),
+                    });
                 }
                 flatten(group.stream(), out);
                 if !close.is_empty() {
-                    out.push(Token { text: close.into(), at: at(group.span_close().start()) });
+                    out.push(Token {
+                        text: close.into(),
+                        at: at(group.span_close().start()),
+                    });
                 }
             }
             // The spacing is a part of the token: a macro can see it.
-            TokenTree::Punct(punct) => out.push(Token { text: format!("{}{}", punct.as_char(), if punct.spacing() == Spacing::Joint { "~" } else { "" }), at: at(punct.span().start()) }),
-            tree => out.push(Token { text: tree.to_string(), at: at(tree.span().start()) }),
+            TokenTree::Punct(punct) => out.push(Token {
+                text: format!("{}{}", punct.as_char(), if punct.spacing() == Spacing::Joint { "~" } else { "" }),
+                at: at(punct.span().start()),
+            }),
+            tree => out.push(Token {
+                text: tree.to_string(),
+                at: at(tree.span().start()),
+            }),
         }
         index += 1;
     }
@@ -122,7 +136,13 @@ fn diff(old: &[Token], new: &[Token]) -> (Vec<bool>, Vec<bool>) {
         }
         out
     };
-    let key = |list: &[Token], range: &(usize, usize)| -> String { list[range.0..range.1].iter().map(|token| token.text.as_str()).collect::<Vec<_>>().join("\u{1}") };
+    let key = |list: &[Token], range: &(usize, usize)| -> String {
+        list[range.0..range.1]
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1}")
+    };
     let (old_lines, new_lines) = (lines(old), lines(new));
     let old_keys: Vec<String> = old_lines.iter().map(|range| key(old, range)).collect();
     let new_keys: Vec<String> = new_lines.iter().map(|range| key(new, range)).collect();
@@ -145,8 +165,14 @@ fn diff(old: &[Token], new: &[Token]) -> (Vec<bool>, Vec<bool>) {
         }
         if first_row == row && first_column == column {
             // The two lists do not agree (this cannot occur). Mark the rest.
-            old_changed.iter_mut().skip(old_lines.get(row).map_or(old.len(), |range| range.0)).for_each(|flag| *flag = true);
-            new_changed.iter_mut().skip(new_lines.get(column).map_or(new.len(), |range| range.0)).for_each(|flag| *flag = true);
+            old_changed
+                .iter_mut()
+                .skip(old_lines.get(row).map_or(old.len(), |range| range.0))
+                .for_each(|flag| *flag = true);
+            new_changed
+                .iter_mut()
+                .skip(new_lines.get(column).map_or(new.len(), |range| range.0))
+                .for_each(|flag| *flag = true);
             break;
         }
         // The tokens of the line group.
@@ -158,7 +184,10 @@ fn diff(old: &[Token], new: &[Token]) -> (Vec<bool>, Vec<bool>) {
                 (lines[first].0, lines[end - 1].1)
             }
         };
-        let (old_span, new_span) = (span(&old_lines, first_row, row, old.len()), span(&new_lines, first_column, column, new.len()));
+        let (old_span, new_span) = (
+            span(&old_lines, first_row, row, old.len()),
+            span(&new_lines, first_column, column, new.len()),
+        );
         let (a, b) = crate::opaque::token_diff(&old[old_span.0..old_span.1], &new[new_span.0..new_span.1], |a, b| a.text == b.text);
         for (offset, flag) in a.into_iter().enumerate() {
             old_changed[old_span.0 + offset] = flag;
@@ -205,7 +234,9 @@ impl Region {
 /// `cfg_attr(P, cfg(Q))` (the node exists if `P` is false or `Q` is true). `content` is the
 /// list of the tokens in the brackets of the attribute.
 fn condition(content: &[TokenTree]) -> Option<(Pred, String)> {
-    let [TokenTree::Ident(path), TokenTree::Group(list)] = content else { return None };
+    let [TokenTree::Ident(path), TokenTree::Group(list)] = content else {
+        return None;
+    };
     if list.delimiter() != Delimiter::Parenthesis {
         return None;
     }
@@ -222,7 +253,9 @@ fn condition(content: &[TokenTree]) -> Option<(Pred, String)> {
     let mut found: Option<Pred> = None;
     for part in parts {
         let inner = match (part.first(), part.get(1), part.len()) {
-            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), 2) if name == "cfg" && group.delimiter() == Delimiter::Parenthesis => cfgcond::parse(&group.stream().into_iter().collect::<Vec<_>>()),
+            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), 2) if name == "cfg" && group.delimiter() == Delimiter::Parenthesis => {
+                cfgcond::parse(&group.stream().into_iter().collect::<Vec<_>>())
+            }
             // A `cfg_attr` in a `cfg_attr` can have a `cfg`: Semilla does not evaluate it.
             (Some(TokenTree::Ident(name)), _, _) if name == "cfg_attr" => Pred::Other,
             _ => continue,
@@ -235,57 +268,99 @@ fn condition(content: &[TokenTree]) -> Option<(Pred, String)> {
     Some((Pred::Any(vec![Pred::Not(Box::new(first)), found?]), text("cfg_attr")))
 }
 
+/// The `cfg` range of an attribute node, or `None` if the attribute has no `cfg` condition.
+fn attr_region(node: &semilla_syntax::rs::SyntaxNode, lines: &semilla_syntax::rs::Lines) -> Option<Region> {
+    use semilla_syntax::rs::{SyntaxKind, code_range};
+    let span = |node: &semilla_syntax::rs::SyntaxNode| {
+        let range = code_range(node);
+        (lines.pos(range.start), lines.pos(range.end))
+    };
+    let stream = TokenStream::from_node(node);
+    let content: Vec<TokenTree> = stream
+        .into_iter()
+        .find_map(|tree| match tree {
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group.stream().into_iter().collect()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let (pred, shown) = condition(&content)?;
+    let mut owner = node.parent()?;
+    // An inner attribute in a list or a block applies to the node of the list.
+    if matches!(
+        owner.kind(),
+        SyntaxKind::ITEM_LIST | SyntaxKind::ASSOC_ITEM_LIST | SyntaxKind::EXTERN_ITEM_LIST | SyntaxKind::MATCH_ARM_LIST | SyntaxKind::STMT_LIST
+    ) {
+        owner = owner.parent().unwrap_or(owner);
+        if owner.kind() == SyntaxKind::BLOCK_EXPR && owner.parent().is_some_and(|parent| parent.kind() == SyntaxKind::FN) {
+            owner = owner.parent().unwrap_or(owner);
+        }
+    }
+    let (start, end) = if owner.kind() == SyntaxKind::SOURCE_FILE {
+        ((0, 0), (usize::MAX, usize::MAX))
+    } else {
+        span(&owner)
+    };
+    Some(Region {
+        start,
+        end,
+        attr: span(node),
+        preds: vec![pred],
+        macro_input: false,
+        text: shown,
+    })
+}
+
 /// The `cfg` ranges of a file text. A text that is not a Rust file has no range.
 ///
 /// The range of an attribute is the range of its node (an item, a field, a statement, an
 /// expression, …). An inner attribute of the file applies to the full file. An inner attribute
 /// of a module, a function, or a block applies to that node.
 fn regions(text: &str) -> Vec<Region> {
-    use semilla_syntax::rs::{AstNode, Lines, SyntaxKind, ast, code_range};
-    let parsed = [semilla_syntax::rs::Edition::Edition2021, semilla_syntax::rs::Edition::Edition2024, semilla_syntax::rs::Edition::Edition2015].into_iter().find_map(|edition| semilla_syntax::rs::parse_file(text, edition).ok());
+    use semilla_syntax::rs::{AstNode, Lines, SyntaxKind, ast};
+    let parsed = [
+        semilla_syntax::rs::Edition::Edition2021,
+        semilla_syntax::rs::Edition::Edition2024,
+        semilla_syntax::rs::Edition::Edition2015,
+    ]
+    .into_iter()
+    .find_map(|edition| semilla_syntax::rs::parse_file(text, edition).ok());
     let Some(file) = parsed else { return Vec::new() };
     let lines = Lines::new(text);
     let pos = |offset: usize| lines.pos(offset);
-    let span = |node: &semilla_syntax::rs::SyntaxNode| {
-        let range = code_range(node);
-        (pos(range.start), pos(range.end))
-    };
     let mut out = Vec::new();
     for node in file.syntax().descendants() {
         if node.kind() == SyntaxKind::ATTR {
-            let stream = TokenStream::from_node(&node);
-            let content: Vec<TokenTree> = stream.into_iter().find_map(|tree| match tree {
-                TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group.stream().into_iter().collect()),
-                _ => None,
-            }).unwrap_or_default();
-            let Some((pred, shown)) = condition(&content) else { continue };
-            let Some(mut owner) = node.parent() else { continue };
-            // An inner attribute in a list or a block applies to the node of the list.
-            if matches!(owner.kind(), SyntaxKind::ITEM_LIST | SyntaxKind::ASSOC_ITEM_LIST | SyntaxKind::EXTERN_ITEM_LIST | SyntaxKind::MATCH_ARM_LIST | SyntaxKind::STMT_LIST) {
-                owner = owner.parent().unwrap_or(owner);
-                if owner.kind() == SyntaxKind::BLOCK_EXPR && owner.parent().is_some_and(|parent| parent.kind() == SyntaxKind::FN) {
-                    owner = owner.parent().unwrap_or(owner);
-                }
-            }
-            let (start, end) = if owner.kind() == SyntaxKind::SOURCE_FILE { ((0, 0), (usize::MAX, usize::MAX)) } else { span(&owner) };
-            out.push(Region { start, end, attr: span(&node), preds: vec![pred], macro_input: false, text: shown });
+            out.extend(attr_region(&node, &lines));
             continue;
         }
         // The syntax tree does not go into the input of a macro call. A `cfg` condition in
         // the input can remove a part of it.
         let (first, tree, name) = if let Some(call) = ast::MacroCall::cast(node.clone()) {
-            let name = call.path().and_then(|path| path.segment()).and_then(|segment| segment.name_ref()).map(|name| name.text().to_string()).unwrap_or_default();
+            let name = call
+                .path()
+                .and_then(|path| path.segment())
+                .and_then(|segment| segment.name_ref())
+                .map_or_default(|name| name.text().to_string());
             (call.path().map(|path| path.syntax().text_range().start()), call.token_tree(), name)
         } else if let Some(definition) = ast::MacroRules::cast(node.clone()) {
-            (definition.macro_rules_token().map(|token| token.text_range().start()), definition.token_tree(), "macro_rules".to_string())
+            (
+                definition.macro_rules_token().map(|token| token.text_range().start()),
+                definition.token_tree(),
+                "macro_rules".to_string(),
+            )
         } else {
             continue;
         };
-        let (Some(first), Some(tree)) = (first, tree) else { continue };
-        let input: TokenStream = TokenStream::from_node(tree.syntax()).into_iter().flat_map(|tree| match tree {
-            TokenTree::Group(group) => group.stream(),
-            _ => TokenStream::new(),
-        }).collect();
+        let (Some(first), Some(tree)) = (first, tree) else {
+            continue;
+        };
+        let input: TokenStream = TokenStream::from_node(tree.syntax())
+            .into_iter()
+            .flat_map(|tree| match tree {
+                TokenTree::Group(group) => group.stream(),
+                _ => TokenStream::new(),
+            })
+            .collect();
         let mut preds: Vec<Pred> = Vec::new();
         for condition in cfgcond::conditions(input) {
             let pred = cfgcond::parse(&condition.into_iter().collect::<Vec<_>>());
@@ -295,7 +370,14 @@ fn regions(text: &str) -> Vec<Region> {
         }
         if !preds.is_empty() {
             let (start, end) = (pos(usize::from(first)), pos(usize::from(tree.syntax().text_range().end())));
-            out.push(Region { start, end, attr: ((0, 0), (0, 0)), preds, macro_input: true, text: name });
+            out.push(Region {
+                start,
+                end,
+                attr: ((0, 0), (0, 0)),
+                preds,
+                macro_input: true,
+                text: name,
+            });
         }
     }
     out
@@ -318,15 +400,31 @@ pub(crate) struct Dead {
 /// The text for a file that no checked unit reads: the `cfg` attributes of the modules of the
 /// file, if the syntax has them.
 fn unread(workspace: &Workspace, file: &str) -> String {
-    let mut modules: Vec<&semilla_syntax::Item> = workspace.items.values().filter(|item| item.kind == semilla_syntax::ItemKind::Mod && item.file != file).collect();
-    modules.retain(|module| workspace.items.values().any(|item| item.file == file && crate::checks::is_child(&item.path, &module.path)));
+    let mut modules: Vec<&semilla_syntax::Item> = workspace
+        .items
+        .values()
+        .filter(|item| item.kind == semilla_syntax::ItemKind::Mod && item.file != file)
+        .collect();
+    modules.retain(|module| {
+        workspace
+            .items
+            .values()
+            .any(|item| item.file == file && crate::checks::is_child(&item.path, &module.path))
+    });
     let attrs: Vec<String> = modules
         .iter()
-        .flat_map(|module| module.attrs.iter().filter(|attr| attr.contains("cfg")).map(|attr| format!("`{}` at `{}`", cfgcond::show(&crate::srcconfig::compact(attr)), module.path)))
+        .flat_map(|module| {
+            module
+                .attrs
+                .iter()
+                .filter(|attr| attr.contains("cfg"))
+                .map(|attr| format!("`{}` at `{}`", cfgcond::show(&crate::srcconfig::compact(attr)), module.path))
+        })
         .collect();
-    match attrs.is_empty() {
-        true => format!("{NOT_COMPILED} (no checked unit reads the file `{file}`)"),
-        false => format!("{NOT_COMPILED} (no checked unit reads the file `{file}`: {})", attrs.join(", ")),
+    if attrs.is_empty() {
+        format!("{NOT_COMPILED} (no checked unit reads the file `{file}`)")
+    } else {
+        format!("{NOT_COMPILED} (no checked unit reads the file `{file}`: {})", attrs.join(", "))
     }
 }
 
@@ -337,7 +435,7 @@ fn unread(workspace: &Workspace, file: &str) -> String {
 /// careful rule: a token in a `cfg` range is dead if its item has no body record.
 pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2], bodies: &BodyIndex) -> Vec<Dead> {
     let mut out: BTreeSet<Dead> = BTreeSet::new();
-    if truths.iter().all(|side| side.is_empty()) {
+    if truths.iter().all(std::vec::Vec::is_empty) {
         return Vec::new();
     }
     let files: BTreeSet<&String> = sides.iter().flat_map(|side| side.parsed_files.iter()).collect();
@@ -350,7 +448,10 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
         // A side with no file has no token. A text that is not a token list has one token.
         let fallback = |index: usize| -> Vec<Token> {
             match &lists[index] {
-                Some(None) => vec![Token { text: texts[index].cloned().unwrap_or_default(), at: (1, 0) }],
+                Some(None) => vec![Token {
+                    text: texts[index].cloned().unwrap_or_default(),
+                    at: (1, 0),
+                }],
                 _ => Vec::new(),
             }
         };
@@ -363,57 +464,89 @@ pub(crate) fn dead_edits(sides: [&Workspace; 2], truths: &[Vec<ConfigTruth>; 2],
                 continue;
             }
             let known = !truths[side].is_empty() && truths[side].iter().all(|truth| truth.known);
-            let units: Vec<&crate::Unit> = truths[side].iter().flat_map(|truth| truth.units.iter()).filter(|unit| unit.files.contains(file.as_str())).collect();
+            let units: Vec<&crate::Unit> = truths[side]
+                .iter()
+                .flat_map(|truth| truth.units.iter())
+                .filter(|unit| unit.files.contains(file.as_str()))
+                .collect();
             if known && units.is_empty() {
                 let cause = unread(sides[side], file);
                 for (token, _) in list.iter().zip(&changed).filter(|(_, flag)| **flag) {
-                    out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause: cause.clone(), whole: true });
+                    out.insert(Dead {
+                        file: file.clone(),
+                        side,
+                        line: token.at.0,
+                        cause: cause.clone(),
+                        whole: true,
+                    });
                 }
                 continue;
             }
-            let regions = texts[side].map(|text| regions(text)).unwrap_or_default();
+            let regions = texts[side].map_or_default(|text| regions(text));
             if regions.is_empty() {
                 continue;
             }
             for (token, _) in list.iter().zip(&changed).filter(|(_, flag)| **flag) {
                 let inside = |range: (At, At)| range.0 <= token.at && token.at < range.1;
-                let around: Vec<&Region> = regions.iter().filter(|region| inside((region.start, region.end)) && !inside(region.attr)).collect();
+                let around: Vec<&Region> = regions
+                    .iter()
+                    .filter(|region| inside((region.start, region.end)) && !inside(region.attr))
+                    .collect();
                 if around.is_empty() {
                     continue;
                 }
-                let live = match known {
-                    true => units.iter().any(|unit| around.iter().all(|region| region.compiled(unit, &units))),
-                    false => sides[side].item_at(file, token.at.0).is_some_and(|item| bodies.has_body(&item.path)),
+                let live = if known {
+                    units.iter().any(|unit| around.iter().all(|region| region.compiled(unit, &units)))
+                } else {
+                    sides[side].item_at(file, token.at.0).is_some_and(|item| bodies.has_body(&item.path))
                 };
                 if live {
                     continue;
                 }
-                // The conditions that no unit makes true. If each one is true in a unit, the
-                // cause is the set of the conditions.
-                let mut blocked: Vec<&&Region> = around.iter().filter(|region| !known || !units.iter().any(|unit| region.compiled(unit, &units))).collect();
-                if blocked.is_empty() {
-                    blocked = around.iter().collect();
-                }
-                let mut attrs: Vec<String> = Vec::new();
-                let mut macros: Vec<String> = Vec::new();
-                for region in blocked {
-                    let (list, text) = match region.macro_input {
-                        true => (&mut macros, format!("the input of `{}!` at {file}:{} has a `cfg` condition", region.text, region.start.0)),
-                        false => (&mut attrs, format!("`{}` at {file}:{}", region.text, region.attr.0.0)),
-                    };
-                    if !list.contains(&text) {
-                        list.push(text);
-                    }
-                }
-                let cause = match attrs.is_empty() {
-                    false => format!("{NOT_COMPILED} ({})", attrs.join(", ")),
-                    true => format!("{UNSEEN} ({})", macros.join(", ")),
-                };
-                out.insert(Dead { file: file.to_string(), side, line: token.at.0, cause, whole: false });
+                let cause = dead_cause(&around, known, &units, file);
+                out.insert(Dead {
+                    file: file.clone(),
+                    side,
+                    line: token.at.0,
+                    cause,
+                    whole: false,
+                });
             }
         }
     }
     out.into_iter().collect()
+}
+
+/// The cause of a dead token: the conditions that no unit makes true. If each one is true in a
+/// unit, the cause is the set of the conditions. `around`: the `cfg` ranges around the token.
+fn dead_cause(around: &[&Region], known: bool, units: &[&crate::Unit], file: &str) -> String {
+    let mut blocked: Vec<&&Region> = around
+        .iter()
+        .filter(|region| !known || !units.iter().any(|unit| region.compiled(unit, units)))
+        .collect();
+    if blocked.is_empty() {
+        blocked = around.iter().collect();
+    }
+    let mut attrs: Vec<String> = Vec::new();
+    let mut macros: Vec<String> = Vec::new();
+    for region in blocked {
+        let (list, text) = if region.macro_input {
+            (
+                &mut macros,
+                format!("the input of `{}!` at {file}:{} has a `cfg` condition", region.text, region.start.0),
+            )
+        } else {
+            (&mut attrs, format!("`{}` at {file}:{}", region.text, region.attr.0.0))
+        };
+        if !list.contains(&text) {
+            list.push(text);
+        }
+    }
+    if attrs.is_empty() {
+        format!("{UNSEEN} ({})", macros.join(", "))
+    } else {
+        format!("{NOT_COMPILED} ({})", attrs.join(", "))
+    }
 }
 
 /// The text of the spotlight for a list of causes.
@@ -428,11 +561,20 @@ fn span_of(workspace: &Workspace, anchor: &semilla_core::Anchor) -> Option<(Stri
         Some(semilla_syntax::Resolved::Item(item)) => Some((item.file.clone(), item.line_start, item.line_end)),
         None => {
             // A member (`k::Pair.a`) or a part of a signature: the range of the item.
-            let item = workspace.items.get(&anchor.item).or_else(|| workspace.items.get(anchor.item.rsplit_once('.')?.0))?;
+            let item = workspace
+                .items
+                .get(&anchor.item)
+                .or_else(|| workspace.items.get(anchor.item.rsplit_once('.')?.0))?;
             Some((item.file.clone(), item.line_start, item.line_end))
         }
     }
 }
+
+/// A source range: the file, the first line, and the last line.
+type LineSpan = (String, usize, usize);
+
+/// The range of a fact: the fact, the side, and the range.
+type FactSpan = (usize, usize, LineSpan);
 
 /// Puts each dead edit in the spotlight (the rule of this module).
 ///
@@ -440,32 +582,86 @@ fn span_of(workspace: &Workspace, anchor: &semilla_core::Anchor) -> Option<(Stri
 /// 2. The fact with the smallest edit range around a dead line gets the spotlight, and it is
 ///    not neutral.
 /// 3. A dead line with no fact gets a new fact.
-pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::Step, edits: &[semilla_syntax::Edit], fact_of: &[Option<usize>], renames: &semilla_syntax::Renames, report: &mut semilla_core::StepReport) {
-    use semilla_core::{Anchor, Category, ClaimStatus, Compare};
+pub(crate) fn apply(
+    dead: &[Dead],
+    sides: [&Workspace; 2],
+    step: &semilla_core::Step,
+    edits: &[semilla_syntax::Edit],
+    fact_of: &[Option<usize>],
+    renames: &semilla_syntax::Renames,
+    report: &mut semilla_core::StepReport,
+) {
     if dead.is_empty() {
         return;
     }
-    let hit = |side: usize, span: &(String, usize, usize)| dead.iter().find(|entry| entry.side == side && entry.file == span.0 && span.1 <= entry.line && entry.line <= span.2);
     // 1. The identity claims.
-    // A derived identity (design 38.10) is no claim of the agent: its facts get `no compare`
-    // below, and the rename or the move stays one fact.
-    for claim in step.claims.iter().filter(|claim| matches!(claim.op.as_str(), "rename" | "move-item") && !claim.id.starts_with("derived-identity-")) {
+    refute_identities(dead, sides, step, renames, report);
+    // 2. The ranges of each fact.
+    let spans = fact_spans(sides, edits, fact_of, report);
+    let mut owners = Owners::default();
+    for entry in dead {
+        owners.add(entry, sides, &spans, report);
+    }
+    owners.mark_facts(step, report);
+    owners.whole_spotlight(sides, report);
+    // 3. The new facts.
+    owners.new_facts(step, report);
+}
+
+/// Refutes each identity claim on an item with a dead edit.
+/// A derived identity (design 38.10) is no claim of the agent: its facts get `no compare`
+/// below, and the rename or the move stays one fact.
+fn refute_identities(
+    dead: &[Dead],
+    sides: [&Workspace; 2],
+    step: &semilla_core::Step,
+    renames: &semilla_syntax::Renames,
+    report: &mut semilla_core::StepReport,
+) {
+    use semilla_core::{Anchor, ClaimStatus};
+    let hit = |side: usize, span: &LineSpan| {
+        dead.iter()
+            .find(|entry| entry.side == side && entry.file == span.0 && span.1 <= entry.line && entry.line <= span.2)
+    };
+    for claim in step
+        .claims
+        .iter()
+        .filter(|claim| matches!(claim.op.as_str(), "rename" | "move-item") && !claim.id.starts_with("derived-identity-"))
+    {
         let Some(at) = &claim.at else { continue };
         let new = renames.items.get(&at.item).cloned().unwrap_or_else(|| at.item.clone());
-        let found = span_of(sides[0], &Anchor::item(&at.item)).and_then(|span| hit(0, &span)).or_else(|| span_of(sides[1], &Anchor::item(&new)).and_then(|span| hit(1, &span)));
+        let found = span_of(sides[0], &Anchor::item(&at.item))
+            .and_then(|span| hit(0, &span))
+            .or_else(|| span_of(sides[1], &Anchor::item(&new)).and_then(|span| hit(1, &span)));
         let Some(found) = found else { continue };
-        for result in report.claims.iter_mut().filter(|result| result.claim == claim.id && result.status.is_verified()) {
-            result.status = ClaimStatus::Refuted { reason: format!("{}, so Semilla cannot compare the code of `{}`", found.cause, at.item) };
+        for result in report
+            .claims
+            .iter_mut()
+            .filter(|result| result.claim == claim.id && result.status.is_verified())
+        {
+            result.status = ClaimStatus::Refuted {
+                reason: format!("{}, so Semilla cannot compare the code of `{}`", found.cause, at.item),
+            };
             result.hint = Some("Remove the claim. Semilla derives the facts of the edit. They need a reason.".into());
         }
     }
-    // 2. The ranges of each fact: (the fact, the side, the range).
-    let mut spans: Vec<(usize, usize, (String, usize, usize))> = Vec::new();
-    for (edit, fact) in edits.iter().zip(fact_of).filter_map(|(edit, fact)| fact.filter(|fact| *fact < report.facts.len()).map(|fact| (edit, fact))) {
+}
+
+/// The ranges of each fact: the ranges of its edits, or the range of its place for a fact with
+/// no edit range.
+fn fact_spans(sides: [&Workspace; 2], edits: &[semilla_syntax::Edit], fact_of: &[Option<usize>], report: &semilla_core::StepReport) -> Vec<FactSpan> {
+    let mut spans: Vec<FactSpan> = Vec::new();
+    for (edit, fact) in edits
+        .iter()
+        .zip(fact_of)
+        .filter_map(|(edit, fact)| fact.filter(|fact| *fact < report.facts.len()).map(|fact| (edit, fact)))
+    {
         for (side, anchor) in [&edit.before, &edit.after].into_iter().enumerate() {
             match anchor {
                 Some(anchor) => spans.extend(span_of(sides[side], anchor).map(|span| (fact, side, span))),
-                None if edit.before.is_none() && edit.after.is_none() => spans.extend(edit.file.clone().map(|file| (fact, side, (file, edit.line, edit.line)))),
+                None if edit.before.is_none() && edit.after.is_none() => {
+                    spans.extend(edit.file.clone().map(|file| (fact, side, (file, edit.line, edit.line))));
+                }
                 None => {}
             }
         }
@@ -475,126 +671,189 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
             continue;
         }
         let Some(at) = &fact.at else { continue };
-        for side in 0..2 {
-            spans.extend(span_of(sides[side], at).map(|span| (index, side, span)));
+        for (side, workspace) in sides.iter().enumerate() {
+            spans.extend(span_of(workspace, at).map(|span| (index, side, span)));
         }
     }
-    let mut causes: std::collections::BTreeMap<usize, Vec<String>> = std::collections::BTreeMap::new();
-    // The dead lines with no fact, by the item (or the file) and the side.
-    let mut free: std::collections::BTreeMap<(Option<String>, String), Vec<String>> = std::collections::BTreeMap::new();
-    let mut quiet: BTreeSet<usize> = BTreeSet::new();
-    let mut whole_files: BTreeSet<String> = BTreeSet::new();
-    for entry in dead {
-        let around: Vec<&(usize, usize, (String, usize, usize))> = spans.iter().filter(|(_, side, span)| *side == entry.side && span.0 == entry.file && span.1 <= entry.line && entry.line <= span.2).collect();
+    spans
+}
+
+/// Adds `cause` to `list` if the list does not have it.
+fn add_cause(list: &mut Vec<String>, cause: &String) {
+    if !list.contains(cause) {
+        list.push(cause.clone());
+    }
+}
+
+/// The reason of the step for a fact: the reason of its place, of its item, or of its part.
+fn reason_of(step: &semilla_core::Step, fact: &semilla_core::Fact) -> Option<String> {
+    match &fact.at {
+        Some(at) => step.reasons.get(&at.to_string()).or_else(|| step.reasons.get(&at.item)).cloned(),
+        None => step.reasons.get(&fact.part).cloned(),
+    }
+}
+
+/// Gives a fact the compare result `no compare`, with a note.
+fn no_compare(fact: &mut semilla_core::Fact) {
+    let place = fact
+        .at
+        .as_ref()
+        .map(|at| at.item.clone())
+        .or_else(|| fact.file.clone())
+        .unwrap_or_default();
+    let note = format!("{NO_COMPARE} no checked configuration compiles `{place}`");
+    fact.compare = semilla_core::Compare::NoCompare;
+    fact.note = Some(match fact.note.take() {
+        Some(old) if old.contains(&note) => old,
+        Some(old) => format!("{old}; {note}"),
+        None => note,
+    });
+}
+
+/// The owners of the dead lines.
+#[derive(Default)]
+struct Owners {
+    /// The causes of the dead lines of each fact.
+    causes: std::collections::BTreeMap<usize, Vec<String>>,
+    /// The dead lines with no fact, by the item (or the file) and the side.
+    free: std::collections::BTreeMap<(Option<String>, String), Vec<String>>,
+    /// The facts of a file that no checked unit reads.
+    quiet: BTreeSet<usize>,
+    /// The files that no checked unit reads.
+    whole_files: BTreeSet<String>,
+}
+
+impl Owners {
+    /// Adds one dead line to the facts with the smallest range around it, or to the free lines.
+    fn add(&mut self, entry: &Dead, sides: [&Workspace; 2], spans: &[FactSpan], report: &semilla_core::StepReport) {
+        let around: Vec<&FactSpan> = spans
+            .iter()
+            .filter(|(_, side, span)| *side == entry.side && span.0 == entry.file && span.1 <= entry.line && entry.line <= span.2)
+            .collect();
         let least = around.iter().map(|(_, _, span)| span.2 - span.1).min();
-        let mut owners: Vec<usize> = around.iter().filter(|(_, _, span)| Some(span.2 - span.1) == least).map(|(fact, _, _)| *fact).collect();
+        let mut owners: Vec<usize> = around
+            .iter()
+            .filter(|(_, _, span)| Some(span.2 - span.1) == least)
+            .map(|(fact, _, _)| *fact)
+            .collect();
         let item = sides[entry.side].item_at(&entry.file, entry.line).map(|item| item.path.clone());
         if owners.is_empty() {
-            owners = report.facts.iter().enumerate().filter(|(_, fact)| item.is_some() && fact.at.as_ref().map(|at| &at.item) == item.as_ref()).map(|(index, _)| index).collect();
+            owners = report
+                .facts
+                .iter()
+                .enumerate()
+                .filter(|(_, fact)| item.is_some() && fact.at.as_ref().map(|at| &at.item) == item.as_ref())
+                .map(|(index, _)| index)
+                .collect();
         }
-        owners.sort();
+        owners.sort_unstable();
         owners.dedup();
         // A file that no checked unit reads (design 37.3): the file gets one spotlight. Each
         // fact of the file keeps its text and gets the compare result `no compare`.
         if entry.whole {
-            quiet.extend(owners.iter().copied());
-            let list = free.entry((None, entry.file.clone())).or_default();
-            if !list.contains(&entry.cause) {
-                list.push(entry.cause.clone());
-            }
-            whole_files.insert(entry.file.clone());
-            continue;
+            self.quiet.extend(owners.iter().copied());
+            add_cause(self.free.entry((None, entry.file.clone())).or_default(), &entry.cause);
+            self.whole_files.insert(entry.file.clone());
+            return;
         }
         for owner in &owners {
-            let list = causes.entry(*owner).or_default();
-            if !list.contains(&entry.cause) {
-                list.push(entry.cause.clone());
-            }
+            add_cause(self.causes.entry(*owner).or_default(), &entry.cause);
         }
         if owners.is_empty() {
-            let list = free.entry((item, entry.file.clone())).or_default();
-            if !list.contains(&entry.cause) {
-                list.push(entry.cause.clone());
+            add_cause(self.free.entry((item, entry.file.clone())).or_default(), &entry.cause);
+        }
+    }
+
+    /// Puts the facts with a dead line in the spotlight, and gives them `no compare`.
+    fn mark_facts(&self, step: &semilla_core::Step, report: &mut semilla_core::StepReport) {
+        for index in self.quiet.iter().copied().filter(|index| !self.causes.contains_key(index)) {
+            let fact = &mut report.facts[index];
+            // The spotlight of the file has the cause of this spotlight.
+            if fact.spotlight_why.as_deref() == Some(crate::facts::INACTIVE) {
+                fact.spotlight = false;
+                fact.spotlight_why = None;
+            }
+            if fact.affected.is_empty() {
+                no_compare(fact);
+            }
+        }
+        for (index, list) in &self.causes {
+            let fact = &mut report.facts[*index];
+            let text = spotlight_text(list);
+            fact.spotlight_why = Some(match fact.spotlight_why.take() {
+                // The old text of a fact in a function with no body record says less.
+                Some(why) if why == crate::facts::INACTIVE => text,
+                Some(why) => format!("{why}; {text}"),
+                None => text,
+            });
+            fact.spotlight = true;
+            // The compare has no data for this code (design 35). A fact with a changed body keeps
+            // its result.
+            if fact.affected.is_empty() {
+                no_compare(fact);
+            }
+            if fact.reason.is_none() {
+                fact.reason = reason_of(step, fact);
             }
         }
     }
-    let reason_of = |fact: &semilla_core::Fact| match &fact.at {
-        Some(at) => step.reasons.get(&at.to_string()).or_else(|| step.reasons.get(&at.item)).cloned(),
-        None => step.reasons.get(&fact.part).cloned(),
-    };
-    let no_compare = |fact: &mut semilla_core::Fact| {
-        let place = fact.at.as_ref().map(|at| at.item.clone()).or_else(|| fact.file.clone()).unwrap_or_default();
-        let note = format!("{NO_COMPARE} no checked configuration compiles `{place}`");
-        fact.compare = Compare::NoCompare;
-        fact.note = Some(match fact.note.take() {
-            Some(old) if old.contains(&note) => old,
-            Some(old) => format!("{old}; {note}"),
-            None => note,
-        });
-    };
-    for index in quiet.iter().copied().filter(|index| !causes.contains_key(index)) {
-        let fact = &mut report.facts[index];
-        // The spotlight of the file has the cause of this spotlight.
-        if fact.spotlight_why.as_deref() == Some(crate::facts::INACTIVE) {
-            fact.spotlight = false;
-            fact.spotlight_why = None;
+
+    /// The spotlight list of the report has one line for each file that no unit reads.
+    fn whole_spotlight(&self, sides: [&Workspace; 2], report: &mut semilla_core::StepReport) {
+        let whole_files = &self.whole_files;
+        if whole_files.is_empty() {
+            return;
         }
-        if fact.affected.is_empty() {
-            no_compare(fact);
-        }
-    }
-    for (index, list) in causes {
-        let fact = &mut report.facts[index];
-        let text = spotlight_text(&list);
-        fact.spotlight_why = Some(match fact.spotlight_why.take() {
-            // The old text of a fact in a function with no body record says less.
-            Some(why) if why == crate::facts::INACTIVE => text,
-            Some(why) => format!("{why}; {text}"),
-            None => text,
-        });
-        fact.spotlight = true;
-        // The compare has no data for this code (design 35). A fact with a changed body keeps
-        // its result.
-        if fact.affected.is_empty() {
-            no_compare(fact);
-        }
-        if fact.reason.is_none() {
-            fact.reason = reason_of(fact);
-        }
-    }
-    // The spotlight list of the report has one line for each file that no unit reads.
-    if !whole_files.is_empty() {
         let in_whole = |line: &str| {
-            let item = line.strip_prefix(START).and_then(|rest| rest.rsplit_once("(no checked configuration compiles `")).and_then(|(_, rest)| rest.strip_suffix("`)"));
-            item.is_some_and(|item| sides.iter().any(|side| side.items.get(item).is_some_and(|found| whole_files.contains(&found.file))))
+            let item = line
+                .strip_prefix(START)
+                .and_then(|rest| rest.rsplit_once("(no checked configuration compiles `"))
+                .and_then(|(_, rest)| rest.strip_suffix("`)"));
+            item.is_some_and(|item| {
+                sides
+                    .iter()
+                    .any(|side| side.items.get(item).is_some_and(|found| whole_files.contains(&found.file)))
+            })
         };
         report.spotlight.retain(|line| !in_whole(line));
-        report.spotlight.extend(whole_files.iter().map(|file| format!("{START}{file} (no checked unit reads the file)")));
+        report
+            .spotlight
+            .extend(whole_files.iter().map(|file| format!("{START}{file} (no checked unit reads the file)")));
     }
-    // 3. The new facts.
-    for ((item, file), list) in free {
-        let mut fact = semilla_core::Fact {
-            id: format!("f{}", report.facts.len() + 1),
-            at: item.as_ref().map(Anchor::item),
-            file: Some(file.clone()),
-            part: match &item {
-                Some(_) => "inactive code".into(),
-                None => file.clone(),
-            },
-            description: match &item {
-                Some(item) => format!("an edit in `{item}`, in code that no checked configuration compiles"),
-                None if whole_files.contains(&file) => format!("{file}: each edit of this file is in code that no checked configuration compiles"),
-                None => "an edit in code that no checked configuration compiles".into(),
-            },
-            status: "derived".into(),
-            category: Category::Text,
-            compare: Compare::NoCompare,
-            note: Some(format!("{NO_COMPARE} no checked configuration compiles `{}`", item.clone().unwrap_or_else(|| file.clone()))),
-            spotlight: true,
-            spotlight_why: Some(spotlight_text(&list)),
-            ..Default::default()
-        };
-        fact.reason = reason_of(&fact);
-        report.facts.push(fact);
+
+    /// Adds a new fact for the dead lines of each item (or file) with no fact.
+    fn new_facts(self, step: &semilla_core::Step, report: &mut semilla_core::StepReport) {
+        use semilla_core::{Anchor, Category, Compare};
+        let whole_files = self.whole_files;
+        for ((item, file), list) in self.free {
+            let mut fact = semilla_core::Fact {
+                id: format!("f{}", report.facts.len() + 1),
+                at: item.as_ref().map(Anchor::item),
+                file: Some(file.clone()),
+                part: match &item {
+                    Some(_) => "inactive code".into(),
+                    None => file.clone(),
+                },
+                description: match &item {
+                    Some(item) => format!("an edit in `{item}`, in code that no checked configuration compiles"),
+                    None if whole_files.contains(&file) => {
+                        format!("{file}: each edit of this file is in code that no checked configuration compiles")
+                    }
+                    None => "an edit in code that no checked configuration compiles".into(),
+                },
+                status: "derived".into(),
+                category: Category::Text,
+                compare: Compare::NoCompare,
+                note: Some(format!(
+                    "{NO_COMPARE} no checked configuration compiles `{}`",
+                    item.clone().unwrap_or_else(|| file.clone())
+                )),
+                spotlight: true,
+                spotlight_why: Some(spotlight_text(&list)),
+                ..Default::default()
+            };
+            fact.reason = reason_of(step, &fact);
+            report.facts.push(fact);
+        }
     }
 }

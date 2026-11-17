@@ -8,9 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use semilla_normal::{
-    BodyStatus, Levels, compare, group_levels, read_records, run_cargo_check, suggest_renames,
-};
+use semilla_normal::{BodyStatus, Levels, compare, group_levels, read_records, run_cargo_check, suggest_renames};
 
 const WORKSPACE: &str = r#"[workspace]
 resolver = "3"
@@ -32,7 +30,7 @@ edition = "2024"
 core_a = { path = "../core_a" }
 "#;
 
-const CORE_V1: &str = r#"
+const CORE_V1: &str = r"
 pub fn helper(x: u32) -> u32 {
     x + 1
 }
@@ -113,9 +111,9 @@ pub fn new_mark(x: usize) -> bool {
     let limit: &'static usize = &(5 - 1);
     x == *limit
 }
-"#;
+";
 
-const CORE_V2: &str = r#"
+const CORE_V2: &str = r"
 pub fn add_one(x: u32) -> u32 {
     x + 1
 }
@@ -196,7 +194,7 @@ pub fn new_mark(x: usize) -> bool {
     let limit: &'static usize = &(6 - 2);
     x == *limit
 }
-"#;
+";
 
 const APP_V1: &str = r#"
 include!("rate.rs");
@@ -330,50 +328,12 @@ fn two_versions_of_a_two_crate_workspace() {
     make_workspace(&v1, CORE_V1, APP_V1);
     let before = check_all_levels(&v1, &scratch.join("out-v1"), &target);
 
-    // The records of each target go to their own file: lib, bin, and test of `app_b`.
-    let files: Vec<String> = std::fs::read_dir(scratch.join("out-v1/n0"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    for prefix in ["core_a.lib.", "app_b.lib.", "app_b.bin.", "app_b.test."] {
-        assert!(
-            files.iter().any(|file| file.starts_with(prefix)),
-            "no {prefix}* file in {files:?}"
-        );
-    }
-    // Batch 5t, part A: each record file starts with the record of its compile unit. The `cfg`
-    // set and the list of the source files come from the compiler.
-    let units = semilla_normal::read_units(&scratch.join("out-v1/n0")).expect("a unit record in each file");
-    assert_eq!(units.len(), files.len(), "{units:?}");
-    let unit = |prefix: &str| units.iter().find(|unit| unit.target.starts_with(prefix)).unwrap_or_else(|| panic!("no unit {prefix}: {units:?}"));
-    let (lib, test, bin) = (unit("app_b.lib."), unit("app_b.test."), unit("app_b.bin."));
-    assert!(lib.cfg.contains("debug_assertions") && !lib.cfg.contains("test"), "{lib:?}");
-    assert!(test.cfg.contains("test") && test.cfg.contains("debug_assertions"), "{test:?}");
-    assert_eq!((lib.package.as_str(), lib.folder.as_str(), lib.root.as_str()), ("app_b", "app_b", "app_b/src/lib.rs"));
-    // The file of an `include!` call is a file of the unit.
-    assert!(lib.files.contains("app_b/src/lib.rs") && lib.files.contains("app_b/src/rate.rs"), "{lib:?}");
-    assert!(!lib.files.contains("app_b/src/main.rs") && !lib.files.contains("core_a/src/lib.rs"), "{lib:?}");
-    assert_eq!(test.root, lib.root);
-    assert_eq!(bin.root, "app_b/src/main.rs");
-    assert!(!lib.triple.is_empty());
-    let first = before["n0"].iter().find(|record| record.name == "app_b::get").expect("app_b::get");
-    let span = first.span.as_ref().expect("a span");
-    assert!(span.file.ends_with("app_b/src/lib.rs"), "{span:?}");
-    assert!(span.line_start < span.line_end);
-    assert!(first.loop_free && first.term.is_none(), "N0 records have no term");
-    assert!(first.target.starts_with("app_b.lib."), "{}", first.target);
-    let n2 =
-        before["n2"].iter().find(|record| record.name == "app_b::get").expect("app_b::get at n2");
-    assert!(n2.term.is_some());
-    // N3 records exist only for bodies with an inlined call (`Cart::total` calls `helper`).
-    assert!(before["n3"].iter().any(|record| record.name == "core_a::Cart::total"));
-    assert!(!before["n3"].iter().any(|record| record.name == "app_b::get"));
+    check_units_and_records(&scratch, &before);
 
     // A second run of the same version gives the same records (cargo compiles the crates again).
     let again = check_all_levels(&v1, &scratch.join("out-v1-again"), &target);
     let texts = |levels: &Levels| {
-        let mut texts: Vec<(String, String)> =
-            levels["n0"].iter().map(|record| (record.name.clone(), record.text.clone())).collect();
+        let mut texts: Vec<(String, String)> = levels["n0"].iter().map(|record| (record.name.clone(), record.text.clone())).collect();
         texts.sort();
         texts
     };
@@ -386,80 +346,185 @@ fn two_versions_of_a_two_crate_workspace() {
     let renames = BTreeMap::from([("core_a::helper".to_string(), "core_a::add_one".to_string())]);
     let results = compare(&before, &after, &renames, &[]);
 
-    // Batch 5n, A5: `x += y` against `x = x + (y)`, `a > b` against `b < a`, and `a + b` against
-    // `b + a` on integers. The optimizer of rustc orders the operands by the source text, and the
-    // printer gives them one order. An operation that is not symmetric stays different.
-    assert!(matches!(status(&results, "core_a::climb"), BodyStatus::Equal { level, .. } if level == "n2"), "{:?}", status(&results, "core_a::climb"));
-    assert!(matches!(status(&results, "core_a::drop_off"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::drop_off"));
-
-    // Batch 5n: a call of a trait method with a `const` parameter in its arguments
-    // (`<[usize; N] as Index<RangeTo<usize>>>::index`). The driver does not ask rustc for the impl
-    // of such a call: rustc stops there, and the build of the crate fails.
-    assert!(matches!(status(&results, "core_a::before_key"), BodyStatus::Equal { .. }), "{:?}", status(&results, "core_a::before_key"));
-
-    // Batch 5n: a pointer cast from a generic local type (`*mut Slot<T>`). rustc has no layout for
-    // such a type, so the layout note gives the declaration (the `repr` options and the member
-    // types). The note is the same in each build (see the compare of `before` and `again`), and
-    // it changes when a member type or the `repr` changes.
-    assert!(matches!(status(&results, "core_a::first_slot"), BodyStatus::Equal { .. }), "{:?}", status(&results, "core_a::first_slot"));
-    assert!(matches!(status(&results, "core_a::first_cell"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::first_cell"));
-    assert!(matches!(status(&results, "core_a::first_wide"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::first_wide"));
-
-    // Batch 5s, part E: the mark of a promoted constant with no known source is its printed
-    // MIR. It is the same in each build (see the compare of `before` and `again`), so a body
-    // with no change is equal to itself. A different computation with the same value (`5 - 1`
-    // and `6 - 2`) gives a different text.
-    let kept = before["n0"].iter().find(|record| record.name == "core_a::kept_mark").expect("core_a::kept_mark");
-    assert!(kept.text.contains("@promoted {") && !kept.text.contains("unknown_"), "{}", kept.text);
-    assert!(matches!(status(&results, "core_a::kept_mark"), BodyStatus::Equal { level, .. } if level == "n0"), "{:?}", status(&results, "core_a::kept_mark"));
-    assert!(matches!(status(&results, "core_a::new_mark"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::new_mark"));
-
-    // The renamed function itself has the same body.
-    assert!(
-        matches!(status(&results, "core_a::add_one"), BodyStatus::Equal { level, .. } if level == "n0")
-    );
-    // The callers differ only by the claimed rename (inside the crate and across crates).
-    assert!(
-        matches!(status(&results, "core_a::Cart::total"), BodyStatus::Equal { level, .. } if level == "n1")
-    );
-    assert!(
-        matches!(status(&results, "app_b::uses_helper"), BodyStatus::Equal { level, .. } if level == "n1")
-    );
-    // The inverted guard clause: the compare is the level N0 with the rename map (design 35.4).
-    // The level N4 is gone (batch 7d, design 38.12), so the body is different.
-    assert!(matches!(status(&results, "app_b::get"), BodyStatus::Different { .. }), "{:?}", status(&results, "app_b::get"));
-    // A real change stays different. The control flow is the same.
-    assert_eq!(status(&results, "app_b::price"), &BodyStatus::Different { cfg_changed: false });
-    // The const of an included file changed its value: the body that uses it differs (probe 1 of
-    // batch 5a: the driver printed only the path of the const).
-    assert!(
-        matches!(status(&results, "app_b::rated::{closure#0}"), BodyStatus::Different { .. }),
-        "{:?}",
-        status(&results, "app_b::rated::{closure#0}")
-    );
-    assert!(matches!(status(&results, "app_b::tests::price_adds"), BodyStatus::Different { .. }));
-    // The binary did not change.
-    assert!(
-        matches!(status(&results, "app_b::main"), BodyStatus::Equal { level, .. } if level == "n0")
-    );
+    check_claimed_renames(&before, &results);
 
     // Without the claim, the renamed function is uncovered, and a hint finds it.
     let results = compare(&before, &after, &BTreeMap::new(), &[]);
     assert_eq!(status(&results, "core_a::helper"), &BodyStatus::BeforeOnly);
     assert_eq!(status(&results, "core_a::add_one"), &BodyStatus::AfterOnly);
     assert!(
-        suggest_renames(&before, &after)
-            .contains(&("core_a::helper".to_string(), "core_a::add_one".to_string())),
+        suggest_renames(&before, &after).contains(&("core_a::helper".to_string(), "core_a::add_one".to_string())),
         "{:?}",
         suggest_renames(&before, &after)
     );
 
+    check_missing_dependency(&scratch, &target);
+}
+
+/// Checks the record files, the unit records, and the first records of the first version.
+fn check_units_and_records(scratch: &Path, before: &Levels) {
+    // The records of each target go to their own file: lib, bin, and test of `app_b`.
+    let files: Vec<String> = std::fs::read_dir(scratch.join("out-v1/n0"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    for prefix in ["core_a.lib.", "app_b.lib.", "app_b.bin.", "app_b.test."] {
+        assert!(files.iter().any(|file| file.starts_with(prefix)), "no {prefix}* file in {files:?}");
+    }
+    // Batch 5t, part A: each record file starts with the record of its compile unit. The `cfg`
+    // set and the list of the source files come from the compiler.
+    let units = semilla_normal::read_units(&scratch.join("out-v1/n0")).expect("a unit record in each file");
+    assert_eq!(units.len(), files.len(), "{units:?}");
+    let unit = |prefix: &str| {
+        units
+            .iter()
+            .find(|unit| unit.target.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no unit {prefix}: {units:?}"))
+    };
+    let (lib, bin) = (unit("app_b.lib."), unit("app_b.bin."));
+    // `app_b` has two test units: one for the lib and one for the bin. A file name ends in a
+    // hash of the build paths, so the order of the two files changes from machine to machine.
+    let app_tests: Vec<_> = units.iter().filter(|unit| unit.target.starts_with("app_b.test.")).collect();
+    let mut test_roots: Vec<&str> = app_tests.iter().map(|unit| unit.root.as_str()).collect();
+    test_roots.sort_unstable();
+    assert_eq!(test_roots, ["app_b/src/lib.rs", "app_b/src/main.rs"], "{units:?}");
+    let test = app_tests
+        .into_iter()
+        .find(|unit| unit.root == lib.root)
+        .expect("the test unit of the lib");
+    assert!(lib.cfg.contains("debug_assertions") && !lib.cfg.contains("test"), "{lib:?}");
+    assert!(test.cfg.contains("test") && test.cfg.contains("debug_assertions"), "{test:?}");
+    assert_eq!(
+        (lib.package.as_str(), lib.folder.as_str(), lib.root.as_str()),
+        ("app_b", "app_b", "app_b/src/lib.rs")
+    );
+    // The file of an `include!` call is a file of the unit.
+    assert!(
+        lib.files.contains("app_b/src/lib.rs") && lib.files.contains("app_b/src/rate.rs"),
+        "{lib:?}"
+    );
+    assert!(
+        !lib.files.contains("app_b/src/main.rs") && !lib.files.contains("core_a/src/lib.rs"),
+        "{lib:?}"
+    );
+    assert_eq!(test.root, lib.root);
+    assert_eq!(bin.root, "app_b/src/main.rs");
+    assert_ne!(lib.triple, "");
+    let first = before["n0"].iter().find(|record| record.name == "app_b::get").expect("app_b::get");
+    let span = first.span.as_ref().expect("a span");
+    assert!(span.file.ends_with("app_b/src/lib.rs"), "{span:?}");
+    assert!(span.line_start < span.line_end);
+    assert!(first.loop_free && first.term.is_none(), "N0 records have no term");
+    assert!(first.target.starts_with("app_b.lib."), "{}", first.target);
+    let n2 = before["n2"].iter().find(|record| record.name == "app_b::get").expect("app_b::get at n2");
+    assert!(n2.term.is_some());
+    // N3 records exist only for bodies with an inlined call (`Cart::total` calls `helper`).
+    assert!(before["n3"].iter().any(|record| record.name == "core_a::Cart::total"));
+    assert!(!before["n3"].iter().any(|record| record.name == "app_b::get"));
+}
+
+/// Checks the compare results of the two versions with the claimed rename.
+fn check_claimed_renames(before: &Levels, results: &[semilla_normal::BodyComparison]) {
+    // Batch 5n, A5: `x += y` against `x = x + (y)`, `a > b` against `b < a`, and `a + b` against
+    // `b + a` on integers. The optimizer of rustc orders the operands by the source text, and the
+    // printer gives them one order. An operation that is not symmetric stays different.
+    assert!(
+        matches!(status(results, "core_a::climb"), BodyStatus::Equal { level, .. } if level == "n2"),
+        "{:?}",
+        status(results, "core_a::climb")
+    );
+    assert!(
+        matches!(status(results, "core_a::drop_off"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(results, "core_a::drop_off")
+    );
+
+    // Batch 5n: a call of a trait method with a `const` parameter in its arguments
+    // (`<[usize; N] as Index<RangeTo<usize>>>::index`). The driver does not ask rustc for the impl
+    // of such a call: rustc stops there, and the build of the crate fails.
+    assert!(
+        matches!(status(results, "core_a::before_key"), BodyStatus::Equal { .. }),
+        "{:?}",
+        status(results, "core_a::before_key")
+    );
+
+    // Batch 5n: a pointer cast from a generic local type (`*mut Slot<T>`). rustc has no layout for
+    // such a type, so the layout note gives the declaration (the `repr` options and the member
+    // types). The note is the same in each build (see the compare of `before` and `again`), and
+    // it changes when a member type or the `repr` changes.
+    assert!(
+        matches!(status(results, "core_a::first_slot"), BodyStatus::Equal { .. }),
+        "{:?}",
+        status(results, "core_a::first_slot")
+    );
+    assert!(
+        matches!(status(results, "core_a::first_cell"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(results, "core_a::first_cell")
+    );
+    assert!(
+        matches!(status(results, "core_a::first_wide"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(results, "core_a::first_wide")
+    );
+
+    // Batch 5s, part E: the mark of a promoted constant with no known source is its printed
+    // MIR. It is the same in each build (see the compare of `before` and `again`), so a body
+    // with no change is equal to itself. A different computation with the same value (`5 - 1`
+    // and `6 - 2`) gives a different text.
+    let kept = before["n0"]
+        .iter()
+        .find(|record| record.name == "core_a::kept_mark")
+        .expect("core_a::kept_mark");
+    assert!(kept.text.contains("@promoted {") && !kept.text.contains("unknown_"), "{}", kept.text);
+    assert!(
+        matches!(status(results, "core_a::kept_mark"), BodyStatus::Equal { level, .. } if level == "n0"),
+        "{:?}",
+        status(results, "core_a::kept_mark")
+    );
+    assert!(
+        matches!(status(results, "core_a::new_mark"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(results, "core_a::new_mark")
+    );
+
+    // The renamed function itself has the same body.
+    assert!(matches!(status(results, "core_a::add_one"), BodyStatus::Equal { level, .. } if level == "n0"));
+    // The callers differ only by the claimed rename (inside the crate and across crates).
+    assert!(matches!(status(results, "core_a::Cart::total"), BodyStatus::Equal { level, .. } if level == "n1"));
+    assert!(matches!(status(results, "app_b::uses_helper"), BodyStatus::Equal { level, .. } if level == "n1"));
+    // The inverted guard clause: the compare is the level N0 with the rename map (design 35.4).
+    // The level N4 is gone (batch 7d, design 38.12), so the body is different.
+    assert!(
+        matches!(status(results, "app_b::get"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(results, "app_b::get")
+    );
+    // A real change stays different. The control flow is the same.
+    assert_eq!(status(results, "app_b::price"), &BodyStatus::Different { cfg_changed: false });
+    // The const of an included file changed its value: the body that uses it differs (probe 1 of
+    // batch 5a: the driver printed only the path of the const).
+    assert!(
+        matches!(status(results, "app_b::rated::{closure#0}"), BodyStatus::Different { .. }),
+        "{:?}",
+        status(results, "app_b::rated::{closure#0}")
+    );
+    assert!(matches!(status(results, "app_b::tests::price_adds"), BodyStatus::Different { .. }));
+    // The binary did not change.
+    assert!(matches!(status(results, "app_b::main"), BodyStatus::Equal { level, .. } if level == "n0"));
+}
+
+/// Checks the error of a check build with a dependency that is not in the cargo cache.
+fn check_missing_dependency(scratch: &Path, target: &Path) {
     // Batch 5n: a dependency that is not in the cargo cache. The check build runs cargo with
     // `--offline`. The error says what to do, and it is not a "cargo check failed" error.
     let v3 = scratch.join("v3");
     make_workspace(&v3, CORE_V1, APP_V1);
-    write(&v3.join("core_a/Cargo.toml"), &format!("{CORE_TOML}\n[dependencies]\nzzz-not-in-the-cache = \"1\"\n"));
-    let error = run_cargo_check(&v3, "n0", &scratch.join("out-v3"), &target).expect_err("cargo cannot get the dependency");
+    write(
+        &v3.join("core_a/Cargo.toml"),
+        &format!("{CORE_TOML}\n[dependencies]\nzzz-not-in-the-cache = \"1\"\n"),
+    );
+    let error = run_cargo_check(&v3, "n0", &scratch.join("out-v3"), target).expect_err("cargo cannot get the dependency");
     let text = format!("{error:#}");
     assert!(text.contains(semilla_normal::cargo::MISSING_DEPENDENCY), "{text}");
     assert!(text.contains("zzz-not-in-the-cache"), "{text}");

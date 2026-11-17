@@ -61,6 +61,8 @@ use rustc_span::Symbol;
 use rustc_span::def_id::DefId;
 
 /// The trait facts that must change before a rival wins.
+// Each bool is one independent trait fact, and the message reads each one by its name.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 struct Need {
     open: bool,
@@ -112,16 +114,38 @@ impl Via {
     }
 }
 
+/// The steps of the receiver of a method call, and the positions of the candidates.
+struct ReceiverSteps<'tcx> {
+    /// The type at each step, from the type of the receiver.
+    steps: Vec<Ty<'tcx>>,
+    /// The slice type of the last step, if the last step is an array.
+    array: Option<Ty<'tcx>>,
+    /// The type at each position: three for each step. `None` for a position with no type.
+    positions: Vec<Option<Ty<'tcx>>>,
+    /// The position of the winner.
+    winner_at: usize,
+}
+
+/// A method call, its winner, and the steps of its receiver.
+struct MethodCall<'tcx> {
+    hir_id: rustc_hir::HirId,
+    name: Symbol,
+    winner: DefId,
+    /// True if the winner is an inherent item.
+    inherent: bool,
+    steps: ReceiverSteps<'tcx>,
+}
+
 /// The index of a type parameter of an `impl` that the match of the receiver does not bind.
 const MARK: u32 = 0xFFF0_0000;
 
-pub struct Finder<'tcx> {
+pub(crate) struct Finder<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub typeck: &'tcx ty::TypeckResults<'tcx>,
 }
 
 impl<'tcx> Finder<'tcx> {
-    fn text(&self, ty: Ty<'tcx>) -> String {
+    fn text(ty: Ty<'tcx>) -> String {
         with_no_trimmed_paths!(ty.to_string())
     }
     fn path(&self, def_id: DefId) -> String {
@@ -135,7 +159,9 @@ impl<'tcx> Finder<'tcx> {
     /// True for a trait that the compiler decides from the type alone (`Sized`).
     fn sized_like(&self, trait_id: DefId) -> bool {
         use rustc_attr_ir::LangItem;
-        [LangItem::Sized, LangItem::MetaSized, LangItem::PointeeSized].into_iter().any(|item| self.tcx.is_lang_item(trait_id, item))
+        [LangItem::Sized, LangItem::MetaSized, LangItem::PointeeSized]
+            .into_iter()
+            .any(|item| self.tcx.is_lang_item(trait_id, item))
     }
     /// True if only the standard library can have an `impl` of the trait for the type (the
     /// orphan rule). The trait is of the standard library and has no parameter: a type
@@ -157,7 +183,18 @@ impl<'tcx> Finder<'tcx> {
                     None => return false,
                 },
                 ty::Adt(adt, _) => return std(adt.did()),
-                ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str | ty::Never | ty::Slice(_) | ty::Array(..) | ty::Tuple(_) | ty::RawPtr(..) | ty::FnPtr(..) => return true,
+                ty::Bool
+                | ty::Char
+                | ty::Int(_)
+                | ty::Uint(_)
+                | ty::Float(_)
+                | ty::Str
+                | ty::Never
+                | ty::Slice(_)
+                | ty::Array(..)
+                | ty::Tuple(_)
+                | ty::RawPtr(..)
+                | ty::FnPtr(..) => return true,
                 ty::Dynamic(preds, ..) => return preds.principal_def_id().is_none_or(std),
                 _ => return false,
             };
@@ -168,7 +205,7 @@ impl<'tcx> Finder<'tcx> {
     fn head(&self, ty: Ty<'tcx>) -> String {
         match ty.kind() {
             ty::Adt(adt, _) => self.tcx.item_name(adt.did()).to_string(),
-            ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str => self.text(ty),
+            ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str => Self::text(ty),
             _ => "*".to_string(),
         }
     }
@@ -176,27 +213,29 @@ impl<'tcx> Finder<'tcx> {
     /// Matches the pattern (a type with the parameters of an `impl`) with a type of the body.
     /// `Some(true)`: equal with the bindings in `map`. `Some(false)`: not equal in each
     /// configuration. `None`: not known.
-    fn bind(&self, pattern: Ty<'tcx>, real: Ty<'tcx>, map: &mut Vec<Option<GenericArg<'tcx>>>) -> Option<bool> {
-        self.bind_with(pattern, real, map, false)
+    fn bind(pattern: Ty<'tcx>, real: Ty<'tcx>, map: &mut Vec<Option<GenericArg<'tcx>>>) -> Option<bool> {
+        Self::bind_with(pattern, real, map, false)
     }
 
     /// `marked`: the pattern has the types of the body, and only a parameter with a mark
     /// (`MARK`) can get a binding.
-    fn bind_with(&self, pattern: Ty<'tcx>, real: Ty<'tcx>, map: &mut Vec<Option<GenericArg<'tcx>>>, marked: bool) -> Option<bool> {
+    fn bind_with(pattern: Ty<'tcx>, real: Ty<'tcx>, map: &mut Vec<Option<GenericArg<'tcx>>>, marked: bool) -> Option<bool> {
         if let ty::Param(param) = pattern.kind()
             && (!marked || param.index >= MARK)
         {
             let index = if marked { param.index - MARK } else { param.index };
             let slot = map.get_mut(index as usize)?;
-            return match slot {
-                Some(old) => Some(*old == GenericArg::from(real)),
-                None => {
-                    *slot = Some(real.into());
-                    Some(true)
-                }
+            return if let Some(old) = slot {
+                Some(*old == GenericArg::from(real))
+            } else {
+                *slot = Some(real.into());
+                Some(true)
             };
         }
-        if matches!(real.kind(), ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..)) {
+        if matches!(
+            real.kind(),
+            ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..)
+        ) {
             return None;
         }
         if matches!(real.kind(), ty::Param(param) if param.index >= MARK) {
@@ -204,12 +243,17 @@ impl<'tcx> Finder<'tcx> {
         }
         match (pattern.kind(), real.kind()) {
             (ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..), _) => None,
-            (ty::Ref(_, a, ma), ty::Ref(_, b, mb)) => if ma != mb { Some(false) } else { self.bind_with(*a, *b, map, marked) },
-            (ty::RawPtr(a, ma), ty::RawPtr(b, mb)) => if ma != mb { Some(false) } else { self.bind_with(*a, *b, map, marked) },
-            (ty::Slice(a), ty::Slice(b)) => self.bind_with(*a, *b, map, marked),
+            (ty::Ref(_, a, ma), ty::Ref(_, b, mb)) | (ty::RawPtr(a, ma), ty::RawPtr(b, mb)) => {
+                if ma == mb {
+                    Self::bind_with(*a, *b, map, marked)
+                } else {
+                    Some(false)
+                }
+            }
+            (ty::Slice(a), ty::Slice(b)) => Self::bind_with(*a, *b, map, marked),
             (ty::Array(a, la), ty::Array(b, lb)) => {
-                let first = self.bind_with(*a, *b, map, marked)?;
-                Some(first && self.bind_const(*la, *lb, map)?)
+                let first = Self::bind_with(*a, *b, map, marked)?;
+                Some(first && Self::bind_const(*la, *lb, map)?)
             }
             (ty::Tuple(a), ty::Tuple(b)) => {
                 if a.len() != b.len() {
@@ -217,7 +261,7 @@ impl<'tcx> Finder<'tcx> {
                 }
                 let mut all = true;
                 for (a, b) in a.iter().zip(b.iter()) {
-                    all &= self.bind_with(a, b, map, marked)?;
+                    all &= Self::bind_with(a, b, map, marked)?;
                 }
                 Some(all)
             }
@@ -228,8 +272,8 @@ impl<'tcx> Finder<'tcx> {
                 let mut all = true;
                 for (a, b) in aa.iter().zip(ab.iter()) {
                     match (a.kind(), b.kind()) {
-                        (ty::GenericArgKind::Type(a), ty::GenericArgKind::Type(b)) => all &= self.bind_with(a, b, map, marked)?,
-                        (ty::GenericArgKind::Const(a), ty::GenericArgKind::Const(b)) => all &= self.bind_const(a, b, map)?,
+                        (ty::GenericArgKind::Type(a), ty::GenericArgKind::Type(b)) => all &= Self::bind_with(a, b, map, marked)?,
+                        (ty::GenericArgKind::Const(a), ty::GenericArgKind::Const(b)) => all &= Self::bind_const(a, b, map)?,
                         (ty::GenericArgKind::Lifetime(_), ty::GenericArgKind::Lifetime(_)) => {}
                         _ => return None,
                     }
@@ -252,15 +296,14 @@ impl<'tcx> Finder<'tcx> {
         }
     }
 
-    fn bind_const(&self, pattern: ty::Const<'tcx>, real: ty::Const<'tcx>, map: &mut Vec<Option<GenericArg<'tcx>>>) -> Option<bool> {
+    fn bind_const(pattern: ty::Const<'tcx>, real: ty::Const<'tcx>, map: &mut Vec<Option<GenericArg<'tcx>>>) -> Option<bool> {
         if let ty::ConstKind::Param(param) = pattern.kind() {
             let slot = map.get_mut(param.index as usize)?;
-            return match slot {
-                Some(old) => (*old == GenericArg::from(real)).then_some(true),
-                None => {
-                    *slot = Some(real.into());
-                    Some(true)
-                }
+            return if let Some(old) = slot {
+                (*old == GenericArg::from(real)).then_some(true)
+            } else {
+                *slot = Some(real.into());
+                Some(true)
             };
         }
         (pattern == real).then_some(true)
@@ -282,7 +325,7 @@ impl<'tcx> Finder<'tcx> {
                 ty::ClauseKind::Trait(pred) if self.sized_like(pred.def_id()) => {}
                 ty::ClauseKind::Trait(pred) => {
                     let self_ty = pred.self_ty();
-                    let marked = self.has_mark(self_ty.into());
+                    let marked = Self::has_mark(self_ty.into());
                     if marked {
                         need.open(|| format!("a bound of `{}` holds", self.path(imp)));
                     } else {
@@ -301,7 +344,7 @@ impl<'tcx> Finder<'tcx> {
         if self.sized_like(trait_id) {
             return;
         }
-        let why = || format!("`{}: {}`", self.text(self_ty), self.path(trait_id));
+        let why = || format!("`{}: {}`", Self::text(self_ty), self.path(trait_id));
         if tcx.trait_is_auto(trait_id) {
             need.auto = true;
             need.why.get_or_insert_with(why);
@@ -322,7 +365,10 @@ impl<'tcx> Finder<'tcx> {
                 need.foreign = true;
             }
         }
-        if matches!(self_ty.kind(), ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..)) {
+        if matches!(
+            self_ty.kind(),
+            ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..)
+        ) {
             need.open(why);
             return;
         }
@@ -332,7 +378,7 @@ impl<'tcx> Finder<'tcx> {
         for imp in impls {
             let header = tcx.type_of(imp).instantiate_identity().skip_norm_wip();
             let mut map = vec![None; tcx.generics_of(imp).count()];
-            match self.bind(header, self_ty, &mut map) {
+            match Self::bind(header, self_ty, &mut map) {
                 Some(false) => {}
                 Some(true) => self.bounds(imp, &map, depth, need),
                 None => need.open(why),
@@ -344,7 +390,7 @@ impl<'tcx> Finder<'tcx> {
     /// the selection of the compiler can use, with the bounds of that `impl`. An `impl` of
     /// the workspace is an entry `closed:TRAIT:HEAD`: a different configuration can remove
     /// it, and then a candidate with a lower rank gets the call.
-    pub fn uses(&self, hir_id: rustc_hir::HirId, what: &str, item: DefId) -> Option<String> {
+    pub(crate) fn uses(&self, hir_id: rustc_hir::HirId, what: &str, item: DefId) -> Option<String> {
         let tcx = self.tcx;
         let parent = tcx.opt_parent(item)?;
         let args = self.typeck.node_args_opt(hir_id)?;
@@ -377,7 +423,10 @@ impl<'tcx> Finder<'tcx> {
             (None, Some(why)) => format!("a trait fact ({why})"),
             (None, None) => "a trait fact".to_string(),
         };
-        let message = format!("the {what} means `{}` now because of {fact}; a different configuration can change that fact", self.path(item));
+        let message = format!(
+            "the {what} means `{}` now because of {fact}; a different configuration can change that fact",
+            self.path(item)
+        );
         Some(format!("{}|{}", kinds.join(" "), short(&message)))
     }
 
@@ -390,12 +439,13 @@ impl<'tcx> Finder<'tcx> {
         }
         let env = ty::TypingEnv::post_analysis(tcx, self.typeck.hir_owner.def_id);
         let trait_ref = if trait_ref.has_aliases() {
-            tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new(trait_ref)).unwrap_or(trait_ref)
+            tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new(trait_ref))
+                .unwrap_or(trait_ref)
         } else {
             trait_ref
         };
         let self_ty = trait_ref.self_ty();
-        let why = || format!("`{}: {}`", self.text(self_ty), self.path(trait_id));
+        let why = || format!("`{}: {}`", Self::text(self_ty), self.path(trait_id));
         if tcx.trait_is_auto(trait_id) {
             via.auto = true;
             via.why.get_or_insert_with(why);
@@ -414,7 +464,12 @@ impl<'tcx> Finder<'tcx> {
         {
             return;
         }
-        if depth > 4 || matches!(self_ty.kind(), ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..)) {
+        if depth > 4
+            || matches!(
+                self_ty.kind(),
+                ty::Alias(..) | ty::Infer(..) | ty::Error(..) | ty::Bound(..) | ty::Placeholder(..)
+            )
+        {
             via.open(why);
             return;
         }
@@ -426,8 +481,8 @@ impl<'tcx> Finder<'tcx> {
             let mut equal = Some(true);
             for (pattern, real) in header.args.iter().zip(trait_ref.args.iter()) {
                 let step = match (pattern.kind(), real.kind()) {
-                    (ty::GenericArgKind::Type(a), ty::GenericArgKind::Type(b)) => self.bind(a, b, &mut map),
-                    (ty::GenericArgKind::Const(a), ty::GenericArgKind::Const(b)) => self.bind_const(a, b, &mut map),
+                    (ty::GenericArgKind::Type(a), ty::GenericArgKind::Type(b)) => Self::bind(a, b, &mut map),
+                    (ty::GenericArgKind::Const(a), ty::GenericArgKind::Const(b)) => Self::bind_const(a, b, &mut map),
                     (ty::GenericArgKind::Lifetime(_), ty::GenericArgKind::Lifetime(_)) => Some(true),
                     _ => None,
                 };
@@ -446,12 +501,14 @@ impl<'tcx> Finder<'tcx> {
                 Some(true) => {
                     if imp.is_local() || crate::config::is_workspace_crate(tcx, imp.krate) {
                         via.used.insert((tcx.item_name(trait_id).to_string(), self.head(self_ty)));
-                        via.first.get_or_insert_with(|| format!("impl {} for {}", self.path(trait_id), self.text(self_ty)));
+                        via.first
+                            .get_or_insert_with(|| format!("impl {} for {}", self.path(trait_id), Self::text(self_ty)));
                     } else if self.outside(imp) {
                         // A feature of that crate can remove the `impl`. Semilla does not
                         // read that crate.
                         via.foreign = true;
-                        via.first.get_or_insert_with(|| format!("impl {} for {}", self.path(trait_id), self.text(self_ty)));
+                        via.first
+                            .get_or_insert_with(|| format!("impl {} for {}", self.path(trait_id), Self::text(self_ty)));
                     }
                     self.holds_bounds(imp, &map, depth, via);
                 }
@@ -478,8 +535,9 @@ impl<'tcx> Finder<'tcx> {
         (!unknown).then_some(args)
     }
 
-    fn has_mark(&self, arg: GenericArg<'tcx>) -> bool {
-        arg.walk().any(|part| matches!(part.as_type().map(|ty| ty.kind()), Some(ty::Param(param)) if param.index >= MARK))
+    fn has_mark(arg: GenericArg<'tcx>) -> bool {
+        arg.walk()
+            .any(|part| matches!(part.as_type().map(rustc_middle::ty::Ty::kind), Some(ty::Param(param)) if param.index >= MARK))
     }
 
     /// Gives a binding to each parameter of the `impl` that a bound of the form
@@ -488,26 +546,32 @@ impl<'tcx> Finder<'tcx> {
         let tcx = self.tcx;
         let env = ty::TypingEnv::post_analysis(tcx, self.typeck.hir_owner.def_id);
         for _ in 0..3 {
-            if map.iter().all(|slot| slot.is_some()) {
+            if map.iter().all(std::option::Option::is_some) {
                 return;
             }
             let Some(args) = self.marked_args(imp, map) else { return };
             let mut progress = false;
             for clause in tcx.clauses_of(imp).instantiate(tcx, args).clauses {
                 let clause = clause.skip_norm_wip();
-                let ty::ClauseKind::Projection(pred) = clause.kind().skip_binder() else { continue };
+                let ty::ClauseKind::Projection(pred) = clause.kind().skip_binder() else {
+                    continue;
+                };
                 let Some(pattern) = pred.term.as_type() else { continue };
-                if !self.has_mark(pattern.into()) || pred.projection_term.args.iter().any(|arg| self.has_mark(arg)) {
+                if !Self::has_mark(pattern.into()) || pred.projection_term.args.iter().any(Self::has_mark) {
                     continue;
                 }
-                let ty::AliasTermKind::ProjectionTy { def_id } = pred.projection_term.kind else { continue };
+                let ty::AliasTermKind::ProjectionTy { def_id } = pred.projection_term.kind else {
+                    continue;
+                };
                 let alias = Ty::new_projection(tcx, ty::IsRigid::No, def_id, pred.projection_term.args);
-                let Ok(real) = tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new(alias)) else { continue };
+                let Ok(real) = tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new(alias)) else {
+                    continue;
+                };
                 if real.has_aliases() || real.references_error() {
                     continue;
                 }
                 let mut next = map.clone();
-                if self.bind_with(pattern, real, &mut next, true) == Some(true) {
+                if Self::bind_with(pattern, real, &mut next, true) == Some(true) {
                     *map = next;
                     progress = true;
                 }
@@ -532,7 +596,7 @@ impl<'tcx> Finder<'tcx> {
             if let ty::ClauseKind::Trait(pred) = clause.kind().skip_binder()
                 && !self.sized_like(pred.def_id())
             {
-                let marked = pred.trait_ref.args.iter().any(|arg| self.has_mark(arg));
+                let marked = pred.trait_ref.args.iter().any(Self::has_mark);
                 if marked {
                     via.open(|| format!("a bound of `{}`", self.path(imp)));
                 } else {
@@ -561,7 +625,9 @@ impl<'tcx> Finder<'tcx> {
     }
 
     fn unstable(&self, def_id: DefId) -> bool {
-        self.tcx.lookup_stability(def_id).is_some_and(|stability| stability.is_unstable() && !self.tcx.features().enabled(stability.feature))
+        self.tcx
+            .lookup_stability(def_id)
+            .is_some_and(|stability| stability.is_unstable() && !self.tcx.features().enabled(stability.feature))
     }
 
     /// False only if the compiler says that `self_ty: Trait` does not hold now.
@@ -580,20 +646,31 @@ impl<'tcx> Finder<'tcx> {
     /// An unstable winner (batch 5q). The crate has the feature now. A build with no such
     /// feature puts the winner after each stable candidate, so a stable candidate with a
     /// lower rank can get the call. A `cfg_attr` at the crate root can select the feature.
-    pub fn feature(&self, what: &str, winner: DefId) -> Option<String> {
+    pub(crate) fn feature(&self, what: &str, winner: DefId) -> Option<String> {
         let tcx = self.tcx;
         // An unstable item in the code of a macro of the standard library needs no feature of
         // the crate: each configuration permits it.
         let gate = |def_id: DefId| {
-            tcx.lookup_stability(def_id).filter(|stability| stability.is_unstable() && tcx.features().enabled(stability.feature)).map(|stability| stability.feature)
+            tcx.lookup_stability(def_id)
+                .filter(|stability| stability.is_unstable() && tcx.features().enabled(stability.feature))
+                .map(|stability| stability.feature)
         };
-        let feature = gate(winner).or_else(|| tcx.opt_parent(winner).filter(|parent| matches!(tcx.def_kind(*parent), DefKind::Trait)).and_then(gate))?;
-        let message = format!("the {what} means `{}` now by the feature `{feature}`; a configuration with no such feature can select a different item", self.path(winner));
+        let feature = gate(winner).or_else(|| {
+            tcx.opt_parent(winner)
+                .filter(|parent| matches!(tcx.def_kind(*parent), DefKind::Trait))
+                .and_then(gate)
+        })?;
+        let message = format!(
+            "the {what} means `{}` now by the feature `{feature}`; a configuration with no such feature can select a different item",
+            self.path(winner)
+        );
         Some(format!("unstable|{}", short(&message)))
     }
 
     fn visible(&self, item: DefId, from: rustc_hir::HirId) -> bool {
-        self.tcx.visibility(item).is_accessible_from(self.tcx.parent_module(from).to_def_id(), self.tcx)
+        self.tcx
+            .visibility(item)
+            .is_accessible_from(self.tcx.parent_module(from).to_def_id(), self.tcx)
     }
 
     /// The next step of the list of steps.
@@ -618,13 +695,18 @@ impl<'tcx> Finder<'tcx> {
             return None;
         }
         let mut kinds = Vec::new();
-        for (flag, word) in [(need.open, "open"), (need.foreign, "foreign"), (need.auto, "auto"), (need.unstable, "unstable")] {
+        for (flag, word) in [
+            (need.open, "open"),
+            (need.foreign, "foreign"),
+            (need.auto, "auto"),
+            (need.unstable, "unstable"),
+        ] {
             if flag {
                 kinds.push(word.to_string());
             }
         }
         kinds.extend(need.closed.iter().map(|(name, head)| format!("closed:{name}:{head}")));
-        let now = now.map(|def_id| self.path(def_id)).unwrap_or_else(|| "an unknown item".to_string());
+        let now = now.map_or_else(|| "an unknown item".to_string(), |def_id| self.path(def_id));
         let rival = need.rival.unwrap_or_else(|| "a different item".to_string());
         let why = match need.why {
             Some(why) => format!("{why} holds"),
@@ -636,7 +718,7 @@ impl<'tcx> Finder<'tcx> {
     }
 
     /// The rival of the method call `expr` with the receiver `receiver`.
-    pub fn method(&self, expr: &rustc_hir::Expr<'tcx>, name: Symbol, receiver: &rustc_hir::Expr<'tcx>) -> Option<String> {
+    pub(crate) fn method(&self, expr: &rustc_hir::Expr<'tcx>, name: Symbol, receiver: &rustc_hir::Expr<'tcx>) -> Option<String> {
         let tcx = self.tcx;
         let mut need = Need::default();
         let Some(winner) = self.typeck.type_dependent_def_id(expr.hir_id) else {
@@ -651,9 +733,36 @@ impl<'tcx> Finder<'tcx> {
         if features.arbitrary_self_types() || features.arbitrary_self_types_pointers() {
             return unknown(need, "a receiver of an unstable form matches");
         }
-        let winner_inherent = tcx.opt_parent(winner).is_some_and(|parent| matches!(tcx.def_kind(parent), DefKind::Impl { of_trait: false }));
+        let winner_inherent = tcx
+            .opt_parent(winner)
+            .is_some_and(|parent| matches!(tcx.def_kind(parent), DefKind::Impl { of_trait: false }));
+        let steps = match self.receiver_steps(receiver) {
+            Ok(steps) => steps,
+            Err(why) => return unknown(need, why),
+        };
+        if winner_inherent && steps.winner_at == 0 {
+            return None;
+        }
+        let call = MethodCall {
+            hir_id: expr.hir_id,
+            name,
+            winner,
+            inherent: winner_inherent,
+            steps,
+        };
+        self.inherent_rivals(&call, &mut need);
+        self.trait_rivals(&call, &mut need);
+        self.finish("call", Some(winner), need)
+    }
+
+    /// The steps and the positions of the receiver of a method call, and the position of the
+    /// winner. An error gives the condition for the message.
+    fn receiver_steps(&self, receiver: &rustc_hir::Expr<'tcx>) -> Result<ReceiverSteps<'tcx>, &'static str> {
+        let tcx = self.tcx;
         // The steps to the winner, from the adjustments of the receiver.
-        let Some(start) = self.typeck.expr_ty_opt(receiver) else { return unknown(need, "the receiver has a type") };
+        let Some(start) = self.typeck.expr_ty_opt(receiver) else {
+            return Err("the receiver has a type");
+        };
         let mut steps = vec![start];
         let (mut borrow, mut unsize, mut state) = (None, false, 0);
         for adjustment in self.typeck.expr_adjustments(receiver) {
@@ -667,20 +776,20 @@ impl<'tcx> Finder<'tcx> {
                     unsize = true;
                     state = 2;
                 }
-                _ => return unknown(need, "the receiver has an adjustment of a different kind"),
+                _ => return Err("the receiver has an adjustment of a different kind"),
             }
         }
         if steps.iter().any(|ty| ty.has_infer() || ty.references_error()) {
-            return unknown(need, "the receiver has a known type");
+            return Err("the receiver has a known type");
         }
         let derefs = steps.len() - 1;
         // The other steps.
         while let Some(next) = self.deref(*steps.last().unwrap()) {
             if steps.len() > 12 {
-                return unknown(need, "the receiver has a short list of steps");
+                return Err("the receiver has a short list of steps");
             }
             if unsize {
-                return unknown(need, "the receiver has an array type");
+                return Err("the receiver has an array type");
             }
             steps.push(next);
         }
@@ -689,13 +798,17 @@ impl<'tcx> Finder<'tcx> {
             _ => None,
         };
         if unsize && array.is_none() {
-            return unknown(need, "the receiver has an array type");
+            return Err("the receiver has an array type");
         }
         // The positions. Each has an index: three for each step.
         let erased = tcx.lifetimes.re_erased;
         let mut positions: Vec<Option<Ty<'tcx>>> = Vec::new();
         for step in steps.iter().copied() {
-            positions.extend([Some(step), Some(Ty::new_imm_ref(tcx, erased, step)), Some(Ty::new_mut_ref(tcx, erased, step))]);
+            positions.extend([
+                Some(step),
+                Some(Ty::new_imm_ref(tcx, erased, step)),
+                Some(Ty::new_mut_ref(tcx, erased, step)),
+            ]);
         }
         if let Some(slice) = array {
             positions.extend([None, Some(Ty::new_imm_ref(tcx, erased, slice)), Some(Ty::new_mut_ref(tcx, erased, slice))]);
@@ -703,42 +816,54 @@ impl<'tcx> Finder<'tcx> {
         // The position of the winner. A selection at a step with a `&` type has the
         // adjustments "deref, then borrow": the position is the step before, with no borrow.
         let winner_at = match (borrow, unsize) {
-            (Some(mutable), true) => 3 * steps.len() + 1 + mutable as usize,
+            (Some(mutable), true) => 3 * steps.len() + 1 + usize::from(mutable),
             (Some(mutable), false) => match derefs.checked_sub(1).map(|before| steps[before].kind()) {
                 Some(ty::Ref(_, _, old)) if old.is_mut() == mutable => 3 * (derefs - 1),
-                _ => 3 * derefs + 1 + mutable as usize,
+                _ => 3 * derefs + 1 + usize::from(mutable),
             },
             (None, _) => 3 * derefs,
         };
         if winner_at >= positions.len() {
-            return unknown(need, "the winner has a known position");
+            return Err("the winner has a known position");
         }
-        if winner_inherent && winner_at == 0 {
-            return None;
-        }
+        Ok(ReceiverSteps {
+            steps,
+            array,
+            positions,
+            winner_at,
+        })
+    }
+
+    /// Adds the inherent candidates of a method call to `need`.
+    fn inherent_rivals(&self, call: &MethodCall<'tcx>, need: &mut Need) {
+        let tcx = self.tcx;
         // The inherent candidates.
         let mut impls = Vec::new();
-        for step in steps.iter().copied().chain(array) {
+        for step in call.steps.steps.iter().copied().chain(call.steps.array) {
             self.inherent(step, &mut impls);
         }
         let mut seen = std::collections::HashSet::new();
         impls.retain(|imp| seen.insert(*imp));
-        let last = if winner_inherent { winner_at.saturating_sub(1) } else { winner_at };
+        let last = if call.inherent {
+            call.steps.winner_at.saturating_sub(1)
+        } else {
+            call.steps.winner_at
+        };
         for imp in impls {
-            for item in tcx.associated_items(imp).filter_by_name_unhygienic(name) {
-                if !item.is_method() || item.def_id == winner || !self.visible(item.def_id, expr.hir_id) {
+            for item in tcx.associated_items(imp).filter_by_name_unhygienic(call.name) {
+                if !item.is_method() || item.def_id == call.winner || !self.visible(item.def_id, call.hir_id) {
                     continue;
                 }
                 let form = tcx.fn_sig(item.def_id).instantiate_identity().skip_norm_wip().skip_binder().inputs()[0];
-                for position in positions[..=last].iter().copied().flatten() {
+                for position in call.steps.positions[..=last].iter().copied().flatten() {
                     let mut map = vec![None; tcx.generics_of(item.def_id).count()];
                     let before = need.is_empty();
-                    match self.bind(form, position, &mut map) {
+                    match Self::bind(form, position, &mut map) {
                         Some(false) => continue,
                         Some(true) if self.unstable(item.def_id) => need.unstable = true,
                         Some(true) => {
                             need.barred = false;
-                            self.bounds(imp, &map, 0, &mut need);
+                            self.bounds(imp, &map, 0, need);
                             // The candidate holds now, and the compiler does not select it.
                             // A bound that only the standard library can change is not such
                             // a case: the bound is equal in each configuration.
@@ -752,46 +877,64 @@ impl<'tcx> Finder<'tcx> {
                 }
             }
         }
+    }
+
+    /// Adds the candidates of the traits in scope of a method call to `need`.
+    fn trait_rivals(&self, call: &MethodCall<'tcx>, need: &mut Need) {
+        let tcx = self.tcx;
         // The candidates of the traits in scope. At the position of the winner, a second trait
         // is an error (or the winner stays).
-        let mut traits: Vec<DefId> = tcx.in_scope_traits(expr.hir_id).unwrap_or_default().iter().map(|candidate| candidate.def_id).collect();
+        let mut traits: Vec<DefId> = tcx
+            .in_scope_traits(call.hir_id)
+            .unwrap_or_default()
+            .iter()
+            .map(|candidate| candidate.def_id)
+            .collect();
         let mut seen = std::collections::HashSet::new();
         traits.retain(|trait_id| seen.insert(*trait_id));
-        let last = if features.supertrait_item_shadowing() { winner_at + 1 } else { winner_at };
+        let last = if tcx.features().supertrait_item_shadowing() {
+            call.steps.winner_at + 1
+        } else {
+            call.steps.winner_at
+        };
         for trait_id in traits {
-            for item in tcx.associated_items(trait_id).filter_by_name_unhygienic(name) {
+            for item in tcx.associated_items(trait_id).filter_by_name_unhygienic(call.name) {
                 if !item.is_method() {
                     continue;
                 }
                 let form = tcx.fn_sig(item.def_id).instantiate_identity().skip_norm_wip().skip_binder().inputs()[0];
-                for (index, position) in positions[..last.min(positions.len())].iter().copied().enumerate() {
+                for (index, position) in call.steps.positions[..last.min(call.steps.positions.len())].iter().copied().enumerate() {
                     let Some(position) = position else { continue };
-                    if index == winner_at && item.def_id == winner {
+                    if index == call.steps.winner_at && item.def_id == call.winner {
                         continue;
                     }
                     let mut map = vec![None; tcx.generics_of(item.def_id).count()];
-                    match (self.bind(form, position, &mut map), map[0].and_then(|arg| arg.as_type())) {
+                    match (
+                        Self::bind(form, position, &mut map),
+                        map[0].and_then(rustc_middle::ty::GenericArg::as_type),
+                    ) {
                         (Some(false), _) => continue,
                         // The compiler puts an unstable candidate that holds after each stable
                         // one. A build with the feature gives it its rank. An unstable candidate
                         // that does not hold needs a new trait fact first, as a stable one does.
-                        (Some(true), Some(self_ty)) if (self.unstable(item.def_id) || self.unstable(trait_id)) && self.may_hold(trait_id, self_ty) => {
+                        (Some(true), Some(self_ty))
+                            if (self.unstable(item.def_id) || self.unstable(trait_id)) && self.may_hold(trait_id, self_ty) =>
+                        {
                             need.unstable = true;
                         }
-                        (Some(true), Some(self_ty)) => self.newly(trait_id, self_ty, 0, &mut need),
+                        (Some(true), Some(self_ty)) => self.newly(trait_id, self_ty, 0, need),
                         _ => need.open(|| format!("the receiver of `{}` matches", self.path(item.def_id))),
                     }
                     need.rival.get_or_insert_with(|| self.path(item.def_id));
                 }
             }
         }
-        self.finish("call", Some(winner), need)
     }
 
     /// The rival of the path `Type::name` with the meaning `winner` (a function or a constant).
-    pub fn path_item(&self, hir_id: rustc_hir::HirId, name: Symbol, winner: DefId) -> Option<String> {
+    pub(crate) fn path_item(&self, hir_id: rustc_hir::HirId, name: Symbol, winner: DefId) -> Option<String> {
         let tcx = self.tcx;
-        let Some(parent) = tcx.opt_parent(winner) else { return None };
+        let parent = tcx.opt_parent(winner)?;
         // An inherent item has the highest rank. An item of a different kind is not a result
         // of this lookup.
         if !matches!(tcx.def_kind(parent), DefKind::Trait) {
@@ -813,7 +956,7 @@ impl<'tcx> Finder<'tcx> {
                 let header = tcx.type_of(imp).instantiate_identity().skip_norm_wip();
                 let mut map = vec![None; tcx.generics_of(imp).count()];
                 let before = need.is_empty();
-                match self.bind(header, self_ty, &mut map) {
+                match Self::bind(header, self_ty, &mut map) {
                     Some(false) => continue,
                     Some(true) if self.unstable(item.def_id) => need.unstable = true,
                     Some(true) => {
@@ -836,8 +979,7 @@ impl<'tcx> Finder<'tcx> {
 /// The name of a primitive type stays (`str::len`).
 fn short(text: &str) -> String {
     const KEEP: [&str; 19] = [
-        "str", "bool", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "crate",
-        "dyn",
+        "str", "bool", "char", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "crate", "dyn",
     ];
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::new();

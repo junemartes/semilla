@@ -2,7 +2,7 @@
 //!
 //! Inlining keeps the behavior the same: a call runs the body of the callee with the arguments,
 //! and the inlined code runs the same statements in the same order. The inliner works on the
-//! rustc_public body, before the N0 normalization.
+//! `rustc_public` body, before the N0 normalization.
 //!
 //! What the inliner inlines:
 //!
@@ -41,8 +41,8 @@ use std::collections::{HashMap, HashSet};
 use rustc_public::CrateDef;
 use rustc_public::mir::visit::{Location, MirVisitor, MutMirVisitor, PlaceContext};
 use rustc_public::mir::{
-    BasicBlock, Body, BorrowKind, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem,
-    Rvalue, Statement, StatementKind, Terminator, TerminatorKind, UnwindAction, WithRetag,
+    BasicBlock, Body, BorrowKind, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem, Rvalue, Statement, StatementKind, Terminator,
+    TerminatorKind, UnwindAction, WithRetag,
 };
 use rustc_public::ty::{RigidTy, TyKind};
 
@@ -50,16 +50,16 @@ use crate::normalize::remap_targets;
 use crate::term::address_taken_locals;
 
 /// The inlining depth: a call in inlined code can be inlined once more.
-pub const MAX_DEPTH: usize = 2;
+pub(crate) const MAX_DEPTH: usize = 2;
 /// The largest callee (blocks) that the inliner inlines.
-pub const MAX_CALLEE_BLOCKS: usize = 64;
+pub(crate) const MAX_CALLEE_BLOCKS: usize = 64;
 /// The largest callee (statements) that the inliner inlines.
-pub const MAX_CALLEE_STATEMENTS: usize = 256;
+pub(crate) const MAX_CALLEE_STATEMENTS: usize = 256;
 /// The inliner stops when the body has this number of blocks.
 const MAX_BODY_BLOCKS: usize = 2000;
 
 /// The callees that the inliner can inline, by def path. The bodies are the N2 bodies.
-pub struct Callees {
+pub(crate) struct Callees {
     pub bodies: HashMap<String, Body>,
     /// The callees whose N2 body has no cycle in its control flow graph.
     pub loop_free: std::collections::HashSet<String>,
@@ -67,7 +67,7 @@ pub struct Callees {
 
 /// Which callees an inlining run inlines.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
+pub(crate) enum Scope {
     /// All callees (the N3 text).
     All,
     /// Only the loop-free callees, so a loop-free caller stays loop-free (the N3 term).
@@ -80,15 +80,19 @@ pub enum Scope {
 }
 
 /// The largest callee (blocks) of `Scope::SmallLoopFree`.
-pub const MAX_SMALL_CALLEE_BLOCKS: usize = 16;
+pub(crate) const MAX_SMALL_CALLEE_BLOCKS: usize = 16;
 /// The largest callee (blocks) of `Scope::TinyLoopFree`. A helper that returns a bool from a
 /// short circuit (`a && b`) has about 5 blocks.
-pub const MAX_TINY_CALLEE_BLOCKS: usize = 6;
+pub(crate) const MAX_TINY_CALLEE_BLOCKS: usize = 6;
 
 /// Returns the def path of the local function that a call calls directly, if the call is a
 /// direct call of a local function item without generic arguments.
-pub fn direct_local_callee(kind: &TerminatorKind) -> Option<String> {
-    let TerminatorKind::Call { func: Operand::Constant(constant), .. } = kind else {
+pub(crate) fn direct_local_callee(kind: &TerminatorKind) -> Option<String> {
+    let TerminatorKind::Call {
+        func: Operand::Constant(constant),
+        ..
+    } = kind
+    else {
         return None;
     };
     let TyKind::RigidTy(RigidTy::FnDef(def, args)) = constant.ty().kind() else {
@@ -99,12 +103,12 @@ pub fn direct_local_callee(kind: &TerminatorKind) -> Option<String> {
 
 /// Inlines the calls of a body. Returns the new body, or `None` if no call qualifies (then the
 /// N3 body is the N2 body).
-pub fn inline_calls(body: &Body, callees: &Callees, scope: Scope) -> Option<Body> {
+pub(crate) fn inline_calls(body: &Body, callees: &Callees, scope: Scope) -> Option<Body> {
     inline_calls_named(body, callees, scope, &mut Vec::new())
 }
 
 /// `inline_calls`, and the name of each callee that it inlined goes into `names`.
-pub fn inline_calls_named(body: &Body, callees: &Callees, scope: Scope, names: &mut Vec<String>) -> Option<Body> {
+pub(crate) fn inline_calls_named(body: &Body, callees: &Callees, scope: Scope, names: &mut Vec<String>) -> Option<Body> {
     let mut blocks = body.blocks.clone();
     let mut locals = body.locals().to_vec();
     let arg_count = body.arg_locals().len();
@@ -134,8 +138,11 @@ pub fn inline_calls_named(body: &Body, callees: &Callees, scope: Scope, names: &
                 });
             if let Some((name, callee)) = callee {
                 let before = blocks.len();
-                let borrows = Borrows { taken: &mut taken, mut_taken: &mut mut_taken };
-                if inline_one(&mut blocks, &mut locals, borrows, index, callee) {
+                let mut borrows = Borrows {
+                    taken: &mut taken,
+                    mut_taken: &mut mut_taken,
+                };
+                if inline_one(&mut blocks, &mut locals, &mut borrows, index, callee) {
                     if !names.contains(name) {
                         names.push(name.clone());
                     }
@@ -152,16 +159,15 @@ pub fn inline_calls_named(body: &Body, callees: &Callees, scope: Scope, names: &
 
 /// Inlines the call at the end of block `at`, in place. Returns false (and changes nothing) if
 /// the call does not qualify. `borrows` holds the locals whose address the body takes.
-fn inline_one(
-    blocks: &mut Vec<BasicBlock>,
-    locals: &mut Vec<LocalDecl>,
-    borrows: Borrows<'_>,
-    at: usize,
-    callee: &Body,
-) -> bool {
+fn inline_one(blocks: &mut Vec<BasicBlock>, locals: &mut Vec<LocalDecl>, borrows: &mut Borrows<'_>, at: usize, callee: &Body) -> bool {
     let call = blocks[at].terminator.clone();
-    let TerminatorKind::Call { args, destination, target: Some(return_block), unwind, .. } =
-        &call.kind
+    let TerminatorKind::Call {
+        args,
+        destination,
+        target: Some(return_block),
+        unwind,
+        ..
+    } = &call.kind
     else {
         return false;
     };
@@ -173,9 +179,65 @@ fn inline_one(
     if callee.spread_arg().is_some() || callee_args != args.len() {
         return false;
     }
-
-    let old_local_count = locals.len();
+    let site = CallSite {
+        call: &call,
+        args,
+        destination,
+        return_block: *return_block,
+        unwind: *unwind,
+    };
     let base_block = blocks.len();
+    let mapped = map_callee_locals(blocks, locals, borrows, &site, callee);
+    let arg_statements = append_callee_blocks(blocks, mapped, &site, callee);
+
+    // The call block runs the argument assignments and jumps to the callee entry.
+    let call_block = &mut blocks[at];
+    call_block.statements.extend(arg_statements);
+    call_block.terminator = Terminator {
+        kind: TerminatorKind::Goto { target: base_block },
+        source_info: call.source_info.clone(),
+    };
+    true
+}
+
+/// The parts of a call that the inliner reads.
+struct CallSite<'a> {
+    /// The call terminator.
+    call: &'a Terminator,
+    args: &'a [Operand],
+    destination: &'a Place,
+    return_block: usize,
+    unwind: UnwindAction,
+}
+
+/// The map of the callee locals to the caller, from `map_callee_locals`.
+struct MappedLocals {
+    /// The caller local that each callee local maps to.
+    map: Vec<Option<Local>>,
+    /// The constant that each callee local maps to.
+    constants: Vec<Option<Operand>>,
+    /// The assignments of the arguments to the new locals.
+    arg_statements: Vec<Statement>,
+    /// True if the callee writes the call destination directly.
+    direct_return: bool,
+}
+
+/// Maps each callee local to a caller local or a constant, and adds the new locals.
+fn map_callee_locals(
+    blocks: &[BasicBlock],
+    locals: &mut Vec<LocalDecl>,
+    borrows: &mut Borrows<'_>,
+    site: &CallSite<'_>,
+    callee: &Body,
+) -> MappedLocals {
+    let CallSite {
+        call,
+        args,
+        destination,
+        unwind,
+        ..
+    } = *site;
+    let old_local_count = locals.len();
 
     // The caller local or the constant that each callee local maps to.
     let mut map: Vec<Option<Local>> = vec![None; callee.locals().len()];
@@ -184,7 +246,7 @@ fn inline_one(
 
     // The return place.
     let cleanup_uses = match unwind {
-        UnwindAction::Cleanup(start) => locals_used_from(blocks, *start),
+        UnwindAction::Cleanup(start) => locals_used_from(blocks, start),
         _ => HashSet::new(),
     };
     let args_use = |local: Local| args.iter().any(|arg| operand_local(arg) == Some(local));
@@ -203,9 +265,7 @@ fn inline_one(
         match arg {
             Operand::Copy(place) | Operand::Move(place)
                 if place.projection.is_empty()
-                    && (!borrows.taken[place.local]
-                        || (!borrows.mut_taken[place.local]
-                            && is_freeze(locals[place.local].ty)))
+                    && (!borrows.taken[place.local] || (!borrows.mut_taken[place.local] && is_freeze(locals[place.local].ty)))
                     && place.local != destination.local
                     && is_read_only(callee, callee_local, moved) =>
             {
@@ -222,21 +282,21 @@ fn inline_one(
     for (callee_local, decl) in callee.locals().iter().enumerate() {
         if map[callee_local].is_none() && constants[callee_local].is_none() {
             map[callee_local] = Some(locals.len());
-            locals.push(LocalDecl { ty: decl.ty, span: decl.span, mutability: Mutability::Mut });
+            locals.push(LocalDecl {
+                ty: decl.ty,
+                span: decl.span,
+                mutability: Mutability::Mut,
+            });
             borrows.taken.push(false);
             borrows.mut_taken.push(false);
         }
     }
     for (position, arg) in args.iter().enumerate() {
-        let callee_local = position + 1;
-        let caller_local = map[callee_local];
+        let caller_local = map[position + 1];
         let is_new = caller_local.is_some_and(|local| local >= old_local_count);
         if is_new {
             arg_statements.push(Statement {
-                kind: StatementKind::Assign(
-                    Place::from(caller_local.unwrap()),
-                    Rvalue::Use(arg.clone(), WithRetag::Yes),
-                ),
+                kind: StatementKind::Assign(Place::from(caller_local.unwrap()), Rvalue::Use(arg.clone(), WithRetag::Yes)),
                 source_info: call.source_info.clone(),
             });
         }
@@ -254,10 +314,31 @@ fn inline_one(
         }
     }
 
+    MappedLocals {
+        map,
+        constants,
+        arg_statements,
+        direct_return,
+    }
+}
+
+/// Copies the callee blocks to the end of `blocks`, with the locals and the blocks renumbered.
+/// Returns the assignments of the arguments.
+fn append_callee_blocks(blocks: &mut Vec<BasicBlock>, mapped: MappedLocals, site: &CallSite<'_>, callee: &Body) -> Vec<Statement> {
+    let MappedLocals {
+        map,
+        constants,
+        arg_statements,
+        direct_return,
+    } = mapped;
+    let (destination, return_block, unwind) = (site.destination, &site.return_block, &site.unwind);
+    let base_block = blocks.len();
     // Copy the callee blocks, with the locals and the blocks renumbered.
     let mut copy = callee.clone();
-    let mut remap =
-        Remap { map: map.iter().map(|local| local.unwrap_or(usize::MAX)).collect(), constants };
+    let mut remap = Remap {
+        map: map.iter().map(|local| local.unwrap_or(usize::MAX)).collect(),
+        constants,
+    };
     remap.visit_body(&mut copy);
     let return_local = map[0].expect("the return place has a local");
     for mut block in copy.blocks {
@@ -266,10 +347,7 @@ fn inline_one(
             TerminatorKind::Return => {
                 if !direct_return {
                     block.statements.push(Statement {
-                        kind: StatementKind::Assign(
-                            destination.clone(),
-                            Rvalue::Use(Operand::Move(Place::from(return_local)), WithRetag::Yes),
-                        ),
+                        kind: StatementKind::Assign(destination.clone(), Rvalue::Use(Operand::Move(Place::from(return_local)), WithRetag::Yes)),
                         source_info: block.terminator.source_info.clone(),
                     });
                 }
@@ -283,24 +361,17 @@ fn inline_one(
             }
             _ => {
                 remap_targets(kind, |target| target + base_block);
-                if let Some(callee_unwind) = unwind_mut(kind) {
-                    if *callee_unwind == UnwindAction::Continue {
-                        *callee_unwind = *unwind;
-                    }
+                if let Some(callee_unwind) = unwind_mut(kind)
+                    && *callee_unwind == UnwindAction::Continue
+                {
+                    *callee_unwind = *unwind;
                 }
             }
         }
         blocks.push(block);
     }
 
-    // The call block runs the argument assignments and jumps to the callee entry.
-    let call_block = &mut blocks[at];
-    call_block.statements.extend(arg_statements);
-    call_block.terminator = Terminator {
-        kind: TerminatorKind::Goto { target: base_block },
-        source_info: call.source_info.clone(),
-    };
-    true
+    arg_statements
 }
 
 fn unwind_mut(kind: &mut TerminatorKind) -> Option<&mut UnwindAction> {
@@ -349,13 +420,10 @@ fn is_read_only(body: &Body, local: Local, moved: bool) -> bool {
                         if own(place) && !freeze {
                             return false;
                         }
-                    } else if let Rvalue::Ref(_, _, place)
-                    | Rvalue::AddressOf(_, place)
-                    | Rvalue::Reborrow(_, _, place) = rvalue
+                    } else if let Rvalue::Ref(_, _, place) | Rvalue::AddressOf(_, place) | Rvalue::Reborrow(_, _, place) = rvalue
+                        && own(place)
                     {
-                        if own(place) {
-                            return false;
-                        }
+                        return false;
                     }
                 }
                 StatementKind::SetDiscriminant { place, .. } if own(place) => return false,
@@ -365,9 +433,7 @@ fn is_read_only(body: &Body, local: Local, moved: bool) -> bool {
         match &block.terminator.kind {
             TerminatorKind::Call { destination, .. } if own(destination) => return false,
             TerminatorKind::Drop { place, .. } if own(place) && !moved => return false,
-            TerminatorKind::InlineAsm { operands, .. }
-                if operands.iter().any(|operand| operand.out_place.as_ref().is_some_and(own)) =>
-            {
+            TerminatorKind::InlineAsm { operands, .. } if operands.iter().any(|operand| operand.out_place.as_ref().is_some_and(own)) => {
                 return false;
             }
             _ => {}
@@ -389,12 +455,12 @@ fn mutably_borrowed_locals(body: &Body) -> Vec<Local> {
     let mut found = Vec::new();
     for block in &body.blocks {
         for statement in &block.statements {
-            let StatementKind::Assign(_, rvalue) = &statement.kind else { continue };
+            let StatementKind::Assign(_, rvalue) = &statement.kind else {
+                continue;
+            };
             let place = match rvalue {
                 Rvalue::Ref(_, BorrowKind::Shared, _) => continue,
-                Rvalue::Ref(_, _, place)
-                | Rvalue::AddressOf(_, place)
-                | Rvalue::Reborrow(_, _, place) => place,
+                Rvalue::Ref(_, _, place) | Rvalue::AddressOf(_, place) | Rvalue::Reborrow(_, _, place) => place,
                 _ => continue,
             };
             if !has_deref(place) {
@@ -409,8 +475,8 @@ fn mutably_borrowed_locals(body: &Body) -> Vec<Local> {
 /// cannot change a value of it. A generic or unknown type gives false.
 fn is_freeze(ty: rustc_public::ty::Ty) -> bool {
     rustc_middle::ty::tls::with(|tcx| {
-        let ty = rustc_public::rustc_internal::internal(tcx, ty);
         use rustc_middle::ty::TypeVisitableExt;
+        let ty = rustc_public::rustc_internal::internal(tcx, ty);
         !ty.has_param() && ty.is_freeze(tcx, rustc_middle::ty::TypingEnv::fully_monomorphized())
     })
 }
@@ -424,10 +490,11 @@ fn only_plain_reads(body: &Body, local: Local) -> bool {
     }
     impl MirVisitor for Uses {
         fn visit_operand(&mut self, operand: &Operand, location: Location) {
-            if let Operand::Copy(place) | Operand::Move(place) = operand {
-                if place.local == self.local && place.projection.is_empty() {
-                    return;
-                }
+            if let Operand::Copy(place) | Operand::Move(place) = operand
+                && place.local == self.local
+                && place.projection.is_empty()
+            {
+                return;
             }
             self.super_operand(operand, location);
         }
@@ -473,13 +540,12 @@ struct Remap {
 
 impl MutMirVisitor for Remap {
     fn visit_operand(&mut self, operand: &mut Operand, location: Location) {
-        if let Operand::Copy(place) | Operand::Move(place) = operand {
-            if place.projection.is_empty() {
-                if let Some(constant) = &self.constants[place.local] {
-                    *operand = constant.clone();
-                    return;
-                }
-            }
+        if let Operand::Copy(place) | Operand::Move(place) = operand
+            && place.projection.is_empty()
+            && let Some(constant) = &self.constants[place.local]
+        {
+            *operand = constant.clone();
+            return;
         }
         self.super_operand(operand, location);
     }

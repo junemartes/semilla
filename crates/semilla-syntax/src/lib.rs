@@ -15,8 +15,8 @@ pub mod flow;
 pub mod graph;
 pub mod load;
 mod mapper;
-pub mod rs;
 mod net;
+pub mod rs;
 pub mod tree;
 pub mod tt;
 
@@ -28,6 +28,7 @@ use semilla_core::{Anchor, Segment};
 
 /// Splits an item path at `::`, but not inside `<…>`: `a::<T as fmt::Display>::fmt` gives
 /// `a`, `<T as fmt::Display>`, `fmt`.
+#[must_use]
 pub fn split_path(path: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let (mut depth, mut start) = (0i32, 0);
@@ -52,6 +53,7 @@ pub fn split_path(path: &str) -> Vec<&str> {
 }
 
 /// The role name of an anchor segment.
+#[must_use]
 pub fn segment_role(segment: &Segment) -> String {
     segment.to_string()
 }
@@ -98,7 +100,13 @@ pub fn anchor_at(workspace: &Workspace, file: &str, line: usize, column: Option<
         .values()
         .filter(|item| at_line(item) && item.kind != ItemKind::Mod && item.kind != ItemKind::Impl)
         .min_by_key(|item| item.line_end - item.line_start)
-        .or_else(|| workspace.items.values().filter(at_line).min_by_key(|item| item.line_end - item.line_start))?;
+        .or_else(|| {
+            workspace
+                .items
+                .values()
+                .filter(at_line)
+                .min_by_key(|item| item.line_end - item.line_start)
+        })?;
     let mut anchor = Anchor::item(&item.path);
     let Some(body) = &item.body else {
         return Some(anchor);
@@ -106,18 +114,17 @@ pub fn anchor_at(workspace: &Workspace, file: &str, line: usize, column: Option<
     if !(body.start.0 <= line && line <= body.end.0) {
         return Some(anchor);
     }
-    let roles = match column {
-        Some(column) => column_path(body, (line, column)),
-        None => {
-            let covers = |n: &Node| n.start.0 <= line && line <= n.end.0;
-            match body.children.iter().find(|s| s.stmt && covers(s)) {
-                Some(statement) => {
-                    let mut roles = vec![statement.role.clone()];
-                    roles.extend(line_path(statement, line));
-                    roles
-                }
-                None => Vec::new(),
+    let roles = if let Some(column) = column {
+        column_path(body, (line, column))
+    } else {
+        let covers = |n: &Node| n.start.0 <= line && line <= n.end.0;
+        match body.children.iter().find(|s| s.stmt && covers(s)) {
+            Some(statement) => {
+                let mut roles = vec![statement.role.clone()];
+                roles.extend(line_path(statement, line));
+                roles
             }
+            None => Vec::new(),
         }
     };
     for role in roles {
@@ -241,7 +248,7 @@ mod tests {
         let edits = diff(&old, &new, &Renames::default());
         let summary: Vec<String> = edits
             .iter()
-            .map(|e| format!("{:?} {}", e.kind, e.anchor().map(|a| a.to_string()).unwrap_or_default()))
+            .map(|e| format!("{:?} {}", e.kind, e.anchor().map_or_default(std::string::ToString::to_string)))
             .collect();
         assert_eq!(
             summary,
@@ -249,7 +256,12 @@ mod tests {
             "{edits:#?}"
         );
         assert_eq!(edits[1].source_before.as_deref(), Some("1"));
-        assert_eq!(edits[0].source_after.as_deref(), Some("if i == 0 {\n    return false;\n}"), "{:?}", edits[0].source_after);
+        assert_eq!(
+            edits[0].source_after.as_deref(),
+            Some("if i == 0 {\n    return false;\n}"),
+            "{:?}",
+            edits[0].source_after
+        );
         let modified = edits.iter().find(|e| e.kind == EditKind::Modified).unwrap();
         assert_eq!(modified.source_after.as_deref(), Some("a <= n"));
         assert_eq!((modified.attr_before.as_deref(), modified.attr_after.as_deref()), (Some("<"), Some("<=")));
@@ -290,12 +302,15 @@ mod tests {
         let (_d3, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &changed)]);
         let edits = diff(&old, &new, &renames);
         assert_eq!(edits.len(), 1, "{edits:#?}");
-        assert_eq!(edits[0].anchor().map(|anchor| anchor.to_string()).as_deref(), Some("demo::f/tail"));
+        assert_eq!(edits[0].anchor().map(std::string::ToString::to_string).as_deref(), Some("demo::f/tail"));
     }
 
     #[test]
     fn split_path_keeps_trait_impls_together() {
-        assert_eq!(split_path("a::date::<T as fmt::Display>::fmt"), ["a", "date", "<T as fmt::Display>", "fmt"]);
+        assert_eq!(
+            split_path("a::date::<T as fmt::Display>::fmt"),
+            ["a", "date", "<T as fmt::Display>", "fmt"]
+        );
         assert_eq!(split_path("a"), ["a"]);
     }
 
@@ -303,7 +318,10 @@ mod tests {
     fn renames_reach_inside_groups() {
         let mut renames = Renames::default();
         renames.idents.push((None, "len".into(), "count".into()));
-        assert_eq!(renames.apply("x", "input [len ..] . get (len) + lens + len_2"), "input [count ..] . get (count) + lens + len_2");
+        assert_eq!(
+            renames.apply("x", "input [len ..] . get (len) + lens + len_2"),
+            "input [count ..] . get (count) + lens + len_2"
+        );
     }
 
     #[test]
@@ -328,7 +346,10 @@ mod tests {
         for expected in ["Docs", "Members", "Visibility", "Signature", "ItemAdded", "FileAdded"] {
             assert!(kinds.contains(expected), "missing {expected}: {kinds:?}");
         }
-        assert!(!edits.iter().any(|e| e.attr_after.as_deref() == Some("use")), "an unchanged use gives no edit");
+        assert!(
+            !edits.iter().any(|e| e.attr_after.as_deref() == Some("use")),
+            "an unchanged use gives no edit"
+        );
     }
 
     #[cfg(unix)]
@@ -338,7 +359,16 @@ mod tests {
     }
 
     fn summary(edits: &[Edit]) -> Vec<String> {
-        edits.iter().map(|e| format!("{:?} {}", e.kind, e.anchor().map(|a| a.to_string()).or(e.file.clone()).unwrap_or_default())).collect()
+        edits
+            .iter()
+            .map(|e| {
+                format!(
+                    "{:?} {}",
+                    e.kind,
+                    e.anchor().map(std::string::ToString::to_string).or(e.file.clone()).unwrap_or_default()
+                )
+            })
+            .collect()
     }
 
     #[cfg(unix)]
@@ -347,7 +377,15 @@ mod tests {
         let lib = "pub fn f() -> u32 {\n    1\n}\n";
         let files = |binary: &[u8], orphan: &[u8], lib: &str| {
             let dir = tempfile::tempdir().unwrap();
-            write_files(dir.path(), &[("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("run.sh", "#!/bin/sh\necho hi\n"), ("build.rs", "fn main() {}\n")]);
+            write_files(
+                dir.path(),
+                &[
+                    ("Cargo.toml", MANIFEST),
+                    ("src/lib.rs", lib),
+                    ("run.sh", "#!/bin/sh\necho hi\n"),
+                    ("build.rs", "fn main() {}\n"),
+                ],
+            );
             std::fs::write(dir.path().join("logo.bin"), binary).unwrap();
             std::fs::write(dir.path().join("src/orphan.rs"), orphan).unwrap();
             dir
@@ -359,11 +397,30 @@ mod tests {
         let (old, new) = (Workspace::load(old_dir.path()).unwrap(), Workspace::load(new_dir.path()).unwrap());
         let edits = diff(&old, &new, &Renames::default());
         // The formatting change of the parsed file `src/lib.rs` gives no edit.
-        assert_eq!(summary(&edits), ["FileChanged build.rs", "FileChanged logo.bin", "FileChanged run.sh", "FileChanged src/orphan.rs"], "{edits:#?}");
-        let note = |file: &str| edits.iter().find(|e| e.file.as_deref() == Some(file)).and_then(|e| e.note.clone()).unwrap_or_default();
+        assert_eq!(
+            summary(&edits),
+            [
+                "FileChanged build.rs",
+                "FileChanged logo.bin",
+                "FileChanged run.sh",
+                "FileChanged src/orphan.rs"
+            ],
+            "{edits:#?}"
+        );
+        let note = |file: &str| {
+            edits
+                .iter()
+                .find(|e| e.file.as_deref() == Some(file))
+                .and_then(|e| e.note.clone())
+                .unwrap_or_default()
+        };
         assert_eq!(note("logo.bin"), "binary file changed");
         assert_eq!(note("run.sh"), "mode 100644 → 100755");
-        assert_eq!(note("src/orphan.rs"), "binary file changed", "a Rust file that the loader does not parse is a file");
+        assert_eq!(
+            note("src/orphan.rs"),
+            "binary file changed",
+            "a Rust file that the loader does not parse is a file"
+        );
     }
 
     #[test]
@@ -375,7 +432,20 @@ mod tests {
         };
         let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &src("\\\\"))]);
         let paths: Vec<&str> = old.items.keys().map(String::as_str).collect();
-        for expected in ["demo::sep#0", "demo::sep#1", "demo::other", "demo::imp#0", "demo::imp#1", "demo::imp#0::f", "demo::imp#1::f", "demo::imp#0::use#0", "demo::imp#1::use#0", "demo::impl S#0", "demo::impl S#1", "demo::S::a"] {
+        for expected in [
+            "demo::sep#0",
+            "demo::sep#1",
+            "demo::other",
+            "demo::imp#0",
+            "demo::imp#1",
+            "demo::imp#0::f",
+            "demo::imp#1::f",
+            "demo::imp#0::use#0",
+            "demo::imp#1::use#0",
+            "demo::impl S#0",
+            "demo::impl S#1",
+            "demo::S::a",
+        ] {
             assert!(paths.contains(&expected), "missing {expected}: {paths:?}");
         }
         assert!(!paths.contains(&"demo::sep") && !paths.contains(&"demo::imp::f"), "{paths:?}");
@@ -399,10 +469,23 @@ mod tests {
         let after = "pub struct W<T> { pub inner: T }\nimpl<'a, T: Clone + std::fmt::Debug> W<T> {\n    pub fn get(&self) -> T { self.inner.clone() }\n}\nimpl<T: Copy> std::fmt::Display for W<T> {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"w\") }\n}\n";
         let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)]);
         let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", after)]);
-        assert!(old.items.contains_key("demo::W::get") && old.items.contains_key("demo::<W as std::fmt::Display>::fmt"), "{:?}", old.items.keys());
-        assert_eq!(summary(&diff(&old, &new, &Renames::default())), ["Signature demo::impl <W as std::fmt::Display>", "Signature demo::impl W"]);
+        assert!(
+            old.items.contains_key("demo::W::get") && old.items.contains_key("demo::<W as std::fmt::Display>::fmt"),
+            "{:?}",
+            old.items.keys()
+        );
+        assert_eq!(
+            summary(&diff(&old, &new, &Renames::default())),
+            ["Signature demo::impl <W as std::fmt::Display>", "Signature demo::impl W"]
+        );
         // Two impls of one type with the same method name still have distinct paths.
-        let (_d3, two) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "pub struct W<T>(T);\nimpl W<u8> {\n    pub fn get(&self) {}\n}\nimpl W<u16> {\n    pub fn get(&self) {}\n}\n")]);
+        let (_d3, two) = workspace(&[
+            ("Cargo.toml", MANIFEST),
+            (
+                "src/lib.rs",
+                "pub struct W<T>(T);\nimpl W<u8> {\n    pub fn get(&self) {}\n}\nimpl W<u16> {\n    pub fn get(&self) {}\n}\n",
+            ),
+        ]);
         for path in ["demo::W::get#0", "demo::W::get#1", "demo::impl W#0", "demo::impl W#1"] {
             assert!(two.items.contains_key(path), "missing {path}: {:?}", two.items.keys());
         }
@@ -427,21 +510,54 @@ mod tests {
             summary(&diff(&old, &new, &Renames::default()))
         };
         // One aspect of one member gives one edit of that member, not a blob edit of its owner.
-        assert_eq!(edits(&TYPES.replace("pub balance: u32", "pub balance: u64")), ["Signature demo::Account.balance"]);
-        assert_eq!(edits(&TYPES.replace("pub balance: u32", "balance: u32")), ["Visibility demo::Account.balance"]);
-        assert_eq!(edits(&TYPES.replace("    pub balance: u32,\n", "    pub balance: u32,\n    pub created: u64,\n")), ["Members demo::Account", "ItemAdded demo::Account.created"]);
-        assert_eq!(edits(&TYPES.replace("Close { reason: String }", "Close { reason: String, code: u8 }")), ["Members demo::Event::Close", "ItemAdded demo::Event::Close.code"]);
-        assert_eq!(edits(&TYPES.replace("Deposit(u32)", "Deposit { n: u32 }")), ["Signature demo::Event::Deposit", "Members demo::Event::Deposit", "ItemRemoved demo::Event::Deposit.0", "ItemAdded demo::Event::Deposit.n"]);
-        assert_eq!(edits(&TYPES.replace("\"item\"", "\"thing\"")), ["Replaced demo::Price::label/tail/args[0]"]);
-        assert_eq!(edits(&TYPES.replace("fn price(&self) -> u32;", "fn price(&self, unit: u8) -> u32;")), ["Signature demo::Price::price/sig/param[unit]"]);
+        assert_eq!(
+            edits(&TYPES.replace("pub balance: u32", "pub balance: u64")),
+            ["Signature demo::Account.balance"]
+        );
+        assert_eq!(
+            edits(&TYPES.replace("pub balance: u32", "balance: u32")),
+            ["Visibility demo::Account.balance"]
+        );
+        assert_eq!(
+            edits(&TYPES.replace("    pub balance: u32,\n", "    pub balance: u32,\n    pub created: u64,\n")),
+            ["Members demo::Account", "ItemAdded demo::Account.created"]
+        );
+        assert_eq!(
+            edits(&TYPES.replace("Close { reason: String }", "Close { reason: String, code: u8 }")),
+            ["Members demo::Event::Close", "ItemAdded demo::Event::Close.code"]
+        );
+        assert_eq!(
+            edits(&TYPES.replace("Deposit(u32)", "Deposit { n: u32 }")),
+            [
+                "Signature demo::Event::Deposit",
+                "Members demo::Event::Deposit",
+                "ItemRemoved demo::Event::Deposit.0",
+                "ItemAdded demo::Event::Deposit.n"
+            ]
+        );
+        assert_eq!(
+            edits(&TYPES.replace("\"item\"", "\"thing\"")),
+            ["Replaced demo::Price::label/tail/args[0]"]
+        );
+        assert_eq!(
+            edits(&TYPES.replace("fn price(&self) -> u32;", "fn price(&self, unit: u8) -> u32;")),
+            ["Signature demo::Price::price/sig/param[unit]"]
+        );
         // A new order of the fields is an edit of the owner.
-        assert_eq!(edits(&TYPES.replace("    pub id: u32,\n    pub balance: u32,\n", "    pub balance: u32,\n    pub id: u32,\n")), ["Members demo::Account"]);
+        assert_eq!(
+            edits(&TYPES.replace("    pub id: u32,\n    pub balance: u32,\n", "    pub balance: u32,\n    pub id: u32,\n")),
+            ["Members demo::Account"]
+        );
     }
 
     #[test]
     fn inner_attributes_give_an_edit() {
         let (_d1, old) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "pub mod m;\n"), ("src/m.rs", "pub fn f() {}\n")]);
-        let (_d2, new) = workspace(&[("Cargo.toml", MANIFEST), ("src/lib.rs", "#![allow(dead_code)]\npub mod m;\n"), ("src/m.rs", "#![cfg(any())]\npub fn f() {}\n")]);
+        let (_d2, new) = workspace(&[
+            ("Cargo.toml", MANIFEST),
+            ("src/lib.rs", "#![allow(dead_code)]\npub mod m;\n"),
+            ("src/m.rs", "#![cfg(any())]\npub fn f() {}\n"),
+        ]);
         let edits = diff(&old, &new, &Renames::default());
         assert_eq!(summary(&edits), ["Attrs demo", "Attrs demo::m"], "{edits:#?}");
         assert_eq!(edits[1].text_after.as_deref(), Some("# ! [cfg (any ())]"));
@@ -461,15 +577,30 @@ mod tests {
         assert_eq!(edits(&src.replace("b: &str)", "b: &str, c: bool)")), ["Signature demo::f/sig/param[c]"]);
         assert_eq!(edits(&src.replace("(a: u32, b: &str)", "(a: u32)")), ["Signature demo::f/sig/param[b]"]);
         assert_eq!(edits(&src.replace("b: &str)", "b: String)")), ["Signature demo::f/sig/param[b]"]);
-        assert_eq!(edits(&src.replace("(a: u32, b: &str)", "(b: &str, a: u32)")), ["Signature demo::f/sig/params"]);
+        assert_eq!(
+            edits(&src.replace("(a: u32, b: &str)", "(b: &str, a: u32)")),
+            ["Signature demo::f/sig/params"]
+        );
         assert_eq!(edits(&src.replace("-> u32 where", "-> u64 where")), ["Signature demo::f/sig/ret"]);
         assert_eq!(edits(&src.replace("<X: Clone>", "<X: Clone + Send>")), ["Signature demo::f/sig/generics"]);
-        assert_eq!(edits(&src.replace("where X: Copy", "where X: Copy + Send")), ["Signature demo::f/sig/where"]);
+        assert_eq!(
+            edits(&src.replace("where X: Copy", "where X: Copy + Send")),
+            ["Signature demo::f/sig/where"]
+        );
         assert_eq!(edits(&src.replace("pub fn f", "pub async fn f")), ["Signature demo::f/sig/qualifiers"]);
-        assert_eq!(edits(&src.replace("pub fn m(&self", "pub fn m(&mut self")), ["Signature demo::S::m/sig/param[self]"]);
-        assert_eq!(edits(&src.replace("fn t(&self) -> u32;", "fn t(&self, x: u8) -> u32;")), ["Signature demo::T::t/sig/param[x]"]);
+        assert_eq!(
+            edits(&src.replace("pub fn m(&self", "pub fn m(&mut self")),
+            ["Signature demo::S::m/sig/param[self]"]
+        );
+        assert_eq!(
+            edits(&src.replace("fn t(&self) -> u32;", "fn t(&self, x: u8) -> u32;")),
+            ["Signature demo::T::t/sig/param[x]"]
+        );
         // Two parts change: two edits.
-        assert_eq!(edits(&src.replace("b: &str) -> u32 where", "b: String) -> u64 where")), ["Signature demo::f/sig/param[b]", "Signature demo::f/sig/ret"]);
+        assert_eq!(
+            edits(&src.replace("b: &str) -> u32 where", "b: String) -> u64 where")),
+            ["Signature demo::f/sig/param[b]", "Signature demo::f/sig/ret"]
+        );
     }
 
     use std::collections::BTreeSet;

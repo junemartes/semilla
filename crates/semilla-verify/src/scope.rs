@@ -13,6 +13,7 @@
 //! refutation, never a pass.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use semilla_syntax::Workspace;
 
@@ -124,14 +125,20 @@ pub const STD_NO_IO: &[&str] = &[
 
 /// True when `path` starts with `prefix` at a segment border: `std::fs` matches `std::fs::read`
 /// and `std::fs`, and it does not match `std::fsx::read`.
+#[must_use]
 pub fn has_prefix(path: &str, prefix: &str) -> bool {
-    path.strip_prefix(prefix).is_some_and(|rest| rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
 /// The path tokens of a printed function name: `<std::fs::File as std::io::Read>::read` gives
 /// `std::fs::File`, `std::io::Read`, and `read`.
+#[must_use]
 pub fn path_tokens(text: &str) -> Vec<&str> {
-    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':')).map(|token| token.trim_matches(':')).filter(|token| !token.is_empty()).collect()
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+        .map(|token| token.trim_matches(':'))
+        .filter(|token| !token.is_empty())
+        .collect()
 }
 
 /// The decision of `no-io` for one function of another crate.
@@ -152,12 +159,17 @@ pub enum Io {
 /// - `std`: each `std::…` path in the def path must be in [`STD_NO_IO`]. Else the function
 ///   counts as I/O.
 /// - Each other crate: not examined.
+#[must_use]
 pub fn io_class(krate: &str, def: &str) -> Io {
     match krate {
         "core" | "alloc" => Io::No,
         "std" => {
             let tokens: Vec<&str> = path_tokens(def).into_iter().filter(|token| has_prefix(token, "std")).collect();
-            if !tokens.is_empty() && tokens.iter().all(|token| STD_NO_IO.iter().any(|module| has_prefix(token, module))) { Io::No } else { Io::Yes }
+            if !tokens.is_empty() && tokens.iter().all(|token| STD_NO_IO.iter().any(|module| has_prefix(token, module))) {
+                Io::No
+            } else {
+                Io::Yes
+            }
         }
         _ => Io::NotExamined,
     }
@@ -166,6 +178,7 @@ pub fn io_class(krate: &str, def: &str) -> Io {
 /// The crate and the def path of an external call. An old record has no origin: the printed
 /// path decides. That is safe: a printed `core::…` or `alloc::…` path is never a function of
 /// `std`, and the rule of `std` is the strict one.
+#[must_use]
 pub fn origin(printed: &str, origins: &BTreeMap<String, (String, String)>) -> (String, String) {
     if let Some(found) = origins.get(printed) {
         return found.clone();
@@ -181,149 +194,265 @@ fn is_plain(path: &str) -> bool {
 
 /// The crates of the workspace.
 fn local_crates(after: &Workspace) -> BTreeSet<String> {
-    after.crates.iter().map(|c| c.name.clone()).chain(after.items.values().map(|item| item.path.split("::").next().unwrap_or("").to_string())).collect()
+    after
+        .crates
+        .iter()
+        .map(|c| c.name.clone())
+        .chain(after.items.values().map(|item| item.path.split("::").next().unwrap_or("").to_string()))
+        .collect()
+}
+
+/// The state of the walk of [`scope`] over the facts.
+struct Walk<'a> {
+    facts: &'a BTreeMap<String, ItemFacts>,
+    after: &'a Workspace,
+    /// The crates of the workspace.
+    local: BTreeSet<String>,
+    scope: Scope,
+    types: BTreeSet<String>,
+    drops: BTreeSet<String>,
+    gaps: BTreeSet<String>,
+    indirect: BTreeMap<String, usize>,
+    // The first body that sends a type to the code of another crate, and the first body that
+    // drops a type.
+    type_from: BTreeMap<String, String>,
+    drop_from: BTreeMap<String, String>,
+    todo: Vec<String>,
+    done: BTreeSet<String>,
+}
+
+impl Walk<'_> {
+    /// Visits each body of `todo`, and each body that it adds to `todo`.
+    fn drain(&mut self) {
+        while let Some(current) = self.todo.pop() {
+            self.visit(&current);
+        }
+    }
+
+    /// Adds the callees and the types of one body.
+    fn visit(&mut self, current: &str) {
+        if !self.done.insert(current.to_string()) {
+            return;
+        }
+        let (facts, after) = (self.facts, self.after);
+        let Some(found) = facts.get(current) else {
+            if after.items.get(current).is_some_and(|item| item.body.is_some()) {
+                self.gaps.insert(format!("`{current}` has no MIR"));
+            }
+            return;
+        };
+        let scope = &mut self.scope;
+        for callee in &found.callees {
+            if scope.items.insert(callee.clone()) {
+                scope.from.insert(callee.clone(), (current.to_string(), String::new()));
+                self.todo.push(callee.clone());
+            }
+        }
+        for call in &found.externals {
+            let (krate, def) = origin(call, &found.origins);
+            if after.items.contains_key(call.as_str()) || facts.contains_key(call.as_str()) {
+                // A function of another crate of the workspace.
+                if scope.items.insert(call.clone()) {
+                    scope.from.insert(call.clone(), (current.to_string(), String::new()));
+                    self.todo.push(call.clone());
+                }
+            } else if self.local.contains(&krate) && !is_std(&krate) {
+                self.gaps.insert(format!("`{call}` (a function of the workspace) has no MIR"));
+            } else {
+                scope.externals.entry(call.clone()).or_insert((krate, def, current.to_string()));
+            }
+        }
+        self.visit_types(current, found);
+    }
+
+    /// Adds the reached types, the dropped types, the types of the constants, and the indirect
+    /// calls of one body.
+    fn visit_types(&mut self, current: &str, found: &ItemFacts) {
+        let (local, gaps) = (&self.local, &mut self.gaps);
+        for (path, krate) in &found.reach_types {
+            if local.contains(krate) && !is_std(krate) {
+                self.types.insert(path.clone());
+                self.type_from.entry(path.clone()).or_insert_with(|| current.to_string());
+            } else if is_std(krate) {
+                if !is_plain(path) {
+                    gaps.insert(format!(
+                        "a value of `{path}` goes to the code of another crate, and it can hold code that Semilla does not see"
+                    ));
+                }
+            } else {
+                gaps.insert(format!("the trait impls of `{path}` (the crate `{krate}`)"));
+            }
+        }
+        let scope = &mut self.scope;
+        for (path, krate) in &found.drop_types {
+            if local.contains(krate) && !is_std(krate) {
+                self.drops.insert(path.clone());
+                self.drop_from.entry(path.clone()).or_insert_with(|| current.to_string());
+            } else if krate == "std" {
+                scope.std_drops.entry(path.clone()).or_insert(current.to_string());
+                match found.drop_calls.get(path).filter(|_| !found.drop_real.contains(path)) {
+                    Some(call) => {
+                        scope.std_drop_calls.entry(path.clone()).or_insert((call.clone(), current.to_string()));
+                    }
+                    None => {
+                        scope.std_drop_real.insert(path.clone());
+                    }
+                }
+            } else {
+                gaps.insert(format!("the destructor of `{path}` (the crate `{krate}`)"));
+            }
+        }
+        for (path, krate) in &found.const_types {
+            match (path.as_str(), is_std(krate)) {
+                ("dyn", _) if krate.is_empty() => {
+                    gaps.insert(format!("a static or a constant in `{current}` holds a trait object"));
+                }
+                ("fn", _) if krate.is_empty() => {
+                    gaps.insert(format!("a static or a constant in `{current}` holds a function pointer"));
+                }
+                (_, true) if !is_plain(path) => {
+                    gaps.insert(format!(
+                        "a static or a constant in `{current}` holds a value of `{path}`, and it can hold code that Semilla does not see"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for call in &found.indirect {
+            let kind = call.split(" (in `").next().unwrap_or(call).to_string();
+            *self.indirect.entry(kind).or_default() += 1;
+        }
+    }
+
+    /// Adds the trait impls of the reached types, and the `Drop` impls of the dropped types.
+    fn add_impls(&mut self) {
+        let scope = &mut self.scope;
+        for (name, found) in self.facts {
+            if scope.items.contains(name) {
+                continue;
+            }
+            if let Some(ty) = found.drop_of.iter().find(|ty| self.drops.contains(*ty)) {
+                scope.items.insert(name.clone());
+                scope.drop_bodies.insert(name.clone());
+                scope.why.insert(name.clone(), format!("the code can drop a value of `{ty}`"));
+                scope.from.insert(
+                    name.clone(),
+                    (
+                        self.drop_from.get(ty).cloned().unwrap_or_default(),
+                        format!("the drop of a value of `{ty}`"),
+                    ),
+                );
+                self.todo.push(name.clone());
+            } else if let Some(ty) = found.impl_of.iter().find(|ty| self.types.contains(*ty)) {
+                scope.items.insert(name.clone());
+                scope.through_impls.insert(name.clone());
+                scope
+                    .why
+                    .insert(name.clone(), format!("a trait impl of `{ty}`, which goes to the code of another crate"));
+                scope.from.insert(
+                    name.clone(),
+                    (
+                        self.type_from.get(ty).cloned().unwrap_or_default(),
+                        format!("a generic function of a different crate → each trait impl of `{ty}`"),
+                    ),
+                );
+                self.todo.push(name.clone());
+            }
+        }
+    }
+
+    /// Adds the gaps that do not come from one body, and gives the scope.
+    fn finish(mut self, root: &str) -> Scope {
+        let (facts, gaps) = (self.facts, &mut self.gaps);
+        // A dropped workspace type must have its `Drop` body in the facts.
+        for ty in &self.drops {
+            if !facts.values().any(|found| found.drop_of.contains(ty)) {
+                gaps.insert(format!("the `Drop` impl of `{ty}` has no MIR"));
+            }
+        }
+        // The values that come from the outside: the parameters of the function.
+        if let Some(found) = facts.get(root) {
+            for (path, krate) in &found.param_types {
+                match (path.as_str(), is_std(krate)) {
+                    ("dyn", _) if krate.is_empty() => {
+                        gaps.insert(format!("a parameter of `{root}` is or holds a trait object: the caller gives its code"));
+                    }
+                    ("fn", _) if krate.is_empty() => {
+                        gaps.insert(format!(
+                            "a parameter of `{root}` is or holds a function pointer: the caller gives its code"
+                        ));
+                    }
+                    (_, true) if !is_plain(path) => {
+                        gaps.insert(format!(
+                            "a parameter of `{root}` holds a value of `{path}`, and it can hold code that Semilla does not see"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // A global allocator or a panic handler in the workspace runs with no call in the MIR.
+        for item in self.after.items.values() {
+            for (attr, what) in [
+                ("global_allocator", "each allocation runs its code"),
+                ("panic_handler", "each panic runs its code"),
+            ] {
+                // `#[global_allocator]`, and the same attribute in `#[cfg_attr(…)]` or `#[unsafe(…)]`.
+                if item
+                    .attrs
+                    .iter()
+                    .any(|a| a.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == attr))
+                {
+                    gaps.insert(format!(
+                        "the workspace has a `#[{attr}]` (`{}`): {what}, and Semilla does not follow it",
+                        item.path
+                    ));
+                }
+            }
+        }
+        self.scope.gaps = self
+            .indirect
+            .into_iter()
+            .map(|(kind, count)| if count == 1 { kind } else { format!("{kind} ({count} places)") })
+            .chain(self.gaps)
+            .collect();
+        self.scope
+    }
 }
 
 /// Computes the scope of a property claim on `root`. `reached` is the function and its callees
 /// by the syntax.
 pub fn scope(root: &str, reached: &BTreeSet<String>, facts: &BTreeMap<String, ItemFacts>, after: &Workspace) -> Scope {
-    let mut scope = Scope { items: reached.clone(), ..Scope::default() };
-    let local = local_crates(after);
-    let mut types: BTreeSet<String> = BTreeSet::new();
-    let mut drops: BTreeSet<String> = BTreeSet::new();
-    let mut gaps: BTreeSet<String> = BTreeSet::new();
-    let mut indirect: BTreeMap<String, usize> = BTreeMap::new();
-    // The first body that sends a type to the code of another crate, and the first body that
-    // drops a type.
-    let mut type_from: BTreeMap<String, String> = BTreeMap::new();
-    let mut drop_from: BTreeMap<String, String> = BTreeMap::new();
-    let mut todo: Vec<String> = reached.iter().cloned().collect();
-    let mut done: BTreeSet<String> = BTreeSet::new();
+    let mut walk = Walk {
+        facts,
+        after,
+        local: local_crates(after),
+        scope: Scope {
+            items: reached.clone(),
+            ..Scope::default()
+        },
+        types: BTreeSet::new(),
+        drops: BTreeSet::new(),
+        gaps: BTreeSet::new(),
+        indirect: BTreeMap::new(),
+        type_from: BTreeMap::new(),
+        drop_from: BTreeMap::new(),
+        todo: reached.iter().cloned().collect(),
+        done: BTreeSet::new(),
+    };
     loop {
-        while let Some(current) = todo.pop() {
-            if !done.insert(current.clone()) {
-                continue;
-            }
-            let Some(found) = facts.get(&current) else {
-                if after.items.get(&current).is_some_and(|item| item.body.is_some()) {
-                    gaps.insert(format!("`{current}` has no MIR"));
-                }
-                continue;
-            };
-            for callee in &found.callees {
-                if scope.items.insert(callee.clone()) {
-                    scope.from.insert(callee.clone(), (current.clone(), String::new()));
-                    todo.push(callee.clone());
-                }
-            }
-            for call in &found.externals {
-                let (krate, def) = origin(call, &found.origins);
-                if after.items.contains_key(call.as_str()) || facts.contains_key(call.as_str()) {
-                    // A function of another crate of the workspace.
-                    if scope.items.insert(call.clone()) {
-                        scope.from.insert(call.clone(), (current.clone(), String::new()));
-                        todo.push(call.clone());
-                    }
-                } else if local.contains(&krate) && !is_std(&krate) {
-                    gaps.insert(format!("`{call}` (a function of the workspace) has no MIR"));
-                } else {
-                    scope.externals.entry(call.clone()).or_insert((krate, def, current.clone()));
-                }
-            }
-            for (path, krate) in &found.reach_types {
-                if local.contains(krate) && !is_std(krate) {
-                    types.insert(path.clone());
-                    type_from.entry(path.clone()).or_insert_with(|| current.clone());
-                } else if is_std(krate) {
-                    if !is_plain(path) {
-                        gaps.insert(format!("a value of `{path}` goes to the code of another crate, and it can hold code that Semilla does not see"));
-                    }
-                } else {
-                    gaps.insert(format!("the trait impls of `{path}` (the crate `{krate}`)"));
-                }
-            }
-            for (path, krate) in &found.drop_types {
-                if local.contains(krate) && !is_std(krate) {
-                    drops.insert(path.clone());
-                    drop_from.entry(path.clone()).or_insert_with(|| current.clone());
-                } else if krate == "std" {
-                    scope.std_drops.entry(path.clone()).or_insert(current.clone());
-                    match found.drop_calls.get(path).filter(|_| !found.drop_real.contains(path)) {
-                        Some(call) => drop(scope.std_drop_calls.entry(path.clone()).or_insert((call.clone(), current.clone()))),
-                        None => drop(scope.std_drop_real.insert(path.clone())),
-                    }
-                } else {
-                    gaps.insert(format!("the destructor of `{path}` (the crate `{krate}`)"));
-                }
-            }
-            for (path, krate) in &found.const_types {
-                match (path.as_str(), is_std(krate)) {
-                    ("dyn", _) if krate.is_empty() => drop(gaps.insert(format!("a static or a constant in `{current}` holds a trait object"))),
-                    ("fn", _) if krate.is_empty() => drop(gaps.insert(format!("a static or a constant in `{current}` holds a function pointer"))),
-                    (_, true) if !is_plain(path) => drop(gaps.insert(format!("a static or a constant in `{current}` holds a value of `{path}`, and it can hold code that Semilla does not see"))),
-                    _ => {}
-                }
-            }
-            for call in &found.indirect {
-                let kind = call.split(" (in `").next().unwrap_or(call).to_string();
-                *indirect.entry(kind).or_default() += 1;
-            }
-        }
-        // The trait impls of the reached types, and the `Drop` impls of the dropped types.
-        for (name, found) in facts {
-            if scope.items.contains(name) {
-                continue;
-            }
-            if let Some(ty) = found.drop_of.iter().find(|ty| drops.contains(*ty)) {
-                scope.items.insert(name.clone());
-                scope.drop_bodies.insert(name.clone());
-                scope.why.insert(name.clone(), format!("the code can drop a value of `{ty}`"));
-                scope.from.insert(name.clone(), (drop_from.get(ty).cloned().unwrap_or_default(), format!("the drop of a value of `{ty}`")));
-                todo.push(name.clone());
-            } else if let Some(ty) = found.impl_of.iter().find(|ty| types.contains(*ty)) {
-                scope.items.insert(name.clone());
-                scope.through_impls.insert(name.clone());
-                scope.why.insert(name.clone(), format!("a trait impl of `{ty}`, which goes to the code of another crate"));
-                scope.from.insert(name.clone(), (type_from.get(ty).cloned().unwrap_or_default(), format!("a generic function of a different crate → each trait impl of `{ty}`")));
-                todo.push(name.clone());
-            }
-        }
-        if todo.is_empty() {
+        walk.drain();
+        walk.add_impls();
+        if walk.todo.is_empty() {
             break;
         }
     }
-    // A dropped workspace type must have its `Drop` body in the facts.
-    for ty in &drops {
-        if !facts.values().any(|found| found.drop_of.contains(ty)) {
-            gaps.insert(format!("the `Drop` impl of `{ty}` has no MIR"));
-        }
-    }
-    // The values that come from the outside: the parameters of the function.
-    if let Some(found) = facts.get(root) {
-        for (path, krate) in &found.param_types {
-            match (path.as_str(), is_std(krate)) {
-                ("dyn", _) if krate.is_empty() => drop(gaps.insert(format!("a parameter of `{root}` is or holds a trait object: the caller gives its code"))),
-                ("fn", _) if krate.is_empty() => drop(gaps.insert(format!("a parameter of `{root}` is or holds a function pointer: the caller gives its code"))),
-                (_, true) if !is_plain(path) => drop(gaps.insert(format!("a parameter of `{root}` holds a value of `{path}`, and it can hold code that Semilla does not see"))),
-                _ => {}
-            }
-        }
-    }
-    // A global allocator or a panic handler in the workspace runs with no call in the MIR.
-    for item in after.items.values() {
-        for (attr, what) in [("global_allocator", "each allocation runs its code"), ("panic_handler", "each panic runs its code")] {
-            // `#[global_allocator]`, and the same attribute in `#[cfg_attr(…)]` or `#[unsafe(…)]`.
-            if item.attrs.iter().any(|a| a.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == attr)) {
-                gaps.insert(format!("the workspace has a `#[{attr}]` (`{}`): {what}, and Semilla does not follow it", item.path));
-            }
-        }
-    }
-    scope.gaps = indirect.into_iter().map(|(kind, count)| if count == 1 { kind } else { format!("{kind} ({count} places)") }).chain(gaps).collect();
-    scope
+    walk.finish(root)
 }
 
 /// The items of the syntax calls from `root` to `target`, with the two ends (batch 7b, part 6).
 /// `None` if the syntax calls have no route.
+#[must_use]
 pub fn call_route(calls: &BTreeMap<String, BTreeSet<String>>, root: &str, target: &str) -> Option<Vec<String>> {
     let mut before: BTreeMap<String, String> = BTreeMap::new();
     let mut todo = std::collections::VecDeque::from([root.to_string()]);
@@ -349,6 +478,7 @@ pub fn call_route(calls: &BTreeMap<String, BTreeSet<String>>, root: &str, target
 impl Scope {
     /// The route from the root of a claim to an item of the scope (batch 7b, part 6): each
     /// item on the route, and the text of each link that is not a direct call.
+    #[must_use]
     pub fn route(&self, root: &str, calls: &BTreeMap<String, BTreeSet<String>>, item: &str) -> String {
         let mut parts = vec![format!("`{item}`")];
         let mut current = item.to_string();
@@ -375,6 +505,7 @@ impl Scope {
     }
 
     /// The text "in `item` (why the item is in the scope)".
+    #[must_use]
     pub fn place(&self, item: &str) -> String {
         match self.why.get(item) {
             Some(why) => format!("in `{item}` ({why})"),
@@ -383,19 +514,30 @@ impl Scope {
     }
 
     /// The number of local bodies that Semilla examined.
+    #[must_use]
     pub fn examined(&self, facts: &BTreeMap<String, ItemFacts>) -> usize {
         self.items.iter().filter(|item| facts.contains_key(*item)).count()
     }
 
     /// The text "examined: N local bodies (M through trait impls, K drop bodies); not examined: …".
     /// `more` has the gaps of the one property (for example the calls to other crates).
+    #[must_use]
     pub fn text(&self, facts: &BTreeMap<String, ItemFacts>, more: &[String]) -> String {
         let gaps: Vec<&String> = self.gaps.iter().chain(more).collect();
-        let mut text = format!("examined: {} local bodies ({} through trait impls, {} drop bodies)", self.examined(facts), self.through_impls.len(), self.drop_bodies.len());
+        let mut text = format!(
+            "examined: {} local bodies ({} through trait impls, {} drop bodies)",
+            self.examined(facts),
+            self.through_impls.len(),
+            self.drop_bodies.len()
+        );
         if !gaps.is_empty() {
-            let shown: Vec<String> = gaps.iter().take(6).map(|gap| gap.to_string()).collect();
-            let rest = if gaps.len() > 6 { format!("; and {} more", gaps.len() - 6) } else { String::new() };
-            text.push_str(&format!("; not examined: {}{rest}", shown.join("; ")));
+            let shown: Vec<String> = gaps.iter().take(6).map(|gap| (*gap).clone()).collect();
+            let rest = if gaps.len() > 6 {
+                format!("; and {} more", gaps.len() - 6)
+            } else {
+                String::new()
+            };
+            let _ = write!(text, "; not examined: {}{rest}", shown.join("; "));
         }
         text
     }

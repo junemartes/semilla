@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use semilla_core::view::FlowGraph;
-use semilla_core::{text, Category, Report, Uncovered};
+use semilla_core::{Category, Report, Uncovered, text};
 
 use crate::ctx::{Ctx, category_label, contains, item_of};
 use crate::review::ReviewFile;
@@ -30,7 +30,7 @@ use crate::{SourcePair, UiData};
 const MERMAID_JS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vendor/mermaid/mermaid.min.js"));
 
 /// The script that draws the flow views. It runs after the Mermaid library.
-const REPORT_JS: &str = r#"(function () {
+const REPORT_JS: &str = r"(function () {
   'use strict';
   if (typeof mermaid === 'undefined') return;
   var dark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -41,7 +41,7 @@ const REPORT_JS: &str = r#"(function () {
     console.error('semilla: Mermaid cannot draw a flow view', error);
   });
 })();
-"#;
+";
 
 const CSS: &str = r#"
 :root {
@@ -131,18 +131,23 @@ ul.uncovered li { margin: 0.4rem 0; }
 "#;
 
 /// Renders the report as one self-contained HTML file. The file loads nothing from the network.
+#[must_use]
 pub fn render_html(data: &UiData) -> String {
     let model = Model::new(data);
     let mut out = String::with_capacity(64 * 1024 + if model.flows.is_empty() { 0 } else { MERMAID_JS.len() });
     out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     out.push_str("<meta name=\"color-scheme\" content=\"light dark\">\n");
-    let _ = writeln!(out, "<title>{}</title>", esc(&model.title()));
+    let _ = writeln!(out, "<title>{}</title>", esc(TITLE));
     let _ = writeln!(out, "<style>{CSS}</style>\n</head>\n<body>\n<main>");
-    let _ = writeln!(out, "<h1>{}</h1>", esc(&model.title()));
+    let _ = writeln!(out, "<h1>{}</h1>", esc(TITLE));
     let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(text::AGENT_TEXT_NOTE));
     // An uncovered change is an internal error. The report shows the part only when one exists.
-    let uncovered = if model.uncovered().is_empty() { "" } else { "<a href=\"#uncovered\">Uncovered changes</a>" };
+    let uncovered = if model.uncovered().is_empty() {
+        ""
+    } else {
+        "<a href=\"#uncovered\">Uncovered changes</a>"
+    };
     let _ = writeln!(
         out,
         "<nav class=\"toc\"><a href=\"#summary\">Summary</a><a href=\"#groups\">Groups</a>{uncovered}\
@@ -175,10 +180,11 @@ pub fn render_html(data: &UiData) -> String {
 ///
 /// The full report (`full`) has the same content as [`render_html`]: it adds the public API
 /// changes, the change tree, the other flow views, and all sources.
+#[must_use]
 pub fn render_markdown(data: &UiData, full: bool) -> String {
     let model = Model::new(data);
     let mut out = String::new();
-    let _ = writeln!(out, "# {}\n", md(&model.title()));
+    let _ = writeln!(out, "# {}\n", md(TITLE));
     let _ = writeln!(out, "{}\n", md(text::AGENT_TEXT_NOTE));
     md_summary(&mut out, &model, full);
     md_groups(&mut out, &model, full);
@@ -206,6 +212,9 @@ struct UncoveredItem<'a> {
     uncovered: &'a Uncovered,
 }
 
+/// The title of the exported report.
+const TITLE: &str = "Semilla review report";
+
 struct Model<'a> {
     data: &'a UiData,
     ctx: Ctx,
@@ -221,13 +230,20 @@ impl<'a> Model<'a> {
     fn new(data: &'a UiData) -> Model<'a> {
         let ctx = Ctx::new(data.clone());
         let summary = summary::changeset(&ctx, &ReviewFile::default());
-        let views: Vec<&ClaimView> =
-            summary.groups.iter().flat_map(|group| group.subgroups.iter()).flat_map(|sub| sub.claims.iter()).collect();
+        let views: Vec<&ClaimView> = summary
+            .groups
+            .iter()
+            .flat_map(|group| group.subgroups.iter())
+            .flat_map(|sub| sub.claims.iter())
+            .collect();
 
         // The flow views: first in the order of the claims that use them, then the others.
         let mut flows: Vec<usize> = Vec::new();
         for view in &views {
-            if let Some(index) = view.flow.as_deref().and_then(|function| data.flows.iter().position(|flow| flow.function == function))
+            if let Some(index) = view
+                .flow
+                .as_deref()
+                .and_then(|function| data.flows.iter().position(|flow| flow.function == function))
                 && !flows.contains(&index)
             {
                 flows.push(index);
@@ -242,7 +258,10 @@ impl<'a> Model<'a> {
         // The sources: first in the order of the claims, then the others. Only changed texts.
         let mut sources: Vec<String> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
-        let keys = views.iter().filter_map(|view| view.at.as_deref()).filter_map(|at| ctx.source(at).map(|(key, _)| key.to_string()));
+        let keys = views
+            .iter()
+            .filter_map(|view| view.at.as_deref())
+            .filter_map(|at| ctx.source(at).map(|(key, _)| key.to_string()));
         for key in keys.chain(data.sources.keys().cloned()) {
             if seen.insert(key.clone()) && data.sources.get(&key).is_some_and(|pair| pair.before != pair.after) {
                 sources.push(key);
@@ -251,16 +270,22 @@ impl<'a> Model<'a> {
         // Only the smallest changed parts: a source goes out when a changed part of the same
         // item is inside it (for example `f/S0/cond` is inside `f`).
         let changed = sources.clone();
-        sources.retain(|key| !changed.iter().any(|other| other != key && item_of(other) == item_of(key) && contains(key, other)));
-        Model { data, ctx, summary, flows, sources }
+        sources.retain(|key| {
+            !changed
+                .iter()
+                .any(|other| other != key && item_of(other) == item_of(key) && contains(key, other))
+        });
+        Model {
+            data,
+            ctx,
+            summary,
+            flows,
+            sources,
+        }
     }
 
     fn report(&self) -> &Report {
         &self.data.report
-    }
-
-    fn title(&self) -> String {
-        "Semilla review report".to_string()
     }
 
     /// The uncovered changes in the group order, then the changes of steps without a group.
@@ -276,7 +301,10 @@ impl<'a> Model<'a> {
                 if !placed.insert(step.step) {
                     continue;
                 }
-                out.extend(step.uncovered.iter().map(|uncovered| UncoveredItem { group: Some(group.id.clone()), uncovered }));
+                out.extend(step.uncovered.iter().map(|uncovered| UncoveredItem {
+                    group: Some(group.id.clone()),
+                    uncovered,
+                }));
             }
         }
         for step in report.steps.iter().filter(|step| !placed.contains(&step.step)) {
@@ -287,12 +315,20 @@ impl<'a> Model<'a> {
 
     /// The spotlight items of all steps, as `(step, text)`.
     fn spotlight(&self) -> Vec<(usize, &str)> {
-        self.report().steps.iter().flat_map(|step| step.spotlight.iter().map(move |text| (step.step, text.as_str()))).collect()
+        self.report()
+            .steps
+            .iter()
+            .flat_map(|step| step.spotlight.iter().map(move |text| (step.step, text.as_str())))
+            .collect()
     }
 
     /// The public API changes of all steps, as `(step, text)`.
     fn api_changes(&self) -> Vec<(usize, &str)> {
-        self.report().steps.iter().flat_map(|step| step.api_changes.iter().map(move |text| (step.step, text.as_str()))).collect()
+        self.report()
+            .steps
+            .iter()
+            .flat_map(|step| step.api_changes.iter().map(move |text| (step.step, text.as_str())))
+            .collect()
     }
 
     /// A notice for a phase 1 report.
@@ -313,9 +349,23 @@ impl<'a> Model<'a> {
     fn facts(&self) -> Vec<(&'static str, String)> {
         let summary = &self.summary;
         let report = self.report();
-        let api = if report.api_level.is_some() { summary.api_level.to_string() } else { format!("{} (estimate)", summary.api_level) };
+        let api = if report.api_level.is_some() {
+            summary.api_level.to_string()
+        } else {
+            format!("{} (estimate)", summary.api_level)
+        };
         let mut facts = vec![
-            ("Result", (if summary.not_complete { "not complete" } else if summary.accepted { "accepted" } else { "rejected" }).to_string()),
+            (
+                "Result",
+                (if summary.not_complete {
+                    "not complete"
+                } else if summary.accepted {
+                    "accepted"
+                } else {
+                    "rejected"
+                })
+                .to_string(),
+            ),
             ("Facts", summary.fact_counts.text.clone()),
             ("Phase", self.phase_label()),
             ("Groups", summary.groups.len().to_string()),
@@ -345,12 +395,14 @@ impl<'a> Model<'a> {
     /// The source of a claim anchor: the same anchor, else the first changed part inside it,
     /// else the source of its item.
     fn source_index(&self, at: &str) -> Option<usize> {
-        self.sources.iter().position(|source| source == at).or_else(|| self.sources.iter().position(|source| contains(at, source))).or_else(
-            || {
+        self.sources
+            .iter()
+            .position(|source| source == at)
+            .or_else(|| self.sources.iter().position(|source| contains(at, source)))
+            .or_else(|| {
                 let (key, _) = self.ctx.source(at)?;
                 self.sources.iter().position(|source| source == key)
-            },
-        )
+            })
     }
 
     /// The steps of a group, with their intents and claims.
@@ -368,8 +420,8 @@ impl<'a> Model<'a> {
                         .filter(|intent| !intent.is_empty())
                         .or_else(|| report.map(|report| report.intent.clone()))
                         .unwrap_or_default(),
-                    claims: step.map(|step| step.claims.iter().map(|claim| claim.id.clone()).collect()).unwrap_or_default(),
-                    errors: report.map(|report| report.errors.clone()).unwrap_or_default(),
+                    claims: step.map_or_default(|step| step.claims.iter().map(|claim| claim.id.clone()).collect()),
+                    errors: report.map_or_default(|report| report.errors.clone()),
                 }
             })
             .collect()
@@ -398,7 +450,11 @@ impl<'a> Model<'a> {
         };
         let (key, pair) = found(&key).or_else(|| moved.as_deref().and_then(found))?;
         let text = pair.after.as_deref().filter(|text| !text.trim().is_empty())?;
-        Some(NewCode { label, key: key.to_string(), text: text.to_string() })
+        Some(NewCode {
+            label,
+            key: key.to_string(),
+            text: text.to_string(),
+        })
     }
 
     fn flow(&self, position: usize) -> &FlowGraph {
@@ -417,10 +473,12 @@ impl<'a> Model<'a> {
             .filter_map(|view| view.fact.at.as_ref().map(|at| at.item.as_str()))
             .collect();
         let mut seen: BTreeSet<&str> = BTreeSet::new();
-        (0..self.flows.len()).filter(|position| {
-            let item = item_of(&self.flow(*position).function);
-            bodies.contains(item) && seen.insert(item)
-        }).collect()
+        (0..self.flows.len())
+            .filter(|position| {
+                let item = item_of(&self.flow(*position).function);
+                bodies.contains(item) && seen.insert(item)
+            })
+            .collect()
     }
 
     /// The diff of a fact for the short report, or `None`.
@@ -436,7 +494,11 @@ impl<'a> Model<'a> {
         if fact.part == "identity" {
             return None;
         }
-        let pair = fact.at.as_ref().and_then(|at| self.data.fact_sources.get(&format!("{}:{at}", view.step))).filter(|pair| pair.before != pair.after);
+        let pair = fact
+            .at
+            .as_ref()
+            .and_then(|at| self.data.fact_sources.get(&format!("{}:{at}", view.step)))
+            .filter(|pair| pair.before != pair.after);
         let part = fact.at.as_ref().is_some_and(|at| !at.path.is_empty());
         let lines = |text: &Option<String>| text.as_deref().map_or(0, |text| text.lines().count());
         match (pair, &fact.content) {
@@ -444,7 +506,15 @@ impl<'a> Model<'a> {
                 let short = lines(&pair.before) <= 1 && lines(&pair.after) <= 1 && content.is_none() && !fact.description.contains('…');
                 // A diff block is never empty (batch 6a, A2): the content of the fact is
                 // the block if the diff of the sources has no line.
-                (!short).then(|| diff_text(&dedent(pair.before.as_deref().unwrap_or("")), &dedent(pair.after.as_deref().unwrap_or("")))).filter(|diff| !diff.trim().is_empty()).or_else(|| content.clone())
+                (!short)
+                    .then(|| {
+                        diff_text(
+                            &dedent(pair.before.as_deref().unwrap_or("")),
+                            &dedent(pair.after.as_deref().unwrap_or("")),
+                        )
+                    })
+                    .filter(|diff| !diff.trim().is_empty())
+                    .or_else(|| content.clone())
             }
             (_, Some(content)) => Some(content.clone()),
             _ => None,
@@ -468,24 +538,31 @@ struct StatusText {
 impl StatusText {
     fn of(view: &ClaimView) -> StatusText {
         let Some(result) = &view.result else {
-            return StatusText { name: "no result".to_string(), detail: None, mark: String::new() };
+            return StatusText {
+                name: "no result".to_string(),
+                detail: None,
+                mark: String::new(),
+            };
         };
         let value = serde_json::to_value(&result.status).unwrap_or_default();
         let name = value.get("status").and_then(|name| name.as_str()).unwrap_or(view.status).to_string();
-        let detail = match value.get("proof").and_then(|proof| proof.as_str()) {
-            Some(proof) => Some(format!("proof {proof}")),
-            None => {
-                let parts: Vec<String> = value
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .filter(|(key, _)| key.as_str() != "status")
-                    .filter_map(|(_, value)| value.as_str().map(str::to_string))
-                    .collect();
-                (!parts.is_empty()).then(|| parts.join("; "))
-            }
+        let detail = if let Some(proof) = value.get("proof").and_then(|proof| proof.as_str()) {
+            Some(format!("proof {proof}"))
+        } else {
+            let parts: Vec<String> = value
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(key, _)| key.as_str() != "status")
+                .filter_map(|(_, value)| value.as_str().map(str::to_string))
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("; "))
         };
-        StatusText { name, detail, mark: result.mark() }
+        StatusText {
+            name,
+            detail,
+            mark: result.mark(),
+        }
     }
 
     /// The CSS class: the status name, or `other` for an unknown name.
@@ -536,7 +613,10 @@ struct NewCode {
 impl NewCode {
     /// False if the claim diff already shows the same text.
     fn adds_to(&self, view: &ClaimView) -> bool {
-        view.result.as_ref().and_then(|result| result.after.as_deref()).is_none_or(|after| after.trim() != self.text.trim())
+        view.result
+            .as_ref()
+            .and_then(|result| result.after.as_deref())
+            .is_none_or(|after| after.trim() != self.text.trim())
     }
 }
 
@@ -610,8 +690,17 @@ fn result_word(summary: &crate::summary::ChangeSetSummary) -> &'static str {
 /// `semilla tag`: the result word, the steps, the facts by compare result, the claims.
 fn result_line(model: &Model) -> String {
     let summary = &model.summary;
-    let steps = if summary.step_count == 1 { "1 step".to_string() } else { format!("{} steps", summary.step_count) };
-    format!("result: {} · {steps} · {} · {}", result_word(summary), summary.fact_counts.text, counts_text(&summary.counts))
+    let steps = if summary.step_count == 1 {
+        "1 step".to_string()
+    } else {
+        format!("{} steps", summary.step_count)
+    };
+    format!(
+        "result: {} · {steps} · {} · {}",
+        result_word(summary),
+        summary.fact_counts.text,
+        counts_text(&summary.counts)
+    )
 }
 
 /// True if a notice of the report has the line of the scope of the compare results (it comes
@@ -623,7 +712,10 @@ fn config_scope_shown(report: &Report) -> bool {
 /// The counts as text, for example `3 claims: 2 verified, 1 refuted`.
 fn counts_text(counts: &Counts) -> String {
     // I6: a count of proofs says how many used changed build code.
-    let (verified, partial) = (format!("verified{}", counts.marked_text), format!("partial{}", counts.partial_marked_text));
+    let (verified, partial) = (
+        format!("verified{}", counts.marked_text),
+        format!("partial{}", counts.partial_marked_text),
+    );
     let parts: Vec<String> = [
         (counts.verified, verified.as_str()),
         (counts.partial, partial.as_str()),
@@ -638,8 +730,16 @@ fn counts_text(counts: &Counts) -> String {
     .filter(|(count, _)| *count > 0)
     .map(|(count, label)| format!("{count} {label}"))
     .collect();
-    let claims = if counts.claims == 1 { "1 claim".to_string() } else { format!("{} claims", counts.claims) };
-    if parts.is_empty() { claims } else { format!("{claims}: {}", parts.join(", ")) }
+    let claims = if counts.claims == 1 {
+        "1 claim".to_string()
+    } else {
+        format!("{} claims", counts.claims)
+    };
+    if parts.is_empty() {
+        claims
+    } else {
+        format!("{claims}: {}", parts.join(", "))
+    }
 }
 
 fn risk_dots(risk: u8) -> String {
@@ -656,12 +756,19 @@ fn signed(value: i64) -> String {
 }
 
 fn short_hash(hash: &str) -> String {
-    if hash.is_empty() { "—".to_string() } else { hash.chars().take(12).collect() }
+    if hash.is_empty() {
+        "—".to_string()
+    } else {
+        hash.chars().take(12).collect()
+    }
 }
 
 /// The serde name of an enum value, for example `ctrl_flow` or `api`.
 fn serde_name<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default()
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 /// The Mermaid text of a flow view. The class colors are light, so the label text is dark in
@@ -669,18 +776,37 @@ fn serde_name<T: Serialize>(value: &T) -> String {
 fn mermaid_text(flow: &FlowGraph) -> String {
     let text = flow.to_mermaid();
     // A class that no node uses needs no definition.
-    let used = |line: &str| line.trim_start().strip_prefix("classDef ").and_then(|rest| rest.split(' ').next()).is_none_or(|class| text.contains(&format!(":::{class}")));
+    let used = |line: &str| {
+        line.trim_start()
+            .strip_prefix("classDef ")
+            .and_then(|rest| rest.split(' ').next())
+            .is_none_or(|class| text.contains(&format!(":::{class}")))
+    };
     text.lines()
         .filter(|line| used(line))
-        .map(|line| if line.trim_start().starts_with("classDef ") { format!("{line},color:#1a1a1a") } else { line.to_string() })
+        .map(|line| {
+            if line.trim_start().starts_with("classDef ") {
+                format!("{line},color:#1a1a1a")
+            } else {
+                line.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// The text without the indent that all its lines have.
 fn dedent(text: &str) -> String {
-    let indent = text.lines().filter(|line| !line.trim().is_empty()).map(|line| line.len() - line.trim_start().len()).min().unwrap_or(0);
-    text.lines().map(|line| line.get(indent..).unwrap_or(line.trim_start())).collect::<Vec<_>>().join("\n")
+    let indent = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    text.lines()
+        .map(|line| line.get(indent..).unwrap_or(line.trim_start()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The breadcrumb of a flow view, or `None` if it only repeats the heading: the heading of a
@@ -734,7 +860,11 @@ fn subgroup_marks(sub: &SubgroupSummary) -> Vec<String> {
 
 /// The claim details as `(label, value)`: the category, the step, the effect, the witness, the file.
 fn claim_meta(view: &ClaimView) -> Vec<(&'static str, String)> {
-    let category = if view.property { "property".to_string() } else { category_label(view.category).to_string() };
+    let category = if view.property {
+        "property".to_string()
+    } else {
+        category_label(view.category).to_string()
+    };
     let mut meta = vec![("category", category)];
     if let Some(step) = view.step {
         meta.push(("step", step.to_string()));
@@ -766,31 +896,40 @@ enum Line {
 /// A simple line diff (longest common subsequence). Large inputs fall back to "all removed,
 /// then all added" for the middle part.
 fn line_diff<'t>(before: &'t str, after: &'t str) -> Vec<(Line, &'t str)> {
-    let a: Vec<&str> = if before.is_empty() { Vec::new() } else { before.lines().collect() };
-    let b: Vec<&str> = if after.is_empty() { Vec::new() } else { after.lines().collect() };
-    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
-    let suffix = a[prefix..].iter().rev().zip(b[prefix..].iter().rev()).take_while(|(x, y)| x == y).count();
-    let (mid_a, mid_b) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
-    let mut out: Vec<(Line, &str)> = a[..prefix].iter().map(|line| (Line::Same, *line)).collect();
-    let (n, m) = (mid_a.len(), mid_b.len());
-    if n * m > 4_000_000 {
+    let old_lines: Vec<&str> = if before.is_empty() { Vec::new() } else { before.lines().collect() };
+    let new_lines: Vec<&str> = if after.is_empty() { Vec::new() } else { after.lines().collect() };
+    let prefix = old_lines.iter().zip(&new_lines).take_while(|(left, right)| left == right).count();
+    let suffix = old_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(new_lines[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let (mid_a, mid_b) = (&old_lines[prefix..old_lines.len() - suffix], &new_lines[prefix..new_lines.len() - suffix]);
+    let mut out: Vec<(Line, &str)> = old_lines[..prefix].iter().map(|line| (Line::Same, *line)).collect();
+    let (old_len, new_len) = (mid_a.len(), mid_b.len());
+    if old_len * new_len > 4_000_000 {
         out.extend(mid_a.iter().map(|line| (Line::Del, *line)));
         out.extend(mid_b.iter().map(|line| (Line::Add, *line)));
     } else {
         // lcs[i][j] = the length of the LCS of mid_a[i..] and mid_b[j..].
-        let mut lcs = vec![vec![0u32; m + 1]; n + 1];
-        for i in (0..n).rev() {
-            for j in (0..m).rev() {
-                lcs[i][j] = if mid_a[i] == mid_b[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+        let mut lcs = vec![vec![0u32; new_len + 1]; old_len + 1];
+        for i in (0..old_len).rev() {
+            for j in (0..new_len).rev() {
+                lcs[i][j] = if mid_a[i] == mid_b[j] {
+                    lcs[i + 1][j + 1] + 1
+                } else {
+                    lcs[i + 1][j].max(lcs[i][j + 1])
+                };
             }
         }
         let (mut i, mut j) = (0, 0);
-        while i < n || j < m {
-            if i < n && j < m && mid_a[i] == mid_b[j] {
+        while i < old_len || j < new_len {
+            if i < old_len && j < new_len && mid_a[i] == mid_b[j] {
                 out.push((Line::Same, mid_a[i]));
                 i += 1;
                 j += 1;
-            } else if i < n && (j == m || lcs[i + 1][j] >= lcs[i][j + 1]) {
+            } else if i < old_len && (j == new_len || lcs[i + 1][j] >= lcs[i][j + 1]) {
                 // At a tie, the removed line comes before the added line.
                 out.push((Line::Del, mid_a[i]));
                 i += 1;
@@ -800,7 +939,7 @@ fn line_diff<'t>(before: &'t str, after: &'t str) -> Vec<(Line, &'t str)> {
             }
         }
     }
-    out.extend(a[a.len() - suffix..].iter().map(|line| (Line::Same, *line)));
+    out.extend(old_lines[old_lines.len() - suffix..].iter().map(|line| (Line::Same, *line)));
     out
 }
 
@@ -822,8 +961,16 @@ fn diff_text(before: &str, after: &str) -> String {
 
 /// The source pair as a diff, with headers as in a unified diff.
 fn source_diff(key: &str, pair: &SourcePair) -> String {
-    let before = if pair.before.is_some() { format!("--- before: {key}") } else { "--- (does not exist before)".to_string() };
-    let after = if pair.after.is_some() { format!("+++ after: {key}") } else { "+++ (does not exist after)".to_string() };
+    let before = if pair.before.is_some() {
+        format!("--- before: {key}")
+    } else {
+        "--- (does not exist before)".to_string()
+    };
+    let after = if pair.after.is_some() {
+        format!("+++ after: {key}")
+    } else {
+        "+++ (does not exist after)".to_string()
+    };
     let body = diff_text(pair.before.as_deref().unwrap_or(""), pair.after.as_deref().unwrap_or(""));
     format!("{before}\n{after}\n{body}")
 }
@@ -877,8 +1024,13 @@ fn script_safe(script: &str) -> std::borrow::Cow<'_, str> {
 /// The line under the title "Spotlight" (batch 5w, D4). The section and the summary count
 /// different things, so the line gives the two counts and says what each one is.
 fn spotlight_counts(lines: usize, facts: usize) -> String {
-    let (line_noun, fact_noun) = (if lines == 1 { "line names" } else { "lines name" }, if facts == 1 { "fact" } else { "facts" });
-    format!("{lines} {line_noun} sensitive code that a step changed. The summary counts a different thing: {facts} {fact_noun} with a spotlight. Each such fact shows its spotlight and its reason in its group.")
+    let (line_noun, fact_noun) = (
+        if lines == 1 { "line names" } else { "lines name" },
+        if facts == 1 { "fact" } else { "facts" },
+    );
+    format!(
+        "{lines} {line_noun} sensitive code that a step changed. The summary counts a different thing: {facts} {fact_noun} with a spotlight. Each such fact shows its spotlight and its reason in its group."
+    )
 }
 
 fn html_list(out: &mut String, class: &str, items: &[String]) {
@@ -892,7 +1044,12 @@ fn html_list(out: &mut String, class: &str, items: &[String]) {
 fn html_diff(out: &mut String, before: &str, after: &str, header: Option<(&str, &str)>) {
     out.push_str("<pre class=\"diff\">");
     if let Some((old, new)) = header {
-        let _ = write!(out, "<span class=\"muted\">{}\n</span><span class=\"muted\">{}\n</span>", esc(old), esc(new));
+        let _ = write!(
+            out,
+            "<span class=\"muted\">{}\n</span><span class=\"muted\">{}\n</span>",
+            esc(old),
+            esc(new)
+        );
     }
     for (kind, line) in line_diff(before, after) {
         let (class, mark) = match kind {
@@ -920,7 +1077,11 @@ fn html_summary(out: &mut String, model: &Model) {
         _ => "bad",
     };
     let line = result_line(model);
-    let _ = writeln!(out, "<p class=\"verdict\">result: <span class=\"chip {class}\">{verdict}</span>{}</p>", esc(line.trim_start_matches(&format!("result: {verdict}"))));
+    let _ = writeln!(
+        out,
+        "<p class=\"verdict\">result: <span class=\"chip {class}\">{verdict}</span>{}</p>",
+        esc(line.trim_start_matches(&format!("result: {verdict}")))
+    );
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(notice));
     }
@@ -954,13 +1115,17 @@ fn html_summary(out: &mut String, model: &Model) {
     }
     if !report.pairs.is_empty() {
         out.push_str("<h3>Pair warnings</h3>\n");
-        let items: Vec<String> = report.pairs.iter().map(|pair| pair.text()).collect();
+        let items: Vec<String> = report.pairs.iter().map(semilla_core::PairWarning::text).collect();
         html_list(out, "pairs", &items);
     }
     let spotlight = model.spotlight();
     if !spotlight.is_empty() {
         out.push_str("<h3>Spotlight</h3>\n");
-        let _ = writeln!(out, "<p class=\"note\">{}</p>", esc(&spotlight_counts(spotlight.len(), model.summary.fact_counts.spotlight)));
+        let _ = writeln!(
+            out,
+            "<p class=\"note\">{}</p>",
+            esc(&spotlight_counts(spotlight.len(), model.summary.fact_counts.spotlight))
+        );
         let items: Vec<String> = spotlight.iter().map(|(step, text)| format!("step {step}: {text}")).collect();
         html_list(out, "spotlight", &items);
     }
@@ -984,7 +1149,12 @@ fn html_groups(out: &mut String, model: &Model) {
         out.push_str("<p class=\"muted\">No groups.</p>\n");
     }
     for group in &model.summary.groups {
-        let _ = writeln!(out, "<section class=\"group\" id=\"group-{}\" data-group=\"{}\">", esc(&group.id), esc(&group.id));
+        let _ = writeln!(
+            out,
+            "<section class=\"group\" id=\"group-{}\" data-group=\"{}\">",
+            esc(&group.id),
+            esc(&group.id)
+        );
         let _ = writeln!(
             out,
             "<div class=\"group-head\"><span class=\"kind\">{}</span><code>{}</code> <span class=\"muted\">{}</span><h3>{}</h3><span class=\"risk\" title=\"{}\">{}</span></div>",
@@ -998,7 +1168,12 @@ fn html_groups(out: &mut String, model: &Model) {
         if !group.why.is_empty() {
             let _ = writeln!(out, "<p>{}</p>", esc(&agent_text(group, &group.why)));
         }
-        let _ = writeln!(out, "<p class=\"muted\">{} · {}</p>", esc(&risk_text(group)), esc(&group_meta(group).join(" · ")));
+        let _ = writeln!(
+            out,
+            "<p class=\"muted\">{} · {}</p>",
+            esc(&risk_text(group)),
+            esc(&group_meta(group).join(" · "))
+        );
         // Design 28.3: the build code changes of the group come first, each with its diff.
         let code = fact_items(model, Some(&group.steps), true, Some(true));
         if !code.is_empty() {
@@ -1035,9 +1210,19 @@ fn html_steps(out: &mut String, model: &Model, group: &GroupSummary) {
     }
     out.push_str("<ul class=\"steps\">\n");
     for step in &steps {
-        let _ = write!(out, "<li data-step=\"{}\">step {}: {}", step.index, step.index, esc(&text::quoted(&step.intent)));
+        let _ = write!(
+            out,
+            "<li data-step=\"{}\">step {}: {}",
+            step.index,
+            step.index,
+            esc(&text::quoted(&step.intent))
+        );
         if !step.claims.is_empty() {
-            let links: Vec<String> = step.claims.iter().map(|id| format!("<a href=\"#claim-{0}\"><code>{0}</code></a>", esc(id))).collect();
+            let links: Vec<String> = step
+                .claims
+                .iter()
+                .map(|id| format!("<a href=\"#claim-{0}\"><code>{0}</code></a>", esc(id)))
+                .collect();
             let _ = write!(out, " — {}", links.join(", "));
         }
         for error in &step.errors {
@@ -1053,9 +1238,18 @@ fn html_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
     let folded = if sub.folded { " folded" } else { "" };
     let _ = writeln!(out, "<details class=\"subgroup{folded}\" data-subgroup=\"{}\"{open}>", esc(&sub.id));
     out.push_str("<summary>");
-    let _ = write!(out, "<span class=\"role\">{}</span> <span>{}</span>", esc(sub.role_label), esc(&sub.title));
+    let _ = write!(
+        out,
+        "<span class=\"role\">{}</span> <span>{}</span>",
+        esc(sub.role_label),
+        esc(&sub.title)
+    );
     for mark in subgroup_marks(sub) {
-        let class = if mark == "edited by agent" || mark.starts_with("new claims") { "chip warn" } else { "chip" };
+        let class = if mark == "edited by agent" || mark.starts_with("new claims") {
+            "chip warn"
+        } else {
+            "chip"
+        };
         let _ = write!(out, " <span class=\"{class}\">{}</span>", esc(&mark));
     }
     let _ = write!(out, " <span class=\"muted\">{}</span>", esc(&counts_text(&sub.counts)));
@@ -1081,7 +1275,13 @@ fn html_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
 
 fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
     let status = StatusText::of(view);
-    let _ = writeln!(out, "<li class=\"claim {}\" id=\"claim-{}\" data-claim=\"{}\">", esc(status.css()), esc(&view.id), esc(&view.id));
+    let _ = writeln!(
+        out,
+        "<li class=\"claim {}\" id=\"claim-{}\" data-claim=\"{}\">",
+        esc(status.css()),
+        esc(&view.id),
+        esc(&view.id)
+    );
     let _ = write!(
         out,
         "<div class=\"claim-head\"><span class=\"icon\" title=\"{}\">{}</span><code>{}</code><code>{}</code>",
@@ -1118,7 +1318,12 @@ fn html_claim(out: &mut String, model: &Model, view: &ClaimView) {
     if let Some(checked) = view.result.as_ref().and_then(|result| result.after.as_deref()).filter(|_| view.property) {
         let _ = writeln!(out, "<p class=\"checked\">Checked: {}</p>", esc(checked));
     } else if let Some((before, after)) = rename_text(view) {
-        let _ = writeln!(out, "<div class=\"rename\"><code>{}</code> → <code>{}</code></div>", esc(&before), esc(&after));
+        let _ = writeln!(
+            out,
+            "<div class=\"rename\"><code>{}</code> → <code>{}</code></div>",
+            esc(&before),
+            esc(&after)
+        );
     } else if let Some(result) = &view.result
         && (result.before.is_some() || result.after.is_some())
     {
@@ -1142,7 +1347,11 @@ fn html_uncovered(out: &mut String, model: &Model) {
         return;
     }
     out.push_str("<h2 id=\"uncovered\">Uncovered changes</h2>\n");
-    let _ = writeln!(out, "<p class=\"notice bad\">An internal error: {} change(s) have no fact. Semilla rejects the change set.</p>", items.len());
+    let _ = writeln!(
+        out,
+        "<p class=\"notice bad\">An internal error: {} change(s) have no fact. Semilla rejects the change set.</p>",
+        items.len()
+    );
     out.push_str("<ul class=\"uncovered\">\n");
     for item in &items {
         let uncovered = item.uncovered;
@@ -1183,7 +1392,11 @@ fn html_flows(out: &mut String, model: &Model) {
         let text = mermaid_text(flow);
         // Mermaid reads the text of the element and decodes the HTML entities.
         let _ = writeln!(out, "<pre class=\"mermaid\">{}</pre>", esc_block(&text));
-        let _ = writeln!(out, "<details><summary class=\"muted\">Mermaid text</summary><pre>{}</pre></details>", esc_block(&text));
+        let _ = writeln!(
+            out,
+            "<details><summary class=\"muted\">Mermaid text</summary><pre>{}</pre></details>",
+            esc_block(&text)
+        );
         out.push_str("</div>\n");
     }
 }
@@ -1197,9 +1410,22 @@ fn html_sources(out: &mut String, model: &Model) {
         let pair = model.source(key);
         let _ = writeln!(out, "<details class=\"source\" id=\"source-{index}\" data-source=\"{}\" open>", esc(key));
         let _ = writeln!(out, "<summary><code>{}</code></summary>", esc(key));
-        let old = if pair.before.is_some() { format!("--- before: {key}") } else { "--- (does not exist before)".to_string() };
-        let new = if pair.after.is_some() { format!("+++ after: {key}") } else { "+++ (does not exist after)".to_string() };
-        html_diff(out, pair.before.as_deref().unwrap_or(""), pair.after.as_deref().unwrap_or(""), Some((&old, &new)));
+        let old = if pair.before.is_some() {
+            format!("--- before: {key}")
+        } else {
+            "--- (does not exist before)".to_string()
+        };
+        let new = if pair.after.is_some() {
+            format!("+++ after: {key}")
+        } else {
+            "+++ (does not exist after)".to_string()
+        };
+        html_diff(
+            out,
+            pair.before.as_deref().unwrap_or(""),
+            pair.after.as_deref().unwrap_or(""),
+            Some((&old, &new)),
+        );
         out.push_str("</details>\n");
     }
 }
@@ -1217,7 +1443,17 @@ fn md_with_code(text: &str) -> String {
     }
     // A code part has no backtick and no line break: it cannot close its span.
     let last = parts.len() - 1;
-    parts.iter().enumerate().map(|(index, part)| if index % 2 == 1 { format!("`{}`", text::inline(part)) } else { md_part(part, index == 0, index == last) }).collect()
+    parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| {
+            if index % 2 == 1 {
+                format!("`{}`", text::inline(part))
+            } else {
+                md_part(part, index == 0, index == last)
+            }
+        })
+        .collect()
 }
 
 /// Escapes inline Markdown text (5k, A2). Each hidden character shows as an escape, also a
@@ -1235,7 +1471,11 @@ fn md_part(text: &str, first: bool, last: bool) -> String {
     let text = if first { text.trim_start_matches(' ') } else { text.as_str() };
     let mut out = String::with_capacity(text.len());
     // The digits at the start: `1.` and `1)` start a list.
-    let digits = if first { text.chars().take_while(char::is_ascii_digit).count() } else { 0 };
+    let digits = if first {
+        text.chars().take_while(char::is_ascii_digit).count()
+    } else {
+        0
+    };
     for (index, c) in text.chars().enumerate() {
         match c {
             '<' => out.push_str("&lt;"),
@@ -1267,7 +1507,11 @@ fn md_part(text: &str, first: bool, last: bool) -> String {
 fn code(text: &str) -> String {
     let text = text::inline(text);
     let ticks = "`".repeat(longest_run(&text, '`') + 1);
-    let pad = if text.starts_with('`') || text.ends_with('`') || text.starts_with(' ') { " " } else { "" };
+    let pad = if text.starts_with('`') || text.ends_with('`') || text.starts_with(' ') {
+        " "
+    } else {
+        ""
+    };
     format!("{ticks}{pad}{text}{pad}{ticks}")
 }
 
@@ -1327,65 +1571,115 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
         .into_iter()
         .map(|view| {
             let fact = &view.fact;
-            let mut text = format!("step {}: {} derived: {} [{}]{}", view.step, fact.id, fact.description, fact.label(), fact.mark());
-            for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
-                let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
-                // A folded fact has the count and the text in its description: only the anchors
-                // follow (batch 5x, part E).
-                if fact.folds(group) {
-                    text.push_str(&format!(" (at {anchors})"));
+            let text = fact_text(view, full);
+            (
+                view.step,
+                fact.id.as_str(),
+                text,
+                if full {
+                    fact.content.clone()
                 } else {
-                    text.push_str(&format!("; {} site(s): {} ({anchors})", group.sites.len(), group.edit));
-                }
-            }
-            // The short report shows the count and the scope of a long list (batch 5x, part E).
-            // The full report has each body (brief 5h, C6).
-            let list = |bodies: &[String]| {
-                if full || bodies.len() <= semilla_core::report::LIST_LIMIT {
-                    format!(": {}", bodies.iter().map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", "))
-                } else {
-                    format!(" of {} (the names: `--full`)", semilla_core::report::list_scope(bodies))
-                }
-            };
-            // Design 35.2: the mismatch mark. The text of the change gives no cause for
-            // different compiled code.
-            if fact.mismatch() {
-                text.push_str(&format!("; {}{}", semilla_core::report::MISMATCH.trim_end_matches(':'), if fact.affected.is_empty() { String::new() } else { list(&fact.affected) }));
-            } else if !fact.affected.is_empty() {
-                text.push_str(&format!("; {} affected bod{}{}", fact.affected.len(), if fact.affected.len() == 1 { "y" } else { "ies" }, list(&fact.affected)));
-            }
-            // Two or more edits in one body (design 36.5).
-            text.push_str(&fact.other_edits_text());
-            if !fact.equal_sites.is_empty() {
-                let count = if full || fact.equal_sites.len() <= semilla_core::report::LIST_LIMIT { String::new() } else { format!("{} ", fact.equal_sites.len()) };
-                text.push_str(&format!("; {count}{}{}{}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
-            }
-            // The branch mark (design 40.4).
-            if let Some(branches) = &fact.branches {
-                text.push_str(&format!("; branches: {branches}"));
-            }
-            // A public API change (design 36.3).
-            if fact.api_change() {
-                text.push_str(&format!("; {}", semilla_core::report::API_LINE));
-            }
-            // A changed body with `unsafe` code (design 36.5).
-            if fact.unsafe_code {
-                text.push_str(&format!("; {}", semilla_core::report::UNSAFE_LINE));
-            }
-            if let Some(note) = &fact.note {
-                text.push_str(&format!("; note: {note}{}", fact.part_mark()));
-            }
-            // A stored reason of a fact with no spotlight is a note (batch 5x, part E).
-            if let Some(reason) = fact.reason.as_deref().filter(|_| fact.spotlight_why.is_none()) {
-                text.push_str(&format!("; note: no spotlight; the agent gave a reason: {}", text::quoted(reason)));
-            }
-            if let Some(why) = &fact.spotlight_why {
-                text.push_str(&format!("; spotlight: {why}; {}: {}", fact.reason_label(), fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
-            }
-            (view.step, fact.id.as_str(), text, if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) })
+                    model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change))
+                },
+            )
         })
         .collect();
     without_equal_diffs(items)
+}
+
+/// The text of the line of one fact in the fact items: the description, the label, the
+/// sites, the affected bodies, and the notes and marks of the fact.
+fn fact_text(view: &crate::summary::FactView, full: bool) -> String {
+    let fact = &view.fact;
+    let mut text = format!(
+        "step {}: {} derived: {} [{}]{}",
+        view.step,
+        fact.id,
+        fact.description,
+        fact.label(),
+        fact.mark()
+    );
+    for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
+        let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
+        // A folded fact has the count and the text in its description: only the anchors
+        // follow (batch 5x, part E).
+        if fact.folds(group) {
+            let _ = write!(text, " (at {anchors})");
+        } else {
+            let _ = write!(text, "; {} site(s): {} ({anchors})", group.sites.len(), group.edit);
+        }
+    }
+    // The short report shows the count and the scope of a long list (batch 5x, part E).
+    // The full report has each body (brief 5h, C6).
+    let list = |bodies: &[String]| {
+        if full || bodies.len() <= semilla_core::report::LIST_LIMIT {
+            format!(": {}", bodies.iter().map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", "))
+        } else {
+            format!(" of {} (the names: `--full`)", semilla_core::report::list_scope(bodies))
+        }
+    };
+    // Design 35.2: the mismatch mark. The text of the change gives no cause for
+    // different compiled code.
+    if fact.mismatch() {
+        let _ = write!(
+            text,
+            "; {}{}",
+            semilla_core::report::MISMATCH.trim_end_matches(':'),
+            if fact.affected.is_empty() { String::new() } else { list(&fact.affected) }
+        );
+    } else if !fact.affected.is_empty() {
+        let _ = write!(
+            text,
+            "; {} affected bod{}{}",
+            fact.affected.len(),
+            if fact.affected.len() == 1 { "y" } else { "ies" },
+            list(&fact.affected)
+        );
+    }
+    // Two or more edits in one body (design 36.5).
+    text.push_str(&fact.other_edits_text());
+    if !fact.equal_sites.is_empty() {
+        let count = if full || fact.equal_sites.len() <= semilla_core::report::LIST_LIMIT {
+            String::new()
+        } else {
+            format!("{} ", fact.equal_sites.len())
+        };
+        let _ = write!(
+            text,
+            "; {count}{}{}{}",
+            semilla_core::report::EQUAL_SITES,
+            fact.part_mark(),
+            list(&fact.equal_sites)
+        );
+    }
+    // The branch mark (design 40.4).
+    if let Some(branches) = &fact.branches {
+        let _ = write!(text, "; branches: {branches}");
+    }
+    // A public API change (design 36.3).
+    if fact.api_change() {
+        let _ = write!(text, "; {}", semilla_core::report::API_LINE);
+    }
+    // A changed body with `unsafe` code (design 36.5).
+    if fact.unsafe_code {
+        let _ = write!(text, "; {}", semilla_core::report::UNSAFE_LINE);
+    }
+    if let Some(note) = &fact.note {
+        let _ = write!(text, "; note: {note}{}", fact.part_mark());
+    }
+    // A stored reason of a fact with no spotlight is a note (batch 5x, part E).
+    if let Some(reason) = fact.reason.as_deref().filter(|_| fact.spotlight_why.is_none()) {
+        let _ = write!(text, "; note: no spotlight; the agent gave a reason: {}", text::quoted(reason));
+    }
+    if let Some(why) = &fact.spotlight_why {
+        let _ = write!(
+            text,
+            "; spotlight: {why}; {}: {}",
+            fact.reason_label(),
+            fact.reason.as_deref().map_or_else(|| "MISSING".into(), text::quoted)
+        );
+    }
+    text
 }
 
 /// Batch 5y, C2. In one step, the second fact with an equal diff block does not show the
@@ -1401,17 +1695,23 @@ fn without_equal_diffs(items: Vec<(usize, &str, String, Option<String>)>) -> Vec
         // Batch 7b, part 5.8, and design 38.9 (the merge of the text output): the same text
         // with the same diff block (or with no block) shows one time. The first fact names the
         // second fact.
-        if let Some((_, _, _, _, position)) = shown.iter().find(|(known, _, block, text, _)| *known == step && *block == content && *text == plain) {
-            result[*position].0.push_str(&format!("; also {id}"));
+        if let Some((_, _, _, _, position)) = shown
+            .iter()
+            .find(|(known, _, block, text, _)| *known == step && *block == content && *text == plain)
+        {
+            let _ = write!(result[*position].0, "; also {id}");
             continue;
         }
-        let first = content.as_ref().and_then(|content| shown.iter().find(|(known, _, block, _, _)| *known == step && block.as_ref() == Some(content)));
-        match first {
-            Some((_, first, _, _, _)) => result.push((format!("{text}; the same diff as {first}"), None)),
-            None => {
-                shown.push((step, id, content.clone(), plain, result.len()));
-                result.push((text, content));
-            }
+        let first = content.as_ref().and_then(|content| {
+            shown
+                .iter()
+                .find(|(known, _, block, _, _)| *known == step && block.as_ref() == Some(content))
+        });
+        if let Some((_, first, _, _, _)) = first {
+            result.push((format!("{text}; the same diff as {first}"), None));
+        } else {
+            shown.push((step, id, content.clone(), plain, result.len()));
+            result.push((text, content));
         }
     }
     result
@@ -1451,7 +1751,11 @@ fn md_summary(out: &mut String, model: &Model, full: bool) {
     }
     out.push_str("## Summary\n\n");
     let verdict = result_word(summary);
-    let _ = writeln!(out, "{}\n", md(&result_line(model)).replacen(&format!("result: {verdict}"), &format!("result: **{verdict}**"), 1));
+    let _ = writeln!(
+        out,
+        "{}\n",
+        md(&result_line(model)).replacen(&format!("result: {verdict}"), &format!("result: **{verdict}**"), 1)
+    );
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "> **{}**\n", md(notice));
     }
@@ -1475,9 +1779,20 @@ fn md_summary(out: &mut String, model: &Model, full: bool) {
     let lists: [(&str, Vec<String>); 5] = [
         ("Organization errors", report.organization.clone()),
         ("Warnings", report.warnings.clone()),
-        ("Pair warnings", report.pairs.iter().map(|pair| pair.text()).collect()),
-        ("Spotlight", model.spotlight().iter().map(|(step, text)| format!("step {step}: {text}")).collect()),
-        ("Public API changes", model.api_changes().iter().filter(|_| full).map(|(step, text)| format!("step {step}: {text}")).collect()),
+        ("Pair warnings", report.pairs.iter().map(semilla_core::PairWarning::text).collect()),
+        (
+            "Spotlight",
+            model.spotlight().iter().map(|(step, text)| format!("step {step}: {text}")).collect(),
+        ),
+        (
+            "Public API changes",
+            model
+                .api_changes()
+                .iter()
+                .filter(|_| full)
+                .map(|(step, text)| format!("step {step}: {text}"))
+                .collect(),
+        ),
     ];
     for (title, items) in lists {
         if items.is_empty() {
@@ -1500,7 +1815,14 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
         out.push_str("No groups.\n\n");
     }
     for group in &model.summary.groups {
-        let _ = writeln!(out, "### {} · {} · {} · {}\n", code(&group.id), md(&steps_label(&group.steps)), md(&format!("{}{}", serde_name(&group.kind), group.kind_mark)), md(&agent_text(group, &group.title)));
+        let _ = writeln!(
+            out,
+            "### {} · {} · {} · {}\n",
+            code(&group.id),
+            md(&steps_label(&group.steps)),
+            md(&format!("{}{}", serde_name(&group.kind), group.kind_mark)),
+            md(&agent_text(group, &group.title))
+        );
         if !group.why.is_empty() {
             let _ = writeln!(out, "{}\n", md(&agent_text(group, &group.why)));
         }
@@ -1539,8 +1861,17 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
     }
     // A step with no group: its facts show here, so that each fact shows one time.
     let grouped: BTreeSet<usize> = model.summary.groups.iter().flat_map(|group| group.steps.iter().copied()).collect();
-    let free: Vec<usize> = model.report().steps.iter().map(|step| step.step).filter(|step| !grouped.contains(step)).collect();
-    let (code, facts) = (fact_items(model, Some(&free), full, Some(true)), fact_items(model, Some(&free), full, Some(false)));
+    let free: Vec<usize> = model
+        .report()
+        .steps
+        .iter()
+        .map(|step| step.step)
+        .filter(|step| !grouped.contains(step))
+        .collect();
+    let (code, facts) = (
+        fact_items(model, Some(&free), full, Some(true)),
+        fact_items(model, Some(&free), full, Some(false)),
+    );
     if !code.is_empty() || !facts.is_empty() {
         out.push_str("### Steps with no group\n\n");
     }
@@ -1582,11 +1913,19 @@ fn md_new_code(out: &mut String, new: &NewCode, indent: &str) {
 
 fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
     let marks = subgroup_marks(sub);
-    let marks = if marks.is_empty() { String::new() } else { format!(" · _{}_", md(&marks.join(" · "))) };
+    let marks = if marks.is_empty() {
+        String::new()
+    } else {
+        format!(" · _{}_", md(&marks.join(" · ")))
+    };
     if sub.folded {
         // A folded subgroup is one line with the counts. It has no claim (design 35.7).
         let ids: Vec<String> = sub.claims.iter().map(|view| code(&view.id)).collect();
-        let ids = if ids.is_empty() { String::new() } else { format!(" — {}", ids.join(", ")) };
+        let ids = if ids.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", ids.join(", "))
+        };
         let _ = writeln!(
             out,
             "- ▸ **{}** · {}{marks} · folded: {} ({}){ids}",
@@ -1603,7 +1942,12 @@ fn md_subgroup(out: &mut String, model: &Model, sub: &SubgroupSummary) {
     // A location is a file, or a module or a crate when the item has no file (a removed item).
     let is_file = |location: &&String| location.contains('/') || location.contains('.');
     let files: Vec<String> = sub.locations.iter().filter(is_file).map(|location| code(location)).collect();
-    let modules: Vec<String> = sub.locations.iter().filter(|location| !is_file(location)).map(|location| code(location)).collect();
+    let modules: Vec<String> = sub
+        .locations
+        .iter()
+        .filter(|location| !is_file(location))
+        .map(|location| code(location))
+        .collect();
     if !files.is_empty() {
         lines.push(format!("Files: {}", files.join(" · ")));
     }
@@ -1678,7 +2022,11 @@ fn md_uncovered(out: &mut String, model: &Model) {
         return;
     }
     out.push_str("## Uncovered changes\n\n");
-    let _ = writeln!(out, "**An internal error: {} change(s) have no fact.** Semilla rejects the change set.\n", items.len());
+    let _ = writeln!(
+        out,
+        "**An internal error: {} change(s) have no fact.** Semilla rejects the change set.\n",
+        items.len()
+    );
     for item in &items {
         let uncovered = item.uncovered;
         let mut meta = vec![format!("step {}", uncovered.step), format!("view {}", md(&serde_name(&uncovered.view)))];
@@ -1756,11 +2104,30 @@ mod tests {
     fn the_text_of_the_agent_cannot_start_a_block() {
         // Batch 5k, A2: inline text stays on one line and in its block.
         assert_eq!(md("a\nresult: accepted\u{1b}[8m"), "a\\\\nresult: accepted\\\\u{1b}\\[8m");
-        for start in ["# title", "> quote", "- item", "+ item", "* item", "1. item", "2) item", "```", "~~~", "| a | b |", "<details>", "=== ", "    code", "\tcode", "---"] {
+        for start in [
+            "# title",
+            "> quote",
+            "- item",
+            "+ item",
+            "* item",
+            "1. item",
+            "2) item",
+            "```",
+            "~~~",
+            "| a | b |",
+            "<details>",
+            "=== ",
+            "    code",
+            "\tcode",
+            "---",
+        ] {
             let text = md(start);
             let first = text.chars().next().unwrap();
             assert!(first == '\\' || first == '&' || first.is_ascii_alphanumeric(), "{start:?} gives {text:?}");
-            assert!(!text.contains('\n') && !text.contains('|') || text.contains("\\|"), "{start:?} gives {text:?}");
+            assert!(
+                !text.contains('\n') && !text.contains('|') || text.contains("\\|"),
+                "{start:?} gives {text:?}"
+            );
         }
         assert_eq!(md("1. item"), "1\\. item");
         assert_eq!(md("a | b"), "a \\| b");
@@ -1786,18 +2153,53 @@ mod tests {
         // Batch 5y, C2: two facts of one step with the same diff block. An equal block in a
         // different step stays.
         let block = Some("- a\n+ b".to_string());
-        let items = vec![(0, "f1", "one".to_string(), block.clone()), (0, "f2", "two".to_string(), block.clone()), (0, "f3", "three".to_string(), None), (1, "f1", "four".to_string(), block.clone())];
+        let items = vec![
+            (0, "f1", "one".to_string(), block.clone()),
+            (0, "f2", "two".to_string(), block.clone()),
+            (0, "f3", "three".to_string(), None),
+            (1, "f1", "four".to_string(), block.clone()),
+        ];
         let list = without_equal_diffs(items);
-        assert_eq!(list, [("one".to_string(), block.clone()), ("two; the same diff as f1".to_string(), None), ("three".to_string(), None), ("four".to_string(), block.clone())]);
+        assert_eq!(
+            list,
+            [
+                ("one".to_string(), block.clone()),
+                ("two; the same diff as f1".to_string(), None),
+                ("three".to_string(), None),
+                ("four".to_string(), block.clone())
+            ]
+        );
         // Batch 7b, part 5.8: two facts of one step with the same text and the same diff block
         // show the change one time.
-        let items = vec![(0, "f1", "step 0: f1 derived: one".to_string(), block.clone()), (0, "f2", "step 0: f2 derived: one".to_string(), block.clone()), (1, "f1", "step 1: f1 derived: one".to_string(), block.clone())];
-        assert_eq!(without_equal_diffs(items), [("step 0: f1 derived: one; also f2".to_string(), block.clone()), ("step 1: f1 derived: one".to_string(), block.clone())]);
+        let items = vec![
+            (0, "f1", "step 0: f1 derived: one".to_string(), block.clone()),
+            (0, "f2", "step 0: f2 derived: one".to_string(), block.clone()),
+            (1, "f1", "step 1: f1 derived: one".to_string(), block.clone()),
+        ];
+        assert_eq!(
+            without_equal_diffs(items),
+            [
+                ("step 0: f1 derived: one; also f2".to_string(), block.clone()),
+                ("step 1: f1 derived: one".to_string(), block.clone())
+            ]
+        );
         // Design 38.9: the merge of the text output. The same text with no block shows one
         // time. The same text with a different block shows two times.
         let other = Some("- a\n+ c".to_string());
-        let items = vec![(0, "f1", "step 0: f1 derived: two".to_string(), None), (0, "f2", "step 0: f2 derived: two".to_string(), None), (0, "f3", "step 0: f3 derived: two".to_string(), block.clone()), (0, "f4", "step 0: f4 derived: two".to_string(), other.clone())];
-        assert_eq!(without_equal_diffs(items), [("step 0: f1 derived: two; also f2".to_string(), None), ("step 0: f3 derived: two".to_string(), block), ("step 0: f4 derived: two".to_string(), other)]);
+        let items = vec![
+            (0, "f1", "step 0: f1 derived: two".to_string(), None),
+            (0, "f2", "step 0: f2 derived: two".to_string(), None),
+            (0, "f3", "step 0: f3 derived: two".to_string(), block.clone()),
+            (0, "f4", "step 0: f4 derived: two".to_string(), other.clone()),
+        ];
+        assert_eq!(
+            without_equal_diffs(items),
+            [
+                ("step 0: f1 derived: two; also f2".to_string(), None),
+                ("step 0: f3 derived: two".to_string(), block),
+                ("step 0: f4 derived: two".to_string(), other)
+            ]
+        );
     }
 
     #[test]

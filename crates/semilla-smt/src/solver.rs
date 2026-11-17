@@ -5,8 +5,10 @@
 //! definite answers (`sat` and `unsat`) by the query text.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::io::{Read, Write};
+use std::num::NonZeroU128;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -32,6 +34,8 @@ pub struct Solver {
     path: PathBuf,
     version: String,
     timeout: Duration,
+    /// The time limit in the solver header, in milliseconds. A limit under one millisecond is one.
+    timeout_millis: NonZeroU128,
     seed: u32,
     cache: Mutex<HashMap<String, Answer>>,
 }
@@ -49,6 +53,10 @@ pub(crate) enum Answer {
 impl Solver {
     /// Finds the solver binary for a tool that checks no repository (the tests of this crate).
     /// See [`Solver::find_for`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no solver binary is found, or if the binary does not run as Z3.
     pub fn find() -> Result<Solver> {
         Solver::find_for(&[], None)
     }
@@ -66,17 +74,33 @@ impl Solver {
     /// file there (invariant I5). So the search never takes a solver from that folder: a
     /// candidate of step 2, 3, or 4 in the folder is skipped. The search does not look at the
     /// current folder or its parents.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `SEMILLA_Z3` names no executable file, if no step finds a solver, or
+    /// if the binary does not run as Z3.
     pub fn find_for(tool_dirs: &[PathBuf], repository: Option<&Path>) -> Result<Solver> {
         let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(TOOLS_PATH);
-        Solver::at(locate(std::env::var_os(SOLVER_ENV), tool_dirs, std::env::var_os("PATH"), Some(&own), repository)?)
+        Solver::at(locate(
+            std::env::var_os(SOLVER_ENV),
+            tool_dirs,
+            std::env::var_os("PATH").as_deref(),
+            Some(&own),
+            repository,
+        )?)
     }
 
     /// Returns true if [`Solver::find`] finds a solver that runs.
+    #[must_use]
     pub fn available() -> bool {
         Solver::find().is_ok()
     }
 
     /// Uses the solver binary at `path`. The function makes sure that the binary runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the binary does not start, or if `--version` does not name Z3.
     pub fn at(path: impl Into<PathBuf>) -> Result<Solver> {
         let path = path.into();
         let output = Command::new(&path)
@@ -96,18 +120,22 @@ impl Solver {
             path,
             version,
             timeout: DEFAULT_TIMEOUT,
+            timeout_millis: header_millis(DEFAULT_TIMEOUT),
             seed: DEFAULT_SEED,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
     /// Sets the time limit of one query.
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Solver {
         self.timeout = timeout;
+        self.timeout_millis = header_millis(timeout);
         self
     }
 
     /// Sets the random seed of the solver.
+    #[must_use]
     pub fn with_seed(mut self, seed: u32) -> Solver {
         self.seed = seed;
         self
@@ -132,7 +160,7 @@ impl Solver {
 
     /// The header that each query starts with.
     pub(crate) fn header(&self) -> String {
-        let millis = self.timeout.as_millis().max(1);
+        let millis = self.timeout_millis;
         format!(
             "(set-option :produce-models true)\n\
              (set-option :timeout {millis})\n\
@@ -149,17 +177,14 @@ impl Solver {
         query.push_str(body);
         query.push_str("(check-sat)\n(get-info :reason-unknown)\n");
         if !symbols.is_empty() {
-            query.push_str(&format!("(get-value ({}))\n", symbols.join(" ")));
+            let _ = writeln!(query, "(get-value ({}))", symbols.join(" "));
         }
         if let Some(answer) = self.cache.lock().unwrap().get(&query) {
             return Ok((query, answer.clone()));
         }
         let answer = self.run(&query)?;
         if !matches!(answer, Answer::Unknown(_)) {
-            self.cache
-                .lock()
-                .unwrap()
-                .insert(query.clone(), answer.clone());
+            self.cache.lock().unwrap().insert(query.clone(), answer.clone());
         }
         Ok((query, answer))
     }
@@ -179,9 +204,7 @@ impl Solver {
             let _ = stdout.read_to_string(&mut text);
             text
         });
-        stdin
-            .write_all(query.as_bytes())
-            .context("cannot write the query to the SMT solver")?;
+        stdin.write_all(query.as_bytes()).context("cannot write the query to the SMT solver")?;
         drop(stdin);
 
         // The solver stops itself at the soft time limit. Kill it if it does not stop.
@@ -199,23 +222,24 @@ impl Solver {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        let text = reader
-            .join()
-            .map_err(|_| anyhow!("the solver output thread failed"))?;
+        let text = reader.join().map_err(|_| anyhow!("the solver output thread failed"))?;
         if killed {
-            return Ok(Answer::Unknown(
-                "the solver did not stop at the time limit".into(),
-            ));
+            return Ok(Answer::Unknown("the solver did not stop at the time limit".into()));
         }
         parse_output(&text, query)
     }
+}
+
+/// The time limit in milliseconds for the solver header. A limit under one millisecond gives one.
+fn header_millis(timeout: Duration) -> NonZeroU128 {
+    NonZeroU128::new(timeout.as_millis()).unwrap_or(NonZeroU128::MIN)
 }
 
 /// Finds the solver binary. See [`Solver::find_for`].
 pub(crate) fn locate(
     env_value: Option<OsString>,
     tool_dirs: &[PathBuf],
-    path_var: Option<OsString>,
+    path_var: Option<&OsStr>,
     build_time: Option<&Path>,
     repository: Option<&Path>,
 ) -> Result<PathBuf> {
@@ -224,17 +248,23 @@ pub(crate) fn locate(
         if is_executable(&path) {
             return Ok(path);
         }
-        bail!(
-            "{SOLVER_ENV} is set to {}, but that is not an executable file",
-            path.display()
-        );
+        bail!("{SOLVER_ENV} is set to {}, but that is not an executable file", path.display());
     }
     // A candidate in the checked repository is never the solver: the agent can write it.
     let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let repository = repository.map(real);
-    let allowed = |candidate: &Path| is_executable(candidate) && repository.as_ref().is_none_or(|repository| !real(candidate).starts_with(repository));
-    let on_path = path_var.iter().flat_map(std::env::split_paths).filter(|dir| dir.is_absolute()).collect::<Vec<_>>();
-    let candidates = tool_dirs.iter().chain(&on_path).map(|dir| dir.join("z3")).chain(build_time.map(Path::to_path_buf));
+    let allowed =
+        |candidate: &Path| is_executable(candidate) && repository.as_ref().is_none_or(|repository| !real(candidate).starts_with(repository));
+    let on_path = path_var
+        .iter()
+        .flat_map(std::env::split_paths)
+        .filter(|dir| dir.is_absolute())
+        .collect::<Vec<_>>();
+    let candidates = tool_dirs
+        .iter()
+        .chain(&on_path)
+        .map(|dir| dir.join("z3"))
+        .chain(build_time.map(Path::to_path_buf));
     for candidate in candidates {
         if allowed(&candidate) {
             return Ok(candidate);
@@ -249,9 +279,7 @@ pub(crate) fn locate(
 
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 /// Reads the output of one query.
@@ -284,9 +312,7 @@ fn parse_output(text: &str, query: &str) -> Result<Answer> {
             }
             Ok(Answer::Unknown(reason))
         }
-        other => Err(anyhow!(
-            "the SMT solver did not accept the query: {other}\nquery:\n{query}"
-        )),
+        other => Err(anyhow!("the SMT solver did not accept the query: {other}\nquery:\n{query}")),
     }
 }
 
@@ -315,7 +341,7 @@ pub(crate) mod sexp {
     use std::fmt;
 
     #[derive(Clone, Debug, PartialEq, Eq)]
-    pub enum Sexp {
+    pub(crate) enum Sexp {
         Atom(String),
         List(Vec<Sexp>),
     }
@@ -338,7 +364,7 @@ pub(crate) mod sexp {
         }
     }
 
-    pub fn parse_all(text: &str) -> Vec<Sexp> {
+    pub(crate) fn parse_all(text: &str) -> Vec<Sexp> {
         let tokens = tokenize(text);
         let mut pos = 0;
         let mut out = Vec::new();
@@ -351,7 +377,7 @@ pub(crate) mod sexp {
         out
     }
 
-    pub fn parse_one(text: &str) -> Option<Sexp> {
+    pub(crate) fn parse_one(text: &str) -> Option<Sexp> {
         parse_all(text).into_iter().next()
     }
 
@@ -443,11 +469,10 @@ pub(crate) mod sexp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
 
     #[test]
     fn missing_solver_gives_a_clear_error() {
-        let error = locate(None, &[], Some(OsStr::new("").to_os_string()), None, None).unwrap_err();
+        let error = locate(None, &[], Some(OsStr::new("")), None, None).unwrap_err();
         let text = error.to_string();
         assert!(text.contains("no Z3 SMT solver found"), "{text}");
         assert!(text.contains("SEMILLA_Z3"), "{text}");
@@ -456,13 +481,8 @@ mod tests {
 
     #[test]
     fn a_bad_env_value_is_an_error() {
-        let error = locate(Some("/nonexistent/z3".into()), &[], None, None, None)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("SEMILLA_Z3 is set to /nonexistent/z3"),
-            "{error}"
-        );
+        let error = locate(Some("/nonexistent/z3".into()), &[], None, None, None).unwrap_err().to_string();
+        assert!(error.contains("SEMILLA_Z3 is set to /nonexistent/z3"), "{error}");
     }
 
     /// Batch 5h, A1: the agent controls the repository folder. A solver there is never used:
@@ -480,10 +500,14 @@ mod tests {
         };
         let repo = base.join("repo");
         let inside = [repo.join(".semilla/tools/z3"), repo.join("bin/z3")];
-        inside.iter().for_each(|path| program(path));
+        for path in &inside {
+            program(path);
+        }
         let path_var = std::env::join_paths([repo.join("bin"), PathBuf::from("relative")]).unwrap();
         let tool_dirs = [repo.join(".semilla/tools")];
-        let error = locate(None, &tool_dirs, Some(path_var.clone()), Some(&inside[0]), Some(&repo)).unwrap_err().to_string();
+        let error = locate(None, &tool_dirs, Some(path_var.as_os_str()), Some(&inside[0]), Some(&repo))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("never takes a solver from the repository"), "{error}");
         // A link from outside into the repository is in the repository also.
         std::os::unix::fs::symlink(repo.join("bin"), base.join("link")).unwrap();
@@ -491,9 +515,12 @@ mod tests {
         // A solver outside the repository is found: in a tool folder first, then on `PATH`.
         let outside = base.join("cache/tools/z3");
         program(&outside);
-        assert_eq!(locate(None, &[base.join("cache/tools")], Some(path_var.clone()), None, Some(&repo)).unwrap(), outside);
+        assert_eq!(
+            locate(None, &[base.join("cache/tools")], Some(path_var.as_os_str()), None, Some(&repo)).unwrap(),
+            outside
+        );
         let on_path = std::env::join_paths([repo.join("bin"), base.join("cache/tools")]).unwrap();
-        assert_eq!(locate(None, &[], Some(on_path), None, Some(&repo)).unwrap(), outside);
+        assert_eq!(locate(None, &[], Some(on_path.as_os_str()), None, Some(&repo)).unwrap(), outside);
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -505,17 +532,10 @@ mod tests {
 
     #[test]
     fn parse_solver_output() {
-        let answer = parse_output(
-            "sat\n(:reason-unknown \"\")\n((v0 #x00000005)\n (v1 true))\n",
-            "",
-        )
-        .unwrap();
+        let answer = parse_output("sat\n(:reason-unknown \"\")\n((v0 #x00000005)\n (v1 true))\n", "").unwrap();
         assert_eq!(
             answer,
-            Answer::Sat(vec![
-                ("v0".into(), "#x00000005".into()),
-                ("v1".into(), "true".into())
-            ])
+            Answer::Sat(vec![("v0".into(), "#x00000005".into()), ("v1".into(), "true".into())])
         );
         let answer = parse_output(
             "unknown\n(:reason-unknown \"timeout\")\n(error \"line 7 column 14: model is not available\")\n",
@@ -523,10 +543,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(answer, Answer::Unknown("timeout".into()));
-        assert_eq!(
-            parse_output("unsat\n(error \"x\")", "").unwrap(),
-            Answer::Unsat
-        );
+        assert_eq!(parse_output("unsat\n(error \"x\")", "").unwrap(), Answer::Unsat);
         assert!(parse_output("(error \"bad\")\nsat", "").is_err());
     }
 }

@@ -57,8 +57,10 @@ fn items(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<String> {
 }
 
 /// Writes the trait table of the crate to the folder of `SEMILLA_TRAIT_TABLE`.
-pub fn write(tcx: TyCtxt<'_>) -> std::io::Result<()> {
-    let Some(folder) = std::env::var_os("SEMILLA_TRAIT_TABLE") else { return Ok(()) };
+pub(crate) fn write(tcx: TyCtxt<'_>) -> std::io::Result<()> {
+    let Some(folder) = std::env::var_os("SEMILLA_TRAIT_TABLE") else {
+        return Ok(());
+    };
     let sized = tcx.lang_items().sized_trait();
     let mut traits = Vec::new();
     for def_id in tcx.all_traits_including_private() {
@@ -73,7 +75,7 @@ pub fn write(tcx: TyCtxt<'_>) -> std::io::Result<()> {
                 .clauses
                 .into_iter()
                 .filter_map(|clause| clause.skip_norm_wip().as_trait_clause())
-                .map(|clause| clause.def_id())
+                .map(ty::PolyTraitClause::def_id)
                 .filter(|bound| Some(*bound) != sized)
                 .map(|bound| tcx.def_path_str(bound))
                 .collect();
@@ -83,7 +85,12 @@ pub fn write(tcx: TyCtxt<'_>) -> std::io::Result<()> {
         }
         blanket.sort();
         blanket.dedup();
-        traits.push(TraitFacts { path: tcx.def_path_str(def_id), public: tcx.visibility(def_id).is_public(), items: items(tcx, def_id), blanket });
+        traits.push(TraitFacts {
+            path: tcx.def_path_str(def_id),
+            public: tcx.visibility(def_id).is_public(),
+            items: items(tcx, def_id),
+            blanket,
+        });
     }
     traits.sort_by(|a, b| a.path.cmp(&b.path));
     let mut impls = Vec::new();
@@ -94,7 +101,12 @@ pub fn write(tcx: TyCtxt<'_>) -> std::io::Result<()> {
         let def_id = local.to_def_id();
         let derive = !matches!(tcx.def_span(def_id).ctxt().outer_expn_data().kind, rustc_span::ExpnKind::Root);
         let of_trait = tcx.impl_opt_trait_id(def_id).map(|trait_id| tcx.def_path_str(trait_id));
-        impls.push(ImplFacts { self_type: tcx.type_of(def_id).instantiate_identity().skip_norm_wip().to_string(), of_trait, items: items(tcx, def_id), derive });
+        impls.push(ImplFacts {
+            self_type: tcx.type_of(def_id).instantiate_identity().skip_norm_wip().to_string(),
+            of_trait,
+            items: items(tcx, def_id),
+            derive,
+        });
     }
     impls.sort_by(|a, b| (&a.self_type, &a.of_trait).cmp(&(&b.self_type, &b.of_trait)));
     let text = serde_json::to_string(&Table { traits, impls }).expect("the table is valid JSON");

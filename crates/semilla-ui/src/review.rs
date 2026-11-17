@@ -6,6 +6,7 @@
 //! claim becomes "not reviewed" again. The other claims keep their state.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,7 @@ pub enum ReviewState {
 }
 
 impl ReviewState {
+    #[must_use]
     pub fn is_reviewed(self) -> bool {
         self == ReviewState::Reviewed
     }
@@ -71,20 +73,34 @@ impl ReviewState {
 impl ReviewFile {
     /// Reads the review file. A missing file gives an empty state. A bad file gives an empty
     /// state and a warning: the next write replaces it.
+    #[must_use]
     pub fn load(path: &Path) -> ReviewFile {
         match std::fs::read_to_string(path) {
             Ok(text) => match serde_json::from_str(&text) {
                 Ok(file) => file,
                 Err(error) => {
-                    eprintln!("semilla ui: warning: cannot read {}: {error}. The review state starts empty.", path.display());
-                    ReviewFile { version: 1, ..Default::default() }
+                    eprintln!(
+                        "semilla ui: warning: cannot read {}: {error}. The review state starts empty.",
+                        path.display()
+                    );
+                    ReviewFile {
+                        version: 1,
+                        ..Default::default()
+                    }
                 }
             },
-            Err(_) => ReviewFile { version: 1, ..Default::default() },
+            Err(_) => ReviewFile {
+                version: 1,
+                ..Default::default()
+            },
         }
     }
 
     /// Writes the review file. It writes a temporary file first, then renames it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the folder, the temporary file, or the rename fails.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir)?;
@@ -96,6 +112,7 @@ impl ReviewFile {
     }
 
     /// The state of one claim, from its current hash.
+    #[must_use]
     pub fn state(&self, claim: &str, current_hash: Option<&str>) -> ReviewState {
         match (self.claims.get(claim), current_hash) {
             (None, _) => ReviewState::NotReviewed,
@@ -105,7 +122,13 @@ impl ReviewFile {
     }
 
     pub fn mark(&mut self, claim: &str, hash: &str, now: u64) {
-        self.claims.insert(claim.to_string(), ReviewEntry { hash: hash.to_string(), marked_at: now });
+        self.claims.insert(
+            claim.to_string(),
+            ReviewEntry {
+                hash: hash.to_string(),
+                marked_at: now,
+            },
+        );
     }
 
     pub fn unmark(&mut self, claim: &str) {
@@ -113,6 +136,7 @@ impl ReviewFile {
     }
 
     /// The reviewer's decision on a pair, if any.
+    #[must_use]
     pub fn pair(&self, key: &str) -> Option<&str> {
         self.pairs.get(key).map(|d| d.decision.as_str())
     }
@@ -121,7 +145,13 @@ impl ReviewFile {
     pub fn set_pair(&mut self, key: &str, decision: Option<&str>, now: u64) {
         match decision {
             Some(decision) => {
-                self.pairs.insert(key.to_string(), PairDecision { decision: decision.to_string(), marked_at: now });
+                self.pairs.insert(
+                    key.to_string(),
+                    PairDecision {
+                        decision: decision.to_string(),
+                        marked_at: now,
+                    },
+                );
             }
             None => {
                 self.pairs.remove(key);
@@ -132,8 +162,9 @@ impl ReviewFile {
 
 /// The review hash of a claim: SHA-256 of a canonical JSON text of the op, the anchor, the
 /// arguments, and the source text before and after.
+#[must_use]
 pub fn claim_hash(ctx: &Ctx, claim: &Claim) -> String {
-    let anchor = claim.at.as_ref().map(|at| at.to_string());
+    let anchor = claim.at.as_ref().map(std::string::ToString::to_string);
     let result = ctx.results.get(&claim.id);
     let mut sources = Vec::new();
     if let Some(anchor) = &anchor {
@@ -158,7 +189,10 @@ pub fn claim_hash(ctx: &Ctx, claim: &Claim) -> String {
     let mut text = String::new();
     canonical(&content, &mut text);
     let digest = Sha256::digest(text.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    digest.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 /// Writes JSON with sorted object keys, so the hash does not depend on the key order.
@@ -193,8 +227,11 @@ fn canonical(value: &Value, out: &mut String) {
 }
 
 /// The current time in seconds since the Unix epoch.
+#[must_use]
 pub fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|time| time.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs())
 }
 
 #[cfg(test)]

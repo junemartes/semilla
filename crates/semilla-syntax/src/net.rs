@@ -46,7 +46,9 @@ impl Files {
 }
 
 fn is_doc_text(tree: Option<&TokenTree>) -> bool {
-    let Some(TokenTree::Group(group)) = tree else { return false };
+    let Some(TokenTree::Group(group)) = tree else {
+        return false;
+    };
     let inner: Vec<TokenTree> = group.stream().into_iter().collect();
     group.delimiter() == Delimiter::Bracket
         && matches!(inner.as_slice(), [TokenTree::Ident(name), TokenTree::Punct(equal), TokenTree::Literal(_)] if name == "doc" && equal.as_char() == '=')
@@ -67,10 +69,18 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
                     Delimiter::None => ("", ""),
                 };
                 let (start, after) = (group.span_open().start(), group.span_open().end());
-                out.push(Token { text: open.to_string(), at: (start.line, start.column), end: (after.line, after.column) });
+                out.push(Token {
+                    text: open.to_string(),
+                    at: (start.line, start.column),
+                    end: (after.line, after.column),
+                });
                 flatten(group.stream(), out);
                 let (end, after) = (group.span_close().start(), group.span_close().end());
-                out.push(Token { text: close.to_string(), at: (end.line, end.column), end: (after.line, after.column) });
+                out.push(Token {
+                    text: close.to_string(),
+                    at: (end.line, end.column),
+                    end: (after.line, after.column),
+                });
             }
             TokenTree::Punct(punct) => {
                 if punct.as_char() == ',' {
@@ -85,11 +95,19 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
                     }
                 }
                 let (start, after) = (punct.span().start(), punct.span().end());
-                out.push(Token { text: punct.as_char().to_string(), at: (start.line, start.column), end: (after.line, after.column) });
+                out.push(Token {
+                    text: punct.as_char().to_string(),
+                    at: (start.line, start.column),
+                    end: (after.line, after.column),
+                });
             }
             other => {
                 let (start, after) = (other.span().start(), other.span().end());
-                out.push(Token { text: other.to_string(), at: (start.line, start.column), end: (after.line, after.column) });
+                out.push(Token {
+                    text: other.to_string(),
+                    at: (start.line, start.column),
+                    end: (after.line, after.column),
+                });
             }
         }
     }
@@ -110,7 +128,11 @@ fn own_tokens(files: &mut Files, workspace: &Workspace, item: &Item) -> Vec<Toke
         .filter(|(from, to)| *from >= start && *to <= end && (*from, *to) != (start, end))
         .collect();
     let tokens = files.tokens(workspace, &item.file);
-    let mut out: Vec<Token> = tokens.iter().filter(|token| token.at >= start && token.at < end && !nested.iter().any(|(from, to)| token.at >= *from && token.at < *to)).cloned().collect();
+    let mut out: Vec<Token> = tokens
+        .iter()
+        .filter(|token| token.at >= start && token.at < end && !nested.iter().any(|(from, to)| token.at >= *from && token.at < *to))
+        .cloned()
+        .collect();
     // The body of a function and the content of an inline module: the last brace group, which
     // ends at the end of the item.
     let has_block = (item.kind == ItemKind::Fn && item.body.is_some()) || item.kind == ItemKind::Mod;
@@ -145,13 +167,21 @@ fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -
     let mut out: Vec<Token> = Vec::new();
     let mut next = 0;
     let mut cut = false;
-    for token in files.tokens(workspace, &item.file).iter().filter(|token| token.at >= start && token.at < end) {
+    for token in files
+        .tokens(workspace, &item.file)
+        .iter()
+        .filter(|token| token.at >= start && token.at < end)
+    {
         if own.get(next).is_some_and(|own| own.at == token.at) {
             out.push(own[next].clone());
             next += 1;
             cut = false;
         } else if !cut {
-            out.push(Token { text: "…".to_string(), at: token.at, end: token.at });
+            out.push(Token {
+                text: "…".to_string(),
+                at: token.at,
+                end: token.at,
+            });
             cut = true;
         }
     }
@@ -175,18 +205,30 @@ fn compact(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace() && *c != ',').collect()
 }
 
+/// One associated constant or type: the kind, the name, the visibility, and the attributes.
+type Associated = (&'static str, String, (String, String), (String, String));
+
 /// The associated constants and types of an impl: the kind, the name, the visibility, and the
 /// attributes (no doc text). The member list of the impl has the other parts.
 /// Each part has its compare text and its display text (design 39.2).
-fn associated(item: &Item) -> Vec<(&'static str, String, (String, String), (String, String))> {
+fn associated(item: &Item) -> Vec<Associated> {
     use crate::rs::{AstNode, ast};
     use ast::{HasName, HasVisibility};
-    let Some(ast::Item::Impl(parsed)) = crate::rs::parse_item(&item.source) else { return Vec::new() };
+    let Some(ast::Item::Impl(parsed)) = crate::rs::parse_item(&item.source) else {
+        return Vec::new();
+    };
     let text = |node: &crate::rs::SyntaxNode, vis: Option<ast::Visibility>, default: bool| {
-        let attrs: Vec<(String, String)> = crate::load::attributes(node).iter().filter(|attr| !attr.doc_text()).map(|attr| (attr.text.clone(), attr.display.clone())).collect();
+        let attrs: Vec<(String, String)> = crate::load::attributes(node)
+            .iter()
+            .filter(|attr| !attr.doc_text())
+            .map(|attr| (attr.text.clone(), attr.display.clone()))
+            .collect();
         let default = if default { "default " } else { "" };
-        let vis_display = vis.as_ref().map(|vis| crate::tt::display_text(vis.syntax())).unwrap_or_default();
-        let vis = (format!("{default}{}", crate::rs::compare_opt(vis.as_ref())).trim().to_string(), format!("{default}{vis_display}").trim().to_string());
+        let vis_display = vis.as_ref().map_or_default(|vis| crate::tt::display_text(vis.syntax()));
+        let vis = (
+            format!("{default}{}", crate::rs::compare_opt(vis.as_ref())).trim().to_string(),
+            format!("{default}{vis_display}").trim().to_string(),
+        );
         let shown = |pick: fn(&(String, String)) -> &String| attrs.iter().map(pick).cloned().collect::<Vec<_>>().join("\n");
         (vis, (shown(|pair| &pair.0), shown(|pair| &pair.1)))
     };
@@ -197,11 +239,16 @@ fn associated(item: &Item) -> Vec<(&'static str, String, (String, String), (Stri
         .filter_map(|member| match &member {
             ast::AssocItem::Const(constant) => {
                 let (vis, attrs) = text(constant.syntax(), constant.visibility(), constant.default_token().is_some());
-                Some(("constant", constant.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into()), vis, attrs))
+                Some((
+                    "constant",
+                    constant.name().map_or_else(|| "_".into(), |name| name.text().to_string()),
+                    vis,
+                    attrs,
+                ))
             }
             ast::AssocItem::TypeAlias(ty) => {
                 let (vis, attrs) = text(ty.syntax(), ty.visibility(), ty.default_token().is_some());
-                Some(("type", ty.name().map(|name| name.text().to_string()).unwrap_or_default(), vis, attrs))
+                Some(("type", ty.name().map_or_default(|name| name.text().to_string()), vis, attrs))
             }
             _ => None,
         })
@@ -218,9 +265,14 @@ fn associated_edits(before: &Item, after: &Item, renames: &Renames) -> Vec<Edit>
     let mut out = Vec::new();
     for (kind, name, old_vis, old_attrs) in &old {
         let name_after = renames.apply(&before.path, name);
-        type Part = (&'static str, String, (String, String), (String, String));
-        let same = |list: &[Part], name: &str| list.iter().filter(|(k, n, _, _)| k == kind && n == name).count() == 1;
-        let Some((_, _, new_vis, new_attrs)) = new.iter().find(|(k, n, _, _)| k == kind && *n == name_after).filter(|_| same(&old, name) && same(&new, &name_after)) else { continue };
+        let same = |list: &[Associated], name: &str| list.iter().filter(|(k, n, _, _)| k == kind && n == name).count() == 1;
+        let Some((_, _, new_vis, new_attrs)) = new
+            .iter()
+            .find(|(k, n, _, _)| k == kind && *n == name_after)
+            .filter(|_| same(&old, name) && same(&new, &name_after))
+        else {
+            continue;
+        };
         for (part, a, b) in [("visibility", old_vis, new_vis), ("attributes", old_attrs, new_attrs)] {
             if renames.apply(&before.path, &a.0) != b.0 {
                 let mut edit = text_edit(before, after, a.0.clone(), b.0.clone(), after.line_start);
@@ -256,14 +308,30 @@ fn text_edit(before: &Item, after: &Item, old: String, new: String, line: usize)
 }
 
 /// The edits for the changed tokens of an item pair that no edit of the pair has in its text.
-pub(crate) fn uncovered(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspace, before: &Item, after: &Item, renames: &Renames, pair_edits: &[Edit]) -> Vec<Edit> {
+pub(crate) fn uncovered(
+    files: &mut (Files, Files),
+    before_ws: &Workspace,
+    after_ws: &Workspace,
+    before: &Item,
+    after: &Item,
+    renames: &Renames,
+    pair_edits: &[Edit],
+) -> Vec<Edit> {
     let mut out = associated_edits(before, after, renames);
     let known: Vec<Edit> = pair_edits.iter().chain(&out).cloned().collect();
     out.extend(general(files, before_ws, after_ws, before, after, renames, &known));
     out
 }
 
-fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspace, before: &Item, after: &Item, renames: &Renames, pair_edits: &[Edit]) -> Option<Edit> {
+fn general(
+    files: &mut (Files, Files),
+    before_ws: &Workspace,
+    after_ws: &Workspace,
+    before: &Item,
+    after: &Item,
+    renames: &Renames,
+    pair_edits: &[Edit],
+) -> Option<Edit> {
     if before.file == after.file && before_ws.rust_files.get(&before.file) == after_ws.rust_files.get(&after.file) {
         return None;
     }
@@ -286,19 +354,19 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     if old_texts == new_texts {
         return None;
     }
-    // The name of a renamed item is not in the rename map of the identifiers (a field, a
-    // variant): the pair gives it.
-    let own_name = |item: &Item| item.path.rsplit(['.', ':']).next().unwrap_or("").split('#').next().unwrap_or("").to_string();
-    let (old_name, new_name) = (own_name(before), own_name(after));
-    let renamed: Vec<String> = old_texts.iter().map(|text| if *text == old_name { new_name.clone() } else { renames.apply(&before.path, text) }).collect();
-    let with_name: Vec<Token> = old.iter().zip(&renamed).map(|(token, text)| Token { text: text.clone(), ..token.clone() }).collect();
-    if renamed == new_texts || renames.apply(&before.path, &join(&with_name)) == join(&new) {
+    let (renamed_texts, with_name) = renamed_tokens(before, after, renames, &old, &old_texts);
+    if renamed_texts == new_texts || renames.apply(&before.path, &join(&with_name)) == join(&new) {
         return None;
     }
     // The common start and the common end keep the table of the compare small.
-    let head = renamed.iter().zip(&new_texts).take_while(|(a, b)| a == b).count();
-    let tail = renamed[head..].iter().rev().zip(new_texts[head..].iter().rev()).take_while(|(a, b)| a == b).count();
-    let (old_mid, new_mid) = (&renamed[head..renamed.len() - tail], &new_texts[head..new_texts.len() - tail]);
+    let head = renamed_texts.iter().zip(&new_texts).take_while(|(a, b)| a == b).count();
+    let tail = renamed_texts[head..]
+        .iter()
+        .rev()
+        .zip(new_texts[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (old_mid, new_mid) = (&renamed_texts[head..renamed_texts.len() - tail], &new_texts[head..new_texts.len() - tail]);
     let same = crate::diff::lcs(old_mid, new_mid, |a, b| a == b);
     let runs = |length: usize, kept: Vec<usize>| -> Vec<(usize, usize)> {
         let mut out = Vec::new();
@@ -313,27 +381,81 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     };
     // The text of a parameter order edit has only the names: the edit has the full signature.
     let order = pair_edits.iter().any(|edit| edit.node_before == Some("params"));
-    let covered = |tokens: &[Token], (from, to): (usize, usize), item: &Item, text_of: &dyn Fn(&Edit) -> Option<&String>| {
+    let covered = |tokens: &[Token], (from, to): (usize, usize), item: &Item, text_of: fn(&Edit) -> Option<&String>| {
         let run = compact(&join(&tokens[head + from..head + to]));
         // A plain comment is no token: only an attribute line of a comment edit is text of the
         // item. (`#[doc(hidden)]` is an attribute edit since batch 6b, part 1.)
         let text = |edit: &Edit| -> Option<String> {
             let text = text_of(edit)?;
-            Some(if edit.kind == EditKind::Comment { text.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>().join("\n") } else { text.clone() })
+            Some(if edit.kind == EditKind::Comment {
+                text.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>().join("\n")
+            } else {
+                text.clone()
+            })
         };
-        pair_edits.iter().filter_map(text).chain(order.then(|| item.signature.clone())).any(|text| compact(&text).contains(&run))
+        pair_edits
+            .iter()
+            .filter_map(text)
+            .chain(order.then(|| item.signature.clone()))
+            .any(|text| compact(&text).contains(&run))
     };
-    let old_open = runs(old_mid.len(), same.iter().map(|(a, _)| *a).collect()).into_iter().any(|run| !covered(&old, run, before, &|edit| edit.text_before.as_ref()));
-    let new_open = runs(new_mid.len(), same.iter().map(|(_, b)| *b).collect()).into_iter().any(|run| !covered(&new, run, after, &|edit| edit.text_after.as_ref()));
+    let old_open = runs(old_mid.len(), same.iter().map(|(a, _)| *a).collect())
+        .into_iter()
+        .any(|run| !covered(&old, run, before, |edit| edit.text_before.as_ref()));
+    let new_open = runs(new_mid.len(), same.iter().map(|(_, b)| *b).collect())
+        .into_iter()
+        .any(|run| !covered(&new, run, after, |edit| edit.text_after.as_ref()));
     if !old_open && !new_open {
         return None;
     }
     // The compare above uses one alignment of the tokens. With a token run that the item has two
     // times (a bound that moves), a different alignment of the same length is correct.
-    if !order && renamed == old_texts && explained(&compact(&join(&old)), &compact(&join(&new)), pair_edits) {
+    if !order && renamed_texts == old_texts && explained(&compact(&join(&old)), &compact(&join(&new)), pair_edits) {
         return None;
     }
-    Some(text_edit(before, after, old_shown, new_shown, new.get(head).map(|token| token.at.0).unwrap_or(after.line_start)))
+    Some(text_edit(
+        before,
+        after,
+        old_shown,
+        new_shown,
+        new.get(head).map_or(after.line_start, |token| token.at.0),
+    ))
+}
+
+/// The old tokens with the renames: the texts, and the tokens with these texts. The name of a
+/// renamed item is not in the rename map of the identifiers (a field, a variant): the pair
+/// gives it.
+fn renamed_tokens(before: &Item, after: &Item, renames: &Renames, old: &[Token], old_texts: &[String]) -> (Vec<String>, Vec<Token>) {
+    let item_name = |item: &Item| {
+        item.path
+            .rsplit(['.', ':'])
+            .next()
+            .unwrap_or("")
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    let (old_name, new_name) = (item_name(before), item_name(after));
+    let renamed_texts: Vec<String> = old_texts
+        .iter()
+        .map(|text| {
+            if *text == old_name {
+                new_name.clone()
+            } else {
+                renames.apply(&before.path, text)
+            }
+        })
+        .collect();
+    let with_name: Vec<Token> = old
+        .iter()
+        .zip(&renamed_texts)
+        .map(|(token, text)| Token {
+            text: text.clone(),
+            ..token.clone()
+        })
+        .collect();
+    (renamed_texts, with_name)
 }
 
 /// The answer to "do the texts of the edits make the new text from the old text?". Each edit
@@ -341,22 +463,12 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
 /// have no white space and no commas. The search can skip an edit (a body edit has no text
 /// here). A mark replaces each text, thus two edits cannot use the same tokens.
 fn explained(old: &str, new: &str, edits: &[Edit]) -> bool {
-    let texts: Vec<(String, String)> = edits
-        .iter()
-        .map(|edit| {
-            let text = |text: &Option<String>| {
-                let text = text.as_deref().unwrap_or("");
-                compact(&if edit.kind == EditKind::Comment { text.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>().join("\n") } else { text.to_string() })
-            };
-            (text(&edit.text_before), text(&edit.text_after))
-        })
-        .filter(|(a, b)| a != b)
-        .collect();
-    if texts.len() > 6 || old.contains(['\u{0}', '\u{1}']) || new.contains(['\u{0}', '\u{1}']) {
-        return false;
-    }
     fn places(text: &str, part: &str) -> Vec<Option<usize>> {
-        if part.is_empty() { vec![None] } else { text.match_indices(part).map(|(at, _)| Some(at)).collect() }
+        if part.is_empty() {
+            vec![None]
+        } else {
+            text.match_indices(part).map(|(at, _)| Some(at)).collect()
+        }
     }
     fn put(text: &str, at: Option<usize>, length: usize, mark: &str) -> String {
         match at {
@@ -374,15 +486,43 @@ fn explained(old: &str, new: &str, edits: &[Edit]) -> bool {
             return plain(old) == plain(new);
         };
         // An edit with one text only (an added or a removed part) leaves a mark with no name.
-        let mark = if a.is_empty() || b.is_empty() { "\u{0}".to_string() } else { format!("\u{1}{index}\u{1}") };
+        let mark = if a.is_empty() || b.is_empty() {
+            "\u{0}".to_string()
+        } else {
+            format!("\u{1}{index}\u{1}")
+        };
         for at_old in places(old, a) {
             for at_new in places(new, b) {
-                if search(&put(old, at_old, a.len(), &mark), &put(new, at_new, b.len(), &mark), texts, index + 1, budget) {
+                if search(
+                    &put(old, at_old, a.len(), &mark),
+                    &put(new, at_new, b.len(), &mark),
+                    texts,
+                    index + 1,
+                    budget,
+                ) {
                     return true;
                 }
             }
         }
         search(old, new, texts, index + 1, budget)
+    }
+    let texts: Vec<(String, String)> = edits
+        .iter()
+        .map(|edit| {
+            let text = |text: &Option<String>| {
+                let text = text.as_deref().unwrap_or("");
+                compact(&if edit.kind == EditKind::Comment {
+                    text.lines().filter(|line| line.starts_with('#')).collect::<Vec<_>>().join("\n")
+                } else {
+                    text.to_string()
+                })
+            };
+            (text(&edit.text_before), text(&edit.text_after))
+        })
+        .filter(|(a, b)| a != b)
+        .collect();
+    if texts.len() > 6 || old.contains(['\u{0}', '\u{1}']) || new.contains(['\u{0}', '\u{1}']) {
+        return false;
     }
     search(old, new, &texts, 0, &mut 4000)
 }

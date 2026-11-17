@@ -22,6 +22,7 @@ fn starts_token(text: &str, index: usize) -> bool {
 /// Applies a rename map to a text. A key matches a whole path, or the start of a longer path (a
 /// child item, such as a method of a renamed type or a closure of a renamed function). So a
 /// rename of `krate::Cart` also renames `krate::Cart::total`. The longest key wins.
+#[must_use]
 pub fn rename(text: &str, renames: &[(String, String)]) -> String {
     if renames.is_empty() {
         return text.to_string();
@@ -36,6 +37,7 @@ pub fn rename(text: &str, renames: &[(String, String)]) -> String {
 /// item as `{path}` (in the type `fn(u32) -> u32 {path}` and in a function pointer constant).
 /// A struct can have the same path as a function (types and values have separate namespaces),
 /// and a type reference must not get the hash of the function.
+#[must_use]
 pub fn replace_functions(text: &str, replacements: &[(String, String)]) -> String {
     if replacements.is_empty() {
         return text.to_string();
@@ -52,12 +54,16 @@ enum Mode {
     Functions,
 }
 
+/// The generic keys of a [`Replacer`] by their first character: the segments of each key and of
+/// its value.
+type GenericBuckets = HashMap<char, Vec<(Vec<String>, Vec<String>)>>;
+
 /// A prepared set of replacements. Build it once and apply it to many texts. The keys are in
 /// buckets by their first character, longest key first, so a position costs one map lookup.
 pub struct Replacer {
     buckets: HashMap<char, Vec<(String, String)>>,
     /// The generic keys (`GENERIC_KEY`): the segments of the key and of the value.
-    generic: HashMap<char, Vec<(Vec<String>, Vec<String>)>>,
+    generic: GenericBuckets,
     mode: Mode,
 }
 
@@ -135,12 +141,12 @@ fn generic_match<'a>(text: &'a str, key: &[String]) -> Option<(usize, Vec<&'a st
         }
         at += segment.len();
         let mut list = "";
-        if index + 1 < key.len() {
-            if let Some(len) = generic_list(&text[at..]) {
-                list = &text[at..at + len];
-                at += len;
-                found = true;
-            }
+        if index + 1 < key.len()
+            && let Some(len) = generic_list(&text[at..])
+        {
+            list = &text[at..at + len];
+            at += len;
+            found = true;
         }
         lists.push(list);
     }
@@ -150,6 +156,7 @@ fn generic_match<'a>(text: &'a str, key: &[String]) -> Option<(usize, Vec<&'a st
 /// The start of the text that a generic key matches, with its lists of generic arguments
 /// (for example `a::Type::<T>::method` of `a::Type::<T>::method::{closure#0}`). `None` if the
 /// key does not match the text from its start to the end of a path segment.
+#[must_use]
 pub fn generic_prefix<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let (len, _) = generic_match(text, &segments(key))?;
     let end_ok = text[len..].chars().next().is_none_or(|c| !is_ident_char(c));
@@ -158,18 +165,20 @@ pub fn generic_prefix<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 
 impl Replacer {
     /// The replacer of `rename`.
+    #[must_use]
     pub fn renames(pairs: &[(String, String)]) -> Replacer {
         Replacer::new(pairs, Mode::Rename)
     }
 
     /// The replacer of `replace_functions`.
+    #[must_use]
     pub fn functions(pairs: &[(String, String)]) -> Replacer {
         Replacer::new(pairs, Mode::Functions)
     }
 
     fn new(pairs: &[(String, String)], mode: Mode) -> Replacer {
         let mut buckets: HashMap<char, Vec<(String, String)>> = HashMap::new();
-        let mut generic: HashMap<char, Vec<(Vec<String>, Vec<String>)>> = HashMap::new();
+        let mut generic: GenericBuckets = HashMap::new();
         for (key, value) in pairs {
             if let Some(key) = key.strip_prefix(GENERIC_KEY) {
                 let (from, to) = (segments(key), segments(value));
@@ -193,7 +202,9 @@ impl Replacer {
     fn find_generic(&self, rest: &str) -> Option<(usize, String)> {
         let first = rest.chars().next()?;
         for (from, to) in self.generic.get(&first)? {
-            let Some((len, lists)) = generic_match(rest, from) else { continue };
+            let Some((len, lists)) = generic_match(rest, from) else {
+                continue;
+            };
             if !self.end_ok(&rest[len..]) {
                 continue;
             }
@@ -216,10 +227,10 @@ impl Replacer {
 
     /// Returns true if the text after a match ends the matched path correctly.
     fn end_ok(&self, rest: &str) -> bool {
-        if let Mode::Functions = self.mode {
-            if let Some(after) = rest.strip_prefix("::") {
-                return after.starts_with('<');
-            }
+        if let Mode::Functions = self.mode
+            && let Some(after) = rest.strip_prefix("::")
+        {
+            return after.starts_with('<');
         }
         match rest.chars().next() {
             None => true,
@@ -237,6 +248,12 @@ impl Replacer {
     }
 
     /// Applies the replacements to a text.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scan of a rename map is at the end of the text. The scan stops before the
+    /// end, so this does not happen.
+    #[must_use]
     pub fn apply(&self, text: &str) -> String {
         if self.buckets.is_empty() && self.generic.is_empty() {
             return text.to_string();
@@ -278,14 +295,47 @@ impl Replacer {
             }
             index = match self.mode {
                 Mode::Functions => candidate,
-                Mode::Rename => {
-                    candidate + text[candidate..].chars().next().expect("a character").len_utf8()
-                }
+                Mode::Rename => candidate + text[candidate..].chars().next().expect("a character").len_utf8(),
             };
         }
         out.push_str(&text[copied..]);
         out
     }
+}
+
+/// A type text with no lifetime (design 37.2): `<&'a mut a::Node as a::Parse>::parse` gives
+/// `<&mut a::Node as a::Parse>::parse`, and `(dyn a::Shape + 'static)` gives `(dyn a::Shape)`.
+pub fn no_lifetimes(text: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\'') {
+        let name = rest[at + 1..].find(|c: char| !word(c)).unwrap_or(rest.len() - at - 1);
+        let after = &rest[at + 1 + name..];
+        if name == 0 || after.starts_with('\'') {
+            // A character literal, not a lifetime.
+            out.push_str(&rest[..=at]);
+            rest = &rest[at + 1..];
+            continue;
+        }
+        // A bound (`+ 'a`) goes away with its `+`.
+        let before = rest[..at].trim_end();
+        out.push_str(before.strip_suffix('+').map_or(&rest[..at], str::trim_end));
+        rest = after.strip_prefix(' ').unwrap_or(after);
+        // An argument of a list goes away with its comma. An empty list goes away.
+        if let Some(next) = rest.strip_prefix(',') {
+            rest = next.trim_start();
+        } else if rest.starts_with('>') {
+            let kept = out.trim_end().strip_suffix(',').map(str::len);
+            out.truncate(kept.unwrap_or(out.len()));
+            if let Some(kept) = out.strip_suffix("::<").or_else(|| out.strip_suffix('<')).map(str::len) {
+                out.truncate(kept);
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -336,39 +386,4 @@ mod tests {
         let hashes = map(&[("k::f", "#abc")]);
         assert_eq!(replace_functions("let _1: k::f; {k::f}", &hashes), "let _1: k::f; {#abc}");
     }
-}
-
-/// A type text with no lifetime (design 37.2): `<&'a mut a::Node as a::Parse>::parse` gives
-/// `<&mut a::Node as a::Parse>::parse`, and `(dyn a::Shape + 'static)` gives `(dyn a::Shape)`.
-pub fn no_lifetimes(text: &str) -> String {
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find('\'') {
-        let name = rest[at + 1..].find(|c: char| !word(c)).unwrap_or(rest.len() - at - 1);
-        let after = &rest[at + 1 + name..];
-        if name == 0 || after.starts_with('\'') {
-            // A character literal, not a lifetime.
-            out.push_str(&rest[..at + 1]);
-            rest = &rest[at + 1..];
-            continue;
-        }
-        // A bound (`+ 'a`) goes away with its `+`.
-        let before = rest[..at].trim_end();
-        out.push_str(before.strip_suffix('+').map_or(&rest[..at], str::trim_end));
-        rest = after.strip_prefix(' ').unwrap_or(after);
-        // An argument of a list goes away with its comma. An empty list goes away.
-        if let Some(next) = rest.strip_prefix(',') {
-            rest = next.trim_start();
-        } else if rest.starts_with('>') {
-            let kept = out.trim_end().strip_suffix(',').map(str::len);
-            out.truncate(kept.unwrap_or(out.len()));
-            if let Some(kept) = out.strip_suffix("::<").or_else(|| out.strip_suffix('<')).map(str::len) {
-                out.truncate(kept);
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
 }

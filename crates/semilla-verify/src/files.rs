@@ -21,6 +21,7 @@ pub struct KeyChange {
 /// True for a file that Semilla reads as a TOML manifest. The legacy names `.cargo/config` and
 /// `rust-toolchain` count as `.cargo/config.toml` and `rust-toolchain.toml`: cargo and rustup
 /// still read them.
+#[must_use]
 pub fn is_manifest(file: &str) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
     matches!(name, "Cargo.toml" | "Cargo.lock") || is_tool_config(file)
@@ -28,6 +29,7 @@ pub fn is_manifest(file: &str) -> bool {
 
 /// True for a file that cargo or rustup reads as its configuration: each file under a `.cargo`
 /// folder, and `rust-toolchain` or `rust-toolchain.toml` in each folder.
+#[must_use]
 pub fn is_tool_config(file: &str) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
     matches!(name, "rust-toolchain" | "rust-toolchain.toml") || file.starts_with(".cargo/") || file.contains("/.cargo/")
@@ -37,14 +39,17 @@ pub fn is_tool_config(file: &str) -> bool {
 /// other file is in the spotlight. A `.gitignore` or a `.gitattributes` is not on the list: an
 /// ignored file is not in the tree of the step, but cargo still reads it, and a git filter can
 /// change the content of a checkout.
+#[must_use]
 pub fn is_inert_file(file: &str) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
     let lower = name.to_ascii_lowercase();
     let upper = name.to_ascii_uppercase();
-    let extension = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    let extension = lower.rsplit_once('.').map_or("", |(_, e)| e);
     !is_tool_config(file)
         && (matches!(extension, "md" | "txt" | "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" | "bmp")
-            || ["LICENSE", "COPYING", "NOTICE", "CHANGELOG", "AUTHORS"].iter().any(|prefix| upper.starts_with(prefix)))
+            || ["LICENSE", "COPYING", "NOTICE", "CHANGELOG", "AUTHORS"]
+                .iter()
+                .any(|prefix| upper.starts_with(prefix)))
 }
 
 /// The file text as a TOML table. A one-line `rust-toolchain` file that is not TOML is the
@@ -66,6 +71,7 @@ fn parse_table(file: &str, text: &str) -> Option<toml::Table> {
 
 /// The change of a file content as text for the reviewer: a line diff with a size limit, or
 /// "binary, N bytes".
+#[must_use]
 pub fn content_change(old: Option<&str>, new: Option<&str>, old_size: Option<u64>, new_size: Option<u64>) -> String {
     const MAX_LINES: usize = 40;
     let side = |text: Option<&str>, size: Option<u64>| match (text, size) {
@@ -79,8 +85,8 @@ pub fn content_change(old: Option<&str>, new: Option<&str>, old_size: Option<u64
             (a, b) => a.or(b).unwrap_or_default(),
         };
     }
-    let a: Vec<&str> = old.map(|t| t.lines().collect()).unwrap_or_default();
-    let b: Vec<&str> = new.map(|t| t.lines().collect()).unwrap_or_default();
+    let a: Vec<&str> = old.map_or_default(|t| t.lines().collect());
+    let b: Vec<&str> = new.map_or_default(|t| t.lines().collect());
     let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
     let suffix = a[prefix..].iter().rev().zip(b[prefix..].iter().rev()).take_while(|(x, y)| x == y).count();
     let mut lines: Vec<String> = Vec::new();
@@ -102,7 +108,9 @@ pub fn content_change(old: Option<&str>, new: Option<&str>, old_size: Option<u64
 
 /// The arrays whose order has no meaning: their elements are compared as a set.
 fn is_set_array(key: &str) -> bool {
-    matches!(key, "workspace.members" | "workspace.exclude" | "workspace.default-members") || key.starts_with("features.") || key.ends_with(".features")
+    matches!(key, "workspace.members" | "workspace.exclude" | "workspace.default-members")
+        || key.starts_with("features.")
+        || key.ends_with(".features")
 }
 
 fn flatten(prefix: &str, value: &toml::Value, out: &mut BTreeMap<String, String>) {
@@ -132,10 +140,11 @@ fn flatten(prefix: &str, value: &toml::Value, out: &mut BTreeMap<String, String>
 
 /// The changed keys of a TOML file, or `None` if a side does not parse. An empty list means that
 /// only the format, the key order, or a comment changed.
+#[must_use]
 pub fn key_changes(file: &str, old: Option<&str>, new: Option<&str>) -> Option<Vec<KeyChange>> {
     let parse = |text: Option<&str>| -> Option<toml::Value> {
         match text {
-            None => Some(toml::Value::Table(Default::default())),
+            None => Some(toml::Value::Table(toml::Table::default())),
             Some(text) => parse_table(file, text).map(toml::Value::Table),
         }
     };
@@ -150,7 +159,11 @@ pub fn key_changes(file: &str, old: Option<&str>, new: Option<&str>) -> Option<V
     Some(
         keys.into_iter()
             .filter(|key| a.get(*key) != b.get(*key))
-            .map(|key| KeyChange { key: key.clone(), old: a.get(key).cloned(), new: b.get(key).cloned() })
+            .map(|key| KeyChange {
+                key: key.clone(),
+                old: a.get(key).cloned(),
+                new: b.get(key).cloned(),
+            })
             .collect(),
     )
 }
@@ -162,7 +175,9 @@ fn lock_changes(old: &toml::Value, new: &toml::Value) -> Vec<KeyChange> {
         let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         for package in value.get("package").and_then(|p| p.as_array()).into_iter().flatten() {
             let field = |name: &str| package.get(name).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            map.entry(field("name")).or_default().insert(field("version"), format!("{} {}", field("source"), field("checksum")));
+            map.entry(field("name"))
+                .or_default()
+                .insert(field("version"), format!("{} {}", field("source"), field("checksum")));
         }
         map
     };
@@ -174,14 +189,30 @@ fn lock_changes(old: &toml::Value, new: &toml::Value) -> Vec<KeyChange> {
         let gone: Vec<&String> = old_versions.keys().filter(|v| !new_versions.contains_key(*v)).collect();
         let added: Vec<&String> = new_versions.keys().filter(|v| !old_versions.contains_key(*v)).collect();
         if gone.len() == 1 && added.len() == 1 {
-            changes.push(KeyChange { key: format!("package {name}"), old: Some(gone[0].clone()), new: Some(added[0].clone()) });
+            changes.push(KeyChange {
+                key: format!("package {name}"),
+                old: Some(gone[0].clone()),
+                new: Some(added[0].clone()),
+            });
         } else {
-            changes.extend(gone.iter().map(|v| KeyChange { key: format!("package {name}"), old: Some((*v).clone()), new: None }));
-            changes.extend(added.iter().map(|v| KeyChange { key: format!("package {name}"), old: None, new: Some((*v).clone()) }));
+            changes.extend(gone.iter().map(|v| KeyChange {
+                key: format!("package {name}"),
+                old: Some((*v).clone()),
+                new: None,
+            }));
+            changes.extend(added.iter().map(|v| KeyChange {
+                key: format!("package {name}"),
+                old: None,
+                new: Some((*v).clone()),
+            }));
         }
         for (version, source) in &old_versions {
             if new_versions.get(version).is_some_and(|other| other != source) {
-                changes.push(KeyChange { key: format!("package {name} {version} source"), old: Some(source.clone()), new: new_versions.get(version).cloned() });
+                changes.push(KeyChange {
+                    key: format!("package {name} {version} source"),
+                    old: Some(source.clone()),
+                    new: new_versions.get(version).cloned(),
+                });
             }
         }
     }
@@ -192,7 +223,9 @@ fn lock_changes(old: &toml::Value, new: &toml::Value) -> Vec<KeyChange> {
 /// `serde`), with the table path.
 fn dependency(key: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = key.split('.').collect();
-    let at = parts.iter().position(|p| matches!(*p, "dependencies" | "dev-dependencies" | "build-dependencies"))?;
+    let at = parts
+        .iter()
+        .position(|p| matches!(*p, "dependencies" | "dev-dependencies" | "build-dependencies"))?;
     Some((parts[..=at].join("."), parts.get(at + 1)?.to_string()))
 }
 
@@ -200,22 +233,38 @@ fn dependency(key: &str) -> Option<(String, String)> {
 /// dependency (design 38.6): a package of `Cargo.lock` (a new version, an added or a removed
 /// package), or the version of a dependency in a manifest. Semilla does not compare the code of
 /// a dependency, so such a fact has the result `no compare`.
+#[must_use]
 pub fn is_dependency_version(place: &str) -> bool {
-    let Some((file, key)) = place.split_once(':') else { return false };
+    let Some((file, key)) = place.split_once(':') else {
+        return false;
+    };
     if file.ends_with("Cargo.lock") {
         return key.starts_with("package ") && !key.ends_with(" source");
     }
-    file.ends_with("Cargo.toml") && dependency(key).is_some_and(|(table, name)| key == format!("{table}.{name}") || key == format!("{table}.{name}.version"))
+    file.ends_with("Cargo.toml")
+        && dependency(key).is_some_and(|(table, name)| key == format!("{table}.{name}") || key == format!("{table}.{name}.version"))
 }
 
 /// The descriptive package keys: they do not change the build.
-const DESCRIPTIVE: &[&str] = &["description", "authors", "license", "license-file", "repository", "readme", "keywords", "categories", "homepage", "documentation"];
+const DESCRIPTIVE: &[&str] = &[
+    "description",
+    "authors",
+    "license",
+    "license-file",
+    "repository",
+    "readme",
+    "keywords",
+    "categories",
+    "homepage",
+    "documentation",
+];
 
 /// True if the manifest fact with this place (`FILE:key`) is a build input (brief 5f, B2): each
 /// key change except a descriptive package key. `package.version` is a build input: it is a part
 /// of the crate hash, so it can change the MIR of bodies with no edit.
+#[must_use]
 pub fn is_build_key(place: &str) -> bool {
-    let key = place.split_once(':').map(|(_, key)| key).unwrap_or("");
+    let key = place.split_once(':').map_or("", |(_, key)| key);
     for table in ["workspace.package", "package"] {
         if let Some(name) = key.strip_prefix(table).and_then(|rest| rest.strip_prefix('.')) {
             let name = name.split([':', '.']).next().unwrap_or(name);
@@ -229,7 +278,11 @@ pub fn is_build_key(place: &str) -> bool {
 /// target (cargo names it: `package.build`, else `build.rs`), a module file of the build script,
 /// or a file that the build script includes with `include!`. The file name does not decide.
 pub fn build_script_of(workspace: &Workspace, file: &str) -> Option<String> {
-    workspace.code_files.get(file).filter(|code| code.is_build_script() && !code.outside).map(|code| code.package.clone())
+    workspace
+        .code_files
+        .get(file)
+        .filter(|code| code.is_build_script() && !code.outside)
+        .map(|code| code.package.clone())
 }
 
 /// The code file entry of a file on one of the two sides: Rust code that the loader does not
@@ -237,7 +290,12 @@ pub fn build_script_of(workspace: &Workspace, file: &str) -> Option<String> {
 pub fn code_file<'a>(before: &'a Workspace, after: &'a Workspace, file: &str) -> Option<&'a semilla_syntax::CodeFile> {
     let found = |ws: &'a Workspace| ws.code_files.get(file);
     // A build script on one side has priority: the reviewer must see this role.
-    [after, before].into_iter().filter_map(found).find(|code| code.is_build_script()).or_else(|| found(after)).or_else(|| found(before))
+    [after, before]
+        .into_iter()
+        .filter_map(found)
+        .find(|code| code.is_build_script())
+        .or_else(|| found(after))
+        .or_else(|| found(before))
 }
 
 /// Why a manifest key change needs the reviewer's attention (design 23, rule 6), or `None`.
@@ -251,7 +309,9 @@ fn spotlight(file: &str, change: &KeyChange, all: &[KeyChange], manifest: Option
         return Some("a key of the cargo or toolchain configuration");
     }
     if file.ends_with("Cargo.lock") {
-        return key.ends_with(" source").then_some("the same package version with a new source or checksum");
+        return key
+            .ends_with(" source")
+            .then_some("the same package version with a new source or checksum");
     }
     for table in ["package", "workspace.package"] {
         if let Some(name) = key.strip_prefix(table).and_then(|rest| rest.strip_prefix('.')) {
@@ -263,11 +323,18 @@ fn spotlight(file: &str, change: &KeyChange, all: &[KeyChange], manifest: Option
     }
     if let Some((table, name)) = dependency(key) {
         let prefix = format!("{table}.{name}");
-        let existed = all.iter().filter(|c| c.key == prefix || c.key.starts_with(&format!("{prefix}."))).all(|c| c.old.is_some()) && change.old.is_some();
+        let existed = all
+            .iter()
+            .filter(|c| c.key == prefix || c.key.starts_with(&format!("{prefix}.")))
+            .all(|c| c.old.is_some())
+            && change.old.is_some();
         if !existed {
             return Some("a new dependency");
         }
-        if [".git", ".path", ".registry", ".branch", ".rev", ".tag", ".package"].iter().any(|s| key.ends_with(s)) {
+        if [".git", ".path", ".registry", ".branch", ".rev", ".tag", ".package"]
+            .iter()
+            .any(|s| key.ends_with(s))
+        {
             return Some("a changed source of a dependency");
         }
         if key.ends_with(".features") || key.contains(".features:") || key.ends_with(".default-features") {
@@ -283,10 +350,17 @@ fn spotlight(file: &str, change: &KeyChange, all: &[KeyChange], manifest: Option
         return Some("a dependency setting other than the version");
     }
     let first = key.split(['.', ':']).next().unwrap_or("");
-    if matches!(first, "profile" | "patch" | "replace" | "features" | "lints" | "lib" | "bin" | "target" | "test" | "bench" | "example") {
+    if matches!(
+        first,
+        "profile" | "patch" | "replace" | "features" | "lints" | "lib" | "bin" | "target" | "test" | "bench" | "example"
+    ) {
         return Some("a build setting (profile, patch, features, lints, or a target table)");
     }
-    if matches!(key, "package.edition" | "package.build" | "package.links" | "package.rust-version") || key.starts_with("workspace.lints") || key.starts_with("workspace.package.edition") || key.starts_with("workspace.package.rust-version") {
+    if matches!(key, "package.edition" | "package.build" | "package.links" | "package.rust-version")
+        || key.starts_with("workspace.lints")
+        || key.starts_with("workspace.package.edition")
+        || key.starts_with("workspace.package.rust-version")
+    {
         return Some("a package setting that changes the build");
     }
     if key.starts_with("workspace.") {
@@ -323,16 +397,23 @@ pub fn is_workspace_path_dependency(changes: &[KeyChange], before: &Workspace) -
         && changes.iter().all(|change| {
             change.old.is_none()
                 && dependency(&change.key).is_some_and(|(table, name)| {
-                    table == "dependencies" && before.crates.iter().any(|krate| krate.name == name.replace('-', "_")) && (change.key.ends_with(".path") || change.key.ends_with(".version") || change.key == format!("dependencies.{name}"))
+                    table == "dependencies"
+                        && before.crates.iter().any(|krate| krate.name == name.replace('-', "_"))
+                        && (semilla_core::text::has_extension(&change.key, "path")
+                            || change.key.ends_with(".version")
+                            || change.key == format!("dependencies.{name}"))
                 })
         })
-        && changes.iter().any(|change| change.key.ends_with(".path"))
+        && changes.iter().any(|change| semilla_core::text::has_extension(&change.key, "path"))
 }
 
 /// True if a Rust file includes the file in a doc attribute (`#![doc = include_str!("…")]`).
 fn doc_include(before: &Workspace, after: &Workspace, file: &str) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
-    [before, after].iter().flat_map(|ws| ws.rust_files.values()).any(|text| text.lines().any(|line| line.contains("doc") && line.contains("include_") && line.contains(name)))
+    [before, after].iter().flat_map(|ws| ws.rust_files.values()).any(|text| {
+        text.lines()
+            .any(|line| line.contains("doc") && line.contains("include_") && line.contains(name))
+    })
 }
 
 /// The spotlight text of a file mode change.
@@ -351,7 +432,15 @@ pub(crate) const PARSE_ERROR: &str = "Semilla cannot parse this file: ";
 /// - `rust`: the file is Rust code on one side: a `.rs` file, or a file that a target, a module,
 ///   or an `include!` of a target names. The file name does not decide (brief 5h, A4).
 /// - `code`: the target that has the file, if the loader does not parse the target.
-pub(crate) fn file_spotlight(file: &str, note: &str, content_changed: bool, parsed: bool, rust: bool, code: Option<&semilla_syntax::CodeFile>, doc_include: impl Fn() -> bool) -> Option<String> {
+pub(crate) fn file_spotlight(
+    file: &str,
+    note: &str,
+    content_changed: bool,
+    parsed: bool,
+    rust: bool,
+    code: Option<&semilla_syntax::CodeFile>,
+    doc_include: impl Fn() -> bool,
+) -> Option<String> {
     let mut causes: Vec<String> = Vec::new();
     if note.contains("mode ") {
         causes.push(MODE_WHY.to_string());
@@ -366,14 +455,20 @@ pub(crate) fn file_spotlight(file: &str, note: &str, content_changed: bool, pars
     // other cause is known: a file fact of these kinds never goes without a reason.
     let content: Option<String> = if let Some(code) = code.filter(|code| code.is_build_script()) {
         // The allow list of files does not apply: cargo compiles and runs this file.
-        Some(format!("build script: this file is code of {}. Cargo runs it before each build of the package, and it can change the code and the result of the build", code.role()))
+        Some(format!(
+            "build script: this file is code of {}. Cargo runs it before each build of the package, and it can change the code and the result of the build",
+            code.role()
+        ))
     } else if rust && parsed {
         // The syntax diff decides about the content of a Rust file that the loader parses.
         None
     } else if let Some(code) = code {
         Some(format!("Rust code that Semilla does not parse: this file is code of {}", code.role()))
     } else if rust {
-        Some("Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads)".to_string())
+        Some(
+            "Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads)"
+                .to_string(),
+        )
     } else if is_manifest(file) {
         Some("a manifest whose keys Semilla cannot compare (it does not parse, or it is not a usual file)".to_string())
     } else if !is_inert_file(file) {
@@ -410,7 +505,13 @@ pub(crate) fn is_mode_fact(before: &Workspace, after: &Workspace, fact: &Fact) -
 
 /// The facts of the file edits that no claim explains. Returns the facts and, for each edit index,
 /// the index of its first fact in the returned list.
-pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], before: &Workspace, after: &Workspace) -> (Vec<Fact>, BTreeMap<usize, usize>) {
+pub fn file_facts(
+    step: &semilla_core::Step,
+    edits: &[Edit],
+    free: &[usize],
+    before: &Workspace,
+    after: &Workspace,
+) -> (Vec<Fact>, BTreeMap<usize, usize>) {
     let mut facts: Vec<Fact> = Vec::new();
     let mut owner = BTreeMap::new();
     let text = |ws: &Workspace, file: &str| ws.other_files.get(file).or_else(|| ws.rust_files.get(file)).cloned();
@@ -422,7 +523,12 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
         let Some(file) = edit.file.clone() else { continue };
         let first = facts.len();
         let (old, new) = (text(before, &file), text(after, &file));
-        let size = |ws: &Workspace| ws.files.get(&file).map(|entry| entry.size).or_else(|| text(ws, &file).map(|t| t.len() as u64));
+        let size = |ws: &Workspace| {
+            ws.files
+                .get(&file)
+                .map(|entry| entry.size)
+                .or_else(|| text(ws, &file).map(|t| t.len() as u64))
+        };
         let content = content_change(old.as_deref(), new.as_deref(), size(before), size(after));
         let mut fact = |place: String, description: String, why: Option<String>| {
             let reason = step.reasons.get(&place).cloned();
@@ -449,7 +555,11 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
         let note = edit.note.as_deref().unwrap_or("");
         let mode_only = note.starts_with("mode ");
         // The keys of a manifest that is a usual file. A mode change does not stop the comparison.
-        let changes = if is_manifest(&file) && (note.is_empty() || mode_only) { key_changes(&file, old.as_deref(), new.as_deref()) } else { None };
+        let changes = if is_manifest(&file) && (note.is_empty() || mode_only) {
+            key_changes(&file, old.as_deref(), new.as_deref())
+        } else {
+            None
+        };
         match changes {
             Some(changes) if changes.is_empty() && !mode_only => fact(format!("{file}:"), format!("{file}: format only"), None),
             Some(changes) => {
@@ -474,14 +584,22 @@ pub fn file_facts(step: &semilla_core::Step, edits: &[Edit], free: &[usize], bef
                 let parsed = |ws: &Workspace| !exists(ws) || ws.parsed_files.contains(&file);
                 // A file that `include!` reads is Rust code, whatever its name is (batch 5w, D3).
                 let rust = before.is_rust_file(&file) || after.is_rust_file(&file) || crate::owners::code_readers(before, after, &file).is_some();
-                let why = file_spotlight(&file, note, content_changed, parsed(before) && parsed(after), rust, code_file(before, after, &file), || doc_include(before, after, &file));
+                let why = file_spotlight(
+                    &file,
+                    note,
+                    content_changed,
+                    parsed(before) && parsed(after),
+                    rust,
+                    code_file(before, after, &file),
+                    || doc_include(before, after, &file),
+                );
                 // A file that the loader cannot parse (design 37.5): the spotlight has the reason.
                 let error = |ws: &Workspace, side: &str| ws.parse_errors.get(&file).map(|reason| format!("{reason}, in the tree {side} the step"));
                 let why = match error(after, "after").or_else(|| error(before, "before")) {
                     Some(reason) => Some(format!("{PARSE_ERROR}{reason}")),
                     None => why,
                 };
-                let note = edit.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
+                let note = edit.note.as_deref().map_or_default(|n| format!(" ({n})"));
                 fact(format!("{file}:"), format!("{file}: {what}{note}"), why);
             }
         }

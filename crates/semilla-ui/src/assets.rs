@@ -22,7 +22,11 @@ const TEXT: &str = "text/plain; charset=utf-8";
 
 macro_rules! asset {
     ($path:literal, $type:expr, $file:literal) => {
-        Asset { path: $path, content_type: $type, bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/", $file)) }
+        Asset {
+            path: $path,
+            content_type: $type,
+            bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/", $file)),
+        }
     };
 }
 
@@ -45,6 +49,7 @@ pub static ASSETS: &[Asset] = &[
 ];
 
 /// Finds an embedded file by its URL path.
+#[must_use]
 pub fn find(path: &str) -> Option<&'static Asset> {
     ASSETS.iter().find(|asset| asset.path == path)
 }

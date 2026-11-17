@@ -9,8 +9,11 @@ use crate::Options;
 
 /// The suggested role of a claim, from the rule table. A fact gets its role from its category
 /// (`Category::role`, design 35).
+#[must_use]
 pub fn suggested_role(set: &ChangeSet, claim_id: &str, _result: Option<&ClaimResult>, test_items: &BTreeSet<String>) -> Role {
-    let Some((_, claim)) = set.claim(claim_id) else { return Role::Core };
+    let Some((_, claim)) = set.claim(claim_id) else {
+        return Role::Core;
+    };
     let info = ops::op(&claim.op);
     if claim.at.as_ref().is_some_and(|at| test_items.contains(&at.item)) {
         return Role::Tests;
@@ -18,11 +21,13 @@ pub fn suggested_role(set: &ChangeSet, claim_id: &str, _result: Option<&ClaimRes
     if info.is_some_and(|info| info.level == OpLevel::File) {
         return Role::Config;
     }
-    let role = info.map(|info| info.role).unwrap_or(Role::Core);
+    let role = info.map_or(Role::Core, |info| info.role);
     // In an api group, a new public item is the interface, and an expression change is a call site.
-    let in_api = set.steps.iter().find(|s| s.claims.iter().any(|c| c.id == claim_id)).is_some_and(|step| {
-        set.groups.iter().any(|g| g.kind == GroupKind::Api && g.steps.contains(&step.index))
-    });
+    let in_api = set
+        .steps
+        .iter()
+        .find(|s| s.claims.iter().any(|c| c.id == claim_id))
+        .is_some_and(|step| set.groups.iter().any(|g| g.kind == GroupKind::Api && g.steps.contains(&step.index)));
     if in_api && claim.op == "add-item" {
         return Role::Interface;
     }
@@ -48,9 +53,16 @@ fn role_title(role: Role) -> &'static str {
 pub use semilla_core::report::{derived_kind, merge_kinds};
 
 /// Suggests the subgroups of a group, by role.
+#[must_use]
 pub fn suggest(set: &ChangeSet, group_id: &str, steps: &[StepReport], test_items: &BTreeSet<String>) -> Vec<Subgroup> {
-    let Some(group) = set.groups.iter().find(|group| group.id == group_id) else { return Vec::new() };
-    let results: BTreeMap<&str, &ClaimResult> = steps.iter().flat_map(|step| step.claims.iter()).map(|result| (result.claim.as_str(), result)).collect();
+    let Some(group) = set.groups.iter().find(|group| group.id == group_id) else {
+        return Vec::new();
+    };
+    let results: BTreeMap<&str, &ClaimResult> = steps
+        .iter()
+        .flat_map(|step| step.claims.iter())
+        .map(|result| (result.claim.as_str(), result))
+        .collect();
     let mut by_role: BTreeMap<Role, Vec<String>> = BTreeMap::new();
     for step in set.steps.iter().filter(|step| group.steps.contains(&step.index)) {
         for claim in &step.claims {
@@ -61,7 +73,13 @@ pub fn suggest(set: &ChangeSet, group_id: &str, steps: &[StepReport], test_items
     let mut subgroups: Vec<Subgroup> = by_role
         .into_iter()
         .map(|(role, claims)| Subgroup {
-            id: format!("{group_id}:{}", serde_json::to_value(role).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
+            id: format!(
+                "{group_id}:{}",
+                serde_json::to_value(role)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default()
+            ),
             group: group_id.to_string(),
             role,
             title: role_title(role).to_string(),
@@ -91,12 +109,78 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
         for step in &set.steps {
             let count = set.groups.iter().filter(|group| group.steps.contains(&step.index)).count();
             if count != 1 {
-                report.organization.push(format!("step {} is in {count} groups; it must be in exactly one", step.index));
+                report
+                    .organization
+                    .push(format!("step {} is in {count} groups; it must be in exactly one", step.index));
             }
         }
     }
 
-    // The kind rules.
+    check_group_kinds(set, report);
+
+    // The subgroup rules.
+    for subgroup in &set.subgroups {
+        let Some(group) = set.groups.iter().find(|group| group.id == subgroup.group) else {
+            report
+                .organization
+                .push(format!("subgroup `{}` names the missing group `{}`", subgroup.title, subgroup.group));
+            continue;
+        };
+        for claim in &subgroup.claims {
+            let Some((step, found)) = set.claim(claim) else {
+                report
+                    .organization
+                    .push(format!("subgroup `{}` names the missing claim {claim}", subgroup.title));
+                continue;
+            };
+            if !group.steps.contains(&step.index) {
+                report.organization.push(format!(
+                    "subgroup `{}`: claim {claim} is not in a step of group {}",
+                    subgroup.title, group.id
+                ));
+            }
+            let info = ops::op(&found.op);
+            if info.is_some_and(|i| i.kind == semilla_core::OpKind::Property) {
+                continue;
+            }
+            let problem = match subgroup.role {
+                Role::Docs => (found.op != "edit-doc").then_some("a Docs subgroup can contain only `edit-doc` claims"),
+                Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation || i.level == OpLevel::Expression))
+                    .then_some("a Propagation subgroup can contain only call site claims: expression claims and rewrites"),
+                Role::Interface => (!info.is_some_and(|i| i.level == OpLevel::Item)).then_some("an Interface subgroup can contain only item claims"),
+                Role::Config => (!info.is_some_and(|i| i.level == OpLevel::File)).then_some("a Config subgroup can contain only file claims"),
+                Role::Mechanical | Role::Tests | Role::Core | Role::Custom => None,
+            };
+            if let Some(problem) = problem {
+                report
+                    .organization
+                    .push(format!("subgroup `{}`: claim {claim} (`{}`): {problem}", subgroup.title, found.op));
+            }
+        }
+    }
+    // Each claim is in exactly one subgroup of its group (when the agent set subgroups).
+    for group in &set.groups {
+        let subgroups: Vec<&Subgroup> = set.subgroups.iter().filter(|s| s.group == group.id).collect();
+        if subgroups.is_empty() {
+            continue;
+        }
+        for step in set.steps.iter().filter(|step| group.steps.contains(&step.index)) {
+            for claim in &step.claims {
+                let count = subgroups.iter().filter(|s| s.claims.contains(&claim.id)).count();
+                if count != 1 {
+                    report.organization.push(format!(
+                        "claim {} is in {count} subgroups of group {}; it must be in exactly one",
+                        claim.id, group.id
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Checks the kind rules: each claim of a group fits the kind of the group. Errors go to
+/// `report.organization`.
+fn check_group_kinds(set: &ChangeSet, report: &mut Report) {
     for group in &set.groups {
         let claims: Vec<(&str, &str)> = set
             .steps
@@ -113,70 +197,30 @@ pub fn check(set: &ChangeSet, steps: &[StepReport], report: &mut Report, options
             // A group kind is a label (design 35): no rule compares it with a category or with
             // a compare result.
             let problem = match group.kind {
-                GroupKind::Refactor | GroupKind::Rename | GroupKind::Move => None,
                 // A call site update can be any expression op; statement ops add new control flow.
                 GroupKind::Api => (!info.is_some_and(|i| matches!(i.level, OpLevel::Item | OpLevel::Expression) || i.role == Role::Propagation))
-                    .then(|| "an api group can contain only claims of item-level ops and of expression-level ops"),
-                GroupKind::Deps => (!info.is_some_and(|i| i.level == OpLevel::File || i.role == Role::Propagation)).then(|| "a deps group can contain only call site claims (the manifest changes are facts)"),
-                GroupKind::Tests => None, // Checked below with the test items.
-                GroupKind::Fix | GroupKind::Feature | GroupKind::Behavior | GroupKind::Change => None,
+                    .then_some("an api group can contain only claims of item-level ops and of expression-level ops"),
+                GroupKind::Deps => (!info.is_some_and(|i| i.level == OpLevel::File || i.role == Role::Propagation))
+                    .then_some("a deps group can contain only call site claims (the manifest changes are facts)"),
+                // The test items check a `Tests` group below.
+                GroupKind::Refactor
+                | GroupKind::Rename
+                | GroupKind::Move
+                | GroupKind::Tests
+                | GroupKind::Fix
+                | GroupKind::Feature
+                | GroupKind::Behavior
+                | GroupKind::Change => None,
             };
             if let Some(problem) = problem {
                 report.organization.push(format!("group {}: claim {id} (`{op}`): {problem}", group.id));
             }
         }
     }
-
-    // The subgroup rules.
-    for subgroup in &set.subgroups {
-        let Some(group) = set.groups.iter().find(|group| group.id == subgroup.group) else {
-            report.organization.push(format!("subgroup `{}` names the missing group `{}`", subgroup.title, subgroup.group));
-            continue;
-        };
-        for claim in &subgroup.claims {
-            let Some((step, found)) = set.claim(claim) else {
-                report.organization.push(format!("subgroup `{}` names the missing claim {claim}", subgroup.title));
-                continue;
-            };
-            if !group.steps.contains(&step.index) {
-                report.organization.push(format!("subgroup `{}`: claim {claim} is not in a step of group {}", subgroup.title, group.id));
-            }
-            let info = ops::op(&found.op);
-            if info.is_some_and(|i| i.kind == semilla_core::OpKind::Property) {
-                continue;
-            }
-            let problem = match subgroup.role {
-                Role::Mechanical => None,
-                Role::Docs => (found.op != "edit-doc").then(|| "a Docs subgroup can contain only `edit-doc` claims"),
-                Role::Propagation => (!info.is_some_and(|i| i.role == Role::Propagation || i.level == OpLevel::Expression))
-                    .then(|| "a Propagation subgroup can contain only call site claims: expression claims and rewrites"),
-                Role::Interface => (!info.is_some_and(|i| i.level == OpLevel::Item)).then(|| "an Interface subgroup can contain only item claims"),
-                Role::Config => (!info.is_some_and(|i| i.level == OpLevel::File)).then(|| "a Config subgroup can contain only file claims"),
-                Role::Tests | Role::Core | Role::Custom => None,
-            };
-            if let Some(problem) = problem {
-                report.organization.push(format!("subgroup `{}`: claim {claim} (`{}`): {problem}", subgroup.title, found.op));
-            }
-        }
-    }
-    // Each claim is in exactly one subgroup of its group (when the agent set subgroups).
-    for group in &set.groups {
-        let subgroups: Vec<&Subgroup> = set.subgroups.iter().filter(|s| s.group == group.id).collect();
-        if subgroups.is_empty() {
-            continue;
-        }
-        for step in set.steps.iter().filter(|step| group.steps.contains(&step.index)) {
-            for claim in &step.claims {
-                let count = subgroups.iter().filter(|s| s.claims.contains(&claim.id)).count();
-                if count != 1 {
-                    report.organization.push(format!("claim {} is in {count} subgroups of group {}; it must be in exactly one", claim.id, group.id));
-                }
-            }
-        }
-    }
 }
 
 /// The open or folded state of a subgroup: its contents decide, not its label.
+#[must_use]
 pub fn is_open(subgroup: &Subgroup, steps: &[StepReport]) -> bool {
     // No result folds a subgroup (design 35): a subgroup with a claim is open.
     let _ = steps;
@@ -190,7 +234,10 @@ pub fn check_test_groups(set: &ChangeSet, test_items: &BTreeSet<String>, report:
             for claim in &step.claims {
                 let on_test = claim.at.as_ref().is_some_and(|at| test_items.contains(&at.item));
                 if !on_test {
-                    report.organization.push(format!("group {}: claim {} is not on test code; a tests group can contain only test code", group.id, claim.id));
+                    report.organization.push(format!(
+                        "group {}: claim {} is not on test code; a tests group can contain only test code",
+                        group.id, claim.id
+                    ));
                 }
             }
         }
@@ -203,7 +250,9 @@ pub fn place_new_claims(set: &mut ChangeSet, group_id: &str, test_items: &BTreeS
     if !set.subgroups.iter().any(|s| s.group == group_id) {
         return;
     }
-    let Some(group) = set.groups.iter().find(|g| g.id == group_id).cloned() else { return };
+    let Some(group) = set.groups.iter().find(|g| g.id == group_id).cloned() else {
+        return;
+    };
     let loose: Vec<String> = set
         .steps
         .iter()
@@ -214,22 +263,26 @@ pub fn place_new_claims(set: &mut ChangeSet, group_id: &str, test_items: &BTreeS
     for id in loose {
         let role = suggested_role(set, &id, None, test_items);
         let position = set.subgroups.iter().position(|s| s.group == group_id && s.role == role);
-        let subgroup = match position {
-            Some(position) => &mut set.subgroups[position],
-            None => {
-                set.subgroups.push(Subgroup {
-                    id: format!("{group_id}:{}", serde_json::to_value(role).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
-                    group: group_id.to_string(),
-                    role,
-                    title: role_title(role).to_string(),
-                    why: String::new(),
-                    claims: Vec::new(),
-                    edited: false,
-                    new_claims: Vec::new(),
-                });
-                set.subgroups.last_mut().unwrap()
-            }
-        };
+        let position = position.unwrap_or_else(|| {
+            set.subgroups.push(Subgroup {
+                id: format!(
+                    "{group_id}:{}",
+                    serde_json::to_value(role)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default()
+                ),
+                group: group_id.to_string(),
+                role,
+                title: role_title(role).to_string(),
+                why: String::new(),
+                claims: Vec::new(),
+                edited: false,
+                new_claims: Vec::new(),
+            });
+            set.subgroups.len() - 1
+        });
+        let subgroup = &mut set.subgroups[position];
         subgroup.claims.push(id.clone());
         subgroup.new_claims.push(id);
     }

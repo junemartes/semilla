@@ -35,6 +35,7 @@ pub enum Limit {
 
 impl Limit {
     /// The name of the limit in an output.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Limit::Write => "the write limit",
@@ -55,6 +56,7 @@ pub struct Missing {
 
 impl Missing {
     /// The names of the missing limits: "the write limit, the read limit, and the network limit".
+    #[must_use]
     pub fn names(&self) -> String {
         let names: Vec<&str> = self.limits.iter().map(|limit| limit.name()).collect();
         match names.as_slice() {
@@ -67,17 +69,33 @@ impl Missing {
 
     /// The line that each result shows when a build ran with a missing limit. The line names
     /// each missing limit.
+    #[must_use]
     pub fn line(&self) -> String {
-        let (kind, verb) = if self.limits.len() == 3 { ("no", "are") } else { ("a partial", if self.limits.len() == 1 { "is" } else { "are" }) };
-        format!("the build ran with {kind} sandbox: {} {verb} missing ({}). A build script or a proc macro of this change set can change the result", self.names(), self.cause)
+        let (kind, verb) = if self.limits.len() == 3 {
+            ("no", "are")
+        } else {
+            ("a partial", if self.limits.len() == 1 { "is" } else { "are" })
+        };
+        format!(
+            "the build ran with {kind} sandbox: {} {verb} missing ({}). A build script or a proc macro of this change set can change the result",
+            self.names(),
+            self.cause
+        )
     }
 
     /// The state in one clause: "the network limit is missing (the cause)" (batch 5w, D5).
+    #[must_use]
     pub fn state(&self) -> String {
-        format!("{} {} missing ({})", self.names(), if self.limits.len() == 1 { "is" } else { "are" }, self.cause)
+        format!(
+            "{} {} missing ({})",
+            self.names(),
+            if self.limits.len() == 1 { "is" } else { "are" },
+            self.cause
+        )
     }
 
     /// The short text of the state for a cache key.
+    #[must_use]
     pub fn key(&self) -> String {
         self.limits.iter().map(|limit| limit.name()).collect::<Vec<_>>().join("+")
     }
@@ -98,7 +116,10 @@ pub fn missing() -> Option<Missing> {
     STATE
         .get_or_init(|| {
             if variable() {
-                return Some(Missing { limits: vec![Limit::Write, Limit::Read, Limit::Network], cause: "the variable SEMILLA_NO_SANDBOX is set".into() });
+                return Some(Missing {
+                    limits: vec![Limit::Write, Limit::Read, Limit::Network],
+                    cause: "the variable SEMILLA_NO_SANDBOX is set".into(),
+                });
             }
             machine()
         })
@@ -118,10 +139,14 @@ fn machine() -> Option<Missing> {
         causes.push(cause);
     }
     causes.dedup();
-    (!limits.is_empty()).then(|| Missing { limits, cause: causes.join("; ") })
+    (!limits.is_empty()).then(|| Missing {
+        limits,
+        cause: causes.join("; "),
+    })
 }
 
 /// Why this machine cannot make the full sandbox, or `None`. The check makes no build.
+#[must_use]
 pub fn check() -> Option<String> {
     machine().map(|missing| format!("{} missing: {}", missing.names(), missing.cause))
 }
@@ -141,19 +166,34 @@ pub struct Sandbox {
 
 /// The system paths that each build can read: the programs and the libraries of the compiler
 /// and the linker, the cache of the dynamic loader, and three devices with no data of the user.
-pub const SYSTEM_READ: [&str; 9] = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc/ld.so.cache", "/dev/urandom", "/dev/random", "/dev/zero"];
+pub const SYSTEM_READ: [&str; 9] = [
+    "/usr",
+    "/lib",
+    "/lib64",
+    "/bin",
+    "/sbin",
+    "/etc/ld.so.cache",
+    "/dev/urandom",
+    "/dev/random",
+    "/dev/zero",
+];
 
 impl Sandbox {
     /// Puts the sandbox on a command: each limit that [`missing`] does not name. An error means
     /// that a limit cannot start. The caller must not run the command then.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason if the Landlock rule set or the seccomp filter cannot start.
     pub fn apply(&self, command: &mut Command) -> Result<(), String> {
-        let missing = missing().map(|missing| missing.limits).unwrap_or_default();
+        let missing = missing().map_or_default(|missing| missing.limits);
         imp::apply(self, command, !missing.contains(&Limit::Write), !missing.contains(&Limit::Network))
     }
 }
 
 /// The fixed search path of a build for programs: the programs of the toolchain, then the
 /// system folders. No folder of the user and no folder of the repository is in it.
+#[must_use]
 pub fn build_path(toolchain_bin: &std::path::Path) -> std::ffi::OsString {
     let mut path = toolchain_bin.as_os_str().to_os_string();
     path.push(":/usr/local/bin:/usr/bin:/bin");
@@ -186,7 +226,8 @@ mod imp {
     const REFER: u64 = 1 << 13;
     const TRUNCATE: u64 = 1 << 14;
     /// Each right that changes a file or a folder.
-    const ALL_WRITES: u64 = WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_CHAR | MAKE_DIR | MAKE_REG | MAKE_SOCK | MAKE_FIFO | MAKE_BLOCK | MAKE_SYM | REFER | TRUNCATE;
+    const ALL_WRITES: u64 =
+        WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_CHAR | MAKE_DIR | MAKE_REG | MAKE_SOCK | MAKE_FIFO | MAKE_BLOCK | MAKE_SYM | REFER | TRUNCATE;
     /// Each right that reads a file or a folder, or starts a program.
     const ALL_READS: u64 = EXECUTE | READ_FILE | READ_DIR;
     /// The write rights that apply to a file that is not a folder.
@@ -213,14 +254,23 @@ mod imp {
 
     /// The Landlock version of the kernel. The sandbox needs version 3: that version can stop a
     /// truncate of a file.
-    pub fn abi() -> Result<i64, String> {
+    pub(super) fn abi() -> Result<i64, String> {
         // SAFETY: the call reads no memory (a null pointer with the size 0 asks for the version).
-        let version = unsafe { libc::syscall(libc::SYS_landlock_create_ruleset, std::ptr::null::<RulesetAttr>(), 0usize, CREATE_RULESET_VERSION) };
+        let version = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::null::<RulesetAttr>(),
+                0usize,
+                CREATE_RULESET_VERSION,
+            )
+        };
         if version < 0 {
             return Err(format!("the kernel has no Landlock ({})", std::io::Error::last_os_error()));
         }
         if version < 3 {
-            return Err(format!("the kernel has Landlock version {version}, and the sandbox needs version 3 (Linux 6.2)"));
+            return Err(format!(
+                "the kernel has Landlock version {version}, and the sandbox needs version 3 (Linux 6.2)"
+            ));
         }
         Ok(version)
     }
@@ -230,15 +280,26 @@ mod imp {
         // SAFETY: `text` is a valid C string. The call opens the path and reads no file data.
         let fd = unsafe { libc::open(text.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
         if fd < 0 {
-            return Err(format!("the sandbox cannot open {} ({})", path.display(), std::io::Error::last_os_error()));
+            return Err(format!(
+                "the sandbox cannot open {} ({})",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
         }
         // SAFETY: `fd` is a new descriptor that this function owns.
         let parent = unsafe { OwnedFd::from_raw_fd(fd) };
-        let rule = PathBeneathAttr { allowed_access: access, parent_fd: parent.as_raw_fd() };
+        let rule = PathBeneathAttr {
+            allowed_access: access,
+            parent_fd: parent.as_raw_fd(),
+        };
         // SAFETY: `rule` lives until the call returns, and the kernel reads only its bytes.
-        let result = unsafe { libc::syscall(libc::SYS_landlock_add_rule, ruleset.as_raw_fd(), RULE_PATH_BENEATH, &rule as *const PathBeneathAttr, 0u32) };
+        let result = unsafe { libc::syscall(libc::SYS_landlock_add_rule, ruleset.as_raw_fd(), RULE_PATH_BENEATH, &raw const rule, 0u32) };
         if result < 0 {
-            return Err(format!("the sandbox cannot add the rule for {} ({})", path.display(), std::io::Error::last_os_error()));
+            return Err(format!(
+                "the sandbox cannot add the rule for {} ({})",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
         }
         Ok(())
     }
@@ -249,14 +310,28 @@ mod imp {
         // and it has no rule for a port, so each TCP `bind` and each TCP `connect` fails. This is
         // a second barrier. The seccomp filter is the network limit.
         let net = if abi()? >= 4 { NET_BIND_TCP | NET_CONNECT_TCP } else { 0 };
-        let attr = RulesetAttr { handled_access_fs: ALL_WRITES | ALL_READS, handled_access_net: net };
+        let attr = RulesetAttr {
+            handled_access_fs: ALL_WRITES | ALL_READS,
+            handled_access_net: net,
+        };
         // SAFETY: `attr` lives until the call returns, and the size is the size of the struct.
-        let fd = unsafe { libc::syscall(libc::SYS_landlock_create_ruleset, &attr as *const RulesetAttr, std::mem::size_of::<RulesetAttr>(), 0u32) };
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                &raw const attr,
+                std::mem::size_of::<RulesetAttr>(),
+                0u32,
+            )
+        };
         if fd < 0 {
-            return Err(format!("the kernel cannot make a Landlock rule set ({})", std::io::Error::last_os_error()));
+            return Err(format!(
+                "the kernel cannot make a Landlock rule set ({})",
+                std::io::Error::last_os_error()
+            ));
         }
+        let fd = i32::try_from(fd).map_err(|_| format!("the kernel gave the rule set descriptor {fd}, which is not a valid descriptor"))?;
         // SAFETY: `fd` is a new descriptor that this function owns.
-        let ruleset = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+        let ruleset = unsafe { OwnedFd::from_raw_fd(fd) };
         for folder in &sandbox.folders {
             std::fs::create_dir_all(folder).map_err(|error| format!("the sandbox cannot make {} ({error})", folder.display()))?;
             add_rule(&ruleset, folder, ALL_WRITES | ALL_READS)?;
@@ -267,7 +342,7 @@ mod imp {
         // A program writes its unused output to `/dev/null`.
         add_rule(&ruleset, Path::new("/dev/null"), FILE_WRITES | READ_FILE)?;
         let system = super::SYSTEM_READ.iter().map(|path| Path::new(*path));
-        for path in sandbox.read.iter().map(|path| path.as_path()).chain(system) {
+        for path in sandbox.read.iter().map(std::path::PathBuf::as_path).chain(system) {
             // The rule is for the real file. A path that does not exist needs no rule.
             match std::fs::metadata(path) {
                 Ok(meta) if meta.is_dir() => add_rule(&ruleset, path, ALL_READS)?,
@@ -343,7 +418,7 @@ mod imp {
     const STOPPED: [libc::c_long; 0] = [];
 
     /// Why this machine has no seccomp filter for the network limit, or `Ok`.
-    pub fn filter_support() -> Result<(), String> {
+    pub(super) fn filter_support() -> Result<(), String> {
         if ARCH.is_none() {
             return Err("the network limit supports only x86_64 and aarch64".into());
         }
@@ -360,41 +435,105 @@ mod imp {
     /// The filter program: a system call of the list fails with `EPERM`, and each system call of
     /// a different architecture fails with `EPERM` (the 32-bit entry and the x32 numbers on
     /// x86_64, the 32-bit entry on aarch64). Each other system call continues.
-    fn filter() -> Vec<Instruction> {
-        let deny = Instruction { code: RETURN, jt: 0, jf: 0, k: RET_ERRNO | libc::EPERM as u32 };
+    fn filter() -> Result<Vec<Instruction>, String> {
+        let deny = Instruction {
+            code: RETURN,
+            jt: 0,
+            jf: 0,
+            k: RET_ERRNO | libc::EPERM as u32,
+        };
         let mut program = vec![
             // The architecture of the system call (offset 4 of `seccomp_data`).
-            Instruction { code: LOAD_WORD, jt: 0, jf: 0, k: 4 },
-            Instruction { code: JUMP_EQUAL, jt: 1, jf: 0, k: ARCH.unwrap_or(0) },
+            Instruction {
+                code: LOAD_WORD,
+                jt: 0,
+                jf: 0,
+                k: 4,
+            },
+            Instruction {
+                code: JUMP_EQUAL,
+                jt: 1,
+                jf: 0,
+                k: ARCH.unwrap_or(0),
+            },
             deny,
             // The number of the system call (offset 0).
-            Instruction { code: LOAD_WORD, jt: 0, jf: 0, k: 0 },
+            Instruction {
+                code: LOAD_WORD,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
         ];
         // The x32 numbers have the same architecture value as x86_64, and the bit 30.
         #[cfg(target_arch = "x86_64")]
-        program.extend([Instruction { code: JUMP_GREATER_EQUAL, jt: 0, jf: 1, k: 0x4000_0000 }, deny]);
+        program.extend([
+            Instruction {
+                code: JUMP_GREATER_EQUAL,
+                jt: 0,
+                jf: 1,
+                k: 0x4000_0000,
+            },
+            deny,
+        ]);
         for number in STOPPED {
-            program.extend([Instruction { code: JUMP_EQUAL, jt: 0, jf: 1, k: number as u32 }, deny]);
+            program.extend([
+                Instruction {
+                    code: JUMP_EQUAL,
+                    jt: 0,
+                    jf: 1,
+                    k: syscall_word(number)?,
+                },
+                deny,
+            ]);
         }
         // `socketpair` continues only for the family `AF_UNIX` (the first argument, offset 16).
         // The standard library of Rust uses such a pair to start a process, and cargo needs
         // that. The pair has no name: it connects only processes of the build.
         #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         program.extend([
-            Instruction { code: JUMP_EQUAL, jt: 0, jf: 3, k: libc::SYS_socketpair as u32 },
-            Instruction { code: LOAD_WORD, jt: 0, jf: 0, k: 16 },
-            Instruction { code: JUMP_EQUAL, jt: 1, jf: 0, k: libc::AF_UNIX as u32 },
+            Instruction {
+                code: JUMP_EQUAL,
+                jt: 0,
+                jf: 3,
+                k: syscall_word(libc::SYS_socketpair)?,
+            },
+            Instruction {
+                code: LOAD_WORD,
+                jt: 0,
+                jf: 0,
+                k: 16,
+            },
+            Instruction {
+                code: JUMP_EQUAL,
+                jt: 1,
+                jf: 0,
+                k: libc::AF_UNIX as u32,
+            },
             deny,
         ]);
-        program.push(Instruction { code: RETURN, jt: 0, jf: 0, k: RET_ALLOW });
-        program
+        program.push(Instruction {
+            code: RETURN,
+            jt: 0,
+            jf: 0,
+            k: RET_ALLOW,
+        });
+        Ok(program)
     }
 
-    pub fn apply(sandbox: &Sandbox, command: &mut Command, files: bool, network: bool) -> Result<(), String> {
+    /// The number of a system call as a word of the filter program.
+    fn syscall_word(number: libc::c_long) -> Result<u32, String> {
+        u32::try_from(number).map_err(|_| format!("the system call number {number} does not fit in the seccomp filter"))
+    }
+
+    pub(super) fn apply(sandbox: &Sandbox, command: &mut Command, files: bool, network: bool) -> Result<(), String> {
         let ruleset = if files { Some(ruleset(sandbox)?) } else { None };
         let filter = if network {
             filter_support()?;
-            Some(filter())
+            let program = filter()?;
+            let len =
+                libc::c_ushort::try_from(program.len()).map_err(|_| format!("the seccomp filter has too many instructions ({})", program.len()))?;
+            Some((program, len))
         } else {
             None
         };
@@ -414,7 +553,7 @@ mod imp {
                 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if let Some(filter) = &filter {
+                if let Some((filter, len)) = &filter {
                     // The build gets no open file of Semilla except the three standard ones: an
                     // open socket of the parent process would pass the filter. The flag closes
                     // each file at the `exec`. The call needs Linux 5.11, which is older than
@@ -422,8 +561,11 @@ mod imp {
                     if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
                         return Err(std::io::Error::last_os_error());
                     }
-                    let program = Program { len: filter.len() as libc::c_ushort, filter: filter.as_ptr() };
-                    if libc::prctl(libc::PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program as *const Program, 0, 0) != 0 {
+                    let program = Program {
+                        len: *len,
+                        filter: filter.as_ptr(),
+                    };
+                    if libc::prctl(libc::PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &raw const program, 0, 0) != 0 {
                         return Err(std::io::Error::last_os_error());
                     }
                 }
@@ -439,7 +581,7 @@ mod group {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    pub fn start(command: &mut Command) {
+    pub(super) fn start(command: &mut Command) {
         // The build gets its own process group, so `stop` can stop the whole group with one
         // signal. `PR_SET_PDEATHSIG` stops `cargo` if the Semilla thread stops first.
         command.process_group(0);
@@ -456,19 +598,20 @@ mod group {
     /// Waits until the leader of the group ends, and then stops each process of the group. The
     /// leader stays in the process table until the caller reads its state, so no new process
     /// can get the number of the group before the signal.
-    pub fn wait_and_stop(leader: u32) {
+    pub(super) fn wait_and_stop(leader: u32) {
         // SAFETY: `waitid` with `WNOWAIT` reads the state of the child of this process and does
         // not remove it. `kill` with a negative number sends the signal to each process of the
         // group: `cargo`, each `rustc`, each build script, and each child of them. The seccomp
         // filter stops `setsid` and `setpgid`, so no process of the build leaves the group.
         unsafe {
             let mut info: libc::siginfo_t = std::mem::zeroed();
-            while libc::waitid(libc::P_PID, leader as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) != 0 {
+            while libc::waitid(libc::P_PID, leader as libc::id_t, &raw mut info, libc::WEXITED | libc::WNOWAIT) != 0 {
                 if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
                     break;
                 }
             }
-            libc::kill(-(leader as i32), libc::SIGKILL);
+            // A process number is at most `i32::MAX`, so the cast keeps the value.
+            libc::kill(-leader.cast_signed(), libc::SIGKILL);
         }
     }
 }
@@ -487,26 +630,39 @@ mod group {
 /// group. With the network limit, the seccomp filter stops `setsid` and `setpgid`, so each
 /// process of the build is in the group at that time. With no network limit, a process that
 /// leaves the group continues, and the output names the missing limit.
+///
+/// # Errors
+///
+/// Returns an error if the command does not start, or if the wait for `cargo` fails.
 pub fn run_and_stop(command: &mut Command) -> std::io::Result<std::process::Output> {
-    use std::io::Read;
     group::start(command);
-    let mut child = command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn()?;
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
     // A process of the build can hold the output pipes after `cargo` ends. So two threads read
     // the pipes, and this thread waits only for `cargo`.
-    let reader = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut data = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut data);
-            }
-            data
-        })
-    };
-    let stdout = reader(child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
-    let stderr = reader(child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let stdout = read_on_thread(child.stdout.take());
+    let stderr = read_on_thread(child.stderr.take());
     group::wait_and_stop(child.id());
     let status = child.wait()?;
-    Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+/// Reads a pipe to its end on a new thread. The thread owns the pipe and closes it at the end.
+fn read_on_thread<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut data = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut data);
+        }
+        data
+    })
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -562,13 +718,33 @@ mod tests {
         std::fs::write(closed.join("old.txt"), "old").unwrap();
         std::fs::write(closed.join("one.txt"), "old").unwrap();
         let script = "echo new > open/a.txt; echo new > closed/a.txt; echo new > closed/old.txt; rm closed/old.txt; mv open/a.txt closed/b.txt; echo new > closed/one.txt; true";
-        let output = shell(dir.path(), script, &Sandbox { folders: vec![open.clone()], files: vec![closed.join("one.txt")], read: Vec::new() });
+        let output = shell(
+            dir.path(),
+            script,
+            &Sandbox {
+                folders: vec![open.clone()],
+                files: vec![closed.join("one.txt")],
+                read: Vec::new(),
+            },
+        );
         assert!(output.status.success());
-        assert_eq!(std::fs::read_to_string(open.join("a.txt")).unwrap(), "new\n", "the build writes its folder");
+        assert_eq!(
+            std::fs::read_to_string(open.join("a.txt")).unwrap(),
+            "new\n",
+            "the build writes its folder"
+        );
         assert!(!closed.join("a.txt").exists(), "no new file outside the allow list");
         assert!(!closed.join("b.txt").exists(), "no move to a folder outside the allow list");
-        assert_eq!(std::fs::read_to_string(closed.join("old.txt")).unwrap(), "old", "no change and no removal of a file outside the allow list");
-        assert_eq!(std::fs::read_to_string(closed.join("one.txt")).unwrap(), "new\n", "a file of the allow list is writable");
+        assert_eq!(
+            std::fs::read_to_string(closed.join("old.txt")).unwrap(),
+            "old",
+            "no change and no removal of a file outside the allow list"
+        );
+        assert_eq!(
+            std::fs::read_to_string(closed.join("one.txt")).unwrap(),
+            "new\n",
+            "a file of the allow list is writable"
+        );
         // The sandbox is in the child only: this process writes as before.
         std::fs::write(closed.join("parent.txt"), "x").unwrap();
     }
@@ -605,39 +781,35 @@ mod tests {
         ]
         .join("; ");
         let mut command = Command::new("/bin/sh");
-        command.arg("-c").arg(script).current_dir(dir.path()).env_clear().env("PATH", "/usr/bin:/bin");
+        command
+            .arg("-c")
+            .arg(script)
+            .current_dir(dir.path())
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin");
         // The home folder of the user of the test: the test checks only if a list of it works.
         command.env("HOME_FOLDER", std::env::var_os("HOME").unwrap_or_else(|| "/root".into()));
-        Sandbox { folders: vec![write.clone()], files: Vec::new(), read: vec![open.clone(), closed.join("one.txt"), closed.join("missing.txt")] }.apply(&mut command).unwrap();
+        Sandbox {
+            folders: vec![write.clone()],
+            files: Vec::new(),
+            read: vec![open.clone(), closed.join("one.txt"), closed.join("missing.txt")],
+        }
+        .apply(&mut command)
+        .unwrap();
         let output = run_and_stop(&mut command).unwrap();
         let text = String::from_utf8_lossy(&output.stdout);
         let answers: Vec<&str> = text.lines().collect();
-        assert_eq!(answers, ["yes", "yes", "no", "no", "yes", "no", "no", "no", "no", "no", "no", "no", "yes"], "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(
+            answers,
+            ["yes", "yes", "no", "no", "yes", "no", "no", "no", "no", "no", "no", "no", "yes"],
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
-    /// A command in the sandbox makes no socket (part D): no TCP, no UDP, no UNIX socket, no
-    /// netlink. A packet for a listener on `127.0.0.1` does not arrive.
-    #[test]
-    fn a_command_in_the_sandbox_has_no_network() {
-        if !full() {
-            return;
-        }
-        let Some(python) = ["/usr/bin/python3", "/bin/python3"].into_iter().find(|path| std::path::Path::new(path).is_file()) else {
-            eprintln!("no python3 on this machine");
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        udp.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
-        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        tcp.set_nonblocking(true).unwrap();
-        // The listener has an abstract name: the path of a test folder can be too long for a
-        // socket path. The filter stops the `socket` call, so the two name forms get one check.
-        let name = format!("semilla-test-{}", std::process::id());
-        let address = <std::os::unix::net::SocketAddr as std::os::linux::net::SocketAddrExt>::from_abstract_name(name.as_bytes()).unwrap();
-        let unix = std::os::unix::net::UnixListener::bind_addr(&address).unwrap();
-        unix.set_nonblocking(true).unwrap();
-        let script = format!(
+    /// The Python script of the network test: it tries each kind of socket and prints the result.
+    fn network_script(udp: u16, tcp: u16, unix: &std::path::Path, name: &str) -> String {
+        format!(
             r#"
 import socket, os
 def attempt(name, family, kind, target=None, proto=0):
@@ -675,22 +847,79 @@ try:
 except OSError as error:
     print("setsid stopped", error.errno)
 "#,
-            udp = udp.local_addr().unwrap().port(),
-            tcp = tcp.local_addr().unwrap().port(),
-            unix = dir.path().join("socket").display(),
+            udp = udp,
+            tcp = tcp,
+            unix = unix.display(),
             name = name,
+        )
+    }
+
+    /// A command in the sandbox makes no socket (part D): no TCP, no UDP, no UNIX socket, no
+    /// netlink. A packet for a listener on `127.0.0.1` does not arrive.
+    #[test]
+    fn a_command_in_the_sandbox_has_no_network() {
+        if !full() {
+            return;
+        }
+        let Some(python) = ["/usr/bin/python3", "/bin/python3"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+        else {
+            eprintln!("no python3 on this machine");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        tcp.set_nonblocking(true).unwrap();
+        // The listener has an abstract name: the path of a test folder can be too long for a
+        // socket path. The filter stops the `socket` call, so the two name forms get one check.
+        let name = format!("semilla-test-{}", std::process::id());
+        let address = <std::os::unix::net::SocketAddr as std::os::linux::net::SocketAddrExt>::from_abstract_name(name.as_bytes()).unwrap();
+        let unix = std::os::unix::net::UnixListener::bind_addr(&address).unwrap();
+        unix.set_nonblocking(true).unwrap();
+        let script = network_script(
+            udp.local_addr().unwrap().port(),
+            tcp.local_addr().unwrap().port(),
+            &dir.path().join("socket"),
+            &name,
         );
         let mut command = Command::new(python);
         command.arg("-I").arg("-c").arg(script).current_dir(dir.path()).env_clear();
-        Sandbox { folders: Vec::new(), files: Vec::new(), read: vec![dir.path().to_path_buf()] }.apply(&mut command).unwrap();
+        Sandbox {
+            folders: Vec::new(),
+            files: Vec::new(),
+            read: vec![dir.path().to_path_buf()],
+        }
+        .apply(&mut command)
+        .unwrap();
         let output = run_and_stop(&mut command).unwrap();
         let text = String::from_utf8_lossy(&output.stdout);
         let eperm = libc::EPERM;
         // A pair of the family `AF_UNIX` with no name is the one socket that a build can make.
-        let expected: Vec<String> = ["udp", "tcp", "udp6", "unix", "abstract", "netlink", "raw", "pair", "local pair", "pair", "setsid"]
-            .iter()
-            .map(|name| if *name == "local pair" { "local pair open".to_string() } else { format!("{name} stopped {eperm}") })
-            .collect();
+        let expected: Vec<String> = [
+            "udp",
+            "tcp",
+            "udp6",
+            "unix",
+            "abstract",
+            "netlink",
+            "raw",
+            "pair",
+            "local pair",
+            "pair",
+            "setsid",
+        ]
+        .iter()
+        .map(|name| {
+            if *name == "local pair" {
+                "local pair open".to_string()
+            } else {
+                format!("{name} stopped {eperm}")
+            }
+        })
+        .collect();
         assert_eq!(text.lines().collect::<Vec<_>>(), expected, "{}", String::from_utf8_lossy(&output.stderr));
         let mut buffer = [0u8; 8];
         assert!(udp.recv_from(&mut buffer).is_err(), "no UDP packet arrives");
@@ -714,16 +943,39 @@ except OSError as error:
             unsafe {
                 std::arch::asm!("int 0x80", inlateout("rax") 20i64 => result, options(nostack));
             }
-            std::process::exit(if result == -(libc::EPERM as i64) { 7 } else if result == -(libc::ENOSYS as i64) { 8 } else { 9 });
+            std::process::exit(if result == -i64::from(libc::EPERM) {
+                7
+            } else if result == -i64::from(libc::ENOSYS) {
+                8
+            } else {
+                9
+            });
         }
         let exe = std::env::current_exe().unwrap();
         let mut command = Command::new(&exe);
-        command.args(["--exact", "sandbox::tests::the_filter_stops_a_system_call_of_a_different_architecture", "--nocapture"]).env("SEMILLA_TEST_INT80", "1");
+        command
+            .args([
+                "--exact",
+                "sandbox::tests::the_filter_stops_a_system_call_of_a_different_architecture",
+                "--nocapture",
+            ])
+            .env("SEMILLA_TEST_INT80", "1");
         let folder = exe.parent().unwrap().to_path_buf();
-        let read: Vec<PathBuf> = std::env::var_os("LD_LIBRARY_PATH").map(|paths| std::env::split_paths(&paths).collect()).unwrap_or_default();
-        Sandbox { folders: Vec::new(), files: Vec::new(), read: read.into_iter().chain([folder]).collect() }.apply(&mut command).unwrap();
+        let read: Vec<PathBuf> = std::env::var_os("LD_LIBRARY_PATH").map_or_default(|paths| std::env::split_paths(&paths).collect());
+        Sandbox {
+            folders: Vec::new(),
+            files: Vec::new(),
+            read: read.into_iter().chain([folder]).collect(),
+        }
+        .apply(&mut command)
+        .unwrap();
         let output = run_and_stop(&mut command).unwrap();
-        assert_eq!(output.status.code(), Some(7), "the 32-bit entry gives EPERM: {}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "the 32-bit entry gives EPERM: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     /// No process of a command continues after the command ends (part F, rule 3): a child that
@@ -736,11 +988,23 @@ except OSError as error:
         let dir = tempfile::tempdir().unwrap();
         // The child process waits, and then it writes a marker file. `setsid` fails in the
         // sandbox, so the shell runs the command in the same group.
-        let script = "(setsid sh -c 'sleep 1; echo late > late.txt' || sh -c 'sleep 1; echo late > late.txt') >/dev/null 2>&1 & echo started > started.txt";
+        let script =
+            "(setsid sh -c 'sleep 1; echo late > late.txt' || sh -c 'sleep 1; echo late > late.txt') >/dev/null 2>&1 & echo started > started.txt";
         let started = std::time::Instant::now();
-        let output = shell(dir.path(), script, &Sandbox { folders: vec![dir.path().to_path_buf()], files: Vec::new(), read: Vec::new() });
+        let output = shell(
+            dir.path(),
+            script,
+            &Sandbox {
+                folders: vec![dir.path().to_path_buf()],
+                files: Vec::new(),
+                read: Vec::new(),
+            },
+        );
         assert!(output.status.success());
-        assert!(started.elapsed() < std::time::Duration::from_millis(900), "the command does not wait for the child");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(900),
+            "the command does not wait for the child"
+        );
         assert!(dir.path().join("started.txt").exists());
         std::thread::sleep(std::time::Duration::from_millis(1500));
         assert!(!dir.path().join("late.txt").exists(), "the child process does not continue");
@@ -749,13 +1013,31 @@ except OSError as error:
     /// The line names each missing limit.
     #[test]
     fn the_line_names_each_missing_limit() {
-        let all = Missing { limits: vec![Limit::Write, Limit::Read, Limit::Network], cause: "cause".into() };
-        assert_eq!(all.line(), "the build ran with no sandbox: the write limit, the read limit, and the network limit are missing (cause). A build script or a proc macro of this change set can change the result");
+        let all = Missing {
+            limits: vec![Limit::Write, Limit::Read, Limit::Network],
+            cause: "cause".into(),
+        };
+        assert_eq!(
+            all.line(),
+            "the build ran with no sandbox: the write limit, the read limit, and the network limit are missing (cause). A build script or a proc macro of this change set can change the result"
+        );
         assert!(all.line().starts_with(NO_SANDBOX));
-        let one = Missing { limits: vec![Limit::Network], cause: "cause".into() };
-        assert_eq!(one.line(), "the build ran with a partial sandbox: the network limit is missing (cause). A build script or a proc macro of this change set can change the result");
-        let two = Missing { limits: vec![Limit::Write, Limit::Read], cause: "cause".into() };
-        assert!(two.line().starts_with("the build ran with a partial sandbox: the write limit and the read limit are missing (cause)."));
+        let one = Missing {
+            limits: vec![Limit::Network],
+            cause: "cause".into(),
+        };
+        assert_eq!(
+            one.line(),
+            "the build ran with a partial sandbox: the network limit is missing (cause). A build script or a proc macro of this change set can change the result"
+        );
+        let two = Missing {
+            limits: vec![Limit::Write, Limit::Read],
+            cause: "cause".into(),
+        };
+        assert!(
+            two.line()
+                .starts_with("the build ran with a partial sandbox: the write limit and the read limit are missing (cause).")
+        );
         assert_ne!(all.key(), one.key());
     }
 }

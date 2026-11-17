@@ -21,18 +21,22 @@ pub struct Claim {
 
 impl Claim {
     /// Returns a string argument.
+    #[must_use]
     pub fn arg_str(&self, name: &str) -> Option<&str> {
         self.args.get(name).and_then(|value| value.as_str())
     }
 
     /// Returns a list of strings argument (for example `affects`).
+    #[must_use]
     pub fn arg_list(&self, name: &str) -> Vec<String> {
         match self.args.get(name) {
-            Some(serde_json::Value::Array(values)) => {
-                values.iter().filter_map(|value| value.as_str().map(str::to_string)).collect()
-            }
+            Some(serde_json::Value::Array(values)) => values.iter().filter_map(|value| value.as_str().map(str::to_string)).collect(),
             // The comma form `a,b,c` is the same list as `["a", "b", "c"]`.
-            Some(serde_json::Value::String(value)) => value.split(',').map(|part| part.trim().to_string()).filter(|part| !part.is_empty()).collect(),
+            Some(serde_json::Value::String(value)) => value
+                .split(',')
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -101,6 +105,7 @@ pub enum Role {
 
 impl Role {
     /// The review order of the roles (design section 11.2).
+    #[must_use]
     pub fn order(self) -> u8 {
         match self {
             Role::Interface => 0,
@@ -165,11 +170,15 @@ pub struct PairRefusal {
 
 impl ChangeSet {
     /// Finds a claim and its step by claim ID.
+    #[must_use]
     pub fn claim(&self, id: &str) -> Option<(&Step, &Claim)> {
-        self.steps.iter().find_map(|step| step.claims.iter().find(|claim| claim.id == id).map(|claim| (step, claim)))
+        self.steps
+            .iter()
+            .find_map(|step| step.claims.iter().find(|claim| claim.id == id).map(|claim| (step, claim)))
     }
 
     /// Returns the next free claim ID.
+    #[must_use]
     pub fn next_claim_id(&self) -> String {
         let count: usize = self.steps.iter().map(|step| step.claims.len()).sum();
         let mut number = count + 1;
@@ -197,12 +206,20 @@ mod tests {
         let step = Step {
             index: 0,
             intent: String::new(),
-            claims: vec![Claim { id: "c2".into(), op: "rename".into(), at: None, args: Default::default() }],
+            claims: vec![Claim {
+                id: "c2".into(),
+                op: "rename".into(),
+                at: None,
+                args: serde_json::Map::default(),
+            }],
             tree_before: String::new(),
             tree_after: String::new(),
-            reasons: Default::default(),
+            reasons: std::collections::BTreeMap::default(),
         };
-        let set = ChangeSet { steps: vec![step], ..Default::default() };
+        let set = ChangeSet {
+            steps: vec![step],
+            ..Default::default()
+        };
         assert_eq!(set.next_claim_id(), "c3");
     }
 }

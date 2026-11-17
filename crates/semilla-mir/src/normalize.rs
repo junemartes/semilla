@@ -8,16 +8,16 @@
 //! 1. Remove the statements that have no runtime effect (storage markers, borrow check marks).
 //! 2. Remove the debug information (the names of user variables).
 //! 3. Jump over empty blocks that contain only a `goto`.
-//! 3b. Merge a block that ends with a `goto` with its target, if the target has no other
+//!    3b. Merge a block that ends with a `goto` with its target, if the target has no other
 //!    reachable predecessor (the unwind edges count). The code runs in the same order, so the behavior is
 //!    the same. The N3 inliner needs this rule: it adds a `goto` into the callee entry.
-//! 3c. Forward a copy: replace `_t = copy p; ...; use(copy _t)` with `...; use(copy p)` when the
+//!    3c. Forward a copy: replace `_t = copy p; ...; use(copy _t)` with `...; use(copy p)` when the
 //!    copy and the only use of `_t` are in the same block, `p` is a local or a field of a local,
 //!    no statement between them writes the local of `p`, and the body takes the address of
 //!    neither local. Then `p` has the same value at the use, so the use reads the same value.
 //!    `_t` has no other use, so the copy has no other effect. The N3 inliner needs this rule,
 //!    because the inlined code and the original code copy values in different places.
-//! 3c2. Forward a copy across a call (batch 5u): the same change as rule 3c when the copy is in
+//!    3c2. Forward a copy across a call (batch 5u): the same change as rule 3c when the copy is in
 //!    a block that ends with a call, and the only use of `_t` is in the return block of the
 //!    call. The conditions: `p` is a local or a field of a local, the body takes the address of
 //!    neither local, no statement between the copy and the use writes the local of `p`, the
@@ -28,7 +28,7 @@
 //!    because the body does not take its address and does not move it into the call. So `p` has
 //!    the same value at the use. The source text `i < v.len()` and `v.len() > i` differ only in
 //!    the place of this copy.
-//! 3d. Forward a reference: replace each `(*r)...` with `P...` when the only assignments to the
+//!    3d. Forward a reference: replace each `(*r)...` with `P...` when the only assignments to the
 //!    local `r` are `r = &P` (shared or mutable) with the same place `P`, `P` is a local or
 //!    fields of a local (no deref and no index, so it names one fixed place), and each other use
 //!    of `r` is a deref. Then `(*r)` and `P` name the same memory, so each read and each write
@@ -37,7 +37,7 @@
 //!    rule for a callee with a `&mut` parameter: the inlined code writes through the reference,
 //!    and the original code writes the local. The aliasing model (retags, stacked borrows) is not
 //!    behavior here, as in the rest of the normalization.
-//! 3e. Use `Eq` for a branch on `Ne` (batch 5u): replace `_t = Ne(a, b); switchInt(_t) -> [0: X,
+//!    3e. Use `Eq` for a branch on `Ne` (batch 5u): replace `_t = Ne(a, b); switchInt(_t) -> [0: X,
 //!    otherwise: Y]` with `_t = Eq(a, b); switchInt(_t) -> [0: Y, otherwise: X]` when the
 //!    assignment is the last statement of the block and `_t` has no other mention in the body.
 //!    The MIR operators `Eq` and `Ne` are only for the primitive types (integers, `bool`, `char`,
@@ -60,18 +60,18 @@
 //! The normalization keeps all drops, because the drop order is observable in Rust.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use rustc_public::mir::visit::{Location, MirVisitor, MutMirVisitor, PlaceContext};
 use rustc_public::mir::{
-    BasicBlock, BasicBlockIdx, BinOp, Body, Local, LocalDecl, Mutability, Operand, Place,
-    ProjectionElem, Rvalue, Statement, StatementKind, SwitchTargets, Terminator, TerminatorKind,
-    UnwindAction,
+    BasicBlock, BasicBlockIdx, BinOp, Body, Local, LocalDecl, Mutability, Operand, Place, ProjectionElem, Rvalue, Statement, StatementKind,
+    SwitchTargets, Terminator, TerminatorKind, UnwindAction,
 };
 
 use crate::print::Printer;
 
 /// The canonical form of a body: its text and the local functions that it refers to.
-pub struct Canonical {
+pub(crate) struct Canonical {
     pub text: String,
     pub callees: Vec<String>,
     /// The uses of the build configuration in the body (see `config.rs`), sorted.
@@ -80,26 +80,29 @@ pub struct Canonical {
 
 /// Returns the canonical text of a body that `canonical_body` made. Two bodies with the same
 /// text have the same behavior.
-pub fn canonical_text(body: &Body) -> Canonical {
+pub(crate) fn canonical_text(body: &Body) -> Canonical {
     let mut printer = Printer::default();
     let text = printer.body(body);
     let mut config = std::mem::take(&mut printer.config);
     config.sort();
-    Canonical { text: stable_closure_names(&text), callees: printer.callees.into_iter().collect(), config }
+    Canonical {
+        text: stable_closure_names(&text),
+        callees: printer.callees.into_iter().collect(),
+        config,
+    }
 }
 
 /// Returns the shape of the control flow graph: the kind of each terminator and its successors,
 /// without the statements and without the operands. Two bodies with the same shape can still
 /// have a different logic, but a different shape always means a change in the control flow.
-pub fn shape(body: &Body) -> String {
+pub(crate) fn shape(body: &Body) -> String {
     let mut out = String::new();
     for (index, block) in body.blocks.iter().enumerate() {
         let kind = &block.terminator.kind;
         let head = match kind {
             TerminatorKind::Goto { .. } => "goto".to_string(),
             TerminatorKind::SwitchInt { targets, .. } => {
-                let values: Vec<String> =
-                    targets.branches().map(|(value, _)| value.to_string()).collect();
+                let values: Vec<String> = targets.branches().map(|(value, _)| value.to_string()).collect();
                 format!("switch[{}]", values.join(","))
             }
             TerminatorKind::Resume => "resume".to_string(),
@@ -123,12 +126,11 @@ pub fn shape(body: &Body) -> String {
             Some(UnwindAction::Terminate) => " ut".to_string(),
             Some(UnwindAction::Unreachable) => " uu".to_string(),
         };
-        let normal: Vec<String> =
-            normal_successors(kind).iter().map(|target| target.to_string()).collect();
+        let normal: Vec<String> = normal_successors(kind).iter().map(std::string::ToString::to_string).collect();
         if index > 0 {
             out.push(';');
         }
-        out.push_str(&format!("{index}:{head}->{}{unwind}", normal.join(",")));
+        let _ = write!(out, "{index}:{head}->{}{unwind}", normal.join(","));
     }
     out
 }
@@ -143,15 +145,12 @@ fn normal_successors(kind: &TerminatorKind) -> Vec<BasicBlockIdx> {
         }
         TerminatorKind::Call { target, .. } => target.iter().copied().collect(),
         TerminatorKind::InlineAsm { destination, .. } => destination.iter().copied().collect(),
-        TerminatorKind::Resume
-        | TerminatorKind::Abort
-        | TerminatorKind::Return
-        | TerminatorKind::Unreachable => Vec::new(),
+        TerminatorKind::Resume | TerminatorKind::Abort | TerminatorKind::Return | TerminatorKind::Unreachable => Vec::new(),
     }
 }
 
 /// Returns true if the control flow graph has no cycle. The unwind edges count.
-pub fn is_loop_free(body: &Body) -> bool {
+pub(crate) fn is_loop_free(body: &Body) -> bool {
     // 0: not visited, 1: on the current path, 2: done.
     let mut state = vec![0u8; body.blocks.len()];
     let mut stack: Vec<(BasicBlockIdx, usize)> = vec![(0, 0)];
@@ -180,7 +179,7 @@ pub fn is_loop_free(body: &Body) -> bool {
 ///
 /// The same original name always gets the same number, so two different closures in one body
 /// stay different.
-pub fn stable_closure_names(text: &str) -> String {
+pub(crate) fn stable_closure_names(text: &str) -> String {
     let mut numbers: HashMap<String, usize> = HashMap::new();
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -192,13 +191,11 @@ pub fn stable_closure_names(text: &str) -> String {
             .find(|c: char| !(c.is_ascii_alphabetic() || c == ' ' || c == '-'))
             .map(|end| end + 1);
         match (kind_end, candidate.find('}')) {
-            (Some(kind_end), Some(close))
-                if kind_end > 1 && candidate[kind_end..].starts_with('@') =>
-            {
+            (Some(kind_end), Some(close)) if kind_end > 1 && candidate[kind_end..].starts_with('@') => {
                 let original = &candidate[..=close];
                 let next = numbers.len();
                 let number = *numbers.entry(original.to_string()).or_insert(next);
-                out.push_str(&format!("{{{}#{number}}}", &candidate[1..kind_end]));
+                let _ = write!(out, "{{{}#{number}}}", &candidate[1..kind_end]);
                 rest = &candidate[close + 1..];
             }
             _ => {
@@ -212,7 +209,7 @@ pub fn stable_closure_names(text: &str) -> String {
 }
 
 /// Returns a new body with the N0 rules applied.
-pub fn canonical_body(body: &Body) -> Body {
+pub(crate) fn canonical_body(body: &Body) -> Body {
     let arg_count = body.arg_locals().len();
 
     let mut blocks = body.blocks.clone();
@@ -224,17 +221,10 @@ pub fn canonical_body(body: &Body) -> Body {
     merge_straight_blocks(&mut blocks);
     forward_copies(&mut blocks, arg_count, body.locals().len());
     branch_on_eq(&mut blocks, arg_count, body.locals().len());
-    let blocks = order_blocks(blocks);
+    let blocks = order_blocks(&blocks);
 
     // The visitors need a body, so build one with the original locals first.
-    let ordered = Body::new(
-        blocks,
-        body.locals().to_vec(),
-        arg_count,
-        Vec::new(),
-        body.spread_arg(),
-        body.span,
-    );
+    let ordered = Body::new(blocks, body.locals().to_vec(), arg_count, Vec::new(), body.spread_arg(), body.span);
     let locals = local_order(&ordered, arg_count);
     renumber_locals(ordered, &locals, arg_count)
 }
@@ -256,8 +246,7 @@ fn has_runtime_effect(kind: &StatementKind) -> bool {
 
 /// Changes each jump to an empty `goto` block into a jump to the end of the `goto` chain.
 fn skip_empty_gotos(blocks: &mut [BasicBlock]) {
-    let resolved: Vec<BasicBlockIdx> =
-        (0..blocks.len()).map(|index| goto_chain_end(blocks, index)).collect();
+    let resolved: Vec<BasicBlockIdx> = (0..blocks.len()).map(|index| goto_chain_end(blocks, index)).collect();
     // The entry block stays the entry block, so it is not resolved.
     for block in blocks.iter_mut() {
         remap_targets(&mut block.terminator.kind, |target| resolved[target]);
@@ -316,6 +305,16 @@ fn reachable_blocks(blocks: &[BasicBlock]) -> Vec<bool> {
 /// place, and `(*r)` names the same place. Then the assignments to `r` have no use, and the
 /// rule removes them.
 fn forward_references(blocks: &mut [BasicBlock], arg_count: usize, local_count: usize) {
+    let forward = reference_sources(blocks, arg_count, local_count);
+    if forward.iter().all(Option::is_none) {
+        return;
+    }
+    rewrite_references(blocks, &forward);
+}
+
+/// The borrowed place `P` of each reference local `r` that rule 3d forwards, or `None` for a
+/// local that the rule does not forward.
+fn reference_sources(blocks: &[BasicBlock], arg_count: usize, local_count: usize) -> Vec<Option<Place>> {
     #[derive(Clone, Default)]
     struct Uses {
         /// The borrowed place of the assignments `r = &P`.
@@ -348,23 +347,22 @@ fn forward_references(blocks: &mut [BasicBlock], arg_count: usize, local_count: 
     };
 
     let mut uses = vec![Uses::default(); local_count];
-    for block in blocks.iter() {
+    for block in blocks {
         for statement in &block.statements {
-            if let StatementKind::Assign(target, Rvalue::Ref(_, _, source)) = &statement.kind {
-                if target.projection.is_empty()
-                    && target.local > arg_count
-                    && simple(source)
-                    && source.local != target.local
-                {
-                    let entry = &mut uses[target.local];
-                    match &entry.source {
-                        Some(old) if old != source => entry.bad = true,
-                        _ => entry.source = Some(source.clone()),
-                    }
-                    // The borrowed place is a use of its own local (not a deref).
-                    uses[source.local].bad = true;
-                    continue;
+            if let StatementKind::Assign(target, Rvalue::Ref(_, _, source)) = &statement.kind
+                && target.projection.is_empty()
+                && target.local > arg_count
+                && simple(source)
+                && source.local != target.local
+            {
+                let entry = &mut uses[target.local];
+                match &entry.source {
+                    Some(old) if old != source => entry.bad = true,
+                    _ => entry.source = Some(source.clone()),
                 }
+                // The borrowed place is a use of its own local (not a deref).
+                uses[source.local].bad = true;
+                continue;
             }
             let single = BasicBlock {
                 statements: vec![statement.clone()],
@@ -375,34 +373,41 @@ fn forward_references(blocks: &mut [BasicBlock], arg_count: usize, local_count: 
             };
             Scan(&mut uses).visit_basic_block(&single);
         }
-        let single = BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+        let single = BasicBlock {
+            statements: Vec::new(),
+            terminator: block.terminator.clone(),
+        };
         Scan(&mut uses).visit_basic_block(&single);
     }
-    let forward: Vec<Option<Place>> =
-        uses.into_iter().map(|entry| if entry.bad { None } else { entry.source }).collect();
-    if forward.iter().all(Option::is_none) {
-        return;
-    }
+    uses.into_iter().map(|entry| if entry.bad { None } else { entry.source }).collect()
+}
 
+/// Removes the assignments `r = &P` of each forwarded local `r`, and replaces each `(*r)...`
+/// with `P...`.
+fn rewrite_references(blocks: &mut [BasicBlock], forward: &[Option<Place>]) {
     struct Rewrite<'a>(&'a [Option<Place>]);
     impl MutMirVisitor for Rewrite<'_> {
         fn visit_place(&mut self, place: &mut Place, ptx: PlaceContext, location: Location) {
-            if let Some(source) = &self.0[place.local] {
-                if place.projection.first() == Some(&ProjectionElem::Deref) {
-                    let mut projection = source.projection.clone();
-                    projection.extend(place.projection.drain(1..));
-                    *place = Place { local: source.local, projection };
-                }
+            if let Some(source) = &self.0[place.local]
+                && place.projection.first() == Some(&ProjectionElem::Deref)
+            {
+                let mut projection = source.projection.clone();
+                projection.extend(place.projection.drain(1..));
+                *place = Place {
+                    local: source.local,
+                    projection,
+                };
             }
             self.super_place(place, ptx, location);
         }
     }
+
     for block in blocks.iter_mut() {
         block.statements.retain(|statement| {
             !matches!(&statement.kind, StatementKind::Assign(target, Rvalue::Ref(..))
                 if target.projection.is_empty() && forward[target.local].is_some())
         });
-        let mut rewrite = Rewrite(&forward);
+        let mut rewrite = Rewrite(forward);
         for statement in &mut block.statements {
             let mut single = BasicBlock {
                 statements: vec![statement.clone()],
@@ -414,8 +419,10 @@ fn forward_references(blocks: &mut [BasicBlock], arg_count: usize, local_count: 
             rewrite.visit_basic_block(&mut single);
             *statement = single.statements.pop().expect("one statement");
         }
-        let mut single =
-            BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+        let mut single = BasicBlock {
+            statements: Vec::new(),
+            terminator: block.terminator.clone(),
+        };
         rewrite.visit_basic_block(&mut single);
         block.terminator = single.terminator;
     }
@@ -429,16 +436,11 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
         for block in blocks.iter() {
             count_mentions(block, &mut mentions);
             for statement in &block.statements {
-                if let StatementKind::Assign(
-                    _,
-                    Rvalue::Ref(_, _, place)
-                    | Rvalue::AddressOf(_, place)
-                    | Rvalue::Reborrow(_, _, place),
-                ) = &statement.kind
+                if let StatementKind::Assign(_, Rvalue::Ref(_, _, place) | Rvalue::AddressOf(_, place) | Rvalue::Reborrow(_, _, place)) =
+                    &statement.kind
+                    && !place.projection.iter().any(|elem| matches!(elem, ProjectionElem::Deref))
                 {
-                    if !place.projection.iter().any(|elem| matches!(elem, ProjectionElem::Deref)) {
-                        taken[place.local] = true;
-                    }
+                    taken[place.local] = true;
                 }
             }
         }
@@ -447,18 +449,16 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
             let mut index = 0;
             while index < blocks[at].statements.len() {
                 let block = &mut blocks[at];
-                let StatementKind::Assign(
-                    target,
-                    Rvalue::Use(Operand::Copy(source) | Operand::Move(source), _),
-                ) = &block.statements[index].kind
+                let StatementKind::Assign(target, Rvalue::Use(Operand::Copy(source) | Operand::Move(source), _)) = &block.statements[index].kind
                 else {
                     index += 1;
                     continue;
                 };
                 let (temp, source) = (target.local, source.clone());
-                let simple_source = source.projection.iter().all(|elem| {
-                    matches!(elem, ProjectionElem::Field(..) | ProjectionElem::Downcast(_))
-                });
+                let simple_source = source
+                    .projection
+                    .iter()
+                    .all(|elem| matches!(elem, ProjectionElem::Field(..) | ProjectionElem::Downcast(_)));
                 // The temporary has two mentions: this assignment and its only use.
                 let candidate = target.projection.is_empty()
                     && temp > arg_count
@@ -467,9 +467,7 @@ fn forward_copies(blocks: &mut [BasicBlock], arg_count: usize, local_count: usiz
                     && !taken[temp]
                     && !taken[source.local]
                     && simple_source;
-                if candidate
-                    && (forward_in_block(block, index, temp, &source)
-                        || forward_across_call(blocks, at, index, temp, &source, local_count))
+                if candidate && (forward_in_block(block, index, temp, &source) || forward_across_call(blocks, at, index, temp, &source, local_count))
                 {
                     // The copy is gone, and the use reads `source` now: the mentions of the
                     // locals of `source` stay the same, and `temp` has no mention left. The
@@ -501,14 +499,7 @@ fn forward_in_block(block: &mut BasicBlock, index: usize, temp: Local, source: &
 /// Rule 3c2: the copy at statement `index` of block `at`, with its only use in the return block
 /// of the call that ends the block. Returns false (and changes nothing) if a condition of the
 /// rule is false.
-fn forward_across_call(
-    blocks: &mut [BasicBlock],
-    at: usize,
-    index: usize,
-    temp: Local,
-    source: &Place,
-    local_count: usize,
-) -> bool {
+fn forward_across_call(blocks: &mut [BasicBlock], at: usize, index: usize, temp: Local, source: &Place, local_count: usize) -> bool {
     let block = &blocks[at];
     // No statement after the copy writes the local of `source`.
     if block.statements[index + 1..].iter().any(|later| writes_local(&later.kind, source.local)) {
@@ -524,7 +515,10 @@ fn forward_across_call(
     // The call names neither local: the callee gets no pointer to them, and the result goes
     // to a different local.
     let mut mentions = vec![0usize; local_count];
-    let call = BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+    let call = BasicBlock {
+        statements: Vec::new(),
+        terminator: block.terminator.clone(),
+    };
     count_mentions(&call, &mut mentions);
     if mentions[temp] != 0 || mentions[source.local] != 0 {
         return false;
@@ -554,9 +548,7 @@ fn forward_across_call(
 /// True if the statement writes a place of the local.
 fn writes_local(kind: &StatementKind, local: Local) -> bool {
     match kind {
-        StatementKind::Assign(place, _) | StatementKind::SetDiscriminant { place, .. } => {
-            place.local == local
-        }
+        StatementKind::Assign(place, _) | StatementKind::SetDiscriminant { place, .. } => place.local == local,
         _ => false,
     }
 }
@@ -572,12 +564,14 @@ fn replace_use(block: &mut BasicBlock, from: usize, temp: Local, source: &Place)
     }
     impl MutMirVisitor for Replace<'_> {
         fn visit_operand(&mut self, operand: &mut Operand, location: Location) {
-            if let Operand::Copy(place) | Operand::Move(place) = operand {
-                if !self.done && place.local == self.temp && place.projection.is_empty() {
-                    *operand = Operand::Copy(self.source.clone());
-                    self.done = true;
-                    return;
-                }
+            if let Operand::Copy(place) | Operand::Move(place) = operand
+                && !self.done
+                && place.local == self.temp
+                && place.projection.is_empty()
+            {
+                *operand = Operand::Copy(self.source.clone());
+                self.done = true;
+                return;
             }
             self.super_operand(operand, location);
         }
@@ -602,7 +596,10 @@ fn replace_use(block: &mut BasicBlock, from: usize, temp: Local, source: &Place)
             return false;
         }
     }
-    let mut single = BasicBlock { statements: Vec::new(), terminator: block.terminator.clone() };
+    let mut single = BasicBlock {
+        statements: Vec::new(),
+        terminator: block.terminator.clone(),
+    };
     replace.visit_basic_block(&mut single);
     if replace.done {
         block.terminator = single.terminator;
@@ -618,13 +615,17 @@ fn branch_on_eq(blocks: &mut [BasicBlock], arg_count: usize, local_count: usize)
         count_mentions(block, &mut mentions);
     }
     for block in blocks.iter_mut() {
-        let TerminatorKind::SwitchInt { discr: Operand::Copy(discr) | Operand::Move(discr), targets } =
-            &block.terminator.kind
+        let TerminatorKind::SwitchInt {
+            discr: Operand::Copy(discr) | Operand::Move(discr),
+            targets,
+        } = &block.terminator.kind
         else {
             continue;
         };
-        let Some(Statement { kind: StatementKind::Assign(target, Rvalue::BinaryOp(BinOp::Ne, left, right)), .. }) =
-            block.statements.last()
+        let Some(Statement {
+            kind: StatementKind::Assign(target, Rvalue::BinaryOp(BinOp::Ne, left, right)),
+            ..
+        }) = block.statements.last()
         else {
             continue;
         };
@@ -640,12 +641,16 @@ fn branch_on_eq(blocks: &mut [BasicBlock], arg_count: usize, local_count: usize)
         let on_true = targets.otherwise();
         let (left, right, target) = (left.clone(), right.clone(), target.clone());
         let discr = block.terminator.kind.clone();
-        let TerminatorKind::SwitchInt { discr, .. } = discr else { continue };
+        let TerminatorKind::SwitchInt { discr, .. } = discr else {
+            continue;
+        };
         if let Some(last) = block.statements.last_mut() {
             last.kind = StatementKind::Assign(target, Rvalue::BinaryOp(BinOp::Eq, left, right));
         }
-        block.terminator.kind =
-            TerminatorKind::SwitchInt { discr, targets: SwitchTargets::new(vec![(0, on_true)], on_false) };
+        block.terminator.kind = TerminatorKind::SwitchInt {
+            discr,
+            targets: SwitchTargets::new(vec![(0, on_true)], on_false),
+        };
     }
 }
 
@@ -677,7 +682,7 @@ fn goto_chain_end(blocks: &[BasicBlock], start: BasicBlockIdx) -> BasicBlockIdx 
 }
 
 /// Orders the blocks by a depth-first walk from the entry, and removes unreachable blocks.
-fn order_blocks(blocks: Vec<BasicBlock>) -> Vec<BasicBlock> {
+fn order_blocks(blocks: &[BasicBlock]) -> Vec<BasicBlock> {
     let mut order = Vec::new();
     let mut seen = vec![false; blocks.len()];
     let mut stack = vec![0];
@@ -695,8 +700,7 @@ fn order_blocks(blocks: Vec<BasicBlock>) -> Vec<BasicBlock> {
         }
     }
 
-    let new_index: HashMap<BasicBlockIdx, BasicBlockIdx> =
-        order.iter().enumerate().map(|(new, &old)| (old, new)).collect();
+    let new_index: HashMap<BasicBlockIdx, BasicBlockIdx> = order.iter().enumerate().map(|(new, &old)| (old, new)).collect();
     order
         .iter()
         .map(|&old| {
@@ -708,7 +712,7 @@ fn order_blocks(blocks: Vec<BasicBlock>) -> Vec<BasicBlock> {
 }
 
 /// Applies `map` to each block target of a terminator, the unwind targets included.
-pub fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> BasicBlockIdx) {
+pub(crate) fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> BasicBlockIdx) {
     let remap_unwind = |unwind: &mut UnwindAction| {
         if let UnwindAction::Cleanup(target) = unwind {
             *target = map(*target);
@@ -720,8 +724,7 @@ pub fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> B
             let branches = targets.branches().map(|(value, target)| (value, map(target))).collect();
             *targets = SwitchTargets::new(branches, map(targets.otherwise()));
         }
-        TerminatorKind::Drop { target, unwind, .. }
-        | TerminatorKind::Assert { target, unwind, .. } => {
+        TerminatorKind::Drop { target, unwind, .. } | TerminatorKind::Assert { target, unwind, .. } => {
             *target = map(*target);
             remap_unwind(unwind);
         }
@@ -737,10 +740,7 @@ pub fn remap_targets(kind: &mut TerminatorKind, map: impl Fn(BasicBlockIdx) -> B
             }
             remap_unwind(unwind);
         }
-        TerminatorKind::Resume
-        | TerminatorKind::Abort
-        | TerminatorKind::Return
-        | TerminatorKind::Unreachable => {}
+        TerminatorKind::Resume | TerminatorKind::Abort | TerminatorKind::Return | TerminatorKind::Unreachable => {}
     }
 }
 
@@ -797,7 +797,11 @@ fn renumber_locals(mut body: Body, order: &[Local], arg_count: usize) -> Body {
         .iter()
         .map(|&old| {
             let decl = &body.locals()[old];
-            LocalDecl { ty: decl.ty, span: decl.span, mutability: Mutability::Not }
+            LocalDecl {
+                ty: decl.ty,
+                span: decl.span,
+                mutability: Mutability::Not,
+            }
         })
         .collect();
     // The spread argument is an argument, so its number does not change.

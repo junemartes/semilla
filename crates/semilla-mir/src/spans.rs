@@ -19,7 +19,7 @@ use rustc_span::{ExpnKind, Span};
 /// end for a span from a macro call. `file` is `-1` if the tokens have no source range. An
 /// element with no range has no entry.
 #[derive(serde::Serialize, Default)]
-pub struct Elements {
+pub(crate) struct Elements {
     /// The count of the elements of the body.
     pub n: usize,
     /// The files of the ranges (relative to the workspace root).
@@ -32,31 +32,39 @@ pub struct Elements {
 type Range = (i64, i64, i64);
 
 /// Returns the ranges of the elements of a canonical body.
-pub fn elements(body: &Body) -> Elements {
+pub(crate) fn elements(body: &Body) -> Elements {
     let mut out = Elements::default();
     let spans: Vec<rustc_public::ty::Span> = body
         .blocks
         .iter()
-        .flat_map(|block| block.statements.iter().map(|statement| statement.source_info.span).chain(std::iter::once(block.terminator.source_info.span)))
+        .flat_map(|block| {
+            block
+                .statements
+                .iter()
+                .map(|statement| statement.source_info.span)
+                .chain(std::iter::once(block.terminator.source_info.span))
+        })
         .collect();
     out.n = spans.len();
     rustc_middle::ty::tls::with(|tcx| {
         let mut last: Option<(Option<Range>, Option<Range>)> = None;
-        for (index, span) in spans.into_iter().enumerate() {
+        for (index, span) in (0_i64..).zip(spans) {
             let span = rustc_public::rustc_internal::internal(tcx, span);
             let ranges = ranges(tcx, span, &mut out.f);
             if ranges == (None, None) {
                 last = None;
                 continue;
             }
-            if last == Some(ranges) && let Some(run) = out.r.last_mut() {
+            if last == Some(ranges)
+                && let Some(run) = out.r.last_mut()
+            {
                 run[1] += 1;
                 continue;
             }
             last = Some(ranges);
             let (tokens, call) = ranges;
             let (file, start, end) = tokens.unwrap_or((-1, 0, 0));
-            let mut run = vec![index as i64, 1, file, start, end];
+            let mut run = vec![index, 1, file, start, end];
             if let Some((file, start, end)) = call {
                 run.extend([file, start, end]);
             }
@@ -98,27 +106,28 @@ fn range(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, files: &mut Vec<String>)
     if !file.contains(span.hi()) || span.hi() < span.lo() {
         return None;
     }
-    let rustc_span::FileName::Real(name) = &file.name else { return None };
+    let rustc_span::FileName::Real(name) = &file.name else {
+        return None;
+    };
     let path = crate::workspace_path(name.local_path()?);
     // An absolute path is outside the workspace.
     if path.is_empty() || std::path::Path::new(&path).is_absolute() {
         return None;
     }
-    let start = file.original_relative_byte_pos(span.lo()).0 as i64;
-    let end = file.original_relative_byte_pos(span.hi()).0 as i64;
-    let index = match files.iter().position(|known| *known == path) {
-        Some(index) => index,
-        None => {
-            files.push(path);
-            files.len() - 1
-        }
+    let start = i64::from(file.original_relative_byte_pos(span.lo()).0);
+    let end = i64::from(file.original_relative_byte_pos(span.hi()).0);
+    let index = if let Some(index) = files.iter().position(|known| *known == path) {
+        index
+    } else {
+        files.push(path);
+        files.len() - 1
     };
-    Some((index as i64, start, end))
+    Some((i64::try_from(index).ok()?, start, end))
 }
 
 /// The byte range of the span of a body in the file as written. `None` for a span from a macro
 /// expansion and for a file outside the workspace.
-pub fn body_range(span: rustc_public::ty::Span) -> Option<(i64, i64)> {
+pub(crate) fn body_range(span: rustc_public::ty::Span) -> Option<(i64, i64)> {
     rustc_middle::ty::tls::with(|tcx| {
         let span = rustc_public::rustc_internal::internal(tcx, span);
         if span.from_expansion() {

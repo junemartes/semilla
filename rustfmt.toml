@@ -1,0 +1,2 @@
+# The line width of the code. Semilla uses long lines, so the width is above the default 100.
+max_width = 150

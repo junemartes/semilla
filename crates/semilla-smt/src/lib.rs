@@ -145,14 +145,8 @@ impl<'a> Run<'a> {
     }
 
     fn check(&mut self, label: &str, assertions: &[&str], model: bool) -> Result<Answer> {
-        let symbols = if model {
-            self.problem.sym_names()
-        } else {
-            Vec::new()
-        };
-        let (query, answer) = self
-            .solver
-            .check(&self.problem.body(assertions), &symbols)?;
+        let symbols = if model { self.problem.sym_names() } else { Vec::new() };
+        let (query, answer) = self.solver.check(&self.problem.body(assertions), &symbols)?;
         self.queries.push(format!("; ---- {label}\n{query}"));
         Ok(answer)
     }
@@ -185,20 +179,14 @@ impl<'a> Run<'a> {
             return Ok(None);
         }
         let assertion = format!("(or {})", differences.join(" "));
-        let answer = self.check(
-            "a call runs on one side and not on the other",
-            &["inputs_valid", &assertion],
-            true,
-        )?;
+        let answer = self.check("a call runs on one side and not on the other", &["inputs_valid", &assertion], true)?;
         Ok(match answer {
             Answer::Unsat => None,
             Answer::Sat(model) => Some(format!(
                 "a call runs on one side and not on the other (for example, {}); calls can have side effects",
                 self.problem.witness(&model)
             )),
-            Answer::Unknown(reason) => Some(format!(
-                "the solver did not show that the calls run under the same conditions ({reason})"
-            )),
+            Answer::Unknown(reason) => Some(format!("the solver did not show that the calls run under the same conditions ({reason})")),
         })
     }
 
@@ -223,10 +211,7 @@ impl<'a> Run<'a> {
             match self.check(label, &["inputs_valid", assertion], true)? {
                 Answer::Unsat => {}
                 Answer::Sat(model) => {
-                    return Ok(Err(PanicDifference::Found(format!(
-                        "{}; {text}",
-                        self.problem.witness(&model)
-                    ))));
+                    return Ok(Err(PanicDifference::Found(format!("{}; {text}", self.problem.witness(&model)))));
                 }
                 Answer::Unknown(reason) => unknown = Some(reason),
             }
@@ -259,33 +244,31 @@ fn prepare(before: &str, after: &str, env: &TypeEnv, top: Top) -> Result<Result<
 ///
 /// The effect is computed under the assumption that neither side panics. The
 /// field `panic_conditions_differ` tells if the panic conditions are different.
-pub fn classify_condition(
-    solver: &Solver,
-    before: &str,
-    after: &str,
-    env: &TypeEnv,
-) -> Result<EffectResult> {
+///
+/// # Errors
+///
+/// Returns an error if the solver process fails or gives output that the crate cannot read.
+pub fn classify_condition(solver: &Solver, before: &str, after: &str, env: &TypeEnv) -> Result<EffectResult> {
     let result = classify_one(solver, before, after, env)?;
     if result.effect != Effect::Equivalent || result.panic_conditions_differ {
         return Ok(result);
     }
     // "Equivalent" is a proof, and a proof must hold for each build configuration.
     for other in &build::ALL[1..] {
-        let holds = build::with(*other, || classify_one(solver, before, after, env)).is_ok_and(|other| other.effect == Effect::Equivalent && !other.panic_conditions_differ);
+        let holds = build::with(*other, || classify_one(solver, before, after, env))
+            .is_ok_and(|other| other.effect == Effect::Equivalent && !other.panic_conditions_differ);
         if !holds {
-            return Ok(EffectResult::unrelated(format!("the two sides are equivalent in the check build, and there is no proof for a build with {other}"), result.query));
+            return Ok(EffectResult::unrelated(
+                format!("the two sides are equivalent in the check build, and there is no proof for a build with {other}"),
+                result.query,
+            ));
         }
     }
     Ok(result)
 }
 
 /// [`classify_condition`] for the build configuration of this thread.
-fn classify_one(
-    solver: &Solver,
-    before: &str,
-    after: &str,
-    env: &TypeEnv,
-) -> Result<EffectResult> {
+fn classify_one(solver: &Solver, before: &str, after: &str, env: &TypeEnv) -> Result<EffectResult> {
     let problem = match prepare(before, after, env, Top::Condition)? {
         Ok(problem) => problem,
         Err(reason) => return Ok(EffectResult::unrelated(reason, String::new())),
@@ -297,11 +280,7 @@ fn classify_one(
 
     let mut notes = Vec::new();
     let (effect, witness) = 'effect: {
-        match run.check(
-            "an input exists on which neither side panics",
-            &[NO_PANIC],
-            false,
-        )? {
+        match run.check("an input exists on which neither side panics", &[NO_PANIC], false)? {
             Answer::Sat(_) => {}
             Answer::Unsat => {
                 notes.push("each valid input makes one of the sides panic".into());
@@ -312,32 +291,16 @@ fn classify_one(
                 break 'effect (Effect::Unrelated, None);
             }
         }
-        let differ = run.check(
-            "before and after differ",
-            &[NO_PANIC, "(distinct before after)"],
-            true,
-        )?;
+        let differ = run.check("before and after differ", &[NO_PANIC, "(distinct before after)"], true)?;
         if differ == Answer::Unsat {
             break 'effect (Effect::Equivalent, None);
         }
-        let negate = run.check(
-            "after is not the negation of before",
-            &[NO_PANIC, "(= before after)"],
-            false,
-        )?;
+        let negate = run.check("after is not the negation of before", &[NO_PANIC, "(= before after)"], false)?;
         if negate == Answer::Unsat {
             break 'effect (Effect::Negate, None);
         }
-        let gained = run.check(
-            "after holds and before does not",
-            &[NO_PANIC, "after", "(not before)"],
-            true,
-        )?;
-        let lost = run.check(
-            "before holds and after does not",
-            &[NO_PANIC, "before", "(not after)"],
-            true,
-        )?;
+        let gained = run.check("after holds and before does not", &[NO_PANIC, "after", "(not before)"], true)?;
+        let lost = run.check("before holds and after does not", &[NO_PANIC, "before", "(not after)"], true)?;
         match (&gained, &lost) {
             (Answer::Unsat, Answer::Sat(model)) => (Effect::Narrow, Some(problem.witness(model))),
             (Answer::Sat(model), Answer::Unsat) => (Effect::Widen, Some(problem.witness(model))),
@@ -369,21 +332,20 @@ fn classify_one(
             if unknown.is_empty() {
                 (true, Some(witness))
             } else {
-                notes.push(format!("no example of the panic difference: the integer type of {} is not known", unknown.join(", ")));
+                notes.push(format!(
+                    "no example of the panic difference: the integer type of {} is not known",
+                    unknown.join(", ")
+                ));
                 (true, None)
             }
         }
         Err(PanicDifference::Unknown(reason)) => {
-            notes.push(format!(
-                "the solver did not show that the panic conditions are the same ({reason})"
-            ));
+            notes.push(format!("the solver did not show that the panic conditions are the same ({reason})"));
             (true, None)
         }
     };
     if !problem.exact && witness.is_some() {
-        notes.push(
-            "the witness can be impossible in Rust: the encoding has atoms or unknown types".into(),
-        );
+        notes.push("the witness can be impossible in Rust: the encoding has atoms or unknown types".into());
     }
     Ok(EffectResult {
         effect,
@@ -398,40 +360,36 @@ fn classify_one(
 
 /// Proves that `after` has the same value as `before` for each input, and
 /// that the two sides panic on the same inputs.
-pub fn equivalent(
-    solver: &Solver,
-    before: &str,
-    after: &str,
-    env: &TypeEnv,
-) -> Result<Equivalence> {
+///
+/// # Errors
+///
+/// Returns an error if the solver process fails or gives output that the crate cannot read.
+pub fn equivalent(solver: &Solver, before: &str, after: &str, env: &TypeEnv) -> Result<Equivalence> {
     compare(solver, before, after, env, true)
 }
 
 /// Proves that `after` has the same value as `before` for each input on which
 /// neither side panics. The panic conditions can be different.
-pub fn equivalent_no_panic(
-    solver: &Solver,
-    before: &str,
-    after: &str,
-    env: &TypeEnv,
-) -> Result<Equivalence> {
+///
+/// # Errors
+///
+/// Returns an error if the solver process fails or gives output that the crate cannot read.
+pub fn equivalent_no_panic(solver: &Solver, before: &str, after: &str, env: &TypeEnv) -> Result<Equivalence> {
     compare(solver, before, after, env, false)
 }
 
 /// Tests a rewrite rule `lhs => rhs` (design B24). The pattern variables are
 /// the free names of the rule, with their types in `env`. The rule is sound
 /// only if the two sides have the same value and the same panic conditions.
+///
+/// # Errors
+///
+/// Returns an error if the solver process fails or gives output that the crate cannot read.
 pub fn check_rule(solver: &Solver, lhs: &str, rhs: &str, env: &TypeEnv) -> Result<Equivalence> {
     compare(solver, lhs, rhs, env, true)
 }
 
-fn compare(
-    solver: &Solver,
-    before: &str,
-    after: &str,
-    env: &TypeEnv,
-    strict: bool,
-) -> Result<Equivalence> {
+fn compare(solver: &Solver, before: &str, after: &str, env: &TypeEnv, strict: bool) -> Result<Equivalence> {
     let result = compare_one(solver, before, after, env, strict)?;
     // The check with `strict == false` is about the inputs with no panic in the check build. It
     // is not a proof of equal behavior, and no caller uses it as one.
@@ -440,22 +398,19 @@ fn compare(
     }
     // A proof must hold for each build configuration.
     for other in &build::ALL[1..] {
-        let holds = build::with(*other, || compare_one(solver, before, after, env, strict)).is_ok_and(|other| matches!(other, Equivalence::Proved { .. }));
+        let holds =
+            build::with(*other, || compare_one(solver, before, after, env, strict)).is_ok_and(|other| matches!(other, Equivalence::Proved { .. }));
         if !holds {
-            return Ok(Equivalence::NotProved { reason: format!("the two sides are equal in the check build, and there is no proof for a build with {other}") });
+            return Ok(Equivalence::NotProved {
+                reason: format!("the two sides are equal in the check build, and there is no proof for a build with {other}"),
+            });
         }
     }
     Ok(result)
 }
 
 /// [`compare`] for the build configuration of this thread.
-fn compare_one(
-    solver: &Solver,
-    before: &str,
-    after: &str,
-    env: &TypeEnv,
-    strict: bool,
-) -> Result<Equivalence> {
+fn compare_one(solver: &Solver, before: &str, after: &str, env: &TypeEnv, strict: bool) -> Result<Equivalence> {
     let problem = match prepare(before, after, env, Top::SameType)? {
         Ok(problem) => problem,
         Err(reason) => return Ok(Equivalence::NotProved { reason }),
@@ -466,22 +421,14 @@ fn compare_one(
     }
     let refute = |witness: String, what: &str| {
         if problem.exact {
-            Equivalence::Refuted {
-                counterexample: witness,
-            }
+            Equivalence::Refuted { counterexample: witness }
         } else {
             Equivalence::NotProved {
-                reason: format!(
-                    "{what} for a model that can be impossible in Rust (the encoding has atoms or unknown types): {witness}"
-                ),
+                reason: format!("{what} for a model that can be impossible in Rust (the encoding has atoms or unknown types): {witness}"),
             }
         }
     };
-    match run.check(
-        "the values differ",
-        &[NO_PANIC, "(distinct before after)"],
-        true,
-    )? {
+    match run.check("the values differ", &[NO_PANIC, "(distinct before after)"], true)? {
         Answer::Unsat => {}
         Answer::Sat(model) => return Ok(refute(problem.witness(&model), "the values differ")),
         Answer::Unknown(reason) => {
@@ -498,9 +445,7 @@ fn compare_one(
             }
             Err(PanicDifference::Unknown(reason)) => {
                 return Ok(Equivalence::NotProved {
-                    reason: format!(
-                        "the solver did not show that the panic conditions are the same ({reason})"
-                    ),
+                    reason: format!("the solver did not show that the panic conditions are the same ({reason})"),
                 });
             }
         }

@@ -24,7 +24,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         if path.is_dir() && name != "target" && !name.starts_with('.') {
             out.extend(walk(&path));
-        } else if name.ends_with(".rs") {
+        } else if semilla_core::text::has_extension(&name, "rs") {
             out.push(path);
         }
     }

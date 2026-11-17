@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The cache folder of one repository.
 #[derive(Debug)]
-pub struct Store {
+pub(crate) struct Store {
     /// The folder of this repository.
     pub dir: PathBuf,
     /// True if the folder is temporary: `--fresh`, or no cache folder that Semilla can write.
@@ -21,23 +21,27 @@ pub struct Store {
 static FRESH: AtomicBool = AtomicBool::new(false);
 
 /// Sets the `--fresh` mode of this process: no command reads a cache.
-pub fn set_fresh(fresh: bool) {
+pub(crate) fn set_fresh(fresh: bool) {
     FRESH.store(fresh, Ordering::Relaxed);
 }
 
 /// The cache folder of the user for all repositories. `None` if no variable gives a folder.
-pub fn user_cache() -> Option<PathBuf> {
+pub(crate) fn user_cache() -> Option<PathBuf> {
     let absolute = |name: &str| std::env::var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
-    absolute("SEMILLA_CACHE_DIR").or_else(|| absolute("XDG_CACHE_HOME").map(|dir| dir.join("semilla"))).or_else(|| absolute("HOME").map(|dir| dir.join(".cache/semilla")))
+    absolute("SEMILLA_CACHE_DIR")
+        .or_else(|| absolute("XDG_CACHE_HOME").map(|dir| dir.join("semilla")))
+        .or_else(|| absolute("HOME").map(|dir| dir.join(".cache/semilla")))
 }
 
 /// A stable hash of a text (FNV-1a, 64 bits). The standard hasher can change with the compiler.
-pub fn stable_hash(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3))
+pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 /// True if `path` is `folder` or is in `folder`. The two paths are canonical when they exist.
-pub fn is_inside(path: &Path, folder: &Path) -> bool {
+pub(crate) fn is_inside(path: &Path, folder: &Path) -> bool {
     let canonical = |path: &Path| {
         // A path that does not exist yet: use the first parent that exists.
         let mut rest = Vec::new();
@@ -46,7 +50,10 @@ pub fn is_inside(path: &Path, folder: &Path) -> bool {
             if let Ok(real) = std::fs::canonicalize(&current) {
                 return rest.iter().rev().fold(real, |path, name| path.join(name));
             }
-            match (current.file_name().map(|name| name.to_os_string()), current.parent().map(Path::to_path_buf)) {
+            match (
+                current.file_name().map(std::ffi::OsStr::to_os_string),
+                current.parent().map(Path::to_path_buf),
+            ) {
                 (Some(name), Some(parent)) => {
                     rest.push(name);
                     current = parent;
@@ -61,7 +68,8 @@ pub fn is_inside(path: &Path, folder: &Path) -> bool {
 impl Store {
     /// Opens the cache folder of a repository. If Semilla cannot use the folder, the work goes on
     /// with a temporary folder (no cache), and one note on stderr says so.
-    pub fn open(root: &Path) -> Store {
+    pub(crate) fn open(root: &Path) -> Store {
+        static NOTED: AtomicBool = AtomicBool::new(false);
         // `--fresh`: a new private folder, so this process reads no record of an earlier run.
         if FRESH.load(Ordering::Relaxed) {
             return Store::temporary();
@@ -70,18 +78,19 @@ impl Store {
         let name = format!("{:016x}", stable_hash(real.to_string_lossy().as_bytes()));
         let problem = match user_cache() {
             None => "no variable gives a cache folder (SEMILLA_CACHE_DIR, XDG_CACHE_HOME, HOME)".to_string(),
-            Some(base) if is_inside(&base, &real) => format!("the cache folder {} is in the repository folder", base.display()),
+            Some(base) if is_inside(&base, &real) => {
+                format!("the cache folder {} is in the repository folder", base.display())
+            }
             Some(base) => {
                 let dir = base.join(name);
                 let marker = dir.join("repository");
-                let usable = std::fs::create_dir_all(dir.join("tmp")).and_then(|_| std::fs::write(&marker, format!("{}\n", real.display())));
+                let usable = std::fs::create_dir_all(dir.join("tmp")).and_then(|()| std::fs::write(&marker, format!("{}\n", real.display())));
                 match usable {
                     Ok(()) => return Store { dir, temporary: false },
                     Err(error) => format!("Semilla cannot write the cache folder {} ({error})", dir.display()),
                 }
             }
         };
-        static NOTED: AtomicBool = AtomicBool::new(false);
         if !NOTED.swap(true, Ordering::Relaxed) {
             eprintln!("note: {problem}; Semilla works with no cache and computes each record again");
         }
@@ -90,7 +99,9 @@ impl Store {
 
     /// A new private folder in the temporary folder of the system. `Drop` removes it.
     fn temporary() -> Store {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|time| time.subsec_nanos()).unwrap_or(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |time| time.subsec_nanos());
         let mut count = 0;
         loop {
             let dir = std::env::temp_dir().join(format!("semilla-nocache-{}-{nanos:09}-{count}", std::process::id()));
@@ -109,7 +120,7 @@ impl Store {
     }
 
     /// True if this process has no cache that stays (`--fresh`, or no folder that it can write).
-    pub fn is_temporary(&self) -> bool {
+    pub(crate) fn is_temporary(&self) -> bool {
         self.temporary
     }
 
@@ -117,7 +128,7 @@ impl Store {
     /// this user (batch 6a, B3). The cache folder of a repository has the path of the repository
     /// in its name, so a copy of the repository at a different path does not find its records.
     /// `None` if this process has no cache that stays.
-    pub fn content_dir(&self, name: &str) -> Option<PathBuf> {
+    pub(crate) fn content_dir(&self, name: &str) -> Option<PathBuf> {
         if self.temporary {
             return None;
         }
@@ -125,11 +136,13 @@ impl Store {
     }
 
     /// A path in the cache folder that only this process uses (an index file, a note text).
-    pub fn private_path(&self, name: &str) -> PathBuf {
+    pub(crate) fn private_path(&self, name: &str) -> PathBuf {
         use std::sync::atomic::AtomicUsize;
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let _ = std::fs::create_dir_all(self.dir.join("tmp"));
-        self.dir.join("tmp").join(format!("{name}-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)))
+        self.dir
+            .join("tmp")
+            .join(format!("{name}-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)))
     }
 }
 
@@ -144,9 +157,13 @@ impl Drop for Store {
 /// The folders where Semilla looks for a tool (the solver), in order, after the environment
 /// variable of the tool: next to the Semilla binary, then the cache folder of the user. A folder
 /// in the checked repository is never in the list (I5).
-pub fn tool_dirs(repo_root: &Path) -> Vec<PathBuf> {
+pub(crate) fn tool_dirs(repo_root: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| std::fs::canonicalize(exe).ok()).and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| std::fs::canonicalize(exe).ok())
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
         dirs.push(dir.join("tools"));
         dirs.push(dir);
     }
