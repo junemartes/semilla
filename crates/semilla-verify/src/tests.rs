@@ -97,7 +97,7 @@ fn structured_claims_cover_all_edits() {
     assert!(status_of(&report, "c2").is_verified(), "{:?}", status_of(&report, "c2"));
     let c2 = report.claims.iter().find(|c| c.claim == "c2").unwrap();
     assert_eq!(c2.effect, Some(Effect::Widen));
-    assert_eq!(c2.category, Some(Category::ControlFlow));
+    assert_eq!(c2.category, Some(Category::Semantics));
     assert_eq!(c2.witness.as_deref(), Some("i = 5, n = 5"));
     assert!(report.accepted());
 }
@@ -136,7 +136,7 @@ fn a_claim_of_a_rewrite_checks_the_shape_only() {
     let extract = || vec![claim("c1", "extract-variable", Some("demo::f/tail"), serde_json::json!({"name": "product"}))];
     let category = |report: &StepReport| report.claims.iter().find(|result| result.claim == "c1").unwrap().category;
     // An equal result above N1 is not a result of the compare.
-    for (status, expected) in [(equal("n0"), Category::Logic), (equal("n2"), Category::Logic), (different(false), Category::Logic), (different(true), Category::Logic)] {
+    for (status, expected) in [(equal("n0"), Category::Semantics), (equal("n2"), Category::Semantics), (different(false), Category::Semantics), (different(true), Category::Semantics)] {
         let report = run(PLAIN, EXTRACTED, extract(), &[("demo::f", status)], None);
         assert_eq!(status_of(&report, "c1"), &ClaimStatus::Verified { proof: "shape".into() });
         assert_eq!(category(&report), Some(expected), "{report:#?}");
@@ -2150,7 +2150,7 @@ fn each_edit_gets_a_derived_fact() {
     assert!(report.facts.iter().all(|f| f.compare == Compare::Pending), "{:#?}", report.facts);
     // Phase 2: a changed body gives the class of the op.
     let report = derive(&[("demo::total", different(true))]);
-    assert!(report.facts.iter().all(|f| f.category == Category::ControlFlow), "{:#?}", report.facts);
+    assert!(report.facts.iter().all(|f| f.category == Category::Semantics), "{:#?}", report.facts);
     assert!(report.accepted(), "{report:#?}");
     // An equal body hides no edit (design 35): each edit is a fact with `code equal`.
     let count = report.facts.len();
@@ -2261,7 +2261,7 @@ fn one_expression_edit_gives_one_fact() {
     let before = source("a");
     let report = run_derived(&before, &before.replace("a > 0 && b > 0", "a > 0 && b > 0 && x > 0"), &[("demo::f", equal("n0")), ("demo::g", different(true)), ("demo::c", equal("n0"))]);
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
-    assert!(report.facts[0].description.starts_with("added operand `&& x > 0`") && report.facts[0].category == Category::ControlFlow, "{:#?}", report.facts);
+    assert!(report.facts[0].description.starts_with("added operand `&& x > 0`") && report.facts[0].category == Category::Semantics, "{:#?}", report.facts);
 }
 
 #[test]
@@ -2382,7 +2382,7 @@ fn a_hidden_change_next_to_a_derived_identity_is_shown() {
     let report = run_derived(MOVE_BEFORE, &changed, &[("demo::b::over", different(false)), ("demo::b::run", equal("n1"))]);
     let moved = report.facts.iter().find(|f| f.description.starts_with("moved `demo::a::over` → `demo::b::over`")).unwrap();
     assert!(moved.compare == Compare::CodeEqual && moved.affected.is_empty() && !moved.mismatch(), "{moved:#?}");
-    assert!(report.facts.iter().any(|f| f.description == "changed operator `x > LIMIT` → `x >= LIMIT` at `demo::b::over/tail`" && f.category == Category::Logic && f.compare == Compare::CodeDifferent && f.affected == ["demo::b::over"]), "{:#?}", report.facts);
+    assert!(report.facts.iter().any(|f| f.description == "changed operator `x > LIMIT` → `x >= LIMIT` at `demo::b::over/tail`" && f.category == Category::Semantics && f.compare == Compare::CodeDifferent && f.affected == ["demo::b::over"]), "{:#?}", report.facts);
     assert!(!descriptions(&report).iter().any(|d| d.starts_with("added `") || d.starts_with("removed `")), "{:?}", descriptions(&report));
     // A function rename and a changed literal in its body.
     let before = "pub fn percent(a: u64) -> u64 {\n    a / 100\n}\npub fn charge(a: u64) -> u64 {\n    percent(a) + 1\n}\n";
@@ -2843,7 +2843,7 @@ fn a_renamed_macro_with_equal_bodies_is_one_rename_fact_with_its_call_sites() {
     let report = run_derived(before, &more, &[("demo::one", different(false)), ("demo::two", different(false))]);
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
     assert!(text.contains("renamed macro `demo::map_either` → `demo::map_both` [rename · code different]\n      1 site(s): changed macro call `map_either!` → `map_both!` (in demo::one)\n      ! the compiled code changes: demo::one\n"), "{text}");
-    assert!(text.contains("derived: changed macro: `map_either!(a, y => y * 2)` → `map_both!(a, y => y * 3)` at `demo::two/tail` [logic · code different]"), "{text}");
+    assert!(text.contains("derived: changed macro: `map_either!(a, y => y * 2)` → `map_both!(a, y => y * 3)` at `demo::two/tail` [semantics · code different]"), "{text}");
     // A rename with a different body keeps the removed fact and the added fact.
     let other = after.replace("$pattern => $result,", "$pattern => $result,\n            #[allow(unreachable_patterns)]\n            _ => unreachable!(),");
     let report = run_derived(before, &other, &[("demo::one", different(false)), ("demo::two", different(false))]);
@@ -2875,7 +2875,7 @@ fn the_text_output_shows_a_manifest_diff_and_an_equal_spotlight_text_one_time() 
             fact
         })
         .collect();
-    facts.insert(0, shown_fact("f1", "src/lib.rs", "changed literal `1` → `2` at `demo::f/S0`", Category::Value, Compare::CodeDifferent));
+    facts.insert(0, shown_fact("f1", "src/lib.rs", "changed literal `1` → `2` at `demo::f/S0`", Category::Semantics, Compare::CodeDifferent));
     let report = StepReport { facts, ..Default::default() };
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
     assert_eq!(text.matches("- old").count(), 1, "{text}");
@@ -2936,9 +2936,9 @@ fn the_text_output_puts_the_body_edits_with_different_code_first() {
         shown_fact("f3", "src/lib.rs", "renamed `demo::a` → `demo::b`", Category::Rename, Compare::CodeEqual),
         shown_fact("f4", "src/lib.rs", "added `demo::new`", Category::Added, Compare::CodeDifferent),
         shown_fact("f5", "src/lib.rs", "changed docs of `demo::b`", Category::Docs, Compare::NoCode),
-        shown_fact("f6", "src/lib.rs", "changed literal `1` → `2` at `demo::f/S0`", Category::Value, Compare::CodeDifferent),
-        shown_fact("f7", "src/lib.rs", "changed literal `3` → `3u8` at `demo::g/S0`", Category::Value, Compare::CodeEqual),
-        shown_fact("f8", "src/lib.rs", "added statement `x += 1;` at `demo::f/S1`", Category::Logic, Compare::CodeDifferent),
+        shown_fact("f6", "src/lib.rs", "changed literal `1` → `2` at `demo::f/S0`", Category::Semantics, Compare::CodeDifferent),
+        shown_fact("f7", "src/lib.rs", "changed literal `3` → `3u8` at `demo::g/S0`", Category::Semantics, Compare::CodeEqual),
+        shown_fact("f8", "src/lib.rs", "added statement `x += 1;` at `demo::f/S1`", Category::Semantics, Compare::CodeDifferent),
     ];
     let report = StepReport { facts, ..Default::default() };
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
@@ -4196,7 +4196,7 @@ fn a_moved_node_shows_its_two_places() {
     assert!(texts.contains(&"moved statement `None` from `demo::h/S0/then/tail` to `demo::h/S0/else/tail`"), "{texts:#?}");
     assert!(texts.contains(&"moved statement `Some(0)` from `demo::h/S0/else/tail` to `demo::h/S0/then/tail`"), "{texts:#?}");
     // Fix round 2 (design 41.7): a moved statement has the category of its statement form.
-    assert!(report.facts.iter().filter(|f| f.description.starts_with("moved statement")).all(|f| f.category == Category::Logic), "{texts:#?}");
+    assert!(report.facts.iter().filter(|f| f.description.starts_with("moved statement")).all(|f| f.category == Category::Semantics), "{texts:#?}");
 }
 
 #[test]
@@ -4682,7 +4682,7 @@ fn a_moved_constant_and_a_moved_struct_get_their_proof() {
     // Design 36.1: the move is one fact, and the value is a second fact with the changed bodies.
     let texts = descriptions(&report);
     assert_eq!(texts, ["moved `demo::date::LIMIT` → `demo::calendar::LIMIT`, with 1 `use` line(s)", "visibility of `demo::calendar::LIMIT`: `private` → `pub(crate)`", "value of `demo::calendar::LIMIT` changed: 4 → 5"]);
-    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[2].category == Category::Value && report.facts[2].affected == ["demo::calendar::LIMIT", "demo::date::parse"], "{report:#?}");
+    assert!(report.facts[0].compare == Compare::CodeEqual && report.facts[2].category == Category::Semantics && report.facts[2].affected == ["demo::calendar::LIMIT", "demo::date::parse"], "{report:#?}");
 
     // A struct with an `impl` block.
     const YEAR: &str = "pub struct Year(pub u64);\nimpl Year {\n    pub fn leap(&self) -> bool {\n        self.0 % 4 == 0\n    }\n}\n";
@@ -5278,7 +5278,7 @@ fn a_declaration_change_of_a_public_item_names_the_public_api() {
         assert!(BASE.contains(old), "{old}");
         let report = run_derived(BASE, &BASE.replace(old, new), &bodies);
         let fact = report.facts.iter().find(|fact| fact.description.contains(start)).unwrap_or_else(|| panic!("{new}: {:#?}", descriptions(&report)));
-        assert!(matches!(fact.category, Category::Declaration | Category::Value), "{new}: {fact:#?}");
+        assert!(matches!(fact.category, Category::Declaration | Category::Semantics), "{new}: {fact:#?}");
         assert!(fact.description.contains("(the public API can change: a different crate can use the item)"), "{new}: {}", fact.description);
         assert!(report.facts.iter().all(|fact| sides_differ(&fact.description)), "{new}: {:#?}", descriptions(&report));
         // The API level of the report is `major`.
@@ -6302,18 +6302,18 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Op::ANY`".to_string()]));
     // A changed value, a removed constant: the level is `major`.
     let (text, category, level, api) = one("DEFAULT: Op = Op(1)", "DEFAULT: Op = Op(2)");
-    assert_eq!((text, category), (format!("value of `demo::Op::DEFAULT` changed: Op(1) → Op(2) {API}"), Category::Value));
+    assert_eq!((text, category), (format!("value of `demo::Op::DEFAULT` changed: Op(1) → Op(2) {API}"), Category::Semantics));
     assert_eq!((level.as_str(), api), ("major", vec!["changed `demo::Op::DEFAULT` (the type or the value)".to_string()]));
     let (text, category, level, api) = one("    pub const DEFAULT: Op = Op(1);\n", "");
     assert_eq!((text, category), (format!("removed `demo::Op::DEFAULT` {API}"), Category::Removed));
     assert_eq!((level.as_str(), api), ("major", vec!["removed `demo::Op::DEFAULT`".to_string()]));
     // A private constant of an inherent impl is not a part of the public API.
     let (text, category, level, api) = one("HIDDEN: u8 = 1", "HIDDEN: u8 = 2");
-    assert_eq!((text.as_str(), category), ("value of `demo::Op::HIDDEN` changed: 1 → 2", Category::Value));
+    assert_eq!((text.as_str(), category), ("value of `demo::Op::HIDDEN` changed: 1 → 2", Category::Semantics));
     assert_eq!((level.as_str(), api.len()), ("patch", 0));
     // A member of a trait impl has no visibility: the impl gives the answer.
     let (text, category, level, _) = one("= \"op\"", "= \"operator\"");
-    assert_eq!((text, category, level.as_str()), (format!("value of `demo::<Op as Named>::NAME` changed: \"op\" → \"operator\" {API}"), Category::Value, "major"));
+    assert_eq!((text, category, level.as_str()), (format!("value of `demo::<Op as Named>::NAME` changed: \"op\" → \"operator\" {API}"), Category::Semantics, "major"));
     let (text, category, level, _) = one("type Out = u8", "type Out = u16");
     assert_eq!((text, category, level.as_str()), (format!("associated type `demo::<Op as Named>::Out`: `type Out = u8;` → `type Out = u16;` {API}"), Category::Declaration, "major"));
     // New methods: one fact for each method, and no fact for the member list.
@@ -6326,7 +6326,7 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Kind::ALL`".to_string()]));
     // Rule 2: a constant in a function body follows the rule of a constant of a module.
     let (text, category, level, _) = one("MAX: usize = 32", "MAX: usize = 64");
-    assert_eq!((text.as_str(), category, level.as_str()), ("value of `MAX` (in `demo::limit`) changed: 32 → 64", Category::Value, "patch"));
+    assert_eq!((text.as_str(), category, level.as_str()), ("value of `MAX` (in `demo::limit`) changed: 32 → 64", Category::Semantics, "patch"));
     // Rule 4: a new trait impl, a removed `Sync` impl, a removed `derive` name.
     let (text, _, level, api) = one("pub fn limit", "impl From<u8> for Op {\n    fn from(x: u8) -> Op {\n        Op(x)\n    }\n}\npub fn limit");
     assert_eq!(text, format!("trait impl `<Op as From<u8>>` added with: `fn from` {API}"));
@@ -6435,11 +6435,11 @@ fn two_impl_blocks_that_differ_only_in_lifetimes_are_one_impl() {
     assert!(headers[1].starts_with("generics of `demo::impl dynShape`: `impl<'a> dyn Shape + 'a { }` → `impl dyn Shape { }`"), "{lines:#?}");
     // Each edit in a member is a fact with its text.
     for text in [
-        "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [control flow]",
-        "changed literal `10` → `20` at `demo::<&mutNode as Parse>::parse/S0/arm[0].body` [value]",
-        "changed pattern `1` → `0` at `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [control flow]",
-        "changed literal `20` → `10` at `demo::<&mutNode as Parse>::parse/S0/arm[1].body` [value]",
-        "changed literal `1` → `2` at `demo::dynShape::area/tail` [value]",
+        "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [semantics]",
+        "changed literal `10` → `20` at `demo::<&mutNode as Parse>::parse/S0/arm[0].body` [semantics]",
+        "changed pattern `1` → `0` at `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [semantics]",
+        "changed literal `20` → `10` at `demo::<&mutNode as Parse>::parse/S0/arm[1].body` [semantics]",
+        "changed literal `1` → `2` at `demo::dynShape::area/tail` [semantics]",
     ] {
         assert!(lines.contains(&text.to_string()), "{text}\n{lines:#?}");
     }
@@ -6485,8 +6485,8 @@ fn a_module_file_under_a_condition_that_is_off_gets_the_usual_facts() {
     let report = run_units(&before, &after, &oracle, &[]);
     let lines: Vec<String> = report.facts.iter().map(|fact| format!("{} [{} · {}]{}", fact.description, fact.category.name(), fact.compare.name(), if fact.spotlight { " spotlight" } else { "" })).collect();
     // Each file of the module is a twin module. An edit in a file that is off has its text.
-    assert!(lines.contains(&"changed literal `2` → `3` at `demo::sys#1::open/tail/rhs` [value · no compare]".to_string()), "{lines:#?}");
-    assert!(lines.contains(&"changed literal `4` → `5` at `demo::win::handle/tail/rhs` [value · no compare]".to_string()), "{lines:#?}");
+    assert!(lines.contains(&"changed literal `2` → `3` at `demo::sys#1::open/tail/rhs` [semantics · no compare]".to_string()), "{lines:#?}");
+    assert!(lines.contains(&"changed literal `4` → `5` at `demo::win::handle/tail/rhs` [semantics · no compare]".to_string()), "{lines:#?}");
     // Design 38.10: the derived rename in the file that is off has no compare.
     assert!(lines.contains(&"renamed `demo::sys#1::close` → `demo::sys#1::shut` [rename · no compare]".to_string()), "{lines:#?}");
     // One spotlight for each file, with the file as the key of the reason.
@@ -7100,26 +7100,28 @@ fn the_branch_mark_counts_the_branch_points_the_targets_and_the_exits() {
 }
 
 #[test]
-fn the_category_of_an_edit_comes_from_its_syntax() {
-    // Design 40.5: the table, one row for each class. The status of the body (with a changed
-    // control flow graph or not) does not change a category.
+fn each_form_of_a_body_edit_is_semantics_and_keeps_its_text() {
+    // Design 42: the table of 40.5 gives the forms of `semantics`, one row for each form. The
+    // status of the body (with a changed control flow graph or not) does not change a
+    // category. The text keeps the form of the edit.
     let base = "pub fn f(a: u32, o: Option<u32>) -> u32 {\n    let b = a + 1;\n    if a > b {\n        return 0;\n    }\n    let Some(c) = o else { return 1; };\n    g(b);\n    panic!(\"no\");\n}\nfn g(_x: u32) {}\n";
     let rows = [
-        ("a + 1", "a + 7", "value"),
-        ("if a > b", "if a >= b", "control flow"),
-        ("        return 0;\n", "", "control flow"),
-        ("    let Some(c) = o else { return 1; };\n", "", "control flow"),
-        ("    g(b);\n", "", "logic"),
-        ("    panic!(\"no\");\n", "", "control flow"),
-        ("let b = a + 1;", "let b = a.wrapping_add(1);", "logic"),
+        ("a + 1", "a + 7", "changed literal `1` → `7`"),
+        ("if a > b", "if a >= b", "changed operator `a > b` → `a >= b`"),
+        ("        return 0;\n", "", "deleted statement `return 0`"),
+        ("    let Some(c) = o else { return 1; };\n", "", "deleted statement `let Some(c) = o else { return 1; }"),
+        ("    g(b);\n", "", "deleted statement `g(b)`"),
+        ("    panic!(\"no\");\n", "", "deleted statement `panic!(\"no\")"),
+        ("let b = a + 1;", "let b = a.wrapping_add(1);", "changed expression `a + 1` → `a.wrapping_add(1)`"),
     ];
-    for (old, new, expected) in rows {
+    for (old, new, text) in rows {
         let after = base.replacen(old, new, 1);
         for cfg in [false, true] {
             let report = run_derived(base, &after, &[("demo::f", different(cfg))]);
             let lines = fact_lines(&report);
             let edit: Vec<&String> = lines.iter().filter(|line| line.contains("demo::f")).collect();
-            assert!(!edit.is_empty() && edit.iter().all(|line| line.ends_with(&format!("[{expected}]"))), "{old} → {new} ({cfg}): {lines:#?}");
+            assert!(!edit.is_empty() && edit.iter().all(|line| line.ends_with("[semantics]")), "{old} → {new} ({cfg}): {lines:#?}");
+            assert!(edit.iter().any(|line| line.starts_with(text)), "{old} → {new} ({cfg}): {lines:#?}");
         }
     }
 }
@@ -7161,8 +7163,8 @@ fn a_move_owns_the_elements_of_its_region_and_gives_no_indirect_fact() {
     let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
     assert_eq!(descriptions(&report), ["moved statement `let x = a + 1;` from `demo::f/S0` to `demo::f/S1`"]);
     let fact = &report.facts[0];
-    // Fix round 2 (design 41.7): a swap of two statements is `logic`, with no mismatch mark.
-    assert!(fact.category == Category::Logic && fact.compare == Compare::CodeDifferent && !fact.mismatch(), "{fact:#?}");
+    // Fix round 2 (design 41.7, 42): a swap of two statements is `semantics`, with no mismatch mark.
+    assert!(fact.category == Category::Semantics && fact.compare == Compare::CodeDifferent && !fact.mismatch(), "{fact:#?}");
 }
 
 #[test]
@@ -7187,7 +7189,7 @@ fn a_change_inside_a_moved_statement_owns_its_elements() {
     let body = changed_body("demo::f", vec![element_at(&before, "a + 1")], vec![element_at(&after, "a + 2")]);
     let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
     let literal = report.facts.iter().find(|fact| fact.description.starts_with("changed literal `1` → `2`")).unwrap();
-    assert!(literal.compare == Compare::CodeDifferent && literal.category == Category::Value, "{literal:#?}");
+    assert!(literal.compare == Compare::CodeDifferent && literal.category == Category::Semantics, "{literal:#?}");
     let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved statement `let p = a + 1;`")).unwrap();
     assert_eq!(moved.compare, Compare::CodeDifferent, "{moved:#?}");
 }
@@ -7223,21 +7225,44 @@ fn an_edit_inside_a_moved_statement_names_its_new_place() {
     let texts = descriptions(&run_derived(&before, &after, &[]));
     assert!(texts.iter().any(|t| t.starts_with("changed literal `2` → `3` at `demo::f/S3/then/S0/rhs`")), "{texts:?}");
     assert!(texts.iter().any(|t| t.starts_with("moved statement `if a > 1")), "{texts:?}");
-    // Fix round 2 (design 41.7): a moved `if` is `control flow`, a moved assignment is `logic`.
+    // Fix round 2 (design 41.7, 42): a moved `if` and a moved assignment are `semantics`.
     let report = run_derived(&before, &after, &[]);
     let moved = report.facts.iter().find(|fact| fact.description.starts_with("moved statement `if a > 1")).unwrap();
-    assert_eq!(moved.category, Category::ControlFlow, "{moved:#?}");
+    assert_eq!(moved.category, Category::Semantics, "{moved:#?}");
 }
 
 #[test]
-fn a_swap_of_two_statements_is_logic_with_no_mismatch_mark() {
-    // Fix round 2 (design 41.7): a move changes the order of execution. The fact keeps its text,
-    // and it has the category of its statement form, so the mismatch mark does not show.
+fn a_swap_of_two_statements_is_semantics_with_no_mismatch_mark() {
+    // Fix round 2 (design 41.7, 42): a move changes the order of execution. The fact keeps its
+    // text, and it has the category `semantics`, so the mismatch mark does not show.
     let before = refactor_body("    let x = a + 1;\n    let y = b * 2;\n    x + y\n");
     let after = refactor_body("    let y = b * 2;\n    let x = a + 1;\n    x + y\n");
     let body = changed_body("demo::f", vec![element_at(&before, "a + 1")], vec![element_at(&after, "a + 1")]);
     let report = run_elements(&before, &after, Vec::new(), &ElementBodies(vec![body]));
     assert_eq!(descriptions(&report), ["moved statement `let x = a + 1;` from `demo::f/S0` to `demo::f/S1`"]);
     let fact = &report.facts[0];
-    assert!(fact.category == Category::Logic && fact.compare == Compare::CodeDifferent && !fact.mismatch(), "{fact:#?}");
+    assert!(fact.category == Category::Semantics && fact.compare == Compare::CodeDifferent && !fact.mismatch(), "{fact:#?}");
+}
+
+#[test]
+fn a_fact_with_changed_branches_does_not_fold_with_a_fact_whose_branches_stay() {
+    // Design 42: the three old categories are one, so the "branches:" line is a part of the
+    // fold key. The line of each fact stays.
+    let branches = "the compiled code of this edit changes its branches (1 → 1 branch point(s), 2 → 3 targets)";
+    let fact = |item: &str, branch: bool| Fact {
+        at: Some(format!("{item}/S0/cond").parse().unwrap()),
+        part: "edit".into(),
+        description: format!("changed operator `a > b` → `a >= b` at `{item}/S0/cond`"),
+        status: "derived".into(),
+        category: Category::Semantics,
+        compare: Compare::CodeDifferent,
+        branches: branch.then(|| branches.to_string()),
+        ..Default::default()
+    };
+    let mut facts = vec![fact("demo::f", false), fact("demo::g", true), fact("demo::h", false)];
+    let mut fact_of = vec![Some(0), Some(1), Some(2)];
+    edits::fold(&mut facts, &mut fact_of);
+    let texts: Vec<(&str, Option<&str>)> = facts.iter().map(|fact| (fact.description.as_str(), fact.branches.as_deref())).collect();
+    assert_eq!(texts, [("2 site(s): changed operator `a > b` → `a >= b`", None), ("changed operator `a > b` → `a >= b` at `demo::g/S0/cond`", Some(branches))], "{texts:#?}");
+    assert_eq!(fact_of, [Some(0), Some(1), Some(0)]);
 }

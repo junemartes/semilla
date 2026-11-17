@@ -299,7 +299,7 @@ mod tests {
                 id: "a::f".into(),
                 label: "fn f".into(),
                 status: Status::Added,
-                category: Some(Category::Logic),
+                category: Some(Category::Semantics),
                 compare: None,
                 build_code: None,
                 claims: vec!["c1".into()],
@@ -311,13 +311,13 @@ mod tests {
         };
         let text = tree.render();
         assert!(text.contains("~ crate a"));
-        assert!(text.contains("└─ + fn f   [logic]"));
+        assert!(text.contains("└─ + fn f   [semantics]"));
         // Design 28, I6: a result `code equal` that used changed build code has the mark.
         let mut tree = tree;
         tree.children[0].compare = Some(Compare::CodeEqual);
         tree.children[0].build_code = Some(1);
-        assert!(tree.render().contains("└─ + fn f   [logic · code equal] (with the build code of step 1)"));
+        assert!(tree.render().contains("└─ + fn f   [semantics · code equal] (with the build code of step 1)"));
         tree.children[0].compare = Some(Compare::CodeDifferent);
-        assert!(tree.render().contains("└─ + fn f   [logic · code different]\n"), "{}", tree.render());
+        assert!(tree.render().contains("└─ + fn f   [semantics · code different]\n"), "{}", tree.render());
     }
 }

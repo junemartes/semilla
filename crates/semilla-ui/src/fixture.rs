@@ -212,7 +212,7 @@ pub fn demo_changeset() -> ChangeSet {
 
 /// Builds the verification report for [`demo_changeset`].
 pub fn demo_report() -> Report {
-    let mut c4 = texts(verified("c4", 2, "smt", Category::Logic), "item.qty > MAX_QTY", "item.qty >= MAX_QTY");
+    let mut c4 = texts(verified("c4", 2, "smt", Category::Semantics), "item.qty > MAX_QTY", "item.qty >= MAX_QTY");
     c4.effect = Some(Effect::Widen);
     c4.witness = Some("item.qty = 100, MAX_QTY = 100".into());
     let mut c8 = texts(
@@ -220,7 +220,7 @@ pub fn demo_report() -> Report {
         "if item.discount == 0.0 { base } else { base - item.discount }",
         "if item.discount != 0.0 { base - item.discount } else { base }",
     );
-    c8.hint = Some("Tag the claim as change-condition (logic), or keep the old order of the branches.".into());
+    c8.hint = Some("Tag the claim as change-condition (semantics), or keep the old order of the branches.".into());
     let steps = vec![
         StepReport {
             step: 1,
@@ -234,14 +234,14 @@ pub fn demo_report() -> Report {
         StepReport {
             step: 2,
             intent: "Return 0 for an empty cart".into(),
-            claims: vec![texts(verified("c3", 2, "shape", Category::ControlFlow), "", "if self.items.is_empty() {\n    return 0;\n}"), c4],
+            claims: vec![texts(verified("c3", 2, "shape", Category::Semantics), "", "if self.items.is_empty() {\n    return 0;\n}"), c4],
             ..Default::default()
         },
         StepReport {
             step: 3,
             intent: "Test the empty cart".into(),
             claims: vec![texts(
-                verified("c5", 3, "shape", Category::Logic),
+                verified("c5", 3, "shape", Category::Semantics),
                 "",
                 "#[test]\nfn empty_cart_total() {\n    assert_eq!(Cart::default().total(), Ok(0));\n}",
             )],
@@ -250,7 +250,7 @@ pub fn demo_report() -> Report {
         StepReport {
             step: 4,
             intent: "Extract the price of a line".into(),
-            claims: vec![texts(verified("c6", 4, "N1", Category::Logic), "sum += item.price * item.qty;", "sum += line_total(item);")],
+            claims: vec![texts(verified("c6", 4, "N1", Category::Semantics), "sum += item.price * item.qty;", "sum += line_total(item);")],
             ..Default::default()
         },
         StepReport {
@@ -264,15 +264,15 @@ pub fn demo_report() -> Report {
             intent: "Return Result from Cart::total".into(),
             claims: vec![
                 texts(
-                    verified("c9", 6, "shape", Category::Logic),
+                    verified("c9", 6, "shape", Category::Semantics),
                     "",
                     "#[derive(Debug, PartialEq, thiserror::Error)]\npub enum CartError {\n    #[error(\"quantity {0} is over the limit\")]\n    TooMany(u32),\n}",
                 ),
-                texts(verified("c10", 6, "shape", Category::Logic), "-> u32", "-> Result<u32, CartError>"),
-                texts(verified("c11", 6, "shape", Category::Logic), "sum", "Ok(sum)"),
-                texts(verified("c12", 6, "shape", Category::Logic), "return 0;", "return Ok(0);"),
-                texts(verified("c13", 6, "shape", Category::ControlFlow), "continue;", ""),
-                texts(verified("c14", 6, "shape", Category::ControlFlow), "", "return Err(CartError::TooMany(item.qty));"),
+                texts(verified("c10", 6, "shape", Category::Semantics), "-> u32", "-> Result<u32, CartError>"),
+                texts(verified("c11", 6, "shape", Category::Semantics), "sum", "Ok(sum)"),
+                texts(verified("c12", 6, "shape", Category::Semantics), "return 0;", "return Ok(0);"),
+                texts(verified("c13", 6, "shape", Category::Semantics), "continue;", ""),
+                texts(verified("c14", 6, "shape", Category::Semantics), "", "return Err(CartError::TooMany(item.qty));"),
                 texts(verified("c15", 6, "file", Category::Manifest), "", "thiserror = \"2.0\""),
             ],
             ..Default::default()
@@ -283,10 +283,10 @@ pub fn demo_report() -> Report {
             panic_delta: -2,
             intent: "Update the callers of Cart::total".into(),
             claims: vec![
-                texts(verified("c16", 7, "shape", Category::Logic), "cart.total()", "cart.total()?"),
-                texts(verified("c17", 7, "free", Category::Logic), "load_cart(&path).unwrap()", "load_cart(&path)?"),
+                texts(verified("c16", 7, "shape", Category::Semantics), "cart.total()", "cart.total()?"),
+                texts(verified("c17", 7, "free", Category::Semantics), "load_cart(&path).unwrap()", "load_cart(&path)?"),
                 texts(
-                    verified("c18", 7, "shape", Category::Logic),
+                    verified("c18", 7, "shape", Category::Semantics),
                     "pub fn legacy_total(cart: &Cart) -> u32 {\n    cart.total().checked_add(0).expect(\"total\")\n}",
                     "",
                 ),
@@ -369,37 +369,37 @@ pub fn demo_tree() -> TreeNode {
     let t = |path: &str| format!("{TOTAL}/{path}");
     let total = tree(TOTAL, "fn Cart::sum → Cart::total", Status::Changed)
         .claims(&["c1"])
-        .summary("3 ctrl flow · 5 logic · 1 extract · 1 rename")
+        .summary("8 semantics · 1 extract · 1 rename")
         .children(vec![
             tree(&t("signature"), "signature", Status::Changed)
-                .mark(Category::Logic, Compare::CodeDifferent)
+                .mark(Category::Semantics, Compare::CodeDifferent)
                 .claims(&["c10"])
                 .diff("⟦-> u32⟧→⟦-> Result<u32, CartError>⟧"),
-            tree(&t("S0"), "if self.items.is_empty() { return Ok(0) }", Status::Added).mark(Category::ControlFlow, Compare::CodeDifferent).claims(&["c3", "c12"]),
+            tree(&t("S0"), "if self.items.is_empty() { return Ok(0) }", Status::Added).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c3", "c12"]),
             tree(&t("S1"), "let mut sum = 0;", Status::Same),
-            tree(&t("S2"), "for item in &self.items", Status::Changed).summary("2 ctrl flow · 1 logic · 1 extract").children(vec![
-                tree(&t("S2/body/S0"), "if item.qty >= MAX_QTY …", Status::Changed).mark(Category::ControlFlow, Compare::CodeDifferent).children(vec![
+            tree(&t("S2"), "for item in &self.items", Status::Changed).summary("3 semantics · 1 extract").children(vec![
+                tree(&t("S2/body/S0"), "if item.qty >= MAX_QTY …", Status::Changed).mark(Category::Semantics, Compare::CodeDifferent).children(vec![
                     tree(&t("S2/body/S0/cond"), "cond", Status::Changed)
-                        .mark(Category::Logic, Compare::CodeDifferent)
+                        .mark(Category::Semantics, Compare::CodeDifferent)
                         .claims(&["c4"])
                         .diff("item.qty ⟦>⟧→⟦>=⟧ MAX_QTY"),
-                    tree(&t("S2/body/S0/then/S0"), "continue;", Status::Removed).mark(Category::ControlFlow, Compare::CodeDifferent).claims(&["c13"]),
+                    tree(&t("S2/body/S0/then/S0"), "continue;", Status::Removed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c13"]),
                     tree(&t("S2/body/S0/then/S1"), "return Err(CartError::TooMany(item.qty));", Status::Added)
-                        .mark(Category::ControlFlow, Compare::CodeDifferent)
+                        .mark(Category::Semantics, Compare::CodeDifferent)
                         .claims(&["c14"]),
                 ]),
                 tree(&t("S2/body/S1"), "sum += item.price * item.qty  →  line_total(item)", Status::Extracted)
-                    .mark(Category::Logic, Compare::CodeEqual)
+                    .mark(Category::Semantics, Compare::CodeEqual)
                     .claims(&["c6"]),
             ]),
-            tree(&t("tail"), "tail", Status::Changed).mark(Category::Logic, Compare::CodeDifferent).claims(&["c11"]).diff("⟦sum⟧→⟦Ok(sum)⟧"),
+            tree(&t("tail"), "tail", Status::Changed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c11"]).diff("⟦sum⟧→⟦Ok(sum)⟧"),
         ]);
     let cart = tree("shop_core::cart", "mod cart", Status::Changed).summary("10 code different · 3 code equal").children(vec![
         total,
         tree("shop_core::cart::Cart::len", "fn Cart::count → Cart::len", Status::Moved).mark(Category::Rename, Compare::CodeEqual).claims(&["c2"]),
-        tree("shop_core::cart::CartError", "enum CartError", Status::Added).mark(Category::Logic, Compare::CodeDifferent).claims(&["c9"]),
+        tree("shop_core::cart::CartError", "enum CartError", Status::Added).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c9"]),
         tree("shop_core::cart::tests", "mod tests", Status::Changed).summary("1 new test").children(vec![
-            tree("shop_core::cart::tests::empty_cart_total", "fn empty_cart_total", Status::Added).mark(Category::Logic, Compare::CodeDifferent).claims(&["c5"]),
+            tree("shop_core::cart::tests::empty_cart_total", "fn empty_cart_total", Status::Added).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c5"]),
             tree("shop_core::cart::tests::len_counts_items", "fn len_counts_items", Status::Same),
         ]),
         tree("shop_core::cart::Cart", "struct Cart", Status::Same),
@@ -416,11 +416,11 @@ pub fn demo_tree() -> TreeNode {
                     .diff("if ⟦item.discount == 0.0⟧→⟦item.discount != 0.0⟧, branches swapped"),
             ]),
     ]);
-    let report = tree("shop_core::report", "mod report", Status::Changed).summary("1 uncovered · 1 logic").children(vec![
+    let report = tree("shop_core::report", "mod report", Status::Changed).summary("1 uncovered · 1 semantics").children(vec![
         tree("shop_core::report::summary", "fn summary", Status::Uncovered).children(vec![
             tree("shop_core::report::summary/S0", "let total = …", Status::Uncovered).diff("⟦cart.total()⟧→⟦cart.total().unwrap_or(0)⟧"),
         ]),
-        tree("shop_core::report::legacy_total", "fn legacy_total", Status::Removed).mark(Category::Logic, Compare::CodeDifferent).claims(&["c18"]),
+        tree("shop_core::report::legacy_total", "fn legacy_total", Status::Removed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c18"]),
         tree("shop_core::report::format_line", "fn format_line", Status::Same),
     ]);
     let core = tree("shop_core", "crate shop_core", Status::Changed)
@@ -434,13 +434,13 @@ pub fn demo_tree() -> TreeNode {
                 .claims(&["c15"])
                 .diff("⟦⟧→⟦thiserror = \"2.0\"⟧"),
         ]);
-    let cli = tree("shop_cli", "crate shop_cli", Status::Changed).summary("2 logic").children(vec![
-        tree("shop_cli::run", "fn run", Status::Changed).summary("2 logic").children(vec![
+    let cli = tree("shop_cli", "crate shop_cli", Status::Changed).summary("2 semantics").children(vec![
+        tree("shop_cli::run", "fn run", Status::Changed).summary("2 semantics").children(vec![
             tree("shop_cli::run/S0", "let cart = …", Status::Changed)
-                .mark(Category::Logic, Compare::CodeDifferent)
+                .mark(Category::Semantics, Compare::CodeDifferent)
                 .claims(&["c17"])
                 .diff("load_cart(&path)⟦.unwrap()⟧→⟦?⟧"),
-            tree("shop_cli::run/S1", "let total = …", Status::Changed).mark(Category::Logic, Compare::CodeDifferent).claims(&["c16"]).diff("cart.total()⟦⟧→⟦?⟧"),
+            tree("shop_cli::run/S1", "let total = …", Status::Changed).mark(Category::Semantics, Compare::CodeDifferent).claims(&["c16"]).diff("cart.total()⟦⟧→⟦?⟧"),
             tree("shop_cli::run/S2", "println!(\"{}\", report::summary(&cart))", Status::Same),
         ]),
         tree("shop_cli::main", "fn main", Status::Same),

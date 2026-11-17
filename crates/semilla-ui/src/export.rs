@@ -171,7 +171,7 @@ pub fn render_html(data: &UiData) -> String {
 ///
 /// The default report is short (brief 5f, D2): the summary table, then the groups with each fact
 /// one time, in the order of design 35.7. No compare result hides a fact or its diff. A body
-/// with a fact of the category `value`, `logic`, or `control flow` has its flow view, one time.
+/// with a fact of the category `semantics` has its flow view, one time.
 ///
 /// The full report (`full`) has the same content as [`render_html`]: it adds the public API
 /// changes, the change tree, the other flow views, and all sources.
@@ -406,14 +406,14 @@ impl<'a> Model<'a> {
     }
 
     /// The positions of the flow views of the short report: each body with a fact of the
-    /// category `value`, `logic`, or `control flow`, one time. The compare result does not
+    /// category `semantics`, one time. The compare result does not
     /// count (design 35.7).
     fn fact_flows(&self) -> Vec<usize> {
         let bodies: BTreeSet<&str> = self
             .summary
             .facts
             .iter()
-            .filter(|view| matches!(view.fact.category, Category::Value | Category::Logic | Category::ControlFlow))
+            .filter(|view| view.fact.category == Category::Semantics)
             .filter_map(|view| view.fact.at.as_ref().map(|at| at.item.as_str()))
             .collect();
         let mut seen: BTreeSet<&str> = BTreeSet::new();

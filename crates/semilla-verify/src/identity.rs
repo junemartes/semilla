@@ -451,7 +451,7 @@ fn edit_category(edit: &semilla_syntax::Edit) -> Category {
         EditKind::Docs | EditKind::Comment => Category::Docs,
         EditKind::Attrs => Category::Attribute,
         EditKind::Signature | EditKind::Members => Category::Declaration,
-        EditKind::Inserted | EditKind::Deleted | EditKind::Moved | EditKind::Modified | EditKind::Replaced => Category::Logic,
+        EditKind::Inserted | EditKind::Deleted | EditKind::Moved | EditKind::Modified | EditKind::Replaced => Category::Semantics,
         _ => Category::Text,
     }
 }

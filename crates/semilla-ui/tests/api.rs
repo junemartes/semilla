@@ -147,7 +147,7 @@ async fn subgroups_in_role_order() {
     let claim = &core["claims"][0];
     assert_eq!(claim["id"], "c3");
     assert_eq!(claim["status"], "verified");
-    assert_eq!(claim["category"], "control_flow");
+    assert_eq!(claim["category"], "semantics");
     assert_eq!(claim["result"]["proof"], "shape");
     assert_eq!(claim["flow"], TOTAL);
     assert_eq!(claim["review"], "not_reviewed");
@@ -167,7 +167,7 @@ async fn fold_state_follows_contents() {
     assert_eq!(subgroup(g2, "Call sites")["folded"], false);
     assert_eq!(subgroup(g3, "Discount check")["folded"], false);
     // Badges for custom subgroups, and the agent marker.
-    assert_eq!(subgroup(g1, "Quantity limit")["badges"], serde_json::json!(["1 logic"]));
+    assert_eq!(subgroup(g1, "Quantity limit")["badges"], serde_json::json!(["1 semantics"]));
     assert_eq!(subgroup(g1, "Quantity limit")["edited"], true);
     assert_eq!(subgroup(g3, "Discount check")["badges"], serde_json::json!(["1 unknown"]));
     assert_eq!(subgroup(g1, "Renames")["badges"], serde_json::json!([]));
@@ -186,7 +186,7 @@ async fn fold_state_follows_contents() {
 #[tokio::test]
 async fn fold_state_ignores_the_label() {
     let mut data = demo_data();
-    // Put a logic claim into a Mechanical subgroup, and only neutral claims into a Core subgroup.
+    // Put a `semantics` claim into a Mechanical subgroup, and only neutral claims into a Core subgroup.
     for sub in &mut data.changeset.subgroups {
         if sub.title == "Renames" {
             sub.claims.push("c4".into());
@@ -406,9 +406,12 @@ async fn search_filters() {
     assert!(!changed.contains(&"shop_cli::main".to_string()));
     assert!(!changed.contains(&"shop_core::cart".to_string()));
 
+    // Design 42: a saved search with an old name finds the `semantics` facts.
     let control = hit_ids(&search(&app, "category:control-flow").await);
     assert!(control.contains(&TOTAL.to_string()));
-    assert!(!control.contains(&"shop_cli::run".to_string()));
+    for query in ["category:semantics", "category:logic", "category:value"] {
+        assert_eq!(hit_ids(&search(&app, query).await), control, "{query}");
+    }
     let equal = hit_ids(&search(&app, "compare:code-equal changed:fn").await);
     assert!(equal.contains(&"shop_core::cart::Cart::len".to_string()));
     assert!(!equal.contains(&TOTAL.to_string()));

@@ -446,7 +446,7 @@ impl Fact {
             _ if self.build_code_change => 0,
             Category::Docs | Category::File => 5,
             _ if self.compare == Compare::NoCode => 5,
-            Category::Value | Category::Logic | Category::ControlFlow | Category::Macro | Category::Text if self.compare == Compare::CodeDifferent => 1,
+            Category::Semantics | Category::Macro | Category::Text if self.compare == Compare::CodeDifferent => 1,
             Category::Declaration | Category::Added | Category::Removed => 2,
             _ => 3,
         }
@@ -1288,7 +1288,7 @@ mod tests {
     #[test]
     fn the_mark_is_on_each_equal_result_of_a_fact_and_on_each_verified_claim() {
         // Invariant I6: a result `code equal` that used changed build code has the mark.
-        let mut fact = Fact { category: Category::Logic, compare: Compare::CodeEqual, ..Default::default() };
+        let mut fact = Fact { category: Category::Semantics, compare: Compare::CodeEqual, ..Default::default() };
         assert_eq!((fact.mark(), fact.part_mark()), (String::new(), String::new()), "a compare with the build code of the base has no mark");
         fact.build_code = Some(2);
         assert_eq!(fact.mark(), " (with the build code of step 2)");
@@ -1296,7 +1296,7 @@ mod tests {
         // A fact with a different result has no mark in its first line.
         fact.compare = Compare::CodeDifferent;
         assert_eq!(fact.mark(), "");
-        assert_eq!(fact.label(), "logic · code different");
+        assert_eq!(fact.label(), "semantics · code different");
         assert!(!fact.mismatch());
         fact.category = Category::Visibility;
         assert!(fact.mismatch(), "the text of a visibility change gives no cause for different code");
@@ -1304,8 +1304,8 @@ mod tests {
         // Batch 7b, part 3: a public API change is after a mismatch mark and before each
         // fact with `code different`, also when its compare result is `code equal`.
         let api = Fact { category: Category::Visibility, compare: Compare::CodeEqual, description: "visibility of `m::f`: `private` → `pub` (the public API changes: a different crate can now use the item)".into(), ..Default::default() };
-        let different = Fact { category: Category::Logic, compare: Compare::CodeDifferent, ..Default::default() };
-        let equal = Fact { category: Category::Logic, compare: Compare::CodeEqual, ..Default::default() };
+        let different = Fact { category: Category::Semantics, compare: Compare::CodeDifferent, ..Default::default() };
+        let equal = Fact { category: Category::Semantics, compare: Compare::CodeEqual, ..Default::default() };
         assert!(api.api_change() && !equal.api_change());
         assert!(fact.order() < api.order() && api.order() < different.order() && different.order() < equal.order());
         let possible = Fact { description: "qualifiers of `m::f` removed: `const` (the public API can change: a different crate can use the item)".into(), ..equal.clone() };
@@ -1333,15 +1333,15 @@ mod tests {
     fn the_facts_part_of_the_result_line_leaves_out_a_count_of_zero() {
         let fact = |category, compare, spotlight| Fact { category, compare, spotlight, ..Default::default() };
         let facts = vec![
-            fact(Category::Logic, Compare::CodeDifferent, false),
-            fact(Category::Value, Compare::CodeDifferent, true),
+            fact(Category::Semantics, Compare::CodeDifferent, false),
+            fact(Category::Semantics, Compare::CodeDifferent, true),
             fact(Category::Rename, Compare::CodeEqual, false),
             fact(Category::Docs, Compare::NoCode, false),
         ];
         let counts = FactCounts::of(facts.iter());
         assert_eq!(counts.text(""), "4 facts: 2 code different, 1 code equal, 1 no code (1 with a spotlight)");
         assert_eq!(counts.text(" (1 with the build code of step 3)"), "4 facts: 2 code different, 1 code equal (1 with the build code of step 3), 1 no code (1 with a spotlight)");
-        assert_eq!(counts.category, vec![(Category::Rename, 1), (Category::Value, 1), (Category::Logic, 1), (Category::Docs, 1)]);
+        assert_eq!(counts.category, vec![(Category::Rename, 1), (Category::Semantics, 2), (Category::Docs, 1)]);
         assert_eq!(FactCounts::of([].iter()).text(""), "0 facts");
         let one = vec![fact(Category::Import, Compare::CodeDifferent, false)];
         assert_eq!(FactCounts::of(one.iter()).text(""), "1 fact: 1 code different (1 with a mismatch mark)");

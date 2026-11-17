@@ -136,7 +136,7 @@ fn agent_flow_end_to_end() {
     let stored = run(repo, &["step", "return 0 for an empty cart, include the max"], 0);
     assert!(stored.contains("added early exit `if self.items.is_empty()") && stored.contains("changed operator"), "{stored}");
     let check = run(repo, &["check", "--full"], 0);
-    assert!(check.contains("[control flow · code different]"), "{check}");
+    assert!(check.contains("[semantics · code different]"), "{check}");
     if workspace_root().join(".semilla/tools/z3").exists() {
         assert!(check.contains("effect hint: widen"), "{check}");
     }
@@ -666,7 +666,7 @@ fn a_function_moves_to_another_crate() {
     write(repo, "crates/shop-app/src/main.rs", &app_after(">="));
     let check = run(repo, &["check", "--full"], 0);
     assert!(fact_line(&check, "moved `shop_core::over` → `shop_app::over`").ends_with("[move · code equal]"), "{check}");
-    assert!(fact_line(&check, "changed operator `account.balance > LIMIT` → `account.balance >= LIMIT` at `shop_app::over/tail`").ends_with("[logic · code different]"), "{check}");
+    assert!(fact_line(&check, "changed operator `account.balance > LIMIT` → `account.balance >= LIMIT` at `shop_app::over/tail`").ends_with("[semantics · code different]"), "{check}");
     assert!(check.contains("affected bodies: shop_app::over") && !check.contains("in a step with no other change") && !check.contains("looks like a move"), "{check}");
     assert!(!check.contains("inactive code"), "{check}");
 }
@@ -879,7 +879,7 @@ fn a_file_that_a_crate_reads_at_build_time_is_a_build_input() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the readers"]);
 
-    // A text file, a binary file, and a computed path: a fact of the class `logic` with the
+    // A text file, a binary file, and a computed path: a fact of the category `semantics` with the
     // body that reads the file. No reason is necessary.
     for (file, body) in [("crates/shop-core/src/notes.md", "shop_core::notes"), ("crates/shop-core/terms.txt", "shop_core::terms")] {
         let old = std::fs::read_to_string(repo.join(file)).unwrap();
@@ -946,7 +946,7 @@ fn an_include_file_is_code_with_each_name_and_each_content() {
         assert!(!out.contains(CONFIG_NOTE) && out.matches("spotlight:").count() == 1, "{out}");
         assert_eq!(out.matches("--reason '").count(), 2, "one spotlight line and one `run again` line: {out}");
         // The compare result of the edit facts shows if the content is the same.
-        assert_eq!(out.contains("[logic · code equal]"), equal, "{out}");
+        assert_eq!(out.contains("[semantics · code equal]"), equal, "{out}");
         let out = run(repo, &["step", &format!("move the value of {function}"), "--reason", &format!("{file}:=the value is in a file now")], 0);
         assert!(out.starts_with("accepted"), "{out}");
     }
@@ -1294,7 +1294,7 @@ fn a_rename_and_a_move_need_no_claim() {
     write(repo, "crates/shop-app/src/main.rs", &app_after(">="));
     let hidden = run(repo, &["step", "move over to the app"], 0);
     assert!(fact_line(&hidden, "moved `shop_core::over` → `shop_app::over`").ends_with("[move · code equal]"), "{hidden}");
-    assert!(fact_line(&hidden, "changed operator `account.cents > LIMIT` → `account.cents >= LIMIT` at `shop_app::over/tail`").ends_with("[logic · code different]"), "{hidden}");
+    assert!(fact_line(&hidden, "changed operator `account.cents > LIMIT` → `account.cents >= LIMIT` at `shop_app::over/tail`").ends_with("[semantics · code different]"), "{hidden}");
     assert!(!hidden.contains("removed `shop_core::over`") && !hidden.contains("in a step with no other change") && !hidden.contains("looks like a move"), "{hidden}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-app/src/main.rs", &app_after(">"));
@@ -2112,7 +2112,7 @@ fn a_field_rename_of_a_type_with_a_constant_in_memory_is_proved() {
     let out = run(repo, &["step", "rename left to start and reorder"], 0);
     assert!(fact_line(&out, "renamed `shop_core::members::Pair.left` → `shop_core::members::Pair.start`").ends_with("[rename · code equal]"), "{out}");
     assert!(fact_line(&out, "member order of `shop_core::members::Pair`: `left, b` → `b, start`").ends_with("[declaration · code different]"), "{out}");
-    assert!(fact_line(&out, "value of `shop_core::members::P` changed").ends_with("[value · code different]"), "{out}");
+    assert!(fact_line(&out, "value of `shop_core::members::P` changed").ends_with("[semantics · code different]"), "{out}");
     assert!(out.contains("affected bodies: shop_core::members::P, shop_core::members::origin") && !out.contains("changed code"), "{out}");
 }
 
@@ -2223,7 +2223,7 @@ fn no_reviewer_result_depends_on_a_file_of_the_repository_that_is_not_a_git_obje
     git(repo, &["replace", &new_blob, &old_blob]);
     write(repo, ".git/shallow", &format!("{commit}\n"));
     // Forged results and records in `.semilla` (the trial 5 cheats C2 and C3).
-    let forged = serde_json::json!({ "key": commit, "tree": tree, "hash": "x", "tools": "x", "text": "FORGED: [logic · code equal]\n", "report": {} }).to_string();
+    let forged = serde_json::json!({ "key": commit, "tree": tree, "hash": "x", "tools": "x", "text": "FORGED: [semantics · code equal]\n", "report": {} }).to_string();
     write(repo, &format!(".semilla/reports/{commit}.json"), &forged);
     write(repo, ".semilla/reports/session.json", &forged);
     write(repo, &format!(".semilla/cache/mir/{tree}/n0/.complete"), "");
@@ -2385,14 +2385,14 @@ fn a_target_file_is_rust_code_whatever_its_name() {
     let out = run(repo, &["step", "reword the license"], 1);
     assert!(out.contains("no checked unit reads the file `crates/shop-app/LICENSE.txt`") && out.contains("--reason 'crates/shop-app/LICENSE.txt=…'"), "{out}");
     let out = run(repo, &["step", "reword the license", "--reason", "crates/shop-app/LICENSE.txt=the limit is in the range"], 0);
-    assert!(out.contains("shop_app::license::limit") && out.contains("[control flow · no compare]") && out.contains("note: no compare: no checked configuration compiles `shop_app::license::limit`"), "{out}");
+    assert!(out.contains("shop_app::license::limit") && out.contains("[semantics · no compare]") && out.contains("note: no compare: no checked configuration compiles `shop_app::license::limit`"), "{out}");
     assert!(!out.contains("LICENSE.txt: changed"), "{out}");
 }
 
 #[test]
 fn a_doc_test_is_code() {
     // Brief 5h, B1 (attempt 21). A doc comment with a code block is a test that `cargo test`
-    // runs. A change of the block is a fact of the class `logic`, and it stops an identity.
+    // runs. A change of the block is a fact of the category `semantics`, and it stops an identity.
     let dir = setup();
     let repo = &dir.path().join("repo");
     write(repo, "crates/shop-core/src/lib.rs", "//! The shop rules.\n\npub mod cart;\n");
@@ -3798,7 +3798,7 @@ fn no_proof_uses_the_value_of_a_macro_that_the_tree_does_not_decide() {
     // Design 40.3: the deleted condition owns the changed elements, so it is never `code equal`.
     // A kept statement (`a + 1`) can have the same compiled code before and after.
     let equal_deletions = out.lines().filter(|line| line.contains("deleted statement") && line.contains("code equal]")).count();
-    assert!(output.status.success() && equal_deletions == 0 && out.contains("[control flow · code different]"), "{out}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success() && equal_deletions == 0 && out.contains("[semantics · code different]"), "{out}\n{}", String::from_utf8_lossy(&output.stderr));
     for name in &names {
         assert!(out.contains(&format!("shop_core::values::{name}")), "the step shows `{name}`: {out}");
     }
@@ -3842,38 +3842,38 @@ fn a_proof_holds_for_each_build_configuration() {
     // The table of the brief. A use of `cfg!` gets a note under the fact (design 35.5). The note
     // asks for no reason.
     let out = probe("if !cfg!(unix) { return 0; }", "", 0);
-    assert!(out.contains("[control flow · code different]") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)") && !out.contains("spotlight"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)") && !out.contains("spotlight"), "{out}");
     for statement in ["if usize::BITS != 64 { return 0; }", "if usize::MAX as u64 != u64::MAX { return 0; }", "if core::mem::size_of::<usize>() != 8 { return 0; }", "if core::mem::align_of::<u64>() != 8 { return 0; }", "if (1u64 << 40) as usize == 0 { return 0; }", "if (u64::MAX as usize as u64) != u64::MAX { return 0; }"] {
         let out = probe(statement, "", 0);
-        assert!(out.contains("added early exit") && out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{statement}: {out}");
+        assert!(out.contains("added early exit") && out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{statement}: {out}");
     }
     let out = probe("if !CHECKED { return 0; }", "\nconst CHECKED: bool = cfg!(unix);\n", 0);
-    assert!(out.contains("added early exit `if !CHECKED { return 0; }` at `shop_core::percent/S0` [control flow · code different]"), "{out}");
+    assert!(out.contains("added early exit `if !CHECKED { return 0; }` at `shop_core::percent/S0` [semantics · code different]"), "{out}");
     assert!(out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::CHECKED`)") && !out.contains("spotlight") && !out.contains("cfg attribute"), "{out}");
     let out = probe("if option_env!(\"LEDGER_FREE\").is_some() { return 0; }", "", 0);
-    assert!(out.contains("[control flow · code different]") && out.contains("note: this body uses `option_env!(\"LEDGER_FREE\")`, which Semilla did not check (`shop_core::percent`)"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: this body uses `option_env!(\"LEDGER_FREE\")`, which Semilla did not check (`shop_core::percent`)"), "{out}");
     // A plain constant of the workspace is equal in each build. The compare at level N0 folds no
     // condition: the fact is `code different`, with no note.
     let out = probe("if OFF { return 0; }", "\nconst OFF: bool = false;\n", 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
     let out = probe("if u64::MAX == 0 { return 0; }", "", 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
 
     // `cfg!` in an `if` expression (trial 6, attempt 10), with a feature, and in a macro of
     // the workspace.
     let out = step(&FEES.replace("let cost = amount + fee;", "let cost = if cfg!(target_os = \"windows\") { amount } else { amount + fee };"), &["step", "probe"], 0);
-    assert!(out.contains("[control flow · code different]") && out.contains("note: this body uses `cfg!(target_os = \"windows\")`, which Semilla did not check (`shop_core::withdraw`)"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: this body uses `cfg!(target_os = \"windows\")`, which Semilla did not check (`shop_core::withdraw`)"), "{out}");
     let out = probe("if cfg!(feature = \"x\") { return 0; }", "", 0);
-    assert!(out.contains("[control flow · code different]") && out.contains("note: this body uses `cfg!(feature = \"x\")`, which Semilla did not check (`shop_core::percent`)"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: this body uses `cfg!(feature = \"x\")`, which Semilla did not check (`shop_core::percent`)"), "{out}");
     let out = step(&FEES.replace(percent, &format!("macro_rules! free {{ () => {{ !cfg!(unix) }}; }}\n\n{percent}    if free!() {{ return 0; }}\n")), &["step", "probe"], 1);
     // The new macro has a `cfg` condition in its input: the spotlight "inactive code" asks for a reason.
-    assert!(out.contains("added early exit `if free!() { return 0; }` at `shop_core::percent/S0` [control flow · code different]") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)") && out.contains("spotlight: inactive code"), "{out}");
+    assert!(out.contains("added early exit `if free!() { return 0; }` at `shop_core::percent/S0` [semantics · code different]") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)") && out.contains("spotlight: inactive code"), "{out}");
 
     // `cfg!` hidden in a rename step (attempt 21): the edit shows as `code different` with the
     // note. The claim `rename` is gone (design 35.3): the command stops with exit code 2.
     let hidden = FEES.replace("BASE_FEE", "FIXED_FEE").replace("    FIXED_FEE + percent", "    if !cfg!(unix) { return 0; }\n    FIXED_FEE + percent");
     let out = step(&hidden, &["step", "rename the fee"], 0);
-    assert!(out.contains("added early exit `if !cfg!(unix) { return 0; }` at `shop_core::charge/S0` [control flow · code different]") && out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("added early exit `if !cfg!(unix) { return 0; }` at `shop_core::charge/S0` [semantics · code different]") && out.contains(CONFIG_NOTE), "{out}");
     // Batch 7b, part 1: the rename is a fact of its own. The edit fact has the changed body.
     assert!(fact_line(&out, "renamed `shop_core::BASE_FEE` → `shop_core::FIXED_FEE`").ends_with("[rename · code equal]") && out.contains("affected bodies: shop_core::charge"), "{out}");
     let out = step(&hidden, &["step", "rename the fee", "--claim", "rename shop_core::BASE_FEE to=FIXED_FEE"], 2);
@@ -3891,9 +3891,9 @@ fn a_proof_holds_for_each_build_configuration() {
     // A statement with a `cfg` attribute, in the text and in a macro of the workspace: the MIR of
     // the check configuration does not have this code. The note names the attribute.
     let out = probe("#[cfg(not(unix))]\n    return 0;", "", 1);
-    assert!(out.contains("[control flow · no compare]") && out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::percent`); no compare: no checked configuration compiles `shop_core::percent`"), "{out}");
+    assert!(out.contains("[semantics · no compare]") && out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::percent`); no compare: no checked configuration compiles `shop_core::percent`"), "{out}");
     let out = step(&FEES.replace(percent, &format!("macro_rules! rel {{ ($e:expr) => {{ #[cfg(not(unix))] {{ $e }} }}; }}\n\n{percent}    rel!(return 0);\n")), &["step", "probe"], 1);
-    assert!(out.contains("added macro statement `rel!(return 0);` at `shop_core::percent/S0` [logic · code equal]") && out.contains("note: this body uses `rel! (#[cfg(not(unix))])`, which Semilla did not check (`shop_core::percent`)"), "{out}");
+    assert!(out.contains("added macro statement `rel!(return 0);` at `shop_core::percent/S0` [semantics · code equal]") && out.contains("note: this body uses `rel! (#[cfg(not(unix))])`, which Semilla did not check (`shop_core::percent`)"), "{out}");
 
     // D4: a function with the name `cfg` has no `cfg` attribute.
     let out = step(&format!("{FEES}\npub fn cfg() -> u64 {{\n    7\n}}\n"), &["step", "add cfg"], 0);
@@ -3999,7 +3999,7 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     };
     // One probe: the statement goes first in `percent`, the item goes to the end of the file.
     let probe = |statement: &str, item: &str, expect: i32| -> String { step(&format!("{}{item}", base.replace(percent, &format!("{percent}    {statement}\n"))), expect) };
-    let uses = |out: &str, text: &str| out.contains("[control flow · code different]") && out.contains(CONFIG_NOTE) && out.contains(&format!("note: this body uses {text}"));
+    let uses = |out: &str, text: &str| out.contains("[semantics · code different]") && out.contains(CONFIG_NOTE) && out.contains(&format!("note: this body uses {text}"));
 
     // Group 1: the item is in the base and has no change.
     let out = probe("if !strict() { return 0; }", "", 0);
@@ -4033,15 +4033,15 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     // configuration, so the result is `code equal`. The note names each type and its condition.
     let out = step(&base.replace("let _h = hold();", "let _ = hold();"), 0);
     // The pattern `_` is not a local: the fact is not a rename.
-    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::keep/S0/pat` [logic · code equal]") && out.contains("note: this body uses `shop_core::Guard` (a type with an `impl` under `#[cfg(not(unix))]`), `shop_core::Hold` (a type; its declaration uses `Guard`), which Semilla did not check (`shop_core::keep`)") && !out.contains("renamed local"), "{out}");
+    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::keep/S0/pat` [semantics · code equal]") && out.contains("note: this body uses `shop_core::Guard` (a type with an `impl` under `#[cfg(not(unix))]`), `shop_core::Hold` (a type; its declaration uses `Guard`), which Semilla did not check (`shop_core::keep`)") && !out.contains("renamed local"), "{out}");
 
     // A use in code with no change gets no note.
     let out = step(&base.replace("    helper();\n    1\n", "    helper();\n    if u64::MAX == 0 {\n        return 0;\n    }\n    1\n"), 0);
-    assert!(out.contains("at `shop_core::keep/") && out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("at `shop_core::keep/") && out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
     // Batch 5o (A3): a call of a function under `cfg` with no change gives no note for an edit in
     // a different part of the body.
     let out = step(&base.replace("    if !strict() {\n        return 0;\n    }\n    amount\n", "    if !strict() {\n        return 0;\n    }\n    if u64::MAX == 0 {\n        return 0;\n    }\n    amount\n"), 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
     // The edit changes the place of the call.
     let out = step(&base.replace("    if !strict() {\n        return 0;\n    }\n    amount\n", "    if amount == 0 {\n        return 0;\n    }\n    if !strict() {\n        return 0;\n    }\n    amount\n"), 0);
     assert!(out.contains("shop_core::guarded"), "{out}");
@@ -4051,7 +4051,7 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     write(repo, "crates/shop-app/src/main.rs", &format!("{MAIN_V0}\npub fn gate() -> u64 {{\n    if !shop_core::fast() {{\n        return 0;\n    }}\n    1\n}}\n"));
     let out = run(repo, &["step", "probe"], 0);
     run(repo, &["undo"], 0);
-    assert!(out.contains("added early exit") && out.contains("[control flow · code different]"), "{out}");
+    assert!(out.contains("added early exit") && out.contains("[semantics · code different]"), "{out}");
 
     // A type alias of a crate outside the workspace: the configuration can select its target, and
     // the MIR shows only the target. An alias of the allow list is free.
@@ -4066,7 +4066,7 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     write(repo, "crates/shop-core/src/lib.rs", &with_alias);
     commit_all(repo, "an alias of the allow list");
     let out = step(&with_alias.replace(percent, &format!("{percent}    if u64::MAX == 0 {{ return 0; }}\n")), 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
     write(repo, "crates/shop-core/src/lib.rs", &base);
     commit_all(repo, "the base again");
 
@@ -4082,9 +4082,9 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     // The cases with no note: a static with a literal, and a call of a function with no
     // configuration. The module `tests` under `#[cfg(test)]` does not make `helper` opaque.
     let out = probe("if OFF { return 0; }", "\nstatic OFF: bool = false;\n", 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
     let out = probe("if !helper() { return 0; }", "", 0);
-    assert!(out.contains("[control flow · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains(CONFIG_NOTE), "{out}");
 
     // Batch 5l, P10: a variant under `cfg` changes the set of the values of the type. The check
     // of the variant is not dead code, with `unix` and with a feature.
@@ -4094,7 +4094,7 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
         write(repo, "crates/shop-core/src/lib.rs", &with_mode);
         commit_all(repo, "a variant under cfg");
         let out = step(&with_mode.replace(check, ""), 0);
-        assert!(out.contains("deleted statement `assert!(matches!(mode, Mode::Plain)") && out.contains("at `shop_core::fee_for/S0` [control flow · code different]"), "{attr}: {out}");
+        assert!(out.contains("deleted statement `assert!(matches!(mode, Mode::Plain)") && out.contains("at `shop_core::fee_for/S0` [semantics · code different]"), "{attr}: {out}");
     }
     write(repo, "crates/shop-core/src/lib.rs", &base);
     commit_all(repo, "the base again");
@@ -4144,7 +4144,7 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // A new macro call that gives a function with a second definition under `cfg`. The
     // release build calls a different function. The note names it (design 35.5).
     let out = step("    glob::lim()\n", "    call!()\n", 0);
-    assert!(out.contains("[logic · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(unix))]`; the macro `call!` puts the name into the code), which Semilla did not check (`shop_core::by_call`)"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(unix))]`; the macro `call!` puts the name into the code), which Semilla did not check (`shop_core::by_call`)"), "{out}");
     // The edit removes a macro call that gives a constant under `cfg`.
     let out = step("    if x!() != 1 {\n        return 0;\n    }\n", "", 0);
     assert!(out.contains("deleted statement `if x!() != 1 { return 0; }`"), "{out}");
@@ -4154,7 +4154,7 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // `write!` gives a method call `write_fmt`. An inherent method under `cfg` gets the call
     // in the release build.
     let out = step("    std::fmt::Write::write_fmt(w, format_args!(\"x\"))\n", "    write!(w, \"x\")\n", 0);
-    assert!(out.contains("[logic · code equal]") && out.contains("note: this body uses `write_fmt` (an `impl` under `#[cfg(not(unix))]`; the macro `write!` puts the name into the code), which Semilla did not check (`shop_core::by_write`)"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `write_fmt` (an `impl` under `#[cfg(not(unix))]`; the macro `write!` puts the name into the code), which Semilla did not check (`shop_core::by_write`)"), "{out}");
     // The control: a rewrite in a body with a macro that gives no such name has no note. The
     // compare at level N0 sees the removed local.
     let out = step("    let v = two!() + a;\n    v\n", "    two!() + a\n", 0);
@@ -4194,12 +4194,12 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     // The debug build has no `Coin: Mark`: the call means `Other::dig`. The release build
     // has it: the method with `self` by value wins.
     let out = step("    tr::Other::dig(&t)\n", "    t.dig()\n", 0);
-    assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The debug build has `Bill: Flag`: the call means `Low::low`. The release build does not
     // have it: the call means `Base::low`. The winner uses a fact that can change.
     let out = step("    let _ = &t;\n    1\n", "    t.low()\n", 0);
     // Design 40.5: the category comes from the syntax (a call), not from the compiled code.
-    assert!(out.contains("added statement `t.low()` at `shop_core::by_fact/tail` [logic · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("added statement `t.low()` at `shop_core::by_fact/tail` [semantics · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The control: the calls of an honest rewrite have no rival with such a fact. The step
     // inlines a variable (design 41.5): one `move` fact.
     let out = step("    let n = v.iter().map(|y| y + 1).sum::<u64>();\n    n + a\n", "    v.iter().map(|y| y + 1).sum::<u64>() + a\n", 0);
@@ -4225,10 +4225,10 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     };
     // The winner is unstable: a build with no feature gives the call to `Emp::is_empty`.
     let out = unstable("#![cfg_attr(unix, feature(exact_size_is_empty))]\n", "ExactSizeIterator::is_empty(&it)", "ExactSizeIterator::is_empty(&it)", "it.is_empty()", 0);
-    assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The unstable candidate holds now: a build with the feature gives the call to it.
     let out = unstable("#![cfg_attr(not(unix), feature(exact_size_is_empty))]\n", "Emp::is_empty(&mut it)", "Emp::is_empty(&mut it)", "it.is_empty()", 0);
-    assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The control: the unstable candidate does not hold for an array, and no `impl` of the
     // workspace can make it hold. The call is not an input. The crate has no attribute
     // under `cfg` here: such an attribute at the root makes each `impl` of the root a fact
@@ -4257,7 +4257,7 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     let out = orphan("    let o = a.cmp(&b);\n    o\n", "    a.cmp(&b)\n", 0);
     assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     let out = orphan("    Ord::cmp(&a, &b)\n", "    a.cmp(&b)\n", 0);
-    assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
 }
 
 #[test]
@@ -4289,7 +4289,7 @@ fn a_type_of_a_crate_outside_the_workspace_is_opaque() {
     // The value has no drop code in this build. The feature `check` adds a `Drop` impl. The
     // result is `code equal` for the checked configurations, and the note names the cause.
     let out = step(&base.replace(hold, "    let _ = shop_dep::loud();\n"));
-    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::hold/S0/pat` [logic · code equal]") && out.contains("note: this body uses `shop_dep::Loud` (a type of a different crate, and a feature of that crate can change its parts), which Semilla did not check (`shop_core::hold`)") && !out.contains("renamed local"), "{out}");
+    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::hold/S0/pat` [semantics · code equal]") && out.contains("note: this body uses `shop_dep::Loud` (a type of a different crate, and a feature of that crate can change its parts), which Semilla did not check (`shop_core::hold`)") && !out.contains("renamed local"), "{out}");
     // A body with a call of that crate and with no type of it keeps its proof.
     let out = step(&base.replace(far, "    let v = shop_dep::next(n);\n    v + 1\n"));
     assert!(out.contains("code equal]") && !out.contains("code different]"), "{out}");
@@ -4330,11 +4330,11 @@ fn a_trait_impl_of_a_crate_outside_the_workspace_can_change_a_call() {
     // The call means `Loud::size` by an `impl` of the other crate. The feature `check`
     // removes that `impl`: then the call means `Quiet::size`.
     let out = step("    shop_dep::Loud::size(&n)\n", "    n.size()\n", 0);
-    assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The call means `Quiet::deep`. The feature `check` adds `impl Soft for u32`: then the
     // call means `Soft::deep`.
     let out = step("    Quiet::deep(&mut n)\n", "    n.deep()\n", 0);
-    assert!(out.contains("[logic · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The control: no trait of the other crate has the name `calm`. The step inlines a variable
     // (design 41.5).
     let out = step("    let v = n.calm();\n    v\n", "    n.calm()\n", 0);
@@ -4728,7 +4728,7 @@ fn a_configuration_with_a_compile_error_is_named() {
     // the fact gets the note (design 35.5). The note asks for no reason.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace(percent, &format!("{percent}    if cfg!(feature = \"fast\") {{\n        return 7;\n    }}\n")));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains(gap) && out.contains("[control flow · code different]") && out.contains("note: this body uses `cfg!(feature = \"fast\")`, which Semilla did not check (`shop_core::percent`)"), "{out}");
+    assert!(out.contains(gap) && out.contains("[semantics · code different]") && out.contains("note: this body uses `cfg!(feature = \"fast\")`, which Semilla did not check (`shop_core::percent`)"), "{out}");
     run(repo, &["undo"], 0);
 
     // A step that breaks the release profile only: the message names the configuration and
@@ -4773,7 +4773,7 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     // `m::lim` in the build with the assertions on, and it is not equal in the release build.
     write(repo, "crates/shop-core/src/lib.rs", &step);
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code different]") && out.contains("note: the compiled code is equal in `dev`; different in `release`") && !out.contains(CONFIG_NOTE) && !out.contains("code equal"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: the compiled code is equal in `dev`; different in `release`") && !out.contains(CONFIG_NOTE) && !out.contains("code equal"), "{out}");
     run(repo, &["undo"], 0);
 
     // A file under `tests/`: `test` is true in each unit that reads the file. The item under
@@ -4781,7 +4781,7 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     write(repo, "crates/shop-core/src/lib.rs", &base);
     write(repo, "crates/shop-core/tests/it.rs", &test_base.replace("{ a / m::lim() }", "{ a / lim() }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(test))]`), which Semilla did not check (`shop_core::it::via`)"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(test))]`), which Semilla did not check (`shop_core::it::via`)"), "{out}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-core/tests/it.rs", &test_base);
 
@@ -4792,7 +4792,7 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     commit("the flags");
     write(repo, "crates/shop-core/src/lib.rs", &step);
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code equal]") && out.contains("note: this body uses `lim` (2 definitions, one under `#[cfg(not(debug_assertions))]`), which Semilla did not check (`shop_core::via`)"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (2 definitions, one under `#[cfg(not(debug_assertions))]`), which Semilla did not check (`shop_core::via`)"), "{out}");
     run(repo, &["undo"], 0);
 
     // The header names the condition: the list does not cover it.
@@ -4826,7 +4826,7 @@ fn a_configuration_that_builds_only_its_libraries_and_binaries_is_checked() {
     // The call of `lim` is the call of `m::lim` only with `std`. The smaller build shows it.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("a / m::lim()", "a / lim()"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code different]") && out.contains(&format!("; different in `{narrow}`")) && !out.contains(CONFIG_NOTE) && !out.contains("code equal"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains(&format!("; different in `{narrow}`")) && !out.contains(CONFIG_NOTE) && !out.contains("code equal"), "{out}");
     run(repo, &["undo"], 0);
 
     // A step that breaks the smaller build is a compile error.
@@ -4870,13 +4870,13 @@ fn a_fact_with_no_proof_needs_no_reason_for_a_covered_condition() {
         ("if !<u64 as K>::Q { return 0; }", "impl K for u64 {\n    const Q: bool = cfg!(debug_assertions);\n}"),
     ] {
         let out = probe(statement, item, 0);
-        assert!(out.contains(&format!("added early exit `{statement}` at `shop_core::percent/S0` [control flow · code different]")), "{statement}: {out}");
+        assert!(out.contains(&format!("added early exit `{statement}` at `shop_core::percent/S0` [semantics · code different]")), "{statement}: {out}");
         assert!(!out.contains("spotlight:") && !out.contains("not checked together"), "{statement}: {out}");
     }
     // The same step with a condition that no checked configuration makes false gets a note
     // under the fact (design 35.5). The step needs no reason.
     let out = probe("if !QC { return 0; }", "const QC: bool = cfg!(unix);", 0);
-    assert!(out.contains("[control flow · code different]") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::QC`)") && !out.contains("spotlight:"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::QC`)") && !out.contains("spotlight:"), "{out}");
 }
 
 #[test]
@@ -4892,7 +4892,7 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a name under cfg"]);
     let note = "note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)";
-    let shown = |out: &str| out.contains(note) && out.contains("[control flow · code equal]") && !out.contains("spotlight:") && !out.contains("code different");
+    let shown = |out: &str| out.contains(note) && out.contains("[semantics · code equal]") && !out.contains("spotlight:") && !out.contains("code different");
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("if a > b { l0() + a }", "if b < a { l0() + a }"));
     let out = run(repo, &["step", "probe"], 0);
     assert!(shown(&out) && out.contains("accepted"), "{out}");
@@ -4901,25 +4901,25 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     let md = repo.join(".semilla/review.md");
     run(repo, &["review", "--md", md.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&md).unwrap();
-    assert!(text.contains("\\[control flow · code equal\\]; note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)"), "{text}");
+    assert!(text.contains("\\[semantics · code equal\\]; note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)"), "{text}");
     run(repo, &["undo"], 0);
 
     // The same for a statement with a `cfg` attribute that the edit does not touch.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("    if a > b { a } else { 0 }", "    if b < a { a } else { 0 }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::gate`)") && !out.contains("spotlight:") && out.contains("[control flow · code equal]"), "{out}");
+    assert!(out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::gate`)") && !out.contains("spotlight:") && out.contains("[semantics · code equal]"), "{out}");
     run(repo, &["undo"], 0);
 
     // An edit of the code that reads the condition: the compare is different in one profile,
     // and the same note names the condition. The step needs no reason.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ l0() + a }", "{ a + l0() }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code different]") && out.contains(&format!("note: the compiled code is equal in `release`; different in `dev`; {}", &note["note: ".len()..])) && !out.contains("spotlight:"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains(&format!("note: the compiled code is equal in `release`; different in `dev`; {}", &note["note: ".len()..])) && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
     // Negative: a body with no name under `cfg` has no note of a condition.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("    amount * rate / 100\n}\n\npub fn scaled", "    rate * amount / 100\n}\n\npub fn scaled"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code different]") && out.contains("note: the compiled code is equal in `release`; different in `dev`") && !out.contains("which Semilla did not check"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("note: the compiled code is equal in `release`; different in `dev`") && !out.contains("which Semilla did not check"), "{out}");
 }
 
 #[test]
@@ -4947,7 +4947,7 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     // has the result of the first twin, and the second twin gives no indirect change.
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains("Semilla added the configurations `dev, features fast`, `release, features fast`"), "{out}");
-    assert!(out.contains("at `shop_core::cut#0/tail/operand` [logic · code different]\n      affected bodies: shop_core::cut#0\n      note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`"), "{out}");
+    assert!(out.contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`"), "{out}");
     assert!(!out.contains("code equal]") && !out.contains("indirect change") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
 
@@ -4988,7 +4988,7 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     // configuration for it.
     write(repo, "crates/shop-core/src/lib.rs", &three.replace("a as TA as TB as TC as u64", "a as TB as TC as u64"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code different]") && out.contains("; different in `dev, features fa,fc`, `release, features fa,fc`") && !out.contains("code equal]") && !out.contains("Semilla added"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("; different in `dev, features fa,fc`, `release, features fa,fc`") && !out.contains("code equal]") && !out.contains("Semilla added"), "{out}");
 }
 
 #[test]
@@ -5018,7 +5018,7 @@ fn a_proof_with_two_conditions_needs_each_joint_state() {
     // `u64`, or the two are `u8`). The code is different in the build with only `fast`:
     // the added configuration shows it. The fact is `code different` in each output.
     let note = "note: the compiled code is equal in `dev`, `dev, all features`, `dev, features slow`, `release`, `release, all features`, `release, features slow`; different in `dev, features fast`, `release, features fast`";
-    let not_neutral = |out: &str| out.contains(note) && out.contains("[logic · code different]") && !out.contains("code equal]") && !out.contains("spotlight:");
+    let not_neutral = |out: &str| out.contains(note) && out.contains("[semantics · code different]") && !out.contains("code equal]") && !out.contains("spotlight:");
     write(repo, "crates/shop-core/src/lib.rs", &drop);
     let out = run(repo, &["step", "probe"], 0);
     assert!(not_neutral(&out) && out.contains(added) && !out.contains("feature-sets"), "{out}");
@@ -5087,7 +5087,7 @@ fn a_proof_with_two_conditions_needs_each_joint_state() {
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-core/src/lib.rs", &drop);
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[logic · code different]") && out.contains("; different in `dev, features fast`, `release, features fast`") && !out.contains("code equal]") && !out.contains("Semilla added"), "{out}");
+    assert!(out.contains("[semantics · code different]") && out.contains("; different in `dev, features fast`, `release, features fast`") && !out.contains("code equal]") && !out.contains("Semilla added"), "{out}");
 }
 
 /// The functions for the tests of the normal form rules 3c2 and 3e (batch 5u).
@@ -5209,10 +5209,10 @@ fn a_read_of_a_local_moves_across_a_call_only_when_no_pointer_to_it_exists() {
     let dir = rules_5u_setup();
     let repo = &dir.path().join("repo");
     let out = rules_5u_probe(repo, "i < encode.len()", "encode.len() > i");
-    // Design 40.5: a changed condition is `control flow`.
-    assert!(out.contains("[control flow · code different]") && !out.contains("code equal]"), "{out}");
+    // Design 40.5, 42: a changed condition is `semantics`.
+    assert!(out.contains("[semantics · code different]") && !out.contains("code equal]"), "{out}");
     let out = rules_5u_probe(repo, "index += e.valid_up_to();", "index = index + (e.valid_up_to());");
-    assert!(out.contains("[logic · code different]") && !out.contains("code equal]"), "{out}");
+    assert!(out.contains("[semantics · code different]") && !out.contains("code equal]"), "{out}");
     // Negative tests: the callee can write the place. Each of these steps changes the result
     // of the function. No fact is `neutral`.
     for (old, new) in [
@@ -5227,7 +5227,7 @@ fn a_read_of_a_local_moves_across_a_call_only_when_no_pointer_to_it_exists() {
     ] {
         let out = rules_5u_probe(repo, old, new);
         assert!(!out.contains("code equal"), "{old}: {out}");
-        assert!(out.contains("[control flow · code different]") || out.contains("[logic · code different]"), "{old}: {out}");
+        assert!(out.contains("[semantics · code different]"), "{old}: {out}");
     }
 }
 
@@ -5302,7 +5302,7 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     // The file module: the attribute is in a different file.
     // The file has one spotlight, and the key of the reason is the file (design 37.3).
     assert!(out.contains("(no checked unit reads the file `crates/shop-core/src/win.rs`: `#[cfg(target_os = \"none\")]` at `shop_core::win`), so Semilla did not compare the edit; it needs a reason: --reason 'crates/shop-core/src/win.rs=…'"), "{out}");
-    assert!(out.contains("value of `shop_core::win::SEP` changed: ") && out.contains("[value · no compare]") && !out.contains("--reason 'shop_core::win::SEP"), "{out}");
+    assert!(out.contains("value of `shop_core::win::SEP` changed: ") && out.contains("[semantics · no compare]") && !out.contains("--reason 'shop_core::win::SEP"), "{out}");
     assert!(!out.contains("code equal"), "{out}");
 
     // Design 37.19: eleven open spotlights have the kind `inactive-code`. The command to run
@@ -5333,7 +5333,7 @@ fn an_edit_in_code_that_no_configuration_compiles_needs_a_reason() {
     write(repo, "crates/shop-core/src/lib.rs", &lib.replace("LIMIT: u64 = 7", "LIMIT: u64 = 8"));
     write(repo, "crates/shop-core/src/win.rs", file);
     let out = run(repo, &["step", "a new limit", "--reason", "shop_core::small::LIMIT=the limit of the small target is 8"], 0);
-    assert!(out.contains("value of `shop_core::small::LIMIT` changed: 7 → 8 [value · no compare]") && out.contains("reason: \"the limit of the small target is 8\""), "{out}");
+    assert!(out.contains("value of `shop_core::small::LIMIT` changed: 7 → 8 [semantics · no compare]") && out.contains("reason: \"the limit of the small target is 8\""), "{out}");
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-a", "-m", "a new limit"]);
     let out = run(repo, &["tag"], 0);
     assert!(out.contains("1 fact: 1 no compare (1 with a spotlight)"), "{out}");
@@ -6098,7 +6098,7 @@ fn a_feature_that_only_one_side_has_does_not_stop_the_step() {
     let gap = "! configurations `dev, features old-name`, `release, features old-name` are not checked: only the code before the step has the feature `old-name`. The code after the step has no such configuration: no compare";
     assert!(out.contains(gap), "{out}");
     // The other configurations compare as usual.
-    assert!(out.contains("changed literal `1` → `2` at `shop_core::plain/tail/rhs` [value · code different]"), "{out}");
+    assert!(out.contains("changed literal `1` → `2` at `shop_core::plain/tail/rhs` [semantics · code different]"), "{out}");
     // The manifest facts of the feature stay.
     assert!(out.contains("crates/shop-core/Cargo.toml: features.old-name removed ([]) [manifest · no code]"), "{out}");
     assert!(out.contains("crates/shop-core/Cargo.toml: features.new-name added ([]) [manifest · no code]"), "{out}");
@@ -6155,8 +6155,8 @@ fn each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_synta
     commit_all(repo, "count");
     let edited = base.replace("v.len()", "Vec::len(v)").replace("n + 1", "n + 2");
     write(repo, "crates/shop-core/src/lib.rs", &edited);
-    let call = "changed expression `v.len()` → `Vec::len(v)` at `shop_core::count/S0/init` [logic · code equal]";
-    let literal = "changed literal `1` → `2` at `shop_core::count/tail/rhs` [value · code different]";
+    let call = "changed expression `v.len()` → `Vec::len(v)` at `shop_core::count/S0/init` [semantics · code equal]";
+    let literal = "changed literal `1` → `2` at `shop_core::count/tail/rhs` [semantics · code different]";
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains(call) && out.contains(literal), "{out}");
     // The list of the affected bodies has only the edit that owns a changed element.
@@ -6167,7 +6167,7 @@ fn each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_synta
     let out = run(repo, &["step", "probe"], 0);
     // The same edits keep their categories and their results. The new branch has the mark.
     assert!(out.contains(call) && out.contains(literal), "{out}");
-    assert!(out.contains("added early exit `if n > 9 { return 0; }` at `shop_core::count/S1` [control flow · code different]"), "{out}");
+    assert!(out.contains("added early exit `if n > 9 { return 0; }` at `shop_core::count/S1` [semantics · code different]"), "{out}");
     assert!(out.contains("branches: the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets)"), "{out}");
     assert!(!out.contains("[indirect"), "{out}");
     let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
@@ -6417,7 +6417,7 @@ fn an_edit_whose_only_effect_is_the_place_of_a_drop_is_code_different() {
     commit_all(repo, "a guard");
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("let _ = guard();", "let _g = guard();"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("changed pattern `_` → `_g` at `shop_core::work/S0/pat` [logic · code different]") && !out.contains("code equal]"), "{out}");
+    assert!(out.contains("changed pattern `_` → `_g` at `shop_core::work/S0/pat` [semantics · code different]") && !out.contains("code equal]"), "{out}");
     assert!(out.contains("the compiled code of `shop_core::work` changes with no edit at its place: `a + 1`; a type or a path changes in f1 of this body [indirect · code different]"), "{out}");
     assert_eq!(out.matches("◆").count(), 2, "{out}");
 }
@@ -6440,19 +6440,19 @@ fn the_statement_mapper_gives_one_fact_for_each_refactoring_and_keeps_each_chang
         out
     };
     let out = step(base.replace("    s += a * 2;\n    if b > 3 {\n", "    if b > 3 {\n        s += a * 2;\n"));
-    assert!(out.contains("moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [logic · code different]") && !out.contains("! the compiled code changes"), "{out}");
+    assert!(out.contains("moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [semantics · code different]") && !out.contains("! the compiled code changes"), "{out}");
     assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
     let out = step(base.replace("    if a * b + 1 > 10 {\n        return a * b + 1;\n", "    let area = a * b + 1;\n    if area > 10 {\n        return area;\n"));
     assert!(out.contains("extracted variable `area` = `a * b + 1` (2 uses) at `shop_core::area/S0` [move · code"), "{out}");
     assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
     let swapped = base.replace("    let x = a + 1;\n    let y = b * 2;\n", "    let y = b * 2;\n    let x = a + 1;\n");
     let out = step(swapped.clone());
-    assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [logic · code") && !out.contains("! the compiled code changes"), "{out}");
+    assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [semantics · code") && !out.contains("! the compiled code changes"), "{out}");
     assert!(!out.contains("[indirect") && out.matches(" derived: ").count() == 1, "{out}");
     // The needle: the move does not absorb the changed operator.
     let out = step(swapped.replace("if x > y", "if x >= y"));
-    assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [logic · code"), "{out}");
-    assert!(out.contains("`x > y` → `x >= y` at `shop_core::pick/S2/cond` [control flow · code different]"), "{out}");
+    assert!(out.contains("moved statement `let x = a + 1;` from `shop_core::pick/S0` to `shop_core::pick/S1` [semantics · code"), "{out}");
+    assert!(out.contains("`x > y` → `x >= y` at `shop_core::pick/S2/cond` [semantics · code different]"), "{out}");
     write(repo, "crates/shop-core/src/lib.rs", &swapped);
     run(repo, &["step", "probe"], 0);
     let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);

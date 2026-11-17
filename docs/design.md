@@ -2745,7 +2745,7 @@ Each detail below that the user did not decide has the mark **Decided by Claude*
 
 ### 35.2 Categories and compare results
 
-**The category list. Decided by Claude** (the user gave the start list; the list is closed: `semilla_core::Category`, 18 entries).
+**The category list. Decided by Claude** (the user gave the start list; the list is closed: `semilla_core::Category`, 16 entries since 42; 18 before).
 
 | Category | The change |
 |---|---|
@@ -2755,9 +2755,7 @@ Each detail below that the user did not decide has the mark **Decided by Claude*
 | `declaration` | a signature, generics, bounds, the type of a member or a constant, the set or the order of members, a `derive` list, a qualifier |
 | `added` | a new item, member, `impl`, or test |
 | `removed` | a removed item, member, `impl`, or test |
-| `value` | a literal or the value of a constant |
-| `logic` | statements, operands, calls |
-| `control flow` | branches, loops, exits |
+| `semantics` | a change of the code in a body: a literal, the value of a constant, a statement, an operand, a call, a condition, a branch, a loop, an exit (since 42; before: `value`, `logic`, `control flow`) |
 | `attribute` | an attribute |
 | `docs` | a doc comment or a comment (a doc test change says "doc test" in its text) |
 | `import` | a `use` line, a `mod` line, an `extern crate` line |
@@ -2768,7 +2766,7 @@ Each detail below that the user did not decide has the mark **Decided by Claude*
 | `indirect` | the compiled code of a body changes, and its text does not |
 | `text` | changed source text with no other fact (the net of 33.10) |
 
-The start list of the user is unchanged: no entry is joined, and no entry is split. The rules of the sections 22.5 and 23 decide between `value`, `logic`, and `control flow` for an edit in a body. A pattern `_` in place of a name is not a rename of a local: it is a `logic` fact.
+The start list of the user stayed unchanged until 42. Since 42 (user decision): `value`, `logic`, and `control flow` are one entry, `semantics`. A pattern `_` in place of a name is not a rename of a local: it is a `semantics` fact.
 
 **The compare results. User decision** (the four results and the two texts).
 
@@ -2839,7 +2837,7 @@ Each rule: **Decided by Claude**, apart from "no fold because of the compare res
 - **The fold.** No fact folds because of its compare result. A subgroup with a claim is open. The filters of the UI are the category and the compare result (the search keys `category:` and `compare:`).
 - **The role of a subgroup** comes from the category of its facts (`Category::role`): `rename`, `move`, `import`, and `visibility` give `Mechanical`; `declaration` gives `Interface`; `docs` gives `Docs`; `manifest`, `file`, `build code`, and `attribute` give `Config`; `indirect` gives `Propagation`; each other category gives `Core`. A role is a label: no rule hides or folds a subgroup because of its role.
 - **The kind of a group** comes from its facts (`derived_kind`). Each fact is a derived rename: `rename`. Each fact is a derived move: `move`. Each other group: `change` (36.3; before batch 7b: `refactor` and `behavior`). A doc fact and the API fact of a rename do not count. The kind is a label of the compare results. It is not a verdict.
-- **The risk** of a group is a sum of points: 2 for a `control flow` fact with `code different`; 1 for each other fact set with `code different`, `no compare`, `pending`, or `not checked`; 2 for a mismatch mark; 1 for a spotlight fact; 1 for a public API change; 1 for a changed body with `unsafe` code (36.5); 1 for a panic delta above zero; 2 for a claim that is not verified; 2 for an uncovered change; 2 for a pair warning. The levels: 0 points give 0, 1 to 2 give 1, 3 to 4 give 2, 5 or more give 3. The risk is a reading order. It is not a verdict.
+- **The risk** of a group is a sum of points: 2 for a fact with `code different` and a "branches:" line (since 42; before: a `control flow` fact with `code different`); 1 for each other fact set with `code different`, `no compare`, `pending`, or `not checked`; 2 for a mismatch mark; 1 for a spotlight fact; 1 for a public API change; 1 for a changed body with `unsafe` code (36.5); 1 for a panic delta above zero; 2 for a claim that is not verified; 2 for an uncovered change; 2 for a pair warning. The levels: 0 points give 0, 1 to 2 give 1, 3 to 4 give 2, 5 or more give 3. The risk is a reading order. It is not a verdict.
 - **`--fast`.** Phase 2 runs in the command only for a property claim or a possible rename or move.
 
 ### 35.8 The limits and the dead code
@@ -2877,7 +2875,7 @@ Batch 7b. The model of 35.1 stays (the user decided only that model). The rule a
 1. A removed item and an added item of the same kind are a candidate pair when their texts are similar (`PAIR_THRESHOLD` = 0.7). The score does not count a doc comment, an attribute, and a visibility. The step can have other changes: in the item, in a different item, and more pairs.
 2. Semilla checks each name map of the pairs. The map with the highest sum of the scores that passes the check gives the facts. Maps with the same score: the map that leaves the smallest number of other facts wins.
 3. The pair gives one `rename` fact or one `move` fact, with the forced edits under it: "renamed `semver::eval::matches_caret` → `semver::eval::matches_caret_op` [rename · code equal]".
-4. Each difference of the pair that the new name does not force is its own fact at the new path: "changed operator `ver.minor > minor` → `ver.minor >= minor` at `semver::eval::matches_caret_op/S3/then/S0/then/S0/value` [logic · code different]". This applies to a signature, a visibility, an attribute, a doc comment, a member, and each edit of a body.
+4. Each difference of the pair that the new name does not force is its own fact at the new path: "changed operator `ver.minor > minor` → `ver.minor >= minor` at `semver::eval::matches_caret_op/S3/then/S0/then/S0/value` [logic · code different]" (since 42: `semantics`). This applies to a signature, a visibility, an attribute, a doc comment, a member, and each edit of a body.
 5. A changed body with an edit fact goes to that fact. A changed body that no fact explains goes to the identity fact. Then the identity fact has `code different` and the mismatch mark.
 6. A type moves with its `impl` blocks: "moved `semver::error::QuotedChar` → `semver::quoted::QuotedChar`, with 1 impl and 2 `use` line(s) [move · code equal]". No "trait impl removed" fact and no "trait impl added" fact shows.
 7. A renamed local or parameter with a second edit in the same body gives one `rename` fact and one fact for each other edit.
@@ -2905,7 +2903,7 @@ Batch 7b. The model of 35.1 stays (the user decided only that model). The rule a
 4. The general facts (category `text`, and "changed code") do not show a token range that an item fact covers.
 5. The API list and the API level count each item that a different crate can use. An added public associated item, trait impl, or derive of a reachable type: a line, level `minor` or higher. A removed or changed one: level `major`. An `unsafe impl Send` or `Sync`: the line says that each type with a field of this type can change too.
 6. The fact text has the public API text: "(the public API changes: a different crate can now use the item)" or "(the public API can change: a different crate can use the item)". The second form is for an item where Semilla cannot decide. Then the higher level applies.
-7. A fact about an associated item has the category of its change (`visibility`, `attribute`, `value`). The category `text` is only for the general text.
+7. A fact about an associated item has the category of its change (`visibility`, `attribute`, `value`; since 42: `semantics`). The category `text` is only for the general text.
 
 **The limits.** A value text has the token form (`Op :: Caret`). A member that a macro call makes and a twin key keep the old full-list edit. A local `const` with a changed name or type keeps the general text. A changed reachable associated constant or type is `major`, also when the new value is equal for each caller.
 
@@ -3044,7 +3042,7 @@ The search for a fact text that shows only a signature when the body also change
 
 - A rename in a module with two files (twins under `cfg`) can keep `code different`.
 - The `utf8_iter` step has one type fact whose "affected bodies" list has names of two sides that look equal.
-- An added statement with a call gets the category `control flow`.
+- An added statement with a call gets the category `control flow` (since 42: each body edit is `semantics`).
 - An import fact does not name its module. A field that a struct gets has the category `added`.
 
 ### 37.10 The tests of a large step
@@ -3384,20 +3382,22 @@ If the elements that the edits of a fact own change the branch structure, the fa
 
 ### 40.5 The category of an edit
 
-The category of a fact does not depend on the compiled code. `category()` no longer changes `logic` to `control flow`. An op with a computed category (`COMPUTED` in `ops.rs`), and an edit with no op, get the category of the syntax of the changed node (`edits::syntax_category`). An op with a fixed category keeps it (`add-let` is `logic`).
+The category of a fact does not depend on the compiled code. **Since 42:** each op that is not a property has a fixed category (`ops.rs`; `COMPUTED` and `edits::syntax_category` are gone). An edit with no op gets `semantics`. An op with a fixed category keeps it (`add-let` is `semantics`, `rename-local` is `rename`).
 
-| Row | The changed node | Category | Example |
+The table below is the table of the forms that give `semantics`. Before 42, the rows gave `value`, `control flow`, or `logic` (the column "8c"). The fact text keeps the form of the edit.
+
+| Row | The changed node | 8c | Example (since 42: `semantics`) |
 |---|---|---|---|
-| 1 (user) | a literal only: each side is a literal | `value` | `a + 1` → `a + 7` at `…/S0/init/rhs` |
-| 2 (user) | a node in a condition (`cond`, a match guard) or in an arm (not its body) | `control flow` | `if a > b` → `if a >= b`; a changed arm pattern `0` → `1` |
-| 3 (user) | a top node `if`, `match`, `for`, `while`, `loop`, `return`, `break`, `continue`, `?` | `control flow` | deleted statement `return 0;` |
-| 4 (Decided by Claude) | a macro call of the `panic!` family: `panic`, `unreachable`, `todo`, `unimplemented`, `assert`, `assert_eq`, `assert_ne`, and the `debug_` forms | `control flow` | deleted statement `panic!("no");` |
-| 5 (Decided by Claude) | a `let … else` | `control flow` | deleted statement `let Some(c) = o else { return 1; };` |
-| 6 (user) | each other statement, operand, or call | `logic` | deleted statement `g(b);`; `v.len()` → `Vec::len(v)` |
+| 1 (user) | a literal only: each side is a literal | `value` | "changed literal `1` → `7`" (`a + 1` → `a + 7` at `…/S0/init/rhs`) |
+| 2 (user) | a node in a condition (`cond`, a match guard) or in an arm (not its body) | `control flow` | "changed operator `a > b` → `a >= b`"; a changed arm pattern `0` → `1` |
+| 3 (user) | a top node `if`, `match`, `for`, `while`, `loop`, `return`, `break`, `continue`, `?` | `control flow` | "deleted statement `return 0`" |
+| 4 (Decided by Claude) | a macro call of the `panic!` family: `panic`, `unreachable`, `todo`, `unimplemented`, `assert`, `assert_eq`, `assert_ne`, and the `debug_` forms | `control flow` | "deleted statement `panic!("no");`" |
+| 5 (Decided by Claude) | a `let … else` | `control flow` | "deleted statement `let Some(c) = o else { return 1; };`" |
+| 6 (user) | each other statement, operand, or call | `logic` | "deleted statement `g(b)`"; "changed expression `v.len()` → `Vec::len(v)`" |
+| 7 | the value of a constant (`part_category`), a constant in a body | `value` | "value of `demo::Op::HIDDEN` changed: 1 → 2" |
+| 8 | a moved statement (41.7), an item rewrite (`rewrite-item`), a changed condition with an SMT effect hint | the form, `logic`, `control flow` | "moved statement `s += a * 2` from … to …" |
 
-A moved statement (41.6) gets the category of its statement form, as an added statement (fix round 2 of 8c). A statement that contains a branch or an exit is `control flow` only if the branch or the exit is its top node (row 3), or if it is a `let … else` (row 5). **Decided by Claude:** the SMT effect of a changed condition (`narrow`, `widen`, `negate`) keeps `control flow`; row 2 gives the same category. An item rewrite (`rewrite-item`) is `logic`.
-
-The test `the_category_of_an_edit_comes_from_its_syntax` runs each row with a body status with and without a changed control flow graph. The e2e test `each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_syntax` has two steps with the same literal edit, one with a second edit that adds a branch: the literal keeps `value`.
+The test `each_form_of_a_body_edit_is_semantics_and_keeps_its_text` runs the rows 1 to 6 with a body status with and without a changed control flow graph. The e2e test `each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_syntax` has two steps with the same literal edit, one with a second edit that adds a branch: the literal keeps its category and its result.
 
 ### 40.6 Time
 
@@ -3464,16 +3464,16 @@ A mapped statement whose partner is in a different block, or whose order among t
 
 ### 41.7 The category and the compare result
 
-**Decided by Claude.** An extracted variable and an inlined variable get the category `move`. A consistent rename of a local keeps `rename`. An item move (a function to a different module) keeps `move`. Each other edit keeps the table of 40.5.
+**Decided by Claude.** An extracted variable and an inlined variable get the category `move`. A consistent rename of a local keeps `rename`. An item move (a function to a different module) keeps `move`. Each other edit keeps the table of 40.5 (since 42: `semantics`).
 
-**Fix round 2 (Decided by Claude; it replaces the first rule of this section for a moved statement).** A moved statement gets the category of the table of 40.5 for its statement form, as an added statement of the same form: a moved `let` or expression statement is `logic`; a moved `return`, `if`, `match`, or loop is `control flow`. The fact text stays: "moved statement `X` from … to …". Cause: a move changes the order of execution, so its compiled code normally changes. On 27 large real pull requests, 59 of 68 move facts had `code different` and the mismatch mark. On the mutants, 13 changes of behavior (swaps of two dependent statements) had only a `move` fact. The category `move` says that the code does not change, and a mark on almost each move has no value.
+**Fix round 2 (Decided by Claude; it replaces the first rule of this section for a moved statement).** A moved statement gets the category of an added statement of the same form. Since 42, this is always `semantics` (in 8c: a moved `let` or expression statement was `logic`; a moved `return`, `if`, `match`, or loop was `control flow`). The fact text stays: "moved statement `X` from … to …". Cause: a move changes the order of execution, so its compiled code normally changes. On 27 large real pull requests, 59 of 68 move facts had `code different` and the mismatch mark. On the mutants, 13 changes of behavior (swaps of two dependent statements) had only a `move` fact. The category `move` says that the code does not change, and a mark on almost each move has no value.
 
 The compare result comes from the map of 40.3, with these rules (`mirmap.rs`):
 
 1. A move owns the MIR elements of its statement on the two sides. An element whose smallest owner is a move also goes to each edit inside its node: a change inside a moved statement keeps its own result.
 2. **The region.** The cause of the `indirect` fact of a move in 8b: the dev MIR numbers the locals in the order of their declarations, and the alignment of 40.3 keeps the order. A move or a new `let` renumbers the later locals, and the alignment of a later element can fail with no edit at its place ("moved let `let scale = limit * 2;`" gave an `indirect` fact for `top`, `scale`, and `base + 3`). **Decided by Claude:** the region of a move is the statements of the lowest block pair that contains its two places, from the first statement whose order to the moved statement changes to the end of the block, and the statement that the move leaves or enters. The region of the `let` of a variable is the statements from the `let` to the end of its block, and on the other side from the partner of its next statement. An element with no owner by the rules of 40.3, in a statement of the region with no edit of a different fact (an edit of a rename or a move fact does not count), goes to the refactoring.
 3. An element that a refactoring takes by its region can be the effect of a different edit (a deleted statement whose elements the alignment pairs with a different statement). Then each other edit of the body that is not a refactoring keeps the doubt rule (design 38): it never gets `code equal` from the owner rule. Cause: the needle `n_swap_del` gave "deleted statement `v.push(y)` [logic · code equal]" before this rule.
-4. The mismatch mark of 37 applies to a `move` fact (an extracted or inlined variable, an item move) with `code different`: "! the compiled code changes: …". A moved statement has the category of its form (fix round 2), so it has no mismatch mark: "moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [logic · code different]". An extracted variable whose elements align (the same computation in the same order) gets `code equal`.
+4. The mismatch mark of 37 applies to a `move` fact (an extracted or inlined variable, an item move) with `code different`: "! the compiled code changes: …". A moved statement has the category of its form (fix round 2), so it has no mismatch mark: "moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [semantics · code different]". An extracted variable whose elements align (the same computation in the same order) gets `code equal`.
 
 ### 41.8 The MIR check of each map
 
@@ -3526,3 +3526,61 @@ On the ten fixtures of 7c, the first line, the runs, and the reasons are the sam
 - A use of a variable in an operand chain whose shape changes (`area + 2` → `a * b + 1 + 2`) is not a use: the chain is one changed expression.
 - A composite whose inner statements go to a different level can map to the wrong composite. Before fix round 1, in `quickcheck`, `None => { match … }` became `None => match …`, and the inner `match` mapped to the outer `match`. The structural header score removes this case: the fact is "changed match: `{ match self.seed…=> return None } }` → `match self.seed…=> return None, }`", as in 8b.
 - The gap rules of 8b stay as the fallback (41.2). They can still pair two different statements of one kind in place (`f3_low_share`: `let expect_string = format!(…)` and `let variant_values = &self.variant_values;`), and the rename rule of 36.1 can then name a rename of the two patterns, as in 8b.
+
+## 42. Batch 8d: one category `semantics` for each change of the code in a body
+
+### 42.1 The decision
+
+**User decision (2026-11-17).** The categories `value`, `logic`, and `control flow` become one category: `semantics`. The words of the user: "A lot of times logic changes are also control flow changes no? Maybe it is worth merging them and focusing on finding the side effects from a given change." Then: "Let's do that and rename behavior into semantics."
+
+- A changed value often goes into a condition, so a `logic` edit often changes the control flow. A changed literal can have a large effect too. The syntax class of an edit says little about its effect.
+- A later batch adds an analysis of the effects of each change. This batch is only the merge.
+- The decision of 2026-11-16 stays: the category comes from the edit, not from the compiled code. The "branches:" line of 40.4 stays.
+
+### 42.2 The rule
+
+- `Category::Value`, `Category::Logic`, and `Category::ControlFlow` are one variant, `Category::Semantics`. Its name in each output is `semantics`. The list has 16 entries.
+- Each op that is not a property has a fixed category. The ops that gave `value`, `logic`, or `control flow`, and the ops with a computed category (`COMPUTED`), give `semantics`. An edit with no op gets `semantics`. `edits::syntax_category` and `checks::computed_category` are gone.
+- Also `semantics`: the value of a constant (`part_category`), a constant in a body, a moved statement (41.7), an item rewrite, a changed condition with an SMT effect hint, and a body difference of a pair (`identity::edit_category`).
+- `expects_equal`: no. `semantics` predicts a change of the code, as the three did. No mismatch mark.
+- `role`: `Core`. `weight`: 6, the highest weight of the three.
+- The fact texts stay: "changed condition", "changed literal", "added early exit", "moved statement", "(effect hint: widen)". The text gives the form of the edit.
+
+### 42.3 The old names
+
+`Category::from_name` reads `value`, `logic`, and `control flow` as `semantics`. The serde form reads `value`, `logic`, and `control_flow` as `semantics` (`#[serde(alias)]`). The places that store a category:
+
+| Place | The stored form | 8c data |
+|---|---|---|
+| the stored report of a step and of a commit (`StoredReport` in the cache, `background::store`) | serde: `Fact.category`, `ClaimResult.category` | loads. The tools key of a new binary differs, so Semilla computes the report again. The stored `text` of 8c keeps the old names, and Semilla does not use it |
+| the git note `refs/notes/semilla-report` | a copy of `StoredReport` | Semilla never reads it (background.rs) |
+| the review data (`StoredReview` in the cache: `UiData` with the report and the change tree, `TreeNode.category`) | serde | loads with no error and shows `semantics` (test `a_stored_review_and_a_stored_report_of_8c_load_and_show_semantics`) |
+| the review file (`.semilla/review.json`) | no category: the claim hash has the op, the anchor, the arguments, and the sources | the marks stay valid |
+| the session (`.semilla/session.json`, the change set) | no category | – |
+| a saved search (`category:logic`, `category:control-flow`, `category:value`) | the text of the query | gives the `semantics` facts (test `search_filters`) |
+| the UI state (the fact filter of `app.js`) | in memory only; the option list comes from `Category::ALL` | – |
+| an export (Markdown, HTML) | text | an 8c export keeps its old names. Semilla does not read an export |
+
+### 42.4 The rules that used the three categories
+
+Each rule: **Decided by Claude.**
+
+1. **The order of the text output** (`Fact::text_rank`, 37.18). A body edit with `code different` of `value`, `logic`, `control flow`, `macro`, or `text` has rank 1. Now: `semantics`, `macro`, or `text`. The order is the same as in 8c. In a rank, the facts keep the place in the source (the order of the derive).
+2. **The order in a group of the review** (`Fact::order`, 35.7). It used no category. No change.
+3. **The risk of a group** (35.7). Before: 2 points for a `control flow` fact with `code different`. Now: 2 points for a fact with `code different` and a "branches:" line (its compiled code changes its branches, 40.4). The reason text: "N fact(s) with code different and changed branches". Each other fact with `code different` gives the 1 point, as before. Cause: the "branches:" line is the observation of the control flow in the compiled code. A changed condition that keeps its branches (`a > b` → `a >= b`) now gives 1 point, not 2.
+4. **The flow views of the short Markdown report** (`fact_flows`). Before: each body with a fact of `value`, `logic`, or `control flow`. Now: each body with a `semantics` fact. The set is the same.
+5. **The fold of equal facts** (`edits::fold`, 37.16). The key had the category. Two facts with the same text in different syntax classes (a changed operator in a condition and in a `let`) can now have the same key. Now the key also has the "branches:" line. A fact whose compiled branches change does not fold with a fact whose branches stay, so the line of each fact stays (before, the fold kept only the line of the first fact).
+6. **The mark of a node of the change tree** (`views::merge_marks`). The node shows the category with the highest weight. `semantics` has 6: a node with a `value` edit and an `indirect` change showed `indirect` in 8c; now it shows `semantics`.
+7. **The summary table, the UI filter, the badges of a custom subgroup.** They use `Category::ALL`: one row `semantics` in place of three. The UI has no color for a category: the chip color comes from the compare result.
+8. **`oracle.rs`.** No rule uses a category. The comment "the control flow of a build changed" is about a build condition.
+
+### 42.5 Limits
+
+- The reviewer cannot filter the facts by the form of the edit (a condition, a literal). The text search finds the form: "changed literal", "added early exit".
+- No analysis of the effects of a change yet (a later batch).
+- An 8c export and the stored `text` of an 8c report keep the old names.
+- A line of more than 500 characters keeps its cut. The name `semantics` has a different length than the old name, so the cut text of such a line shows up to 4 characters more or less (5 lines in the ten fixtures of 7c). `semilla status --verbose` shows the full line.
+
+### 42.6 The measure
+
+On the ten fixtures of 7c, the 8c binaries and the 8d binaries give the same first line, the same runs (2) and reasons, the same count of facts, and the same compare result of each fact. The count of `semantics` facts is the sum of the `value`, `logic`, and `control flow` facts of 8c in each fixture: no fact folds in a different way. After the replacement of the three old names with `semantics` in the 8c output, the outputs are equal, apart from the 5 cut lines of 42.5. The warm step time of `bytes` and `quickcheck-2` is the same (the median of 5 runs: +0.4% and −0.2%).

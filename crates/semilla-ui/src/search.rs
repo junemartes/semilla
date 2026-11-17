@@ -5,7 +5,7 @@
 //! | `total` | fuzzy search on symbol names |
 //! | `"qty <= max"` | text search on labels and source |
 //! | `changed:`, `step:3`, `group:G2` | filters by diff status, step, and group |
-//! | `category:logic`, `compare:code-equal` | filters by the category and the compare result of a fact (design 35) |
+//! | `category:semantics`, `compare:code-equal` | filters by the category and the compare result of a fact (design 35) |
 //! | `kind:panic`, `kind:unsafe`, `kind:err` | panic sites, `unsafe` blocks, error exits |
 //! | `callers:Cart::total`, `callees:…` | graph neighbors |
 //! | `path:main -> Cart::total` | call paths |
@@ -591,7 +591,7 @@ mod tests {
             vec![
                 Term::Fuzzy("total".into()),
                 Term::Text("qty <= max".into()),
-                Term::Category(Category::ControlFlow),
+                Term::Category(Category::Semantics),
                 Term::Compare(Compare::CodeEqual),
                 Term::Step(3),
                 Term::Group("G2".into()),

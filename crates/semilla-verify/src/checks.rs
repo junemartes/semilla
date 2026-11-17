@@ -794,20 +794,10 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
     };
 
     if outcome.category.is_none() {
-        // Design 40.5: an op with no fixed category gets the category of the syntax.
-        outcome.category = match info.category {
-            None => computed_category(context, claim),
-            other => other,
-        };
+        // Design 42: each op that is not a property has a fixed category.
+        outcome.category = info.category;
     }
     outcome
-}
-
-/// The category of a body edit that no op decides (design 40.5): the category of the syntax of
-/// the edit at the anchor, else `logic`. It does not depend on the compiled code.
-fn computed_category(context: &Context, claim: &Claim) -> Option<Category> {
-    let at = claim.at.as_ref()?;
-    Some(context.edits.iter().find(|edit| edit.anchor() == Some(at)).map_or(Category::Logic, |edit| crate::edits::syntax_category(context, edit)))
 }
 
 fn texts(context: &Context, indexes: &[usize], mut outcome: Outcome) -> Outcome {
@@ -1508,7 +1498,7 @@ fn add_effect(context: &Context, at: &Anchor, outcome: &mut Outcome) {
         match check.effect {
             Effect::Equivalent => {}
             Effect::Narrow | Effect::Widen | Effect::Negate => {
-                outcome.category = Some(Category::ControlFlow);
+                outcome.category = Some(Category::Semantics);
                 outcome.effect = Some(check.effect);
                 outcome.witness = check.witness;
             }
@@ -1845,8 +1835,8 @@ fn check_rewrite(context: &Context, claim: &Claim) -> Outcome {
     let mut outcome = Outcome::verified("rewrite", explains);
     outcome.before = Some(old_item.source.clone());
     outcome.after = Some(new_item.source.clone());
-    // Design 40.5: an item rewrite is `logic`; the compiled code does not decide it.
-    outcome.category = Some(Category::Logic);
+    // Design 40.5, 42: an item rewrite is `semantics`; the compiled code does not decide it.
+    outcome.category = Some(Category::Semantics);
     outcome
 }
 

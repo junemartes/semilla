@@ -237,7 +237,7 @@ pub struct SubgroupSummary {
     pub locations: Vec<String>,
     /// The claims that the engine added after the agent's edit (design section 6.3, rule 5).
     pub new_claims: Vec<String>,
-    /// The category badges of a custom subgroup, for example `2 control flow`.
+    /// The category badges of a custom subgroup, for example `2 semantics`.
     pub badges: Vec<String>,
     /// The number of claims for each category label.
     pub category_counts: BTreeMap<&'static str, usize>,
@@ -716,7 +716,8 @@ pub const ALL_EQUAL: &str = "each fact: code equal or no code";
 /// verdict.
 ///
 /// - A fact with the result `code equal` or `no code` adds no point.
-/// - 2 points: a `control flow` fact with `code different`.
+/// - 2 points: a fact with `code different` whose compiled code changes its branches (the
+///   line "branches: …", design 40.4 and 42).
 /// - 1 point: one or more other facts with `code different`, `no compare`, `pending`, or
 ///   `not checked`.
 /// - 2 points: a fact with the mismatch mark.
@@ -730,14 +731,16 @@ fn risk(ctx: &Ctx, group: &Group, subgroups: &[SubgroupSummary], claims: &[&Clai
     let mut score = 0;
     let mut reasons = Vec::new();
     let facts: Vec<&semilla_core::Fact> = group_facts(ctx, group);
-    let control = facts.iter().filter(|fact| fact.category == Category::ControlFlow && fact.compare == Compare::CodeDifferent).count();
+    // Design 42: the "branches:" line, not the category, tells a change of the control flow.
+    let branches = |fact: &semilla_core::Fact| fact.branches.is_some() && fact.compare == Compare::CodeDifferent;
+    let control = facts.iter().filter(|fact| branches(fact)).count();
     if control > 0 {
         score += 2;
-        reasons.push(format!("{control} control flow fact(s) with code different"));
+        reasons.push(format!("{control} fact(s) with code different and changed branches"));
     }
     let mut other = false;
     for compare in [Compare::CodeDifferent, Compare::NoCompare, Compare::Pending, Compare::NotChecked] {
-        let count = facts.iter().filter(|fact| fact.compare == compare && !(compare == Compare::CodeDifferent && fact.category == Category::ControlFlow)).count();
+        let count = facts.iter().filter(|fact| fact.compare == compare && !(compare == Compare::CodeDifferent && branches(fact))).count();
         if count > 0 {
             other = true;
             reasons.push(format!("{count} fact(s) with {}", compare.name()));

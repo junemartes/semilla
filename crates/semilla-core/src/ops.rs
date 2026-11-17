@@ -23,12 +23,11 @@ pub enum Category {
     Added,
     /// A removed item, member, `impl`, or test.
     Removed,
-    /// A literal or the value of a constant.
-    Value,
-    /// Statements, operands, calls.
-    Logic,
-    /// Branches, loops, exits.
-    ControlFlow,
+    /// A change of the code in a body: a literal, the value of a constant, a statement, an
+    /// operand, a call, a condition, a branch, a loop, or an exit (design 42). The old names
+    /// `value`, `logic`, and `control flow` of a stored record read as this category.
+    #[serde(alias = "value", alias = "logic", alias = "control_flow")]
+    Semantics,
     /// An attribute.
     Attribute,
     /// A doc comment or a comment.
@@ -59,9 +58,7 @@ impl Category {
         Category::Declaration,
         Category::Added,
         Category::Removed,
-        Category::Value,
-        Category::Logic,
-        Category::ControlFlow,
+        Category::Semantics,
         Category::Attribute,
         Category::Docs,
         Category::Import,
@@ -82,9 +79,7 @@ impl Category {
             Category::Declaration => "declaration",
             Category::Added => "added",
             Category::Removed => "removed",
-            Category::Value => "value",
-            Category::Logic => "logic",
-            Category::ControlFlow => "control flow",
+            Category::Semantics => "semantics",
             Category::Attribute => "attribute",
             Category::Docs => "docs",
             Category::Import => "import",
@@ -97,9 +92,13 @@ impl Category {
         }
     }
 
-    /// The category with this text, or `None`.
+    /// The category with this text, or `None`. The old names `value`, `logic`, and
+    /// `control flow` (before design 42) give `semantics`: a saved search can have them.
     pub fn from_name(name: &str) -> Option<Category> {
-        Category::ALL.iter().copied().find(|category| category.name() == name)
+        match name {
+            "value" | "logic" | "control flow" => Some(Category::Semantics),
+            _ => Category::ALL.iter().copied().find(|category| category.name() == name),
+        }
     }
 
     /// True if the text of the change gives no cause for different compiled code. Such a fact
@@ -116,7 +115,7 @@ impl Category {
             Category::Docs => Role::Docs,
             Category::Manifest | Category::File | Category::BuildCode | Category::Attribute => Role::Config,
             Category::Indirect => Role::Propagation,
-            Category::Added | Category::Removed | Category::Value | Category::Logic | Category::ControlFlow | Category::Macro | Category::Text => Role::Core,
+            Category::Added | Category::Removed | Category::Semantics | Category::Macro | Category::Text => Role::Core,
         }
     }
 
@@ -128,9 +127,9 @@ impl Category {
             Category::Rename | Category::Move | Category::Import | Category::Visibility => 1,
             Category::Attribute | Category::Manifest | Category::File | Category::Text => 2,
             Category::Declaration | Category::Added | Category::Removed | Category::Macro => 3,
-            Category::Value => 4,
-            Category::Logic | Category::Indirect => 5,
-            Category::ControlFlow => 6,
+            Category::Indirect => 5,
+            // Design 42: the highest weight of `value`, `logic`, and `control flow`.
+            Category::Semantics => 6,
             Category::BuildCode => 7,
         }
     }
@@ -224,8 +223,7 @@ pub struct OpInfo {
     pub name: &'static str,
     pub level: OpLevel,
     pub kind: OpKind,
-    /// The category of the change. `None`: the verifier chooses `logic` or `control flow` from
-    /// the MIR, or the op is a property.
+    /// The category of the change. `None`: the op is a property.
     pub category: Option<Category>,
     /// The role for the subgroup suggestion.
     pub role: Role,
@@ -256,12 +254,10 @@ const M: Option<Category> = Some(Category::Move);
 const A: Option<Category> = Some(Category::Added);
 const X: Option<Category> = Some(Category::Removed);
 const D: Option<Category> = Some(Category::Declaration);
-const V: Option<Category> = Some(Category::Value);
-const L: Option<Category> = Some(Category::Logic);
-const C: Option<Category> = Some(Category::ControlFlow);
+// Design 42: each change of the code in a body is `semantics`.
+const S: Option<Category> = Some(Category::Semantics);
 const O: Option<Category> = Some(Category::Docs);
 const MC: Option<Category> = Some(Category::Macro);
-const COMPUTED: Option<Category> = None;
 
 ops! {
     // ----- items -----
@@ -271,65 +267,65 @@ ops! {
     "remove-item",            Item,       Identity,    X, Core, [],                "Remove an item.";
     "change-signature",       Item,       OwnContent,  D, Interface,   [],                "Change an item signature that no fact covers: a const or static value, a `macro_rules!` body.";
     "edit-doc",               Item,       OwnContent,  O, Docs,        [],                "Change doc comments.";
-    "extract-function",       Item,       AcrossNodes, L, Mechanical,  ["new"],           "Move statements or an expression into a new function.";
-    "inline-function",        Item,       AcrossNodes, L, Mechanical,  [],                "Replace a call with the body of the function.";
-    "rewrite-item",           Item,       Free,        COMPUTED, Core, ["note"],          "Rewrite an item as a whole (optional `new`: its new path). Always in the spotlight.";
+    "extract-function",       Item,       AcrossNodes, S, Mechanical,  ["new"],           "Move statements or an expression into a new function.";
+    "inline-function",        Item,       AcrossNodes, S, Mechanical,  [],                "Replace a call with the body of the function.";
+    "rewrite-item",           Item,       Free,        S, Core, ["note"],          "Rewrite an item as a whole (optional `new`: its new path). Always in the spotlight.";
     // ----- files -----
     // ----- statements: add -----
-    "add-let",                Statement,  OwnContent,  L, Core,        [],                "Add a let statement.";
-    "add-expression-statement", Statement, OwnContent, L, Core,        [],                "Add an expression statement (a call, an assignment).";
-    "add-if",                 Statement,  OwnContent,  C, Core,        [],                "Add an if statement.";
-    "add-match",              Statement,  OwnContent,  C, Core,        [],                "Add a match statement.";
-    "add-loop",               Statement,  OwnContent,  C, Core,        [],                "Add a loop (for, while, loop).";
-    "add-return",             Statement,  OwnContent,  C, Core,        [],                "Add a return statement.";
-    "add-early-exit",         Statement,  OwnContent,  C, Core,        [],                "Add `if cond { return/break/continue }`.";
-    "add-break",              Statement,  OwnContent,  C, Core,        [],                "Add a break statement.";
-    "add-continue",           Statement,  OwnContent,  C, Core,        [],                "Add a continue statement.";
-    "add-macro-statement",    Statement,  OwnContent,  L, Core,        [],                "Add a macro call statement.";
+    "add-let",                Statement,  OwnContent,  S, Core,        [],                "Add a let statement.";
+    "add-expression-statement", Statement, OwnContent, S, Core,        [],                "Add an expression statement (a call, an assignment).";
+    "add-if",                 Statement,  OwnContent,  S, Core,        [],                "Add an if statement.";
+    "add-match",              Statement,  OwnContent,  S, Core,        [],                "Add a match statement.";
+    "add-loop",               Statement,  OwnContent,  S, Core,        [],                "Add a loop (for, while, loop).";
+    "add-return",             Statement,  OwnContent,  S, Core,        [],                "Add a return statement.";
+    "add-early-exit",         Statement,  OwnContent,  S, Core,        [],                "Add `if cond { return/break/continue }`.";
+    "add-break",              Statement,  OwnContent,  S, Core,        [],                "Add a break statement.";
+    "add-continue",           Statement,  OwnContent,  S, Core,        [],                "Add a continue statement.";
+    "add-macro-statement",    Statement,  OwnContent,  S, Core,        [],                "Add a macro call statement.";
     // ----- statements: structure -----
-    "delete-statement",       Statement,  OwnContent,  COMPUTED, Core, [],                "Delete a statement.";
-    "move-statement",         Statement,  OwnContent,  COMPUTED, Core, ["to"],            "Move a statement in its block or to another block.";
-    "wrap-statements",        Statement,  OwnContent,  C, Core,        ["count", "with"], "Put statements inside a new if, loop, block, or unsafe block.";
-    "unwrap-statements",      Statement,  OwnContent,  C, Core,        [],                "Remove a construct and keep its body.";
-    "extract-variable",       Statement,  OwnContent,  L, Mechanical,  ["name"],          "Move an expression into a new let.";
-    "inline-variable",        Statement,  OwnContent,  L, Mechanical,  [],                "Replace a variable with its value.";
+    "delete-statement",       Statement,  OwnContent,  S, Core, [],                "Delete a statement.";
+    "move-statement",         Statement,  OwnContent,  S, Core, ["to"],            "Move a statement in its block or to another block.";
+    "wrap-statements",        Statement,  OwnContent,  S, Core,        ["count", "with"], "Put statements inside a new if, loop, block, or unsafe block.";
+    "unwrap-statements",      Statement,  OwnContent,  S, Core,        [],                "Remove a construct and keep its body.";
+    "extract-variable",       Statement,  OwnContent,  S, Mechanical,  ["name"],          "Move an expression into a new let.";
+    "inline-variable",        Statement,  OwnContent,  S, Mechanical,  [],                "Replace a variable with its value.";
     "rename-local",           Statement,  Identity,    R, Mechanical,  ["to"],            "Rename a local variable, or a parameter (optional `from`: the old name; the anchor is then the function).";
-    "change-mutability",      Statement,  OwnContent,  L, Mechanical,  [],                "Add or remove `mut`.";
-    "change-type-annotation", Statement,  OwnContent,  L, Mechanical,  [],                "Add, remove, or change a type annotation on a let.";
-    "add-else",               Statement,  OwnContent,  C, Core,        [],                "Add an else branch.";
-    "add-else-if",            Statement,  OwnContent,  C, Core,        [],                "Add an else-if branch.";
-    "remove-else",            Statement,  OwnContent,  C, Core,        [],                "Remove an else branch.";
-    "remove-if",              Statement,  OwnContent,  C, Core,        ["keep"],          "Remove an if and keep one branch.";
-    "invert-if",              Statement,  OwnContent,  C, Mechanical,  [],                "Negate the condition and swap the branches.";
-    "swap-branches",          Statement,  OwnContent,  COMPUTED, Core, [],                "Swap the branches of an if.";
-    "add-arm",                Statement,  OwnContent,  C, Core,        [],                "Add a match arm.";
-    "remove-arm",             Statement,  OwnContent,  C, Core,        [],                "Remove a match arm.";
-    "move-arm",               Statement,  OwnContent,  COMPUTED, Core, [],                "Move a match arm.";
-    "change-loop-kind",       Statement,  OwnContent,  L, Core,        [],                "Change a loop between for, while, and loop.";
-    "if-to-match",            Statement,  OwnContent,  C, Mechanical,  [],                "Convert an if into a match.";
-    "match-to-if",            Statement,  OwnContent,  C, Mechanical,  [],                "Convert a match into an if.";
-    "guard-clause",           Statement,  OwnContent,  C, Mechanical,  [],                "Replace an if/else with an early exit.";
-    "reorder-statements",     Statement,  OwnContent,  L, Mechanical,  [],                "Reorder independent statements.";
-    "question-mark",          Statement,  OwnContent,  C, Mechanical,  [],                "Replace a manual match on Option or Result with `?`.";
+    "change-mutability",      Statement,  OwnContent,  S, Mechanical,  [],                "Add or remove `mut`.";
+    "change-type-annotation", Statement,  OwnContent,  S, Mechanical,  [],                "Add, remove, or change a type annotation on a let.";
+    "add-else",               Statement,  OwnContent,  S, Core,        [],                "Add an else branch.";
+    "add-else-if",            Statement,  OwnContent,  S, Core,        [],                "Add an else-if branch.";
+    "remove-else",            Statement,  OwnContent,  S, Core,        [],                "Remove an else branch.";
+    "remove-if",              Statement,  OwnContent,  S, Core,        ["keep"],          "Remove an if and keep one branch.";
+    "invert-if",              Statement,  OwnContent,  S, Mechanical,  [],                "Negate the condition and swap the branches.";
+    "swap-branches",          Statement,  OwnContent,  S, Core, [],                "Swap the branches of an if.";
+    "add-arm",                Statement,  OwnContent,  S, Core,        [],                "Add a match arm.";
+    "remove-arm",             Statement,  OwnContent,  S, Core,        [],                "Remove a match arm.";
+    "move-arm",               Statement,  OwnContent,  S, Core, [],                "Move a match arm.";
+    "change-loop-kind",       Statement,  OwnContent,  S, Core,        [],                "Change a loop between for, while, and loop.";
+    "if-to-match",            Statement,  OwnContent,  S, Mechanical,  [],                "Convert an if into a match.";
+    "match-to-if",            Statement,  OwnContent,  S, Mechanical,  [],                "Convert a match into an if.";
+    "guard-clause",           Statement,  OwnContent,  S, Mechanical,  [],                "Replace an if/else with an early exit.";
+    "reorder-statements",     Statement,  OwnContent,  S, Mechanical,  [],                "Reorder independent statements.";
+    "question-mark",          Statement,  OwnContent,  S, Mechanical,  [],                "Replace a manual match on Option or Result with `?`.";
     // ----- expressions -----
-    "change-literal",         Expression, OwnContent,  V, Core,        [],                "Change a literal.";
-    "change-path",            Expression, OwnContent,  L, Core,        [],                "Change a path: another variable, const, or function.";
-    "change-operator",        Expression, OwnContent,  COMPUTED, Core, [],                "Change a binary or unary operator.";
-    "change-condition",       Expression, OwnContent,  COMPUTED, Core, [],                "Change a condition. The engine computes the effect.";
-    "negate",                 Expression, OwnContent,  COMPUTED, Core, [],                "Negate an expression.";
-    "swap-operands",          Expression, OwnContent,  COMPUTED, Core, [],                "Swap the operands of a binary operator.";
-    "wrap-expression",        Expression, OwnContent,  L, Core,        ["with"],          "Wrap an expression: Ok(x), Some(x), &x, x.clone(), x as T, x?.";
-    "unwrap-expression",      Expression, OwnContent,  L, Core,        [],                "Remove a wrapper from an expression.";
-    "add-argument",           Expression, OwnContent,  L, Propagation, [],                "Add an argument to a call.";
-    "remove-argument",        Expression, OwnContent,  L, Propagation, [],                "Remove an argument from a call.";
-    "chain-method",           Expression, OwnContent,  L, Core,        ["method"],        "Add a method call to the end of an expression.";
-    "add-clone",              Expression, OwnContent,  L, Core,        [],                "Add `.clone()` (a borrow checker fix).";
-    "rewrite-pattern",        Expression, OwnContent,  L, Propagation, ["from", "to"],    "Apply one rewrite rule at many sites.";
-    "replace-expression",     Expression, Free,        COMPUTED, Core, [],                "Replace a block-free expression (free edit).";
-    "replace-pattern",        Expression, Free,        COMPUTED, Core, [],                "Replace a pattern (free edit).";
-    "add-alternative",        Expression, OwnContent,  COMPUTED, Core, [],                "Add alternatives to an or-pattern (`a | b` becomes `a | b | c`).";
-    "remove-alternative",     Expression, OwnContent,  COMPUTED, Core, [],                "Remove alternatives from an or-pattern.";
-    "replace-type",           Expression, Free,        COMPUTED, Core, [],                "Replace a type (free edit).";
+    "change-literal",         Expression, OwnContent,  S, Core,        [],                "Change a literal.";
+    "change-path",            Expression, OwnContent,  S, Core,        [],                "Change a path: another variable, const, or function.";
+    "change-operator",        Expression, OwnContent,  S, Core, [],                "Change a binary or unary operator.";
+    "change-condition",       Expression, OwnContent,  S, Core, [],                "Change a condition. The engine computes the effect.";
+    "negate",                 Expression, OwnContent,  S, Core, [],                "Negate an expression.";
+    "swap-operands",          Expression, OwnContent,  S, Core, [],                "Swap the operands of a binary operator.";
+    "wrap-expression",        Expression, OwnContent,  S, Core,        ["with"],          "Wrap an expression: Ok(x), Some(x), &x, x.clone(), x as T, x?.";
+    "unwrap-expression",      Expression, OwnContent,  S, Core,        [],                "Remove a wrapper from an expression.";
+    "add-argument",           Expression, OwnContent,  S, Propagation, [],                "Add an argument to a call.";
+    "remove-argument",        Expression, OwnContent,  S, Propagation, [],                "Remove an argument from a call.";
+    "chain-method",           Expression, OwnContent,  S, Core,        ["method"],        "Add a method call to the end of an expression.";
+    "add-clone",              Expression, OwnContent,  S, Core,        [],                "Add `.clone()` (a borrow checker fix).";
+    "rewrite-pattern",        Expression, OwnContent,  S, Propagation, ["from", "to"],    "Apply one rewrite rule at many sites.";
+    "replace-expression",     Expression, Free,        S, Core, [],                "Replace a block-free expression (free edit).";
+    "replace-pattern",        Expression, Free,        S, Core, [],                "Replace a pattern (free edit).";
+    "add-alternative",        Expression, OwnContent,  S, Core, [],                "Add alternatives to an or-pattern (`a | b` becomes `a | b | c`).";
+    "remove-alternative",     Expression, OwnContent,  S, Core, [],                "Remove alternatives from an or-pattern.";
+    "replace-type",           Expression, Free,        S, Core, [],                "Replace a type (free edit).";
     "replace-macro-input",    Expression, Free,        MC, Core, [],                "Replace the input of one macro call (free edit, always in the spotlight).";
     // ----- properties of the code after the step -----
     "no-panic",               Item,       Property,    None, Core,     [],                "The local code that can run from the function has no explicit panic site.";
@@ -424,15 +420,38 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), Category::ALL.len());
-        assert_eq!(Category::from_name("control flow"), Some(Category::ControlFlow));
+        assert_eq!(Category::from_name("semantics"), Some(Category::Semantics));
         assert_eq!(Compare::from_name("code equal"), Some(Compare::CodeEqual));
         assert_eq!(serde_json::to_string(&Compare::NoCompare).unwrap(), "\"no_compare\"");
         assert_eq!(serde_json::to_string(&Category::BuildCode).unwrap(), "\"build_code\"");
     }
 
     #[test]
+    fn the_old_names_of_8c_read_as_semantics() {
+        // Design 42: a stored record and a saved search can have the old names.
+        for name in ["value", "logic", "control flow", "semantics"] {
+            assert_eq!(Category::from_name(name), Some(Category::Semantics), "{name}");
+        }
+        for name in ["value", "logic", "control_flow", "semantics"] {
+            assert_eq!(serde_json::from_str::<Category>(&format!("\"{name}\"")).unwrap(), Category::Semantics, "{name}");
+        }
+        assert_eq!(serde_json::to_string(&Category::Semantics).unwrap(), "\"semantics\"");
+        assert_eq!(Category::Semantics.name(), "semantics");
+        assert!(!Category::ALL.iter().any(|category| ["value", "logic", "control flow"].contains(&category.name())));
+        // No mismatch mark, the role `Core`, and the highest weight of the three old names.
+        assert!(!Category::Semantics.expects_equal());
+        assert_eq!(Category::Semantics.role(), Role::Core);
+        assert_eq!(Category::Semantics.weight(), 6);
+        assert!(Category::Semantics.weight() > Category::Indirect.weight() && Category::Semantics.weight() < Category::BuildCode.weight());
+        // Each op that is not a property has a fixed category.
+        for info in OPS.iter() {
+            assert_eq!(info.category.is_none(), info.kind == OpKind::Property, "{}", info.name);
+        }
+    }
+
+    #[test]
     fn lookup() {
-        assert_eq!(op("add-if").unwrap().category, Some(Category::ControlFlow));
+        assert_eq!(op("add-if").unwrap().category, Some(Category::Semantics));
         assert!(op("edit-fn-body").is_none(), "edit-fn-body must not exist");
     }
 }

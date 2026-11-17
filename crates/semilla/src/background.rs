@@ -384,3 +384,52 @@ pub fn wait(app: &mut App, key: &str, hash: &str, timeout: std::time::Duration) 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use semilla_core::{Category, Compare, Fact};
+
+    /// Puts the old category names of 8c into each `category` field of a JSON value, in turn.
+    fn old_names(value: &mut serde_json::Value, next: &mut usize) {
+        const OLD: [&str; 3] = ["logic", "control_flow", "value"];
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, item) in map.iter_mut() {
+                    if key == "category" && item.as_str() == Some("semantics") {
+                        *item = serde_json::Value::String(OLD[*next % 3].into());
+                        *next += 1;
+                    } else {
+                        old_names(item, next);
+                    }
+                }
+            }
+            serde_json::Value::Array(list) => list.iter_mut().for_each(|item| old_names(item, next)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn a_stored_review_and_a_stored_report_of_8c_load_and_show_semantics() {
+        // Design 42: a stored record with the old names `logic`, `control flow`, and `value`
+        // loads with no error, and each output shows `semantics`.
+        let mut data = semilla_ui::fixture::demo_data();
+        let fact = |id: &str| Fact { id: id.into(), part: "edit".into(), description: "changed literal `1` → `2`".into(), status: "derived".into(), category: Category::Semantics, compare: Compare::CodeDifferent, ..Default::default() };
+        data.report.steps[0].facts.extend([fact("f8"), fact("f9"), fact("f10")]);
+        let review = StoredReview { key: "session".into(), tree: String::new(), hash: "h".into(), tools: "t".into(), mode: Default::default(), review: String::new(), data: data.clone() };
+        let report = StoredReport { key: "session".into(), tree: String::new(), hash: "h".into(), tools: "t".into(), report: data.report.clone(), text: String::new() };
+        let mut count = 0;
+        let mut review_json = serde_json::to_value(&review).unwrap();
+        old_names(&mut review_json, &mut count);
+        let mut report_json = serde_json::to_value(&report).unwrap();
+        old_names(&mut report_json, &mut count);
+        let text = format!("{review_json}{report_json}");
+        assert!(count >= 6 && ["\"logic\"", "\"control_flow\"", "\"value\""].iter().all(|name| text.contains(name)) && !text.contains("\"semantics\""), "{count}");
+        let loaded: StoredReview = serde_json::from_value(review_json).expect("an 8c review loads");
+        let stored: StoredReport = serde_json::from_value(report_json).expect("an 8c report loads");
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), serde_json::to_value(&review).unwrap());
+        assert_eq!(serde_json::to_value(&stored.report).unwrap(), serde_json::to_value(&data.report).unwrap());
+        let markdown = semilla_ui::export::render_markdown(&loaded.data, false);
+        assert!(markdown.contains("\\[semantics · code different\\]") && ["logic", "control flow", "value"].iter().all(|old| !markdown.contains(&format!("{old} · code")) && !markdown.contains(&format!("category: {old}"))), "{markdown}");
+    }
+}

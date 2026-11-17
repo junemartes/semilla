@@ -213,7 +213,7 @@ fn subgroups_show_renames_and_new_code() {
 
 #[test]
 fn the_facts_give_the_risk_and_the_equal_label() {
-    // Trial 3, D9: a group with a `control_flow` step had "risk 0/3 · all neutral". Design
+    // Trial 3, D9: a group with a `control_flow` step (since 42: `semantics`) had "risk 0/3 · all neutral". Design
     // 35.7: the categories and the compare results of the facts give the risk.
     use semilla_core::{Category, Compare};
     let mut data = demo_data();
@@ -229,23 +229,28 @@ fn the_facts_give_the_risk_and_the_equal_label() {
     let base = g2(&data);
     // A group with no fact does not have the label.
     assert!(!base.all_equal);
-    for (category, compare, risk) in [
-        (Category::ControlFlow, Compare::CodeDifferent, 2),
-        (Category::Logic, Compare::CodeDifferent, 1),
-        (Category::Logic, Compare::NoCompare, 1),
-        (Category::Logic, Compare::Pending, 1),
-        (Category::Logic, Compare::NotChecked, 1),
+    // Design 42: 2 points for a fact with different code whose compiled branches change (the
+    // "branches:" line), 1 point for each other fact with different code.
+    let branches = "the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets)";
+    for (category, compare, branch, risk) in [
+        (Category::Semantics, Compare::CodeDifferent, true, 2),
+        (Category::Semantics, Compare::CodeDifferent, false, 1),
+        (Category::Semantics, Compare::NoCompare, false, 1),
+        (Category::Semantics, Compare::Pending, false, 1),
+        (Category::Semantics, Compare::NotChecked, false, 1),
         // The mismatch mark: 1 point for the different code, and 2 points for the mark.
-        (Category::Rename, Compare::CodeDifferent, 3),
+        (Category::Rename, Compare::CodeDifferent, false, 3),
     ] {
         let mut data = data.clone();
-        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact(category, compare));
+        let fact = semilla_core::Fact { branches: branch.then(|| branches.to_string()), ..fact(category, compare) };
+        data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact);
         let group = g2(&data);
         assert!(!group.all_equal, "{category:?} {compare:?}");
-        assert_eq!(group.risk_score, base.risk_score + risk, "{category:?} {compare:?}: {:?}", group.risk_reasons);
+        assert_eq!(group.risk_score, base.risk_score + risk, "{category:?} {compare:?} {branch}: {:?}", group.risk_reasons);
+        assert_eq!(group.risk_reasons.iter().any(|reason| reason == "1 fact(s) with code different and changed branches"), branch, "{:?}", group.risk_reasons);
     }
     // A fact with equal code, and a fact with no code, add no point.
-    for (category, compare) in [(Category::Logic, Compare::CodeEqual), (Category::ControlFlow, Compare::CodeEqual), (Category::Docs, Compare::NoCode)] {
+    for (category, compare) in [(Category::Semantics, Compare::CodeEqual), (Category::Docs, Compare::NoCode)] {
         let mut data = data.clone();
         data.report.steps.iter_mut().find(|step| step.step == 6).unwrap().facts.push(fact(category, compare));
         let group = g2(&data);
@@ -291,14 +296,15 @@ fn a_claim_adds_no_risk_and_a_fact_with_different_code_does() {
             claim.category = Some(semilla_core::Category::Rename);
         }
     }
-    // G1 has a control flow fact with different code.
+    // G1 has a fact with different code whose compiled branches change (design 42).
     data.report.steps.iter_mut().find(|step| step.step == 2).unwrap().facts.push(semilla_core::Fact {
         id: "f1".into(),
         part: "edit".into(),
         description: "added statement `if self.items.is_empty() { … }`".into(),
         status: "derived".into(),
-        category: semilla_core::Category::ControlFlow,
+        category: semilla_core::Category::Semantics,
         compare: semilla_core::Compare::CodeDifferent,
+        branches: Some("the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets)".into()),
         ..Default::default()
     });
     let stored = changeset(&Ctx::new(data.clone()), &ReviewFile::default());
@@ -311,7 +317,7 @@ fn a_claim_adds_no_risk_and_a_fact_with_different_code_does() {
     assert_eq!(g2.risk, 1, "the public API alone gives one dot: {:?}", g2.risk_reasons);
     assert_eq!(g2.risk_reasons, ["public API"]);
     let g1 = summary.groups.iter().find(|group| group.id == "G1").unwrap();
-    assert!(g1.risk_score > g2.risk_score, "a control flow fact with different code ranks above verified claims");
+    assert!(g1.risk_score > g2.risk_score, "a fact with changed branches and different code ranks above verified claims");
     assert_eq!(summary.groups[0].id, "G1");
 
     // Pending claims give a reason, but no points.
@@ -532,7 +538,7 @@ fn reports_show_the_content_of_a_file_fact() {
 }
 
 fn fact(id: &str, at: &str, compare: semilla_core::Compare, description: &str) -> semilla_core::Fact {
-    semilla_core::Fact { id: id.into(), at: Some(at.parse().unwrap()), part: "edit".into(), description: description.into(), status: "derived".into(), category: semilla_core::Category::Logic, compare, ..Default::default() }
+    semilla_core::Fact { id: id.into(), at: Some(at.parse().unwrap()), part: "edit".into(), description: description.into(), status: "derived".into(), category: semilla_core::Category::Semantics, compare, ..Default::default() }
 }
 
 #[test]
@@ -556,10 +562,10 @@ fn the_short_report_shows_each_fact_one_time() {
     assert_eq!(full.matches("f1 derived").count(), 1, "{full}");
     // Design 35.7: no compare result hides a fact or its source diff.
     assert!(short.contains("new_sum(items)") && short.contains("NEUTRAL_NEW"), "{short}");
-    assert!(short.contains("\\[logic · code different\\]") && short.contains("\\[logic · code equal\\]"), "{short}");
+    assert!(short.contains("\\[semantics · code different\\]") && short.contains("\\[semantics · code equal\\]"), "{short}");
     // The order in a group: `code different` comes before `code equal`.
     assert!(short.find("f1 derived").unwrap() < short.find("f2 derived").unwrap(), "{short}");
-    // A flow view for the body of a logic fact, one time. The demo data has no flow view of
+    // A flow view for the body of a `semantics` fact, one time. The demo data has no flow view of
     // `shop_core::helper`.
     assert_eq!(short.matches("```mermaid").count(), 1, "{short}");
     assert_eq!(short.matches(&format!("\n### `{function}`\n")).count(), 1, "{short}");
@@ -569,7 +575,7 @@ fn the_short_report_shows_each_fact_one_time() {
     assert!(short.contains("`semilla review --md FILE --full`"), "{short}");
     assert!(full.contains("## Change tree") && full.contains("## Sources"), "{full}");
     assert!(short.lines().count() < full.lines().count());
-    // No fact of the category `value`, `logic`, or `control flow` in a body with a flow view:
+    // No fact of the category `semantics` in a body with a flow view:
     // no flow view.
     data.report.steps[0].facts.remove(0);
     assert!(!render_markdown(&data, false).contains("```mermaid"));
@@ -684,7 +690,7 @@ fn a_folded_fact_shows_its_text_one_time() {
     let sites: Vec<semilla_core::Anchor> = ["demo::a", "demo::b", "demo::c"].iter().map(|item| semilla_core::Anchor::item(*item)).collect();
     let edit = "changed path `old` → `new`";
     let group = semilla_core::report::SiteGroup { edit: edit.into(), sites };
-    let fact = semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: format!("3 site(s): {edit}"), status: "derived".into(), category: semilla_core::Category::Logic, compare: semilla_core::Compare::CodeDifferent, sites: vec![group.clone()], ..Default::default() };
+    let fact = semilla_core::Fact { id: "f9".into(), part: "edit".into(), description: format!("3 site(s): {edit}"), status: "derived".into(), category: semilla_core::Category::Semantics, compare: semilla_core::Compare::CodeDifferent, sites: vec![group.clone()], ..Default::default() };
     assert!(fact.folds(&group));
     data.report.steps[0].facts.push(fact);
     let line = |data: &semilla_ui::UiData| semilla_ui::export::render_markdown(data, false).lines().find(|line| line.contains("f9 derived")).unwrap_or_default().to_string();

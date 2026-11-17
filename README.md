@@ -32,7 +32,7 @@ git add -A && git commit -m "fix the cart total"   # `-A` adds each new file of 
 semilla tag                               # the final check, the result line, and the git note
 ```
 
-- Semilla derives a fact for each change: "added early exit `if …`", "changed operator `<` → `<=` (effect hint: widen)", "parameter of `f` added". Each fact has one category and one compare result of the compiled code: "[logic · code different]", "[rename · code equal]". Semilla gives no verdict for a change (design 35). Equal facts fold into one line ("6 site(s): changed expression …"). The agent writes no claim for them.
+- Semilla derives a fact for each change: "added early exit `if …`", "changed operator `<` → `<=` (effect hint: widen)", "parameter of `f` added". Each fact has one category and one compare result of the compiled code: "[semantics · code different]", "[rename · code equal]". The category `semantics` covers each change of the code in a body (design 42). Semilla gives no verdict for a change (design 35). Equal facts fold into one line ("6 site(s): changed expression …"). The agent writes no claim for them.
 - A rename or a move gives one fact: "renamed `A` → `B` [rename · code equal]" or "moved `A` → `B` [move · code equal]". Each other change of the step is its own fact at the new path (design 36.1). If Semilla cannot derive the pair, the two items show as removed and added, with a note and a pair warning.
 - Two lines under a fact give a limit of the compare: "! public API: the compare does not cover the code of a different crate" and "! unsafe code: the changed body has an `unsafe` block". They ask for no reason. Semilla derives the kind of a group from its facts: `rename`, `move`, or `change`.
 - A rejected step stores nothing. The first lines say why, and the last line is the command to run again, for example with the missing `--reason 'ANCHOR=TEXT'`.
@@ -108,7 +108,7 @@ semilla status HEAD --no-wait          # the same, but it does not wait: a fact 
 semilla --fresh status HEAD            # read no cache: compute each record again (a full build)
 semilla status HEAD --verbose          # the same, with each fact of each step
 semilla review HEAD                    # the review UI on http://127.0.0.1:7878
-semilla review HEAD --md review.md     # a short Markdown report: the result, the groups with their facts, the flow views of the changed logic
+semilla review HEAD --md review.md     # a short Markdown report: the result, the groups with their facts, the flow views of the bodies with a `semantics` fact
 semilla review HEAD --md review.md --full   # also the change tree, the public API changes, all flow views, and all sources
 semilla review HEAD --html review.html # a self-contained HTML report (works offline)
 semilla load HEAD && semilla show      # the change tree in the terminal

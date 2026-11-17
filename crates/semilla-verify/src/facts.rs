@@ -1501,7 +1501,7 @@ pub(crate) fn part_category(part: &str, descriptions: &[String]) -> Category {
         "attribute" => Category::Attribute,
         "member added" | "trait impl added" | "associated added" | BODY_ADDED => Category::Added,
         "member removed" | "trait impl removed" | "associated removed" | BODY_REMOVED => Category::Removed,
-        "value" => Category::Value,
+        "value" => Category::Semantics,
         "parameter" if !descriptions.is_empty() && descriptions.iter().all(|text| text.contains(" renamed to ")) => Category::Rename,
         // A new name of a parameter is a rename (design 35.2).
         "parameter rename" => Category::Rename,
