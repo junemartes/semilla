@@ -6660,3 +6660,94 @@ fn associated_constants_new_use_lines_receivers_and_derive_lists_have_their_caus
     let out = step_and_undo(repo, &[(file, &base)], &[(file, &base.replace("#[derive(Copy, Clone, Debug)]", "#[derive(Clone, Debug)]"))], "R4");
     assert!(accepted(&out) && fact_line(&out, "derive removed: Copy").ends_with("code different]"), "{out}");
 }
+
+/// Design 45 (batch 8g): the dependence in a body. A changed type of a `let`, a literal suffix,
+/// and an auto-ref of a receiver and of the operands of `==`: each changed element goes to the
+/// edit of the local that it depends on, with no `indirect` fact and no doubt. The needle keeps
+/// its own fact. The safety forms (a swap of two statements that write one local, a rename that
+/// also changes a type) stay `code different`. A type that inference gives to a different local
+/// follows its reader (fix round 1); a cast that the new type makes the identity keeps an
+/// `indirect` fact.
+#[test]
+fn the_dependence_gives_each_changed_element_to_the_edit_of_its_local() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/dep.rs";
+    let base = "use std::num::Wrapping;\n\npub fn f(a: u8) -> u64 {\n    let x: u32 = a.into();\n    let p = x as u64 + 1;\n    let q = (x as u64) * 2;\n    p + q\n}\n\npub fn s(a: u64) -> u64 {\n    let x = 5u32;\n    let y = x.wrapping_mul(3);\n    y as u64 + a\n}\n\npub fn r(a: u8) -> u32 {\n    let x: Wrapping<u32> = Wrapping(a.into());\n    let s = x.to_string();\n    s.len() as u32\n}\n\npub fn e(a: u8, b: u8) -> bool {\n    let x: Wrapping<u32> = Wrapping(a.into());\n    let y: Wrapping<u32> = Wrapping(b.into());\n    x == y\n}\n\npub fn w(a: u32, b: u32) -> u32 {\n    let mut s = 0;\n    s = a;\n    s = b;\n    s + 1\n}\n\npub fn i(a: u8, b: u8) -> u64 {\n    let x: Wrapping<u32> = Wrapping(a.into());\n    let y = Wrapping(b.into());\n    let s = x + y;\n    s.0 as u64\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod dep;\n");
+    write(repo, file, base);
+    commit_all(repo, "dep");
+    let clean = |out: &str| out.starts_with("accepted") && !out.contains("[indirect") && !out.contains("code equal]");
+    let step = |text: String, intent: &str| step_and_undo(repo, &[(file, base)], &[(file, &text)], intent);
+    // The `let` of 44.5: before 45, a rename `u32` → `u16` with `code equal` or the doubt rule.
+    let typed = base.replace("    let x: u32 = a.into();", "    let x: u16 = a.into();");
+    let out = step(typed.clone(), "type");
+    assert!(clean(&out) && fact_line(&out, "changed pattern `x: u32` → `x: u16` at `shop_core::dep::f/S0/pat`").ends_with("[semantics · code different]") && !out.contains("renamed local"), "{out}");
+    let out = step(base.replace("5u32", "5u16"), "suffix");
+    assert!(clean(&out) && fact_line(&out, "changed literal `5u32` → `5u16`").ends_with("[semantics · code different]"), "{out}");
+    let receiver = base.replace("    let x: Wrapping<u32> = Wrapping(a.into());\n    let s = x.to_string();", "    let x: Wrapping<u64> = Wrapping(a.into());\n    let s = x.to_string();");
+    let out = step(receiver, "receiver");
+    assert!(clean(&out) && out.matches(" derived: ").count() == 1, "{out}");
+    let operands = base.replace("    let x: Wrapping<u32> = Wrapping(a.into());\n    let y: Wrapping<u32> = Wrapping(b.into());\n    x == y", "    let x: Wrapping<u64> = Wrapping(a.into());\n    let y: Wrapping<u64> = Wrapping(b.into());\n    x == y");
+    let out = step(operands, "operands");
+    assert!(clean(&out) && out.matches(" derived: ").count() == 2, "{out}");
+    // The needle: a change of behavior in the same body keeps its own fact.
+    let out = step(typed.replace("    p + q\n", "    p - q\n"), "needle");
+    assert!(clean(&out) && fact_line(&out, "changed operator `p + q` → `p - q`").ends_with("[semantics · code different]") && fact_line(&out, "changed pattern `x: u32`").ends_with("code different]"), "{out}");
+    // The safety forms.
+    let out = step(base.replace("    s = a;\n    s = b;\n", "    s = b;\n    s = a;\n"), "swap");
+    assert!(clean(&out) && fact_line(&out, "moved statement `s = a`").ends_with("[semantics · code different]"), "{out}");
+    let renamed = base.replace("    let x: u32 = a.into();\n    let p = x as u64 + 1;\n    let q = (x as u64) * 2;", "    let y: u16 = a.into();\n    let p = y as u64 + 1;\n    let q = (y as u64) * 2;");
+    let out = step(renamed, "rename and type");
+    assert!(clean(&out) && fact_line(&out, "changed pattern `x: u32` → `y: u16`").ends_with("[semantics · code different]"), "{out}");
+    // Inference gives `y` the new type: since fix round 1, `y` takes the causes of its reader
+    // `x + y`. The cast `s.0 as u64` that the new type makes the identity keeps its fact.
+    let out = step(base.replace("    let x: Wrapping<u32> = Wrapping(a.into());\n    let y = Wrapping(b.into());", "    let x: Wrapping<u64> = Wrapping(a.into());\n    let y = Wrapping(b.into());"), "inference");
+    let rest = fact_line(&out, "the compiled code of `shop_core::dep::i` changes with no edit at its place");
+    assert!(rest.contains("s.0") && !rest.contains("Wrapping(b.into())") && !rest.contains("x + y"), "{out}");
+    // The counts of `semilla status --verbose`.
+    write(repo, file, &typed);
+    run(repo, &["step", "type"], 0);
+    let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert!(out.contains("; changed elements by cause: ") && out.contains("dependence "), "{out}");
+}
+
+/// Design 45, fix round 1 (G1, core rule 6): a `let` with no type annotation gets its type by
+/// inference from the elements that read it. The changed callee `take` gives `n` a new type; the
+/// call has a link, and `n` takes the causes of its reader. The step needs no reason. A `Vec`
+/// that a changed literal of `push` gives a new type is the same form.
+#[test]
+fn a_local_with_no_type_annotation_takes_the_causes_of_its_readers() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/infer.rs";
+    let base = "pub fn take(v: u32) -> u64 {\n    v as u64 * 3\n}\n\npub fn caller(k: bool) -> u64 {\n    let n = 5;\n    if k { take(n) } else { 0 }\n}\n\npub fn count(k: u32) -> usize {\n    let mut v = Vec::new();\n    for _ in 0..k {\n        v.push(7u8);\n    }\n    v.len()\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod infer;\n");
+    write(repo, file, base);
+    commit_all(repo, "infer");
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &base.replace("pub fn take(v: u32) -> u64 {\n    v as u64 * 3", "pub fn take(v: u64) -> u64 {\n    v * 3"))], "take");
+    assert!(out.starts_with("accepted") && !out.contains("[indirect") && !out.contains("needs a reason"), "{out}");
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &base.replace("7u8", "7u16"))], "push");
+    assert!(out.starts_with("accepted") && !out.contains("[indirect") && fact_line(&out, "changed literal `7u8` → `7u16`").ends_with("[semantics · code different]"), "{out}");
+}
+
+/// Design 45, fix round 1 (G2, core rule 4): the region of a move is a local cause. A link of a
+/// changed bound (or a dependence) adds a cause to an element of the region; it never takes the
+/// element from the move. The swap stays `code different`, also with a changed `derive` list.
+#[test]
+fn a_link_never_takes_the_region_of_a_move() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/swap.rs";
+    let swap_a = "        self.core.generate(&mut self.results);\n        self.index = index;\n";
+    let swap_b = "        self.index = index;\n        self.core.generate(&mut self.results);\n";
+    let base = format!("pub trait Source {{\n    fn generate(&mut self, out: &mut Vec<u32>);\n}}\n\n#[derive(Clone)]\npub struct Rng<R: Source + ?Sized> {{\n    pub results: Vec<u32>,\n    pub index: usize,\n    pub core: R,\n}}\n\nimpl<R: Source> Rng<R> {{\n    pub fn generate_and_set(&mut self, index: usize) {{\n        assert!(index < self.results.len());\n{swap_a}    }}\n}}\n");
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod swap;\n");
+    write(repo, file, &base);
+    commit_all(repo, "swap");
+    let moved = "moved statement `self.core.generate(&mut self.results)`";
+    for (form, text) in [("bound", base.replace("R: Source + ?Sized", "R: Source")), ("derive", base.replace("#[derive(Clone)]", "#[derive(Clone, Debug)]"))] {
+        let out = step_and_undo(repo, &[(file, &base)], &[(file, &text.replace(swap_a, swap_b))], form);
+        assert!(fact_line(&out, moved).ends_with("[semantics · code different]"), "{form}\n{out}");
+    }
+}

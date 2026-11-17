@@ -16,16 +16,23 @@
 //! 2. else, the edit whose node contains the source range of the tokens of the element, when the
 //!    tokens are outside the macro call (an element from a `macro_rules` body, or from a field
 //!    that a derive reads);
-//! 3. else, the link (design 44): each edit that changes a symbol that the element names (a
-//!    changed definition of the step, see `links.rs`); a link also adds a cause to a changed
-//!    element with a local owner, and an element at the receiver of a method call takes the
-//!    links of the call;
-//! 4. else, no owner.
+//!    2b. else, the region of a move: an element in a statement that a move passes over goes
+//!    to the move (design 41.7; a local cause, fix round 1 of 45);
+//! 3. the link (design 44): each edit that changes a symbol that the element names (a changed
+//!    definition of the step, see `links.rs`); a link also adds a cause to a changed element
+//!    with a local owner; a drop takes the link of a changed `Drop` impl;
+//! 4. else, the dependence (design 45): the causes of the sources of the element (its changed
+//!    locals and cleanup blocks, `semilla_normal::elements`), to a fixed point; each group of
+//!    sources needs a cause;
+//! 5. else, the counterpart: an element with the same node text on the other side has a link
+//!    (a call that resolves to a new impl); then the dependence runs again;
+//! 6. else, the kept rules: a jump with no value needs no owner; glue whose node is a block or
+//!    the body needs no owner;
+//! 7. else, no owner.
 //!
 //! A moved statement (design 41.7) owns the elements of its nodes on the two sides. An element
 //! whose smallest owner is a move also goes to each edit inside its node: a change inside a
-//! moved statement keeps its own result. An element with no owner by the rules above, whose
-//! node is in a statement that the move passes over (with no edit in it), goes to the move.
+//! moved statement keeps its own result.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,9 +52,6 @@ pub struct Mapped {
     pub text: String,
     /// True if the node contains no statement list.
     pub block_free: bool,
-    /// The display text of the method call whose receiver is the node (fix round 2, R3): the
-    /// auto-ref, the temporary, and the drop of a receiver belong to the call.
-    pub call: Option<String>,
 }
 
 /// The lossless tree of one file of one side, with its line index.
@@ -91,6 +95,63 @@ pub struct MirMap<'a> {
     links: Option<&'a crate::links::Links<'a>>,
 }
 
+/// The cause of a changed element (design 45; the names of `report::CAUSES`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cause {
+    /// The edit at its place: rules 1 and 2 of design 40.3.
+    Rule1,
+    /// An edit inside its node: rule 1b.
+    Rule1b,
+    /// A symbol link (design 44).
+    Link,
+    /// A dependence in its body (design 45).
+    Dependence,
+    /// The kept rules (design 45): a jump with no value, glue at the end of a block, the region
+    /// of a move, the counterpart (an element with the same node text and a link).
+    Jump,
+    Glue,
+    Region,
+    Counterpart,
+    /// No cause.
+    Nothing,
+}
+
+impl Cause {
+    fn name(self) -> String {
+        let index = match self {
+            Cause::Rule1 => 0,
+            Cause::Rule1b => 1,
+            Cause::Link => 2,
+            Cause::Dependence => 3,
+            Cause::Jump => 4,
+            Cause::Glue => 5,
+            Cause::Region => 6,
+            Cause::Counterpart => 7,
+            Cause::Nothing => 8,
+        };
+        semilla_core::report::CAUSES[index].to_string()
+    }
+}
+
+/// A changed element in the owner rule, with its causes.
+struct Item {
+    side: usize,
+    element: MirElement,
+    node: Option<Mapped>,
+    /// The edits that cause the element.
+    owners: BTreeSet<usize>,
+    /// The first cause.
+    cause: Option<Cause>,
+    /// True if the element is new or deleted code at the place of an edit (rules 1 and 2).
+    at_edit: bool,
+    /// True for a jump with no value and no owner of rules 1 and 1b.
+    jump: bool,
+    /// True for glue with no owner of rule 1, whose node is a block or the body.
+    glue: bool,
+    /// The move whose region has the element (design 41.7).
+    region: Option<usize>,
+}
+
 /// The most examples of map errors that the report keeps.
 const EXAMPLES: usize = 5;
 
@@ -117,6 +178,8 @@ pub struct Ownership {
     /// The edits of the changed symbol of the function of the body, for a changed part that
     /// is not an element (`other`: the signature line), with the symbols (design 44).
     pub other_links: BTreeMap<usize, BTreeSet<String>>,
+    /// The count of the changed elements by their cause (design 45).
+    pub causes: BTreeMap<String, usize>,
 }
 
 impl Ownership {
@@ -256,8 +319,7 @@ impl<'a> MirMap<'a> {
         // A node with only trivia in the range keeps the range itself.
         let (from, to) = if code.start <= start && end <= code.end { (code.start, code.end) } else { (start, end) };
         let text = semilla_syntax::tree::short(&rs::display_syntax(&node), 60);
-        let call = node.parent().and_then(rs::ast::MethodCallExpr::cast).filter(|call| call.receiver().is_some_and(|receiver| receiver.syntax() == &node)).map(|call| semilla_syntax::tree::short(&rs::display_syntax(call.syntax()), 60));
-        Some(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free, call })
+        Some(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free })
     }
 
     /// The smallest edit whose node contains a node on one side.
@@ -292,12 +354,8 @@ impl<'a> MirMap<'a> {
     /// The owner of each element that differs in a body.
     pub fn own(&mut self, diff: &MirDiff) -> Ownership {
         let mut out = Ownership::default();
-        // Pass 1: the local causes (rules 1, 1b, 2, the region of a move, and the waivers of a
-        // jump and of glue). A link never removes a local cause (design 44).
-        // Each element with its node, its local owners, and true if it is new or deleted code at
-        // the place of an edit (rule 1: the node of the edit contains the node of the element;
-        // rule 2: the tokens of the element are at the place of the edit).
-        let mut checked: Vec<(usize, MirElement, Option<Mapped>, Vec<usize>, bool)> = Vec::new();
+        // Pass 1: the causes by place (rules 1, 1b, and 2), and the data of the kept rules.
+        let mut items: Vec<Item> = Vec::new();
         for (side, elements) in [&diff.old, &diff.new].into_iter().enumerate() {
             for element in elements {
                 // The place of the element in the body: its tokens if they are in the body
@@ -317,8 +375,10 @@ impl<'a> MirMap<'a> {
                 if let (Some((edit, true)), Some(node)) = (first, &node) {
                     owners.extend(self.inner(side, node).into_iter().filter(|inner| *inner != edit));
                 }
-                // A glue element with no owner, whose node is a block or the body, follows a
-                // change at a different place (see below).
+                let mut cause = (!owners.is_empty()).then_some(Cause::Rule1);
+                // A glue element (a `goto`, a `return`, a `drop`) whose node is a block or the
+                // body follows a change at a different place: rule 1b does not give it to the
+                // edits of the block.
                 let glue = owners.is_empty() && element.glue && node.as_ref().is_none_or(|node| !node.block_free);
                 // Rule 1b: a node that contains edits (a call with a changed argument, a block
                 // with a deleted statement): each edit in the node owns the element.
@@ -327,80 +387,118 @@ impl<'a> MirMap<'a> {
                     && let Some(node) = &node
                 {
                     owners = self.inner(side, node);
+                    cause = (!owners.is_empty()).then_some(Cause::Rule1b);
                 }
-                // A jump with no value and no owner (a `goto`, a `return`) has no value of the
-                // source: its target follows a change at a different place, and that change has
-                // its own elements (fix round 2).
-                if owners.is_empty() && element.jump {
-                    out.glue += 1;
-                    continue;
-                }
+                // A jump with no value (a `goto`, a `return`) and no owner has no value of the
+                // source: only a dependence or the jump rule (fix round 2) follow.
+                let jump = owners.is_empty() && element.jump;
                 // Rule 2: the tokens of the element are at the place of an edit (a `macro_rules`
                 // body, a field of a type that a derive reads). Since design 44, each edit counts:
                 // the element comes from the text of the edit.
                 let mut at_edit = first.is_some();
                 if owners.is_empty()
+                    && !jump
                     && let Some(place) = definition
                     && let Some(found) = self.node(side, place)
                 {
                     owners.extend(self.owner(side, &found));
                     at_edit |= !owners.is_empty();
+                    cause = cause.or((!owners.is_empty()).then_some(Cause::Rule1));
                 }
-                // An element in a statement that a move passes over (design 41.7).
-                if owners.is_empty()
-                    && let Some(node) = &node
-                {
-                    owners.extend(self.jump_owner(side, node));
-                    out.by_region |= !owners.is_empty();
-                }
-                // A glue element (a `goto`, a `return`, a `drop` at the end of a scope) with no
-                // owner, whose node is a block or the body, follows a change at a different place
-                // (a new exit joins the end of the body, a new local gets its drop): that change
-                // has its own elements.
-                if owners.is_empty() && element.glue && node.as_ref().is_none_or(|node| !node.block_free) {
-                    out.glue += 1;
-                    continue;
+                // A statement that a move passes over (design 41.7). The region is a local cause
+                // (fix round 1 of 45): a link or a dependence adds a cause to such an element, and
+                // never removes the move.
+                let region = if owners.is_empty() && !jump { node.as_ref().and_then(|node| self.jump_owner(side, node)) } else { None };
+                if let Some(edit) = region {
+                    owners.push(edit);
+                    cause = Some(Cause::Region);
+                    out.by_region = true;
                 }
                 out.positional.extend(owners.iter().copied());
-                checked.push((side, element.clone(), node, owners, at_edit));
+                items.push(Item { side, element: element.clone(), node, owners: owners.into_iter().collect(), cause, at_edit, jump, glue, region });
             }
         }
         // Pass 2 (design 44): the links. A link adds a cause to a changed element that the two
         // sides have at one place: an element with no local owner, or with an edit inside its
-        // node (rule 1b), or in the region of a move. New code or deleted code at the place of an
-        // edit (rules 1 and 2) gets its cause from that edit only. An element with a local owner
-        // keeps only the symbols that a changed element of the other side names too: a symbol of
-        // the new code inside it (`s.v` in `s.v + 1`) is no cause of the element.
-        let named: [BTreeSet<String>; 2] = [0, 1].map(|side| checked.iter().filter(|(found, ..)| *found == side).flat_map(|(_, element, ..)| element.symbols.iter().map(|symbol| symbol.path.clone())).collect());
+        // node (rule 1b). New code or deleted code at the place of an edit (rules 1 and 2) gets
+        // its cause from that edit only. An element with a local owner keeps only the symbols
+        // that a changed element of the other side names too: a symbol of the new code inside
+        // it (`s.v` in `s.v + 1`) is no cause of the element. A jump with no owner takes no
+        // link. A drop takes the link of a changed `Drop` impl (design 45: the cause of a scope).
+        let linkable = |item: &Item| !(item.owners.is_empty() && item.jump);
+        let named: [BTreeSet<String>; 2] = [0, 1].map(|side| items.iter().filter(|item| item.side == side && linkable(item)).flat_map(|item| item.element.symbols.iter().map(|symbol| symbol.path.clone())).collect());
         // The links of each side by node text, for the counterpart rule.
         let mut linked_at: [BTreeMap<String, BTreeMap<usize, BTreeSet<String>>>; 2] = [BTreeMap::new(), BTreeMap::new()];
-        let mut deferred: Vec<(usize, MirElement, Option<Mapped>)> = Vec::new();
-        for (side, element, node, mut owners, at_edit) in checked {
-            if let Some(links) = self.links.filter(|_| !at_edit) {
-                let mut kept = element.clone();
-                if !owners.is_empty() {
-                    kept.symbols.retain(|symbol| named[1 - side].contains(&symbol.path));
+        if let Some(links) = self.links {
+            for item in items.iter_mut().filter(|item| !item.at_edit && linkable(item)) {
+                let mut kept = item.element.clone();
+                if !item.owners.is_empty() {
+                    kept.symbols.retain(|symbol| named[1 - item.side].contains(&symbol.path));
                 }
-                let found = links.element(side, &kept, diff.evaluated);
-                if !found.is_empty() {
-                    out.linked += 1;
-                    for (edit, symbols) in found {
-                        if let Some(node) = &node {
-                            linked_at[side].entry(bare(&node.text).to_string()).or_default().entry(edit).or_default().extend(symbols.iter().cloned());
-                        }
-                        if !owners.contains(&edit) {
-                            owners.push(edit);
-                        }
-                        out.through.entry(edit).or_default().extend(symbols);
+                let found = links.element(item.side, &kept, diff.evaluated);
+                if found.is_empty() {
+                    continue;
+                }
+                out.linked += 1;
+                item.cause = item.cause.or(Some(Cause::Link));
+                for (edit, symbols) in found {
+                    if let Some(node) = &item.node {
+                        linked_at[item.side].entry(bare(&node.text).to_string()).or_default().entry(edit).or_default().extend(symbols.iter().cloned());
+                    }
+                    item.owners.insert(edit);
+                    out.through.entry(edit).or_default().extend(symbols);
+                }
+            }
+        }
+        // Pass 3 (design 45): the dependence. An element with no cause of rules 1, 1b, 2, or a
+        // link takes the causes of its sources (the changed locals and cleanup blocks that
+        // explain its whole difference, `elements.rs`), to a fixed point. An element of a region
+        // takes them too, with the move.
+        self.depend(&mut items);
+        // The counterpart (design 44, kept by design 45): a changed element with no cause whose
+        // counterpart on the other side (the same node text) has a link takes that link. Cause:
+        // a call that resolves to a new impl names the new symbol on one side only. A jump and
+        // glue keep their rules. The dependence runs again: an element
+        // that depends on such an element (the auto-ref of the receiver) takes its cause.
+        let mut counterparts = false;
+        for item in items.iter_mut().filter(|item| item.cause.is_none() && !item.jump && item.region.is_none() && !item.glue) {
+            let Some(edits) = item.node.as_ref().and_then(|node| linked_at[1 - item.side].get(bare(&node.text))) else { continue };
+            item.cause = Some(Cause::Counterpart);
+            counterparts = true;
+            out.linked += 1;
+            for (edit, symbols) in edits {
+                item.owners.insert(*edit);
+                out.through.entry(*edit).or_default().extend(symbols.iter().cloned());
+            }
+        }
+        if counterparts {
+            self.depend(&mut items);
+        }
+        // Pass 4: the kept rules, then no owner.
+        let mut deferred: Vec<(usize, MirElement, Option<Mapped>)> = Vec::new();
+        for item in items {
+            let cause = match item.cause {
+                Some(cause) => cause,
+                // A jump with no value has no value of the source: its target follows a change at
+                // a different place, and that change has its own elements (fix round 2).
+                None if item.jump => Cause::Jump,
+                // A glue element (a `goto`, a `return`, a `drop` at the end of a scope) with no
+                // owner, whose node is a block or the body, follows a change at a different place
+                // (a new exit joins the end of the body, a new local gets its drop).
+                None if item.glue => Cause::Glue,
+                None => {
+                    deferred.push((item.side, item.element, item.node));
+                    continue;
+                }
+            };
+            *out.causes.entry(cause.name()).or_default() += 1;
+            match cause {
+                Cause::Jump | Cause::Glue => out.glue += 1,
+                _ => {
+                    for edit in item.owners {
+                        out.owns.entry(edit).or_default()[item.side].push(item.element.clone());
                     }
                 }
-            }
-            if owners.is_empty() {
-                deferred.push((side, element, node));
-                continue;
-            }
-            for edit in owners {
-                out.owns.entry(edit).or_default()[side].push(element.clone());
             }
         }
         // A changed part that is not an element (`other`), or a body that differs with no element
@@ -415,27 +513,91 @@ impl<'a> MirMap<'a> {
                 }
             }
         }
-        // The counterpart (design 44): a changed element with no cause whose counterpart on the
-        // other side (the same node text) has a link takes that link (a new drop adds an unwind
-        // edge to the element before it; the old element names no changed symbol).
-        for (side, element, node) in deferred {
-            // A receiver (an auto-ref, a temporary, a drop) takes the links of its method call.
-            let counterpart = node.as_ref().and_then(|node| linked_at[1 - side].get(bare(&node.text)).or_else(|| node.call.as_ref().and_then(|call| linked_at[1 - side].get(bare(call)).or_else(|| linked_at[side].get(bare(call))))));
-            match (counterpart, node) {
-                (Some(edits), _) => {
-                    out.linked += 1;
-                    for (edit, symbols) in edits {
-                        out.owns.entry(*edit).or_default()[side].push(element.clone());
-                        out.through.entry(*edit).or_default().extend(symbols.iter().cloned());
-                    }
-                }
-                (None, Some(node)) => {
+        // An element with no cause (since design 45, the receiver rule of 44.4 is gone: the
+        // dependence gives each of its elements the cause of the call).
+        for (side, _, node) in deferred {
+            *out.causes.entry(Cause::Nothing.name()).or_default() += 1;
+            match node {
+                Some(node) => {
                     out.unowned.insert((side, node));
                 }
-                (None, None) => out.lost += 1,
+                None => out.lost += 1,
             }
         }
         out
+    }
+
+    /// The dependence (design 45): each element with no cause and with sources takes the causes
+    /// of its sources, to a fixed point. The causes of a declaration are the edits at its place
+    /// (rules 1 and 1b); the causes of a changed element are the causes that it has (rules 1,
+    /// 1b, 2, a link, or a dependence). A dependence never removes a cause.
+    fn depend(&mut self, items: &mut [Item]) {
+        if items.iter().all(|item| !matches!(item.cause, None | Some(Cause::Dependence | Cause::Region)) || item.element.sources.is_empty()) {
+            return;
+        }
+        let mut by_place: BTreeMap<(usize, Option<&MirPlace>, Option<&MirPlace>), Vec<usize>> = BTreeMap::new();
+        for (index, item) in items.iter().enumerate() {
+            by_place.entry((item.side, item.element.tokens.as_ref(), item.element.call.as_ref())).or_default().push(index);
+        }
+        let dependents: Vec<usize> = (0..items.len()).filter(|index| matches!(items[*index].cause, None | Some(Cause::Dependence | Cause::Region)) && !items[*index].element.sources.is_empty()).collect();
+        // Each group of each dependent, resolved one time: the edits at its declarations, and the
+        // items at the places of its elements.
+        let mut declared: BTreeMap<(usize, &MirPlace), BTreeSet<usize>> = BTreeMap::new();
+        let mut resolved: Vec<(usize, Vec<(bool, BTreeSet<usize>, Vec<usize>)>)> = Vec::new();
+        for &index in &dependents {
+            let mut groups = Vec::new();
+            for group in &items[index].element.sources {
+                let (mut edits, mut others) = (BTreeSet::new(), Vec::new());
+                for source in &group.sources {
+                    match source {
+                        crate::MirSource::Declaration(side, place) => {
+                            let found = declared.entry((*side, place)).or_insert_with(|| match self.node(*side, place) {
+                                Some(node) => self.owner(*side, &node).into_iter().chain(self.inner(*side, &node)).collect(),
+                                None => BTreeSet::new(),
+                            });
+                            edits.extend(found.iter().copied());
+                        }
+                        crate::MirSource::Element(side, tokens, call) => others.extend(by_place.get(&(*side, tokens.as_ref(), call.as_ref())).into_iter().flatten().copied()),
+                    }
+                }
+                groups.push((group.follows, edits, others));
+            }
+            resolved.push((index, groups));
+        }
+        loop {
+            let mut changed = false;
+            for (index, groups) in &resolved {
+                // Each group that does not follow the element (a changed local that it reads, a
+                // changed cleanup block) needs a cause; with no such group, one group that follows
+                // the element (the local that it writes, a temporary that it reads) needs one.
+                let required = groups.iter().any(|(follows, ..)| !follows);
+                let mut found: BTreeSet<usize> = BTreeSet::new();
+                let mut each = true;
+                for (follows, edits, others) in groups {
+                    found.extend(edits.iter().copied());
+                    for other in others {
+                        found.extend(items[*other].owners.iter().copied());
+                    }
+                    let has = !edits.is_empty() || others.iter().any(|other| !items[*other].owners.is_empty());
+                    each &= has || *follows;
+                }
+                if !each || (!required && found.is_empty()) {
+                    continue;
+                }
+                if !found.is_subset(&items[*index].owners) {
+                    items[*index].owners.extend(found);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for &index in &dependents {
+            if items[index].cause.is_none() && !items[index].owners.is_empty() {
+                items[index].cause = Some(Cause::Dependence);
+            }
+        }
     }
 
 }

@@ -553,7 +553,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 })
                 .collect();
             let is_pattern = |edit: &Edit| edit.anchor().is_some_and(|anchor| anchor.path.last().is_some_and(|last| last.to_string() == "pat" || last.to_string().ends_with(".pat")));
-            places.extend(body.iter().filter(|&&i| is_pattern(&edits[i])).filter_map(|&i| crate::hints::one_name_change(edits[i].text_before.as_deref()?, edits[i].text_after.as_deref()?)));
+            places.extend(body.iter().filter(|&&i| is_pattern(&edits[i])).filter_map(|&i| crate::hints::pattern_name_change(edits[i].text_before.as_deref()?, edits[i].text_after.as_deref()?)));
             let renamed = crate::hints::local_renames_with_edits(old_item, new_item, &places);
             body.retain(|&i| crate::hints::only_names_change(edits[i].text_before.as_deref().unwrap_or(""), edits[i].text_after.as_deref().unwrap_or(""), &renamed));
             // Only the names that an edit of the body shows.

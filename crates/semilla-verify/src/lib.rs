@@ -105,6 +105,28 @@ pub struct MirElement {
     pub jump: bool,
     /// The symbols that the element names (design 44).
     pub symbols: Vec<Sym>,
+    /// The sources of the difference of the element (design 45): one group for each changed
+    /// local and each changed cleanup block that the difference needs.
+    pub sources: Vec<MirGroup>,
+}
+
+/// A group of sources of a MIR element (design 45): a changed local or a changed cleanup block.
+/// The element has a cause only if each group that does not follow it has one; with no such
+/// group, one group that follows it (the local that it writes, a temporary that it reads)
+/// needs one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MirGroup {
+    pub follows: bool,
+    pub sources: Vec<MirSource>,
+}
+
+/// A source of the difference of a MIR element (design 45). The side is 0 (old) or 1 (new).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MirSource {
+    /// A declaration range of a changed local: the edits at this place.
+    Declaration(usize, MirPlace),
+    /// A changed element of the same body, by its tokens and its macro call: its causes.
+    Element(usize, Option<MirPlace>, Option<MirPlace>),
 }
 
 /// A symbol that a MIR element or a definition names (design 44): the def path, and the place

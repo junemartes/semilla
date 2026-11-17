@@ -213,6 +213,12 @@ pub fn stable_closure_names(text: &str) -> String {
 
 /// Returns a new body with the N0 rules applied.
 pub fn canonical_body(body: &Body) -> Body {
+    canonical_body_with_order(body).0
+}
+
+/// Returns a new body with the N0 rules applied, and the number of each of its locals in `body`
+/// (rule 6 numbers the locals again; design 45 records the declaration of each local).
+pub fn canonical_body_with_order(body: &Body) -> (Body, Vec<Local>) {
     let arg_count = body.arg_locals().len();
 
     let mut blocks = body.blocks.clone();
@@ -236,7 +242,8 @@ pub fn canonical_body(body: &Body) -> Body {
         body.span,
     );
     let locals = local_order(&ordered, arg_count);
-    renumber_locals(ordered, &locals, arg_count)
+    let body = renumber_locals(ordered, &locals, arg_count);
+    (body, locals)
 }
 
 /// Returns false for the statements that have no effect on the runtime behavior.

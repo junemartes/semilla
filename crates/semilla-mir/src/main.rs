@@ -976,7 +976,7 @@ fn record(
     generics: &str,
     item: Option<rustc_public::DefId>,
 ) -> BodyRecord {
-    let canonical = normalize::canonical_body(body);
+    let (canonical, order) = normalize::canonical_body_with_order(body);
     let mut printed = normalize::canonical_text(&canonical);
     // The generic parameters go on the first line (the signature).
     if !generics.is_empty() {
@@ -1070,7 +1070,7 @@ fn record(
         param_types: Vec::new(),
         const_types: Vec::new(),
         config: printed.config,
-        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical, item)) } else { None },
+        elements: if level == Level::N0 { guarded(|| spans::elements(&canonical, item, Some((body, &order)))) } else { None },
     }
 }
 

@@ -7507,3 +7507,85 @@ fn a_pair_diff_fact_gets_the_result_of_its_own_edit() {
     assert_eq!(identity::pair_diff_result(&report, &fact_of, 2, true, "demo::g"), (true, vec!["demo::g".to_string()]));
     assert_eq!(identity::pair_diff_result(&report, &fact_of, 3, false, "demo::g"), (false, Vec::new()));
 }
+
+// Batch 8g (design 45): the dependence in a body.
+
+/// The source of a declaration at the first `part` of `text`, on a side.
+fn declared_at(side: usize, text: &str, part: &str) -> MirSource {
+    let start = text.find(part).unwrap_or_else(|| panic!("no `{part}`"));
+    MirSource::Declaration(side, ("src/lib.rs".into(), start, start + part.len()))
+}
+
+/// The source of a changed element at the first `part` of `text`, on a side.
+fn source_at(side: usize, text: &str, part: &str) -> MirSource {
+    let start = text.find(part).unwrap_or_else(|| panic!("no `{part}`"));
+    MirSource::Element(side, Some(("src/lib.rs".into(), start, start + part.len())), None)
+}
+
+const LET_BEFORE: &str = "pub fn f(a: u8) -> u64 {\n    let x: u32 = a.into();\n    let p = x as u64 + 1;\n    p * 2\n}\n";
+
+/// The elements of `f` on one side: the call `a.into()` and the cast `x as u64` depend on `x`
+/// (its type annotation and its writer, the call); `p * N` has no sources unless `needle`.
+fn let_elements(side: usize, text: &str, ty: &str, needle: bool) -> Vec<MirElement> {
+    let sources = vec![MirGroup { follows: false, sources: vec![declared_at(side, text, ty), source_at(side, text, "a.into()")] }];
+    let mut tail = element_at(text, "p * ");
+    if needle {
+        tail.sources = sources.clone();
+    }
+    vec![MirElement { sources: sources.clone(), ..element_at(text, "a.into()") }, MirElement { sources, ..element_at(text, "x as u64") }, tail]
+}
+
+#[test]
+fn a_changed_type_of_a_local_owns_the_elements_that_depend_on_it() {
+    // Design 45: `let x: u32` → `let x: u16`. The call and the cast have no edit at their place;
+    // they depend on `x`, whose declaration has the type edit. The type edit owns them: `code
+    // different`, no `indirect` fact, no doubt. The needle: the changed literal of `p * 2` keeps
+    // its own element and result, also when its element has sources (a dependence never
+    // removes a cause of rule 1).
+    let after = LET_BEFORE.replace("x: u32", "x: u16").replace("p * 2", "p * 3");
+    for needle in [false, true] {
+        let body = changed_body("demo::f", let_elements(0, LET_BEFORE, "u32", needle), let_elements(1, &after, "u16", needle));
+        let report = run_links(LET_BEFORE, &after, &LinkBodies(vec![body], Default::default()));
+        let fact = |text: &str| report.facts.iter().find(|fact| fact.description.contains(text)).unwrap_or_else(|| panic!("{text}: {report:#?}"));
+        let pattern = fact("`x: u32` → `x: u16`");
+        assert_eq!((pattern.category, pattern.compare, pattern.affected.clone()), (Category::Semantics, Compare::CodeDifferent, vec!["demo::f".to_string()]), "{report:#?}");
+        let literal = fact("`2` → `3`");
+        assert_eq!((literal.compare, literal.affected.clone()), (Compare::CodeDifferent, vec!["demo::f".to_string()]), "{report:#?}");
+        assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect), "{report:#?}");
+        assert_eq!((report.mir_map.doubt, report.mir_map.causes.get("dependence").copied(), report.mir_map.causes.get("rule 1b").copied()), (0, Some(4), Some(2)), "{report:#?}");
+    }
+    // With no sources (a record before 8g), the elements have no cause: the doubt rule.
+    let strip = |list: Vec<MirElement>| list.into_iter().map(|element| MirElement { sources: Vec::new(), ..element }).collect();
+    let body = changed_body("demo::f", strip(let_elements(0, LET_BEFORE, "u32", false)), strip(let_elements(1, &after, "u16", false)));
+    let report = run_links(LET_BEFORE, &after, &LinkBodies(vec![body], Default::default()));
+    assert!(report.facts.iter().any(|fact| fact.category == Category::Indirect), "{report:#?}");
+}
+
+#[test]
+fn a_dependence_takes_the_causes_of_a_chain_to_a_fixed_point() {
+    // Design 45, part 2.5: the cast depends on the call, and the call depends on the declaration
+    // of `x`. The sources come in an order where the cast comes first: the fixed point still
+    // gives the cast the type edit. Each group needs a cause: an element whose second changed
+    // local has no cause stays with no cause, also when its first local has one.
+    let after = LET_BEFORE.replace("x: u32", "x: u16");
+    let group = |sources: Vec<MirSource>| MirGroup { follows: false, sources };
+    let elements = |side: usize, text: &str, ty: &str| vec![MirElement { sources: vec![group(vec![source_at(side, text, "a.into()")])], ..element_at(text, "x as u64") }, MirElement { sources: vec![group(vec![declared_at(side, text, ty)])], ..element_at(text, "a.into()") }];
+    let body = changed_body("demo::f", elements(0, LET_BEFORE, "u32"), elements(1, &after, "u16"));
+    let report = run_links(LET_BEFORE, &after, &LinkBodies(vec![body], Default::default()));
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Indirect) && report.mir_map.causes.get("dependence") == Some(&4), "{report:#?}");
+    // Two groups: the declaration of `x` has a cause, the second local has none.
+    let lone = |side: usize, text: &str, ty: &str| vec![MirElement { sources: vec![group(vec![declared_at(side, text, ty)]), group(vec![source_at(side, text, "p * 2")])], ..element_at(text, "x as u64") }, element_at(text, "p * 2")];
+    let body = changed_body("demo::f", lone(0, LET_BEFORE, "u32"), lone(1, &after, "u16"));
+    let report = run_links(LET_BEFORE, &after, &LinkBodies(vec![body], Default::default()));
+    assert!(report.facts.iter().any(|fact| fact.category == Category::Indirect && fact.description.contains("x as u64")), "{report:#?}");
+}
+
+#[test]
+fn a_changed_type_in_a_pattern_is_no_new_name_of_a_local() {
+    // Design 45, safety 1: `let x: u32` → `let x: u16` gave "renamed local `u32` → `u16`" (8f),
+    // and rule 7 of 36.1 gave it `code equal`. Only a name of the binding part is a new name.
+    assert_eq!(hints::pattern_name_change("x: u32", "x: u16"), None);
+    assert_eq!(hints::pattern_name_change("x: u32", "y: u32"), Some(("x".to_string(), "y".to_string())));
+    assert_eq!(hints::pattern_name_change("(a, b): (u32, u32)", "(a, c): (u32, u32)"), Some(("b".to_string(), "c".to_string())));
+    assert_eq!(hints::pattern_name_change("mut x: Vec<T>", "mut x: Vec<U>"), None);
+}

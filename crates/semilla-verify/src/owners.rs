@@ -198,6 +198,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             map.owning.extend(own.owns.keys().copied());
             note_through(input, &own, &name, &mut through_of);
             map.counts.linked += own.linked;
+            for (cause, count) in &own.causes {
+                *map.counts.causes.entry(cause.clone()).or_default() += count;
+            }
             let idle: Vec<usize> = text_edits.iter().copied().filter(|edit| !own.owns.contains_key(edit)).collect();
             // An element that a refactoring took by its region (design 41.7) can be the effect
             // of a different edit: such an edit keeps the doubt rule.
@@ -242,6 +245,9 @@ pub fn assign(input: &Input, report: &mut StepReport) {
         let diff_own = (text_edits.is_empty() && symbols && found.is_empty()).then(|| body.elements.as_ref().map(|diff| (diff, map.own(diff)))).flatten().filter(|(_, own)| !own.positional.iter().any(is_macro));
         if let Some((diff, mut own)) = diff_own {
             map.counts.linked += own.linked;
+            for (cause, count) in &own.causes {
+                *map.counts.causes.entry(cause.clone()).or_default() += count;
+            }
             // The signature line (`other`) with a changed symbol of the function.
             let other_owned = !(diff.other || (diff.old.is_empty() && diff.new.is_empty())) || !own.other_links.is_empty();
             for (edit, symbols) in std::mem::take(&mut own.other_links) {

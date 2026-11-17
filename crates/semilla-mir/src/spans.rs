@@ -44,7 +44,19 @@ pub struct Elements {
     /// block): its symbols are evaluated, so the body of a `const fn` counts (design 44).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub c: bool,
+    /// The declaration of each local of the canonical body, in the numbers of the text (design
+    /// 45): `[kind, file, start, end]`, and `[file, start, end]` of the type annotation of a
+    /// `let` or of a parameter. The kinds: [`RETURN`], [`PARAMETER`], [`USER`], [`TEMPORARY`].
+    /// A declaration with no source range is `[kind]`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub l: Vec<Vec<i64>>,
 }
+
+/// The kinds of a local (design 45).
+pub const RETURN: i64 = 0;
+pub const PARAMETER: i64 = 1;
+pub const USER: i64 = 2;
+pub const TEMPORARY: i64 = 3;
 
 fn is_zero(value: &u8) -> bool {
     *value == 0
@@ -53,9 +65,10 @@ fn is_zero(value: &u8) -> bool {
 /// One source range: the index of the file, the start, and the end.
 type Range = (i64, i64, i64);
 
-/// Returns the ranges of the elements of a canonical body, and the symbols of each element of
-/// the body of `item` (design 44).
-pub fn elements(body: &Body, item: Option<rustc_public::DefId>) -> Elements {
+/// Returns the ranges of the elements of a canonical body, the symbols of each element of the
+/// body of `item` (design 44), and the declaration of each local (design 45; `original` is the
+/// body before the N0 rules, with the old number of each local).
+pub fn elements(body: &Body, item: Option<rustc_public::DefId>, original: Option<(&Body, &[usize])>) -> Elements {
     let mut out = Elements::default();
     let spans: Vec<rustc_public::ty::Span> = body
         .blocks
@@ -86,6 +99,11 @@ pub fn elements(body: &Body, item: Option<rustc_public::DefId>) -> Elements {
             out.r.push(run);
         }
     });
+    if let Some((original, order)) = original
+        && let Some(locals) = crate::guarded(|| locals(body, original, order, item, &mut out.f))
+    {
+        out.l = locals;
+    }
     if let Some(item) = item
         && let Some((symbols, per, own, evaluated)) = crate::guarded(|| crate::symbols::elements(body, item, &mut out.f))
     {
@@ -108,6 +126,69 @@ pub fn elements(body: &Body, item: Option<rustc_public::DefId>) -> Elements {
         }
     }
     out
+}
+
+/// The declaration of each local of a canonical body (design 45): the kind, the source range
+/// of the declaration (the binding of a user variable or of a parameter, the expression of a
+/// temporary), and the type annotation of a `let` or a parameter. The debug information of the
+/// original body names the user variables (rule 2 of `normalize.rs` removes it later).
+fn locals(body: &Body, original: &Body, order: &[usize], item: Option<rustc_public::DefId>, files: &mut Vec<String>) -> Vec<Vec<i64>> {
+    use rustc_public::mir::VarDebugInfoContents;
+    let users: std::collections::BTreeSet<usize> = original
+        .var_debug_info
+        .iter()
+        .filter(|info| info.argument_index.is_none() && info.composite.is_none())
+        .filter_map(|info| match &info.value {
+            VarDebugInfoContents::Place(place) if place.projection.is_empty() => Some(place.local),
+            _ => None,
+        })
+        .collect();
+    let args = body.arg_locals().len();
+    rustc_middle::ty::tls::with(|tcx| {
+        // The pattern and the type annotation of each `let` with a type and of each parameter.
+        let mut typed: Vec<(Span, Span)> = Vec::new();
+        if let Some(item) = item
+            && let Some(local) = rustc_public::rustc_internal::internal(tcx, item).as_local()
+            && let Some(hir) = tcx.hir_maybe_body_owned_by(local)
+        {
+            typed.extend(hir.params.iter().map(|param| (param.pat.span, param.ty_span)));
+            let mut lets = Lets(Vec::new());
+            rustc_hir::intravisit::Visitor::visit_body(&mut lets, hir);
+            typed.extend(lets.0);
+        }
+        let mut out = Vec::with_capacity(body.locals().len());
+        for (index, decl) in body.locals().iter().enumerate() {
+            let kind = match index {
+                0 => RETURN,
+                _ if index <= args => PARAMETER,
+                _ if order.get(index).is_some_and(|old| users.contains(old)) => USER,
+                _ => TEMPORARY,
+            };
+            let span = rustc_public::rustc_internal::internal(tcx, decl.span);
+            let mut entry = vec![kind];
+            if let Some((file, start, end)) = range(tcx, span, files) {
+                entry.extend([file, start, end]);
+                let annotation = typed.iter().filter(|(pattern, _)| kind != TEMPORARY && pattern.contains(span)).min_by_key(|(pattern, _)| pattern.hi() - pattern.lo());
+                if let Some((file, start, end)) = annotation.and_then(|(_, ty)| range(tcx, *ty, files)) {
+                    entry.extend([file, start, end]);
+                }
+            }
+            out.push(entry);
+        }
+        out
+    })
+}
+
+/// The pattern and the type annotation of each `let` with a type in a body.
+struct Lets(Vec<(Span, Span)>);
+
+impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for Lets {
+    fn visit_local(&mut self, statement: &'tcx rustc_hir::LetStmt<'tcx>) {
+        if let Some(ty) = statement.ty {
+            self.0.push((statement.pat.span, ty.span));
+        }
+        rustc_hir::intravisit::walk_local(self, statement);
+    }
 }
 
 /// The range of the tokens of a span, and the range of its outermost macro call.

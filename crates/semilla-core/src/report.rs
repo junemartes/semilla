@@ -224,7 +224,17 @@ pub struct MirMapCounts {
     /// The bodies above the limit of the statement mapper (design 41.9).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mapper_skipped: Vec<String>,
+    /// The changed MIR elements of the bodies with an edit, by their cause (design 45): the
+    /// names of [`CAUSES`].
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub causes: std::collections::BTreeMap<String, usize>,
 }
+
+/// The causes of a changed MIR element (design 45), in the order of the status line: the edit at
+/// its place (rules 1 and 2 of 40.3), an edit inside its node (rule 1b), a symbol link (44), a
+/// dependence in its body (45), the kept rules (a jump, glue, the region of a move, the
+/// counterpart: the same node text with a link on the other side), and no cause.
+pub const CAUSES: &[&str] = &["rule 1", "rule 1b", "link", "dependence", "jump", "glue", "region", "counterpart", "none"];
 
 impl MirMapCounts {
     pub fn is_empty(&self) -> bool {
@@ -236,6 +246,10 @@ impl MirMapCounts {
         let mut line = format!("MIR map: {} map error(s); {} edit(s) own a changed MIR element; {} edit(s) with equal code in a changed body; {} edit(s) with the doubt rule", self.errors, self.owners, self.equal, self.doubt);
         if self.linked > 0 {
             line.push_str(&format!("; {} linked element(s)", self.linked));
+        }
+        if !self.causes.is_empty() {
+            let parts: Vec<String> = CAUSES.iter().filter_map(|cause| self.causes.get(*cause).map(|count| format!("{cause} {count}"))).collect();
+            line.push_str(&format!("; changed elements by cause: {}", parts.join(", ")));
         }
         if !self.examples.is_empty() {
             line.push_str(&format!(" (first map errors: {})", self.examples.join(", ")));

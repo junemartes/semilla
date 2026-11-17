@@ -363,6 +363,29 @@ pub(crate) fn one_name_change(before: &str, after: &str) -> Option<(String, Stri
     pair.map(|(a, b)| (a.to_string(), b.to_string()))
 }
 
+/// The name change of a pattern edit (`x: u32` → `y: u32`): [`one_name_change`], when the old
+/// name is in the binding part of the pattern, before its type annotation (design 45). A changed
+/// type (`x: u32` → `x: u16`) is not a new name of a local: it changes the code.
+pub(crate) fn pattern_name_change(before: &str, after: &str) -> Option<(String, String)> {
+    let found = one_name_change(before, after)?;
+    // The binding part: the text before the first `:` outside brackets that is not a part of `::`.
+    let bytes = before.as_bytes();
+    let mut depth = 0i32;
+    let mut end = before.len();
+    for (at, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b':' if depth == 0 && bytes.get(at + 1) != Some(&b':') && (at == 0 || bytes[at - 1] != b':') => {
+                end = at;
+                break;
+            }
+            _ => {}
+        }
+    }
+    code_words(&before[..end]).contains(&found.0.as_str()).then_some(found)
+}
+
 /// True if the names of `pairs` are the only difference of two texts (and the texts differ).
 pub(crate) fn only_names_change(before: &str, after: &str, pairs: &[(String, String)]) -> bool {
     let (old, new) = (code_words(before), code_words(after));
