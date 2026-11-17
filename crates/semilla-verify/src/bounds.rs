@@ -15,9 +15,9 @@
 
 use std::collections::BTreeSet;
 
+use ast::{HasGenericParams, HasName, HasTypeBounds};
 use semilla_syntax::rs::{AstNode, Direction, SyntaxKind, SyntaxNode, TextRange, ast, compare, compare_opt};
 use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
-use ast::{HasGenericParams, HasName, HasTypeBounds};
 use semilla_syntax::{Item, ItemKind, Workspace};
 
 type Pair = (String, String);
@@ -37,44 +37,68 @@ struct Form {
 /// Takes the bounds out of the generics of a declaration: the text of the declaration with no
 /// bound in the parameter list and with no `where` clause, the pairs, and the pairs of the
 /// `where` clause. `None` for a predicate of a kind that Semilla does not know.
-fn take(node: &SyntaxNode, params: Option<ast::GenericParamList>, clause: Option<ast::WhereClause>) -> Option<(String, Vec<Pair>, BTreeSet<Pair>)> {
+fn take(node: &SyntaxNode, params: Option<&ast::GenericParamList>, clause: Option<&ast::WhereClause>) -> Option<(String, Vec<Pair>, BTreeSet<Pair>)> {
     let mut all = Vec::new();
     let mut in_where = BTreeSet::new();
     let mut skip: Vec<TextRange> = Vec::new();
     // A bound list with the `:` before it.
     let mut drop_bounds = |bounds: Option<ast::TypeBoundList>| {
         if let Some(bounds) = bounds {
-            let colon = bounds.syntax().siblings_with_tokens(Direction::Prev).skip(1).find(|element| !element.kind().is_trivia()).filter(|element| element.kind() == SyntaxKind::COLON);
-            skip.push(colon.map_or(bounds.syntax().text_range(), |colon| colon.text_range().cover(bounds.syntax().text_range())));
+            let colon = bounds
+                .syntax()
+                .siblings_with_tokens(Direction::Prev)
+                .skip(1)
+                .find(|element| !element.kind().is_trivia())
+                .filter(|element| element.kind() == SyntaxKind::COLON);
+            skip.push(colon.map_or(bounds.syntax().text_range(), |colon| {
+                colon.text_range().cover(bounds.syntax().text_range())
+            }));
         }
     };
-    for param in params.iter().flat_map(|list| list.generic_params()) {
+    for param in params.into_iter().flat_map(semilla_syntax::rs::ast::GenericParamList::generic_params) {
         match &param {
             ast::GenericParam::LifetimeParam(param) => {
                 let name = compare_opt(param.lifetime().as_ref());
-                all.extend(param.type_bound_list().into_iter().flat_map(|list| list.bounds()).map(|bound| (name.clone(), compare(&bound))));
+                all.extend(
+                    param
+                        .type_bound_list()
+                        .into_iter()
+                        .flat_map(|list| list.bounds())
+                        .map(|bound| (name.clone(), compare(&bound))),
+                );
                 drop_bounds(param.type_bound_list());
             }
             ast::GenericParam::TypeParam(param) => {
-                let name = param.name().map(|name| name.text().to_string()).unwrap_or_default();
-                all.extend(param.type_bound_list().into_iter().flat_map(|list| list.bounds()).map(|bound| (name.clone(), compare(&bound))));
+                let name = param.name().map_or_default(|name| name.text().to_string());
+                all.extend(
+                    param
+                        .type_bound_list()
+                        .into_iter()
+                        .flat_map(|list| list.bounds())
+                        .map(|bound| (name.clone(), compare(&bound))),
+                );
                 drop_bounds(param.type_bound_list());
             }
             ast::GenericParam::ConstParam(_) => {}
         }
     }
-    if let Some(clause) = &clause {
+    if let Some(clause) = clause {
         skip.push(clause.syntax().text_range());
         for predicate in clause.predicates() {
             let bounded = match (predicate.lifetime(), predicate.ty()) {
                 (Some(lifetime), None) => compare(&lifetime),
                 (None, Some(ty)) => {
-                    let binder = predicate.for_binder().map(|binder| format!("{} ", compare(&binder))).unwrap_or_default();
+                    let binder = predicate.for_binder().map_or_default(|binder| format!("{} ", compare(&binder)));
                     format!("{binder}{}", compare(&ty))
                 }
                 _ => return None,
             };
-            let bounds: Vec<String> = predicate.type_bound_list().into_iter().flat_map(|list| list.bounds()).map(|bound| compare(&bound)).collect();
+            let bounds: Vec<String> = predicate
+                .type_bound_list()
+                .into_iter()
+                .flat_map(|list| list.bounds())
+                .map(|bound| compare(&bound))
+                .collect();
             // A predicate with no bound (`where Vec<T>:`) says that the type is well formed.
             // It is a pair with an empty bound.
             let bounds = if bounds.is_empty() { vec![String::new()] } else { bounds };
@@ -92,7 +116,11 @@ fn form(item: &Item) -> Option<Form> {
     let (rest, all, in_where) = if item.kind == ItemKind::Fn {
         let signature = semilla_syntax::rs::parse_signature(&item.signature)?;
         // The parse adds a `;` to the signature text.
-        let (rest, all, in_where) = take(signature.syntax(), signature.generic_param_list(), signature.where_clause())?;
+        let (rest, all, in_where) = take(
+            signature.syntax(),
+            signature.generic_param_list().as_ref(),
+            signature.where_clause().as_ref(),
+        )?;
         (rest.strip_suffix(" ;").map(str::to_string).unwrap_or(rest), all, in_where)
     } else {
         let parsed = semilla_syntax::rs::parse_item(&item.signature)?;
@@ -104,7 +132,7 @@ fn form(item: &Item) -> Option<Form> {
             ast::Item::Impl(value) => (value.generic_param_list(), value.where_clause()),
             _ => return None,
         };
-        take(parsed.syntax(), params, clause)?
+        take(parsed.syntax(), params.as_ref(), clause.as_ref())?
     };
     Some(Form { rest, all, in_where })
 }
@@ -118,7 +146,9 @@ fn has_reader(item: &Item, workspace: &Workspace) -> bool {
         return true;
     }
     item.attrs.iter().any(|attr| {
-        let Ok(stream) = attr.parse::<TokenStream>() else { return true };
+        let Ok(stream) = attr.parse::<TokenStream>() else {
+            return true;
+        };
         let Some(inner) = stream.into_iter().find_map(|tree| match tree {
             TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group.stream()),
             _ => None,
@@ -129,19 +159,21 @@ fn has_reader(item: &Item, workspace: &Workspace) -> bool {
         match trees.next() {
             Some(TokenTree::Ident(name)) if name == "cfg_attr" => true,
             Some(TokenTree::Ident(name)) if name == "derive" => {
-                let Some(TokenTree::Group(list)) = trees.next() else { return true };
+                let Some(TokenTree::Group(list)) = trees.next() else {
+                    return true;
+                };
                 // The last name of each path: `derive(Clone, std::fmt::Debug)`.
-                let mut last: Option<String> = None;
-                let mut names: Vec<String> = Vec::new();
+                let mut latest: Option<String> = None;
+                let mut derived: Vec<String> = Vec::new();
                 for tree in list.stream() {
                     match tree {
-                        TokenTree::Ident(word) => last = Some(word.to_string()),
-                        TokenTree::Punct(mark) if mark.as_char() == ',' => names.extend(last.take()),
+                        TokenTree::Ident(word) => latest = Some(word.to_string()),
+                        TokenTree::Punct(mark) if mark.as_char() == ',' => derived.extend(latest.take()),
                         _ => {}
                     }
                 }
-                names.extend(last);
-                names.iter().any(|name| !crate::opaque::derive_known(name))
+                derived.extend(latest);
+                derived.iter().any(|name| !crate::opaque::derive_known(name))
             }
             _ => false,
         }

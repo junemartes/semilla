@@ -9,17 +9,26 @@ use semilla_syntax::{Edit, EditKind};
 use crate::checks;
 
 /// A one-line description of an edit.
+#[must_use]
 pub fn describe(edit: &Edit) -> String {
-    let short = |text: &Option<String>| text.as_deref().map(|t| semilla_syntax::tree::short(t, 60)).unwrap_or_default();
+    let short = |text: &Option<String>| text.as_deref().map_or_default(|t| semilla_syntax::tree::short(t, 60));
     // The two sides of a change: the one function of batch 6a, A2.
     let pair = || crate::edits::sides_text(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""));
     match edit.kind {
-        EditKind::ItemAdded => format!("new {} `{}`", edit.attr_after.as_deref().unwrap_or("item"), edit.after.as_ref().map(|a| a.item.as_str()).unwrap_or("")),
-        EditKind::ItemRemoved => format!("removed {} `{}`", edit.attr_before.as_deref().unwrap_or("item"), edit.before.as_ref().map(|a| a.item.as_str()).unwrap_or("")),
+        EditKind::ItemAdded => format!(
+            "new {} `{}`",
+            edit.attr_after.as_deref().unwrap_or("item"),
+            edit.after.as_ref().map_or("", |a| a.item.as_str())
+        ),
+        EditKind::ItemRemoved => format!(
+            "removed {} `{}`",
+            edit.attr_before.as_deref().unwrap_or("item"),
+            edit.before.as_ref().map_or("", |a| a.item.as_str())
+        ),
         EditKind::Visibility => format!("visibility: {}", pair()),
         EditKind::Signature => match edit.node_after.or(edit.node_before) {
             Some("param") => {
-                let role = edit.anchor().and_then(|a| a.path.last()).map(|s| s.to_string()).unwrap_or_default();
+                let role = edit.anchor().and_then(|a| a.path.last()).map_or_default(std::string::ToString::to_string);
                 let name = role.trim_start_matches("param[").trim_end_matches(']');
                 match (&edit.text_before, &edit.text_after) {
                     (None, Some(new)) => format!("parameter `{name}` added: `{}`", short(&Some(new.clone()))),
@@ -33,25 +42,31 @@ pub fn describe(edit: &Edit) -> String {
             Some("where") => format!("`where` clause: {}", pair()),
             Some("qualifiers") => format!("qualifiers: {}", pair()),
             // The view of the line is "signature" already.
-            _ => format!("{}", pair()),
+            _ => pair().clone(),
         },
         EditKind::Docs if crate::facts::doc_test_change(edit).is_some() => "doc test changed (a code block in a doc comment)".to_string(),
         EditKind::Docs => "doc comments changed".to_string(),
         EditKind::Comment => "a comment changed".to_string(),
         EditKind::Attrs => "attributes changed".to_string(),
-        EditKind::Members if edit.anchor().is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) => "methods of the impl changed".to_string(),
+        EditKind::Members
+            if edit
+                .anchor()
+                .is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) =>
+        {
+            "methods of the impl changed".to_string()
+        }
         EditKind::Members => "fields or variants changed".to_string(),
         EditKind::Inserted => format!("new statement: `{}`", short(&edit.text_after)),
         EditKind::Deleted => format!("removed statement: `{}`", short(&edit.text_before)),
         EditKind::Moved => format!("moved statement: `{}`", short(&edit.text_before)),
-        EditKind::Modified | EditKind::Replaced => format!("{}", pair()),
+        EditKind::Modified | EditKind::Replaced => pair().clone(),
         EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => {
             let what = match edit.kind {
                 EditKind::FileAdded => "new",
                 EditKind::FileRemoved => "removed",
                 _ => "changed",
             };
-            let note = edit.note.as_deref().map(|note| format!(" ({note})")).unwrap_or_default();
+            let note = edit.note.as_deref().map_or_default(|note| format!(" ({note})"));
             format!("{what} file `{}`{note}", edit.file.as_deref().unwrap_or(""))
         }
     }
@@ -62,16 +77,24 @@ pub fn describe(edit: &Edit) -> String {
 fn arm_op(edit: &Edit) -> Option<&'static str> {
     let arms = |text: &Option<String>| -> Option<Vec<String>> {
         match semilla_syntax::rs::parse_expr(text.as_deref()?)? {
-            semilla_syntax::rs::ast::Expr::MatchExpr(m) => Some(m.match_arm_list()?.arms().map(|arm| semilla_syntax::rs::compare(&arm).trim_end_matches(" ,").to_string()).collect()),
+            semilla_syntax::rs::ast::Expr::MatchExpr(m) => Some(
+                m.match_arm_list()?
+                    .arms()
+                    .map(|arm| semilla_syntax::rs::compare(&arm).trim_end_matches(" ,").to_string())
+                    .collect(),
+            ),
             _ => None,
         }
     };
     let (old, new) = (arms(&edit.text_before)?, arms(&edit.text_after)?);
-    let one_more = |short: &[String], long: &[String]| long.len() == short.len() + 1 && (0..long.len()).any(|skip| {
-        let mut rest = long.to_vec();
-        rest.remove(skip);
-        rest == short
-    });
+    let one_more = |short: &[String], long: &[String]| {
+        long.len() == short.len() + 1
+            && (0..long.len()).any(|skip| {
+                let mut rest = long.to_vec();
+                rest.remove(skip);
+                rest == short
+            })
+    };
     if one_more(&old, &new) {
         return Some("add-arm");
     }
@@ -85,8 +108,13 @@ fn arm_op(edit: &Edit) -> Option<&'static str> {
 }
 
 /// The name of the op that most likely explains an edit.
+#[must_use]
 pub fn suggest(edit: &Edit) -> &'static str {
-    let in_condition = edit.before.as_ref().is_some_and(|a| a.path.iter().any(|s| matches!(s, Segment::Role(r) if r == "cond" || r.ends_with(".guard"))));
+    let in_condition = edit.before.as_ref().is_some_and(|a| {
+        a.path
+            .iter()
+            .any(|s| matches!(s, Segment::Role(r) if r == "cond" || semilla_core::text::has_extension(r, "guard")))
+    });
     let owner = edit.attr_after.as_deref().or(edit.attr_before.as_deref()).unwrap_or("");
     if crate::facts::is_fact_edit(edit) {
         return "no claim: Semilla derives this fact";
@@ -99,12 +127,24 @@ pub fn suggest(edit: &Edit) -> &'static str {
         EditKind::Docs if crate::facts::doc_test_change(edit).is_some() => "no claim: Semilla derives this fact (a doc test is code)",
         EditKind::Docs => "edit-doc",
         EditKind::Comment => "no claim: Semilla derives this fact (a comment is not code)",
-        EditKind::Members if edit.anchor().is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) => "add-item (for the new or removed method)",
+        EditKind::Members
+            if edit
+                .anchor()
+                .is_some_and(|a| a.item.rsplit("::").next().is_some_and(|last| last.starts_with("impl "))) =>
+        {
+            "add-item (for the new or removed method)"
+        }
         EditKind::Members if owner == "trait" => "add-item (for the new or removed trait method), or rewrite-item",
         EditKind::Members => "rewrite-item (no fact covers this member list)",
         EditKind::Inserted => match edit.node_after.unwrap_or("") {
             "let" => "add-let",
-            "if" if edit.text_after.as_deref().is_some_and(|t| (t.contains("return") || t.contains("break") || t.contains("continue")) && !t.contains("else")) => "add-early-exit",
+            "if" if edit
+                .text_after
+                .as_deref()
+                .is_some_and(|t| (t.contains("return") || t.contains("break") || t.contains("continue")) && !t.contains("else")) =>
+            {
+                "add-early-exit"
+            }
             "if" => "add-if",
             "match" => "add-match",
             "for" | "while" | "loop" => "add-loop",
@@ -121,11 +161,26 @@ pub fn suggest(edit: &Edit) -> &'static str {
         _ if in_condition && !edit.block_like => "change-condition",
         EditKind::Replaced if edit.node_before == Some("lit") && edit.node_after == Some("lit") => "change-literal",
         EditKind::Replaced if edit.node_before == Some("path") && edit.node_after == Some("path") => "change-path",
-        EditKind::Replaced if edit.node_before == Some("pattern") && crate::checks::alternatives_added(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or("")) => "add-alternative",
-        EditKind::Replaced if edit.node_before == Some("pattern") && crate::checks::alternatives_added(edit.text_after.as_deref().unwrap_or(""), edit.text_before.as_deref().unwrap_or("")) => "remove-alternative",
+        EditKind::Replaced
+            if edit.node_before == Some("pattern")
+                && crate::checks::alternatives_added(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or("")) =>
+        {
+            "add-alternative"
+        }
+        EditKind::Replaced
+            if edit.node_before == Some("pattern")
+                && crate::checks::alternatives_added(edit.text_after.as_deref().unwrap_or(""), edit.text_before.as_deref().unwrap_or("")) =>
+        {
+            "remove-alternative"
+        }
         EditKind::Replaced if edit.node_before == Some("pattern") => "replace-pattern",
         EditKind::Replaced | EditKind::Modified if edit.node_before == Some("macro") && edit.node_after == Some("macro") => "replace-macro-input",
-        _ if edit.node_before == Some("match") && edit.node_after == Some("match") && arm_op(edit).is_some() => arm_op(edit).unwrap(),
+        _ if edit.node_before == Some("match")
+            && edit.node_after == Some("match")
+            && let Some(op) = arm_op(edit) =>
+        {
+            op
+        }
         _ if edit.block_like => "a structured statement op (add-if, add-arm, wrap-statements, …)",
         EditKind::Replaced | EditKind::Modified => "replace-expression",
         EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged => "no claim: Semilla derives this fact",
@@ -133,18 +188,25 @@ pub fn suggest(edit: &Edit) -> &'static str {
 }
 
 /// Builds claim suggestions for the uncovered edits of a step (the `suggest_claims` helper).
+#[must_use]
 pub fn suggest_claims(edits: &[Edit], owners: &[Option<usize>]) -> Vec<Claim> {
     suggest_claims_with_renames(edits, owners, &[])
 }
 
 /// Like [`suggest_claims`], with the likely renames: a rename claim replaces the pair of a
 /// removed and an added item.
+#[must_use]
 pub fn suggest_claims_with_renames(edits: &[Edit], owners: &[Option<usize>], renames: &[(String, String)]) -> Vec<Claim> {
     let mut claims = Vec::new();
     for (old, new) in renames {
         let mut args = serde_json::Map::new();
         args.insert("to".into(), new.clone().into());
-        claims.push(Claim { id: format!("s{}", claims.len() + 1), op: "rename".into(), at: old.parse().ok(), args });
+        claims.push(Claim {
+            id: format!("s{}", claims.len() + 1),
+            op: "rename".into(),
+            at: old.parse().ok(),
+            args,
+        });
     }
     let in_rename = |edit: &Edit| {
         let item = edit.anchor().map(|a| a.item.as_str());
@@ -158,19 +220,28 @@ pub fn suggest_claims_with_renames(edits: &[Edit], owners: &[Option<usize>], ren
         if op.contains(' ') {
             continue;
         }
-        let at: Option<Anchor> = if op.starts_with("add-") && edit.kind == EditKind::Inserted { edit.after.clone() } else { edit.before.clone().or(edit.after.clone()) };
+        let at: Option<Anchor> = if op.starts_with("add-") && edit.kind == EditKind::Inserted {
+            edit.after.clone()
+        } else {
+            edit.before.clone().or(edit.after.clone())
+        };
         let mut args = serde_json::Map::new();
         match op {
             "edit-config" | "bump-dependency or edit-config" => {
                 args.insert("file".into(), edit.file.clone().unwrap_or_default().into());
             }
             "move-statement" => {
-                args.insert("to".into(), edit.after.as_ref().map(|a| a.to_string()).unwrap_or_default().into());
+                args.insert("to".into(), edit.after.as_ref().map_or_default(std::string::ToString::to_string).into());
             }
             _ => {}
         }
         let at = if checks_file_level(op) { None } else { at };
-        claims.push(Claim { id: format!("s{}", claims.len() + 1), op: op.to_string(), at, args });
+        claims.push(Claim {
+            id: format!("s{}", claims.len() + 1),
+            op: op.to_string(),
+            at,
+            args,
+        });
     }
     claims
 }
@@ -183,19 +254,36 @@ fn checks_file_level(op: &str) -> bool {
 /// Pairs of a removed item and an added item that look like a rename: the same kind, and the same
 /// text after the old name becomes the new name.
 pub fn likely_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> Vec<(String, String)> {
-    let removed: Vec<&str> = edits.iter().filter(|e| e.kind == EditKind::ItemRemoved).filter_map(|e| e.before.as_ref().map(|a| a.item.as_str())).collect();
-    let added: Vec<&str> = edits.iter().filter(|e| e.kind == EditKind::ItemAdded).filter_map(|e| e.after.as_ref().map(|a| a.item.as_str())).collect();
+    let removed: Vec<&str> = edits
+        .iter()
+        .filter(|e| e.kind == EditKind::ItemRemoved)
+        .filter_map(|e| e.before.as_ref().map(|a| a.item.as_str()))
+        .collect();
+    let added: Vec<&str> = edits
+        .iter()
+        .filter(|e| e.kind == EditKind::ItemAdded)
+        .filter_map(|e| e.after.as_ref().map(|a| a.item.as_str()))
+        .collect();
     let mut pairs = Vec::new();
     for old in &removed {
-        let Some(old_item) = before.items.get(*old) else { continue };
+        let Some(old_item) = before.items.get(*old) else {
+            continue;
+        };
         let old_name = old.rsplit("::").next().unwrap_or(old);
         for new in &added {
-            let Some(new_item) = after.items.get(*new) else { continue };
+            let Some(new_item) = after.items.get(*new) else {
+                continue;
+            };
             if old_item.kind != new_item.kind {
                 continue;
             }
             let new_name = new.rsplit("::").next().unwrap_or(new);
-            let renamed: String = old_item.text.split(' ').map(|token| if token == old_name { new_name } else { token }).collect::<Vec<_>>().join(" ");
+            let renamed: String = old_item
+                .text
+                .split(' ')
+                .map(|token| if token == old_name { new_name } else { token })
+                .collect::<Vec<_>>()
+                .join(" ");
             if renamed == new_item.text {
                 pairs.push((old.to_string(), new.to_string()));
             }
@@ -208,20 +296,32 @@ pub fn likely_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after:
 /// text changes only by one consistent change of identifiers, and each old name is a parameter
 /// or a `let` or `for` variable. The new name does not occur in the old text.
 pub fn likely_local_renames(edits: &[Edit], before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> Vec<(String, String, String)> {
-    let items: std::collections::BTreeSet<&str> = edits.iter().filter_map(|e| e.before.as_ref().or(e.after.as_ref())).map(|a| a.item.as_str()).collect();
+    let items: std::collections::BTreeSet<&str> = edits
+        .iter()
+        .filter_map(|e| e.before.as_ref().or(e.after.as_ref()))
+        .map(|a| a.item.as_str())
+        .collect();
     let is_ident = |t: &str| t.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && t.chars().all(|c| c.is_alphanumeric() || c == '_');
     let mut found = Vec::new();
     for path in items {
-        let (Some(old_item), Some(new_item)) = (before.items.get(path), after.items.get(path)) else { continue };
+        let (Some(old_item), Some(new_item)) = (before.items.get(path), after.items.get(path)) else {
+            continue;
+        };
         let (old_tokens, new_tokens) = (words(&old_item.text), words(&new_item.text));
         if old_tokens.len() != new_tokens.len() || old_tokens == new_tokens {
             continue;
         }
         let mut map: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
-        let consistent = old_tokens.iter().zip(&new_tokens).filter(|(a, b)| a != b).all(|(a, b)| is_ident(a) && is_ident(b) && *map.entry(*a).or_insert(*b) == *b);
+        let consistent = old_tokens
+            .iter()
+            .zip(&new_tokens)
+            .filter(|(a, b)| a != b)
+            .all(|(a, b)| is_ident(a) && is_ident(b) && *map.entry(*a).or_insert(*b) == *b);
         let olds: std::collections::BTreeSet<&str> = old_tokens.iter().copied().collect();
         let injective = map.values().collect::<std::collections::BTreeSet<_>>().len() == map.len();
-        let bindings = map.iter().all(|(old, new)| !olds.contains(new) && crate::checks::is_binding(old_item, old));
+        let bindings = map
+            .iter()
+            .all(|(old, new)| !olds.contains(new) && crate::checks::is_binding(old_item, old));
         if consistent && injective && bindings {
             found.extend(map.into_iter().map(|(old, new)| (path.to_string(), old.to_string(), new.to_string())));
         }
@@ -276,7 +376,10 @@ pub(crate) fn code_words(text: &str) -> Vec<&str> {
     while at < bytes.len() {
         let rest = &text[at..];
         // A raw string: `r"…"`, `r#"…"#`, with an optional `b` before.
-        let raw = rest.strip_prefix("br").or_else(|| rest.strip_prefix('r')).filter(|_| at == 0 || !(bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_'));
+        let raw = rest
+            .strip_prefix("br")
+            .or_else(|| rest.strip_prefix('r'))
+            .filter(|_| at == 0 || !(bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_'));
         let hashes = raw.map(|tail| tail.len() - tail.trim_start_matches('#').len());
         let end = match (raw, hashes) {
             (Some(tail), Some(count)) if tail[count..].starts_with('"') => {
@@ -311,7 +414,10 @@ pub(crate) fn code_words(text: &str) -> Vec<&str> {
         }
         let c = rest.chars().next().unwrap_or(' ');
         if c.is_alphanumeric() || c == '_' {
-            let len = rest.char_indices().find(|(_, c)| !(c.is_alphanumeric() || *c == '_')).map_or(rest.len(), |(index, _)| index);
+            let len = rest
+                .char_indices()
+                .find(|(_, c)| !(c.is_alphanumeric() || *c == '_'))
+                .map_or(rest.len(), |(index, _)| index);
             out.push(&rest[..len]);
             at += len;
         } else {
@@ -328,12 +434,22 @@ pub(crate) fn code_words(text: &str) -> Vec<&str> {
 /// 36.1, rule 7). `pairs` are the name changes of the binding places: a parameter rename, or
 /// an edit of a pattern that changes only one name. A pair counts when the old name is not in
 /// the new text, the new name is not in the old text, and each use can be a local.
-pub fn local_renames_with_edits(old_item: &semilla_syntax::Item, new_item: &semilla_syntax::Item, pairs: &[(String, String)]) -> Vec<(String, String)> {
+#[must_use]
+pub fn local_renames_with_edits(
+    old_item: &semilla_syntax::Item,
+    new_item: &semilla_syntax::Item,
+    pairs: &[(String, String)],
+) -> Vec<(String, String)> {
     let (old_words, new_words) = (code_words(&old_item.text), code_words(&new_item.text));
     let mut found: Vec<(String, String)> = Vec::new();
     for (old, new) in pairs {
         // A use that is not a field after a dot.
-        let used = |words: &[&str], name: &str| words.iter().enumerate().any(|(index, word)| *word == name && (index == 0 || words[index - 1] != "."));
+        let used = |words: &[&str], name: &str| {
+            words
+                .iter()
+                .enumerate()
+                .any(|(index, word)| *word == name && (index == 0 || words[index - 1] != "."))
+        };
         let fresh = !used(&new_words, old) && !used(&old_words, new);
         let plain = old != "_" && new != "_" && only_local_uses(&old_words, old) && only_local_uses(&new_words, new);
         let one_to_one = !found.iter().any(|(a, b)| a == old || b == new);
@@ -367,7 +483,13 @@ pub(crate) fn one_name_change(before: &str, after: &str) -> Option<(String, Stri
 pub(crate) fn only_names_change(before: &str, after: &str, pairs: &[(String, String)]) -> bool {
     let (old, new) = (code_words(before), code_words(after));
     // A name after a dot is a field or a method, not a local.
-    old.len() == new.len() && old != new && old.iter().zip(&new).enumerate().all(|(index, (a, b))| a == b || (pairs.iter().any(|(from, to)| from == a && to == b) && (index == 0 || old[index - 1] != ".")))
+    old.len() == new.len()
+        && old != new
+        && old
+            .iter()
+            .zip(&new)
+            .enumerate()
+            .all(|(index, (a, b))| a == b || (pairs.iter().any(|(from, to)| from == a && to == b) && (index == 0 || old[index - 1] != ".")))
 }
 
 /// The words and the other characters of a token text (a delimiter can touch a word: `(len)`).
@@ -395,6 +517,7 @@ pub(crate) fn words(text: &str) -> Vec<&str> {
 }
 
 /// The `rename-local` claims of [`likely_local_renames`]: the function is the anchor, `from` is the old name.
+#[must_use]
 pub fn local_rename_claims(renames: &[(String, String, String)]) -> Vec<Claim> {
     renames
         .iter()
@@ -403,18 +526,30 @@ pub fn local_rename_claims(renames: &[(String, String, String)]) -> Vec<Claim> {
             let mut args = serde_json::Map::new();
             args.insert("from".into(), old.clone().into());
             args.insert("to".into(), new.clone().into());
-            Claim { id: format!("l{}", index + 1), op: "rename-local".into(), at: item.parse().ok(), args }
+            Claim {
+                id: format!("l{}", index + 1),
+                op: "rename-local".into(),
+                at: item.parse().ok(),
+                args,
+            }
         })
         .collect()
 }
 
 /// The similarity of two items, from 0 to 1: the longest common token sequence of their texts,
 /// with the item names replaced by one token. Large items use the token sets.
+#[must_use]
+// A token count stays far below 2^52, so each cast to `f64` is exact.
+#[allow(clippy::cast_precision_loss)]
 pub fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
     let name = |item: &semilla_syntax::Item| item.path.rsplit("::").next().unwrap_or("").to_string();
     let tokens = |item: &semilla_syntax::Item| -> Vec<String> {
         let own = name(item);
-        item.text.split(' ').filter(|t| !t.is_empty()).map(|t| if t == own { "$name".to_string() } else { t.to_string() }).collect()
+        item.text
+            .split(' ')
+            .filter(|t| !t.is_empty())
+            .map(|t| if t == own { "$name".to_string() } else { t.to_string() })
+            .collect()
     };
     let (x, y) = (tokens(a), tokens(b));
     if x.is_empty() || y.is_empty() {
@@ -428,7 +563,11 @@ pub fn similarity(a: &semilla_syntax::Item, b: &semilla_syntax::Item) -> f64 {
     for token in &x {
         let mut current = vec![0usize; y.len() + 1];
         for (j, other) in y.iter().enumerate() {
-            current[j + 1] = if token == other { previous[j] + 1 } else { current[j].max(previous[j + 1]) };
+            current[j + 1] = if token == other {
+                previous[j] + 1
+            } else {
+                current[j].max(previous[j + 1])
+            };
         }
         previous = current;
     }

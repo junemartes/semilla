@@ -22,28 +22,31 @@
 //! no fact. A body that does not have the known form (statements with no effect, and one call
 //! with one argument) keeps its full MIR text.
 
+use rustc_public::CrateDef;
 use rustc_public::mir::{AggregateKind, Body, CastKind, PointerCoercion, Rvalue, StatementKind, TerminatorKind};
 use rustc_public::ty::{RigidTy, TyKind};
-use rustc_public::CrateDef;
 use rustc_span::hygiene::{AstPass, ExpnKind};
 
 /// The last segment of the record name. `semilla-normal` has the same text (`HARNESS_MAIN`).
 const SEGMENT: &str = "{test-harness-main}";
 
 /// True if the item is the `main` function that rustc generates for a test build.
-pub fn is_harness_main(item: rustc_public::DefId) -> bool {
+pub(crate) fn is_harness_main(item: rustc_public::DefId) -> bool {
     rustc_middle::ty::tls::with(|tcx| {
         if !tcx.sess.is_test_crate() {
             return false;
         }
         let def_id = rustc_public::rustc_internal::internal(tcx, item);
-        let generated = matches!(tcx.def_span(def_id).ctxt().outer_expn_data().kind, ExpnKind::AstPass(AstPass::TestHarness));
+        let generated = matches!(
+            tcx.def_span(def_id).ctxt().outer_expn_data().kind,
+            ExpnKind::AstPass(AstPass::TestHarness)
+        );
         generated && tcx.entry_fn(()).is_some_and(|(entry, _)| entry == def_id)
     })
 }
 
 /// The record name of the harness `main` of the local crate.
-pub fn record_name() -> String {
+pub(crate) fn record_name() -> String {
     let krate = rustc_middle::ty::tls::with(|tcx| tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).to_string());
     format!("{krate}::{SEGMENT}")
 }
@@ -54,7 +57,7 @@ pub fn record_name() -> String {
 /// The known form: no parameter, statements that only build the argument (a use, a reference, an
 /// array, an unsize cast), and exactly one call, of a known function, with one argument. Such a
 /// body can only give its argument to the runner.
-pub fn text(body: &Body) -> Option<String> {
+pub(crate) fn text(body: &Body) -> Option<String> {
     if !body.arg_locals().is_empty() {
         return None;
     }
@@ -62,12 +65,16 @@ pub fn text(body: &Body) -> Option<String> {
     for block in &body.blocks {
         for statement in &block.statements {
             match &statement.kind {
-                StatementKind::Assign(_, rvalue) => match rvalue {
-                    Rvalue::Use(..) | Rvalue::Ref(..) | Rvalue::Aggregate(AggregateKind::Array(_), _) => {}
-                    Rvalue::Cast(CastKind::PointerCoercion(PointerCoercion::Unsize), ..) => {}
-                    _ => return None,
-                },
-                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) | StatementKind::Nop => {}
+                StatementKind::Assign(
+                    _,
+                    Rvalue::Use(..)
+                    | Rvalue::Ref(..)
+                    | Rvalue::Aggregate(AggregateKind::Array(_), _)
+                    | Rvalue::Cast(CastKind::PointerCoercion(PointerCoercion::Unsize), ..),
+                )
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::Nop => {}
                 _ => return None,
             }
         }
@@ -77,11 +84,14 @@ pub fn text(body: &Body) -> Option<String> {
                     return None;
                 }
                 let ty = func.ty(body.locals()).ok()?;
-                let TyKind::RigidTy(RigidTy::FnDef(def, generics)) = ty.kind() else { return None };
+                let TyKind::RigidTy(RigidTy::FnDef(def, generics)) = ty.kind() else {
+                    return None;
+                };
                 if !generics.0.is_empty() {
                     return None;
                 }
-                let (krate, real) = rustc_middle::ty::tls::with(|tcx| crate::reach::origin(rustc_public::rustc_internal::internal(tcx, def.def_id())));
+                let (krate, real) =
+                    rustc_middle::ty::tls::with(|tcx| crate::reach::origin(rustc_public::rustc_internal::internal(tcx, def.def_id())));
                 runner = Some(format!("{} (the crate `{krate}` defines it as `{real}`)", def.name()));
             }
             TerminatorKind::Return | TerminatorKind::Resume | TerminatorKind::Goto { .. } | TerminatorKind::Abort | TerminatorKind::Unreachable => {}
@@ -89,5 +99,7 @@ pub fn text(body: &Body) -> Option<String> {
         }
     }
     let runner = runner?;
-    Some(format!("test harness main (rustc generates it for a test build)\nrunner: {runner}\nargument: the list of the tests of this target (each test has its own record)\n"))
+    Some(format!(
+        "test harness main (rustc generates it for a test build)\nrunner: {runner}\nargument: the list of the tests of this target (each test has its own record)\n"
+    ))
 }

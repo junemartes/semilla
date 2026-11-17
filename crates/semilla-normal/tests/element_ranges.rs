@@ -19,14 +19,24 @@ fn ensure_driver(scratch: &Path) -> PathBuf {
         return path;
     }
     let target = scratch.join("driver-target");
-    let status = Command::new("cargo").args(["build", "-p", "semilla-mir", "--target-dir"]).arg(&target).current_dir(semilla_normal::cargo::semilla_workspace()).status().expect("cargo runs");
+    let status = Command::new("cargo")
+        .args(["build", "-p", "semilla-mir", "--target-dir"])
+        .arg(&target)
+        .current_dir(semilla_normal::cargo::semilla_workspace())
+        .status()
+        .expect("cargo runs");
     assert!(status.success(), "cannot build the driver");
     target.join("debug/semilla-mir-driver")
 }
 
 /// The texts of the ranges of each element of a body: the tokens, and the macro call.
 fn element_texts(root: &Path, record: &semilla_normal::BodyRecord) -> Vec<(Option<String>, Option<String>)> {
-    let ranges = record.elements.as_ref().expect("an N0 record has its element ranges").ranges().expect("valid ranges");
+    let ranges = record
+        .elements
+        .as_ref()
+        .expect("an N0 record has its element ranges")
+        .ranges()
+        .expect("valid ranges");
     let text = |place: &Option<semilla_normal::elements::Place>| {
         place.as_ref().map(|place| {
             let bytes = std::fs::read(root.join(&place.file)).unwrap();
@@ -44,15 +54,29 @@ fn the_element_ranges_are_offsets_in_the_file_as_written() {
     unsafe { std::env::set_var("SEMILLA_MIR_DRIVER", &driver) };
     let root = scratch.join("ws");
     let _ = std::fs::remove_dir_all(&root);
-    write(&root.join("Cargo.toml"), b"[package]\nname = \"ranges\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[workspace]\n");
+    write(
+        &root.join("Cargo.toml"),
+        b"[package]\nname = \"ranges\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[workspace]\n",
+    );
     // The root file has a BOM and CRLF line ends. The module has CRLF line ends only.
-    write(&root.join("src/lib.rs"), b"\xef\xbb\xbfmod crlf;\r\nmacro_rules! twice {\r\n    ($e:expr) => { $e * 2 };\r\n}\r\n\r\npub fn bom(a: u32) -> u32 {\r\n    let b = twice!(a + 1);\r\n    b - 3\r\n}\r\n");
-    write(&root.join("src/crlf.rs"), b"// A comment.\r\npub fn crlf(x: u64) -> u64 {\r\n    let y = x * 7;\r\n    y + 11\r\n}\r\n");
+    write(
+        &root.join("src/lib.rs"),
+        b"\xef\xbb\xbfmod crlf;\r\nmacro_rules! twice {\r\n    ($e:expr) => { $e * 2 };\r\n}\r\n\r\npub fn bom(a: u32) -> u32 {\r\n    let b = twice!(a + 1);\r\n    b - 3\r\n}\r\n",
+    );
+    write(
+        &root.join("src/crlf.rs"),
+        b"// A comment.\r\npub fn crlf(x: u64) -> u64 {\r\n    let y = x * 7;\r\n    y + 11\r\n}\r\n",
+    );
     let out = scratch.join("records");
     let _ = std::fs::remove_dir_all(&out);
     run_cargo_check(&root, "n0", &out, &scratch.join("target")).unwrap_or_else(|error| panic!("{error:#}"));
     let records = read_records(&out).unwrap();
-    let find = |name: &str| records.iter().find(|record| record.name == name && record.level == "n0").unwrap_or_else(|| panic!("no record {name}"));
+    let find = |name: &str| {
+        records
+            .iter()
+            .find(|record| record.name == name && record.level == "n0")
+            .unwrap_or_else(|| panic!("no record {name}"))
+    };
 
     let crlf = element_texts(&root, find("ranges::crlf::crlf"));
     let tokens: Vec<&str> = crlf.iter().filter_map(|(tokens, _)| tokens.as_deref()).collect();
@@ -63,11 +87,18 @@ fn the_element_ranges_are_offsets_in_the_file_as_written() {
     let tokens: Vec<&str> = bom.iter().filter_map(|(tokens, _)| tokens.as_deref()).collect();
     assert!(tokens.contains(&"a + 1") && tokens.contains(&"b - 3"), "{bom:?}");
     // The code of the macro: the tokens of the `macro_rules` body, and the call.
-    assert!(bom.iter().any(|(tokens, call)| tokens.as_deref() == Some("$e * 2") && call.as_deref() == Some("twice!(a + 1)")), "{bom:?}");
+    assert!(
+        bom.iter()
+            .any(|(tokens, call)| tokens.as_deref() == Some("$e * 2") && call.as_deref() == Some("twice!(a + 1)")),
+        "{bom:?}"
+    );
     // The body range of the record is in the file as written too.
     let span = find("ranges::crlf::crlf").span.clone().unwrap();
     let (start, end) = span.range.expect("a body range");
     let bytes = std::fs::read(root.join("src/crlf.rs")).unwrap();
-    assert!(String::from_utf8_lossy(&bytes[start..end]).starts_with("pub fn crlf(x: u64) -> u64 {\r\n"), "{span:?}");
+    assert!(
+        String::from_utf8_lossy(&bytes[start..end]).starts_with("pub fn crlf(x: u64) -> u64 {\r\n"),
+        "{span:?}"
+    );
     let _ = std::fs::remove_dir_all(&scratch);
 }

@@ -62,15 +62,15 @@ use std::collections::HashMap;
 
 use rustc_public::abi::VariantsShape;
 use rustc_public::mir::{
-    AggregateKind, AssertMessage, BinOp, Body, Local, NonDivergingIntrinsic, Operand, Place,
-    ProjectionElem, Rvalue, StatementKind, TerminatorKind, UnOp, UnwindAction,
+    AggregateKind, AssertMessage, BinOp, Body, Local, NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue, StatementKind, SwitchTargets,
+    TerminatorKind, UnOp, UnwindAction,
 };
 use rustc_public::ty::{AdtKind, RigidTy, Ty, TyKind, VariantIdx};
 use rustc_public_bridge::IndexedVal;
 
 use crate::print::{
-    DiscriminantUse, FieldName, Printer, aggregate_fields, borrow_kind_text, cast_kind_text, cast_note,
-    discriminant_table, field_name, table_text, variant_path,
+    DiscriminantUse, FieldName, Printer, aggregate_fields, borrow_kind_text, cast_kind_text, cast_note, discriminant_table, field_name, table_text,
+    variant_path,
 };
 
 /// The leaves of the bool constants, in the form of the printer.
@@ -81,19 +81,22 @@ const FALSE: &str = "const bool = false";
 const MAX_STEPS: usize = 4000;
 
 /// The term of a body, with the names of the build rules that changed it.
-pub struct BodyTerm {
+pub(crate) struct BodyTerm {
     pub text: String,
     pub rules: Vec<String>,
 }
 
 /// Returns the term of a loop-free body, or `None` if the body uses a part that the builder does
 /// not model, or if the body has too many paths.
-pub fn body_term(body: &Body, generics: &str) -> Option<BodyTerm> {
+pub(crate) fn body_term(body: &Body, generics: &str) -> Option<BodyTerm> {
     let mut builder = Builder::new(body);
     builder.generics = generics.to_string();
     let root = builder.root().ok()?;
-    let rules = builder.rules.iter().map(|rule| rule.to_string()).collect();
-    Some(BodyTerm { text: builder.nodes.render(root), rules })
+    let rules = builder.rules.iter().map(std::string::ToString::to_string).collect();
+    Some(BodyTerm {
+        text: builder.nodes.render(root),
+        rules,
+    })
 }
 
 type Id = usize;
@@ -183,13 +186,7 @@ impl Nodes {
                 Node::Cmp(op, a, b) => {
                     format!("(ICmp {} {} {})", quote(op), reference(a), reference(b))
                 }
-                Node::Assert(c, m, u, s) => format!(
-                    "(Assert {} {} {} {})",
-                    reference(c),
-                    reference(m),
-                    reference(u),
-                    reference(s)
-                ),
+                Node::Assert(c, m, u, s) => format!("(Assert {} {} {} {})", reference(c), reference(m), reference(u), reference(s)),
                 Node::Load(t, a, s) => {
                     format!("(Load {} {} {})", reference(t), reference(a), reference(s))
                 }
@@ -332,8 +329,7 @@ impl<'a> Builder<'a> {
     /// Builds the term of the whole body: the signature and the outcome tree.
     fn root(&mut self) -> Result<Id> {
         let body = self.body;
-        let mut signature: Vec<String> =
-            body.arg_locals().iter().map(|decl| self.printer.ty(decl.ty)).collect();
+        let mut signature: Vec<String> = body.arg_locals().iter().map(|decl| self.printer.ty(decl.ty)).collect();
         signature.push(self.printer.ty(body.ret_local().ty));
         let signature = self.leaf(format!("signature {}{}", signature.join(", "), self.generics));
 
@@ -350,7 +346,11 @@ impl<'a> Builder<'a> {
                 locals[arg] = Some(value);
             }
         }
-        let env = Env { locals, state, facts: Vec::new() };
+        let env = Env {
+            locals,
+            state,
+            facts: Vec::new(),
+        };
         let outcome = self.block(0, env)?;
         Ok(self.app("body", vec![signature, outcome]))
     }
@@ -378,88 +378,7 @@ impl<'a> Builder<'a> {
         let span = block.terminator.source_info.span;
         match &block.terminator.kind {
             TerminatorKind::Goto { target } => self.block(*target, env),
-            TerminatorKind::SwitchInt { discr, targets } => {
-                let value = self.operand(discr, &mut env)?;
-                let ty = discr.ty(self.body.locals()).map_err(|_| Unsupported)?;
-                let branches: Vec<(u128, usize)> = targets.branches().collect();
-                if let Some(number) = self.constant_value(value, ty) {
-                    // Rule 8.
-                    self.rules.insert("constant-switch");
-                    let target = branches
-                        .iter()
-                        .find(|(branch, _)| *branch == number)
-                        .map_or(targets.otherwise(), |(_, target)| *target);
-                    return self.block(target, env);
-                }
-                if ty.kind().is_bool() && branches.len() == 1 && branches[0].0 == 0 {
-                    // `switchInt(c) -> [0: else, otherwise: then]`.
-                    if let Some(known) = self.known(&env, value) {
-                        // Rule 1: the condition has a known value on this path.
-                        self.rules.insert("path-fact");
-                        let target = if known { targets.otherwise() } else { branches[0].1 };
-                        return self.block(target, env);
-                    }
-                    let then_env = self.with_fact(&env, value, true);
-                    let else_env = self.with_fact(&env, value, false);
-                    let then_outcome = self.block(targets.otherwise(), then_env)?;
-                    let else_outcome = self.block(branches[0].1, else_env)?;
-                    return Ok(self.nodes.add(Node::Ite(value, then_outcome, else_outcome)));
-                }
-                // The general case: test each value in turn. The values are different, so the
-                // order of the tests does not change the result.
-                let integer = is_integer(ty);
-                // A switch on a discriminant tests the variants by name (see `print.rs`), in the
-                // order of the names.
-                let names = match discr {
-                    Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-                        match self.printer.discriminant_use(place.local) {
-                            Some(DiscriminantUse::Switch(table)) => Some(table.clone()),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-                let mut branches: Vec<(u128, usize)> = branches;
-                let mut labels: Vec<String> = Vec::new();
-                if let Some(table) = &names {
-                    let name = |number: u128| table.iter().find(|(v, _)| *v == number).map(|(_, path)| path.clone());
-                    if branches.iter().all(|(number, _)| name(*number).is_some()) {
-                        branches.sort_by_key(|(number, _)| name(*number));
-                        labels = branches.iter().map(|(number, _)| format!("variant {}", name(*number).unwrap())).collect();
-                    }
-                }
-                let mut conditions = Vec::new();
-                for (position, (number, _)) in branches.iter().enumerate() {
-                    let condition = if let Some(label) = labels.get(position) {
-                        let variant = self.leaf(label.clone());
-                        self.app("is-variant", vec![value, variant])
-                    } else {
-                        let ty_text = self.printer.ty(ty);
-                        let constant = self.leaf(format!("const {ty_text} = {number}"));
-                        if integer {
-                            self.nodes.add(Node::Cmp("eq", value, constant))
-                        } else {
-                            self.app("switch-eq", vec![value, constant])
-                        }
-                    };
-                    conditions.push(condition);
-                }
-                let mut otherwise_env = env.clone();
-                for &condition in &conditions {
-                    otherwise_env = self.with_fact(&otherwise_env, condition, false);
-                }
-                let mut outcome = self.block(targets.otherwise(), otherwise_env)?;
-                for (position, (_, target)) in branches.iter().enumerate().rev() {
-                    let mut branch_env = env.clone();
-                    for &earlier in &conditions[..position] {
-                        branch_env = self.with_fact(&branch_env, earlier, false);
-                    }
-                    branch_env = self.with_fact(&branch_env, conditions[position], true);
-                    let branch = self.block(*target, branch_env)?;
-                    outcome = self.nodes.add(Node::Ite(conditions[position], branch, outcome));
-                }
-                Ok(outcome)
-            }
+            TerminatorKind::SwitchInt { discr, targets } => self.switch(discr, targets, env),
             TerminatorKind::Resume => Ok(self.app("resume", vec![env.state])),
             TerminatorKind::Abort => Ok(self.app("abort", vec![env.state])),
             TerminatorKind::Unreachable => Ok(self.leaf("unreachable")),
@@ -482,9 +401,13 @@ impl<'a> Builder<'a> {
                 }
                 self.block(*target, env)
             }
-            TerminatorKind::Call { func, args, destination, target: Some(target), .. }
-                if args.len() == 1 && crate::is_opaque_wrap(func) =>
-            {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target: Some(target),
+                ..
+            } if args.len() == 1 && crate::is_opaque_wrap(func) => {
                 // The opaque value of `config.rs`: a pure function of the argument that no
                 // rule can read.
                 let value = match &args[0] {
@@ -501,7 +424,13 @@ impl<'a> Builder<'a> {
                 self.write(destination, result, &mut env)?;
                 self.block(*target, env)
             }
-            TerminatorKind::Call { func, args, destination, target, unwind } => {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target,
+                unwind,
+            } => {
                 let function = self.operand(func, &mut env)?;
                 let mut values = Vec::new();
                 for arg in args {
@@ -518,7 +447,13 @@ impl<'a> Builder<'a> {
                     None => Ok(self.app("diverge", vec![env.state])),
                 }
             }
-            TerminatorKind::Assert { cond, expected, msg, target, unwind } => {
+            TerminatorKind::Assert {
+                cond,
+                expected,
+                msg,
+                target,
+                unwind,
+            } => {
                 let value = self.operand(cond, &mut env)?;
                 let condition = if *expected { value } else { self.not(value) };
                 if self.known(&env, condition) == Some(true) {
@@ -534,6 +469,88 @@ impl<'a> Builder<'a> {
             }
             TerminatorKind::InlineAsm { .. } => Err(Unsupported),
         }
+    }
+
+    /// Returns the outcome term of a `switchInt` terminator.
+    fn switch(&mut self, discr: &Operand, targets: &SwitchTargets, mut env: Env) -> Result<Id> {
+        let value = self.operand(discr, &mut env)?;
+        let ty = discr.ty(self.body.locals()).map_err(|_| Unsupported)?;
+        let branches: Vec<(u128, usize)> = targets.branches().collect();
+        if let Some(number) = self.constant_value(value, ty) {
+            // Rule 8.
+            self.rules.insert("constant-switch");
+            let target = branches
+                .iter()
+                .find(|(branch, _)| *branch == number)
+                .map_or(targets.otherwise(), |(_, target)| *target);
+            return self.block(target, env);
+        }
+        if ty.kind().is_bool() && branches.len() == 1 && branches[0].0 == 0 {
+            // `switchInt(c) -> [0: else, otherwise: then]`.
+            if let Some(known) = self.known(&env, value) {
+                // Rule 1: the condition has a known value on this path.
+                self.rules.insert("path-fact");
+                let target = if known { targets.otherwise() } else { branches[0].1 };
+                return self.block(target, env);
+            }
+            let then_env = self.with_fact(&env, value, true);
+            let else_env = self.with_fact(&env, value, false);
+            let then_outcome = self.block(targets.otherwise(), then_env)?;
+            let else_outcome = self.block(branches[0].1, else_env)?;
+            return Ok(self.nodes.add(Node::Ite(value, then_outcome, else_outcome)));
+        }
+        // The general case: test each value in turn. The values are different, so the
+        // order of the tests does not change the result.
+        let integer = is_integer(ty);
+        // A switch on a discriminant tests the variants by name (see `print.rs`), in the
+        // order of the names.
+        let names = match discr {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => match self.printer.discriminant_use(place.local) {
+                Some(DiscriminantUse::Switch(table)) => Some(table.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut branches: Vec<(u128, usize)> = branches;
+        let mut labels: Vec<String> = Vec::new();
+        if let Some(table) = &names {
+            let name = |number: u128| table.iter().find(|(v, _)| *v == number).map(|(_, path)| path.clone());
+            if branches.iter().all(|(number, _)| name(*number).is_some()) {
+                branches.sort_by_key(|(number, _)| name(*number));
+                labels = branches.iter().map(|(number, _)| format!("variant {}", name(*number).unwrap())).collect();
+            }
+        }
+        let mut conditions = Vec::new();
+        for (position, (number, _)) in branches.iter().enumerate() {
+            let condition = if let Some(label) = labels.get(position) {
+                let variant = self.leaf(label.clone());
+                self.app("is-variant", vec![value, variant])
+            } else {
+                let ty_text = self.printer.ty(ty);
+                let constant = self.leaf(format!("const {ty_text} = {number}"));
+                if integer {
+                    self.nodes.add(Node::Cmp("eq", value, constant))
+                } else {
+                    self.app("switch-eq", vec![value, constant])
+                }
+            };
+            conditions.push(condition);
+        }
+        let mut otherwise_env = env.clone();
+        for &condition in &conditions {
+            otherwise_env = self.with_fact(&otherwise_env, condition, false);
+        }
+        let mut outcome = self.block(targets.otherwise(), otherwise_env)?;
+        for (position, (_, target)) in branches.iter().enumerate().rev() {
+            let mut branch_env = env.clone();
+            for &earlier in &conditions[..position] {
+                branch_env = self.with_fact(&branch_env, earlier, false);
+            }
+            branch_env = self.with_fact(&branch_env, conditions[position], true);
+            let branch = self.block(*target, branch_env)?;
+            outcome = self.nodes.add(Node::Ite(conditions[position], branch, outcome));
+        }
+        Ok(outcome)
     }
 
     /// Returns the term of an unwind action. A cleanup path starts from the state `hole`.
@@ -566,15 +583,9 @@ impl<'a> Builder<'a> {
             AssertMessage::OverflowNeg(_) => self.leaf("panic overflow neg"),
             AssertMessage::DivisionByZero(_) => self.leaf("panic division by zero"),
             AssertMessage::RemainderByZero(_) => self.leaf("panic remainder by zero"),
-            AssertMessage::ResumedAfterReturn(kind) => {
-                self.leaf(format!("panic resumed after return {kind:?}"))
-            }
-            AssertMessage::ResumedAfterPanic(kind) => {
-                self.leaf(format!("panic resumed after panic {kind:?}"))
-            }
-            AssertMessage::ResumedAfterDrop(kind) => {
-                self.leaf(format!("panic resumed after drop {kind:?}"))
-            }
+            AssertMessage::ResumedAfterReturn(kind) => self.leaf(format!("panic resumed after return {kind:?}")),
+            AssertMessage::ResumedAfterPanic(kind) => self.leaf(format!("panic resumed after panic {kind:?}")),
+            AssertMessage::ResumedAfterDrop(kind) => self.leaf(format!("panic resumed after drop {kind:?}")),
             AssertMessage::MisalignedPointerDereference { required, found } => {
                 let required = self.operand(required, env)?;
                 let found = self.operand(found, env)?;
@@ -601,7 +612,9 @@ impl<'a> Builder<'a> {
             }
             StatementKind::SetDiscriminant { place, variant_index } => {
                 let ty = place.ty(self.body.locals()).map_err(|_| Unsupported)?;
-                let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else { return Err(Unsupported) };
+                let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
+                    return Err(Unsupported);
+                };
                 let old = self.read(place, env)?;
                 let variant = self.leaf(format!("variant {}", variant_path(def, *variant_index)));
                 let value = self.app("set-discriminant", vec![old, variant]);
@@ -655,7 +668,7 @@ impl<'a> Builder<'a> {
             Rvalue::CopyForDeref(place) => self.read(place, env)?,
             Rvalue::Ref(_, kind, place) => {
                 let address = self.address(place, env)?;
-                self.app(format!("ref {}", borrow_kind_text(kind)), vec![address])
+                self.app(format!("ref {}", borrow_kind_text(*kind)), vec![address])
             }
             Rvalue::AddressOf(kind, place) => {
                 let address = self.address(place, env)?;
@@ -672,10 +685,10 @@ impl<'a> Builder<'a> {
             }
             Rvalue::Cast(kind, operand, ty) => {
                 let source = operand.ty(self.body.locals()).map_err(|_| Unsupported)?;
-                let note = cast_note(kind, source, *ty);
+                let note = cast_note(*kind, source, *ty);
                 let value = self.operand(operand, env)?;
                 let ty = self.ty_leaf(*ty);
-                self.app(format!("cast {}{note}", cast_kind_text(kind)), vec![value, ty])
+                self.app(format!("cast {}{note}", cast_kind_text(*kind)), vec![value, ty])
             }
             Rvalue::BinaryOp(op, left, right) => {
                 let left_ty = left.ty(self.body.locals()).map_err(|_| Unsupported)?;
@@ -718,40 +731,7 @@ impl<'a> Builder<'a> {
                 let name = self.discriminant_name(ty, None);
                 self.app(name, vec![value])
             }
-            Rvalue::Aggregate(kind, operands) => {
-                let mut values = Vec::new();
-                for operand in operands {
-                    values.push(self.operand(operand, env)?);
-                }
-                // An ADT aggregate: the operands in the order of the field names (see `print.rs`).
-                // `values` stays in the order of the fields, for rule 3.
-                let head = self.printer.aggregate_kind(kind);
-                let (name, children) = match aggregate_fields(kind, values.len()) {
-                    Some(names) => {
-                        let mut pairs: Vec<(String, Id)> = names.into_iter().zip(values.iter().copied()).collect();
-                        pairs.sort();
-                        let list: Vec<&str> = pairs.iter().map(|(name, _)| name.as_str()).collect();
-                        (format!("aggregate {head} fields [{}]", list.join(", ")), pairs.iter().map(|(_, id)| *id).collect())
-                    }
-                    None => (format!("aggregate {head}"), values.clone()),
-                };
-                let id = self.app(name, children);
-                let info = match kind {
-                    AggregateKind::Tuple | AggregateKind::Closure(..) => {
-                        Some(AggregateInfo::Fields(values))
-                    }
-                    AggregateKind::Adt(def, variant, _, _, None) => match def.kind() {
-                        AdtKind::Struct => Some(AggregateInfo::Fields(values)),
-                        AdtKind::Enum => Some(AggregateInfo::Variant(variant.to_index(), values)),
-                        AdtKind::Union => None,
-                    },
-                    _ => None,
-                };
-                if let Some(info) = info {
-                    self.aggregates.insert(id, info);
-                }
-                id
-            }
+            Rvalue::Aggregate(kind, operands) => self.aggregate(kind, operands, env)?,
             Rvalue::Repeat(operand, count) => {
                 let value = self.operand(operand, env)?;
                 let count = self.printer.ty_const(count);
@@ -762,6 +742,43 @@ impl<'a> Builder<'a> {
                 self.leaf(format!("thread local {}", item.name()))
             }
         })
+    }
+
+    /// Returns the term of an aggregate, and notes its fields for rule 3.
+    fn aggregate(&mut self, kind: &AggregateKind, operands: &[Operand], env: &mut Env) -> Result<Id> {
+        let mut values = Vec::new();
+        for operand in operands {
+            values.push(self.operand(operand, env)?);
+        }
+        // An ADT aggregate: the operands in the order of the field names (see `print.rs`).
+        // `values` stays in the order of the fields, for rule 3.
+        let head = self.printer.aggregate_kind(kind);
+        let (name, children) = match aggregate_fields(kind, values.len()) {
+            Some(names) => {
+                let mut pairs: Vec<(String, Id)> = names.into_iter().zip(values.iter().copied()).collect();
+                pairs.sort();
+                let list: Vec<&str> = pairs.iter().map(|(name, _)| name.as_str()).collect();
+                (
+                    format!("aggregate {head} fields [{}]", list.join(", ")),
+                    pairs.iter().map(|(_, id)| *id).collect(),
+                )
+            }
+            None => (format!("aggregate {head}"), values.clone()),
+        };
+        let id = self.app(name, children);
+        let info = match kind {
+            AggregateKind::Tuple | AggregateKind::Closure(..) => Some(AggregateInfo::Fields(values)),
+            AggregateKind::Adt(def, variant, _, _, None) => match def.kind() {
+                AdtKind::Struct => Some(AggregateInfo::Fields(values)),
+                AdtKind::Enum => Some(AggregateInfo::Variant(variant.to_index(), values)),
+                AdtKind::Union => None,
+            },
+            _ => None,
+        };
+        if let Some(info) = info {
+            self.aggregates.insert(id, info);
+        }
+        Ok(id)
     }
 
     /// Returns the value of a constant leaf of a bool or an integer type, as `switchInt` sees it.
@@ -801,7 +818,10 @@ impl<'a> Builder<'a> {
     /// `discriminant`: the switches test the variants by name. Another discriminant of an enum
     /// has the value of each variant in its name, because its value matters (see `print.rs`).
     fn discriminant_name(&mut self, ty: Ty, local: Option<Local>) -> String {
-        let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else { return "discriminant".into() };
+        use rustc_public::CrateDef;
+        let TyKind::RigidTy(RigidTy::Adt(def, _)) = ty.kind() else {
+            return "discriminant".into();
+        };
         if def.kind() != AdtKind::Enum {
             return "discriminant".into();
         }
@@ -810,7 +830,6 @@ impl<'a> Builder<'a> {
             Some(DiscriminantUse::Value { cast }) => *cast,
             None => false,
         };
-        use rustc_public::CrateDef;
         let table = table_text(&discriminant_table(def));
         format!("discriminant{} of {} values {table}", if cast { " cast" } else { "" }, def.name())
     }
@@ -857,7 +876,7 @@ impl<'a> Builder<'a> {
         let mut variant = None;
         for elem in &place.projection {
             if let ProjectionElem::Deref = elem {
-                let pointer = self.read_location(&location, ty, env)?;
+                let pointer = self.read_location(&location, ty, env);
                 location = Location::Memory(self.app("deref", vec![pointer]));
             } else {
                 let projection = self.projection(elem, ty, variant, env)?;
@@ -866,9 +885,7 @@ impl<'a> Builder<'a> {
                         path.push(projection);
                         Location::Value(local, path)
                     }
-                    Location::Memory(address) => {
-                        Location::Memory(self.app("at", vec![projection, address]))
-                    }
+                    Location::Memory(address) => Location::Memory(self.app("at", vec![projection, address])),
                 };
             }
             variant = match elem {
@@ -893,10 +910,7 @@ impl<'a> Builder<'a> {
                     FieldName::Member(name) => name,
                     FieldName::Position => index.to_string(),
                 };
-                let id = self.leaf(format!(
-                    "{} {name} {text}",
-                    if union { "union field" } else { "field" }
-                ));
+                let id = self.leaf(format!("{} {name} {text}", if union { "union field" } else { "field" }));
                 if !union {
                     self.struct_fields.insert(id, *index);
                 }
@@ -906,14 +920,16 @@ impl<'a> Builder<'a> {
                 let index = self.read(&Place::from(*local), env)?;
                 self.app("index", vec![index])
             }
-            ProjectionElem::ConstantIndex { offset, min_length, from_end } => {
-                self.leaf(format!("constant index {offset} {min_length} {from_end}"))
-            }
-            ProjectionElem::Subslice { from, to, from_end } => {
-                self.leaf(format!("subslice {from} {to} {from_end}"))
-            }
+            ProjectionElem::ConstantIndex {
+                offset,
+                min_length,
+                from_end,
+            } => self.leaf(format!("constant index {offset} {min_length} {from_end}")),
+            ProjectionElem::Subslice { from, to, from_end } => self.leaf(format!("subslice {from} {to} {from_end}")),
             ProjectionElem::Downcast(variant) => {
-                let TyKind::RigidTy(RigidTy::Adt(def, _)) = base.kind() else { return Err(Unsupported) };
+                let TyKind::RigidTy(RigidTy::Adt(def, _)) = base.kind() else {
+                    return Err(Unsupported);
+                };
                 let id = self.leaf(format!("downcast {}", variant_path(def, *variant)));
                 self.downcasts.insert(id, variant.to_index());
                 id
@@ -928,11 +944,11 @@ impl<'a> Builder<'a> {
     fn read(&mut self, place: &Place, env: &mut Env) -> Result<Id> {
         let ty = place.ty(self.body.locals()).map_err(|_| Unsupported)?;
         let location = self.locate(place, env)?;
-        self.read_location(&location, ty, env)
+        Ok(self.read_location(&location, ty, env))
     }
 
-    fn read_location(&mut self, location: &Location, ty: Ty, env: &mut Env) -> Result<Id> {
-        Ok(match location {
+    fn read_location(&mut self, location: &Location, ty: Ty, env: &mut Env) -> Id {
+        match location {
             Location::Value(local, path) => {
                 let base = match env.locals[*local] {
                     Some(value) => value,
@@ -944,7 +960,7 @@ impl<'a> Builder<'a> {
                 let ty = self.ty_leaf(ty);
                 self.nodes.add(Node::Load(ty, *address, env.state))
             }
-        })
+        }
     }
 
     /// Reads a path of projections from a value. It uses rules 2 and 3.
@@ -964,11 +980,10 @@ impl<'a> Builder<'a> {
             if common < written.len() && common < path.len() {
                 let (a, b) = (path[common], written[common]);
                 if let (Some(x), Some(y)) = (self.struct_fields.get(&a), self.struct_fields.get(&b))
+                    && x != y
                 {
-                    if x != y {
-                        self.rules.insert("read-after-write");
-                        return self.get_path(old, path);
-                    }
+                    self.rules.insert("read-after-write");
+                    return self.get_path(old, path);
                 }
             }
         }
@@ -976,23 +991,21 @@ impl<'a> Builder<'a> {
             // Rule 3: a field of an aggregate that the body built.
             match info {
                 AggregateInfo::Fields(operands) => {
-                    if let Some(&index) = self.struct_fields.get(&first) {
-                        if let Some(&operand) = operands.get(index) {
-                            self.rules.insert("aggregate-field");
-                            return self.get_path(operand, rest);
-                        }
+                    if let Some(&index) = self.struct_fields.get(&first)
+                        && let Some(&operand) = operands.get(index)
+                    {
+                        self.rules.insert("aggregate-field");
+                        return self.get_path(operand, rest);
                     }
                 }
                 AggregateInfo::Variant(variant, operands) => {
-                    if self.downcasts.get(&first) == Some(&variant) {
-                        if let Some((&field, after)) = rest.split_first() {
-                            if let Some(&index) = self.struct_fields.get(&field) {
-                                if let Some(&operand) = operands.get(index) {
-                                    self.rules.insert("aggregate-field");
-                                    return self.get_path(operand, after);
-                                }
-                            }
-                        }
+                    if self.downcasts.get(&first) == Some(&variant)
+                        && let Some((&field, after)) = rest.split_first()
+                        && let Some(&index) = self.struct_fields.get(&field)
+                        && let Some(&operand) = operands.get(index)
+                    {
+                        self.rules.insert("aggregate-field");
+                        return self.get_path(operand, after);
                     }
                 }
             }
@@ -1084,16 +1097,13 @@ fn is_integer(ty: Ty) -> bool {
 
 /// Returns the locals whose storage the body borrows (a reference or a raw pointer to the local
 /// or to a part of it, without a deref in the place).
-pub fn address_taken_locals(body: &Body) -> Vec<Local> {
+pub(crate) fn address_taken_locals(body: &Body) -> Vec<Local> {
     let mut taken = vec![false; body.locals().len()];
     for block in &body.blocks {
         for statement in &block.statements {
             if let StatementKind::Assign(_, rvalue) = &statement.kind {
-                let place = match rvalue {
-                    Rvalue::Ref(_, _, place)
-                    | Rvalue::AddressOf(_, place)
-                    | Rvalue::Reborrow(_, _, place) => place,
-                    _ => continue,
+                let (Rvalue::Ref(_, _, place) | Rvalue::AddressOf(_, place) | Rvalue::Reborrow(_, _, place)) = rvalue else {
+                    continue;
                 };
                 if !place.projection.iter().any(|elem| matches!(elem, ProjectionElem::Deref)) {
                     taken[place.local] = true;

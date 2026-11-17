@@ -11,9 +11,9 @@
 
 use std::collections::HashMap;
 
-use semilla_syntax::rs::ast;
 use ast::HasGenericArgs;
 use semilla_syntax::rs::AstToken;
+use semilla_syntax::rs::ast;
 
 use crate::types::RustType;
 
@@ -55,10 +55,7 @@ pub(crate) enum BinOp {
 
 impl BinOp {
     pub(crate) fn is_comparison(self) -> bool {
-        matches!(
-            self,
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-        )
+        matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
     }
 }
 
@@ -112,10 +109,7 @@ pub(crate) struct Node {
 
 impl Node {
     fn new(kind: NodeKind) -> Node {
-        Node {
-            kind,
-            tv: usize::MAX,
-        }
+        Node { kind, tv: usize::MAX }
     }
 }
 
@@ -140,10 +134,7 @@ pub(crate) fn parse(text: &str) -> anyhow::Result<ast::Expr> {
 pub(crate) fn lower(expr: &ast::Expr) -> Lowered<Side> {
     let mut lowerer = Lowerer::default();
     let root = lowerer.expr(expr)?;
-    Ok(Side {
-        root,
-        calls: lowerer.calls,
-    })
+    Ok(Side { root, calls: lowerer.calls })
 }
 
 #[derive(Default)]
@@ -170,12 +161,7 @@ impl Lowerer {
                 index
             }
         };
-        Node::new(NodeKind::Leaf(Leaf {
-            text,
-            kind,
-            index,
-            is_let,
-        }))
+        Node::new(NodeKind::Leaf(Leaf { text, kind, index, is_let }))
     }
 
     fn call(&mut self, expr: &ast::Expr) -> Node {
@@ -219,10 +205,7 @@ impl Lowerer {
                     }
                     Ok(Node::new(NodeKind::Unary(UnOp::Neg, Box::new(value))))
                 }
-                None => Err(Unsupported(format!(
-                    "the unary operator in `{}`",
-                    expr_text(expr)
-                ))),
+                None => Err(Unsupported(format!("the unary operator in `{}`", expr_text(expr)))),
             },
             Expr::BinExpr(binary) => {
                 use ast::{ArithOp, BinaryOp, CmpOp, LogicOp, Ordering};
@@ -241,34 +224,37 @@ impl Lowerer {
                     Some(BinaryOp::ArithOp(ArithOp::Shr)) => BinOp::Shr,
                     Some(BinaryOp::CmpOp(CmpOp::Eq { negated: false })) => BinOp::Eq,
                     Some(BinaryOp::CmpOp(CmpOp::Eq { negated: true })) => BinOp::Ne,
-                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Less, strict: true })) => BinOp::Lt,
-                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Less, strict: false })) => BinOp::Le,
-                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Greater, strict: true })) => BinOp::Gt,
-                    Some(BinaryOp::CmpOp(CmpOp::Ord { ordering: Ordering::Greater, strict: false })) => BinOp::Ge,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord {
+                        ordering: Ordering::Less,
+                        strict: true,
+                    })) => BinOp::Lt,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord {
+                        ordering: Ordering::Less,
+                        strict: false,
+                    })) => BinOp::Le,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord {
+                        ordering: Ordering::Greater,
+                        strict: true,
+                    })) => BinOp::Gt,
+                    Some(BinaryOp::CmpOp(CmpOp::Ord {
+                        ordering: Ordering::Greater,
+                        strict: false,
+                    })) => BinOp::Ge,
                     _ => {
-                        return Err(Unsupported(format!(
-                            "the assignment operator in `{}`",
-                            expr_text(expr)
-                        )));
+                        return Err(Unsupported(format!("the assignment operator in `{}`", expr_text(expr))));
                     }
                 };
                 // Rust evaluates the left operand first.
                 let lhs = self.expr(&inner(binary.lhs(), expr)?)?;
                 let rhs = self.expr(&inner(binary.rhs(), expr)?)?;
-                Ok(Node::new(NodeKind::Binary(
-                    op,
-                    Box::new(lhs),
-                    Box::new(rhs),
-                )))
+                Ok(Node::new(NodeKind::Binary(op, Box::new(lhs), Box::new(rhs))))
             }
             Expr::CastExpr(cast) => {
                 let value = self.expr(&inner(cast.expr(), expr)?)?;
-                let ty = cast.ty().map(|ty| semilla_syntax::rs::compare(&ty)).unwrap_or_default();
+                let ty = cast.ty().map_or_default(|ty| semilla_syntax::rs::compare(&ty));
                 let target = RustType::parse(&ty);
                 if target == RustType::Unknown {
-                    return Err(Unsupported(format!(
-                        "the cast to the unknown type `{ty}`"
-                    )));
+                    return Err(Unsupported(format!("the cast to the unknown type `{ty}`")));
                 }
                 Ok(Node::new(NodeKind::Cast(Box::new(value), target)))
             }
@@ -292,23 +278,16 @@ impl Lowerer {
                         }
                     },
                 };
-                let mag = int.value().map_err(|_| {
-                    Unsupported(format!("the integer literal `{text}` is too large"))
-                })?;
-                Ok(Node::new(NodeKind::Int {
-                    mag,
-                    neg: false,
-                    suffix,
-                }))
+                let mag = int
+                    .value()
+                    .map_err(|_| Unsupported(format!("the integer literal `{text}` is too large")))?;
+                Ok(Node::new(NodeKind::Int { mag, neg: false, suffix }))
             }
             ast::LiteralKind::Byte(byte) => match byte.value() {
                 Ok(value) => Ok(Node::new(NodeKind::Int {
-                    mag: value as u128,
+                    mag: u128::from(value),
                     neg: false,
-                    suffix: Some(RustType::Int {
-                        bits: 8,
-                        signed: false,
-                    }),
+                    suffix: Some(RustType::Int { bits: 8, signed: false }),
                 })),
                 Err(_) => Err(Unsupported(format!("the literal `{}`", expr_text(expr)))),
             },
@@ -323,17 +302,16 @@ impl Lowerer {
     }
 
     fn path(&mut self, path: &ast::PathExpr, expr: &ast::Expr) -> Node {
-        let segments = path.path().map(|path| path_segments(&path)).unwrap_or_default();
-        let plain = !segments.is_empty() && segments.iter().all(|segment| segment.type_anchor().is_none() && segment.generic_arg_list().is_none() && segment.name_ref().is_some());
+        let segments = path.path().map_or_default(|path| path_segments(&path));
+        let plain = !segments.is_empty()
+            && segments
+                .iter()
+                .all(|segment| segment.type_anchor().is_none() && segment.generic_arg_list().is_none() && segment.name_ref().is_some());
         let rooted = segments.first().is_some_and(|segment| segment.coloncolon_token().is_some());
-        let name = |segment: &ast::PathSegment| segment.name_ref().map(|name| name.text().to_string()).unwrap_or_default();
+        let name = |segment: &ast::PathSegment| segment.name_ref().map_or_default(|name| name.text().to_string());
         if plain && segments.len() == 1 && !rooted {
             let name = name(&segments[0]);
-            let kind = if is_constant_name(&name) {
-                LeafKind::Const
-            } else {
-                LeafKind::Var
-            };
+            let kind = if is_constant_name(&name) { LeafKind::Const } else { LeafKind::Var };
             return self.leaf(name, kind, false);
         }
         if plain && segments.len() == 2 {
@@ -360,10 +338,7 @@ fn path_segments(path: &ast::Path) -> Vec<ast::PathSegment> {
 
 /// True for a name in upper case, for example `MAX_LEN`. Rust uses these names for constants.
 fn is_constant_name(name: &str) -> bool {
-    name.chars().any(|c| c.is_ascii_uppercase())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    name.chars().any(|c| c.is_ascii_uppercase()) && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// Gives `u32::MAX`, `i8::MIN`, `u64::BITS`, and similar constants as literals.
@@ -376,14 +351,7 @@ fn int_constant(ty: RustType, name: &str) -> Option<Node> {
         ("MAX", true) => (u128::MAX >> (129 - bits), false, ty),
         ("MIN", false) => (0, false, ty),
         ("MIN", true) => (1u128 << (bits - 1), true, ty),
-        ("BITS", _) => (
-            bits as u128,
-            false,
-            RustType::Int {
-                bits: 32,
-                signed: false,
-            },
-        ),
+        ("BITS", _) => (u128::from(bits), false, RustType::Int { bits: 32, signed: false }),
         _ => return None,
     };
     Some(Node::new(NodeKind::Int {
@@ -397,7 +365,9 @@ fn int_constant(ty: RustType, name: &str) -> Option<Node> {
 fn is_pure_place(expr: &ast::Expr) -> bool {
     use ast::Expr;
     match expr {
-        Expr::PathExpr(path) => path.path().is_some_and(|path| path_segments(&path).iter().all(|segment| segment.type_anchor().is_none())),
+        Expr::PathExpr(path) => path
+            .path()
+            .is_some_and(|path| path_segments(&path).iter().all(|segment| segment.type_anchor().is_none())),
         Expr::FieldExpr(field) => field.expr().is_some_and(|base| is_pure_place(&base)),
         Expr::ParenExpr(inner) => inner.expr().is_some_and(|value| is_pure_place(&value)),
         Expr::RefExpr(inner) => inner.expr().is_some_and(|value| is_pure_place(&value)),
@@ -418,13 +388,9 @@ mod tests {
     fn calls_and_epochs() {
         let s = side("x < f() && x > g(x) && f() > 0");
         assert_eq!(s.calls, vec!["f ()", "g (x)", "f ()"]);
-        let NodeKind::Binary(_, lhs, rhs) = &s.root.kind else {
-            panic!()
-        };
+        let NodeKind::Binary(_, lhs, rhs) = &s.root.kind else { panic!() };
         // The last call to `f` has the occurrence number 1.
-        let NodeKind::Binary(_, last, _) = &rhs.kind else {
-            panic!()
-        };
+        let NodeKind::Binary(_, last, _) = &rhs.kind else { panic!() };
         assert!(matches!(
             &last.kind,
             NodeKind::Leaf(Leaf {
@@ -434,12 +400,8 @@ mod tests {
             })
         ));
         // The second read of `x` comes after one call.
-        let NodeKind::Binary(_, _, second) = &lhs.kind else {
-            panic!()
-        };
-        let NodeKind::Binary(_, x, _) = &second.kind else {
-            panic!()
-        };
+        let NodeKind::Binary(_, _, second) = &lhs.kind else { panic!() };
+        let NodeKind::Binary(_, x, _) = &second.kind else { panic!() };
         assert!(matches!(
             &x.kind,
             NodeKind::Leaf(Leaf {
@@ -458,36 +420,14 @@ mod tests {
             NodeKind::Int {
                 mag: 255,
                 neg: false,
-                suffix: Some(RustType::Int {
-                    bits: 8,
-                    signed: false
-                })
+                suffix: Some(RustType::Int { bits: 8, signed: false })
             }
         );
         let s = side("-128i8");
-        assert!(matches!(
-            s.root.kind,
-            NodeKind::Int {
-                mag: 128,
-                neg: true,
-                ..
-            }
-        ));
+        assert!(matches!(s.root.kind, NodeKind::Int { mag: 128, neg: true, .. }));
         let s = side("self.len");
-        assert!(matches!(
-            &s.root.kind,
-            NodeKind::Leaf(Leaf {
-                kind: LeafKind::Place,
-                ..
-            })
-        ));
+        assert!(matches!(&s.root.kind, NodeKind::Leaf(Leaf { kind: LeafKind::Place, .. })));
         let s = side("self.items().len");
-        assert!(matches!(
-            &s.root.kind,
-            NodeKind::Leaf(Leaf {
-                kind: LeafKind::Call,
-                ..
-            })
-        ));
+        assert!(matches!(&s.root.kind, NodeKind::Leaf(Leaf { kind: LeafKind::Call, .. })));
     }
 }

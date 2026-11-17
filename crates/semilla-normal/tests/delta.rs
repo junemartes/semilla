@@ -35,16 +35,19 @@ fn ensure_driver(scratch: &Path) {
 
 /// The records file of a crate, and its modification time.
 fn record_file(out: &Path, crate_name: &str) -> Option<(PathBuf, SystemTime)> {
-    std::fs::read_dir(out).unwrap().flatten().map(|e| e.path()).find(|p| {
-        p.file_name().unwrap().to_string_lossy().starts_with(&format!("{crate_name}.lib"))
-    }).map(|p| {
-        let time = std::fs::metadata(&p).unwrap().modified().unwrap();
-        (p, time)
-    })
+    std::fs::read_dir(out)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(&format!("{crate_name}.lib")))
+        .map(|p| {
+            let time = std::fs::metadata(&p).unwrap().modified().unwrap();
+            (p, time)
+        })
 }
 
 fn body_text(out: &Path, name: &str) -> String {
-    read_records(out).unwrap().into_iter().find(|r| r.name == name).map(|r| r.text).unwrap_or_default()
+    read_records(out).unwrap().into_iter().find(|r| r.name == name).map_or_default(|r| r.text)
 }
 
 #[test]
@@ -54,11 +57,23 @@ fn delta_builds_reuse_only_fresh_crates() {
     let build = scratch.path().join("build");
     let out = scratch.path().join("records");
     let target = scratch.path().join("target");
-    write(&build.join("Cargo.toml"), "[workspace]\nresolver = \"3\"\nmembers = [\"core_a\", \"app_b\"]\n");
-    write(&build.join("core_a/Cargo.toml"), "[package]\nname = \"core_a\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    write(
+        &build.join("Cargo.toml"),
+        "[workspace]\nresolver = \"3\"\nmembers = [\"core_a\", \"app_b\"]\n",
+    );
+    write(
+        &build.join("core_a/Cargo.toml"),
+        "[package]\nname = \"core_a\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    );
     write(&build.join("core_a/src/lib.rs"), "pub fn helper(x: u32) -> u32 {\n    x + 1\n}\n");
-    write(&build.join("app_b/Cargo.toml"), "[package]\nname = \"app_b\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ncore_a = { path = \"../core_a\" }\n");
-    write(&build.join("app_b/src/lib.rs"), "pub fn run(x: u32) -> u32 {\n    core_a::helper(x) * 2\n}\n");
+    write(
+        &build.join("app_b/Cargo.toml"),
+        "[package]\nname = \"app_b\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ncore_a = { path = \"../core_a\" }\n",
+    );
+    write(
+        &build.join("app_b/src/lib.rs"),
+        "pub fn run(x: u32) -> u32 {\n    core_a::helper(x) * 2\n}\n",
+    );
 
     // The trees of this test have no lock file. The checkout of a tree removes the lock file of
     // the build before, and the sandbox lets cargo write only a lock file that Semilla made.
@@ -72,7 +87,10 @@ fn delta_builds_reuse_only_fresh_crates() {
 
     // 1. Change app_b only: core_a is fresh, and keeps its record file unchanged.
     std::thread::sleep(std::time::Duration::from_millis(20));
-    write(&build.join("app_b/src/lib.rs"), "pub fn run(x: u32) -> u32 {\n    core_a::helper(x) * 3\n}\n");
+    write(
+        &build.join("app_b/src/lib.rs"),
+        "pub fn run(x: u32) -> u32 {\n    core_a::helper(x) * 3\n}\n",
+    );
     check(&build).unwrap_or_else(|e| panic!("{e:#}"));
     let (core_file_2, core_time_2) = record_file(&out, "core_a").expect("core_a records stay");
     assert_eq!(core_file, core_file_2);

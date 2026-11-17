@@ -14,6 +14,7 @@ pub const MAX_PATH_LEN: usize = 16;
 
 /// The call paths from `from` to `to`, as lists of node IDs. The second value is true if the
 /// search stopped at a limit.
+#[must_use]
 pub fn call_paths(ctx: &Ctx, from: &str, to: &str) -> (Vec<Vec<String>>, bool) {
     let mut paths = Vec::new();
     let mut truncated = false;
@@ -47,6 +48,7 @@ fn walk(ctx: &Ctx, to: &str, stack: &mut Vec<String>, paths: &mut Vec<Vec<String
 }
 
 /// The entry points of the graph: `main`, `pub` items, and (only with `tests`) test functions.
+#[must_use]
 pub fn entry_points(ctx: &Ctx, tests: bool) -> Vec<String> {
     ctx.data
         .graph
@@ -58,6 +60,7 @@ pub fn entry_points(ctx: &Ctx, tests: bool) -> Vec<String> {
 }
 
 /// All the functions that can reach `id` through call edges (the impact overlay).
+#[must_use]
 pub fn transitive_callers(ctx: &Ctx, id: &str) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
     let mut queue = VecDeque::from([id.to_string()]);
@@ -73,22 +76,38 @@ pub fn transitive_callers(ctx: &Ctx, id: &str) -> BTreeSet<String> {
 
 /// Finds a graph node for a symbol that the user typed: the exact ID, then an ID that ends with
 /// `::symbol`, then a node with the same label.
+#[must_use]
 pub fn resolve(ctx: &Ctx, symbol: &str) -> Option<String> {
     let symbol = symbol.trim();
     if ctx.graph_node(symbol).is_some() {
         return Some(symbol.to_string());
     }
     let suffix = format!("::{symbol}");
-    let mut found: Vec<&str> = ctx.data.graph.nodes.iter().map(|node| node.id.as_str()).filter(|id| id.ends_with(&suffix)).collect();
+    let mut found: Vec<&str> = ctx
+        .data
+        .graph
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .filter(|id| id.ends_with(&suffix))
+        .collect();
     if found.is_empty() {
-        found = ctx.data.graph.nodes.iter().filter(|node| node.label == symbol).map(|node| node.id.as_str()).collect();
+        found = ctx
+            .data
+            .graph
+            .nodes
+            .iter()
+            .filter(|node| node.label == symbol)
+            .map(|node| node.id.as_str())
+            .collect();
     }
     found.sort_by_key(|id| id.len());
-    found.first().map(|id| id.to_string())
+    found.first().map(std::string::ToString::to_string)
 }
 
 /// A flow view for a function without a change: the callers as entry stubs, one summary node
 /// for the body, and the callees as exit stubs. The reviewer can walk the unchanged flow with it.
+#[must_use]
 pub fn synthetic_flow(ctx: &Ctx, id: &str) -> Option<FlowGraph> {
     let node = ctx.graph_node(id)?;
     if !matches!(node.kind, GraphNodeKind::Function | GraphNodeKind::External) {
@@ -97,7 +116,7 @@ pub fn synthetic_flow(ctx: &Ctx, id: &str) -> Option<FlowGraph> {
     let breadcrumb = ctx
         .graph_ancestors(id)
         .iter()
-        .map(|ancestor| ctx.graph_node(ancestor).map(|node| node.label.clone()).unwrap_or_default())
+        .map(|ancestor| ctx.graph_node(ancestor).map_or_default(|node| node.label.clone()))
         .collect();
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -107,10 +126,15 @@ pub fn synthetic_flow(ctx: &Ctx, id: &str) -> Option<FlowGraph> {
             id: stub.clone(),
             label: format!("from: {}", last_label(ctx, caller)),
             kind: FlowKind::Stub,
-            status: ctx.graph_node(caller).map(|node| node.status).unwrap_or(Status::Same),
+            status: ctx.graph_node(caller).map_or(Status::Same, |node| node.status),
             anchor: Some(caller.clone()),
         });
-        edges.push(FlowEdge { from: stub, to: "entry".to_string(), label: None, status: Status::Same });
+        edges.push(FlowEdge {
+            from: stub,
+            to: "entry".to_string(),
+            label: None,
+            status: Status::Same,
+        });
     }
     nodes.push(FlowNode {
         id: "entry".to_string(),
@@ -133,25 +157,56 @@ pub fn synthetic_flow(ctx: &Ctx, id: &str) -> Option<FlowGraph> {
         status: node.status,
         anchor: Some(id.to_string()),
     });
-    nodes.push(FlowNode { id: "exit".to_string(), label: "return".to_string(), kind: FlowKind::Exit, status: Status::Same, anchor: None });
-    edges.push(FlowEdge { from: "entry".to_string(), to: "body".to_string(), label: None, status: Status::Same });
-    edges.push(FlowEdge { from: "body".to_string(), to: "exit".to_string(), label: None, status: Status::Same });
+    nodes.push(FlowNode {
+        id: "exit".to_string(),
+        label: "return".to_string(),
+        kind: FlowKind::Exit,
+        status: Status::Same,
+        anchor: None,
+    });
+    edges.push(FlowEdge {
+        from: "entry".to_string(),
+        to: "body".to_string(),
+        label: None,
+        status: Status::Same,
+    });
+    edges.push(FlowEdge {
+        from: "body".to_string(),
+        to: "exit".to_string(),
+        label: None,
+        status: Status::Same,
+    });
     for (index, callee) in ctx.callees.get(id).into_iter().flatten().enumerate() {
         let stub = format!("out{index}");
-        let status =
-            ctx.data.graph.edges.iter().find(|edge| edge.from == id && &edge.to == callee).map(|edge| edge.status).unwrap_or(Status::Same);
+        let status = ctx
+            .data
+            .graph
+            .edges
+            .iter()
+            .find(|edge| edge.from == id && &edge.to == callee)
+            .map_or(Status::Same, |edge| edge.status);
         nodes.push(FlowNode {
             id: stub.clone(),
             label: format!("to: {}", last_label(ctx, callee)),
             kind: FlowKind::Stub,
-            status: ctx.graph_node(callee).map(|node| node.status).unwrap_or(Status::Same),
+            status: ctx.graph_node(callee).map_or(Status::Same, |node| node.status),
             anchor: Some(callee.clone()),
         });
-        edges.push(FlowEdge { from: "body".to_string(), to: stub, label: Some("call".to_string()), status });
+        edges.push(FlowEdge {
+            from: "body".to_string(),
+            to: stub,
+            label: Some("call".to_string()),
+            status,
+        });
     }
-    Some(FlowGraph { function: id.to_string(), breadcrumb, nodes, edges })
+    Some(FlowGraph {
+        function: id.to_string(),
+        breadcrumb,
+        nodes,
+        edges,
+    })
 }
 
 fn last_label(ctx: &Ctx, id: &str) -> String {
-    ctx.graph_node(id).map(|node| node.label.clone()).unwrap_or_else(|| last_segment(id).to_string())
+    ctx.graph_node(id).map_or_else(|| last_segment(id).to_string(), |node| node.label.clone())
 }

@@ -12,6 +12,7 @@
 //!   conversion of line ends, and no hook applies.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -24,7 +25,7 @@ use crate::store::Store;
 
 /// The configuration that each git command of Semilla gets with `-c`. It stops each hook and
 /// each program that the configuration of the repository can name.
-pub const SAFE_CONFIG: &[&str] = &[
+pub(crate) const SAFE_CONFIG: &[&str] = &[
     // No hook runs (`reference-transaction`, `post-index-change`, `pre-auto-gc`, and each other).
     "core.hooksPath=/dev/null",
     // No file system monitor program runs when git reads the working tree.
@@ -59,7 +60,7 @@ pub const SAFE_CONFIG: &[&str] = &[
 /// The environment of each git command. Replace refs, the shallow file, and the graft file do
 /// not change an object or hide a parent. Git gets no missing object from a remote, asks no
 /// question, and takes no optional lock.
-pub const SAFE_ENV: &[(&str, &str)] = &[
+pub(crate) const SAFE_ENV: &[(&str, &str)] = &[
     ("GIT_NO_REPLACE_OBJECTS", "1"),
     ("GIT_SHALLOW_FILE", ""),
     ("GIT_GRAFT_FILE", "/dev/null"),
@@ -69,7 +70,17 @@ pub const SAFE_ENV: &[(&str, &str)] = &[
 ];
 
 /// The variables that can point git at other data. Semilla removes them from each git command.
-const REMOVED_ENV: &[&str] = &["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_EXTERNAL_DIFF", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_NAMESPACE"];
+const REMOVED_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_NAMESPACE",
+];
 
 /// A git command with the safe configuration and the safe environment.
 fn git_command() -> Command {
@@ -89,7 +100,7 @@ fn git_command() -> Command {
 
 /// A git repository with a working tree.
 #[derive(Clone, Debug)]
-pub struct Repo {
+pub(crate) struct Repo {
     pub root: PathBuf,
     /// The cache folder of this repository. It is outside the repository folder (I5).
     pub store: Arc<Store>,
@@ -97,8 +108,13 @@ pub struct Repo {
 
 impl Repo {
     /// Finds the repository that contains `dir`.
-    pub fn discover(dir: &Path) -> Result<Repo> {
-        let output = git_command().arg("-C").arg(dir).args(["rev-parse", "--show-toplevel"]).output().context("run git")?;
+    pub(crate) fn discover(dir: &Path) -> Result<Repo> {
+        let output = git_command()
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .context("run git")?;
         if !output.status.success() {
             bail!("{} is not in a git repository", dir.display());
         }
@@ -109,12 +125,12 @@ impl Repo {
 
     /// The `.semilla` folder of the repository. It holds only the session of the agent: claims,
     /// never a datum of a result (I5).
-    pub fn state_dir(&self) -> PathBuf {
+    pub(crate) fn state_dir(&self) -> PathBuf {
         self.root.join(".semilla")
     }
 
     /// The cache folder of this repository, outside the repository folder.
-    pub fn cache_dir(&self) -> PathBuf {
+    pub(crate) fn cache_dir(&self) -> PathBuf {
         self.store.dir.clone()
     }
 
@@ -122,12 +138,12 @@ impl Repo {
     /// `.cargo/config` of the parent folders of the build, so a build inside the repository reads
     /// the cargo configuration of the working tree. Then a new `.cargo/config` in a step changes
     /// the builds of both trees, and the change is not visible (C5).
-    pub fn build_base(&self) -> PathBuf {
+    pub(crate) fn build_base(&self) -> PathBuf {
         self.store.dir.join("build")
     }
 
     /// Runs git and returns its standard output.
-    pub fn git(&self, args: &[&str]) -> Result<String> {
+    pub(crate) fn git(&self, args: &[&str]) -> Result<String> {
         self.git_env(args, &[])
     }
 
@@ -151,7 +167,7 @@ impl Repo {
     /// (with the clean filters of the repository), so the tree of a step is the tree that the
     /// commit gets. This command is for the agent (`step`). Each check reads the tree as raw
     /// blobs, so a filter cannot hide a change from a result.
-    pub fn write_tree(&self) -> Result<String> {
+    pub(crate) fn write_tree(&self) -> Result<String> {
         let index = self.private_path("index");
         let _ = std::fs::remove_file(&index);
         let env = [("GIT_INDEX_FILE", index.as_path())];
@@ -165,7 +181,7 @@ impl Repo {
     }
 
     /// The tree of a commit. `COMMIT^` is the first parent from the raw commit object.
-    pub fn commit_tree(&self, commit: &str) -> Result<String> {
+    pub(crate) fn commit_tree(&self, commit: &str) -> Result<String> {
         if let Some(child) = commit.strip_suffix('^') {
             let parent = self.parent(child)?.with_context(|| format!("commit {child} has no parent"))?;
             return self.git(&["rev-parse", "--verify", &format!("{parent}^{{tree}}")]);
@@ -175,10 +191,14 @@ impl Repo {
 
     /// The first parent of a commit, from the raw commit object. A shallow file or a graft in the
     /// repository folder cannot hide the parent.
-    pub fn parent(&self, commit: &str) -> Result<Option<String>> {
+    pub(crate) fn parent(&self, commit: &str) -> Result<Option<String>> {
         let hash = self.git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
         let text = self.git(&["cat-file", "commit", &hash])?;
-        Ok(text.lines().take_while(|line| !line.is_empty()).find_map(|line| line.strip_prefix("parent ")).map(str::to_string))
+        Ok(text
+            .lines()
+            .take_while(|line| !line.is_empty())
+            .find_map(|line| line.strip_prefix("parent "))
+            .map(str::to_string))
     }
 
     /// A path in the cache folder that only this process uses (for index files).
@@ -192,7 +212,7 @@ impl Repo {
     /// a private folder first, then a rename puts it in place. The rename is atomic, so a cache
     /// folder that exists is complete, also when other processes write the same tree at the same
     /// time.
-    pub fn materialize(&self, tree: &str) -> Result<PathBuf> {
+    pub(crate) fn materialize(&self, tree: &str) -> Result<PathBuf> {
         let base = self.store.dir.join("snapshots");
         let dir = base.join(tree);
         if dir.exists() {
@@ -219,9 +239,21 @@ impl Repo {
         if entries.is_empty() {
             return Ok(());
         }
-        let mut child = git_command().arg("-C").arg(&self.root).args(["cat-file", "--batch"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().context("run git cat-file --batch")?;
+        let mut child = git_command()
+            .arg("-C")
+            .arg(&self.root)
+            .args(["cat-file", "--batch"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("run git cat-file --batch")?;
         let mut stdin = child.stdin.take().context("no stdin of git cat-file")?;
-        let hashes: Vec<String> = entries.iter().filter(|(_, entry)| entry.mode != "160000").map(|(_, entry)| entry.hash.clone()).collect();
+        let hashes: Vec<String> = entries
+            .iter()
+            .filter(|(_, entry)| entry.mode != "160000")
+            .map(|(_, entry)| entry.hash.clone())
+            .collect();
         // A second thread writes the requests, so that a full pipe cannot stop both sides.
         let writer = std::thread::spawn(move || {
             for hash in hashes {
@@ -242,7 +274,8 @@ impl Repo {
                 let mut header = String::new();
                 stdout.read_line(&mut header)?;
                 let mut parts = header.split_whitespace();
-                let (Some(hash), Some("blob"), Some(size)) = (parts.next(), parts.next(), parts.next().and_then(|size| size.parse::<usize>().ok())) else {
+                let (Some(hash), Some("blob"), Some(size)) = (parts.next(), parts.next(), parts.next().and_then(|size| size.parse::<usize>().ok()))
+                else {
                     bail!("the tree entry `{path}` is not a blob that git can read ({})", header.trim());
                 };
                 anyhow::ensure!(hash == entry.hash, "git gave object {hash} for the entry `{path}` ({})", entry.hash);
@@ -252,7 +285,12 @@ impl Repo {
                 stdout.read_exact(&mut newline)?;
                 if entry.mode == "120000" {
                     #[cfg(unix)]
-                    std::os::unix::fs::symlink(std::ffi::OsStr::new(std::str::from_utf8(&content).with_context(|| format!("the link `{path}` has a target that is not text"))?), &file)?;
+                    std::os::unix::fs::symlink(
+                        std::ffi::OsStr::new(
+                            std::str::from_utf8(&content).with_context(|| format!("the link `{path}` has a target that is not text"))?,
+                        ),
+                        &file,
+                    )?;
                     #[cfg(not(unix))]
                     std::fs::write(&file, &content)?;
                     continue;
@@ -281,7 +319,7 @@ impl Repo {
     /// A build can write its build folder (a build script, a proc macro). So Semilla does not
     /// trust the folder: a file that the tree does not have is removed, and a file whose state
     /// (size, change time, kind) is not the state that Semilla recorded is written again.
-    pub fn checkout_build(&self, dir: &Path, tree: &str) -> Result<()> {
+    pub(crate) fn checkout_build(&self, dir: &Path, tree: &str) -> Result<()> {
         let entries = self.tree_entries(tree)?;
         let record = dir.with_extension("files");
         let known: BTreeMap<String, String> = std::fs::read_to_string(&record)
@@ -293,12 +331,19 @@ impl Repo {
         let _ = std::fs::remove_file(&record);
         std::fs::create_dir_all(dir)?;
         remove_unknown(dir, dir, &entries)?;
-        let stale: Vec<(&String, &FileEntry)> = entries.iter().filter(|(path, entry)| known.get(*path).is_none_or(|state| file_state(&dir.join(path.as_str()), entry).as_deref() != Some(state))).collect();
+        let stale: Vec<(&String, &FileEntry)> = entries
+            .iter()
+            .filter(|(path, entry)| {
+                known
+                    .get(*path)
+                    .is_none_or(|state| file_state(&dir.join(path.as_str()), entry).as_deref() != Some(state))
+            })
+            .collect();
         self.write_files(dir, &stale)?;
         let mut text = String::new();
         for (path, entry) in &entries {
-            let state = file_state(&dir.join(path.as_str()), entry).with_context(|| format!("the build folder has no file `{path}`"))?;
-            text.push_str(&format!("{state}\t{path}\n"));
+            let written = file_state(&dir.join(path.as_str()), entry).with_context(|| format!("the build folder has no file `{path}`"))?;
+            let _ = writeln!(text, "{written}\t{path}");
         }
         std::fs::write(&record, text)?;
         Ok(())
@@ -308,7 +353,7 @@ impl Repo {
     /// be `from`. A private index keeps the user's index unchanged. Git writes only the files that
     /// differ, and removes the files that `to` does not have. Ignored files stay. This command is
     /// for the agent (the replay): it writes the working tree as `git checkout` writes it.
-    pub fn switch_worktree(&self, from: &str, to: &str) -> Result<()> {
+    pub(crate) fn switch_worktree(&self, from: &str, to: &str) -> Result<()> {
         if from == to {
             return Ok(());
         }
@@ -324,7 +369,7 @@ impl Repo {
 
     /// The line hunks between two trees (`git diff -U0`), for all files or for one file. No
     /// external diff program and no text conversion program runs.
-    pub fn hunks(&self, from: &str, to: &str, file: Option<&str>) -> Result<Vec<Hunk>> {
+    pub(crate) fn hunks(&self, from: &str, to: &str, file: Option<&str>) -> Result<Vec<Hunk>> {
         let mut args = vec!["diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", from, to];
         if let Some(file) = file {
             args.extend(["--", file]);
@@ -334,7 +379,7 @@ impl Repo {
 
     /// A new tree: `base` with some files replaced (`Some`) or removed (`None`). The working tree
     /// and the user's index do not change.
-    pub fn tree_with(&self, base: &str, files: &BTreeMap<String, Option<String>>) -> Result<String> {
+    pub(crate) fn tree_with(&self, base: &str, files: &BTreeMap<String, Option<String>>) -> Result<String> {
         let index = self.private_path("index");
         let blob = self.private_path("blob");
         let env = [("GIT_INDEX_FILE", index.as_path())];
@@ -365,7 +410,7 @@ impl Repo {
     /// The agent can write a tree object by hand. So a path that can leave the folder of the tree
     /// (`..`, an absolute path, `.git`), a path that occurs two times, and a path below an entry
     /// that is not a folder are errors.
-    pub fn tree_entries(&self, tree: &str) -> Result<BTreeMap<String, FileEntry>> {
+    pub(crate) fn tree_entries(&self, tree: &str) -> Result<BTreeMap<String, FileEntry>> {
         let text = self.git(&["ls-tree", "-r", "-l", "-z", "--full-tree", tree])?;
         let mut entries = BTreeMap::new();
         for record in text.split('\0').filter(|record| !record.is_empty()) {
@@ -375,16 +420,33 @@ impl Repo {
             let (Some(mode), Some(_), Some(hash), size) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
                 bail!("bad ls-tree line: {record}");
             };
-            anyhow::ensure!(is_safe_path(path), "tree {tree} has the unsafe path `{path}`; Semilla does not read this tree");
-            anyhow::ensure!(matches!(mode, "100644" | "100755" | "120000" | "160000"), "tree {tree} has the mode {mode} for `{path}`; Semilla does not read this tree");
+            anyhow::ensure!(
+                is_safe_path(path),
+                "tree {tree} has the unsafe path `{path}`; Semilla does not read this tree"
+            );
+            anyhow::ensure!(
+                matches!(mode, "100644" | "100755" | "120000" | "160000"),
+                "tree {tree} has the mode {mode} for `{path}`; Semilla does not read this tree"
+            );
             let size = size.and_then(|s| s.parse().ok()).unwrap_or(0);
-            let entry = FileEntry { mode: mode.to_string(), hash: hash.to_string(), size };
-            anyhow::ensure!(entries.insert(path.to_string(), entry).is_none(), "tree {tree} has two entries for the path `{path}`; Semilla does not read this tree");
+            let entry = FileEntry {
+                mode: mode.to_string(),
+                hash: hash.to_string(),
+                size,
+            };
+            anyhow::ensure!(
+                entries.insert(path.to_string(), entry).is_none(),
+                "tree {tree} has two entries for the path `{path}`; Semilla does not read this tree"
+            );
         }
         for path in entries.keys() {
             let mut parent = Path::new(path).parent();
             while let Some(folder) = parent.filter(|folder| !folder.as_os_str().is_empty()) {
-                anyhow::ensure!(!entries.contains_key(&*folder.to_string_lossy()), "tree {tree} has a file and a folder with the path `{}`; Semilla does not read this tree", folder.display());
+                anyhow::ensure!(
+                    !entries.contains_key(&*folder.to_string_lossy()),
+                    "tree {tree} has a file and a folder with the path `{}`; Semilla does not read this tree",
+                    folder.display()
+                );
                 parent = folder.parent();
             }
         }
@@ -392,12 +454,16 @@ impl Repo {
     }
 
     /// The files that differ between two trees.
-    pub fn changed_files(&self, from: &str, to: &str) -> Result<Vec<String>> {
-        Ok(self.git(&["diff-tree", "-r", "--name-only", "--no-renames", from, to])?.lines().map(str::to_string).collect())
+    pub(crate) fn changed_files(&self, from: &str, to: &str) -> Result<Vec<String>> {
+        Ok(self
+            .git(&["diff-tree", "-r", "--name-only", "--no-renames", from, to])?
+            .lines()
+            .map(str::to_string)
+            .collect())
     }
 
     /// Stores a note on a commit, under `refs/notes/semilla`.
-    pub fn write_note(&self, commit: &str, text: &str) -> Result<()> {
+    pub(crate) fn write_note(&self, commit: &str, text: &str) -> Result<()> {
         let file = self.private_path("note");
         std::fs::write(&file, text)?;
         let result = self.git(&["notes", "--ref=semilla", "add", "-f", "-F", &file.to_string_lossy(), commit]);
@@ -406,12 +472,12 @@ impl Repo {
     }
 
     /// Reads the note of a commit.
-    pub fn read_note(&self, commit: &str) -> Result<String> {
+    pub(crate) fn read_note(&self, commit: &str) -> Result<String> {
         self.git(&["notes", "--ref=semilla", "show", commit])
     }
 
     /// Keeps a tree reachable with a ref, so that `git gc` does not remove it.
-    pub fn keep_tree(&self, reference: &str, tree: &str, message: &str) -> Result<()> {
+    pub(crate) fn keep_tree(&self, reference: &str, tree: &str, message: &str) -> Result<()> {
         let commit = self.git(&["commit-tree", "--no-gpg-sign", tree, "-m", message])?;
         self.git(&["update-ref", reference, &commit])?;
         Ok(())
@@ -421,7 +487,11 @@ impl Repo {
 /// True if a tree path stays in the folder of the tree: it is relative, and no part is empty,
 /// `.`, `..`, or `.git`.
 fn is_safe_path(path: &str) -> bool {
-    !path.is_empty() && !path.contains('\\') && path.split('/').all(|part| !part.is_empty() && part != "." && part != ".." && !part.eq_ignore_ascii_case(".git"))
+    !path.is_empty()
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != ".." && !part.eq_ignore_ascii_case(".git"))
 }
 
 /// Makes the place of a tree entry ready: each parent is a real folder in `dir` (not a link),
@@ -455,7 +525,13 @@ fn prepare_place(dir: &Path, path: &str) -> Result<()> {
 /// change time of a file, so a build that edits a file changes this state.
 fn file_state(file: &Path, entry: &FileEntry) -> Option<String> {
     let meta = std::fs::symlink_metadata(file).ok()?;
-    let kind = if meta.file_type().is_symlink() { "link" } else if meta.is_dir() { "folder" } else { "file" };
+    let kind = if meta.file_type().is_symlink() {
+        "link"
+    } else if meta.is_dir() {
+        "folder"
+    } else {
+        "file"
+    };
     let expected = match entry.mode.as_str() {
         "120000" => "link",
         "160000" => "folder",
@@ -467,7 +543,14 @@ fn file_state(file: &Path, entry: &FileEntry) -> Option<String> {
     #[cfg(unix)]
     let times = {
         use std::os::unix::fs::MetadataExt;
-        format!("{}.{}-{}.{}-{:o}", meta.mtime(), meta.mtime_nsec(), meta.ctime(), meta.ctime_nsec(), meta.mode())
+        format!(
+            "{}.{}-{}.{}-{:o}",
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec(),
+            meta.mode()
+        )
     };
     #[cfg(not(unix))]
     let times = format!("{:?}", meta.modified().ok());
@@ -508,7 +591,7 @@ fn remove_unknown(root: &Path, dir: &Path, entries: &BTreeMap<String, FileEntry>
 /// One hunk of a line diff. The old lines are in the "from" tree, the new lines in the "to" tree.
 /// A count of 0 means an insert (old) or a delete (new) after the start line.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Hunk {
+pub(crate) struct Hunk {
     pub file: String,
     pub old_start: usize,
     pub old_count: usize,
@@ -520,28 +603,38 @@ pub struct Hunk {
 
 impl Hunk {
     /// The lines of the hunk in the new file. A delete has the line before it.
-    pub fn new_range(&self) -> (usize, usize) {
-        (self.new_start, self.new_start + self.new_count.max(1) - 1)
+    pub(crate) fn new_range(&self) -> (usize, usize) {
+        // A hunk with no lines covers one line: the subtraction stops at zero.
+        (self.new_start, self.new_start + self.new_count.saturating_sub(1))
     }
 
     /// The lines of the hunk in the old file. An insert has the line before it.
-    pub fn old_range(&self) -> (usize, usize) {
-        (self.old_start, self.old_start + self.old_count.max(1) - 1)
+    pub(crate) fn old_range(&self) -> (usize, usize) {
+        // A hunk with no lines covers one line: the subtraction stops at zero.
+        (self.old_start, self.old_start + self.old_count.saturating_sub(1))
     }
 }
 
 /// Parses the output of `git diff -U0`.
-pub fn parse_hunks(text: &str) -> Vec<Hunk> {
+pub(crate) fn parse_hunks(text: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let (mut old_file, mut file) = (String::new(), String::new());
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("--- ") {
             old_file = rest.strip_prefix("a/").unwrap_or(rest).to_string();
         } else if let Some(rest) = line.strip_prefix("+++ ") {
-            file = if rest == "/dev/null" { old_file.clone() } else { rest.strip_prefix("b/").unwrap_or(rest).to_string() };
+            file = if rest == "/dev/null" {
+                old_file.clone()
+            } else {
+                rest.strip_prefix("b/").unwrap_or(rest).to_string()
+            };
         } else if let Some(rest) = line.strip_prefix("@@ -") {
-            let Some((ranges, _)) = rest.split_once(" @@") else { continue };
-            let Some((old, new)) = ranges.split_once(" +") else { continue };
+            let Some((ranges, _)) = rest.split_once(" @@") else {
+                continue;
+            };
+            let Some((old, new)) = ranges.split_once(" +") else {
+                continue;
+            };
             let range = |text: &str| -> (usize, usize) {
                 match text.split_once(',') {
                     Some((start, count)) => (start.parse().unwrap_or(0), count.parse().unwrap_or(0)),
@@ -549,7 +642,14 @@ pub fn parse_hunks(text: &str) -> Vec<Hunk> {
                 }
             };
             let ((old_start, old_count), (new_start, new_count)) = (range(old), range(new));
-            hunks.push(Hunk { file: file.clone(), old_start, old_count, new_start, new_count, lines: Vec::new() });
+            hunks.push(Hunk {
+                file: file.clone(),
+                old_start,
+                old_count,
+                new_start,
+                new_count,
+                lines: Vec::new(),
+            });
         } else if (line.starts_with('-') || line.starts_with('+')) && !hunks.is_empty() {
             hunks.last_mut().unwrap().lines.push(line.to_string());
         } else if line.starts_with("diff --git") {
@@ -562,7 +662,7 @@ pub fn parse_hunks(text: &str) -> Vec<Hunk> {
 
 /// Applies a subset of the hunks of one file. The hunks come from one diff of `old` to `new`, so
 /// their old line numbers all refer to `old`.
-pub fn apply_hunks(old: &str, new: &str, hunks: &[&Hunk]) -> String {
+pub(crate) fn apply_hunks(old: &str, new: &str, hunks: &[&Hunk]) -> String {
     let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
     let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
     let mut sorted: Vec<&&Hunk> = hunks.iter().collect();
@@ -595,7 +695,18 @@ mod tests {
         for path in ["src/lib.rs", "a/b/c", "LICENSE", ".cargo/config.toml", "a..b/c"] {
             assert!(is_safe_path(path), "{path}");
         }
-        for path in ["", "/etc/passwd", "../x", "a/../../x", "a//b", "./a", "a/.", ".git/config", "a/.GIT/hooks/x", "a\\..\\b"] {
+        for path in [
+            "",
+            "/etc/passwd",
+            "../x",
+            "a/../../x",
+            "a//b",
+            "./a",
+            "a/.",
+            ".git/config",
+            "a/.GIT/hooks/x",
+            "a\\..\\b",
+        ] {
             assert!(!is_safe_path(path), "{path}");
         }
     }

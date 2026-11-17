@@ -21,8 +21,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
 use semilla_syntax::Workspace;
+use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
 
 use crate::srcconfig::compact;
 use crate::{ConfigTruth, Unit};
@@ -58,11 +58,18 @@ pub(crate) fn parts(stream: TokenStream) -> Vec<Vec<TokenTree>> {
 }
 
 pub(crate) fn parse(trees: &[TokenTree]) -> Pred {
-    let Some(TokenTree::Ident(name)) = trees.first() else { return Pred::Other };
+    let Some(TokenTree::Ident(name)) = trees.first() else {
+        return Pred::Other;
+    };
     let name = name.to_string();
     match (name.as_str(), trees.len()) {
         ("all" | "any" | "not", 2) => {
-            let Some(TokenTree::Group(group)) = trees.get(1).filter(|tree| matches!(tree, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis)) else { return Pred::Other };
+            let Some(TokenTree::Group(group)) = trees
+                .get(1)
+                .filter(|tree| matches!(tree, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis))
+            else {
+                return Pred::Other;
+            };
             let mut inner: Vec<Pred> = parts(group.stream()).iter().map(|part| parse(part)).collect();
             match name.as_str() {
                 "all" => Pred::All(inner),
@@ -137,11 +144,12 @@ fn covered_at(pred: &Pred, file: &str, side: &Side) -> bool {
 }
 
 /// The key of a condition: its token text.
-fn key(stream: TokenStream) -> String {
+fn key(stream: &TokenStream) -> String {
     compact(&stream.to_string())
 }
 
 /// The text of a condition for a message: `feature = "x"`, `all(unix, test)`.
+#[must_use]
 pub fn show(key: &str) -> String {
     let mut out = String::new();
     let mut quoted = false;
@@ -165,9 +173,13 @@ pub fn show(key: &str) -> String {
 }
 
 /// The conditions of an attribute, from the tokens between its brackets.
-fn attribute(content: Vec<TokenTree>, out: &mut Vec<TokenStream>) {
-    let Some(TokenTree::Ident(name)) = content.first() else { return };
-    let Some(TokenTree::Group(group)) = content.get(1).filter(|_| content.len() == 2) else { return };
+fn attribute(content: &[TokenTree], out: &mut Vec<TokenStream>) {
+    let Some(TokenTree::Ident(name)) = content.first() else {
+        return;
+    };
+    let Some(TokenTree::Group(group)) = content.get(1).filter(|_| content.len() == 2) else {
+        return;
+    };
     if group.delimiter() != Delimiter::Parenthesis {
         return;
     }
@@ -180,7 +192,7 @@ fn attribute(content: Vec<TokenTree>, out: &mut Vec<TokenStream>) {
             }
             // The content can be a `cfg` or a `cfg_attr`.
             for part in all {
-                attribute(part, out);
+                attribute(&part, out);
             }
         }
         _ => {}
@@ -194,9 +206,10 @@ fn scan(stream: TokenStream, out: &mut Vec<TokenStream>) {
         let before = |back: usize| index.checked_sub(back).and_then(|at| trees.get(at));
         match tree {
             TokenTree::Group(group) => {
-                let attr = group.delimiter() == Delimiter::Bracket && (is_punct(before(1), '#') || (is_punct(before(1), '!') && is_punct(before(2), '#')));
+                let attr =
+                    group.delimiter() == Delimiter::Bracket && (is_punct(before(1), '#') || (is_punct(before(1), '!') && is_punct(before(2), '#')));
                 if attr {
-                    attribute(group.stream().into_iter().collect(), out);
+                    attribute(&group.stream().into_iter().collect::<Vec<_>>(), out);
                 }
                 scan(group.stream(), out);
             }
@@ -272,13 +285,15 @@ impl Cover {
                 if !text.contains("cfg") {
                     continue;
                 }
-                let Ok(stream) = text.parse::<TokenStream>() else { continue };
+                let Ok(stream) = text.parse::<TokenStream>() else {
+                    continue;
+                };
                 let mut found = Vec::new();
                 scan(stream, &mut found);
                 for condition in found {
                     let pred = parse(&condition.clone().into_iter().collect::<Vec<_>>());
                     let covered = covered_at(&pred, file, &side);
-                    let key = key(condition);
+                    let key = key(&condition);
                     *cover.places.entry((file.clone(), key.clone())).or_insert(true) &= covered;
                     cover.preds.insert(key, pred);
                 }
@@ -301,19 +316,19 @@ impl Cover {
 
     /// The state of a condition at a place. `file`: the file of the place, if the caller
     /// knows it. With no file, the condition must be covered at each place of the trees.
-    fn covers(&self, condition: TokenStream, file: Option<&str>, mode: &Mode) -> bool {
+    fn covers(&self, condition: &TokenStream, file: Option<&str>, mode: &Mode) -> bool {
         let trees: Vec<TokenTree> = condition.clone().into_iter().collect();
         let key = key(condition);
         let covered = match file {
-            Some(file) => match self.places.get(&(file.to_string(), key.clone())) {
-                Some(covered) => *covered,
-                // A place that the text scan did not find: each tree with the file must cover it.
-                None => {
+            Some(file) => {
+                if let Some(covered) = self.places.get(&(file.to_string(), key.clone())) {
+                    *covered
+                } else {
                     let pred = parse(&trees);
                     let with: Vec<&Side> = self.sides.iter().filter(|side| side.files.contains(file)).collect();
                     !with.is_empty() && with.iter().all(|side| covered_at(&pred, file, side))
                 }
-            },
+            }
             None => self.covered.contains(&key),
         };
         if !covered || *mode == Mode::Plain {
@@ -344,7 +359,9 @@ impl Cover {
 /// Each condition `P` of an attribute text `#[cfg(P)]`. The item of the attribute exists only
 /// if `P` is true.
 pub(crate) fn own_conditions(attr: &str) -> Vec<Pred> {
-    let Ok(stream) = attr.parse::<TokenStream>() else { return Vec::new() };
+    let Ok(stream) = attr.parse::<TokenStream>() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for tree in stream {
         let TokenTree::Group(group) = tree else { continue };
@@ -376,6 +393,8 @@ pub(crate) struct Scope;
 
 impl Scope {
     /// Makes a different `Cover` the answer of `covered` for the rest of the scope.
+    // The receiver proves that a scope is live, so the end of the scope removes the new `Cover`.
+    #[allow(clippy::unused_self)]
     pub(crate) fn set(&self, cover: Cover) {
         COVER.with(|slot| *slot.borrow_mut() = Some(Rc::new(cover)));
     }
@@ -423,7 +442,7 @@ pub(crate) fn with_mode<R>(mode: &Mode, run: impl FnOnce() -> R) -> R {
 
 /// True if the checked configurations cover the condition (the tokens between the
 /// parentheses of `cfg(…)`). With no `Scope`, no condition is covered.
-pub(crate) fn covered(condition: TokenStream) -> bool {
+pub(crate) fn covered(condition: &TokenStream) -> bool {
     let Some(cover) = current() else { return false };
     let file = FILE.with(|file| file.borrow().clone());
     MODE.with(|mode| cover.covers(condition, file.as_deref(), &mode.borrow()))
@@ -431,8 +450,16 @@ pub(crate) fn covered(condition: TokenStream) -> bool {
 
 /// True for the text of a call `cfg!(P)` with a covered condition.
 pub(crate) fn covered_call(text: &str) -> bool {
-    let Some(inner) = text.trim().strip_prefix("cfg!").map(str::trim).and_then(|rest| rest.strip_prefix('(')).and_then(|rest| rest.strip_suffix(')')) else { return false };
-    inner.parse::<TokenStream>().is_ok_and(covered)
+    let Some(inner) = text
+        .trim()
+        .strip_prefix("cfg!")
+        .map(str::trim)
+        .and_then(|rest| rest.strip_prefix('('))
+        .and_then(|rest| rest.strip_suffix(')'))
+    else {
+        return false;
+    };
+    inner.parse::<TokenStream>().is_ok_and(|condition| covered(&condition))
 }
 
 #[cfg(test)]
@@ -442,13 +469,23 @@ mod tests {
     const LIB: &str = "crates/a/src/lib.rs";
 
     fn unit(target: &str, cfg: &[&str], files: &[&str]) -> Unit {
-        Unit { target: target.to_string(), package: "crates/a".to_string(), cfg: cfg.iter().map(|f| f.to_string()).collect(), files: files.iter().map(|f| f.to_string()).collect(), root: files.first().map(|f| f.to_string()).unwrap_or_default() }
+        Unit {
+            target: target.to_string(),
+            package: "crates/a".to_string(),
+            cfg: cfg.iter().map(std::string::ToString::to_string).collect(),
+            files: files.iter().map(std::string::ToString::to_string).collect(),
+            root: files.first().map_or_default(std::string::ToString::to_string),
+        }
     }
 
     /// A build with a library unit and a test unit of the library.
     fn truth(name: &str, cfg: &[&str]) -> ConfigTruth {
         let with_test: Vec<&str> = cfg.iter().copied().chain(["test"]).collect();
-        ConfigTruth { name: name.to_string(), units: vec![unit("a.lib", cfg, &[LIB]), unit("a.test", &with_test, &[LIB])], known: true }
+        ConfigTruth {
+            name: name.to_string(),
+            units: vec![unit("a.lib", cfg, &[LIB]), unit("a.test", &with_test, &[LIB])],
+            known: true,
+        }
     }
 
     fn workspace(files: &[(&str, &str)]) -> Workspace {
@@ -474,26 +511,56 @@ mod tests {
             #[cfg(secret)] fn j() {}
         "#;
         let ws = workspace(&[(LIB, text)]);
-        let both = [truth("dev", &["unix", "debug_assertions"]), truth("release", &["unix"]), truth("dev, all features", &["unix", "debug_assertions", "feature=\"x\"", "feature=\"y\""])];
+        let both = [
+            truth("dev", &["unix", "debug_assertions"]),
+            truth("release", &["unix"]),
+            truth("dev, all features", &["unix", "debug_assertions", "feature=\"x\"", "feature=\"y\""]),
+        ];
         let cover = Cover::new(&[(&ws, &both)]);
         let closed: Vec<&str> = cover.covered.iter().map(String::as_str).collect();
-        assert_eq!(closed, ["all(feature=\"x\",feature=\"y\")", "debug_assertions", "feature=\"y\"", "not(feature=\"x\")", "test"]);
+        assert_eq!(
+            closed,
+            [
+                "all(feature=\"x\",feature=\"y\")",
+                "debug_assertions",
+                "feature=\"y\"",
+                "not(feature=\"x\")",
+                "test"
+            ]
+        );
         let open: Vec<&str> = cover.not_covered.iter().map(String::as_str).collect();
-        assert_eq!(open, ["any(debug_assertions,version(\"1.80\"))", "any(test,unix)", "feature=\"none\"", "miri", "panic=\"abort\"", "secret", "target_os=\"windows\""]);
+        assert_eq!(
+            open,
+            [
+                "any(debug_assertions,version(\"1.80\"))",
+                "any(test,unix)",
+                "feature=\"none\"",
+                "miri",
+                "panic=\"abort\"",
+                "secret",
+                "target_os=\"windows\""
+            ]
+        );
         assert_eq!(show("all(feature=\"a,b\",not(unix))"), "all(feature = \"a,b\", not(unix))");
         assert_eq!(show("all(unix,not(test),)"), "all(unix, not(test))");
         // One profile: `debug_assertions` has one value.
         let cover = Cover::new(&[(&ws, &both[..1])]);
-        assert!(cover.not_covered.contains("debug_assertions") && cover.covered.contains("test"), "{cover:?}");
+        assert!(
+            cover.not_covered.contains("debug_assertions") && cover.covered.contains("test"),
+            "{cover:?}"
+        );
         // The two trees must cover a condition.
         let cover = Cover::new(&[(&ws, &both), (&ws, &both[..2])]);
-        assert!(cover.not_covered.contains("not(feature=\"x\")") && cover.covered.contains("debug_assertions"), "{cover:?}");
+        assert!(
+            cover.not_covered.contains("not(feature=\"x\")") && cover.covered.contains("debug_assertions"),
+            "{cover:?}"
+        );
         // No scope: no condition is covered.
         let condition = || "debug_assertions".parse::<TokenStream>().unwrap();
-        assert!(!covered(condition()));
+        assert!(!covered(&condition()));
         {
             let _scope = enter(Cover::new(&[(&ws, &both)]));
-            assert!(covered(condition()) && covered_call("cfg!(debug_assertions)") && !covered_call("cfg!(unix)") && !covered_call("env!(\"A\")"));
+            assert!(covered(&condition()) && covered_call("cfg!(debug_assertions)") && !covered_call("cfg!(unix)") && !covered_call("env!(\"A\")"));
             // Batch 7b, part 4.3: a `cfg_attr` with a covered condition is covered, also with a
             // content that Semilla does not know. A content `cfg` has its own condition.
             let kind = |text: &str| crate::opaque::attr_kind(text.parse().unwrap());
@@ -502,60 +569,85 @@ mod tests {
             assert!(matches!(kind("cfg_attr(debug_assertions, cfg(unix))"), Some(crate::opaque::Attr::Select)));
             // A part of the rule is on again: for one atom, or for each atom and file out of a set.
             let without = Mode::Without("debug_assertions".to_string());
-            assert!(!with_mode(&without, || covered(condition())) && with_mode(&without, || covered_call("cfg!(test)")));
-            assert!(!with_mode(&without, || covered("all(test, debug_assertions)".parse().unwrap())));
-            let set = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<BTreeSet<String>>();
+            assert!(!with_mode(&without, || covered(&condition())) && with_mode(&without, || covered_call("cfg!(test)")));
+            assert!(!with_mode(&without, || covered(&"all(test, debug_assertions)".parse().unwrap())));
+            let set = |names: &[&str]| names.iter().map(std::string::ToString::to_string).collect::<BTreeSet<String>>();
             let at_lib = |mode: &Mode, text: &str| {
                 with_mode(mode, || {
                     let _at = at(LIB);
-                    covered(text.parse().unwrap())
+                    covered(&text.parse().unwrap())
                 })
             };
             let only = Mode::Only(set(&["debug_assertions"]), set(&[LIB]));
             assert!(at_lib(&only, "debug_assertions") && !at_lib(&only, "test") && !at_lib(&only, "not(feature = \"x\")"));
             // A place with no file, and a place in a file out of the set, are not covered.
-            assert!(!with_mode(&only, || covered(condition())));
-            assert!(!at_lib(&Mode::Only(set(&["debug_assertions"]), set(&["crates/a/src/b.rs"])), "debug_assertions"));
-            assert!(!with_mode(&Mode::Strict, || covered(condition())) && covered(condition()));
+            assert!(!with_mode(&only, || covered(&condition())));
+            assert!(!at_lib(
+                &Mode::Only(set(&["debug_assertions"]), set(&["crates/a/src/b.rs"])),
+                "debug_assertions"
+            ));
+            assert!(!with_mode(&Mode::Strict, || covered(&condition())) && covered(&condition()));
         }
-        assert!(!covered(condition()));
+        assert!(!covered(&condition()));
     }
 
     /// Batch 5t, part A: the values come from the units, with no rule for a name.
     #[test]
     fn the_units_that_read_the_file_decide() {
         let test_file = "crates/a/tests/it.rs";
-        let ws = workspace(&[(LIB, "#[cfg(test)] mod t {}\n#[cfg(debug_assertions)] fn a() {}\n#[cfg(feature = \"x\")] fn b() {}"), (test_file, "#[cfg(not(test))] fn a() {}\n#[cfg(test)] fn b() {}")]);
+        let ws = workspace(&[
+            (
+                LIB,
+                "#[cfg(test)] mod t {}\n#[cfg(debug_assertions)] fn a() {}\n#[cfg(feature = \"x\")] fn b() {}",
+            ),
+            (test_file, "#[cfg(not(test))] fn a() {}\n#[cfg(test)] fn b() {}"),
+        ]);
         let build = |name: &str, cfg: &[&str]| {
             let mut config = truth(name, cfg);
             let with_test: Vec<&str> = cfg.iter().copied().chain(["test"]).collect();
             config.units.push(unit("it.test", &with_test, &[test_file]));
             config
         };
-        let list = [build("dev", &["debug_assertions"]), build("release", &[]), build("dev, all features", &["debug_assertions", "feature=\"x\""])];
-        let _scope = enter(Cover::new(&[(&ws, &list)]));
+        let list = [
+            build("dev", &["debug_assertions"]),
+            build("release", &[]),
+            build("dev, all features", &["debug_assertions", "feature=\"x\""]),
+        ];
+        let scope = enter(Cover::new(&[(&ws, &list)]));
         let covered_at = |file: &str, text: &str| {
             let _at = at(file);
-            covered(text.parse().unwrap())
+            covered(&text.parse().unwrap())
         };
         // `test` is true in each unit that reads the file of the test target.
         assert!(covered_at(LIB, "test") && !covered_at(test_file, "test") && !covered_at(test_file, "not(test)"));
         // With no file, one place that is not covered decides.
-        assert!(!covered("test".parse().unwrap()) && covered("debug_assertions".parse().unwrap()));
+        assert!(!covered(&"test".parse().unwrap()) && covered(&"debug_assertions".parse().unwrap()));
         assert!(covered_at(test_file, "debug_assertions") && covered_at(LIB, "feature = \"x\"") && covered_at(test_file, "feature = \"x\""));
         assert!(!covered_at("crates/a/src/none.rs", "debug_assertions"));
-        drop(_scope);
+        drop(scope);
         // A flag of the compiler makes `debug_assertions` true in each unit, and `feature = "x"` also.
-        let flags = [build("dev", &["debug_assertions", "feature=\"x\""]), build("release", &["debug_assertions", "feature=\"x\""])];
+        let flags = [
+            build("dev", &["debug_assertions", "feature=\"x\""]),
+            build("release", &["debug_assertions", "feature=\"x\""]),
+        ];
         let cover = Cover::new(&[(&ws, &flags)]);
-        assert!(cover.covered.is_empty() && cover.not_covered.contains("debug_assertions") && cover.not_covered.contains("feature=\"x\""), "{cover:?}");
+        assert!(
+            cover.covered.is_empty() && cover.not_covered.contains("debug_assertions") && cover.not_covered.contains("feature=\"x\""),
+            "{cover:?}"
+        );
         // A record file with no unit record: no condition is covered.
         let mut old = list.clone();
         old[1].known = false;
         assert!(Cover::new(&[(&ws, &old)]).covered.is_empty());
         assert!(Cover::new(&[(&ws, &[])]).covered.is_empty());
         // The value of a string, not its text.
-        assert_eq!(parse(&"feature = \"a\\u{62}\"".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()), Pred::Atom("feature=\"ab\"".to_string()));
-        assert_eq!(parse(&"version(\"1.0\")".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()), Pred::Other);
+        assert_eq!(
+            parse(&"feature = \"a\\u{62}\"".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()),
+            Pred::Atom("feature=\"ab\"".to_string())
+        );
+        assert_eq!(
+            parse(&"version(\"1.0\")".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()),
+            Pred::Other
+        );
     }
 }

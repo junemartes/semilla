@@ -22,6 +22,7 @@
 //! moved statement keeps its own result. An element with no owner by the rules above, whose
 //! node is in a statement that the move passes over (with no edit in it), goes to the move.
 
+use semilla_core::report::MirMapCounts;
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_syntax::rs::{self, AstNode, TextRange, TextSize};
@@ -29,6 +30,9 @@ use semilla_syntax::tree::Pos;
 use semilla_syntax::{Edit, EditKind, ItemKind, Workspace};
 
 use crate::{MirDiff, MirElement, MirPlace};
+
+/// A source range in one file: the file, the start, and the end.
+type FileRange = (String, Pos, Pos);
 
 /// The node of a source range.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -104,6 +108,7 @@ pub struct Ownership {
 
 impl Ownership {
     /// True if each element that differs has an owner, and no other part of the text differs.
+    #[must_use]
     pub fn complete(&self, diff: &MirDiff) -> bool {
         self.unowned.is_empty() && self.lost == 0 && !diff.other && (!diff.old.is_empty() || !diff.new.is_empty())
     }
@@ -120,24 +125,39 @@ impl<'a> MirMap<'a> {
         let sides = [before, after];
         let mut places: [BTreeMap<String, Vec<EditPlace>>; 2] = [BTreeMap::new(), BTreeMap::new()];
         for (index, edit) in edits.iter().enumerate() {
-            if matches!(edit.kind, EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged | EditKind::Docs | EditKind::Comment) {
+            if matches!(
+                edit.kind,
+                EditKind::FileAdded | EditKind::FileRemoved | EditKind::FileChanged | EditKind::Docs | EditKind::Comment
+            ) {
                 continue;
             }
             for (side, anchor) in [&edit.before, &edit.after].into_iter().enumerate() {
                 let Some(anchor) = anchor else { continue };
                 let ws = sides[side];
-                let Some(item) = ws.items.get(&anchor.item) else { continue };
-                let definition = matches!(item.kind, ItemKind::Const | ItemKind::Static) || (item.kind == ItemKind::Macro && item.source.contains("macro_rules!"));
+                let Some(item) = ws.items.get(&anchor.item) else {
+                    continue;
+                };
+                let definition =
+                    matches!(item.kind, ItemKind::Const | ItemKind::Static) || (item.kind == ItemKind::Macro && item.source.contains("macro_rules!"));
                 let (start, end) = match semilla_syntax::resolve(ws, anchor) {
                     Some(semilla_syntax::Resolved::Node(_, node)) => (node.start, node.end),
                     // The place of an edit of a whole item: an added or a removed item, or the
                     // value of a constant or a macro definition. An edit of the header of a
                     // container (its generics, its attributes) does not contain its bodies.
-                    Some(semilla_syntax::Resolved::Item(item)) if definition || matches!(edit.kind, EditKind::ItemAdded | EditKind::ItemRemoved) => ((item.line_start, item.col_start), (item.line_end, item.col_end)),
+                    Some(semilla_syntax::Resolved::Item(item)) if definition || matches!(edit.kind, EditKind::ItemAdded | EditKind::ItemRemoved) => {
+                        ((item.line_start, item.col_start), (item.line_end, item.col_end))
+                    }
                     _ => continue,
                 };
                 let wide = matches!(edit.refactor, Some(semilla_syntax::Refactor::Moved { .. }));
-                places[side].entry(item.file.clone()).or_default().push(EditPlace { edit: index, start, end, definition, wide, jump: false });
+                places[side].entry(item.file.clone()).or_default().push(EditPlace {
+                    edit: index,
+                    start,
+                    end,
+                    definition,
+                    wide,
+                    jump: false,
+                });
             }
         }
         // The statements that a move passes over, with no other edit in them (design 41.7). The
@@ -149,17 +169,44 @@ impl<'a> MirMap<'a> {
                 _ => continue,
             };
             for (side, anchor) in [&edit.before, &edit.after].into_iter().enumerate() {
-                let Some(file) = anchor.as_ref().or(edit.before.as_ref()).or(edit.after.as_ref()).and_then(|anchor| sides[side].items.get(&anchor.item)).map(|item| item.file.clone()) else { continue };
+                let Some(file) = anchor
+                    .as_ref()
+                    .or(edit.before.as_ref())
+                    .or(edit.after.as_ref())
+                    .and_then(|anchor| sides[side].items.get(&anchor.item))
+                    .map(|item| item.file.clone())
+                else {
+                    continue;
+                };
                 let list = places[side].entry(file).or_default();
                 for &(start, end) in &region[side] {
-                    let other = list.iter().any(|place| !place.jump && place.edit != index && !refactoring.contains(&place.edit) && start <= place.start && place.end <= end);
+                    let other = list.iter().any(|place| {
+                        !place.jump && place.edit != index && !refactoring.contains(&place.edit) && start <= place.start && place.end <= end
+                    });
                     if !other {
-                        list.push(EditPlace { edit: index, start, end, definition: false, wide: true, jump: true });
+                        list.push(EditPlace {
+                            edit: index,
+                            start,
+                            end,
+                            definition: false,
+                            wide: true,
+                            jump: true,
+                        });
                     }
                 }
             }
         }
-        MirMap { sides, trees: [BTreeMap::new(), BTreeMap::new()], places, errors: 0, examples: Vec::new(), counts: Default::default(), owning: BTreeSet::new(), idle_equal: BTreeSet::new(), idle_doubt: BTreeSet::new() }
+        MirMap {
+            sides,
+            trees: [BTreeMap::new(), BTreeMap::new()],
+            places,
+            errors: 0,
+            examples: Vec::new(),
+            counts: MirMapCounts::default(),
+            owning: BTreeSet::new(),
+            idle_equal: BTreeSet::new(),
+            idle_doubt: BTreeSet::new(),
+        }
     }
 
     /// The node of a source range on one side. `None` for a file that the side does not have,
@@ -170,7 +217,10 @@ impl<'a> MirMap<'a> {
         let tree = self.trees[side].entry(file.clone()).or_insert_with(|| {
             let text = ws.rust_files.get(file)?;
             let parsed = rs::ast::SourceFile::parse(text, rs::Edition::Edition2021).tree();
-            Some(FileTree { lines: rs::Lines::new(text), root: parsed.syntax().clone() })
+            Some(FileTree {
+                lines: rs::Lines::new(text),
+                root: parsed.syntax().clone(),
+            })
         });
         let tree = tree.as_ref()?;
         let length = tree.lines.text().len();
@@ -187,11 +237,18 @@ impl<'a> MirMap<'a> {
         // A range inside one token is the range of the token if it is in a string literal (a
         // placeholder of a format string), or if it is the last character of the token (the
         // `end_point` of a span in `rustc`).
-        let (start, end) = match u32::try_from(start).ok().and_then(|at| tree.root.token_at_offset(TextSize::from(at)).right_biased()) {
+        let (start, end) = match u32::try_from(start)
+            .ok()
+            .and_then(|at| tree.root.token_at_offset(TextSize::from(at)).right_biased())
+        {
             Some(token) if !boundary(start) && usize::from(token.text_range().end()) >= end => {
                 let (first, last) = (usize::from(token.text_range().start()), usize::from(token.text_range().end()));
                 let last_char = end == last && tree.lines.text().get(start..end).is_some_and(|part| part.chars().count() == 1);
-                if token.kind() == rs::SyntaxKind::STRING || last_char { (first, last) } else { (start, end) }
+                if token.kind() == rs::SyntaxKind::STRING || last_char {
+                    (first, last)
+                } else {
+                    (start, end)
+                }
             }
             _ => (start, end),
         };
@@ -203,10 +260,14 @@ impl<'a> MirMap<'a> {
             }
             return None;
         }
-        let range = TextRange::new(TextSize::from(start as u32), TextSize::from(end as u32));
+        // The check above keeps `end` in the file, and a file of the syntax tree has a `u32` length.
+        let range = TextRange::new(TextSize::try_from(start).ok()?, TextSize::try_from(end).ok()?);
         // An empty range (the end of a block, the unit value of an `if` with no `else`) belongs
         // to the token that ends at it, if that token is not a space or a comment.
-        let left = (start == end).then(|| tree.root.token_at_offset(range.start()).left_biased()).flatten().filter(|token| !token.kind().is_trivia() && token.text_range().end() == range.start());
+        let left = (start == end)
+            .then(|| tree.root.token_at_offset(range.start()).left_biased())
+            .flatten()
+            .filter(|token| !token.kind().is_trivia() && token.text_range().end() == range.start());
         let node = match left {
             Some(token) => token.parent()?,
             None => match tree.root.covering_element(range) {
@@ -217,9 +278,19 @@ impl<'a> MirMap<'a> {
         let block_free = node.kind() != rs::SyntaxKind::STMT_LIST && !node.descendants().any(|inner| inner.kind() == rs::SyntaxKind::STMT_LIST);
         let code = rs::code_range(&node);
         // A node with only trivia in the range keeps the range itself.
-        let (from, to) = if code.start <= start && end <= code.end { (code.start, code.end) } else { (start, end) };
+        let (from, to) = if code.start <= start && end <= code.end {
+            (code.start, code.end)
+        } else {
+            (start, end)
+        };
         let text = semilla_syntax::tree::short(&rs::display_syntax(&node), 60);
-        Some(Mapped { file: file.clone(), start: tree.lines.pos(from), end: tree.lines.pos(to), text, block_free })
+        Some(Mapped {
+            file: file.clone(),
+            start: tree.lines.pos(from),
+            end: tree.lines.pos(to),
+            text,
+            block_free,
+        })
     }
 
     /// The smallest edit whose node contains a node on one side. With `definition`, only an
@@ -240,14 +311,24 @@ impl<'a> MirMap<'a> {
     /// The move whose passed-over statement contains a node (design 41.7).
     fn jump_owner(&self, side: usize, node: &Mapped) -> Option<usize> {
         let places = self.places[side].get(&node.file)?;
-        places.iter().filter(|place| place.jump && place.start <= node.start && node.end <= place.end).max_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end))).map(|place| place.edit)
+        places
+            .iter()
+            .filter(|place| place.jump && place.start <= node.start && node.end <= place.end)
+            .max_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)))
+            .map(|place| place.edit)
     }
 
     /// The edits whose nodes are inside a node on one side.
     fn inner(&self, side: usize, node: &Mapped) -> Vec<usize> {
-        let Some(places) = self.places[side].get(&node.file) else { return Vec::new() };
-        let mut found: Vec<usize> = places.iter().filter(|place| !place.jump && node.start <= place.start && place.end <= node.end).map(|place| place.edit).collect();
-        found.sort();
+        let Some(places) = self.places[side].get(&node.file) else {
+            return Vec::new();
+        };
+        let mut found: Vec<usize> = places
+            .iter()
+            .filter(|place| !place.jump && node.start <= place.start && place.end <= node.end)
+            .map(|place| place.edit)
+            .collect();
+        found.sort_unstable();
         found.dedup();
         found
     }
@@ -267,7 +348,10 @@ impl<'a> MirMap<'a> {
                     (None, None) => (None, None),
                 };
                 let node = own.and_then(|place| self.node(side, place));
-                let first = node.as_ref().and_then(|node| self.owner_place(side, node, false)).map(|place| (place.edit, place.wide));
+                let first = node
+                    .as_ref()
+                    .and_then(|node| self.owner_place(side, node, false))
+                    .map(|place| (place.edit, place.wide));
                 let mut owners: Vec<usize> = first.map(|(edit, _)| edit).into_iter().collect();
                 // A move owns the elements of its statement, and each change inside the node of
                 // the element owns them too (design 41.7).
@@ -332,12 +416,15 @@ impl<'a> MirMap<'a> {
 
 impl MirMap<'_> {
     /// The file and the positions of a source range on one side.
-    fn positions(&mut self, side: usize, place: &MirPlace) -> Option<(String, Pos, Pos)> {
+    fn positions(&mut self, side: usize, place: &MirPlace) -> Option<FileRange> {
         let ws = self.sides[side];
         let tree = self.trees[side].entry(place.0.clone()).or_insert_with(|| {
             let text = ws.rust_files.get(&place.0)?;
             let parsed = rs::ast::SourceFile::parse(text, rs::Edition::Edition2021).tree();
-            Some(FileTree { lines: rs::Lines::new(text), root: parsed.syntax().clone() })
+            Some(FileTree {
+                lines: rs::Lines::new(text),
+                root: parsed.syntax().clone(),
+            })
         });
         let tree = tree.as_ref()?;
         let length = tree.lines.text().len();
@@ -353,21 +440,35 @@ impl MirMap<'_> {
         if mine.is_empty() {
             return;
         }
-        let pairs: Vec<((String, Pos, Pos), (String, Pos, Pos))> = diff.pairs.iter().filter_map(|(a, b)| Some((self.positions(0, a)?, self.positions(1, b)?))).collect();
-        let differ: [Vec<(String, Pos, Pos)>; 2] = [
-            diff.old.iter().filter_map(|element| element.tokens.as_ref()).filter_map(|place| self.positions(0, place)).collect(),
-            diff.new.iter().filter_map(|element| element.tokens.as_ref()).filter_map(|place| self.positions(1, place)).collect(),
+        let pairs: Vec<(FileRange, FileRange)> = diff
+            .pairs
+            .iter()
+            .filter_map(|(a, b)| Some((self.positions(0, a)?, self.positions(1, b)?)))
+            .collect();
+        let differ: [Vec<FileRange>; 2] = [
+            diff.old
+                .iter()
+                .filter_map(|element| element.tokens.as_ref())
+                .filter_map(|place| self.positions(0, place))
+                .collect(),
+            diff.new
+                .iter()
+                .filter_map(|element| element.tokens.as_ref())
+                .filter_map(|place| self.positions(1, place))
+                .collect(),
         ];
-        let inside = |(file, start, end): &(String, Pos, Pos), range: &(String, Pos, Pos)| *file == range.0 && range.1 <= *start && *end <= range.2;
+        let inside = |(file, start, end): &FileRange, range: &FileRange| *file == range.0 && range.1 <= *start && *end <= range.2;
         for map in mine {
-            let range = |side: usize, anchor: &semilla_core::Anchor| -> Option<(String, Pos, Pos)> {
+            let range = |side: usize, anchor: &semilla_core::Anchor| -> Option<FileRange> {
                 let ws = self.sides[side];
                 let node = semilla_syntax::resolve_node(ws, anchor)?;
                 Some((ws.items.get(&anchor.item)?.file.clone(), node.start, node.end))
             };
-            let (Some(old), Some(new)) = (range(0, &map.before), range(1, &map.after)) else { continue };
-            let old_in: Vec<&((String, Pos, Pos), (String, Pos, Pos))> = pairs.iter().filter(|(a, _)| inside(a, &old)).collect();
-            let new_in: Vec<&((String, Pos, Pos), (String, Pos, Pos))> = pairs.iter().filter(|(_, b)| inside(b, &new)).collect();
+            let (Some(old), Some(new)) = (range(0, &map.before), range(1, &map.after)) else {
+                continue;
+            };
+            let old_in: Vec<&(FileRange, FileRange)> = pairs.iter().filter(|(a, _)| inside(a, &old)).collect();
+            let new_in: Vec<&(FileRange, FileRange)> = pairs.iter().filter(|(_, b)| inside(b, &new)).collect();
             let any_old = !old_in.is_empty() || differ[0].iter().any(|place| inside(place, &old));
             let any_new = !new_in.is_empty() || differ[1].iter().any(|place| inside(place, &new));
             if !any_old && !any_new {
@@ -378,7 +479,9 @@ impl MirMap<'_> {
             if elsewhere {
                 self.counts.disagree += 1;
                 if self.counts.disagree_examples.len() < EXAMPLES {
-                    self.counts.disagree_examples.push(format!("`{}` → `{}`{}", map.before, map.after, if map.moved { " (moved)" } else { "" }));
+                    self.counts
+                        .disagree_examples
+                        .push(format!("`{}` → `{}`{}", map.before, map.after, if map.moved { " (moved)" } else { "" }));
                 }
             } else if old_in.is_empty() && new_in.is_empty() {
                 self.counts.unaligned += 1;
@@ -389,6 +492,7 @@ impl MirMap<'_> {
 
 /// The change of the branch structure of the elements of an edit (design 40.4): the text of
 /// the mark, or `None` if the structure is the same.
+#[must_use]
 pub fn branch_mark(elements: &[Vec<MirElement>; 2]) -> Option<String> {
     let count = |list: &[MirElement]| -> (usize, usize, usize) {
         let switches = list.iter().filter(|element| element.targets.is_some()).count();

@@ -36,13 +36,12 @@ pub mod two {
 ";
 
 fn name_of(item: &str) -> &str {
-    item.split_once(' ').map(|(_, name)| name).unwrap_or(item)
+    item.split_once(' ').map_or(item, |(_, name)| name)
 }
 
-#[test]
-fn the_table_of_known_traits_agrees_with_the_compiler() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("probe");
+/// Builds the probe crate in `dir` with the driver, and reads the trait table that the driver writes.
+fn build_trait_table(dir: &Path) -> serde_json::Value {
+    let root = dir.join("probe");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("Cargo.toml"), MANIFEST).unwrap();
     std::fs::write(root.join("src/lib.rs"), SOURCE).unwrap();
@@ -53,25 +52,51 @@ fn the_table_of_known_traits_agrees_with_the_compiler() {
     let lock = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
     std::fs::copy(lock, root.join("Cargo.lock")).unwrap();
     let mut update = Command::new("cargo");
-    update.args(["update", "--workspace", "--offline", "--quiet"]).current_dir(&root).env("RUSTUP_TOOLCHAIN", &toolchain);
-    for name in ["RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_DIR", "CARGO_MANIFEST_DIR"] {
+    update
+        .args(["update", "--workspace", "--offline", "--quiet"])
+        .current_dir(&root)
+        .env("RUSTUP_TOOLCHAIN", &toolchain);
+    for name in [
+        "RUSTC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_TARGET_DIR",
+        "CARGO_MANIFEST_DIR",
+    ] {
         update.env_remove(name);
     }
     let done = update.output().unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
-    let out = dir.path().join("out");
+    let out = dir.join("out");
     std::fs::create_dir_all(&out).unwrap();
     // The build can write only its target folder and the folder of the records.
-    semilla_normal::run_cargo_check_with_trait_table(&root, "n0", &out, &dir.path().join("target")).unwrap();
+    semilla_normal::run_cargo_check_with_trait_table(&root, "n0", &out, &dir.join("target")).unwrap();
     let text = std::fs::read_to_string(out.join("trait_probe.json")).expect("the driver writes the trait table");
-    let table: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let list = |value: &serde_json::Value| value.as_array().unwrap().iter().map(|item| item.as_str().unwrap().to_string()).collect::<Vec<_>>();
+    serde_json::from_str(&text).unwrap()
+}
+
+#[test]
+fn the_table_of_known_traits_agrees_with_the_compiler() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = build_trait_table(dir.path());
+    let list = |value: &serde_json::Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
     // The path of a trait, to its items and to the bounds of each blanket impl. A trait that
     // is not `pub` gives no blanket impl to the test: code outside its crate cannot name the
     // trait, so it cannot call a method of the trait and cannot write a path to an item.
     let mut traits: BTreeMap<String, (Vec<String>, Vec<Vec<String>>)> = BTreeMap::new();
     for entry in table["traits"].as_array().unwrap() {
-        let blanket = if entry["public"].as_bool().unwrap() { entry["blanket"].as_array().unwrap().iter().map(list).collect() } else { Vec::new() };
+        let blanket = if entry["public"].as_bool().unwrap() {
+            entry["blanket"].as_array().unwrap().iter().map(list).collect()
+        } else {
+            Vec::new()
+        };
         traits.insert(entry["path"].as_str().unwrap().to_string(), (list(&entry["items"]), blanket));
     }
     let known: BTreeSet<&str> = semilla_verify::KNOWN_TRAITS.iter().map(|row| row.path).collect();
@@ -79,7 +104,11 @@ fn the_table_of_known_traits_agrees_with_the_compiler() {
     for row in &semilla_verify::KNOWN_TRAITS {
         let (items, _) = traits.get(row.path).unwrap_or_else(|| panic!("the compiler has no trait `{}`", row.path));
         // A use of an associated type or constant can have no name. The table has no such trait.
-        assert!(items.iter().all(|item| item.starts_with("fn ")), "`{}` has an item that is not a function: {items:?}", row.path);
+        assert!(
+            items.iter().all(|item| item.starts_with("fn ")),
+            "`{}` has an item that is not a function: {items:?}",
+            row.path
+        );
         // The names that the trait gives to a type: its items, and the items of each trait
         // that a blanket impl gives to a type with the trait. The rule applies again to each
         // trait that it finds.
@@ -87,7 +116,9 @@ fn the_table_of_known_traits_agrees_with_the_compiler() {
         loop {
             let more: Vec<&str> = traits
                 .iter()
-                .filter(|(path, (_, blanket))| !reached.contains(path.as_str()) && blanket.iter().any(|bounds| bounds.iter().any(|bound| reached.contains(bound.as_str()))))
+                .filter(|(path, (_, blanket))| {
+                    !reached.contains(path.as_str()) && blanket.iter().any(|bounds| bounds.iter().any(|bound| reached.contains(bound.as_str())))
+                })
                 .map(|(path, _)| path.as_str())
                 .collect();
             if more.is_empty() {
@@ -106,7 +137,12 @@ fn the_table_of_known_traits_agrees_with_the_compiler() {
     // with items of the table. A marker trait with no item is not a name.
     let derives: Vec<&semilla_verify::KnownTrait> = semilla_verify::KNOWN_TRAITS.iter().filter(|row| row.derive).collect();
     for row in &derives {
-        let made: Vec<&serde_json::Value> = table["impls"].as_array().unwrap().iter().filter(|entry| entry["derive"].as_bool().unwrap() && entry["self_type"].as_str().unwrap().ends_with(&format!("::S{}", row.name))).collect();
+        let made: Vec<&serde_json::Value> = table["impls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["derive"].as_bool().unwrap() && entry["self_type"].as_str().unwrap().ends_with(&format!("::S{}", row.name)))
+            .collect();
         assert!(!made.is_empty(), "the probe has no `derive({})`", row.name);
         for entry in made {
             let of_trait = entry["of_trait"].as_str().unwrap_or("");
@@ -115,17 +151,29 @@ fn the_table_of_known_traits_agrees_with_the_compiler() {
                 continue;
             }
             assert_eq!(of_trait, row.path, "`derive({})` makes an `impl` of a different trait: {entry}", row.name);
-            assert!(items.iter().all(|item| item.starts_with("fn ") && row.names.contains(&name_of(item))), "`derive({})`: {items:?}", row.name);
+            assert!(
+                items.iter().all(|item| item.starts_with("fn ") && row.names.contains(&name_of(item))),
+                "`derive({})`: {items:?}",
+                row.name
+            );
         }
     }
     // Each `impl` that a `derive` makes for a type of the probe belongs to a row. An `impl`
     // for a different type is in a block with no name: no code outside the block can name it.
-    for entry in table["impls"].as_array().unwrap().iter().filter(|entry| entry["derive"].as_bool().unwrap()) {
+    for entry in table["impls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["derive"].as_bool().unwrap())
+    {
         let self_type = entry["self_type"].as_str().unwrap();
         let of_trait = entry["of_trait"].as_str().unwrap_or("");
         // `one::_::…`: a type in the block of a constant with no name.
         let named = !self_type.contains("::_::");
-        assert!(!named || known.contains(of_trait) || list(&entry["items"]).is_empty(), "an `impl` of a `derive` with no row: {entry}");
+        assert!(
+            !named || known.contains(of_trait) || list(&entry["items"]).is_empty(),
+            "an `impl` of a `derive` with no row: {entry}"
+        );
     }
     assert_eq!(derives.len(), 11);
 }

@@ -21,7 +21,7 @@ use crate::git::Repo;
 /// 28). It has a separate folder set, `build-code/<key>/`, with its own build folders,
 /// target folders, and records. A command with `--no-build-code` does not build such a tree and
 /// does not read its records.
-pub struct NormalOracle {
+pub(crate) struct NormalOracle {
     pub repo: Repo,
     /// The build code state of each tree of the change set.
     pub code: crate::buildcode::BuildCode,
@@ -47,9 +47,13 @@ pub(crate) fn missing_module_note(repo: &Repo, error: &str, tree: &str) -> Optio
                 continue;
             }
             let note = if repo.git(&["check-ignore", "-q", "--", path]).is_ok() {
-                format!("`{path}` is in the folder, but git ignores it (`git check-ignore -v {path}` shows the rule). Semilla builds only files that git tracks or that are not ignored.")
+                format!(
+                    "`{path}` is in the folder, but git ignores it (`git check-ignore -v {path}` shows the rule). Semilla builds only files that git tracks or that are not ignored."
+                )
             } else {
-                format!("`{path}` is in the folder, but it is not in the tree that Semilla builds. Semilla builds the tree of the step, not the folder.")
+                format!(
+                    "`{path}` is in the folder, but it is not in the tree that Semilla builds. Semilla builds the tree of the step, not the folder."
+                )
             };
             if !notes.contains(&note) {
                 notes.push(note);
@@ -61,12 +65,12 @@ pub(crate) fn missing_module_note(repo: &Repo, error: &str, tree: &str) -> Optio
 
 /// The added feature selections of the steps of one oracle (batch 5u, part C).
 #[derive(Debug, Default)]
-pub struct Added {
+pub(crate) struct Added {
     /// The feature selections that the verifier set for a step, by the two trees of the step.
     selections: BTreeMap<(String, String), Vec<Features>>,
     /// The result of `checked` for the two trees of a step and a list of added selections. The
     /// records of a tree do not change in the time of one process.
-    memo: Vec<((String, String), Vec<Features>, Vec<Configuration>, StepConfigs)>,
+    memo: Vec<CheckedMemo>,
     /// The steps that have the builds of the hint.
     hinted: std::collections::BTreeSet<(String, String)>,
     /// The comparison of one configuration of a step, by its inputs (batch 5x, part F). The
@@ -78,8 +82,16 @@ pub struct Added {
     sides: BTreeMap<SidesKey, std::sync::Arc<Sides>>,
     /// The rename map with the moved closures, by the record set, the rename map, and the
     /// added items (design 37.20).
-    moved: Vec<(SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>)>,
+    moved: Vec<MovedMemo>,
 }
+
+/// One result of `checked`: the two trees of a step, the added selections, the checked
+/// configurations, and the configurations of the step.
+type CheckedMemo = ((String, String), Vec<Features>, Vec<Configuration>, StepConfigs);
+
+/// One rename map with the moved closures: the record set, the rename map, the added items, and
+/// the result.
+type MovedMemo = (SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>);
 
 /// The key of a record set: the two trees of a step, and the configuration.
 type SidesKey = (String, String, Configuration);
@@ -122,14 +134,20 @@ impl Sides {
                             mac: name.mac.clone(),
                             line: name.line,
                             rival: name.rival.clone(),
-                            count: name.count.max(1),
+                            // A count of zero reads as one.
+                            count: std::num::NonZeroUsize::new(name.count).map_or(1, std::num::NonZeroUsize::get),
                         })
                         .collect();
                     (span, names)
                 })
                 .collect()
         });
-        let mut sides = Sides { before, after, inputs, two_places: Vec::new() };
+        let mut sides = Sides {
+            before,
+            after,
+            inputs,
+            two_places: Vec::new(),
+        };
         sides.two_places = sides.names_with_two_places();
         sides
     }
@@ -160,7 +178,14 @@ impl Sides {
 
 /// The inputs of the comparison of one configuration: the two trees, the configuration, the
 /// rename map, the added items, and the marks of the two sides (opaque, then stop).
-type CompareKey = (String, String, Configuration, BTreeMap<String, String>, Vec<String>, [std::collections::BTreeSet<String>; 4]);
+type CompareKey = (
+    String,
+    String,
+    Configuration,
+    BTreeMap<String, String>,
+    Vec<String>,
+    [std::collections::BTreeSet<String>; 4],
+);
 
 /// The result of the comparison of one configuration: the comparisons and the spans.
 type Compared = (Vec<semilla_normal::BodyComparison>, BTreeMap<String, (String, usize)>);
@@ -168,18 +193,29 @@ type Compared = (Vec<semilla_normal::BodyComparison>, BTreeMap<String, (String, 
 /// The name of the hint file in the cache folder (batch 5u, part C): the feature selections
 /// that the last step with an added configuration needed. Semilla builds them with the default
 /// list, so the builds are ready if the step needs them. The hint has no part in a decision.
-pub const HINT_FILE: &str = "added-configurations.json";
+pub(crate) const HINT_FILE: &str = "added-configurations.json";
 
 /// The feature selections of a hint text. A text with a bad form gives no selection.
 fn parse_hint(text: &str) -> Vec<Features> {
-    let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(text) else { return Vec::new() };
-    let name = |value: &serde_json::Value| value.as_str().filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "_-+.".contains(c))).map(str::to_string);
+    let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let name = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "_-+.".contains(c)))
+            .map(str::to_string)
+    };
     let entry = |value: &serde_json::Value| -> Option<Features> {
         let features: Vec<String> = value.get("features")?.as_array()?.iter().map(name).collect::<Option<_>>()?;
         if features.is_empty() || features.len() > 8 || !features.is_sorted() {
             return None;
         }
-        Some(if value.get("no_default")?.as_bool()? { Features::NoDefaultListed(features) } else { Features::Listed(features) })
+        Some(if value.get("no_default")?.as_bool()? {
+            Features::NoDefaultListed(features)
+        } else {
+            Features::Listed(features)
+        })
     };
     if list.len() > semilla_verify::MOST_SELECTIONS {
         return Vec::new();
@@ -202,7 +238,7 @@ fn hint_text(list: &[Features]) -> String {
 
 /// The configurations of one compared step (batch 5s, B1): the data of the output.
 #[derive(Clone, Debug, Default)]
-pub struct StepConfigs {
+pub(crate) struct StepConfigs {
     /// The names of the checked configurations.
     pub checked: Vec<String>,
     /// The configurations of the default list that Semilla did not check, each with the cause.
@@ -221,8 +257,7 @@ pub struct StepConfigs {
 }
 
 /// The configurations of each compared step, by the two trees of the step.
-pub type ConfigLog = std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), StepConfigs>>>;
-
+pub(crate) type ConfigLog = std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), StepConfigs>>>;
 
 /// The file of the records cache that holds the error of a build with a compile error. The
 /// same tree, configuration, and settings give the same error.
@@ -231,7 +266,10 @@ const FAILED_FILE: &str = ".failed";
 /// True if a build error is a compile error of the tree. A dependency that cargo cannot get,
 /// a full disk, and a write that the sandbox stops are not compile errors.
 fn is_compile_error(text: &str) -> bool {
-    text.contains("cargo check failed") && !semilla_normal::cargo::missing_dependency(text) && !text.contains("No space left on device") && !text.contains("Permission denied")
+    text.contains("cargo check failed")
+        && !semilla_normal::cargo::missing_dependency(text)
+        && !text.contains("No space left on device")
+        && !text.contains("Permission denied")
 }
 
 /// The cause in the output for a configuration with a feature that only one tree of the step
@@ -245,12 +283,20 @@ fn one_side_cause(before: &[String], after: &[String]) -> Option<String> {
     };
     let names: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
     let noun = if names.len() == 1 { "feature" } else { "features" };
-    Some(format!("only the code {side} the step has the {noun} {}. The code {other} the step has no such configuration: no compare", names.join(", ")))
+    Some(format!(
+        "only the code {side} the step has the {noun} {}. The code {other} the step has no such configuration: no compare",
+        names.join(", ")
+    ))
 }
 
 /// The first error line of a build error text.
 fn first_error_line(text: &str) -> String {
-    let line = text.lines().map(str::trim).find(|line| line.starts_with("error")).or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty())).unwrap_or("");
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("error"))
+        .or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty()))
+        .unwrap_or("");
     line.chars().take(160).collect()
 }
 
@@ -259,12 +305,12 @@ static METADATA: std::sync::Mutex<BTreeMap<String, Option<serde_json::Value>>> =
 
 /// The name of the file that marks the records of a tree with changed build code. The file
 /// holds the base tree of the change set.
-pub const BUILD_CODE_FILE: &str = ".build-code";
+pub(crate) const BUILD_CODE_FILE: &str = ".build-code";
 
 /// The folder set of the trees with one build code state (design 28.9, batch 5v). `marked` is
 /// true for the trees with changed build code. A build can write its target folder and its
 /// records folder, so two builds share a folder set only if they run the same build code.
-pub fn folder_set(repo: &Repo, marked: bool, key: &str) -> std::path::PathBuf {
+pub(crate) fn folder_set(repo: &Repo, marked: bool, key: &str) -> std::path::PathBuf {
     repo.cache_dir().join(if marked { "build-code" } else { "shared" }).join(key)
 }
 
@@ -285,24 +331,28 @@ const OTHER_FILES_FILE: &str = ".other-files";
 
 /// The warning for a result, if a build of its records ran with a limit of the sandbox missing.
 /// The line names each missing limit.
-pub fn no_sandbox_warning() -> Option<String> {
+pub(crate) fn no_sandbox_warning() -> Option<String> {
     NO_SANDBOX.lock().ok()?.clone()
 }
 
 /// The warning for a result, if a build of its records left a file in the records folder that
 /// is not the record file of a unit. Semilla does not copy such a file. The line names each.
-pub fn other_files_warning() -> Option<String> {
+pub(crate) fn other_files_warning() -> Option<String> {
     let files = OTHER_FILES.lock().ok()?;
     if files.is_empty() {
         return None;
     }
     let names: Vec<String> = files.iter().map(|name| format!("`{name}`")).collect();
     let (noun, verb) = if names.len() == 1 { ("a file", "is") } else { ("files", "are") };
-    Some(format!("the build left {noun} in the records folder that {verb} not a record of a build unit: {}. Semilla does not use {}", names.join(", "), if names.len() == 1 { "it" } else { "them" }))
+    Some(format!(
+        "the build left {noun} in the records folder that {verb} not a record of a build unit: {}. Semilla does not use {}",
+        names.join(", "),
+        if names.len() == 1 { "it" } else { "them" }
+    ))
 }
 
 /// The warnings of the builds of the records that this process used.
-pub fn build_warnings() -> Vec<String> {
+pub(crate) fn build_warnings() -> Vec<String> {
     no_sandbox_warning().into_iter().chain(other_files_warning()).collect()
 }
 
@@ -328,13 +378,28 @@ impl NormalOracle {
         let mut sets: Vec<Vec<String>> = vec![Vec::new()];
         for tree in trees {
             let dir = self.repo.materialize(tree)?;
-            let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
-            let Ok(manifest) = text.parse::<toml::Table>() else { continue };
+            let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
+                continue;
+            };
+            let Ok(manifest) = text.parse::<toml::Table>() else {
+                continue;
+            };
             let listed = ["workspace", "package"].iter().find_map(|section| {
-                manifest.get(*section)?.get("metadata")?.get("semilla")?.get("feature-sets")?.as_array().cloned()
+                manifest
+                    .get(*section)?
+                    .get("metadata")?
+                    .get("semilla")?
+                    .get("feature-sets")?
+                    .as_array()
+                    .cloned()
             });
             for set in listed.unwrap_or_default() {
-                let mut features: Vec<String> = set.as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+                let mut features: Vec<String> = set
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.as_str().map(str::to_string))
+                    .collect();
                 features.sort();
                 if !sets.contains(&features) {
                     sets.push(features);
@@ -349,7 +414,11 @@ impl NormalOracle {
         if let Some(known) = METADATA.lock().ok().and_then(|cache| cache.get(tree).cloned()) {
             return known;
         }
-        let found = self.repo.materialize(tree).ok().and_then(|dir| semilla_normal::cargo::cargo_metadata(&dir).ok());
+        let found = self
+            .repo
+            .materialize(tree)
+            .ok()
+            .and_then(|dir| semilla_normal::cargo::cargo_metadata(&dir).ok());
         if let Ok(mut cache) = METADATA.lock() {
             cache.insert(tree.to_string(), found.clone());
         }
@@ -372,7 +441,12 @@ impl NormalOracle {
     #[allow(clippy::type_complexity)]
     fn configurations_with(&self, before: &str, after: &str, extra: &[Features]) -> Result<(Vec<(Configuration, bool)>, Vec<(String, String)>)> {
         let mut selections = vec![(Features::Default, false), (Features::NoDefault, false), (Features::All, false)];
-        selections.extend(self.feature_sets(&[before, after])?.into_iter().filter(|set| !set.is_empty()).map(|set| (Features::Listed(set), false)));
+        selections.extend(
+            self.feature_sets(&[before, after])?
+                .into_iter()
+                .filter(|set| !set.is_empty())
+                .map(|set| (Features::Listed(set), false)),
+        );
         selections.extend(extra.iter().map(|features| (features.clone(), true)));
         let metadata = [self.metadata(before), self.metadata(after)];
         let mut seen: Vec<(Vec<_>, Features)> = Vec::new();
@@ -380,19 +454,30 @@ impl NormalOracle {
         let mut same = Vec::new();
         for (selection, added) in selections {
             // A tree with manifests that cargo cannot read has no state: the selection stays.
-            let state: Vec<_> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::feature_state(data, &selection))).collect();
-            if state.iter().all(Option::is_some) {
-                if let Some((_, first)) = seen.iter().find(|(known, _)| *known == state) {
-                    if !added {
-                        same.push((Configuration::new(false, selection.clone()).name(), Configuration::new(false, first.clone()).name()));
-                    }
-                    continue;
+            let state: Vec<_> = metadata
+                .iter()
+                .map(|data| data.as_ref().map(|data| semilla_normal::cargo::feature_state(data, &selection)))
+                .collect();
+            if state.iter().all(Option::is_some)
+                && let Some((_, first)) = seen.iter().find(|(known, _)| *known == state)
+            {
+                if !added {
+                    same.push((
+                        Configuration::new(false, selection.clone()).name(),
+                        Configuration::new(false, first.clone()).name(),
+                    ));
                 }
+                continue;
             }
             seen.push((state, selection.clone()));
             kept.push((selection, added));
         }
-        Ok((kept.into_iter().flat_map(|(features, added)| [false, true].map(|release| (Configuration::new(release, features.clone()), added))).collect(), same))
+        Ok((
+            kept.into_iter()
+                .flat_map(|(features, added)| [false, true].map(|release| (Configuration::new(release, features.clone()), added)))
+                .collect(),
+            same,
+        ))
     }
 
     /// The cache folder of the records of a tree at a level and a configuration.
@@ -415,7 +500,9 @@ impl NormalOracle {
     /// The target triple of the check build of a tree: the target of the compiler, else the
     /// host of the toolchain.
     fn target(&self, tree: &str, config: &Configuration) -> String {
-        self.units(tree, config).and_then(|units| units.into_iter().map(|unit| unit.triple).find(|triple| !triple.is_empty())).unwrap_or_else(semilla_normal::cargo::host_target)
+        self.units(tree, config)
+            .and_then(|units| units.into_iter().map(|unit| unit.triple).find(|triple| !triple.is_empty()))
+            .unwrap_or_else(semilla_normal::cargo::host_target)
     }
 
     /// The true settings of a checked configuration in a tree.
@@ -424,7 +511,17 @@ impl NormalOracle {
         semilla_verify::ConfigTruth {
             name: config.name(),
             known: units.is_some(),
-            units: units.into_iter().flatten().map(|unit| semilla_verify::Unit { target: unit.target, package: unit.folder, cfg: unit.cfg, files: unit.files, root: unit.root }).collect(),
+            units: units
+                .into_iter()
+                .flatten()
+                .map(|unit| semilla_verify::Unit {
+                    target: unit.target,
+                    package: unit.folder,
+                    cfg: unit.cfg,
+                    files: unit.files,
+                    root: unit.root,
+                })
+                .collect(),
         }
     }
 
@@ -432,9 +529,13 @@ impl NormalOracle {
     ///
     /// The shared folders (`shared/<key>`) serve only a tree with the build code of the base.
     /// The key is the digest of that build code. A tree with no state is never built.
-    pub fn root(&self, tree: &str) -> Result<(std::path::PathBuf, bool)> {
+    pub(crate) fn root(&self, tree: &str) -> Result<(std::path::PathBuf, bool)> {
         if self.code.clean.contains(tree) {
-            let key = if self.code.shared.is_empty() { format!("tree-{}", self.code.base) } else { self.code.shared.clone() };
+            let key = if self.code.shared.is_empty() {
+                format!("tree-{}", self.code.base)
+            } else {
+                self.code.shared.clone()
+            };
             return Ok((folder_set(&self.repo, false, &key), false));
         }
         if !self.code.trees.contains(tree) {
@@ -448,7 +549,7 @@ impl NormalOracle {
     }
 
     /// The records of a tree at a level, with the default features.
-    pub fn records(&self, tree: &str, level: &str) -> Result<Vec<semilla_normal::BodyRecord>> {
+    pub(crate) fn records(&self, tree: &str, level: &str) -> Result<Vec<semilla_normal::BodyRecord>> {
         self.records_with(tree, level, &Configuration::DEV)
     }
 
@@ -488,15 +589,15 @@ impl NormalOracle {
             note_sandbox(&cache);
             return read_cached(&cache);
         }
-        let build = base.join(&name);
+        let build_dir = base.join(&name);
         let records = base.join(format!("{name}-records"));
         // The sandbox write set of the build is the target folder and the records folder. For a
         // tree with changed build code, the two are in the separate folder set.
         let target = root.join("target").join(&name);
         std::fs::create_dir_all(root.join("target"))?;
         let started = std::time::Instant::now();
-        self.repo.checkout_build(&build, tree)?;
-        let built = match semilla_normal::run_cargo_check_delta_config(&build, level, &records, &target, config) {
+        self.repo.checkout_build(&build_dir, tree)?;
+        let built = match semilla_normal::run_cargo_check_delta_config(&build_dir, level, &records, &target, config) {
             Ok(built) => built,
             Err(error) => {
                 let text = format!("{error:#}");
@@ -518,7 +619,14 @@ impl NormalOracle {
             std::fs::copy(records.join(file), cache.join(file))?;
         }
         if !built.other.is_empty() {
-            std::fs::write(cache.join(OTHER_FILES_FILE), built.other.iter().map(|name| format!("{}\n", semilla_core::text::inline(name).replace('`', "'"))).collect::<String>())?;
+            std::fs::write(
+                cache.join(OTHER_FILES_FILE),
+                crate::app::surround_each(
+                    built.other.iter().map(|name| semilla_core::text::inline(name).replace('`', "'")),
+                    "",
+                    "\n",
+                ),
+            )?;
         }
         // The sandbox state of the build stays with the records: a later result that uses them
         // shows the same warning.
@@ -535,13 +643,30 @@ impl NormalOracle {
     }
 
     /// The records of both trees at some levels. Each level runs in its own thread.
-    fn levels(&self, before: &str, after: &str, levels: &[&str], features: &Configuration) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
+    fn levels(
+        &self,
+        before: &str,
+        after: &str,
+        levels: &[&str],
+        features: &Configuration,
+    ) -> Result<(semilla_normal::Levels, semilla_normal::Levels)> {
         let results: Vec<Result<(String, Vec<_>, Vec<_>)>> = std::thread::scope(|scope| {
             let handles: Vec<_> = levels
                 .iter()
-                .map(|level| scope.spawn(move || Ok((level.to_string(), self.records_with(before, level, features)?, self.records_with(after, level, features)?))))
+                .map(|level| {
+                    scope.spawn(move || {
+                        Ok((
+                            level.to_string(),
+                            self.records_with(before, level, features)?,
+                            self.records_with(after, level, features)?,
+                        ))
+                    })
+                })
                 .collect();
-            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed"))))
+                .collect()
         });
         let (mut old, mut new) = (semilla_normal::Levels::default(), semilla_normal::Levels::default());
         for result in results {
@@ -573,21 +698,32 @@ impl NormalOracle {
                     scope.spawn(move || {
                         if let Err(error) = self.records_or_build(&step.tree_before, "n0", config, false) {
                             let text = format!("{error:#}");
-                            return if is_compile_error(&text) { Ok(Some(first_error_line(&text))) } else { Err(error) };
+                            return if is_compile_error(&text) {
+                                Ok(Some(first_error_line(&text)))
+                            } else {
+                                Err(error)
+                            };
                         }
                         match self.records_or_build(&step.tree_after, "n0", config, false) {
                             Ok(_) => Ok(None),
                             Err(error) if is_compile_error(&format!("{error:#}")) => {
                                 // A module file that the folder has and the tree does not have.
-                                let ignored = missing_module_note(&self.repo, &format!("{error:#}"), &step.tree_after).map(|note| format!(". {note} The output of the build")).unwrap_or_default();
-                                Err(error.context(format!("the code after the step does not compile in the configuration `{}` (it compiles before the step){ignored}", config.name())))
+                                let ignored = missing_module_note(&self.repo, &format!("{error:#}"), &step.tree_after)
+                                    .map_or_default(|note| format!(". {note} The output of the build"));
+                                Err(error.context(format!(
+                                    "the code after the step does not compile in the configuration `{}` (it compiles before the step){ignored}",
+                                    config.name()
+                                )))
                             }
                             Err(error) => Err(error),
                         }
                     })
                 })
                 .collect();
-            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed")))).collect()
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a build thread failed"))))
+                .collect()
         })
     }
 
@@ -595,13 +731,19 @@ impl NormalOracle {
     /// [`BodyCache::levels`] (design 37.20).
     fn sides(&self, step: &Step, features: &Configuration) -> Result<std::sync::Arc<Sides>> {
         let key: SidesKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone());
-        let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).sides.get(&key).cloned();
+        let known = self
+            .added
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .sides
+            .get(&key)
+            .cloned();
         if let Some(sides) = known {
             return Ok(sides);
         }
         let (before, after) = self.levels(&step.tree_before, &step.tree_after, &["n0"], features)?;
         let sides = std::sync::Arc::new(Sides::new(before, after));
-        let mut added = self.added.lock().unwrap_or_else(|error| error.into_inner());
+        let mut added = self.added.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if added.sides.len() >= MOST_SIDES {
             added.sides.clear();
             added.moved.clear();
@@ -613,7 +755,13 @@ impl NormalOracle {
     /// Reads the record set of each configuration that is not in memory, each in its own
     /// thread (design 37.20). An error stays for the caller that asks for the record set.
     fn read_sides(&self, step: &Step, configs: &[Configuration]) {
-        let known = |config: &Configuration| self.added.lock().unwrap_or_else(|error| error.into_inner()).sides.contains_key(&(step.tree_before.clone(), step.tree_after.clone(), config.clone()));
+        let known = |config: &Configuration| {
+            self.added.lock().unwrap_or_else(std::sync::PoisonError::into_inner).sides.contains_key(&(
+                step.tree_before.clone(),
+                step.tree_after.clone(),
+                config.clone(),
+            ))
+        };
         let missing: Vec<&Configuration> = configs.iter().filter(|config| !known(config)).collect();
         if missing.len() < 2 || missing.len() > MOST_SIDES {
             return;
@@ -629,26 +777,46 @@ impl NormalOracle {
 
     /// [`with_moved_closures`] for a record set, from memory if the rename map and the added
     /// items are those of an earlier call (design 37.20).
-    fn moved_closures(&self, step: &Step, features: &Configuration, renames: &BTreeMap<String, String>, added: &[String], sides: &Sides) -> BTreeMap<String, String> {
+    fn moved_closures(
+        &self,
+        step: &Step,
+        features: &Configuration,
+        renames: &BTreeMap<String, String>,
+        added: &[String],
+        sides: &Sides,
+    ) -> BTreeMap<String, String> {
         let key: SidesKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone());
-        let fits = |entry: &&(SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>)| entry.0 == key && entry.1 == *renames && entry.2 == added;
-        if let Some(entry) = self.added.lock().unwrap_or_else(|error| error.into_inner()).moved.iter().find(fits) {
+        let fits = |entry: &&(SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>)| {
+            entry.0 == key && entry.1 == *renames && entry.2 == added
+        };
+        if let Some(entry) = self
+            .added
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .moved
+            .iter()
+            .find(fits)
+        {
             return entry.3.clone();
         }
         let made = with_moved_closures(renames, added, &sides.before, &sides.after);
-        self.added.lock().unwrap_or_else(|error| error.into_inner()).moved.push((key, renames.clone(), added.to_vec(), made.clone()));
+        self.added
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .moved
+            .push((key, renames.clone(), added.to_vec(), made.clone()));
         made
     }
 
     /// Compares the bodies of one configuration at N0.
-    fn compare_n0(
+    fn compare_n0<O: semilla_verify::OpaqueInputs + ?Sized>(
         &self,
         step: &Step,
         renames: &BTreeMap<String, String>,
         added: &[String],
         features: &Configuration,
         index: usize,
-        opaque: &dyn semilla_verify::OpaqueInputs,
+        opaque: &O,
     ) -> Result<SetState> {
         let sides = self.sides(step, features)?;
         let (before, after) = (&sides.before, &sides.after);
@@ -681,17 +849,50 @@ impl NormalOracle {
         let (before_marks, after_marks) = (marks(false), marks(true));
         MARK_TIME.add(started);
         // The same comparison of an earlier call (batch 5x, part F): the result is in memory.
-        let key: CompareKey = (step.tree_before.clone(), step.tree_after.clone(), features.clone(), renames.clone(), added.to_vec(), [before_marks.opaque.clone(), before_marks.stop.clone(), after_marks.opaque.clone(), after_marks.stop.clone()]);
-        let known = self.added.lock().unwrap_or_else(|error| error.into_inner()).compared.get(&key).cloned();
+        let key: CompareKey = (
+            step.tree_before.clone(),
+            step.tree_after.clone(),
+            features.clone(),
+            renames.clone(),
+            added.to_vec(),
+            [
+                before_marks.opaque.clone(),
+                before_marks.stop.clone(),
+                after_marks.opaque.clone(),
+                after_marks.stop.clone(),
+            ],
+        );
+        let known = self
+            .added
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .compared
+            .get(&key)
+            .cloned();
         if let Some((comparisons, spans)) = known {
-            return Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: Some(spans) });
+            return Ok(SetState {
+                config: features.clone(),
+                renames: renames.clone(),
+                sides,
+                before_marks,
+                after_marks,
+                comparisons,
+                done: Some(spans),
+            });
         }
         let started = std::time::Instant::now();
         let comparisons = semilla_normal::compare_with(before, after, renames, added, &before_marks, &after_marks);
         N0_TIME.add(started);
-        Ok(SetState { config: features.clone(), renames: renames.clone(), sides, before_marks, after_marks, comparisons, done: None })
+        Ok(SetState {
+            config: features.clone(),
+            renames: renames.clone(),
+            sides,
+            before_marks,
+            after_marks,
+            comparisons,
+            done: None,
+        })
     }
-
 }
 
 /// The totals of the time of the phases that run for each configuration (batch 5x, part F).
@@ -712,15 +913,21 @@ const MOST_FOLDERS: usize = 48;
 
 /// Removes a cache folder, and its records in memory.
 fn remove_cache(cache: &std::path::Path) {
-    RECORDS.lock().unwrap_or_else(|error| error.into_inner()).retain(|(folder, _), _| folder != cache);
+    RECORDS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|(folder, _), _| folder != cache);
     let _ = std::fs::remove_dir_all(cache);
 }
 
 /// Reads the records of a complete cache folder.
 fn read_cached(cache: &std::path::Path) -> Result<Vec<semilla_normal::BodyRecord>> {
-    let key = std::fs::metadata(cache.join(".complete")).and_then(|file| file.modified()).ok().map(|time| (cache.to_path_buf(), time));
+    let key = std::fs::metadata(cache.join(".complete"))
+        .and_then(|file| file.modified())
+        .ok()
+        .map(|time| (cache.to_path_buf(), time));
     if let Some(key) = &key {
-        let known = RECORDS.lock().unwrap_or_else(|error| error.into_inner()).get(key).cloned();
+        let known = RECORDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(key).cloned();
         if let Some(records) = known {
             return Ok(records.as_ref().clone());
         }
@@ -729,7 +936,7 @@ fn read_cached(cache: &std::path::Path) -> Result<Vec<semilla_normal::BodyRecord
     let records = semilla_normal::read_records(cache);
     READ_TIME.add(started);
     if let (Some(key), Ok(records)) = (key, &records) {
-        let mut folders = RECORDS.lock().unwrap_or_else(|error| error.into_inner());
+        let mut folders = RECORDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if folders.len() >= MOST_FOLDERS {
             folders.clear();
         }
@@ -753,7 +960,10 @@ struct SetState {
 impl SetState {
     /// The span of each body: the "after" records win (the name is the "after" name).
     fn spans(&self, spans: &mut BTreeMap<String, (String, usize)>) {
-        for record in [&self.sides.before, &self.sides.after].iter().flat_map(|levels| levels.values().flatten()) {
+        for record in [&self.sides.before, &self.sides.after]
+            .iter()
+            .flat_map(|levels| levels.values().flatten())
+        {
             if let Some(span) = &record.span {
                 spans.insert(record.name.clone(), (span.file.clone(), span.line_start));
             }
@@ -772,7 +982,10 @@ impl SetState {
 /// name is the worst status of its targets. So the span of the changed target wins: it is the
 /// body that needs an owner.
 fn changed_target_spans(old: &[semilla_normal::BodyRecord], new: &[semilla_normal::BodyRecord]) -> Vec<(String, (String, usize))> {
-    let texts: BTreeMap<(&str, &str), &str> = old.iter().map(|record| ((record.name.as_str(), record.target.as_str()), record.text.as_str())).collect();
+    let texts: BTreeMap<(&str, &str), &str> = old
+        .iter()
+        .map(|record| ((record.name.as_str(), record.target.as_str()), record.text.as_str()))
+        .collect();
     let mut targets: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
     for record in new {
         targets.entry(record.name.as_str()).or_default().insert(record.target.as_str());
@@ -780,7 +993,12 @@ fn changed_target_spans(old: &[semilla_normal::BodyRecord], new: &[semilla_norma
     new.iter()
         .filter(|record| targets[record.name.as_str()].len() > 1)
         .filter(|record| texts.get(&(record.name.as_str(), record.target.as_str())) != Some(&record.text.as_str()))
-        .filter_map(|record| record.span.as_ref().map(|span| (record.name.clone(), (span.file.clone(), span.line_start))))
+        .filter_map(|record| {
+            record
+                .span
+                .as_ref()
+                .map(|span| (record.name.clone(), (span.file.clone(), span.line_start)))
+        })
         .collect()
 }
 
@@ -796,12 +1014,17 @@ fn with_moved_closures(
 ) -> BTreeMap<String, String> {
     let original = renames;
     let mut renames = original.clone();
-    let (Some(old), Some(new)) = (before.get("n0"), after.get("n0")) else { return renames };
+    let (Some(old), Some(new)) = (before.get("n0"), after.get("n0")) else {
+        return renames;
+    };
     let is_closure = |name: &str| name.contains("::{closure#");
     let old_names: std::collections::BTreeSet<&str> = old.iter().map(|r| r.name.as_str()).collect();
     let new_names: std::collections::BTreeSet<&str> = new.iter().map(|r| r.name.as_str()).collect();
     let mut taken = std::collections::BTreeSet::new();
-    for record in old.iter().filter(|r| is_closure(&r.name) && !new_names.contains(r.name.as_str()) && !original.contains_key(&r.name)) {
+    for record in old
+        .iter()
+        .filter(|r| is_closure(&r.name) && !new_names.contains(r.name.as_str()) && !original.contains_key(&r.name))
+    {
         let moved = new.iter().find(|candidate| {
             is_closure(&candidate.name)
                 && !old_names.contains(candidate.name.as_str())
@@ -830,7 +1053,9 @@ fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
             BodyStatus::Equal { level: a.max(b), proof: p }
         }
         (BodyStatus::Different { cfg_changed: a }, BodyStatus::Different { cfg_changed: b }) => BodyStatus::Different { cfg_changed: a || b },
-        (BodyStatus::Different { cfg_changed }, BodyStatus::Equal { .. }) | (BodyStatus::Equal { .. }, BodyStatus::Different { cfg_changed }) => BodyStatus::Different { cfg_changed },
+        (BodyStatus::Different { cfg_changed }, BodyStatus::Equal { .. }) | (BodyStatus::Equal { .. }, BodyStatus::Different { cfg_changed }) => {
+            BodyStatus::Different { cfg_changed }
+        }
         (BodyStatus::BeforeOnly, BodyStatus::BeforeOnly) => BodyStatus::BeforeOnly,
         (BodyStatus::AfterOnly, BodyStatus::AfterOnly) => BodyStatus::AfterOnly,
         // The set of the configurations that compile the body changed, or the body changed in
@@ -842,9 +1067,25 @@ fn combine(old: BodyStatus, new: BodyStatus) -> BodyStatus {
 /// The MIR elements that differ, in the form of the verifier.
 fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirDiff {
     let place = |place: Option<semilla_normal::elements::Place>| place.map(|place| (place.file, place.start, place.end));
-    let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement { tokens: place(element.tokens), call: place(element.call), targets: element.targets, exit: element.exit, glue: element.glue, jump: element.jump };
-    let pairs = diff.pairs.into_iter().map(|(old, new)| ((old.file, old.start, old.end), (new.file, new.start, new.end))).collect();
-    semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs }
+    let element = |element: semilla_normal::elements::Element| semilla_verify::MirElement {
+        tokens: place(element.tokens),
+        call: place(element.call),
+        targets: element.targets,
+        exit: element.exit,
+        glue: element.glue,
+        jump: element.jump,
+    };
+    let pairs = diff
+        .pairs
+        .into_iter()
+        .map(|(old, new)| ((old.file, old.start, old.end), (new.file, new.start, new.end)))
+        .collect();
+    semilla_verify::MirDiff {
+        old: diff.old.into_iter().map(element).collect(),
+        new: diff.new.into_iter().map(element).collect(),
+        other: diff.other,
+        pairs,
+    }
 }
 
 /// The answer with no syntax tree: each input is opaque.
@@ -860,12 +1101,200 @@ impl semilla_verify::OpaqueInputs for AllOpaque {
     }
 }
 
+impl NormalOracle {
+    /// Finds the span of each body of each state, and the names with two places. A state with
+    /// no earlier comparison puts its comparisons into the memo.
+    fn prepare_states(
+        &self,
+        step: &Step,
+        added: &[String],
+        states: Vec<SetState>,
+    ) -> (std::collections::BTreeSet<String>, Vec<(SetState, BodySpans)>) {
+        let mut many: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut prepared = Vec::new();
+        for mut state in states {
+            let own = if let Some(own) = state.done.take() {
+                own
+            } else {
+                let mut own = BTreeMap::new();
+                state.spans(&mut own);
+                let key: CompareKey = (
+                    step.tree_before.clone(),
+                    step.tree_after.clone(),
+                    state.config.clone(),
+                    state.renames.clone(),
+                    added.to_vec(),
+                    [
+                        state.before_marks.opaque.clone(),
+                        state.before_marks.stop.clone(),
+                        state.after_marks.opaque.clone(),
+                        state.after_marks.stop.clone(),
+                    ],
+                );
+                self.added
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .compared
+                    .insert(key, (state.comparisons.clone(), own.clone()));
+                own
+            };
+            many.extend(state.sides.two_places.iter().cloned());
+            prepared.push((state, own));
+        }
+        (many, prepared)
+    }
+}
+
+/// The span of each body by its name.
+type BodySpans = BTreeMap<String, (String, usize)>;
+
+/// The key of a body: its name and its place. Two definitions of one name under `cfg`
+/// (a twin) have one name and two places, and one configuration compiles only one of
+/// them. With the name as the key, the result of one definition went to the other
+/// definition (design 35.8, batch 7b, part 4.4). A name with two places in one
+/// configuration (two targets with one crate name) keeps the name as its key: the span
+/// of the changed target is then the place of the body (batch 5n, A4).
+type BodyKey = (String, Option<(String, usize)>);
+
+/// The byte range of each body by its name and place.
+type BodyRanges = BTreeMap<(String, (String, usize)), (usize, usize)>;
+
+/// The byte range of each body by its name and place (design 40.2): the "after" records win.
+fn body_ranges(prepared: &[(SetState, BodySpans)]) -> BodyRanges {
+    let mut ranges: BodyRanges = BTreeMap::new();
+    for (state, _) in prepared {
+        for levels in [&state.sides.before, &state.sides.after] {
+            for record in levels.get("n0").into_iter().flatten() {
+                if let Some((span, range)) = record.span.as_ref().and_then(|span| Some((span, span.range?))) {
+                    ranges.insert((record.name.clone(), (span.file.clone(), span.line_start)), range);
+                }
+            }
+        }
+    }
+    ranges
+}
+
+/// The comparisons of the bodies, merged over the configurations of a step.
+#[derive(Default)]
+struct BodyMerge {
+    spans: BodySpans,
+    combined: BTreeMap<BodyKey, BodyStatus>,
+    /// The configurations that compile each body.
+    compiled: BTreeMap<BodyKey, Vec<String>>,
+    /// The configurations where each body is not equal.
+    differs: BTreeMap<BodyKey, Vec<String>>,
+    config: BTreeMap<BodyKey, std::collections::BTreeSet<String>>,
+    /// The MIR elements that differ, over the configurations (design 40.3). `None`: a
+    /// configuration has no element data for a changed body.
+    elements: BTreeMap<BodyKey, Option<semilla_normal::elements::ElementDiff>>,
+}
+
+impl BodyMerge {
+    /// Adds the comparisons of one configuration.
+    fn add_state(&mut self, state: SetState, own: BodySpans, many: &std::collections::BTreeSet<String>) {
+        let key_of = |name: &String| -> BodyKey { (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() }) };
+        let name = state.config.name();
+        for comparison in state.comparisons {
+            self.add_comparison(key_of(&comparison.name), comparison, &name);
+        }
+        self.spans.extend(own);
+    }
+
+    /// Adds the comparison of one body in the configuration `name`.
+    fn add_comparison(&mut self, key: BodyKey, comparison: semilla_normal::BodyComparison, name: &str) {
+        if !comparison.config.is_empty() {
+            self.config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
+        }
+        let status = match comparison.status {
+            semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
+            semilla_normal::BodyStatus::Different { cfg_changed } => BodyStatus::Different { cfg_changed },
+            semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
+            semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
+        };
+        let found = match &status {
+            BodyStatus::Equal { .. } => Some(semilla_normal::elements::ElementDiff::default()),
+            BodyStatus::Different { .. } => comparison.elements.clone(),
+            _ => None,
+        };
+        let entry = self
+            .elements
+            .entry(key.clone())
+            .or_insert_with(|| Some(semilla_normal::elements::ElementDiff::default()));
+        match (entry.as_mut(), found) {
+            (Some(known), Some(found)) => known.merge(found),
+            _ => *entry = None,
+        }
+        self.compiled.entry(key.clone()).or_default().push(name.to_owned());
+        if !matches!(status, BodyStatus::Equal { .. }) {
+            self.differs.entry(key.clone()).or_default().push(name.to_owned());
+        }
+        let merged = match self.combined.remove(&key) {
+            Some(old) => combine(old, status),
+            None => status,
+        };
+        self.combined.insert(key, merged);
+    }
+
+    /// The merged comparison of each body.
+    fn finish(self, ranges: &BodyRanges) -> Vec<BodyComparison> {
+        let BodyMerge {
+            spans,
+            combined,
+            mut compiled,
+            mut differs,
+            mut config,
+            mut elements,
+        } = self;
+        combined
+            .into_iter()
+            .map(|(key, status)| {
+                // The output names the configurations if the body is equal in one or more of
+                // them, and not equal in one or more (batch 5u, part A). The combined status is
+                // not `Equal`, so the note cannot make a fact neutral.
+                let all = compiled.remove(&key).unwrap_or_default();
+                let differs_in = differs.remove(&key).filter(|list| list.len() < all.len()).unwrap_or_default();
+                let equal_in = if differs_in.is_empty() {
+                    Vec::new()
+                } else {
+                    all.into_iter().filter(|config| !differs_in.contains(config)).collect()
+                };
+                let config = config.remove(&key).into_iter().flatten().collect();
+                let found = elements
+                    .remove(&key)
+                    .flatten()
+                    .filter(|_| matches!(status, BodyStatus::Different { .. }))
+                    .map(mir_diff);
+                let (name, place) = key;
+                let span = place.or_else(|| spans.get(&name).cloned());
+                let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
+                BodyComparison {
+                    span,
+                    status,
+                    config,
+                    differs_in,
+                    equal_in,
+                    stopped: Vec::new(),
+                    name,
+                    range,
+                    elements: found,
+                }
+            })
+            .collect()
+    }
+}
+
 impl BodyOracle for NormalOracle {
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
         self.compare_with(step, renames, added, &AllOpaque)
     }
 
-    fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<BodyComparison>> {
+    fn compare_with(
+        &self,
+        step: &Step,
+        renames: &BTreeMap<String, String>,
+        added: &[String],
+        opaque: &impl semilla_verify::OpaqueInputs,
+    ) -> Result<Vec<BodyComparison>> {
         let checked = self.checked(step)?;
         self.read_sides(step, &checked);
         // N0 for each configuration, with the rename and move map (N1). Design 35.4: this is the
@@ -874,109 +1303,13 @@ impl BodyOracle for NormalOracle {
         for (index, config) in checked.iter().enumerate() {
             states.push(self.compare_n0(step, renames, added, config, index, opaque)?);
         }
-        // The key of a body: its name and its place. Two definitions of one name under `cfg`
-        // (a twin) have one name and two places, and one configuration compiles only one of
-        // them. With the name as the key, the result of one definition went to the other
-        // definition (design 35.8, batch 7b, part 4.4). A name with two places in one
-        // configuration (two targets with one crate name) keeps the name as its key: the span
-        // of the changed target is then the place of the body (batch 5n, A4).
-        type BodyKey = (String, Option<(String, usize)>);
-        let mut many: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        let mut prepared = Vec::new();
-        for mut state in states {
-            let own = match state.done.take() {
-                Some(own) => own,
-                None => {
-                    let mut own = BTreeMap::new();
-                    state.spans(&mut own);
-                    let key: CompareKey = (
-                        step.tree_before.clone(),
-                        step.tree_after.clone(),
-                        state.config.clone(),
-                        state.renames.clone(),
-                        added.to_vec(),
-                        [state.before_marks.opaque.clone(), state.before_marks.stop.clone(), state.after_marks.opaque.clone(), state.after_marks.stop.clone()],
-                    );
-                    self.added.lock().unwrap_or_else(|error| error.into_inner()).compared.insert(key, (state.comparisons.clone(), own.clone()));
-                    own
-                }
-            };
-            many.extend(state.sides.two_places.iter().cloned());
-            prepared.push((state, own));
-        }
-        let mut spans: BTreeMap<String, (String, usize)> = BTreeMap::new();
-        let mut combined: BTreeMap<BodyKey, BodyStatus> = BTreeMap::new();
-        // The configurations of each body: those that compile it, and those where it is not equal.
-        let mut compiled: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
-        let mut differs: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
-        let mut config: BTreeMap<BodyKey, std::collections::BTreeSet<String>> = BTreeMap::new();
-        // The MIR elements that differ, over the configurations (design 40.3). `None`: a
-        // configuration has no element data for a changed body.
-        let mut elements: BTreeMap<BodyKey, Option<semilla_normal::elements::ElementDiff>> = BTreeMap::new();
-        // The byte range of each body by its name and place (design 40.2): the "after" records win.
-        let mut ranges: BTreeMap<(String, (String, usize)), (usize, usize)> = BTreeMap::new();
-        for (state, _) in &prepared {
-            for levels in [&state.sides.before, &state.sides.after] {
-                for record in levels.get("n0").into_iter().flatten() {
-                    if let Some((span, range)) = record.span.as_ref().and_then(|span| Some((span, span.range?))) {
-                        ranges.insert((record.name.clone(), (span.file.clone(), span.line_start)), range);
-                    }
-                }
-            }
-        }
+        let (many, prepared) = self.prepare_states(step, added, states);
+        let ranges = body_ranges(&prepared);
+        let mut merge = BodyMerge::default();
         for (state, own) in prepared {
-            let key_of = |name: &String| -> BodyKey { (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() }) };
-            let name = state.config.name();
-            for comparison in state.comparisons {
-                let key = key_of(&comparison.name);
-                if !comparison.config.is_empty() {
-                    config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
-                }
-                let status = match comparison.status {
-                    semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
-                    semilla_normal::BodyStatus::Different { cfg_changed } => BodyStatus::Different { cfg_changed },
-                    semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
-                    semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
-                };
-                let found = match &status {
-                    BodyStatus::Equal { .. } => Some(semilla_normal::elements::ElementDiff::default()),
-                    BodyStatus::Different { .. } => comparison.elements.clone(),
-                    _ => None,
-                };
-                let entry = elements.entry(key.clone()).or_insert_with(|| Some(semilla_normal::elements::ElementDiff::default()));
-                match (entry.as_mut(), found) {
-                    (Some(known), Some(found)) => known.merge(found),
-                    _ => *entry = None,
-                }
-                compiled.entry(key.clone()).or_default().push(name.clone());
-                if !matches!(status, BodyStatus::Equal { .. }) {
-                    differs.entry(key.clone()).or_default().push(name.clone());
-                }
-                let merged = match combined.remove(&key) {
-                    Some(old) => combine(old, status),
-                    None => status,
-                };
-                combined.insert(key, merged);
-            }
-            spans.extend(own);
+            merge.add_state(state, own, &many);
         }
-        Ok(combined
-            .into_iter()
-            .map(|(key, status)| {
-                // The output names the configurations if the body is equal in one or more of
-                // them, and not equal in one or more (batch 5u, part A). The combined status is
-                // not `Equal`, so the note cannot make a fact neutral.
-                let all = compiled.remove(&key).unwrap_or_default();
-                let differs_in = differs.remove(&key).filter(|list| list.len() < all.len()).unwrap_or_default();
-                let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
-                let config = config.remove(&key).into_iter().flatten().collect();
-                let found = elements.remove(&key).flatten().filter(|_| matches!(status, BodyStatus::Different { .. })).map(mir_diff);
-                let (name, place) = key;
-                let span = place.or_else(|| spans.get(&name).cloned());
-                let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
-                BodyComparison { span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
-            })
-            .collect())
+        Ok(merge.finish(&ranges))
     }
 
     fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
@@ -991,7 +1324,14 @@ impl BodyOracle for NormalOracle {
         for config in self.checked(step)? {
             let records = self.sides(step, &config)?;
             for (side, levels) in sides.iter_mut().zip([&records.before, &records.after]) {
-                side.extend(levels.get("n0").into_iter().flatten().filter(|record| record.text.starts_with("fn _() -> test::TestDescAndFn")).map(|record| record.name.clone()));
+                side.extend(
+                    levels
+                        .get("n0")
+                        .into_iter()
+                        .flatten()
+                        .filter(|record| record.text.starts_with("fn _() -> test::TestDescAndFn"))
+                        .map(|record| record.name.clone()),
+                );
             }
         }
         Ok(Some(sides))
@@ -1004,7 +1344,10 @@ impl BodyOracle for NormalOracle {
         // Each cache folder has its own thread (design 37.20). The results join in the order of
         // the configurations and the trees, so the result is that of one thread.
         let checked = self.checked(step)?;
-        let folders: Vec<(&Configuration, &String)> = checked.iter().flat_map(|config| [(config, &step.tree_before), (config, &step.tree_after)]).collect();
+        let folders: Vec<(&Configuration, &String)> = checked
+            .iter()
+            .flat_map(|config| [(config, &step.tree_before), (config, &step.tree_after)])
+            .collect();
         let read = |config: &Configuration, tree: &str| -> Result<Option<semilla_normal::Made>> {
             self.records_or_build(tree, "n0", config, false)?;
             let (_, cache, _, _) = self.cache_folder(tree, "n0", config)?;
@@ -1013,16 +1356,33 @@ impl BodyOracle for NormalOracle {
         };
         let results: Vec<Result<Option<semilla_normal::Made>>> = std::thread::scope(|scope| {
             let handles: Vec<_> = folders.iter().map(|(config, tree)| scope.spawn(|| read(config, tree))).collect();
-            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed")))).collect()
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed"))))
+                .collect()
         });
         for (index, result) in results.into_iter().enumerate() {
             let Some(made) = result? else { return Ok(None) };
             sides[index % 2].items.extend(made.items);
             sides[index % 2].sites.extend(made.sites);
         }
-        Ok(Some(sides.map(|side| semilla_verify::made::Made {
-            items: side.items.into_iter().map(|item| semilla_verify::made::MadeItem { file: item.file, line: item.line, col: item.col, module: item.module, text: item.text, test: item.test, public: item.public }).collect(),
-            sites: side.sites,
+        Ok(Some(sides.map(|side| {
+            semilla_verify::made::Made {
+                items: side
+                    .items
+                    .into_iter()
+                    .map(|item| semilla_verify::made::MadeItem {
+                        file: item.file,
+                        line: item.line,
+                        col: item.col,
+                        module: item.module,
+                        text: item.text,
+                        test: item.test,
+                        public: item.public,
+                    })
+                    .collect(),
+                sites: side.sites,
+            }
         })))
     }
 
@@ -1034,7 +1394,10 @@ impl BodyOracle for NormalOracle {
         let checked = self.checked(step)?;
         let results: Vec<Result<Vec<semilla_verify::BodyFacts>>> = std::thread::scope(|scope| {
             let handles: Vec<_> = checked.iter().map(|config| scope.spawn(move || self.facts_of(step, config))).collect();
-            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed")))).collect()
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("a read thread failed"))))
+                .collect()
         });
         let mut facts = Vec::new();
         for result in results {
@@ -1050,11 +1413,15 @@ impl BodyOracle for NormalOracle {
                 let mut features = selection.features.clone();
                 features.sort();
                 features.dedup();
-                if selection.no_default { Features::NoDefaultListed(features) } else { Features::Listed(features) }
+                if selection.no_default {
+                    Features::NoDefaultListed(features)
+                } else {
+                    Features::Listed(features)
+                }
             })
             .collect();
         let key = (step.tree_before.clone(), step.tree_after.clone());
-        let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.added.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // The log has the data of this list, if this process has it: the output shows the
         // configurations of the last list.
         if let Some((_, _, _, log)) = state.memo.iter().find(|(step, extra, _, _)| *step == key && *extra == list)
@@ -1087,7 +1454,7 @@ impl NormalOracle {
         // The feature selections that the verifier added for a proof in this step (batch 5u,
         // part C). An added configuration is a configuration of the list as each other one.
         let (extra, hint) = {
-            let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.added.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let extra = state.selections.get(&key).cloned().unwrap_or_default();
             if let Some((_, _, checked, log)) = state.memo.iter().find(|(step, list, _, _)| *step == key && *list == extra) {
                 if let Ok(mut all) = self.log.lock() {
@@ -1096,7 +1463,11 @@ impl NormalOracle {
                 return Ok(checked.clone());
             }
             // The hint: only with the first builds of a step.
-            let hint = if state.hinted.insert(key.clone()) { std::fs::read_to_string(self.repo.cache_dir().join(HINT_FILE)).map(|text| parse_hint(&text)).unwrap_or_default() } else { Vec::new() };
+            let hint = if state.hinted.insert(key.clone()) {
+                std::fs::read_to_string(self.repo.cache_dir().join(HINT_FILE)).map_or_default(|text| parse_hint(&text))
+            } else {
+                Vec::new()
+            };
             (extra, hint)
         };
         let (listed, same) = self.configurations_with(&step.tree_before, &step.tree_after, &extra)?;
@@ -1104,7 +1475,13 @@ impl NormalOracle {
         // of that tree only. Semilla does not build it, and the output names the feature.
         let metadata = [self.metadata(&step.tree_before), self.metadata(&step.tree_after)];
         let one_side = |config: &Configuration| -> Option<String> {
-            let missing: Vec<Vec<String>> = metadata.iter().map(|data| data.as_ref().map(|data| semilla_normal::cargo::missing_features(data, &config.features)).unwrap_or_default()).collect();
+            let missing: Vec<Vec<String>> = metadata
+                .iter()
+                .map(|data| {
+                    data.as_ref()
+                        .map_or_default(|data| semilla_normal::cargo::missing_features(data, &config.features))
+                })
+                .collect();
             one_side_cause(&missing[0], &missing[1])
         };
         let (listed, one_sided): (Vec<_>, Vec<_>) = listed.into_iter().partition(|(config, _)| one_side(config).is_none());
@@ -1113,7 +1490,12 @@ impl NormalOracle {
         // errors, have no use: only the list decides the checked configurations.
         let mut all = configs.clone();
         for features in hint {
-            all.extend([false, true].map(|release| Configuration::new(release, features.clone())).into_iter().filter(|config| !configs.contains(config)));
+            all.extend(
+                [false, true]
+                    .map(|release| Configuration::new(release, features.clone()))
+                    .into_iter()
+                    .filter(|config| !configs.contains(config)),
+            );
         }
         let mut built = self.build_each(step, &all);
         built.truncate(configs.len());
@@ -1121,9 +1503,17 @@ impl NormalOracle {
         // Batch 5t, part C. A configuration that does not build with each target before the
         // step: Semilla tries the libraries and the binaries only. If this smaller build is
         // good before the step, Semilla checks it. A step that breaks it is a compile error.
-        let narrow: Vec<Configuration> = configs.iter().zip(&built).filter(|(_, error)| error.is_some()).map(|(config, _)| config.narrowed()).collect();
+        let narrow: Vec<Configuration> = configs
+            .iter()
+            .zip(&built)
+            .filter(|(_, error)| error.is_some())
+            .map(|(config, _)| config.narrowed())
+            .collect();
         let mut smaller = self.build_all(step, &narrow)?.into_iter();
-        let mut log = StepConfigs { same, ..StepConfigs::default() };
+        let mut log = StepConfigs {
+            same,
+            ..StepConfigs::default()
+        };
         let mut checked = Vec::new();
         for ((config, added), error) in listed.into_iter().zip(built) {
             // The error of the smaller build is not in the output: the error of the build of
@@ -1148,7 +1538,9 @@ impl NormalOracle {
                     }
                     checked.push(config);
                 }
-                Some(error) => log.not_checked.push((config.name(), format!("it does not build before the step: {error}"))),
+                Some(error) => log
+                    .not_checked
+                    .push((config.name(), format!("it does not build before the step: {error}"))),
             }
         }
         for (config, _) in &one_sided {
@@ -1163,69 +1555,92 @@ impl NormalOracle {
         if let Ok(mut all) = self.log.lock() {
             all.insert(key.clone(), log.clone());
         }
-        self.added.lock().unwrap_or_else(|error| error.into_inner()).memo.push((key, extra, checked.clone(), log));
+        self.added
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .memo
+            .push((key, extra, checked.clone(), log));
         Ok(checked)
     }
 
     /// The MIR facts of the bodies after a step in one configuration.
     fn facts_of(&self, step: &Step, config: &Configuration) -> Result<Vec<semilla_verify::BodyFacts>> {
         // A target name is the name of one build: the walk over the live callees stays in it.
-        let tag = |target: String| if *config == Configuration::DEV { target } else { format!("{target} [{}]", config.name()) };
+        let tag = |target: String| {
+            if *config == Configuration::DEV {
+                target
+            } else {
+                format!("{target} [{}]", config.name())
+            }
+        };
         let sides = self.sides(step, config)?;
         let records = sides.after.get("n0").cloned().unwrap_or_default();
         // The MIR signature of each body before the step, by its name and its target (batch 5n,
         // A1). A body with a new name has no entry: its signature is not a known cause.
         let signature = |text: &str| text.lines().next().unwrap_or("").to_string();
-        let old: BTreeMap<(String, String), String> = sides.before.get("n0").into_iter().flatten().map(|record| ((record.name.clone(), record.target.clone()), signature(&record.text))).collect();
-        Ok(
-            records
-                .into_iter()
-                .map(|record| semilla_verify::BodyFacts {
-                    signature_changed: old.get(&(record.name.clone(), record.target.clone())).is_some_and(|before| *before != signature(&record.text)),
-                    span: record.span.as_ref().map(|span| (span.file.clone(), span.line_start)),
-                    callees: record.callees,
-                    panics: semilla_verify::assert_sites(&record.text),
-                    origins: record.externals.iter().filter(|call| !call.krate.is_empty()).map(|call| (call.path.clone(), (call.krate.clone(), call.def.clone()))).collect(),
-                    externals: record.externals.into_iter().map(|call| call.path).collect(),
-                    indirect: record.indirect,
-                    reach_types: record.reach_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    drop_types: record.drop_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    drop_calls: record.drop_calls.into_iter().map(|t| (t.path, t.call)).collect(),
-                    impl_of: record.impl_of,
-                    drop_of: record.drop_of,
-                    target: tag(record.target),
-                    live: record.live_callees,
-                    sure: record.sure_callees,
-                    ends: record.sure_ends.unwrap_or_default(),
-                    param_types: record.param_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    const_types: record.const_types.into_iter().map(|t| (t.path, t.krate)).collect(),
-                    casts: semilla_verify::discriminant_casts(&record.text),
-                    layouts: semilla_verify::layout_types(&record.text),
-                    name: record.name,
-                })
-                .collect(),
-        )
+        let old: BTreeMap<(String, String), String> = sides
+            .before
+            .get("n0")
+            .into_iter()
+            .flatten()
+            .map(|record| ((record.name.clone(), record.target.clone()), signature(&record.text)))
+            .collect();
+        Ok(records
+            .into_iter()
+            .map(|record| semilla_verify::BodyFacts {
+                signature_changed: old
+                    .get(&(record.name.clone(), record.target.clone()))
+                    .is_some_and(|before| *before != signature(&record.text)),
+                span: record.span.as_ref().map(|span| (span.file.clone(), span.line_start)),
+                callees: record.callees,
+                panics: semilla_verify::assert_sites(&record.text),
+                origins: record
+                    .externals
+                    .iter()
+                    .filter(|call| !call.krate.is_empty())
+                    .map(|call| (call.path.clone(), (call.krate.clone(), call.def.clone())))
+                    .collect(),
+                externals: record.externals.into_iter().map(|call| call.path).collect(),
+                indirect: record.indirect,
+                reach_types: record.reach_types.into_iter().map(|t| (t.path, t.krate)).collect(),
+                drop_types: record.drop_types.into_iter().map(|t| (t.path, t.krate)).collect(),
+                drop_calls: record.drop_calls.into_iter().map(|t| (t.path, t.call)).collect(),
+                impl_of: record.impl_of,
+                drop_of: record.drop_of,
+                target: tag(record.target),
+                live: record.live_callees,
+                sure: record.sure_callees,
+                ends: record.sure_ends.unwrap_or_default(),
+                param_types: record.param_types.into_iter().map(|t| (t.path, t.krate)).collect(),
+                const_types: record.const_types.into_iter().map(|t| (t.path, t.krate)).collect(),
+                casts: semilla_verify::discriminant_casts(&record.text),
+                layouts: semilla_verify::layout_types(&record.text),
+                name: record.name,
+            })
+            .collect())
     }
 }
 
 /// The SMT checks with Z3. Without a solver, every check gives "not proved".
-pub struct SmtOracle {
+pub(crate) struct SmtOracle {
     solver: Option<semilla_smt::Solver>,
 }
 
 impl SmtOracle {
     /// The solver for a check of `repo`. The search never takes a solver from the repository
     /// folder (I5): see [`semilla_smt::Solver::find_for`].
-    pub fn for_repo(repo: &Repo) -> SmtOracle {
-        SmtOracle { solver: semilla_smt::Solver::find_for(&crate::store::tool_dirs(&repo.root), Some(&repo.root)).ok() }
+    pub(crate) fn for_repo(repo: &Repo) -> SmtOracle {
+        SmtOracle {
+            solver: semilla_smt::Solver::find_for(&crate::store::tool_dirs(&repo.root), Some(&repo.root)).ok(),
+        }
     }
 
     /// The path of the solver binary, if one is found.
-    pub fn path(&self) -> Option<&std::path::Path> {
-        self.solver.as_ref().map(|solver| solver.path())
+    pub(crate) fn path(&self) -> Option<&std::path::Path> {
+        self.solver.as_ref().map(semilla_smt::Solver::path)
     }
 
-    pub fn available(&self) -> bool {
+    pub(crate) fn available(&self) -> bool {
         self.solver.is_some()
     }
 
@@ -1244,10 +1659,16 @@ impl ExprOracle for SmtOracle {
         let result = semilla_smt::classify_condition(solver, before, after, &Self::env(types)).ok()?;
         let mut witness = result.witness;
         if result.panic_conditions_differ {
-            let none = result.notes.iter().find(|n| n.starts_with("no example of the panic difference"));
-            let note = match (result.panic_witness, none) {
+            let no_example = result.notes.iter().find(|n| n.starts_with("no example of the panic difference"));
+            let note = match (result.panic_witness, no_example) {
                 (Some(w), _) => format!("the panic conditions differ, for example {w}"),
-                (None, Some(none)) => format!("the panic conditions differ ({})", none.trim_start_matches("no example of the panic difference: ").to_string().replace("the integer type of", "no example: the integer type of")),
+                (None, Some(no_example)) => format!(
+                    "the panic conditions differ ({})",
+                    no_example
+                        .trim_start_matches("no example of the panic difference: ")
+                        .to_string()
+                        .replace("the integer type of", "no example: the integer type of")
+                ),
                 (None, None) => "the panic conditions differ".into(),
             };
             witness = Some(match witness {
@@ -1255,7 +1676,11 @@ impl ExprOracle for SmtOracle {
                 None => note,
             });
         }
-        let effect = if result.panic_conditions_differ && result.effect == Effect::Equivalent { Effect::Unrelated } else { result.effect };
+        let effect = if result.panic_conditions_differ && result.effect == Effect::Equivalent {
+            Effect::Unrelated
+        } else {
+            result.effect
+        };
         Some(EffectCheck { effect, witness })
     }
 }
@@ -1269,9 +1694,23 @@ mod tests {
     // names with two places.
     #[test]
     fn a_record_set_has_the_span_and_the_names_of_each_record() {
-        let record = |name: &str, file: &str, line: usize, names: serde_json::Value| serde_json::json!({ "name": name, "level": "n0", "text": "fn f() {}", "span": { "file": file, "line_start": line, "line_end": line + 2 }, "names": names }).to_string();
-        let old = [record("demo::f", "src/lib.rs", 3, serde_json::json!([{ "word": "len", "member": true, "count": 0 }, { "word": "Vec", "prefix": true, "count": 2, "line": 4 }])), serde_json::json!({ "name": "demo::g", "level": "n0", "text": "fn g() {}" }).to_string()];
-        let new = [record("demo::f", "src/lib.rs", 3, serde_json::json!([])), record("demo::main", "src/main.rs", 1, serde_json::json!([])), record("demo::main", "benches/demo.rs", 9, serde_json::json!([]))];
+        let record = |name: &str, file: &str, line: usize, names: serde_json::Value| {
+            serde_json::json!({ "name": name, "level": "n0", "text": "fn f() {}", "span": { "file": file, "line_start": line, "line_end": line + 2 }, "names": names }).to_string()
+        };
+        let old = [
+            record(
+                "demo::f",
+                "src/lib.rs",
+                3,
+                serde_json::json!([{ "word": "len", "member": true, "count": 0 }, { "word": "Vec", "prefix": true, "count": 2, "line": 4 }]),
+            ),
+            serde_json::json!({ "name": "demo::g", "level": "n0", "text": "fn g() {}" }).to_string(),
+        ];
+        let new = [
+            record("demo::f", "src/lib.rs", 3, serde_json::json!([])),
+            record("demo::main", "src/main.rs", 1, serde_json::json!([])),
+            record("demo::main", "benches/demo.rs", 9, serde_json::json!([])),
+        ];
         let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap())]);
         let sides = Sides::new(levels(&old), levels(&new));
         let before: Vec<_> = sides.records(false).collect();
@@ -1279,11 +1718,26 @@ mod tests {
         assert_eq!(before[0].0.name, "demo::f");
         assert_eq!(before[0].1.0, Some(("src/lib.rs".to_string(), 3)));
         // A count of zero is one use, as in each compare before this batch.
-        let names: Vec<(&str, bool, bool, usize, usize)> = before[0].1.1.iter().map(|name| (name.word.as_str(), name.member, name.prefix, name.count, name.line)).collect();
+        let names: Vec<(&str, bool, bool, usize, usize)> = before[0]
+            .1
+            .1
+            .iter()
+            .map(|name| (name.word.as_str(), name.member, name.prefix, name.count, name.line))
+            .collect();
         assert_eq!(names, [("len", true, false, 1, 0), ("Vec", false, true, 2, 4)]);
         assert_eq!((before[1].0.name.as_str(), &before[1].1.0, before[1].1.1.len()), ("demo::g", &None, 0));
-        let after: Vec<_> = sides.records(true).map(|(record, (span, _))| (record.name.clone(), span.clone())).collect();
-        assert_eq!(after, [("demo::f".to_string(), Some(("src/lib.rs".to_string(), 3))), ("demo::main".to_string(), Some(("src/main.rs".to_string(), 1))), ("demo::main".to_string(), Some(("benches/demo.rs".to_string(), 9)))]);
+        let after: Vec<_> = sides
+            .records(true)
+            .map(|(record, (span, _))| (record.name.clone(), span.clone()))
+            .collect();
+        assert_eq!(
+            after,
+            [
+                ("demo::f".to_string(), Some(("src/lib.rs".to_string(), 3))),
+                ("demo::main".to_string(), Some(("src/main.rs".to_string(), 1))),
+                ("demo::main".to_string(), Some(("benches/demo.rs".to_string(), 9)))
+            ]
+        );
         assert_eq!(sides.two_places, ["demo::main"]);
         assert_eq!(sides.two_places, sides.names_with_two_places());
     }
@@ -1297,7 +1751,9 @@ mod tests {
             std::fs::create_dir_all(folder.path()).unwrap();
             std::fs::write(folder.path().join("unit.jsonl"), line.to_string()).unwrap();
             let complete = std::fs::File::create(folder.path().join(".complete")).unwrap();
-            complete.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+            complete
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+                .unwrap();
         };
         let in_memory = || RECORDS.lock().unwrap().keys().filter(|(path, _)| path == folder.path()).count();
         write("a", 1_000);
@@ -1318,7 +1774,10 @@ mod tests {
     }
 
     fn equal(level: &str) -> BodyStatus {
-        BodyStatus::Equal { level: level.into(), proof: Vec::new() }
+        BodyStatus::Equal {
+            level: level.into(),
+            proof: Vec::new(),
+        }
     }
 
     // Batch 5n, A4: the binary and a bench have the crate name `demo`, and each has a `main`.
@@ -1329,10 +1788,24 @@ mod tests {
             let line = serde_json::json!({ "name": name, "level": "n0", "text": text, "target": target, "span": { "file": file, "line_start": 3, "line_end": 5 } });
             semilla_normal::parse_records(&line.to_string()).unwrap().remove(0)
         };
-        let old = vec![record("demo.bin.1", "src/main.rs", "a", "demo::main"), record("demo.bench.2", "benches/demo.rs", "b", "demo::main"), record("demo.bin.1", "src/main.rs", "c", "demo::only")];
-        let new = vec![record("demo.bin.1", "src/main.rs", "a2", "demo::main"), record("demo.bench.2", "benches/demo.rs", "b", "demo::main"), record("demo.bin.1", "src/main.rs", "c2", "demo::only")];
-        assert_eq!(changed_target_spans(&old, &new), [("demo::main".to_string(), ("src/main.rs".to_string(), 3))]);
-        assert!(changed_target_spans(&old, &old).is_empty());
+        let old = vec![
+            record("demo.bin.1", "src/main.rs", "a", "demo::main"),
+            record("demo.bench.2", "benches/demo.rs", "b", "demo::main"),
+            record("demo.bin.1", "src/main.rs", "c", "demo::only"),
+        ];
+        let new = vec![
+            record("demo.bin.1", "src/main.rs", "a2", "demo::main"),
+            record("demo.bench.2", "benches/demo.rs", "b", "demo::main"),
+            record("demo.bin.1", "src/main.rs", "c2", "demo::only"),
+        ];
+        assert_eq!(
+            changed_target_spans(&old, &new),
+            [("demo::main".to_string(), ("src/main.rs".to_string(), 3))]
+        );
+        assert_eq!(
+            changed_target_spans(&old, &old),
+            [] as [(std::string::String, (std::string::String, usize)); 0]
+        );
     }
 
     // Batch 5s, A5: the status of a body over two configurations, for each pair of states.
@@ -1395,7 +1868,12 @@ mod tests {
             { "name": "rich", "features": { "default": ["std"], "std": [], "extra": ["std"] }, "dependencies": [{ "name": "serde", "optional": true }] },
         ]});
         let state = |features: Features| feature_state(&metadata, &features);
-        let set = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<std::collections::BTreeSet<String>>();
+        let set = |names: &[&str]| {
+            names
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<std::collections::BTreeSet<String>>()
+        };
         assert_eq!(state(Features::Default)["plain"], set(&[]));
         assert_eq!(state(Features::NoDefault)["plain"], state(Features::All)["plain"]);
         assert_eq!(state(Features::Default)["rich"], set(&["default", "std"]));
@@ -1417,18 +1895,24 @@ mod tests {
             { "name": "plain", "features": {}, "dependencies": [] },
             { "name": "rich", "features": { "default": ["std"], "std": [] }, "dependencies": [{ "name": "serde", "optional": true }, { "name": "real", "rename": "alias", "optional": true }, { "name": "log" }] },
         ]});
-        let missing = |names: &[&str]| missing_features(&metadata, &Features::Listed(names.iter().map(|name| name.to_string()).collect()));
+        let missing = |names: &[&str]| missing_features(&metadata, &Features::Listed(names.iter().map(std::string::ToString::to_string).collect()));
         // A feature of the table, and an optional dependency with its name in the manifest.
-        assert!(missing(&["std", "serde", "alias"]).is_empty());
+        assert_eq!(missing(&["std", "serde", "alias"]), [] as [std::string::String; 0]);
         assert_eq!(missing(&["std", "serde1", "real", "log"]), ["serde1", "real", "log"]);
         // `package/feature`: a feature of one package. A package of a different workspace is not known.
         assert_eq!(missing(&["rich/std", "plain/std", "other/std"]), ["plain/std"]);
-        assert!(missing_features(&metadata, &Features::All).is_empty());
+        assert_eq!(missing_features(&metadata, &Features::All), [] as [std::string::String; 0]);
         assert_eq!(missing_features(&metadata, &Features::NoDefaultListed(vec!["none".into()])), ["none"]);
 
-        let list = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<Vec<String>>();
-        assert_eq!(one_side_cause(&[], &list(&["serde1"])).unwrap(), "only the code before the step has the feature `serde1`. The code after the step has no such configuration: no compare");
-        assert_eq!(one_side_cause(&list(&["a", "b"]), &[]).unwrap(), "only the code after the step has the features `a`, `b`. The code before the step has no such configuration: no compare");
+        let list = |names: &[&str]| names.iter().map(std::string::ToString::to_string).collect::<Vec<String>>();
+        assert_eq!(
+            one_side_cause(&[], &list(&["serde1"])).unwrap(),
+            "only the code before the step has the feature `serde1`. The code after the step has no such configuration: no compare"
+        );
+        assert_eq!(
+            one_side_cause(&list(&["a", "b"]), &[]).unwrap(),
+            "only the code after the step has the features `a`, `b`. The code before the step has no such configuration: no compare"
+        );
         // The two trees have each feature, or no tree has a feature: the usual build decides.
         assert_eq!(one_side_cause(&[], &[]), None);
         assert_eq!(one_side_cause(&list(&["a"]), &list(&["a"])), None);
@@ -1439,17 +1923,34 @@ mod tests {
     fn a_selection_with_no_default_features_has_its_own_name_and_folder() {
         let config = Configuration::new(false, Features::NoDefaultListed(vec!["a".into(), "b".into()]));
         assert_eq!(config.name(), "dev, no default features, features a,b");
-        assert_eq!(Configuration::new(true, Features::NoDefaultListed(vec!["a".into()])).name(), "release, no default features, features a");
-        let suffixes: std::collections::BTreeSet<String> = [Features::NoDefault, Features::Listed(vec!["a".into(), "b".into()]), Features::NoDefaultListed(vec!["a".into(), "b".into()]), Features::NoDefaultListed(vec!["a".into()])].into_iter().map(|features| Configuration::new(false, features).suffix()).collect();
+        assert_eq!(
+            Configuration::new(true, Features::NoDefaultListed(vec!["a".into()])).name(),
+            "release, no default features, features a"
+        );
+        let suffixes: std::collections::BTreeSet<String> = [
+            Features::NoDefault,
+            Features::Listed(vec!["a".into(), "b".into()]),
+            Features::NoDefaultListed(vec!["a".into(), "b".into()]),
+            Features::NoDefaultListed(vec!["a".into()]),
+        ]
+        .into_iter()
+        .map(|features| Configuration::new(false, features).suffix())
+        .collect();
         assert_eq!(suffixes.len(), 4, "{suffixes:?}");
     }
 
     // Batch 5u, part C: the hint is data from a file that a different program can change.
     #[test]
     fn a_hint_with_a_bad_form_gives_no_selection() {
-        let list = vec![Features::Listed(vec!["fast".into()]), Features::NoDefaultListed(vec!["a".into(), "b".into()])];
+        let list = vec![
+            Features::Listed(vec!["fast".into()]),
+            Features::NoDefaultListed(vec!["a".into(), "b".into()]),
+        ];
         let text = hint_text(&list);
-        assert_eq!(text, r#"[{"no_default":false,"features":["fast"]},{"no_default":true,"features":["a","b"]}]"#);
+        assert_eq!(
+            text,
+            r#"[{"no_default":false,"features":["fast"]},{"no_default":true,"features":["a","b"]}]"#
+        );
         assert_eq!(parse_hint(&text), list);
         // A selection of the default list is not a part of the hint.
         assert_eq!(hint_text(&[Features::All, Features::Default]), "[]");

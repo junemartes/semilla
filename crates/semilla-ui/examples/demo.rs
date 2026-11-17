@@ -1,4 +1,4 @@
-//! Serves the review UI with the demo data set on http://127.0.0.1:7878/.
+//! Serves the review UI with the demo data set on <http://127.0.0.1:7878>/.
 //!
 //! Run: `cargo run -p semilla-ui --example demo`
 //! Options: `--addr HOST:PORT` sets the address. `--json FILE` writes the data set as JSON and stops.

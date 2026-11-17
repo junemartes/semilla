@@ -30,7 +30,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use cargo::{Built, Configuration, Features, run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_config, run_cargo_check_delta_features, run_cargo_check_with_trait_table};
+pub use cargo::{
+    Built, Configuration, Features, run_cargo_check, run_cargo_check_delta, run_cargo_check_delta_config, run_cargo_check_delta_features,
+    run_cargo_check_with_trait_table,
+};
 
 /// A call to a function of another crate (design 10.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,7 +158,13 @@ pub struct BodyRecord {
     pub names: Vec<NameUse>,
     /// The source range of each MIR element (design 40.1; only at N0).
     /// The data is shared: a record in memory is cloned for each read of its cache folder.
-    #[serde(rename = "el", default, skip_serializing_if = "Option::is_none", serialize_with = "elements::serialize_shared", deserialize_with = "elements::deserialize_shared")]
+    #[serde(
+        rename = "el",
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "elements::serialize_shared",
+        deserialize_with = "elements::deserialize_shared"
+    )]
     pub elements: Option<std::sync::Arc<elements::RecordElements>>,
 }
 
@@ -315,12 +324,23 @@ struct SiteLine {
 /// Reads the expanded items and the macro call sites from each `*.jsonl` file of an N0 folder
 /// into `made`. False: a file has no list of the items, so the items are not known.
 pub fn read_made(dir: &Path, made: &mut Made) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else { return false };
-    let files: Vec<_> = entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let files: Vec<_> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+        .collect();
     for file in files {
-        let Ok(text) = std::fs::read_to_string(&file) else { return false };
-        let Some(line) = text.lines().find(|line| line.starts_with(UNIT_LINE)) else { return false };
-        let Some(items) = serde_json::from_str::<MadeLine>(line).ok().and_then(|line| line.unit.made) else { return false };
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            return false;
+        };
+        let Some(line) = text.lines().find(|line| line.starts_with(UNIT_LINE)) else {
+            return false;
+        };
+        let Some(items) = serde_json::from_str::<MadeLine>(line).ok().and_then(|line| line.unit.made) else {
+            return false;
+        };
         made.items.extend(items);
         // The text search is a fast filter: most bodies have no site.
         for line in text.lines().filter(|line| !line.starts_with(UNIT_LINE) && line.contains("\"site\":")) {
@@ -336,18 +356,24 @@ pub fn read_made(dir: &Path, made: &mut Made) -> bool {
 const UNIT_LINE: &str = "{\"unit\":";
 
 /// Parses the JSON lines of the driver. The line of the unit record is not a body record.
+///
+/// # Errors
+///
+/// Returns an error for a line that is not a body record.
 pub fn parse_records(text: &str) -> Result<Vec<BodyRecord>> {
     text.lines()
         .filter(|line| !line.trim().is_empty() && !line.starts_with(UNIT_LINE))
         .enumerate()
-        .map(|(number, line)| {
-            serde_json::from_str(line)
-                .with_context(|| format!("line {}: not a body record", number + 1))
-        })
+        .map(|(number, line)| serde_json::from_str(line).with_context(|| format!("line {}: not a body record", number + 1)))
         .collect()
 }
 
 /// Reads all `*.jsonl` files in a folder (in name order).
+///
+/// # Errors
+///
+/// Returns an error if the folder or a file cannot be read, or if a file has a line that is not
+/// a body record.
 pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("cannot read {}", dir.display()))?
@@ -357,8 +383,7 @@ pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
     files.sort();
     let mut records = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file)
-            .with_context(|| format!("cannot read {}", file.display()))?;
+        let text = std::fs::read_to_string(&file).with_context(|| format!("cannot read {}", file.display()))?;
         records.extend(parse_records(&text).with_context(|| format!("in {}", file.display()))?);
     }
     Ok(records)
@@ -366,6 +391,7 @@ pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
 
 /// Reads the unit record of each `*.jsonl` file in a folder (in name order). `None`: a file has
 /// no unit record, so the units of the folder are not known.
+#[must_use]
 pub fn read_units(dir: &Path) -> Option<Vec<UnitRecord>> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .ok()?
@@ -399,6 +425,7 @@ pub fn group_levels(records: impl IntoIterator<Item = BodyRecord>) -> Levels {
 /// Returns the N1 content hash of each body of one level (design 8.4: a body with a new hash
 /// and no text change is an indirect change). A name with more than one distinct text (for
 /// example a lib target and a test target with different `cfg`) gets no hash.
+#[must_use]
 pub fn body_hashes(records: &[BodyRecord]) -> BTreeMap<String, String> {
     let groups = group_by_name(records.iter(), &[], false);
     hash::content_hashes(&hash_input(&groups, &BTreeSet::new()))
@@ -413,12 +440,8 @@ pub fn body_hashes(records: &[BodyRecord]) -> BTreeMap<String, String> {
 ///
 /// The work is lazy: a level is only computed for the bodies that are not equal at a lower
 /// level, and the content hashes of a level are only computed when a body needs them.
-pub fn compare(
-    before: &Levels,
-    after: &Levels,
-    renames: &BTreeMap<String, String>,
-    added: &[String],
-) -> Vec<BodyComparison> {
+#[must_use]
+pub fn compare(before: &Levels, after: &Levels, renames: &BTreeMap<String, String>, added: &[String]) -> Vec<BodyComparison> {
     compare_with(before, after, renames, added, &Marks::default(), &Marks::default())
 }
 
@@ -441,7 +464,12 @@ pub fn drop_opaque_inlines(levels: &mut Levels, marks: &Marks) {
         .get("n3")
         .into_iter()
         .flatten()
-        .map(|record| record.inlined.iter().all(|callee| known.contains(callee.as_str()) && !marks.opaque.contains(callee)))
+        .map(|record| {
+            record
+                .inlined
+                .iter()
+                .all(|callee| known.contains(callee.as_str()) && !marks.opaque.contains(callee))
+        })
         .collect();
     if let Some(records) = levels.get_mut("n3") {
         let mut keep = keep.into_iter();
@@ -450,6 +478,7 @@ pub fn drop_opaque_inlines(levels: &mut Levels, marks: &Marks) {
 }
 
 /// `compare` with the opaque bodies of each version.
+#[must_use]
 pub fn compare_with(
     before: &Levels,
     after: &Levels,
@@ -459,8 +488,8 @@ pub fn compare_with(
     after_marks: &Marks,
 ) -> Vec<BodyComparison> {
     // The names of the impl items that lost or got a lifetime (design 37.2).
-    let renamed = lifetime_names(before, after, before_marks);
-    let (before, before_marks) = renamed.as_ref().map_or((before, before_marks), |(levels, marks)| (levels, marks));
+    let with_lifetimes = lifetime_names(before, after, before_marks);
+    let (before, before_marks) = with_lifetimes.as_ref().map_or((before, before_marks), |(levels, marks)| (levels, marks));
     let mut rename_pairs = usable_renames(before, renames);
     // The generic parameters of a renamed impl item that got new names (design 38.10).
     let params = param_names(before, after, &rename_pairs, before_marks);
@@ -478,7 +507,11 @@ pub fn compare_with(
     let stopped = |name: &str, status: BodyStatus| match &status {
         BodyStatus::Equal { level, proof } if before.stop.contains(name) || after.stop.contains(name) => {
             let same_text = level == "n0" || (level == "n1" && proof.iter().all(|step| step == "rename-map"));
-            if same_text { status } else { BodyStatus::Different { cfg_changed: true } }
+            if same_text {
+                status
+            } else {
+                BodyStatus::Different { cfg_changed: true }
+            }
         }
         _ => status,
     };
@@ -487,22 +520,48 @@ pub fn compare_with(
     let mut matched = BTreeSet::new();
     let config = |name: &str| -> Vec<String> {
         let sides = [before.config.get(name), after.config.get(name)];
-        sides.into_iter().flatten().flatten().cloned().collect::<BTreeSet<String>>().into_iter().collect()
+        sides
+            .into_iter()
+            .flatten()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<String>>()
+            .into_iter()
+            .collect()
     };
     for (name, original) in &before.names {
         if !after.names.contains_key(name) {
-            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None });
+            results.push(BodyComparison {
+                name: original.clone(),
+                status: BodyStatus::BeforeOnly,
+                config: config(name),
+                elements: None,
+            });
             continue;
         }
         matched.insert(name.clone());
         let status = stopped(name, ladder(&before, &after, name));
-        let elements = if matches!(status, BodyStatus::Different { .. }) { element_diff(&before, &after, name) } else { None };
-        results.push(BodyComparison { name: name.clone(), status, config: config(name), elements });
+        let elements = if matches!(status, BodyStatus::Different { .. }) {
+            element_diff(&before, &after, name)
+        } else {
+            None
+        };
+        results.push(BodyComparison {
+            name: name.clone(),
+            status,
+            config: config(name),
+            elements,
+        });
     }
     for name in after.names.keys() {
         let declared = added.iter().any(|new| name == new || is_child(name, new));
         if !matched.contains(name) && !declared {
-            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None });
+            results.push(BodyComparison {
+                name: name.clone(),
+                status: BodyStatus::AfterOnly,
+                config: config(name),
+                elements: None,
+            });
         }
     }
     results.sort_by(|a, b| a.name.cmp(&b.name));
@@ -530,10 +589,12 @@ fn lifetime_names(before: &Levels, after: &Levels, marks: &Marks) -> Option<(Lev
     let (old_keys, new_keys) = (keys(&old), keys(&new));
     let mut pairs = BTreeMap::new();
     for (key, list) in &old_keys {
-        if let ([from], Some([to])) = (list.as_slice(), new_keys.get(key).map(Vec::as_slice)) {
-            if from != to && !new.contains(from) && !old.contains(to) {
-                pairs.insert(from.clone(), to.clone());
-            }
+        if let ([from], Some([to])) = (list.as_slice(), new_keys.get(key).map(Vec::as_slice))
+            && from != to
+            && !new.contains(from)
+            && !old.contains(to)
+        {
+            pairs.insert(from.clone(), to.clone());
         }
     }
     if pairs.is_empty() {
@@ -546,14 +607,25 @@ fn lifetime_names(before: &Levels, after: &Levels, marks: &Marks) -> Option<(Lev
         }
     }
     let rename = |names: &BTreeSet<String>| names.iter().map(|name| pairs.get(name).unwrap_or(name).clone()).collect();
-    Some((levels, Marks { opaque: rename(&marks.opaque), stop: rename(&marks.stop) }))
+    Some((
+        levels,
+        Marks {
+            opaque: rename(&marks.opaque),
+            stop: rename(&marks.stop),
+        },
+    ))
 }
 
 /// The start of each body name of `levels` that fits `path` with generic arguments
 /// (`a::Type::<T>::method` for `a::Type::method`).
 fn generic_starts(levels: &Levels, path: &str) -> BTreeSet<String> {
     let last = path.rsplit("::").next().unwrap_or(path);
-    levels.values().flatten().filter(|record| record.name.contains(last)).filter_map(|record| paths::generic_prefix(&record.name, path).map(str::to_string)).collect()
+    levels
+        .values()
+        .flatten()
+        .filter(|record| record.name.contains(last))
+        .filter_map(|record| paths::generic_prefix(&record.name, path).map(str::to_string))
+        .collect()
 }
 
 /// The lists of generic arguments of a body name start (`a::W::<T, N>::m` gives `[[T, N]]`).
@@ -565,7 +637,10 @@ fn generic_lists(start: &str) -> Option<Vec<Vec<String>>> {
         let inner = &rest[at + 3..];
         let end = inner.find('>')?;
         let list: Vec<String> = inner[..end].split(", ").map(str::to_string).collect();
-        if list.iter().any(|name| name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_')) {
+        if list
+            .iter()
+            .any(|name| name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        {
             return None;
         }
         lists.push(list);
@@ -594,6 +669,62 @@ fn replace_words(text: &str, map: &BTreeMap<String, String>) -> String {
     out
 }
 
+/// The change of the generic parameters for one rename pair `from` → `to` (see
+/// [`param_names`]): the start of the old body name and the map of the old names to the new
+/// names. `None` if the pair does not apply.
+fn param_change(before: &Levels, after: &Levels, from: &str, to: &str) -> Option<(String, BTreeMap<String, String>)> {
+    let (old, new) = (generic_starts(before, from), generic_starts(after, to));
+    let (Some(old), Some(new), 1, 1) = (old.first(), new.first(), old.len(), new.len()) else {
+        return None;
+    };
+    let (Some(old_lists), Some(new_lists)) = (generic_lists(old), generic_lists(new)) else {
+        return None;
+    };
+    if old_lists.len() != new_lists.len() || old_lists.iter().zip(&new_lists).any(|(a, b)| a.len() != b.len()) {
+        return None;
+    }
+    let map: BTreeMap<String, String> = old_lists
+        .iter()
+        .flatten()
+        .zip(new_lists.iter().flatten())
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| (a.clone(), b.clone()))
+        .collect();
+    // A parameter with the name of a path segment (`impl<W> W<W>`) is not changed.
+    if map.is_empty()
+        || map
+            .keys()
+            .chain(map.values())
+            .any(|name| from.split("::").chain(to.split("::")).any(|segment| segment == name))
+    {
+        return None;
+    }
+    let of = |levels: &Levels, start: &str| -> Vec<String> {
+        levels
+            .values()
+            .flatten()
+            .filter(|record| record.name == start || record.name.strip_prefix(start).is_some_and(|rest| rest.starts_with("::")))
+            .map(|record| record.text.clone())
+            .collect()
+    };
+    let words = |texts: &[String]| -> BTreeSet<String> {
+        texts
+            .iter()
+            .flat_map(|text| {
+                text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .filter(|word| !word.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let (old_words, new_words) = (words(&of(before, old)), words(&of(after, new)));
+    if map.values().any(|name| old_words.contains(name)) || map.keys().any(|name| new_words.contains(name)) {
+        return None;
+    }
+    Some((old.clone(), map))
+}
+
 /// The generic parameters of a renamed impl item with new names (design 38.10): the body name
 /// `a::W::<T>::get` becomes `a::W::<U>::value`, and the body text has `U` for `T`. The old
 /// records of such a body get the new names of the parameters. A pair applies only if exactly
@@ -603,29 +734,19 @@ fn replace_words(text: &str, map: &BTreeMap<String, String>) -> String {
 fn param_names(before: &Levels, after: &Levels, usable: &[(String, String)], marks: &Marks) -> Option<(Levels, Marks)> {
     let mut changes: Vec<(String, BTreeMap<String, String>)> = Vec::new();
     for (from, to) in usable.iter().filter(|(from, to)| from != to && from.matches("::").count() >= 2) {
-        let (old, new) = (generic_starts(before, from), generic_starts(after, to));
-        let (Some(old), Some(new), 1, 1) = (old.first(), new.first(), old.len(), new.len()) else { continue };
-        let (Some(old_lists), Some(new_lists)) = (generic_lists(old), generic_lists(new)) else { continue };
-        if old_lists.len() != new_lists.len() || old_lists.iter().zip(&new_lists).any(|(a, b)| a.len() != b.len()) {
-            continue;
+        if let Some(change) = param_change(before, after, from, to) {
+            changes.push(change);
         }
-        let map: BTreeMap<String, String> = old_lists.iter().flatten().zip(new_lists.iter().flatten()).filter(|(a, b)| a != b).map(|(a, b)| (a.clone(), b.clone())).collect();
-        // A parameter with the name of a path segment (`impl<W> W<W>`) is not changed.
-        if map.is_empty() || map.keys().chain(map.values()).any(|name| from.split("::").chain(to.split("::")).any(|segment| segment == name)) {
-            continue;
-        }
-        let of = |levels: &Levels, start: &str| -> Vec<String> { levels.values().flatten().filter(|record| record.name == start || record.name.strip_prefix(start).is_some_and(|rest| rest.starts_with("::"))).map(|record| record.text.clone()).collect() };
-        let words = |texts: &[String]| -> BTreeSet<String> { texts.iter().flat_map(|text| text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|word| !word.is_empty()).map(str::to_string).collect::<Vec<_>>()).collect() };
-        let (old_words, new_words) = (words(&of(before, old)), words(&of(after, new)));
-        if map.values().any(|name| old_words.contains(name)) || map.keys().any(|name| new_words.contains(name)) {
-            continue;
-        }
-        changes.push((old.clone(), map));
     }
     if changes.is_empty() {
         return None;
     }
-    let change = |name: &str| changes.iter().find(|(start, _)| name == start || name.strip_prefix(start.as_str()).is_some_and(|rest| rest.starts_with("::"))).map(|(_, map)| map);
+    let change = |name: &str| {
+        changes
+            .iter()
+            .find(|(start, _)| name == start || name.strip_prefix(start.as_str()).is_some_and(|rest| rest.starts_with("::")))
+            .map(|(_, map)| map)
+    };
     let mut levels = before.clone();
     // A different body names the old start in its text and in its callees: it gets the new
     // start (`genren::W::<T>::get` becomes `genren::W::<U>::get`).
@@ -655,12 +776,23 @@ fn param_names(before: &Levels, after: &Levels, usable: &[(String, String)], mar
         } else {
             record.text = other(&record.text);
         }
-        for callee in record.callees.iter_mut() {
+        for callee in &mut record.callees {
             *callee = other(callee);
         }
     }
-    let rename = |names: &BTreeSet<String>| names.iter().map(|name| change(name).map(|map| replace_words(name, map)).unwrap_or_else(|| name.clone())).collect();
-    Some((levels, Marks { opaque: rename(&marks.opaque), stop: rename(&marks.stop) }))
+    let rename = |names: &BTreeSet<String>| {
+        names
+            .iter()
+            .map(|name| change(name).map_or_else(|| name.clone(), |map| replace_words(name, map)))
+            .collect()
+    };
+    Some((
+        levels,
+        Marks {
+            opaque: rename(&marks.opaque),
+            stop: rename(&marks.stop),
+        },
+    ))
 }
 
 /// Returns the rename pairs that are safe to apply. A rename whose target path already exists on
@@ -676,12 +808,8 @@ fn usable_renames(before: &Levels, renames: &BTreeMap<String, String>) -> Vec<(S
             }
             let marker = [((*to).clone(), "\u{0}".to_string())];
             // `contains` is a fast first test. The token test is exact.
-            let mentions =
-                |text: &String| text.contains(to.as_str()) && paths::rename(text, &marker) != *text;
-            let exists = before
-                .values()
-                .flatten()
-                .any(|record| mentions(&record.name) || mentions(&record.text));
+            let mentions = |text: &String| text.contains(to.as_str()) && paths::rename(text, &marker) != *text;
+            let exists = before.values().flatten().any(|record| mentions(&record.name) || mentions(&record.text));
             !exists
         })
         .map(|(from, to)| (from.clone(), to.clone()))
@@ -748,6 +876,7 @@ fn generic_renames(before: &Levels, after: &Levels, usable: &[(String, String)],
 /// Returns rename hints: pairs of a "before" body and an "after" body with the same N1 content
 /// hash, where the "before" name is missing after and the "after" name is missing before. Use
 /// these only as hints; a claim must still declare the rename.
+#[must_use]
 pub fn suggest_renames(before: &Levels, after: &Levels) -> Vec<(String, String)> {
     let level = ["n0", "n2", "n3"]
         .into_iter()
@@ -834,12 +963,17 @@ fn without_test_positions<'a>(text: &'a str, name: &str) -> std::borrow::Cow<'a,
 /// Replaces the string of a `TestName` line with the def path of the test, when the string is
 /// the path of the test in its crate (`tests::t` for `k::tests::t`). Else the line stays.
 fn test_name_as_path(line: &str, name: &str) -> String {
+    const OPEN: &str = " fields {";
     let decoded = line.split("memory [").nth(1).and_then(|rest| rest.split(']').next()).and_then(|hex| {
-        let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|at| hex.get(at..at + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect();
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|at| hex.get(at..at + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok()))
+            .collect();
         String::from_utf8(bytes?).ok()
     });
-    const OPEN: &str = " fields {";
-    let (Some(decoded), Some(open), Some(close)) = (decoded, line.find(OPEN), line.rfind('}')) else { return line.to_string() };
+    let (Some(decoded), Some(open), Some(close)) = (decoded, line.find(OPEN), line.rfind('}')) else {
+        return line.to_string();
+    };
     if !name.ends_with(&format!("::{decoded}")) || close < open {
         return line.to_string();
     }
@@ -856,7 +990,7 @@ fn mask_positions(line: &str) -> String {
         let key = format!("test::TestDesc.{field}: const usize = ");
         let Some(found) = out.find(&key) else { continue };
         let value = found + key.len();
-        let digits = out[value..].chars().take_while(|c| c.is_ascii_digit()).count();
+        let digits = out[value..].chars().take_while(char::is_ascii_digit).count();
         if digits > 0 {
             out.replace_range(value..value + digits, "_");
         }
@@ -888,12 +1022,11 @@ fn sort_aggregates(text: &str) -> String {
         for (index, c) in rest.char_indices() {
             match c {
                 '(' | '[' | '{' => depth += 1,
-                ')' | ']' => depth -= 1,
                 '}' if depth == 0 => {
                     end = Some(index);
                     break;
                 }
-                '}' => depth -= 1,
+                ')' | ']' | '}' => depth -= 1,
                 _ => {}
             }
         }
@@ -901,7 +1034,7 @@ fn sort_aggregates(text: &str) -> String {
         // A nested aggregate (in a promoted constant) gets its own sort.
         let inner = sort_aggregates(&rest[..end]);
         let mut parts = split_top(&inner);
-        parts.sort();
+        parts.sort_unstable();
         out.push_str(&parts.join(", "));
         rest = &rest[end..];
     }
@@ -928,7 +1061,9 @@ fn sort_variant_lists(text: &str) -> String {
     // is not a named target (batch 5x, part B): with it in the test, the rename of a callee
     // sorted the numbers as text (`10, 11, 1, 2`), and the caller was not equal.
     sort_list(&text, SWITCH_OPEN, " -> [", |parts| {
-        parts.iter().any(|part| !part.starts_with(|c: char| c.is_ascii_digit() || c == '-') && !part.starts_with("otherwise: "))
+        parts
+            .iter()
+            .any(|part| !part.starts_with(|c: char| c.is_ascii_digit() || c == '-') && !part.starts_with("otherwise: "))
     })
 }
 
@@ -973,7 +1108,7 @@ fn sort_list(text: &str, marker: &str, open: &str, wanted: impl Fn(&[&str]) -> b
             if last.is_some() {
                 parts.pop();
             }
-            parts.sort();
+            parts.sort_unstable();
             parts.extend(last);
         }
         out.push_str(&parts.join(", "));
@@ -1006,7 +1141,10 @@ fn split_top(text: &str) -> Vec<&str> {
 
 impl Group {
     fn add(&mut self, record: &BodyRecord, renames: &[(String, String)], use_targets: bool) {
-        let normal = BodyRecord { text: without_test_positions(&record.text, &record.name).into_owned(), ..record.clone() };
+        let normal = BodyRecord {
+            text: without_test_positions(&record.text, &record.name).into_owned(),
+            ..record.clone()
+        };
         let record = &normal;
         let target = if use_targets { record.target.clone() } else { String::new() };
         if !renames.is_empty() {
@@ -1016,14 +1154,18 @@ impl Group {
                 .or_default()
                 .insert(record.text.clone());
         }
-        let renamed = paths::rename(&record.text, renames);
+        let new_text = paths::rename(&record.text, renames);
         // A rename can change the order of the named operands of an aggregate, of the named
         // targets of a switch, and of the entries of a discriminant table.
-        let renamed = if renamed != record.text { sort_variant_lists(&sort_aggregates(&renamed)) } else { renamed };
+        let new_text = if new_text == record.text {
+            new_text
+        } else {
+            sort_variant_lists(&sort_aggregates(&new_text))
+        };
         if record.level == "n0" {
             self.elements.entry(target.clone()).or_default().push(record.elements.clone());
         }
-        self.texts.entry(target.clone()).or_default().insert(renamed);
+        self.texts.entry(target.clone()).or_default().insert(new_text);
         self.callees.extend(record.callees.iter().map(|callee| paths::rename(callee, renames)));
         self.shapes.insert(record.shape.clone());
         self.terms
@@ -1043,18 +1185,13 @@ impl Group {
     }
 }
 
-fn group_by_name<'a>(
-    records: impl Iterator<Item = &'a BodyRecord>,
-    renames: &[(String, String)],
-    use_targets: bool,
-) -> BTreeMap<String, Group> {
+fn group_by_name<'a>(records: impl Iterator<Item = &'a BodyRecord>, renames: &[(String, String)], use_targets: bool) -> BTreeMap<String, Group> {
     let mut groups: BTreeMap<String, Group> = BTreeMap::new();
     for record in records {
-        groups.entry(paths::rename(&record.name, renames)).or_default().add(
-            record,
-            renames,
-            use_targets,
-        );
+        groups
+            .entry(paths::rename(&record.name, renames))
+            .or_default()
+            .add(record, renames, use_targets);
     }
     groups
 }
@@ -1117,14 +1254,23 @@ impl Side {
             let present: BTreeSet<(String, String, String)> = levels["n3"].iter().map(key).collect();
             for record in n2.iter().filter(|record| !present.contains(&key(record))) {
                 let name = paths::rename(&record.name, renames);
-                let group =
-                    n3.entry(name).or_insert_with(|| Group { from_n2: true, ..Group::default() });
+                let group = n3.entry(name).or_insert_with(|| Group {
+                    from_n2: true,
+                    ..Group::default()
+                });
                 group.add(record, renames, use_targets);
             }
         }
         let hashes = grouped.keys().map(|level| (level.clone(), OnceCell::new())).collect();
-        let renamed = |names: &BTreeSet<String>| names.iter().map(|name| paths::rename(name, renames)).collect();
-        Side { names, levels: grouped, hashes, config, opaque: renamed(&marks.opaque), stop: renamed(&marks.stop) }
+        let rename_all = |names: &BTreeSet<String>| names.iter().map(|name| paths::rename(name, renames)).collect();
+        Side {
+            names,
+            levels: grouped,
+            hashes,
+            config,
+            opaque: rename_all(&marks.opaque),
+            stop: rename_all(&marks.stop),
+        }
     }
 
     fn group(&self, level: &str, name: &str) -> Option<&Group> {
@@ -1147,17 +1293,17 @@ impl Side {
         group
             .texts
             .iter()
-            .map(|(target, texts)| {
-                (target.clone(), texts.iter().map(|text| replacer.apply(text)).collect())
-            })
+            .map(|(target, texts)| (target.clone(), texts.iter().map(|text| replacer.apply(text)).collect()))
             .collect()
     }
 }
 
 /// Tries the levels in order for one body, and stops at the first equal level.
 fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
-    let equal =
-        |level: &str, proof: Vec<String>| BodyStatus::Equal { level: level.to_string(), proof };
+    let equal = |level: &str, proof: Vec<String>| BodyStatus::Equal {
+        level: level.to_string(),
+        proof,
+    };
 
     if let (Some(b), Some(a)) = (before.group("n0", name), after.group("n0", name)) {
         if same_bodies(b.raw(), a.raw()) {
@@ -1176,9 +1322,7 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
             if level == "n3" && b.from_n2 && a.from_n2 {
                 continue;
             }
-            if same_bodies(&b.texts, &a.texts)
-                || same_bodies(&before.hashed_texts(level, b), &after.hashed_texts(level, a))
-            {
+            if same_bodies(&b.texts, &a.texts) || same_bodies(&before.hashed_texts(level, b), &after.hashed_texts(level, a)) {
                 return equal(level, Vec::new());
             }
         }
@@ -1190,7 +1334,9 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
             .find_map(|level| side.group(level, name))
             .map(|group| group.shapes.clone())
     };
-    BodyStatus::Different { cfg_changed: shapes(before) != shapes(after) }
+    BodyStatus::Different {
+        cfg_changed: shapes(before) != shapes(after),
+    }
 }
 
 /// The elements that differ in a changed body (design 40.3), over each target. The targets
@@ -1215,7 +1361,9 @@ fn element_diff(before: &Side, after: &Side, name: &str) -> Option<elements::Ele
     };
     // A target with one text: the text and the ranges of its first record.
     let one = |group: &Group, target: &String| -> Option<(String, std::sync::Arc<elements::RecordElements>)> {
-        let [text] = group.texts.get(target)?.iter().collect::<Vec<_>>()[..] else { return None };
+        let [text] = group.texts.get(target)?.iter().collect::<Vec<_>>()[..] else {
+            return None;
+        };
         Some((text.clone(), group.elements.get(target)?.first()?.clone()?))
     };
     let mut out = elements::ElementDiff::default();
@@ -1234,13 +1382,7 @@ fn element_diff(before: &Side, after: &Side, name: &str) -> Option<elements::Ele
 /// The targets of a body differ when the body moves to another crate (`move-item`), or when the
 /// package of a crate changes. No target map exists then, so the bodies are equal only when each
 /// side has exactly one distinct text for all its targets, and the two texts are the same.
-fn same_bodies(
-    before: &BTreeMap<String, BTreeSet<String>>,
-    after: &BTreeMap<String, BTreeSet<String>>,
-) -> bool {
-    if before.keys().eq(after.keys()) {
-        return before == after;
-    }
+fn same_bodies(before: &BTreeMap<String, BTreeSet<String>>, after: &BTreeMap<String, BTreeSet<String>>) -> bool {
     // A change of the package version or of a dependency changes the hash in each target name
     // (design 37.12). The targets then pair by their name without the hash: for each such name,
     // the two sides have the same number of targets with the same texts.
@@ -1249,18 +1391,24 @@ fn same_bodies(
         for (target, texts) in texts {
             stems.entry(target_stem(target)).or_default().push(texts);
         }
-        stems.values_mut().for_each(|texts| texts.sort());
+        for texts in stems.values_mut() {
+            texts.sort();
+        }
         stems
     }
-    if by_stem(before) == by_stem(after) {
-        return true;
-    }
+    /// The one distinct text of all targets, if there is exactly one.
     fn single(texts: &BTreeMap<String, BTreeSet<String>>) -> Option<&String> {
         let all: BTreeSet<&String> = texts.values().flatten().collect();
         match all.into_iter().collect::<Vec<_>>()[..] {
             [text] => Some(text),
             _ => None,
         }
+    }
+    if before.keys().eq(after.keys()) {
+        return before == after;
+    }
+    if by_stem(before) == by_stem(after) {
+        return true;
     }
     matches!((single(before), single(after)), (Some(b), Some(a)) if b == a)
 }

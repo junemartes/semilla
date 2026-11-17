@@ -71,6 +71,7 @@ impl Category {
     ];
 
     /// The text of the category in each output.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Category::Rename => "rename",
@@ -94,6 +95,7 @@ impl Category {
 
     /// The category with this text, or `None`. The old names `value`, `logic`, and
     /// `control flow` (before design 42) give `semantics`: a saved search can have them.
+    #[must_use]
     pub fn from_name(name: &str) -> Option<Category> {
         match name {
             "value" | "logic" | "control flow" => Some(Category::Semantics),
@@ -103,11 +105,16 @@ impl Category {
 
     /// True if the text of the change gives no cause for different compiled code. Such a fact
     /// with the result `code different` gets the mismatch mark (design 35.2).
+    #[must_use]
     pub fn expects_equal(self) -> bool {
-        matches!(self, Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Attribute)
+        matches!(
+            self,
+            Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Attribute
+        )
     }
 
     /// The role of the subgroup of a fact with this category (design 35.7).
+    #[must_use]
     pub fn role(self) -> Role {
         match self {
             Category::Rename | Category::Move | Category::Import | Category::Visibility => Role::Mechanical,
@@ -121,6 +128,7 @@ impl Category {
 
     /// The weight of the category in a merge of many facts on one tree node: the node shows
     /// the category with the highest weight.
+    #[must_use]
     pub fn weight(self) -> u8 {
         match self {
             Category::Docs => 0,
@@ -158,9 +166,17 @@ pub enum Compare {
 
 impl Compare {
     /// Each compare result, in the order of the result line.
-    pub const ALL: &'static [Compare] = &[Compare::CodeDifferent, Compare::CodeEqual, Compare::NoCompare, Compare::Pending, Compare::NotChecked, Compare::NoCode];
+    pub const ALL: &'static [Compare] = &[
+        Compare::CodeDifferent,
+        Compare::CodeEqual,
+        Compare::NoCompare,
+        Compare::Pending,
+        Compare::NotChecked,
+        Compare::NoCode,
+    ];
 
     /// The text of the compare result in each output.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Compare::CodeEqual => "code equal",
@@ -173,11 +189,13 @@ impl Compare {
     }
 
     /// The compare result with this text, or `None`.
+    #[must_use]
     pub fn from_name(name: &str) -> Option<Compare> {
         Compare::ALL.iter().copied().find(|compare| compare.name() == name)
     }
 
     /// The place of the compare result in a group of the review report (design 35.7).
+    #[must_use]
     pub fn order(self) -> u8 {
         match self {
             Compare::CodeDifferent => 0,
@@ -336,23 +354,34 @@ ops! {
 }
 
 /// Finds an operation by name.
+#[must_use]
 pub fn op(name: &str) -> Option<&'static OpInfo> {
     OPS.iter().find(|info| info.name == name)
 }
 
 /// The optional arguments of an op, in addition to its required arguments. Each argument has a
 /// check in the verifier; a claim with another argument name is malformed.
+#[must_use]
 pub fn optional_args(name: &str) -> Vec<&'static str> {
     let mut args = Vec::new();
     args.extend(match name {
-        "extract-function" => &["count"][..],
         "inline-function" => &["count", "removes"][..],
         "add-if" | "add-early-exit" => &["cond"][..],
         "rewrite-pattern" => &["sites"][..],
         "rewrite-item" => &["new"][..],
         "rename-local" => &["from"][..],
-        "extract-variable" | "inline-variable" | "change-mutability" | "change-type-annotation" | "invert-if" | "swap-branches" | "if-to-match" | "match-to-if"
-        | "guard-clause" | "reorder-statements" | "question-mark" => &["count"][..],
+        "extract-function"
+        | "extract-variable"
+        | "inline-variable"
+        | "change-mutability"
+        | "change-type-annotation"
+        | "invert-if"
+        | "swap-branches"
+        | "if-to-match"
+        | "match-to-if"
+        | "guard-clause"
+        | "reorder-statements"
+        | "question-mark" => &["count"][..],
         _ => &[][..],
     });
     args
@@ -360,17 +389,29 @@ pub fn optional_args(name: &str) -> Vec<&'static str> {
 
 /// The ops that facts replace (design 22.7). The diff determines these changes, so Semilla
 /// derives them as facts, and the agent writes no claim.
-pub const RETIRED: &[&str] = &["change-visibility", "add-struct-field", "add-enum-variant", "change-attribute", "add-trait-impl", "edit-config", "bump-dependency"];
+pub const RETIRED: &[&str] = &[
+    "change-visibility",
+    "add-struct-field",
+    "add-enum-variant",
+    "change-attribute",
+    "add-trait-impl",
+    "edit-config",
+    "bump-dependency",
+];
 
 /// The error for a retired op, or `None` for an op that is not retired.
 /// The message for a retired argument, or `None`. `affects` is retired: Semilla derives the
 /// affected bodies (design 8.16).
+#[must_use]
 pub fn retired_arg(name: &str) -> Option<String> {
     (name == "affects").then(|| "the argument `affects` is retired: Semilla derives the affected bodies; remove the argument".to_string())
 }
 
+#[must_use]
 pub fn retired(name: &str) -> Option<String> {
-    RETIRED.contains(&name).then(|| format!("the op `{name}` is retired: Semilla derives the fact from the diff (the output of `semilla step` shows it); remove the claim"))
+    RETIRED.contains(&name).then(|| {
+        format!("the op `{name}` is retired: Semilla derives the fact from the diff (the output of `semilla step` shows it); remove the claim")
+    })
 }
 
 #[cfg(test)]
@@ -380,7 +421,7 @@ mod tests {
     #[test]
     fn names_are_unique() {
         let mut names: Vec<_> = OPS.iter().map(|info| info.name).collect();
-        names.sort();
+        names.sort_unstable();
         let count = names.len();
         names.dedup();
         assert_eq!(names.len(), count);
@@ -396,11 +437,23 @@ mod tests {
 
     #[test]
     fn retired_ops_give_a_clear_error() {
-        for name in ["change-visibility", "add-struct-field", "add-enum-variant", "change-attribute", "add-trait-impl"] {
+        for name in [
+            "change-visibility",
+            "add-struct-field",
+            "add-enum-variant",
+            "change-attribute",
+            "add-trait-impl",
+        ] {
             assert!(op(name).is_none(), "{name} is retired");
-            assert!(retired(name).is_some_and(|message| message.contains("Semilla derives the fact")), "{name}");
+            assert!(
+                retired(name).is_some_and(|message| message.contains("Semilla derives the fact")),
+                "{name}"
+            );
         }
-        assert!(op("change-signature").is_some(), "change-signature stays for the edits that no fact covers");
+        assert!(
+            op("change-signature").is_some(),
+            "change-signature stays for the edits that no fact covers"
+        );
         assert!(retired("add-if").is_none());
     }
 
@@ -417,7 +470,7 @@ mod tests {
     fn the_category_list_is_closed_and_each_name_is_unique() {
         assert!(Category::ALL.len() <= 20);
         let mut names: Vec<_> = Category::ALL.iter().map(|category| category.name()).collect();
-        names.sort();
+        names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), Category::ALL.len());
         assert_eq!(Category::from_name("semantics"), Some(Category::Semantics));
@@ -433,18 +486,26 @@ mod tests {
             assert_eq!(Category::from_name(name), Some(Category::Semantics), "{name}");
         }
         for name in ["value", "logic", "control_flow", "semantics"] {
-            assert_eq!(serde_json::from_str::<Category>(&format!("\"{name}\"")).unwrap(), Category::Semantics, "{name}");
+            assert_eq!(
+                serde_json::from_str::<Category>(&format!("\"{name}\"")).unwrap(),
+                Category::Semantics,
+                "{name}"
+            );
         }
         assert_eq!(serde_json::to_string(&Category::Semantics).unwrap(), "\"semantics\"");
         assert_eq!(Category::Semantics.name(), "semantics");
-        assert!(!Category::ALL.iter().any(|category| ["value", "logic", "control flow"].contains(&category.name())));
+        assert!(
+            !Category::ALL
+                .iter()
+                .any(|category| ["value", "logic", "control flow"].contains(&category.name()))
+        );
         // No mismatch mark, the role `Core`, and the highest weight of the three old names.
         assert!(!Category::Semantics.expects_equal());
         assert_eq!(Category::Semantics.role(), Role::Core);
         assert_eq!(Category::Semantics.weight(), 6);
         assert!(Category::Semantics.weight() > Category::Indirect.weight() && Category::Semantics.weight() < Category::BuildCode.weight());
         // Each op that is not a property has a fixed category.
-        for info in OPS.iter() {
+        for info in OPS {
             assert_eq!(info.category.is_none(), info.kind == OpKind::Property, "{}", info.name);
         }
     }

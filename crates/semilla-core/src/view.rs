@@ -1,6 +1,7 @@
 //! The data that the UI shows.
 
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 use crate::ops::{Category, Compare};
 
@@ -21,6 +22,7 @@ pub enum Status {
 
 impl Status {
     /// The marker in the change tree (design section 11.4).
+    #[must_use]
     pub fn marker(self) -> &'static str {
         match self {
             Status::Same => "≡",
@@ -70,6 +72,7 @@ pub struct TreeNode {
 
 impl TreeNode {
     /// Prints the tree as text, as in design section 11.4.
+    #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
         self.render_into(&mut out, "", true, true);
@@ -77,7 +80,13 @@ impl TreeNode {
     }
 
     fn render_into(&self, out: &mut String, prefix: &str, last: bool, root: bool) {
-        let branch = if root { "" } else if last { "└─ " } else { "├─ " };
+        let branch = if root {
+            ""
+        } else if last {
+            "└─ "
+        } else {
+            "├─ "
+        };
         out.push_str(prefix);
         out.push_str(branch);
         out.push_str(self.status.marker());
@@ -90,22 +99,30 @@ impl TreeNode {
         }
         if let Some(category) = self.category {
             match self.compare {
-                Some(compare) => out.push_str(&format!("   [{} · {}]", category.name(), compare.name())),
-                None => out.push_str(&format!("   [{}]", category.name())),
+                Some(compare) => {
+                    let _ = write!(out, "   [{} · {}]", category.name(), compare.name());
+                }
+                None => {
+                    let _ = write!(out, "   [{}]", category.name());
+                }
             }
             if let Some(step) = self.build_code.filter(|_| self.compare == Some(Compare::CodeEqual)) {
-                out.push_str(&format!(" {}", crate::report::build_code_mark(step)));
+                let _ = write!(out, " {}", crate::report::build_code_mark(step));
             }
         }
         if let Some(summary) = &self.summary {
-            out.push_str(&format!("   ({})", crate::text::inline(summary)));
+            let _ = write!(out, "   ({})", crate::text::inline(summary));
         }
         if !self.steps.is_empty() {
-            let numbers: Vec<String> = self.steps.iter().map(|step| step.to_string()).collect();
-            out.push_str(&format!("   step{} {}", if numbers.len() == 1 { "" } else { "s" }, numbers.join(", ")));
+            let numbers: Vec<String> = self.steps.iter().map(std::string::ToString::to_string).collect();
+            let _ = write!(out, "   step{} {}", if numbers.len() == 1 { "" } else { "s" }, numbers.join(", "));
         }
         out.push('\n');
-        let child_prefix = if root { String::new() } else { format!("{prefix}{}", if last { "   " } else { "│  " }) };
+        let child_prefix = if root {
+            String::new()
+        } else {
+            format!("{prefix}{}", if last { "   " } else { "│  " })
+        };
         for (index, child) in self.children.iter().enumerate() {
             child.render_into(out, &child_prefix, index + 1 == self.children.len(), false);
         }
@@ -160,6 +177,12 @@ pub struct FlowGraph {
 
 impl FlowGraph {
     /// Converts the graph to Mermaid text.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a node status does not serialize to a JSON string. Each `Status` variant
+    /// serializes to a string, so this does not occur.
+    #[must_use]
     pub fn to_mermaid(&self) -> String {
         let mut out = String::from("flowchart TD\n");
         for node in &self.nodes {
@@ -174,7 +197,7 @@ impl FlowGraph {
                 Status::Same => String::new(),
                 status => format!(":::{}", serde_json::to_value(status).unwrap().as_str().unwrap()),
             };
-            out.push_str(&format!("  {}{shape}{class}\n", node.id));
+            let _ = writeln!(out, "  {}{shape}{class}", node.id);
         }
         for edge in &self.edges {
             let arrow = match edge.status {
@@ -183,8 +206,12 @@ impl FlowGraph {
                 _ => "-->",
             };
             match &edge.label {
-                Some(label) => out.push_str(&format!("  {} {arrow}|{label}| {}\n", edge.from, edge.to)),
-                None => out.push_str(&format!("  {} {arrow} {}\n", edge.from, edge.to)),
+                Some(label) => {
+                    let _ = writeln!(out, "  {} {arrow}|{label}| {}", edge.from, edge.to);
+                }
+                None => {
+                    let _ = writeln!(out, "  {} {arrow} {}", edge.from, edge.to);
+                }
             }
         }
         out.push_str("  classDef added fill:#d4f8d4,stroke:#2a2\n");
@@ -272,10 +299,27 @@ mod tests {
             function: "a::f".into(),
             breadcrumb: vec!["a".into(), "f".into()],
             nodes: vec![
-                FlowNode { id: "n0".into(), label: "entry".into(), kind: FlowKind::Entry, status: Status::Same, anchor: None },
-                FlowNode { id: "n1".into(), label: "x <= max".into(), kind: FlowKind::Branch, status: Status::Changed, anchor: None },
+                FlowNode {
+                    id: "n0".into(),
+                    label: "entry".into(),
+                    kind: FlowKind::Entry,
+                    status: Status::Same,
+                    anchor: None,
+                },
+                FlowNode {
+                    id: "n1".into(),
+                    label: "x <= max".into(),
+                    kind: FlowKind::Branch,
+                    status: Status::Changed,
+                    anchor: None,
+                },
             ],
-            edges: vec![FlowEdge { from: "n0".into(), to: "n1".into(), label: Some("yes".into()), status: Status::Same }],
+            edges: vec![FlowEdge {
+                from: "n0".into(),
+                to: "n1".into(),
+                label: Some("yes".into()),
+                status: Status::Same,
+            }],
         };
         let text = graph.to_mermaid();
         assert!(text.contains("n1{\"x <= max\"}:::changed"));
@@ -316,7 +360,10 @@ mod tests {
         let mut tree = tree;
         tree.children[0].compare = Some(Compare::CodeEqual);
         tree.children[0].build_code = Some(1);
-        assert!(tree.render().contains("└─ + fn f   [semantics · code equal] (with the build code of step 1)"));
+        assert!(
+            tree.render()
+                .contains("└─ + fn f   [semantics · code equal] (with the build code of step 1)")
+        );
         tree.children[0].compare = Some(Compare::CodeDifferent);
         assert!(tree.render().contains("└─ + fn f   [semantics · code different]\n"), "{}", tree.render());
     }

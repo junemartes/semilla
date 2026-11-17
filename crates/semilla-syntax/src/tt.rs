@@ -40,10 +40,12 @@ pub struct Span {
 }
 
 impl Span {
+    #[must_use]
     pub fn start(&self) -> LineColumn {
         self.start
     }
 
+    #[must_use]
     pub fn end(&self) -> LineColumn {
         self.end
     }
@@ -72,28 +74,42 @@ pub struct Group {
 }
 
 impl Group {
+    #[must_use]
     pub fn new(delimiter: Delimiter, stream: TokenStream) -> Group {
-        Group { delimiter, stream, open: Span::default(), close: Span::default() }
+        Group {
+            delimiter,
+            stream,
+            open: Span::default(),
+            close: Span::default(),
+        }
     }
 
+    #[must_use]
     pub fn delimiter(&self) -> Delimiter {
         self.delimiter
     }
 
+    #[must_use]
     pub fn stream(&self) -> TokenStream {
         self.stream.clone()
     }
 
+    #[must_use]
     pub fn span_open(&self) -> Span {
         self.open
     }
 
+    #[must_use]
     pub fn span_close(&self) -> Span {
         self.close
     }
 
+    #[must_use]
     pub fn span(&self) -> Span {
-        Span { start: self.open.start, end: self.close.end }
+        Span {
+            start: self.open.start,
+            end: self.close.end,
+        }
     }
 }
 
@@ -104,6 +120,7 @@ pub struct Ident {
 }
 
 impl Ident {
+    #[must_use]
     pub fn span(&self) -> Span {
         self.span
     }
@@ -123,14 +140,17 @@ pub struct Punct {
 }
 
 impl Punct {
+    #[must_use]
     pub fn as_char(&self) -> char {
         self.ch
     }
 
+    #[must_use]
     pub fn spacing(&self) -> Spacing {
         self.spacing
     }
 
+    #[must_use]
     pub fn span(&self) -> Span {
         self.span
     }
@@ -143,6 +163,7 @@ pub struct Literal {
 }
 
 impl Literal {
+    #[must_use]
     pub fn span(&self) -> Span {
         self.span
     }
@@ -157,6 +178,7 @@ pub enum TokenTree {
 }
 
 impl TokenTree {
+    #[must_use]
     pub fn span(&self) -> Span {
         match self {
             TokenTree::Group(group) => group.span(),
@@ -171,21 +193,25 @@ impl TokenTree {
 pub struct TokenStream(Vec<TokenTree>);
 
 impl TokenStream {
+    #[must_use]
     pub fn new() -> TokenStream {
         TokenStream::default()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// The tokens of a node of a lossless tree. The places are unknown.
+    #[must_use]
     pub fn from_node(node: &SyntaxNode) -> TokenStream {
         build(&flat_tokens(node), None, 0)
     }
 
     /// The tokens of a node, with the places from the line index of its text. `base` is the
     /// byte offset of the tree text in the indexed text.
+    #[must_use]
     pub fn from_node_at(node: &SyntaxNode, lines: &Lines, base: usize) -> TokenStream {
         build(&flat_tokens(node), Some(lines), base)
     }
@@ -297,7 +323,7 @@ impl FromStr for TokenStream {
     fn from_str(text: &str) -> Result<TokenStream, LexError> {
         thread_local! {
             /// The token lists of the texts of this thread: the checks read one text many times.
-            static STREAMS: std::cell::RefCell<std::collections::HashMap<String, Option<TokenStream>>> = Default::default();
+            static STREAMS: std::cell::RefCell<std::collections::HashMap<String, Option<TokenStream>>> = std::cell::RefCell::default();
         }
         if let Some(found) = STREAMS.with(|cache| cache.borrow().get(text).cloned()) {
             return found.ok_or(LexError);
@@ -316,6 +342,10 @@ impl FromStr for TokenStream {
 
 impl TokenStream {
     /// The token trees of a text. The places are lines and columns in the text.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LexError`] if the text is not a list of token trees.
     pub fn with_places(text: &str) -> Result<TokenStream, LexError> {
         lex(text, true)
     }
@@ -330,7 +360,9 @@ fn lex(text: &str, places: bool) -> Result<TokenStream, LexError> {
         if !errors.is_empty() {
             return Err(LexError);
         }
-        let Some(tree) = file.syntax().descendants().find_map(ast::TokenTree::cast) else { return Err(LexError) };
+        let Some(tree) = file.syntax().descendants().find_map(ast::TokenTree::cast) else {
+            return Err(LexError);
+        };
         if usize::from(tree.syntax().text_range().end()) != wrapped.len() || file.syntax().children().count() != 1 {
             return Err(LexError);
         }
@@ -360,7 +392,11 @@ pub(crate) struct Flat {
 
 /// The tokens of a node in source order, without spaces and plain comments.
 pub(crate) fn flat_tokens(node: &SyntaxNode) -> Vec<Flat> {
-    let mut depth = node.ancestors().skip(1).filter(|ancestor| ancestor.kind() == SyntaxKind::TOKEN_TREE).count();
+    let mut depth = node
+        .ancestors()
+        .skip(1)
+        .filter(|ancestor| ancestor.kind() == SyntaxKind::TOKEN_TREE)
+        .count();
     let mut out = Vec::new();
     for event in node.preorder_with_tokens() {
         match event {
@@ -384,12 +420,24 @@ fn flat(token: &SyntaxToken, in_tree: bool) -> Option<Flat> {
     let range = token.text_range();
     // `rustc` changes each CRLF to LF before it lexes a file (design 39.4): a literal or a doc
     // comment has the text that `rustc` reads.
-    let text = if token.text().contains('\r') { token.text().replace("\r\n", "\n") } else { token.text().to_string() };
-    Some(Flat { kind: token.kind(), text, start: range.start().into(), end: range.end().into(), in_tree })
+    let text = if token.text().contains('\r') {
+        token.text().replace("\r\n", "\n")
+    } else {
+        token.text().to_string()
+    };
+    Some(Flat {
+        kind: token.kind(),
+        text,
+        start: range.start().into(),
+        end: range.end().into(),
+        in_tree,
+    })
 }
 
 /// The operators of more than one character of the lexer of `rustc`.
-const COMPOUND: [&str; 22] = ["<<=", ">>=", "...", "..=", "::", "->", "=>", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=", ".."];
+const COMPOUND: [&str; 22] = [
+    "<<=", ">>=", "...", "..=", "::", "->", "=>", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=", "..",
+];
 const SHIFTS: [&str; 2] = ["<<", ">>"];
 
 /// For each token: true if it is joint with the next token (design 39.2). In a token tree of
@@ -399,7 +447,15 @@ const SHIFTS: [&str; 2] = ["<<", ">>"];
 /// not depend on spaces or line breaks.
 fn joins(tokens: &[Flat]) -> Vec<bool> {
     let mut out = vec![false; tokens.len()];
-    let mark = |token: &Flat| token.in_tree && token.text.chars().count() == 1 && !is_literal(token.kind) && !is_word(&token.text) && token.kind != SyntaxKind::LIFETIME_IDENT && !matches!(token.text.as_str(), "(" | ")" | "[" | "]" | "{" | "}") && doc_comment(token.kind, &token.text).is_none();
+    let mark = |token: &Flat| {
+        token.in_tree
+            && token.text.chars().count() == 1
+            && !is_literal(token.kind)
+            && !is_word(&token.text)
+            && token.kind != SyntaxKind::LIFETIME_IDENT
+            && !matches!(token.text.as_str(), "(" | ")" | "[" | "]" | "{" | "}")
+            && doc_comment(token.kind, &token.text).is_none()
+    };
     let mut index = 0;
     while index < tokens.len() {
         if !mark(&tokens[index]) {
@@ -414,10 +470,11 @@ fn joins(tokens: &[Flat]) -> Vec<bool> {
         let mut at = index;
         while at < end {
             let text = |len: usize| tokens[at..at + len].iter().map(|token| token.text.as_str()).collect::<String>();
-            let len = [3, 2].into_iter().find(|len| at + len <= end && (COMPOUND.contains(&text(*len).as_str()) || SHIFTS.contains(&text(*len).as_str()))).unwrap_or(1);
-            for position in at..at + len - 1 {
-                out[position] = true;
-            }
+            let len = [3, 2]
+                .into_iter()
+                .find(|len| at + len <= end && (COMPOUND.contains(&text(*len).as_str()) || SHIFTS.contains(&text(*len).as_str())))
+                .unwrap_or(1);
+            out[at..at + len - 1].fill(true);
             at += len;
         }
         index = end;
@@ -426,7 +483,7 @@ fn joins(tokens: &[Flat]) -> Vec<bool> {
 }
 
 fn is_literal(kind: SyntaxKind) -> bool {
-    use SyntaxKind::*;
+    use SyntaxKind::{BYTE, BYTE_STRING, C_STRING, CHAR, FLOAT_NUMBER, INT_NUMBER, STRING};
     matches!(kind, INT_NUMBER | FLOAT_NUMBER | STRING | BYTE_STRING | C_STRING | CHAR | BYTE)
 }
 
@@ -436,7 +493,7 @@ fn is_word(text: &str) -> bool {
 
 /// The doc text of a doc comment token: (inner, text). `None` for a plain comment.
 pub(crate) fn doc_comment(kind: SyntaxKind, text: &str) -> Option<(bool, String)> {
-    use SyntaxKind::*;
+    use SyntaxKind::{INNER_DOC_COMMENT, OUTER_DOC_COMMENT};
     let inner = match kind {
         INNER_DOC_COMMENT => true,
         OUTER_DOC_COMMENT => false,
@@ -444,18 +501,27 @@ pub(crate) fn doc_comment(kind: SyntaxKind, text: &str) -> Option<(bool, String)
     };
     // The text that `rustc` reads: each CRLF is LF (design 39.4).
     let text = text.replace("\r\n", "\n");
-    let value = if text.starts_with("/*") { text.get(3..text.len().saturating_sub(2)).unwrap_or("") } else { text.get(3..).unwrap_or("").trim_end_matches('\r') };
+    let value = if text.starts_with("/*") {
+        text.get(3..text.len().saturating_sub(2)).unwrap_or("")
+    } else {
+        text.get(3..).unwrap_or("").trim_end_matches('\r')
+    };
     Some((inner, value.to_string()))
 }
 
 /// A string literal with the escapes of `proc_macro`.
+#[must_use]
 pub fn string_literal(value: &str) -> String {
     let mut repr = String::with_capacity(value.len() + 2);
     repr.push('"');
     let mut chars = value.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\0' {
-            repr.push_str(if chars.peek().is_some_and(|next| ('0'..='7').contains(next)) { r"\x00" } else { r"\0" });
+            repr.push_str(if chars.peek().is_some_and(|next| ('0'..='7').contains(next)) {
+                r"\x00"
+            } else {
+                r"\0"
+            });
         } else if c == '\'' {
             repr.push(c);
         } else {
@@ -473,60 +539,142 @@ enum Part {
 }
 
 fn build(tokens: &[Flat], lines: Option<&Lines>, base: usize) -> TokenStream {
-    let place = |offset: usize| -> LineColumn {
-        match lines {
+    let places = Places { lines, base };
+    group_parts(places.parts(tokens))
+}
+
+/// The places of the tokens of a text: the line index of the text and the offset of the text.
+/// With no line index, each place is the default place.
+#[derive(Clone, Copy)]
+struct Places<'a> {
+    lines: Option<&'a Lines>,
+    base: usize,
+}
+
+impl Places<'_> {
+    fn place(self, offset: usize) -> LineColumn {
+        match self.lines {
             Some(lines) => {
-                let (line, column) = lines.pos(offset + base);
+                let (line, column) = lines.pos(offset + self.base);
                 LineColumn { line, column }
             }
             None => LineColumn::default(),
         }
-    };
-    let span = |start: usize, end: usize| Span { start: place(start), end: place(end) };
-    let joined = joins(tokens);
-    let mut parts: Vec<Part> = Vec::with_capacity(tokens.len() + 4);
-    for (index, token) in tokens.iter().enumerate() {
-        let text = token.text.as_str();
-        if let Some((inner, value)) = doc_comment(token.kind, text) {
-            let at = span(token.start, token.end);
-            parts.push(Part::Tree(TokenTree::Punct(Punct { ch: '#', spacing: Spacing::Alone, span: at })));
-            if inner {
-                parts.push(Part::Tree(TokenTree::Punct(Punct { ch: '!', spacing: Spacing::Alone, span: at })));
-            }
-            let stream = TokenStream(vec![
-                TokenTree::Ident(Ident { text: "doc".into(), span: at }),
-                TokenTree::Punct(Punct { ch: '=', spacing: Spacing::Alone, span: at }),
-                TokenTree::Literal(Literal { text: string_literal(&value), span: at }),
-            ]);
-            parts.push(Part::Tree(TokenTree::Group(Group { delimiter: Delimiter::Bracket, stream, open: at, close: at })));
-            continue;
-        }
-        let delimiter = match text {
-            "(" | ")" => Some(Delimiter::Parenthesis),
-            "[" | "]" => Some(Delimiter::Bracket),
-            "{" | "}" => Some(Delimiter::Brace),
-            _ => None,
-        };
-        if let Some(delimiter) = delimiter.filter(|_| !is_literal(token.kind)) {
-            let at = span(token.start, token.end);
-            parts.push(if matches!(text, "(" | "[" | "{") { Part::Open(delimiter, at) } else { Part::Close(delimiter, at) });
-        } else if is_literal(token.kind) {
-            parts.push(Part::Tree(TokenTree::Literal(Literal { text: text.to_string(), span: span(token.start, token.end) })));
-        } else if token.kind == SyntaxKind::LIFETIME_IDENT {
-            parts.push(Part::Tree(TokenTree::Punct(Punct { ch: '\'', spacing: Spacing::Joint, span: span(token.start, token.start + 1) })));
-            parts.push(Part::Tree(TokenTree::Ident(Ident { text: text[1..].to_string(), span: span(token.start + 1, token.end) })));
-        } else if is_word(text) {
-            parts.push(Part::Tree(TokenTree::Ident(Ident { text: text.to_string(), span: span(token.start, token.end) })));
-        } else {
-            // An operator: one mark for each character.
-            let next_joins = joined[index];
-            let count = text.chars().count();
-            for (position, (offset, c)) in text.char_indices().enumerate() {
-                let spacing = if position + 1 < count || next_joins { Spacing::Joint } else { Spacing::Alone };
-                parts.push(Part::Tree(TokenTree::Punct(Punct { ch: c, spacing, span: span(token.start + offset, token.start + offset + c.len_utf8()) })));
-            }
+    }
+
+    fn span(self, start: usize, end: usize) -> Span {
+        Span {
+            start: self.place(start),
+            end: self.place(end),
         }
     }
+
+    /// The parts of the tokens: the open and the close delimiters, and the other token trees.
+    fn parts(self, tokens: &[Flat]) -> Vec<Part> {
+        let span = |start: usize, end: usize| self.span(start, end);
+        let joined = joins(tokens);
+        let mut parts: Vec<Part> = Vec::with_capacity(tokens.len() + 4);
+        for (index, token) in tokens.iter().enumerate() {
+            let text = token.text.as_str();
+            if let Some((inner, value)) = doc_comment(token.kind, text) {
+                Self::doc_parts(span(token.start, token.end), inner, &value, &mut parts);
+                continue;
+            }
+            let delimiter = match text {
+                "(" | ")" => Some(Delimiter::Parenthesis),
+                "[" | "]" => Some(Delimiter::Bracket),
+                "{" | "}" => Some(Delimiter::Brace),
+                _ => None,
+            };
+            if let Some(delimiter) = delimiter.filter(|_| !is_literal(token.kind)) {
+                let at = span(token.start, token.end);
+                parts.push(if matches!(text, "(" | "[" | "{") {
+                    Part::Open(delimiter, at)
+                } else {
+                    Part::Close(delimiter, at)
+                });
+            } else if is_literal(token.kind) {
+                parts.push(Part::Tree(TokenTree::Literal(Literal {
+                    text: text.to_string(),
+                    span: span(token.start, token.end),
+                })));
+            } else if token.kind == SyntaxKind::LIFETIME_IDENT {
+                parts.push(Part::Tree(TokenTree::Punct(Punct {
+                    ch: '\'',
+                    spacing: Spacing::Joint,
+                    span: span(token.start, token.start + 1),
+                })));
+                parts.push(Part::Tree(TokenTree::Ident(Ident {
+                    text: text[1..].to_string(),
+                    span: span(token.start + 1, token.end),
+                })));
+            } else if is_word(text) {
+                parts.push(Part::Tree(TokenTree::Ident(Ident {
+                    text: text.to_string(),
+                    span: span(token.start, token.end),
+                })));
+            } else {
+                // An operator: one mark for each character.
+                let next_joins = joined[index];
+                let count = text.chars().count();
+                for (position, (offset, c)) in text.char_indices().enumerate() {
+                    let spacing = if position + 1 < count || next_joins {
+                        Spacing::Joint
+                    } else {
+                        Spacing::Alone
+                    };
+                    parts.push(Part::Tree(TokenTree::Punct(Punct {
+                        ch: c,
+                        spacing,
+                        span: span(token.start + offset, token.start + offset + c.len_utf8()),
+                    })));
+                }
+            }
+        }
+        parts
+    }
+
+    /// The parts of a doc comment: `#`, `!` for an inner doc comment, and the group
+    /// `[doc = "value"]`. Each part has the span `at` of the comment.
+    fn doc_parts(at: Span, inner: bool, value: &str, parts: &mut Vec<Part>) {
+        parts.push(Part::Tree(TokenTree::Punct(Punct {
+            ch: '#',
+            spacing: Spacing::Alone,
+            span: at,
+        })));
+        if inner {
+            parts.push(Part::Tree(TokenTree::Punct(Punct {
+                ch: '!',
+                spacing: Spacing::Alone,
+                span: at,
+            })));
+        }
+        let stream = TokenStream(vec![
+            TokenTree::Ident(Ident {
+                text: "doc".into(),
+                span: at,
+            }),
+            TokenTree::Punct(Punct {
+                ch: '=',
+                spacing: Spacing::Alone,
+                span: at,
+            }),
+            TokenTree::Literal(Literal {
+                text: string_literal(value),
+                span: at,
+            }),
+        ]);
+        parts.push(Part::Tree(TokenTree::Group(Group {
+            delimiter: Delimiter::Bracket,
+            stream,
+            open: at,
+            close: at,
+        })));
+    }
+}
+
+/// The token trees of the parts: a stack of open delimiters makes the groups.
+fn group_parts(parts: Vec<Part>) -> TokenStream {
     // The groups: a stack of open delimiters. A close delimiter without its open delimiter is a
     // mark (this is not possible in a tree with no error).
     let mut stack: Vec<(Delimiter, Span, Vec<TokenTree>)> = vec![(Delimiter::None, Span::default(), Vec::new())];
@@ -535,7 +683,12 @@ fn build(tokens: &[Flat], lines: Option<&Lines>, base: usize) -> TokenStream {
             Part::Open(delimiter, at) => stack.push((delimiter, at, Vec::new())),
             Part::Close(delimiter, at) if stack.len() > 1 && stack.last().is_some_and(|(open, _, _)| *open == delimiter) => {
                 let (delimiter, open, trees) = stack.pop().expect("an open group");
-                let group = Group { delimiter, stream: TokenStream(trees), open, close: at };
+                let group = Group {
+                    delimiter,
+                    stream: TokenStream(trees),
+                    open,
+                    close: at,
+                };
                 stack.last_mut().expect("the outer list").2.push(TokenTree::Group(group));
             }
             Part::Close(delimiter, at) => {
@@ -544,7 +697,11 @@ fn build(tokens: &[Flat], lines: Option<&Lines>, base: usize) -> TokenStream {
                     Delimiter::Bracket => ']',
                     _ => '}',
                 };
-                stack.last_mut().expect("the outer list").2.push(TokenTree::Punct(Punct { ch, spacing: Spacing::Alone, span: at }));
+                stack.last_mut().expect("the outer list").2.push(TokenTree::Punct(Punct {
+                    ch,
+                    spacing: Spacing::Alone,
+                    span: at,
+                }));
             }
             Part::Tree(tree) => stack.last_mut().expect("the outer list").2.push(tree),
         }
@@ -554,17 +711,26 @@ fn build(tokens: &[Flat], lines: Option<&Lines>, base: usize) -> TokenStream {
         let (_, _, trees) = stack.pop().expect("an open group");
         stack.last_mut().expect("the outer list").2.extend(trees);
     }
-    TokenStream(stack.pop().map(|(_, _, trees)| trees).unwrap_or_default())
+    TokenStream(stack.pop().map_or_default(|(_, _, trees)| trees))
 }
 
 /// The compare text of a node: its tokens in the text form of [`TokenStream`].
+#[must_use]
 pub fn compare_text(node: &SyntaxNode) -> String {
     flat_text(&flat_tokens(node))
 }
 
 /// The compare text of a node without the tokens in the ranges.
+#[must_use]
 pub fn text_without(node: &SyntaxNode, skip: &[ra_ap_syntax::TextRange]) -> String {
-    let tokens: Vec<Flat> = flat_tokens(node).into_iter().filter(|token| !skip.iter().any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))).collect();
+    let tokens: Vec<Flat> = flat_tokens(node)
+        .into_iter()
+        .filter(|token| {
+            !skip
+                .iter()
+                .any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))
+        })
+        .collect();
     flat_text(&tokens)
 }
 
@@ -583,13 +749,22 @@ pub(crate) fn flat_display(tokens: &[Flat]) -> String {
 }
 
 /// The display text of a node: its source text on one line, without its plain comments.
+#[must_use]
 pub fn display_text(node: &SyntaxNode) -> String {
     flat_display(&flat_tokens(node))
 }
 
 /// The display text of a node without the tokens in the ranges.
+#[must_use]
 pub fn display_without(node: &SyntaxNode, skip: &[ra_ap_syntax::TextRange]) -> String {
-    let tokens: Vec<Flat> = flat_tokens(node).into_iter().filter(|token| !skip.iter().any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))).collect();
+    let tokens: Vec<Flat> = flat_tokens(node)
+        .into_iter()
+        .filter(|token| {
+            !skip
+                .iter()
+                .any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))
+        })
+        .collect();
     flat_display(&tokens)
 }
 
@@ -621,9 +796,7 @@ pub(crate) fn flat_text(tokens: &[Flat]) -> String {
             push(&mut out, "=", false, false, &mut glue);
             push(&mut out, &string_literal(&value), false, false, &mut glue);
             push(&mut out, "]", true, false, &mut glue);
-        } else if is_literal(token.kind) || is_word(text) {
-            push(&mut out, text, false, false, &mut glue);
-        } else if token.kind == SyntaxKind::LIFETIME_IDENT {
+        } else if is_literal(token.kind) || is_word(text) || token.kind == SyntaxKind::LIFETIME_IDENT {
             push(&mut out, text, false, false, &mut glue);
         } else if matches!(text, "(" | "[" | "{") {
             push(&mut out, text, false, text != "{", &mut glue);
@@ -650,7 +823,10 @@ mod tests {
     #[test]
     fn the_text_form_has_the_spaces_of_proc_macro() {
         assert_eq!(text("#[cfg(feature = \"std\")]"), "# [cfg (feature = \"std\")]");
-        assert_eq!(text("pub(crate) fn f<'a>(x: &'a u8) -> u8 { x::y }"), "pub (crate) fn f < 'a > (x : & 'a u8) -> u8 { x :: y }");
+        assert_eq!(
+            text("pub(crate) fn f<'a>(x: &'a u8) -> u8 { x::y }"),
+            "pub (crate) fn f < 'a > (x : & 'a u8) -> u8 { x :: y }"
+        );
         assert_eq!(text("a: :b {}"), "a : : b { }");
         assert_eq!(text("/// one\nfn f() {}"), "# [doc = \" one\"] fn f () { }");
         assert!("(a".parse::<TokenStream>().is_err());
@@ -676,7 +852,11 @@ mod tests {
 
     #[test]
     fn the_display_text_keeps_the_spaces_of_the_source() {
-        let file = crate::rs::parse_file("#[cfg( feature=\"std\" )]\nfn f() {\n    // a note\n    g(1,2)\n}\n", Edition::Edition2021).unwrap();
+        let file = crate::rs::parse_file(
+            "#[cfg( feature=\"std\" )]\nfn f() {\n    // a note\n    g(1,2)\n}\n",
+            Edition::Edition2021,
+        )
+        .unwrap();
         let function = file.syntax().descendants().find(|node| node.kind() == SyntaxKind::FN).unwrap();
         assert_eq!(display_text(&function), "#[cfg( feature=\"std\" )] fn f() { g(1,2) }");
         assert_eq!(compare_text(&function), "# [cfg (feature = \"std\")] fn f () { g (1 , 2) }");

@@ -35,7 +35,12 @@ use semilla_core::{GroupKind, Subgroup};
 use crate::app::App;
 
 #[derive(Parser)]
-#[command(name = "semilla", version, about = "Verified semantic changes for code review.", after_help = "The loop: edit the code, then `semilla step \"<intent>\"`. At the end: `git commit`, then `semilla tag`.\nThe commands of the old protocol are hidden. Only a replay by hand uses them (see `README.md`).")]
+#[command(
+    name = "semilla",
+    version,
+    about = "Verified semantic changes for code review.",
+    after_help = "The loop: edit the code, then `semilla step \"<intent>\"`. At the end: `git commit`, then `semilla tag`.\nThe commands of the old protocol are hidden. Only a replay by hand uses them (see `README.md`)."
+)]
 struct Cli {
     /// The repository folder (default: the current folder).
     #[arg(long, global = true)]
@@ -355,23 +360,37 @@ pub struct TimeTotal {
 }
 
 impl TimeTotal {
+    #[must_use]
     pub const fn new() -> Self {
-        Self { nanos: std::sync::atomic::AtomicU64::new(0), count: std::sync::atomic::AtomicU64::new(0) }
+        Self {
+            nanos: std::sync::atomic::AtomicU64::new(0),
+            count: std::sync::atomic::AtomicU64::new(0),
+        }
     }
 
     /// Adds the time from `started` to now.
     pub fn add(&self, started: std::time::Instant) {
-        self.nanos.fetch_add(started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        // A time over `u64::MAX` nanoseconds (584 years) stops at the maximum.
+        let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.nanos.fetch_add(nanos, std::sync::atomic::Ordering::Relaxed);
         self.count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Prints the total to stderr when `SEMILLA_TIMING` is set, and starts a new total.
+    // The total of one process stays far below 2^52 nanoseconds (52 days), so the cast is exact.
+    #[allow(clippy::cast_precision_loss)]
     pub fn print(&self, phase: &str) {
         let nanos = self.nanos.swap(0, std::sync::atomic::Ordering::Relaxed);
         let count = self.count.swap(0, std::sync::atomic::Ordering::Relaxed);
         if std::env::var_os("SEMILLA_TIMING").is_some() && count > 0 {
             eprintln!("[timing] total of {phase} ({count} times): {:.2} s", nanos as f64 / 1e9);
         }
+    }
+}
+
+impl Default for TimeTotal {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -396,7 +415,10 @@ fn main() -> ExitCode {
 fn phase1_ok(report: &semilla_core::Report) -> bool {
     report.organization.is_empty()
         && report.steps.iter().all(|step| {
-            step.errors.is_empty() && step.uncovered.is_empty() && step.facts.iter().all(|f| !f.spotlight || f.reason.is_some()) && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
+            step.errors.is_empty()
+                && step.uncovered.is_empty()
+                && step.facts.iter().all(|f| !f.spotlight || f.reason.is_some())
+                && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
         })
 }
 
@@ -405,7 +427,10 @@ fn phase1_ok(report: &semilla_core::Report) -> bool {
 fn command_mode(command: &Command) -> buildcode::Mode {
     use buildcode::Mode;
     match command {
-        Command::Status { no_build_code: true, .. } | Command::Review { no_build_code: true, .. } | Command::Ui { no_build_code: true, .. } | Command::Verify { no_build_code: true, .. } => Mode::NoBuildCode,
+        Command::Status { no_build_code: true, .. }
+        | Command::Review { no_build_code: true, .. }
+        | Command::Ui { no_build_code: true, .. }
+        | Command::Verify { no_build_code: true, .. } => Mode::NoBuildCode,
         _ => Mode::Run,
     }
 }
@@ -414,15 +439,34 @@ fn command_mode(command: &Command) -> buildcode::Mode {
 /// command that is not an agent command. `status` with no commit shows the session of the agent.
 /// The worker has the mode of its job.
 fn is_reviewer_command(command: &Command) -> bool {
-    !matches!(command, Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index | Command::Cache { .. } | Command::Worker | Command::Status { commit: None, .. })
+    !matches!(
+        command,
+        Command::Step { .. }
+            | Command::Undo
+            | Command::OldStep { .. }
+            | Command::Check { .. }
+            | Command::Tag { .. }
+            | Command::Replay { .. }
+            | Command::Index
+            | Command::Cache { .. }
+            | Command::Worker
+            | Command::Status { commit: None, .. }
+    )
 }
 
 /// The line for the option `--trust-build-code`, which is gone (design 28.3).
-const OLD_OPTION_LINE: &str = "The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.";
+const OLD_OPTION_LINE: &str =
+    "The option --trust-build-code is gone: the command runs changed build code in the sandbox by default. Remove the option.";
 
 /// True if the command line has the old option.
 fn has_old_option(command: &Command) -> bool {
-    matches!(command, Command::Status { trust_build_code: true, .. } | Command::Review { trust_build_code: true, .. } | Command::Ui { trust_build_code: true, .. } | Command::Verify { trust_build_code: true, .. })
+    matches!(
+        command,
+        Command::Status { trust_build_code: true, .. }
+            | Command::Review { trust_build_code: true, .. }
+            | Command::Ui { trust_build_code: true, .. }
+            | Command::Verify { trust_build_code: true, .. }
+    )
 }
 
 /// Removes each folder of `PATH` that is relative or in the repository folder. Semilla starts
@@ -433,8 +477,13 @@ fn safe_path(dir: &std::path::Path) {
     // The repository folder: the first parent folder with a `.git` entry. Git is not asked,
     // because the search for git uses `PATH`.
     let start = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let root = start.ancestors().find(|folder| folder.join(".git").exists()).map(std::path::Path::to_path_buf);
-    let kept: Vec<PathBuf> = std::env::split_paths(&path).filter(|entry| entry.is_absolute() && root.as_ref().is_none_or(|root| !store::is_inside(entry, root))).collect();
+    let root = start
+        .ancestors()
+        .find(|folder| folder.join(".git").exists())
+        .map(std::path::Path::to_path_buf);
+    let kept: Vec<PathBuf> = std::env::split_paths(&path)
+        .filter(|entry| entry.is_absolute() && root.as_ref().is_none_or(|root| !store::is_inside(entry, root)))
+        .collect();
     if let Ok(joined) = std::env::join_paths(kept) {
         // No other thread runs yet: this is the start of `main`.
         unsafe { std::env::set_var("PATH", joined) };
@@ -462,228 +511,120 @@ fn run(cli: Cli) -> Result<ExitCode> {
     if has_old_option(&cli.command) {
         eprintln!("{OLD_OPTION_LINE}");
     }
-    match cli.command {
-        Command::Pair { action: PairAction::Refuse { old, new, reason } } => println!("{}", app.pair_refuse(&old, &new, Some(&reason))?),
-        Command::Pair { action: PairAction::Unrefuse { old, new } } => println!("{}", app.pair_refuse(&old, &new, None)?),
-        Command::Replay { action: ReplayAction::Begin { commit } } => println!("{}", app.replay_begin(commit.as_deref())?),
-        Command::Replay { action: ReplayAction::Status } => println!("{}", app.replay_status()?),
-        Command::Replay { action: ReplayAction::Plan { out } } => {
-            let text = serde_json::to_string_pretty(&app.replay_plan()?)?;
-            let file = out.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
-            if file.as_os_str() == "-" {
-                std::println!("{text}");
-            } else {
-                std::fs::write(&file, text + "\n")?;
-                println!("wrote the draft plan to {}; check each step and claim, then run `semilla replay apply`", file.display());
-            }
-        }
-        Command::Replay { action: ReplayAction::Apply { plan, full } } => {
-            let plan = plan.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
-            let text = std::fs::read_to_string(&plan).with_context(|| format!("read {}", plan.display()))?;
-            let plan: plan::Plan = serde_json::from_str(&text).with_context(|| format!("{} is not a valid plan", plan.display()))?;
-            let applied = app.replay_apply(&plan, full)?;
-            print!("{}", applied.text);
-            return Ok(if applied.ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
-        }
-        Command::Replay { action: ReplayAction::Take { spec } } => {
-            anyhow::ensure!(!spec.is_empty(), "name what to take: FILE, FILE:LINE, FILE:START-END, or an item path");
-            for one in spec {
-                println!("{}", app.replay_take(&one)?);
-            }
-        }
-        Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
-        Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, reasons, tree, fast } => {
+    dispatch(&mut app, cli.command)
+}
+
+/// Runs one command with the app of the repository.
+fn dispatch(app: &mut App, command: Command) -> Result<ExitCode> {
+    match command {
+        Command::Pair {
+            action: PairAction::Refuse { old, new, reason },
+        } => println!("{}", app.pair_refuse(&old, &new, Some(&reason))?),
+        Command::Pair {
+            action: PairAction::Unrefuse { old, new },
+        } => println!("{}", app.pair_refuse(&old, &new, None)?),
+        Command::Replay { action } => return run_replay(app, action),
+        Command::Step {
+            intent,
+            group,
+            claims,
+            reasons,
+            tree,
+            fast,
+        } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast };
-            let (text, stored) = app.step_once(&request)?;
-            print!("{text}");
-            // Design 37.22: the build code cache keeps the entries of the stored steps and the
-            // newest other entries. A failure of the clean is not a failure of the step.
-            let started = std::time::Instant::now();
-            let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
-            timing("clean the build code cache", started);
-            if !stored {
-                // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
-                return Ok(ExitCode::from(1));
-            }
+            let request = onestep::StepRequest {
+                intent,
+                group,
+                claims,
+                reasons,
+                tree,
+                fast,
+            };
+            return run_step(app, &request);
         }
         Command::Undo => println!("{}", app.undo()?),
-        Command::OldStep { action: StepAction::Begin { intent } } => println!("{}", app.step_begin(&intent)?),
+        Command::OldStep {
+            action: StepAction::Begin { intent },
+        } => println!("{}", app.step_begin(&intent)?),
         Command::OldStep { action: StepAction::End } => println!("{}", app.step_end()?),
         Command::OldStep { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
-        Command::OldStep { action: StepAction::Edit { intent } } => println!("{}", app.step_edit(intent.as_deref())?),
+        Command::OldStep {
+            action: StepAction::Edit { intent },
+        } => println!("{}", app.step_edit(intent.as_deref())?),
         Command::OldStep { action: StepAction::Drop } => println!("{}", app.step_drop()?),
-        Command::Claim { op, at, args } => {
-            let mut map = serde_json::Map::new();
-            for arg in args {
-                let (key, value) = arg.split_once('=').with_context(|| format!("`{arg}` is not key=value"))?;
-                let value = serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
-                map.insert(key.to_string(), value);
-            }
-            println!("claim {} added", app.claim(&op, at.as_deref(), map)?);
-        }
+        Command::Claim { op, at, args } => run_claim(app, &op, at.as_deref(), args)?,
         Command::Reason { at, text } => println!("{}", app.reason(&at, &text)?),
         Command::Unclaim { id } => {
             app.unclaim(&id)?;
             println!("claim {id} removed");
         }
-        Command::Anchor { position, before, up } => {
-            let mut parts = position.rsplitn(3, ':').collect::<Vec<_>>();
-            parts.reverse();
-            let (file, line, column) = match parts.as_slice() {
-                [file, line, column] if line.parse::<usize>().is_ok() => (file.to_string(), line.parse()?, Some(column.parse()?)),
-                [file, line] | [_, file, line] => (file.to_string(), line.parse()?, None),
-                _ => anyhow::bail!("use FILE:LINE or FILE:LINE:COLUMN"),
-            };
-            println!("{}", app.anchor_up(&file, line, column, before, up)?);
-        }
-        Command::Check { step, full } => {
-            let session = app.load_session()?;
-            let last = (session.changeset.steps.len() + usize::from(session.open.is_some())).checked_sub(1).context("no step yet")?;
-            app.no_bodies = app.no_bodies || !full;
-            let result = app.check(Some(step.unwrap_or(last)), false)?;
-            println!("{}\n{}", result.text, result.tree.render());
-            // Phase 1 passes when nothing is wrong except the pending body proofs.
-            let ok = if full { result.report.accepted } else { phase1_ok(&result.report) };
-            return Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
-        }
-        Command::Status { commit, wait, no_wait, verbose, .. } => {
-            // Batch 5k: a reviewer has no use for a list of pending facts, so `status <commit>`
-            // waits for the full check. `status` with no commit shows the present state.
-            let wait = match wait {
-                None if commit.is_some() && !no_wait => Some(600),
-                wait => wait,
-            };
-            let text = app.status(commit.as_deref(), wait, verbose)?;
-            println!("{text}");
-            // Batch 5y, A3: a result that is rejected or not complete has the exit code 1. For a
-            // commit, a result with no phase 2 is not a result. For the session, phase 2 can
-            // run in the background: that state keeps the exit code 0.
-            if app::result_fails(&text, commit.is_some()) {
-                return Ok(ExitCode::from(1));
-            }
-        }
-        Command::Review { target, md, html, full, wait, port, .. } => {
+        Command::Anchor { position, before, up } => run_anchor(app, &position, before, up)?,
+        Command::Check { step, full } => return run_check(app, step, full),
+        Command::Status {
+            commit,
+            wait,
+            no_wait,
+            verbose,
+            ..
+        } => return run_status(app, commit.as_deref(), wait, no_wait, verbose),
+        other => return dispatch_more(app, other),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs one command of the second half of the command list (the review and the data commands).
+fn dispatch_more(app: &mut App, command: Command) -> Result<ExitCode> {
+    match command {
+        Command::Review {
+            target,
+            md,
+            html,
+            full,
+            wait,
+            port,
+            ..
+        } => {
             let target = target.unwrap_or_else(|| "session".into());
-            let (key, set) = app.review_target(&target)?;
-            let hash = background::changeset_hash(&set);
-            // Design 37.21: the review data of this change set, if a step, the background
-            // check, or a review stored it. Then the command checks nothing again.
-            let data = match app.stored_ui_data(&key, &set) {
-                Some(data) => data,
-                None => {
-                    // A result of an older state or of an other mode (design 28) is not the
-                    // result of this command: the check runs again.
-                    if matches!(background::state(&app, &key, &hash), background::State::Missing | background::State::Stale) {
-                        background::enqueue(&app, &background::Job { key: key.clone(), hash: hash.clone(), changeset: (key == "session").then(|| set.clone()), mode: app.mode })?;
-                    }
-                    let state = background::wait(&mut app, &key, &hash, std::time::Duration::from_secs(wait))?;
-                    if state != background::State::Ready {
-                        println!("the background check of {key} is not ready ({state:?}); see `semilla status`");
-                        return Ok(ExitCode::from(1));
-                    }
-                    // The background check of the session stores the review data.
-                    match app.stored_ui_data(&key, &set) {
-                        Some(data) => data,
-                        None => app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?,
-                    }
-                }
-            };
-            if let Some(file) = &md {
-                std::fs::write(file, semilla_ui::export::render_markdown(&data, full))?;
-                println!("wrote {}", file.display());
-            }
-            if let Some(file) = &html {
-                std::fs::write(file, semilla_ui::export::render_html(&data))?;
-                println!("wrote {}", file.display());
-            }
-            // The build code line of the result (design 28), also on the terminal.
-            if let Some(line) = app.build_code_notice(&data.report) {
-                println!("{line}");
-            }
-            // The checked configurations (batch 5s, B1), also on the terminal.
-            for line in crate::app::config_lines(&data.report) {
-                println!("{line}");
-            }
-            // Batch 5y, A3: the terminal shows the result line, and a result that is rejected
-            // or not complete has the exit code 1. The report file is there in each case.
-            let result = app::summary_line(&data.report);
-            println!("{}", result.lines().next().unwrap_or_default());
-            if (md.is_some() || html.is_some()) && !data.report.accepted {
-                return Ok(ExitCode::from(1));
-            }
-            if md.is_none() && html.is_none() {
-                let review = app.review_file();
-                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-                println!("semilla review UI: http://{addr}");
-                tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
-            }
+            return run_review(
+                app,
+                &ReviewArgs {
+                    target,
+                    md,
+                    html,
+                    full,
+                    wait,
+                    port,
+                },
+            );
         }
         Command::Worker => {
-            if !background::run_worker(&mut app, true)? {
+            if !background::run_worker(app, true)? {
                 eprintln!("[worker] another worker runs");
             }
         }
         Command::Verify { commit: Some(commit), .. } => {
             let commit = semilla_core::text::quoted(&commit);
-            anyhow::bail!("`semilla verify` takes no commit ({commit}): it checks the session of this folder. For the result of a commit, use `semilla status HEAD` (or `semilla status <commit>`)");
+            anyhow::bail!(
+                "`semilla verify` takes no commit ({commit}): it checks the session of this folder. For the result of a commit, use `semilla status HEAD` (or `semilla status <commit>`)"
+            );
         }
-        Command::Verify { r#final, json, .. } => {
-            // Batch 5y, A1: the result is accepted only if the session agrees with git. The
-            // first line says what the result covers.
-            let (cover, result) = app.verify(r#final)?;
-            std::fs::write(app.repo.state_dir().join("report.json"), serde_json::to_string_pretty(&result.report)?)?;
-            if json {
-                std::println!("{}", serde_json::to_string_pretty(&result.report)?);
-            } else {
-                // The build code line of the result comes first (design 28.4), then the checked
-                // configurations (batch 5s, B1).
-                println!("{cover}");
-                for line in app.build_code_notice(&result.report).into_iter().chain(crate::app::config_lines(&result.report)) {
-                    println!("{line}");
-                }
-                println!("{}\n{}", result.text, result.tree.render());
-            }
-            return Ok(if result.report.accepted { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        Command::Verify { r#final, json, .. } => return run_verify(app, r#final, json),
+        Command::SuggestClaims => {
+            println!("suggest-claims is retired: Semilla derives a fact for each change (design 24). Run `semilla step \"<intent>\"`.");
         }
-        Command::SuggestClaims => println!("suggest-claims is retired: Semilla derives a fact for each change (design 24). Run `semilla step \"<intent>\"`."),
         Command::Group { id, kind, title, why, steps } => {
-            let kind: GroupKind = serde_json::from_value(serde_json::Value::String(kind.clone())).with_context(|| format!("`{kind}` is not a group kind"))?;
+            let kind: GroupKind =
+                serde_json::from_value(serde_json::Value::String(kind.clone())).with_context(|| format!("`{kind}` is not a group kind"))?;
             app.group_set(&id, kind, &title, &why, steps)?;
             println!("group {id} saved");
         }
-        Command::Subgroups { group, set } => match set {
-            Some(file) => {
-                let layout: Vec<Subgroup> = serde_json::from_str(&std::fs::read_to_string(file)?)?;
-                let errors = app.subgroups_set(&group, layout)?;
-                if errors.is_empty() {
-                    println!("ok");
-                } else {
-                    println!("rejected:\n{}", errors.join("\n"));
-                    return Ok(ExitCode::from(1));
-                }
-            }
-            None => {
-                let saved = app.subgroups_saved(&group)?;
-                if saved.is_empty() {
-                    std::println!("the engine suggestion (no saved layout):\n{}", serde_json::to_string_pretty(&app.subgroups_suggest(&group)?)?);
-                } else {
-                    std::println!("the saved layout:\n{}", serde_json::to_string_pretty(&saved)?);
-                }
-            }
-        },
+        Command::Subgroups { group, set } => return run_subgroups(app, &group, set),
         Command::Index => println!("{}", app.index()?),
-        Command::Cache { clean: false } => println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses."),
-        Command::Cache { clean: true } => {
-            // A background check can build in an entry now. The clean waits for its end.
-            let lock = std::fs::File::create(app.repo.cache_dir().join("worker.lock"))?;
-            lock.lock()?;
-            let (count, size) = app.clean_build_code(0)?;
-            lock.unlock()?;
-            let entries = if count == 1 { "entry" } else { "entries" };
-            println!("removed {count} {entries} of the build code cache that no stored step uses: {} freed", app::size_text(size));
+        Command::Cache { clean: false } => {
+            println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses.");
         }
+        Command::Cache { clean: true } => run_cache_clean(app)?,
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),
         Command::Load { commit } => {
@@ -700,29 +641,307 @@ fn run(cli: Cli) -> Result<ExitCode> {
             println!("semilla review UI: http://{addr}");
             tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
         }
-        Command::Ops { name: None } => {
-            println!("The claims that stay (design 24): Semilla derives each other change as a fact.");
-            for op in semilla_core::ops::OPS.iter().filter(|op| onestep::CLAIMS.contains(&op.name)) {
-                let args = if op.args.is_empty() { String::new() } else { format!(" ({})", op.args.join(", ")) };
-                println!("{:<26} {:<10} {}{args}", op.name, format!("{:?}", op.level).to_lowercase(), op.summary);
-            }
-        }
-        Command::Ops { name: Some(name) } => {
-            let op = semilla_core::ops::op(&name).with_context(|| format!("unknown operation `{name}`"))?;
-            println!("{}: {}", op.name, op.summary);
-            println!("  level: {}   kind: {}   category: {}   role: {}", format!("{:?}", op.level).to_lowercase(), format!("{:?}", op.kind).to_lowercase(),
-                op.category.map(|category| category.name()).unwrap_or("none"),
-                serde_json::to_value(op.role).unwrap().as_str().unwrap());
-            println!("  needs: {}", if op.args.is_empty() { "an anchor only".to_string() } else { format!("an anchor, and {}", op.args.join(", ")) });
-            let optional: Vec<&str> = app::optional_args(op.name).into_iter().filter(|arg| !op.args.contains(arg)).collect();
-            println!("  optional: {}", optional.join(", "));
-            let example_args: Vec<String> = op.args.iter().map(|a| format!("{a}=…")).collect();
-            if let Some(message) = onestep::retired_claim(op.name) {
-                println!("  {message}");
-            }
-            println!("  example: semilla step \"<intent>\" --claim '{} <anchor> {}'", op.name, example_args.join(" "));
-        }
+        Command::Ops { name: None } => run_ops_list(),
+        Command::Ops { name: Some(name) } => run_op(&name)?,
         Command::Mcp => unreachable!(),
+        _ => unreachable!("dispatch runs the other commands"),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Runs `claim`: adds a claim with `key=value` arguments to the open step.
+fn run_claim(app: &mut App, op: &str, at: Option<&str>, args: Vec<String>) -> Result<()> {
+    let mut map = serde_json::Map::new();
+    for arg in args {
+        let (key, value) = arg.split_once('=').with_context(|| format!("`{arg}` is not key=value"))?;
+        let value = serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
+        map.insert(key.to_string(), value);
+    }
+    println!("claim {} added", app.claim(op, at, map)?);
+    Ok(())
+}
+
+/// Runs `anchor`: prints the anchor of a source position.
+fn run_anchor(app: &mut App, position: &str, before: bool, up: usize) -> Result<()> {
+    let mut parts = position.rsplitn(3, ':').collect::<Vec<_>>();
+    parts.reverse();
+    let (file, line, column) = match parts.as_slice() {
+        [file, line, column] if line.parse::<usize>().is_ok() => (file.to_string(), line.parse()?, Some(column.parse()?)),
+        [file, line] | [_, file, line] => (file.to_string(), line.parse()?, None),
+        _ => anyhow::bail!("use FILE:LINE or FILE:LINE:COLUMN"),
+    };
+    println!("{}", app.anchor_up(&file, line, column, before, up)?);
+    Ok(())
+}
+
+/// The options of `review`.
+struct ReviewArgs {
+    target: String,
+    md: Option<PathBuf>,
+    html: Option<PathBuf>,
+    full: bool,
+    wait: u64,
+    port: u16,
+}
+
+/// Runs a `replay` command.
+fn run_replay(app: &mut App, action: ReplayAction) -> Result<ExitCode> {
+    match action {
+        ReplayAction::Begin { commit } => println!("{}", app.replay_begin(commit.as_deref())?),
+        ReplayAction::Status => println!("{}", app.replay_status()?),
+        ReplayAction::Plan { out } => {
+            let text = serde_json::to_string_pretty(&app.replay_plan()?)?;
+            let file = out.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
+            if file.as_os_str() == "-" {
+                std::println!("{text}");
+            } else {
+                std::fs::write(&file, text + "\n")?;
+                println!(
+                    "wrote the draft plan to {}; check each step and claim, then run `semilla replay apply`",
+                    file.display()
+                );
+            }
+        }
+        ReplayAction::Apply { plan, full } => {
+            let plan = plan.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
+            let text = std::fs::read_to_string(&plan).with_context(|| format!("read {}", plan.display()))?;
+            let plan: plan::Plan = serde_json::from_str(&text).with_context(|| format!("{} is not a valid plan", plan.display()))?;
+            let applied = app.replay_apply(&plan, full)?;
+            print!("{}", applied.text);
+            return Ok(if applied.ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        }
+        ReplayAction::Take { spec } => {
+            anyhow::ensure!(!spec.is_empty(), "name what to take: FILE, FILE:LINE, FILE:START-END, or an item path");
+            for one in spec {
+                println!("{}", app.replay_take(&one)?);
+            }
+        }
+        ReplayAction::End => println!("{}", app.replay_end()?),
+        ReplayAction::Abort => println!("{}", app.replay_abort()?),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs `step`: stores one step and prints its result.
+fn run_step(app: &mut App, request: &onestep::StepRequest) -> Result<ExitCode> {
+    let (text, stored) = app.step_once(request)?;
+    print!("{text}");
+    // Design 37.22: the build code cache keeps the entries of the stored steps and the
+    // newest other entries. A failure of the clean is not a failure of the step.
+    let started = std::time::Instant::now();
+    let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
+    timing("clean the build code cache", started);
+    if !stored {
+        // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
+        return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs `check`: checks one step of the session.
+fn run_check(app: &mut App, step: Option<usize>, full: bool) -> Result<ExitCode> {
+    let session = app.load_session()?;
+    let last = (session.changeset.steps.len() + usize::from(session.open.is_some()))
+        .checked_sub(1)
+        .context("no step yet")?;
+    app.no_bodies = app.no_bodies || !full;
+    let result = app.check(Some(step.unwrap_or(last)), false)?;
+    println!("{}\n{}", result.text, result.tree.render());
+    // Phase 1 passes when nothing is wrong except the pending body proofs.
+    let ok = if full { result.report.accepted } else { phase1_ok(&result.report) };
+    Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// Runs `status`: prints the state of the check of the session or of a commit.
+fn run_status(app: &mut App, commit: Option<&str>, wait: Option<u64>, no_wait: bool, verbose: bool) -> Result<ExitCode> {
+    // Batch 5k: a reviewer has no use for a list of pending facts, so `status <commit>`
+    // waits for the full check. `status` with no commit shows the present state.
+    let wait = match wait {
+        None if commit.is_some() && !no_wait => Some(600),
+        wait => wait,
+    };
+    let text = app.status(commit, wait, verbose)?;
+    println!("{text}");
+    // Batch 5y, A3: a result that is rejected or not complete has the exit code 1. For a
+    // commit, a result with no phase 2 is not a result. For the session, phase 2 can
+    // run in the background: that state keeps the exit code 0.
+    if app::result_fails(&text, commit.is_some()) {
+        return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs `review`: writes the report files, or serves the review UI.
+fn run_review(app: &mut App, args: &ReviewArgs) -> Result<ExitCode> {
+    let (key, set) = app.review_target(&args.target)?;
+    let hash = background::changeset_hash(&set);
+    // Design 37.21: the review data of this change set, if a step, the background
+    // check, or a review stored it. Then the command checks nothing again.
+    let data = if let Some(data) = app.stored_ui_data(&key, &set) {
+        data
+    } else {
+        // A result of an older state or of an other mode (design 28) is not the
+        // result of this command: the check runs again.
+        if matches!(background::state(app, &key, &hash), background::State::Missing | background::State::Stale) {
+            background::enqueue(
+                app,
+                &background::Job {
+                    key: key.clone(),
+                    hash: hash.clone(),
+                    changeset: (key == "session").then(|| set.clone()),
+                    mode: app.mode,
+                },
+            )?;
+        }
+        let state = background::wait(app, &key, &hash, std::time::Duration::from_secs(args.wait))?;
+        if state != background::State::Ready {
+            println!("the background check of {key} is not ready ({state:?}); see `semilla status`");
+            return Ok(ExitCode::from(1));
+        }
+        // The background check of the session stores the review data.
+        match app.stored_ui_data(&key, &set) {
+            Some(data) => data,
+            None => app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?,
+        }
+    };
+    if let Some(file) = &args.md {
+        std::fs::write(file, semilla_ui::export::render_markdown(&data, args.full))?;
+        println!("wrote {}", file.display());
+    }
+    if let Some(file) = &args.html {
+        std::fs::write(file, semilla_ui::export::render_html(&data))?;
+        println!("wrote {}", file.display());
+    }
+    // The build code line of the result (design 28), also on the terminal.
+    if let Some(line) = App::build_code_notice(&data.report) {
+        println!("{line}");
+    }
+    // The checked configurations (batch 5s, B1), also on the terminal.
+    for line in crate::app::config_lines(&data.report) {
+        println!("{line}");
+    }
+    // Batch 5y, A3: the terminal shows the result line, and a result that is rejected
+    // or not complete has the exit code 1. The report file is there in each case.
+    let result = app::summary_line(&data.report);
+    println!("{}", result.lines().next().unwrap_or_default());
+    if (args.md.is_some() || args.html.is_some()) && !data.report.accepted {
+        return Ok(ExitCode::from(1));
+    }
+    if args.md.is_none() && args.html.is_none() {
+        let review = app.review_file();
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
+        println!("semilla review UI: http://{addr}");
+        tokio::runtime::Runtime::new()?.block_on(semilla_ui::serve(data, review, addr))?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs `verify`: checks the session and writes `report.json`.
+fn run_verify(app: &mut App, r#final: bool, json: bool) -> Result<ExitCode> {
+    // Batch 5y, A1: the result is accepted only if the session agrees with git. The
+    // first line says what the result covers.
+    let (cover, result) = app.verify(r#final)?;
+    std::fs::write(app.repo.state_dir().join("report.json"), serde_json::to_string_pretty(&result.report)?)?;
+    if json {
+        std::println!("{}", serde_json::to_string_pretty(&result.report)?);
+    } else {
+        // The build code line of the result comes first (design 28.4), then the checked
+        // configurations (batch 5s, B1).
+        println!("{cover}");
+        for line in App::build_code_notice(&result.report)
+            .into_iter()
+            .chain(crate::app::config_lines(&result.report))
+        {
+            println!("{line}");
+        }
+        println!("{}\n{}", result.text, result.tree.render());
+    }
+    Ok(if result.report.accepted { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// Runs `subgroups`: saves a layout, or prints the saved or the suggested layout.
+fn run_subgroups(app: &mut App, group: &str, set: Option<PathBuf>) -> Result<ExitCode> {
+    if let Some(file) = set {
+        let layout: Vec<Subgroup> = serde_json::from_str(&std::fs::read_to_string(file)?)?;
+        let errors = app.subgroups_set(group, layout)?;
+        if errors.is_empty() {
+            println!("ok");
+        } else {
+            println!("rejected:\n{}", errors.join("\n"));
+            return Ok(ExitCode::from(1));
+        }
+    } else {
+        let saved = app.subgroups_saved(group)?;
+        if saved.is_empty() {
+            std::println!(
+                "the engine suggestion (no saved layout):\n{}",
+                serde_json::to_string_pretty(&app.subgroups_suggest(group)?)?
+            );
+        } else {
+            std::println!("the saved layout:\n{}", serde_json::to_string_pretty(&saved)?);
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs `cache --clean`: removes the entries of the build code cache that no stored step uses.
+fn run_cache_clean(app: &mut App) -> Result<()> {
+    // A background check can build in an entry now. The clean waits for its end.
+    let lock = std::fs::File::create(app.repo.cache_dir().join("worker.lock"))?;
+    lock.lock()?;
+    let (count, size) = app.clean_build_code(0)?;
+    lock.unlock()?;
+    let entries = if count == 1 { "entry" } else { "entries" };
+    println!(
+        "removed {count} {entries} of the build code cache that no stored step uses: {} freed",
+        app::size_text(size)
+    );
+
+    Ok(())
+}
+
+/// Runs `ops` with no name: prints the list of the claims.
+fn run_ops_list() {
+    println!("The claims that stay (design 24): Semilla derives each other change as a fact.");
+    for op in semilla_core::ops::OPS.iter().filter(|op| onestep::CLAIMS.contains(&op.name)) {
+        let args = if op.args.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", op.args.join(", "))
+        };
+        println!("{:<26} {:<10} {}{args}", op.name, format!("{:?}", op.level).to_lowercase(), op.summary);
+    }
+}
+
+/// Runs `ops` with a name: prints the details of one claim.
+fn run_op(name: &str) -> Result<()> {
+    let op = semilla_core::ops::op(name).with_context(|| format!("unknown operation `{name}`"))?;
+    println!("{}: {}", op.name, op.summary);
+    println!(
+        "  level: {}   kind: {}   category: {}   role: {}",
+        format!("{:?}", op.level).to_lowercase(),
+        format!("{:?}", op.kind).to_lowercase(),
+        op.category.map_or("none", semilla_core::Category::name),
+        serde_json::to_value(op.role).unwrap().as_str().unwrap()
+    );
+    println!(
+        "  needs: {}",
+        if op.args.is_empty() {
+            "an anchor only".to_string()
+        } else {
+            format!("an anchor, and {}", op.args.join(", "))
+        }
+    );
+    let optional: Vec<&str> = app::optional_args(op.name).into_iter().filter(|arg| !op.args.contains(arg)).collect();
+    println!("  optional: {}", optional.join(", "));
+    let example_args: Vec<String> = op.args.iter().map(|a| format!("{a}=…")).collect();
+    if let Some(message) = onestep::retired_claim(op.name) {
+        println!("  {message}");
+    }
+    println!(
+        "  example: semilla step \"<intent>\" --claim '{} <anchor> {}'",
+        op.name,
+        example_args.join(" ")
+    );
+    Ok(())
 }

@@ -5,9 +5,20 @@
 //! must not read them as commands or as layout. Each output uses the functions of this module:
 //! a hidden character shows as an escape (`\n`, `\r`, `\t`, `\u{1b}`).
 
+/// Tells if `path` ends with a dot and `extension`, as `path.ends_with(".rs")` does.
+///
+/// The compare is case-sensitive: cargo, rustc, and git treat `lib.RS` and `lib.rs` as two
+/// files. A name that is only the extension (`.rs`) also matches.
+#[must_use]
+pub fn has_extension(path: &str, extension: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, found)| found == extension)
+}
+
+use std::fmt::Write as _;
 /// True for a character that a terminal or a viewer does not show as a mark: the C0 and C1
 /// control characters, DEL, the bidirectional controls, the zero-width characters, the line
 /// and paragraph separators, and the byte order mark.
+#[must_use]
 pub fn is_hidden(c: char) -> bool {
     matches!(c,
         '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}'
@@ -21,12 +32,15 @@ fn push_escape(out: &mut String, c: char) {
         '\n' => out.push_str("\\n"),
         '\r' => out.push_str("\\r"),
         '\t' => out.push_str("\\t"),
-        c => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+        c => {
+            let _ = write!(out, "\\u{{{:x}}}", c as u32);
+        }
     }
 }
 
 /// Text for one line: each hidden character is an escape, also a line break. The result
 /// never starts a new output line.
+#[must_use]
 pub fn inline(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -44,16 +58,22 @@ pub fn put_line(out: &mut String, line: &str) {
 
 /// Text for a block (a diff, a source text, the output of a tool): the line breaks stay, and
 /// each other hidden character is an escape.
+#[must_use]
 pub fn block(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        if c != '\n' && is_hidden(c) { push_escape(&mut out, c) } else { out.push(c) }
+        if c != '\n' && is_hidden(c) {
+            push_escape(&mut out, c);
+        } else {
+            out.push(c);
+        }
     }
     out
 }
 
 /// A block inside a line of a report: each line after the first one starts with `indent`, so
 /// no line of the block is at the start of an output line.
+#[must_use]
 pub fn block_indent(text: &str, indent: &str) -> String {
     block(text).replace('\n', &format!("\n{indent}"))
 }
@@ -63,6 +83,7 @@ pub const AGENT_TEXT_NOTE: &str = "Text in quote marks is the text of the agent.
 
 /// The words of the agent, in quote marks (batch 5k, A3). A quote mark and a backslash in the
 /// text get a backslash, so the text cannot close the quote.
+#[must_use]
 pub fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
@@ -82,11 +103,16 @@ pub fn quoted(text: &str) -> String {
 
 /// The escape form of a name with characters outside ASCII: `сharge` gives `\u{441}harge`.
 /// `None` for a name of ASCII characters only.
+#[must_use]
 pub fn ascii_form(name: &str) -> Option<String> {
     if name.is_ascii() {
         return None;
     }
-    Some(name.chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{{{:x}}}", c as u32) }).collect())
+    Some(
+        name.chars()
+            .map(|c| if c.is_ascii() { c.to_string() } else { format!("\\u{{{:x}}}", c as u32) })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -97,7 +123,10 @@ mod tests {
     fn hidden_characters_show_as_escapes() {
         let text = "a\nresult: accepted\u{1b}[8m\r\t\u{7f}\u{85}\u{202e}\u{200b}\u{2028}\u{2029}\u{feff}\u{61c}\u{2066}é·";
         let line = inline(text);
-        assert_eq!(line, "a\\nresult: accepted\\u{1b}[8m\\r\\t\\u{7f}\\u{85}\\u{202e}\\u{200b}\\u{2028}\\u{2029}\\u{feff}\\u{61c}\\u{2066}é·");
+        assert_eq!(
+            line,
+            "a\\nresult: accepted\\u{1b}[8m\\r\\t\\u{7f}\\u{85}\\u{202e}\\u{200b}\\u{2028}\\u{2029}\\u{feff}\\u{61c}\\u{2066}é·"
+        );
         assert!(!line.chars().any(is_hidden));
         // A block keeps its lines.
         assert_eq!(block("a\n\u{1b}b\r\n"), "a\n\\u{1b}b\\r\n");

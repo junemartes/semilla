@@ -1,5 +1,7 @@
 //! Integration tests: build the router with the demo data and call every endpoint.
 
+use serde_json::Map;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -20,7 +22,9 @@ fn enc(text: &str) -> String {
     for byte in text.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
-            other => out.push_str(&format!("%{other:02X}")),
+            other => {
+                let _ = write!(out, "%{other:02X}");
+            }
         }
     }
     out
@@ -56,7 +60,10 @@ async fn call(app: &Router, method: &str, uri: &str) -> Reply {
     let request = Request::builder().method(method).uri(uri).body(Body::empty()).unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
-    let content_type = response.headers().get(header::CONTENT_TYPE).map(|value| value.to_str().unwrap().to_string()).unwrap_or_default();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map_or_default(|value| value.to_str().unwrap().to_string());
     let body = response.into_body().collect().await.unwrap().to_bytes().to_vec();
     Reply { status, content_type, body }
 }
@@ -69,7 +76,12 @@ async fn get(app: &Router, uri: &str) -> Value {
 }
 
 fn ids(values: &Value) -> Vec<String> {
-    values.as_array().unwrap().iter().map(|value| value["id"].as_str().unwrap().to_string()).collect()
+    values
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["id"].as_str().unwrap().to_string())
+        .collect()
 }
 
 fn group<'a>(changeset: &'a Value, id: &str) -> &'a Value {
@@ -95,7 +107,10 @@ async fn changeset_summary() {
     assert_eq!(cs["fact_counts"]["text"], report.facts_text());
     assert_eq!(cs["fact_counts"]["compare"].as_array().unwrap().len(), counts.compare.len());
     assert_eq!(cs["fact_counts"]["category"].as_array().unwrap().len(), counts.category.len());
-    assert!(cs["fact_counts"].get("neutral").is_none() && cs["fact_counts"].get("read").is_none(), "{cs}");
+    assert!(
+        cs["fact_counts"].get("neutral").is_none() && cs["fact_counts"].get("read").is_none(),
+        "{cs}"
+    );
     assert_eq!(cs["accepted"], false);
     assert_eq!(cs["group_count"], 3);
     assert_eq!(cs["step_count"], 7);
@@ -138,9 +153,19 @@ async fn groups_by_risk_then_dependency() {
 async fn subgroups_in_role_order() {
     let app = app();
     let cs = get(&app, "/api/changeset").await;
-    let roles: Vec<&str> = group(&cs, "G1")["subgroups"].as_array().unwrap().iter().map(|sub| sub["role"].as_str().unwrap()).collect();
+    let roles: Vec<&str> = group(&cs, "G1")["subgroups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|sub| sub["role"].as_str().unwrap())
+        .collect();
     assert_eq!(roles, ["core", "custom", "tests", "mechanical"]);
-    let roles: Vec<&str> = group(&cs, "G2")["subgroups"].as_array().unwrap().iter().map(|sub| sub["role"].as_str().unwrap()).collect();
+    let roles: Vec<&str> = group(&cs, "G2")["subgroups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|sub| sub["role"].as_str().unwrap())
+        .collect();
     assert_eq!(roles, ["interface", "core", "config", "propagation"]);
     // Claim results are joined in.
     let core = subgroup(group(&cs, "G1"), "Return early for an empty cart");
@@ -180,7 +205,10 @@ async fn fold_state_follows_contents() {
         subgroup(g3, "Extract and move line_total")["locations"],
         serde_json::json!(["shop_core/src/cart.rs", "shop_core/src/billing.rs"])
     );
-    assert_eq!(subgroup(g2, "Dependency for the error type")["locations"], serde_json::json!(["shop_core/Cargo.toml"]));
+    assert_eq!(
+        subgroup(g2, "Dependency for the error type")["locations"],
+        serde_json::json!(["shop_core/Cargo.toml"])
+    );
 }
 
 #[tokio::test]
@@ -216,7 +244,12 @@ async fn fold_state_ignores_the_label() {
     // A subgroup with no claim is folded.
     assert_eq!(subgroup(g1, "Quantity limit")["folded"], true);
     // c3 has no subgroup now: the UI puts it into a synthetic subgroup.
-    let loose = g1["subgroups"].as_array().unwrap().iter().find(|sub| sub["synthetic"] == true).expect("a synthetic subgroup");
+    let loose = g1["subgroups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|sub| sub["synthetic"] == true)
+        .expect("a synthetic subgroup");
     assert_eq!(ids(&loose["claims"]), ["c3"]);
 }
 
@@ -321,14 +354,25 @@ async fn path_endpoint() {
     assert_eq!(paths["to"], TOTAL);
     let list = paths["paths"].as_array().unwrap();
     assert!(list.contains(&serde_json::json!(["shop_cli::main", "shop_cli::run", TOTAL])));
-    assert!(list.contains(&serde_json::json!(["shop_cli::main", "shop_cli::run", "shop_core::report::summary", TOTAL])));
+    assert!(list.contains(&serde_json::json!([
+        "shop_cli::main",
+        "shop_cli::run",
+        "shop_core::report::summary",
+        TOTAL
+    ])));
     // Without `from`, the paths start at the entry points. The test layer is off by default.
     let all = get(&app, &format!("/api/path?to={}", enc(TOTAL))).await;
     let starts: Vec<&str> = all["paths"].as_array().unwrap().iter().map(|path| path[0].as_str().unwrap()).collect();
     assert!(starts.contains(&"shop_cli::main"));
     assert!(!starts.contains(&"shop_core::cart::tests::empty_cart_total"));
     let with_tests = get(&app, &format!("/api/path?tests=1&to={}", enc(TOTAL))).await;
-    assert!(with_tests["paths"].as_array().unwrap().iter().any(|path| path[0] == "shop_core::cart::tests::empty_cart_total"));
+    assert!(
+        with_tests["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path[0] == "shop_core::cart::tests::empty_cart_total")
+    );
     assert_eq!(call(&app, "GET", "/api/path?from=main").await.status, StatusCode::BAD_REQUEST);
     assert_eq!(call(&app, "GET", "/api/path?to=nothing_here").await.status, StatusCode::NOT_FOUND);
 }
@@ -355,7 +399,10 @@ async fn source_endpoint() {
     let item = get(&app, "/api/source/shop_cli%3A%3Arun%2FS2?v=after").await;
     assert_eq!(item["from"], "item");
     assert_eq!(item["key"], "shop_cli::run");
-    assert_eq!(call(&app, "GET", &format!("/api/source/{}?v=middle", enc(TOTAL))).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        call(&app, "GET", &format!("/api/source/{}?v=middle", enc(TOTAL))).await.status,
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(call(&app, "GET", "/api/source/nothing?v=after").await.status, StatusCode::NOT_FOUND);
 }
 
@@ -395,7 +442,10 @@ async fn search_fuzzy_and_text() {
     assert!(found.contains(&format!("{TOTAL}/S2/body/S0/cond")));
     let total_hit = result["results"].as_array().unwrap().iter().find(|hit| hit["id"] == TOTAL).unwrap();
     assert!(total_hit["matched"].as_array().unwrap().iter().any(|m| m == "source after"));
-    assert!(search(&app, "").await["results"].as_array().unwrap().is_empty());
+    assert_eq!(
+        search(&app, "").await["results"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 #[tokio::test]
@@ -448,37 +498,60 @@ async fn search_site_kinds() {
 #[tokio::test]
 async fn search_graph_terms() {
     let app = app();
-    let mut callers = hit_ids(&search(&app, "callers:Cart::total").await);
-    callers.sort();
+    let mut upstream = hit_ids(&search(&app, "callers:Cart::total").await);
+    upstream.sort();
     assert_eq!(
-        callers,
-        ["shop_cli::run", "shop_core::cart::tests::empty_cart_total", "shop_core::report::legacy_total", "shop_core::report::summary"]
+        upstream,
+        [
+            "shop_cli::run",
+            "shop_core::cart::tests::empty_cart_total",
+            "shop_core::report::legacy_total",
+            "shop_core::report::summary"
+        ]
     );
-    let mut callees = hit_ids(&search(&app, "callees:shop_cli::run").await);
-    callees.sort();
-    assert_eq!(callees, ["shop_cli::load_cart", TOTAL, "shop_core::report::summary"]);
+    let mut downstream = hit_ids(&search(&app, "callees:shop_cli::run").await);
+    downstream.sort();
+    assert_eq!(downstream, ["shop_cli::load_cart", TOTAL, "shop_core::report::summary"]);
     // Graph terms and other filters together.
     assert_eq!(hit_ids(&search(&app, "callers:Cart::total kind:err").await), ["shop_cli::run"]);
 
     let paths = search(&app, "path:main -> Cart::total").await;
-    assert!(paths["results"].as_array().unwrap().is_empty());
-    assert!(paths["paths"].as_array().unwrap().contains(&serde_json::json!(["shop_cli::main", "shop_cli::run", TOTAL])));
+    assert_eq!(paths["results"].as_array().unwrap().as_slice(), [] as [serde_json::Value; 0]);
+    assert!(
+        paths["paths"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(["shop_cli::main", "shop_cli::run", TOTAL]))
+    );
 }
 
 #[tokio::test]
 async fn search_errors() {
     let app = app();
-    for query in ["category:huge", "compare:neutral", "step:x", "kind:leak", "path:main", "callers:no_such_fn", "\"open quote"] {
+    for query in [
+        "category:huge",
+        "compare:neutral",
+        "step:x",
+        "kind:leak",
+        "path:main",
+        "callers:no_such_fn",
+        "\"open quote",
+    ] {
         let result = search(&app, query).await;
         assert!(!result["query"]["errors"].as_array().unwrap().is_empty(), "no error for {query}");
     }
-    assert!(hit_ids(&search(&app, "callers:no_such_fn").await).is_empty());
+    assert_eq!(hit_ids(&search(&app, "callers:no_such_fn").await), [] as [std::string::String; 0]);
 }
 
 // ------------------------------------------------------------------ review state
 
 fn claim_states(review: &Value) -> std::collections::BTreeMap<String, String> {
-    review["claims"].as_object().unwrap().iter().map(|(key, value)| (key.clone(), value.as_str().unwrap().to_string())).collect()
+    review["claims"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.as_str().unwrap().to_string()))
+        .collect()
 }
 
 #[tokio::test]
@@ -508,7 +581,10 @@ async fn review_marks_claims_groups_and_subgroups() {
     assert_eq!(subgroup(g1, "Return early for an empty cart")["reviewed"], false);
 
     // A subgroup by its ID.
-    let mechanical = subgroup(group(&cs, "G3"), "Extract and move line_total")["id"].as_str().unwrap().to_string();
+    let mechanical = subgroup(group(&cs, "G3"), "Extract and move line_total")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let reply = call(&app, "POST", &format!("/api/review/{}", enc(&mechanical))).await.json();
     assert_eq!(reply["kind"], "subgroup");
     assert_eq!(reply["claims"], serde_json::json!(["c6", "c7"]));
@@ -546,7 +622,13 @@ async fn review_state_follows_the_claims() {
     // (that is the item of c8). It also adds a new step: the claims move, but they keep their
     // content.
     let mut data: UiData = demo_data();
-    let c4 = data.changeset.steps.iter_mut().flat_map(|step| step.claims.iter_mut()).find(|claim| claim.id == "c4").unwrap();
+    let c4 = data
+        .changeset
+        .steps
+        .iter_mut()
+        .flat_map(|step| step.claims.iter_mut())
+        .find(|claim| claim.id == "c4")
+        .unwrap();
     c4.args.insert("to".into(), Value::String(">".into()));
     data.sources.get_mut("shop_core::billing::line_total").unwrap().after = Some("pub fn line_total(item: &Item) -> u32 { 0 }".into());
     data.changeset.steps.rotate_left(1);
@@ -654,14 +736,21 @@ async fn page_works_offline() {
 
 #[test]
 fn page_script_has_no_syntax_errors() {
-    let has_node = std::process::Command::new("node").arg("--version").output().is_ok_and(|output| output.status.success());
+    let has_node = std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
     if !has_node {
         eprintln!("skip: node is not on this machine");
         return;
     }
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.js");
     let output = std::process::Command::new("node").arg("--check").arg(script).output().unwrap();
-    assert!(output.status.success(), "node --check app.js:\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "node --check app.js:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -685,7 +774,10 @@ fn the_page_script_shows_each_build_code_mark() {
     ] {
         assert!(js.contains(field), "the page script does not show `{field}`");
     }
-    assert!(js.contains("' (with the build code of step ' + buildCode + ')'"), "the fact label has the mark");
+    assert!(
+        js.contains("' (with the build code of step ' + buildCode + ')'"),
+        "the fact label has the mark"
+    );
 }
 
 #[test]
@@ -717,7 +809,10 @@ async fn empty_data_works() {
     assert_eq!(cs["groups"], serde_json::json!([]));
     assert_eq!(cs["api_level"], "none");
     assert_eq!(cs["panic_delta"], 0);
-    assert!(search(&app, "total").await["results"].as_array().unwrap().is_empty());
+    assert_eq!(
+        search(&app, "total").await["results"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     assert_eq!(get(&app, "/api/graph").await["nodes"], serde_json::json!([]));
 }
 
@@ -822,16 +917,31 @@ async fn the_reviewer_decides_on_a_pair_warning() {
     assert_eq!(summary["lines_text"], "");
 
     let pair = "old=shop_core%3A%3Acart%3A%3Aold_total&new=shop_core%3A%3Acart%3A%3Anew_total";
-    assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=accepted")).await.status, StatusCode::OK);
+    assert_eq!(
+        call(&app, "POST", &format!("/api/pair?{pair}&decision=accepted")).await.status,
+        StatusCode::OK
+    );
     assert_eq!(get(&app, "/api/changeset").await["pairs"][0]["reviewer"], "accepted");
     // The CLI reads the same file.
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(saved["pairs"]["shop_core::cart::old_total -> shop_core::cart::new_total"]["decision"], "accepted");
+    assert_eq!(
+        saved["pairs"]["shop_core::cart::old_total -> shop_core::cart::new_total"]["decision"],
+        "accepted"
+    );
 
-    assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=clear")).await.status, StatusCode::OK);
+    assert_eq!(
+        call(&app, "POST", &format!("/api/pair?{pair}&decision=clear")).await.status,
+        StatusCode::OK
+    );
     assert!(get(&app, "/api/changeset").await["pairs"][0]["reviewer"].is_null());
-    assert_eq!(call(&app, "POST", &format!("/api/pair?{pair}&decision=maybe")).await.status, StatusCode::BAD_REQUEST);
-    assert_eq!(call(&app, "POST", "/api/pair?old=a&new=b&decision=accepted").await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        call(&app, "POST", &format!("/api/pair?{pair}&decision=maybe")).await.status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(&app, "POST", "/api/pair?old=a&new=b&decision=accepted").await.status,
+        StatusCode::NOT_FOUND
+    );
 }
 
 // ------------------------------------------------------------------ property claims
@@ -843,9 +953,15 @@ async fn a_property_claim_is_a_checked_fact() {
     let group_id = data.changeset.groups[0].id.clone();
     let step = data.changeset.groups[0].steps[0];
     let at = "shop_core::cart::Cart::total";
-    data.changeset.steps[step].claims.push(semilla_core::Claim { id: "c99".into(), op: "no-unsafe".into(), at: at.parse().ok(), args: Default::default() });
+    data.changeset.steps[step].claims.push(semilla_core::Claim {
+        id: "c99".into(),
+        op: "no-unsafe".into(),
+        at: at.parse().ok(),
+        args: Map::default(),
+    });
     let report = data.report.steps.iter_mut().find(|s| s.step == step).unwrap();
-    report.claims.push(semilla_core::ClaimResult { build_code: None,
+    report.claims.push(semilla_core::ClaimResult {
+        build_code: None,
         claim: "c99".into(),
         step,
         status: semilla_core::ClaimStatus::Verified { proof: "syntax".into() },

@@ -47,55 +47,25 @@ impl RustType {
         // Accept full paths to the primitive types, for example `core::primitive::u32`.
         let name = rest.rsplit("::").next().unwrap_or(rest).trim();
         match name {
-            "u8" => RustType::Int {
-                bits: 8,
-                signed: false,
-            },
-            "u16" => RustType::Int {
-                bits: 16,
-                signed: false,
-            },
-            "u32" => RustType::Int {
-                bits: 32,
-                signed: false,
-            },
-            "u64" => RustType::Int {
-                bits: 64,
-                signed: false,
-            },
+            "u8" => RustType::Int { bits: 8, signed: false },
+            "u16" => RustType::Int { bits: 16, signed: false },
+            "u32" => RustType::Int { bits: 32, signed: false },
+            "u64" => RustType::Int { bits: 64, signed: false },
             // The width of a pointer is a property of the target.
             "usize" => RustType::Int {
                 bits: crate::build::current().pointer_bits,
                 signed: false,
             },
-            "u128" => RustType::Int {
-                bits: 128,
-                signed: false,
-            },
-            "i8" => RustType::Int {
-                bits: 8,
-                signed: true,
-            },
-            "i16" => RustType::Int {
-                bits: 16,
-                signed: true,
-            },
-            "i32" => RustType::Int {
-                bits: 32,
-                signed: true,
-            },
-            "i64" => RustType::Int {
-                bits: 64,
-                signed: true,
-            },
+            "u128" => RustType::Int { bits: 128, signed: false },
+            "i8" => RustType::Int { bits: 8, signed: true },
+            "i16" => RustType::Int { bits: 16, signed: true },
+            "i32" => RustType::Int { bits: 32, signed: true },
+            "i64" => RustType::Int { bits: 64, signed: true },
             "isize" => RustType::Int {
                 bits: crate::build::current().pointer_bits,
                 signed: true,
             },
-            "i128" => RustType::Int {
-                bits: 128,
-                signed: true,
-            },
+            "i128" => RustType::Int { bits: 128, signed: true },
             "bool" => RustType::Bool,
             "char" => RustType::Char,
             "f32" | "f64" | "f16" | "f128" => RustType::Float,
@@ -115,6 +85,7 @@ pub struct TypeEnv {
 }
 
 impl TypeEnv {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -136,14 +107,19 @@ impl TypeEnv {
     }
 
     /// Parses the source text of a type. See [`RustType::parse`].
+    #[must_use]
     pub fn parse_type(text: &str) -> RustType {
         RustType::parse(text)
     }
 
     /// Returns the type of a variable or an atom, or `Unknown`.
+    #[must_use]
     pub fn get(&self, name: &str) -> RustType {
         if let Some(signed) = self.pointer.get(name).or_else(|| self.pointer.get(&normalize_key(name))) {
-            return RustType::Int { bits: crate::build::current().pointer_bits, signed: *signed };
+            return RustType::Int {
+                bits: crate::build::current().pointer_bits,
+                signed: *signed,
+            };
         }
         self.types
             .get(name)
@@ -167,72 +143,24 @@ mod tests {
 
     #[test]
     fn parse_types() {
-        assert_eq!(
-            RustType::parse("u32"),
-            RustType::Int {
-                bits: 32,
-                signed: false
-            }
-        );
-        assert_eq!(
-            RustType::parse("usize"),
-            RustType::Int {
-                bits: 64,
-                signed: false
-            }
-        );
-        assert_eq!(
-            RustType::parse("isize"),
-            RustType::Int {
-                bits: 64,
-                signed: true
-            }
-        );
-        assert_eq!(
-            RustType::parse("&u32"),
-            RustType::Int {
-                bits: 32,
-                signed: false
-            }
-        );
-        assert_eq!(
-            RustType::parse("&mut i8"),
-            RustType::Int {
-                bits: 8,
-                signed: true
-            }
-        );
-        assert_eq!(
-            RustType::parse("&'a &u16"),
-            RustType::Int {
-                bits: 16,
-                signed: false
-            }
-        );
+        assert_eq!(RustType::parse("u32"), RustType::Int { bits: 32, signed: false });
+        assert_eq!(RustType::parse("usize"), RustType::Int { bits: 64, signed: false });
+        assert_eq!(RustType::parse("isize"), RustType::Int { bits: 64, signed: true });
+        assert_eq!(RustType::parse("&u32"), RustType::Int { bits: 32, signed: false });
+        assert_eq!(RustType::parse("&mut i8"), RustType::Int { bits: 8, signed: true });
+        assert_eq!(RustType::parse("&'a &u16"), RustType::Int { bits: 16, signed: false });
         assert_eq!(RustType::parse("bool"), RustType::Bool);
         assert_eq!(RustType::parse("char"), RustType::Char);
         assert_eq!(RustType::parse("f64"), RustType::Float);
         assert_eq!(RustType::parse("Vec<u32>"), RustType::Unknown);
-        assert_eq!(
-            RustType::parse("std::primitive::u64"),
-            RustType::Int {
-                bits: 64,
-                signed: false
-            }
-        );
+        assert_eq!(RustType::parse("std::primitive::u64"), RustType::Int { bits: 64, signed: false });
     }
 
     #[test]
     fn env_keys_are_normalized() {
         let mut env = TypeEnv::new();
         env.insert("v . len ()", RustType::parse("usize"));
-        assert_eq!(
-            env.get("v.len()"),
-            RustType::Int {
-                bits: 64,
-                signed: false
-            }
-        );
+        assert_eq!(env.get("v.len()"), RustType::Int { bits: 64, signed: false });
         assert_eq!(env.get("w.len()"), RustType::Unknown);
     }
 }

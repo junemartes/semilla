@@ -189,6 +189,10 @@ cargo test --workspace
 
 The end-to-end test (`crates/semilla/tests/e2e.rs`) runs the real binary on a temporary git repository with a two-crate workspace. It covers the agent flow, the storage, the MCP server, and the UI server. The test of a large step (`crates/semilla/tests/large.rs`) makes its own crate of 12 modules. It checks one step of 578 changed lines and 14 steps with one more small change (design 37.10).
 
+## Style
+
+The code follows [`docs/STYLE.md`](docs/STYLE.md). `just style` runs the mechanical checks. The CI runs them and the tests on each pull request and on each push to `main`.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE). The vendored UI libraries in `crates/semilla-ui/assets/vendor/` keep their own licenses (MIT, and EPL-2.0 for elkjs).

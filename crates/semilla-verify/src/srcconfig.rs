@@ -17,16 +17,65 @@ pub(crate) const UNSEEN: &str = " (not known)";
 
 /// The attributes that do not select code by the build configuration.
 const ATTR_FREE: [&str; 21] = [
-    "allow", "expect", "warn", "deny", "forbid", "doc", "inline", "cold", "must_use", "test", "should_panic", "ignore", "derive", "repr", "non_exhaustive", "track_caller", "rustfmt::skip",
-    "deprecated", "automatically_derived", "default", "macro_export",
+    "allow",
+    "expect",
+    "warn",
+    "deny",
+    "forbid",
+    "doc",
+    "inline",
+    "cold",
+    "must_use",
+    "test",
+    "should_panic",
+    "ignore",
+    "derive",
+    "repr",
+    "non_exhaustive",
+    "track_caller",
+    "rustfmt::skip",
+    "deprecated",
+    "automatically_derived",
+    "default",
+    "macro_export",
 ];
 
 /// The macros of the standard library with an expansion that has no `cfg` attribute. The MIR
 /// driver makes the values of `cfg!`, `env!`, and `option_env!` opaque.
 pub(crate) const MACRO_FREE: [&str; 33] = [
-    "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "vec", "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne",
-    "matches", "panic", "unreachable", "unimplemented", "todo", "concat", "stringify", "line", "column", "file", "module_path", "include_str", "include_bytes", "cfg", "env", "option_env",
-    "compile_error", "dbg",
+    "println",
+    "print",
+    "eprintln",
+    "eprint",
+    "format",
+    "format_args",
+    "write",
+    "writeln",
+    "vec",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "matches",
+    "panic",
+    "unreachable",
+    "unimplemented",
+    "todo",
+    "concat",
+    "stringify",
+    "line",
+    "column",
+    "file",
+    "module_path",
+    "include_str",
+    "include_bytes",
+    "cfg",
+    "env",
+    "option_env",
+    "compile_error",
+    "dbg",
 ];
 
 /// The keywords of each edition of Rust (the strict keywords and the reserved keywords of the
@@ -34,9 +83,9 @@ pub(crate) const MACRO_FREE: [&str; 33] = [
 /// `if`. A keyword of a later edition only (`async`, `await`, `dyn`, `try`, `gen`) is not in the
 /// list: it is a macro name in an earlier edition. A raw identifier (`r#try!`) is not a keyword.
 pub(crate) const KEYWORDS: [&str; 47] = [
-    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
-    "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof",
-    "unsized", "virtual", "yield",
+    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
+    "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+    "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
 ];
 
 const STD: [&str; 3] = ["std", "core", "alloc"];
@@ -138,13 +187,26 @@ impl<'a> Scan<'a> {
                 match item.kind {
                     ItemKind::Macro => {
                         // The path of a twin has a suffix after the mark: `name!#1`.
-                        let name = item.path.rsplit("::").next().unwrap_or("").split('#').next().unwrap_or("").trim_end_matches('!').to_string();
+                        let name = item
+                            .path
+                            .rsplit("::")
+                            .next()
+                            .unwrap_or("")
+                            .split('#')
+                            .next()
+                            .unwrap_or("")
+                            .trim_end_matches('!')
+                            .to_string();
                         scan.macros.entry(name).or_default().push(item);
                     }
                     ItemKind::Use | ItemKind::Other => {
                         // The crate roots that have the item. `None`: not known, so the scope
                         // is the wide one.
-                        let roots: Option<Vec<String>> = scan.roots.get(&item.file).filter(|roots| !roots.is_empty()).map(|roots| roots.iter().cloned().collect());
+                        let roots: Option<Vec<String>> = scan
+                            .roots
+                            .get(&item.file)
+                            .filter(|roots| !roots.is_empty())
+                            .map(|roots| roots.iter().cloned().collect());
                         // `#[macro_use] extern crate x;`: the macros of `x` are in each module
                         // of the crate root that has the item, and in no other crate root
                         // (batch 5x, part A: a bench target of `humantime` stopped each proof
@@ -167,29 +229,23 @@ impl<'a> Scan<'a> {
                             _ => vec![EACH.to_string()],
                         };
                         let foreign = |first: &str| !(LOCAL.contains(&first) || STD.contains(&first) || scan.crates.contains(first));
-                        match crate::opaque::use_imports(&item.text) {
-                            // A name that the line can bring: the last segment, the name after
-                            // `as`, each name of a group. A segment in the middle of a path
-                            // brings no name (`use chrono::format::Fixed::*;` brings no macro
-                            // with the name `format` by that segment).
-                            Some(imports) => {
-                                for import in imports.iter().filter(|import| foreign(&import.first)) {
-                                    match &import.leaf {
-                                        None => {
-                                            scan.foreign.insert(item.file.clone());
-                                        }
-                                        Some(name) if MACRO_FREE.contains(&name.as_str()) => scan.shadowed.extend(scopes.iter().map(|scope| (scope.clone(), name.clone()))),
-                                        Some(_) => {}
+                        if let Some(imports) = crate::opaque::use_imports(&item.text) {
+                            for import in imports.iter().filter(|import| foreign(&import.first)) {
+                                match &import.leaf {
+                                    None => {
+                                        scan.foreign.insert(item.file.clone());
                                     }
+                                    Some(name) if MACRO_FREE.contains(&name.as_str()) => {
+                                        scan.shadowed.extend(scopes.iter().map(|scope| (scope.clone(), name.clone())));
+                                    }
+                                    Some(_) => {}
                                 }
                             }
-                            // A text that Semilla cannot read: each word is a name, for each
-                            // crate.
-                            None => {
-                                let idents = item.text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|t| !t.is_empty());
-                                scan.shadowed.extend(idents.filter(|t| MACRO_FREE.contains(t)).map(|t| (EACH.to_string(), t.to_string())));
-                                scan.foreign.insert(item.file.clone());
-                            }
+                        } else {
+                            let idents = item.text.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|t| !t.is_empty());
+                            scan.shadowed
+                                .extend(idents.filter(|t| MACRO_FREE.contains(t)).map(|t| (EACH.to_string(), t.to_string())));
+                            scan.foreign.insert(item.file.clone());
                         }
                     }
                     _ => {}
@@ -202,11 +258,16 @@ impl<'a> Scan<'a> {
     /// True if a macro of a crate outside the workspace can have the name `name` in `item`,
     /// with no path before the name.
     fn hidden(&self, name: &str, item: &Item) -> bool {
-        if self.foreign.contains(&item.file) || self.macro_use_wide.contains(&item.crate_name) || self.shadowed.contains(&(EACH.to_string(), name.to_string())) {
+        if self.foreign.contains(&item.file)
+            || self.macro_use_wide.contains(&item.crate_name)
+            || self.shadowed.contains(&(EACH.to_string(), name.to_string()))
+        {
             return true;
         }
         match self.roots.get(&item.file).filter(|roots| !roots.is_empty()) {
-            Some(roots) => roots.iter().any(|root| self.macro_use.contains(root) || self.shadowed.contains(&(root.clone(), name.to_string()))),
+            Some(roots) => roots
+                .iter()
+                .any(|root| self.macro_use.contains(root) || self.shadowed.contains(&(root.clone(), name.to_string()))),
             // No known crate root: the wide rule (each `#[macro_use]`, each import of the name).
             None => !self.macro_use.is_empty() || self.shadowed.iter().any(|(_, shadowed)| shadowed == name),
         }
@@ -262,7 +323,10 @@ impl<'a> Scan<'a> {
             // An attribute: `#`, an optional `!`, and a group in brackets.
             if punct(trees.get(index), '#') {
                 let at = if punct(trees.get(index + 1), '!') { index + 2 } else { index + 1 };
-                if let Some(TokenTree::Group(group)) = trees.get(at).filter(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket)) {
+                if let Some(TokenTree::Group(group)) = trees
+                    .get(at)
+                    .filter(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket))
+                {
                     let name = attribute_name(group.stream());
                     let text = format!("#[{}]", compact(&group.stream().to_string()));
                     // Free: a `cfg_attr` with a content of the allow list (batch 5o, A5), and an
@@ -343,8 +407,14 @@ impl<'a> Scan<'a> {
             if let Some(TokenTree::Group(group)) = trees.get(index + 2) {
                 idents(&group.stream().into_iter().collect::<Vec<_>>(), &mut inside);
             }
-            if let Some(name) = inside.iter().map(|name| name.trim_start_matches("r#")).find(|name| self.watch.contains(*name)) {
-                found.named.insert(format!("`{shown}` with the name `{name}` of the rename in its tokens (Semilla cannot see into it)"));
+            if let Some(name) = inside
+                .iter()
+                .map(|name| name.trim_start_matches("r#"))
+                .find(|name| self.watch.contains(*name))
+            {
+                found.named.insert(format!(
+                    "`{shown}` with the name `{name}` of the rename in its tokens (Semilla cannot see into it)"
+                ));
             }
         }
         if !free {
@@ -401,7 +471,7 @@ fn ends(trees: &[TokenTree], at: usize) -> bool {
 
 /// The tokens of a text. Empty if Semilla cannot read the text.
 fn tokens_of(text: &str) -> Vec<TokenTree> {
-    text.parse::<TokenStream>().map(|stream| stream.into_iter().collect()).unwrap_or_default()
+    text.parse::<TokenStream>().map_or_default(|stream| stream.into_iter().collect())
 }
 
 /// Each identifier of the tokens, at each depth.
@@ -421,33 +491,42 @@ fn idents(trees: &[TokenTree], out: &mut BTreeSet<String>) {
 /// differ, and the full statement around each block that holds them. So an attribute or a
 /// condition above the changed code is in the part, and a use in a different statement is
 /// not. The last value is true if the part starts at the start of the item.
-fn changed(old: Vec<TokenTree>, new: Vec<TokenTree>) -> (Vec<TokenTree>, Vec<TokenTree>, bool) {
-    let text = |trees: &[TokenTree]| trees.iter().map(|tree| tree.to_string()).collect::<Vec<_>>();
-    let (old_text, new_text) = (text(&old), text(&new));
+fn changed(old: &[TokenTree], new: &[TokenTree]) -> (Vec<TokenTree>, Vec<TokenTree>, bool) {
+    let text = |trees: &[TokenTree]| trees.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
+    let (old_text, new_text) = (text(old), text(new));
     let most = old.len().min(new.len());
     let prefix = (0..most).take_while(|at| old_text[*at] == new_text[*at]).count();
-    let suffix = (0..most - prefix).take_while(|at| old_text[old.len() - 1 - at] == new_text[new.len() - 1 - at]).count();
+    let suffix = (0..most - prefix)
+        .take_while(|at| old_text[old.len() - 1 - at] == new_text[new.len() - 1 - at])
+        .count();
     if prefix == old.len() && prefix == new.len() {
         return (Vec::new(), Vec::new(), false);
     }
     // The start of the statement with the first changed token, and the end of the statement
     // with the last one. The tokens before `prefix` are the same on the two sides.
-    let start = (0..prefix).rev().find(|at| ends(&new, *at)).map(|at| at + 1).unwrap_or(0);
+    let start = (0..prefix).rev().find(|at| ends(new, *at)).map_or(0, |at| at + 1);
     let (old_end, new_end) = (old.len() - suffix, new.len() - suffix);
     // No tail if the changed tokens of each side stop at the end of a statement.
     let whole = |side: &[TokenTree], end: usize| end == prefix || ends(side, end - 1);
-    let tail = if whole(&old, old_end) && whole(&new, new_end) { 0 } else { (new_end..new.len()).find(|at| ends(&new, *at)).map(|at| at + 1 - new_end).unwrap_or(suffix) };
-    if let (1, 1, Some(TokenTree::Group(a)), Some(TokenTree::Group(b))) = (old_end - prefix, new_end - prefix, old.get(prefix), new.get(prefix)) {
-        if a.delimiter() == b.delimiter() {
-            let (inner_old, inner_new, _) = changed(a.stream().into_iter().collect(), b.stream().into_iter().collect());
-            let wrap = |side: &[TokenTree], inner: Vec<TokenTree>, end: usize| {
-                let mut out: Vec<TokenTree> = side[start..prefix].to_vec();
-                out.push(TokenTree::Group(semilla_syntax::tt::Group::new(a.delimiter(), inner.into_iter().collect())));
-                out.extend(side[end..end + tail].iter().cloned());
-                out
-            };
-            return (wrap(&old, inner_old, old_end), wrap(&new, inner_new, new_end), start == 0);
-        }
+    let tail = if whole(old, old_end) && whole(new, new_end) {
+        0
+    } else {
+        (new_end..new.len()).find(|at| ends(new, *at)).map_or(suffix, |at| at + 1 - new_end)
+    };
+    if let (1, 1, Some(TokenTree::Group(a)), Some(TokenTree::Group(b))) = (old_end - prefix, new_end - prefix, old.get(prefix), new.get(prefix))
+        && a.delimiter() == b.delimiter()
+    {
+        let (inner_old, inner_new, _) = changed(&a.stream().into_iter().collect::<Vec<_>>(), &b.stream().into_iter().collect::<Vec<_>>());
+        let wrap = |side: &[TokenTree], inner: Vec<TokenTree>, end: usize| {
+            let mut out: Vec<TokenTree> = side[start..prefix].to_vec();
+            out.push(TokenTree::Group(semilla_syntax::tt::Group::new(
+                a.delimiter(),
+                inner.into_iter().collect(),
+            )));
+            out.extend(side[end..end + tail].iter().cloned());
+            out
+        };
+        return (wrap(old, inner_old, old_end), wrap(new, inner_new, new_end), start == 0);
     }
     (old[start..old_end + tail].to_vec(), new[start..new_end + tail].to_vec(), start == 0)
 }
@@ -457,7 +536,9 @@ fn changed(old: Vec<TokenTree>, new: Vec<TokenTree>) -> (Vec<TokenTree>, Vec<Tok
 /// `deprecated`. `content` is the token stream in the brackets.
 fn free_declaration_attribute(content: TokenStream) -> bool {
     let trees: Vec<TokenTree> = content.into_iter().collect();
-    let Some(TokenTree::Ident(name)) = trees.first() else { return false };
+    let Some(TokenTree::Ident(name)) = trees.first() else {
+        return false;
+    };
     let equal = matches!(trees.get(1), Some(TokenTree::Punct(p)) if p.as_char() == '=');
     let group = |text: Option<&str>| matches!(trees.get(1), Some(TokenTree::Group(g)) if trees.len() == 2 && g.delimiter() == Delimiter::Parenthesis && text.is_none_or(|text| compact(&g.stream().to_string()) == text));
     match name.to_string().as_str() {
@@ -477,7 +558,9 @@ fn without_free_parts(stream: TokenStream) -> String {
     let mut kept: Vec<String> = Vec::new();
     let mut index = 0;
     while index + 1 < tokens.len() {
-        let (TokenTree::Punct(mark), TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        let (TokenTree::Punct(mark), TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else {
+            break;
+        };
         if mark.as_char() != '#' || group.delimiter() != Delimiter::Bracket {
             break;
         }
@@ -490,12 +573,15 @@ fn without_free_parts(stream: TokenStream) -> String {
     // with a different first word is not a part of the visibility (a tuple field: `pub (u8, u8)`).
     if matches!(tokens.get(index), Some(TokenTree::Ident(word)) if word == "pub") {
         index += 1;
-        let scope = |group: &semilla_syntax::tt::Group| group.delimiter() == Delimiter::Parenthesis && matches!(group.stream().into_iter().next(), Some(TokenTree::Ident(word)) if ["crate", "super", "self", "in"].contains(&word.to_string().as_str()));
+        let scope = |group: &semilla_syntax::tt::Group| {
+            group.delimiter() == Delimiter::Parenthesis
+                && matches!(group.stream().into_iter().next(), Some(TokenTree::Ident(word)) if ["crate", "super", "self", "in"].contains(&word.to_string().as_str()))
+        };
         if matches!(tokens.get(index), Some(TokenTree::Group(group)) if scope(group)) {
             index += 1;
         }
     }
-    kept.extend(tokens[index..].iter().map(|token| token.to_string()));
+    kept.extend(tokens[index..].iter().map(std::string::ToString::to_string));
     kept.join(" ")
 }
 
@@ -507,14 +593,19 @@ fn has_token_reader(stream: TokenStream) -> bool {
     let tokens: Vec<TokenTree> = stream.into_iter().collect();
     let mut index = 0;
     while index + 1 < tokens.len() {
-        let (TokenTree::Punct(mark), TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        let (TokenTree::Punct(mark), TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else {
+            break;
+        };
         if mark.as_char() != '#' || group.delimiter() != Delimiter::Bracket {
             break;
         }
         let name = attribute_name(group.stream());
         let known = match name.as_str() {
             "cfg" => true,
-            "cfg_attr" => matches!(crate::opaque::attr_kind(group.stream()), Some(crate::opaque::Attr::Free | crate::opaque::Attr::Covered | crate::opaque::Attr::Derive(_))),
+            "cfg_attr" => matches!(
+                crate::opaque::attr_kind(group.stream()),
+                Some(crate::opaque::Attr::Free | crate::opaque::Attr::Covered | crate::opaque::Attr::Derive(_))
+            ),
             name => ATTR_FREE.contains(&name) || crate::facts::is_lint_tool(name),
         };
         if !known {
@@ -534,7 +625,9 @@ fn has_token_reader(stream: TokenStream) -> bool {
 /// The answer is "no" if an attribute macro can read the tokens: an attribute that Semilla
 /// does not know on the item, or on an item around it (an `impl` block, a trait, a module).
 pub(crate) fn free_parts_only(old: &Item, new: &Item, before: &Workspace, after: &Workspace) -> bool {
-    let (Ok(old_stream), Ok(new_stream)) = (old.text.parse::<TokenStream>(), new.text.parse::<TokenStream>()) else { return false };
+    let (Ok(old_stream), Ok(new_stream)) = (old.text.parse::<TokenStream>(), new.text.parse::<TokenStream>()) else {
+        return false;
+    };
     if has_token_reader(old_stream.clone()) || has_token_reader(new_stream.clone()) {
         return false;
     }
@@ -569,7 +662,9 @@ fn without_item_docs(stream: TokenStream) -> String {
     let mut kept: Vec<String> = Vec::new();
     let mut index = 0;
     while index + 1 < tokens.len() {
-        let (semilla_syntax::tt::TokenTree::Punct(mark), semilla_syntax::tt::TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else { break };
+        let (semilla_syntax::tt::TokenTree::Punct(mark), semilla_syntax::tt::TokenTree::Group(group)) = (&tokens[index], &tokens[index + 1]) else {
+            break;
+        };
         if mark.as_char() != '#' || group.delimiter() != semilla_syntax::tt::Delimiter::Bracket {
             break;
         }
@@ -580,9 +675,13 @@ fn without_item_docs(stream: TokenStream) -> String {
         }
         index += 2;
     }
-    kept.extend(tokens[index..].iter().map(|token| token.to_string()));
+    kept.extend(tokens[index..].iter().map(std::string::ToString::to_string));
     kept.join(" ")
 }
+
+/// The uses of the build configuration in the text of an item, the uses in its changed
+/// statements, and the names only outside the changed statements. `None`: no edit of the code.
+type ItemUses = Option<(Found, Found, Option<BTreeSet<String>>)>;
 
 /// Changes the comparison of each body with a text edit and with code that depends on the
 /// build configuration in its source text. The body is not equal for each build, so the
@@ -592,13 +691,19 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
     let old_of: BTreeMap<&String, &String> = renames.iter().map(|(old, new)| (new, old)).collect();
     // The names of the rename map (batch 5x, part A).
     let pairs = crate::opaque::rename_pairs(renames);
-    scan.watch = pairs.iter().filter(|(old, new)| old != new).flat_map(|(old, new)| [old.clone(), new.clone()]).collect();
-    let mut done: BTreeMap<String, Option<(Found, Found, Option<BTreeSet<String>>)>> = BTreeMap::new();
+    scan.watch = pairs
+        .iter()
+        .filter(|(old, new)| old != new)
+        .flat_map(|(old, new)| [old.clone(), new.clone()])
+        .collect();
+    let mut done: BTreeMap<String, ItemUses> = BTreeMap::new();
     for body in bodies.iter_mut() {
         if !matches!(body.status, BodyStatus::Equal { .. } | BodyStatus::Different { .. }) {
             continue;
         }
-        let Some(path) = crate::checks::find_item_by(&body.name, body.span.as_ref(), after) else { continue };
+        let Some(path) = crate::checks::find_item_by(&body.name, body.span.as_ref(), after) else {
+            continue;
+        };
         let found = done.entry(path.clone()).or_insert_with(|| {
             let new = after.items.get(&path)?;
             let old = before.items.get(old_of.get(&path).copied().unwrap_or(&path));
@@ -641,7 +746,8 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
                     if free_parts_only(old, new, before, after) {
                         return None;
                     }
-                    let (old_part, new_part, start) = changed(old_stream.into_iter().collect(), new_stream.into_iter().collect());
+                    let (old_part, new_part, start) =
+                        changed(&old_stream.into_iter().collect::<Vec<_>>(), &new_stream.into_iter().collect::<Vec<_>>());
                     // The same tokens: the edit is in a comment or in the space.
                     if old_part.is_empty() && new_part.is_empty() {
                         return None;
@@ -666,7 +772,10 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
         // statements (batch 5o, A4). `words`: the names only outside the changed statements.
         if let Some(words) = words {
             body.config.retain(|text| {
-                let name = text.split('`').nth(1).and_then(|part| part.split(|c: char| !(c.is_alphanumeric() || c == '_')).find(|word| !word.is_empty()));
+                let name = text
+                    .split('`')
+                    .nth(1)
+                    .and_then(|part| part.split(|c: char| !(c.is_alphanumeric() || c == '_')).find(|word| !word.is_empty()));
                 !name.is_some_and(|name| words.contains(name))
             });
         }
@@ -680,7 +789,12 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
             body.status = BodyStatus::Different { cfg_changed: true };
             // The cause, for the note of a fact with no spotlight (batch 5u).
             // A call with a name of the rename map is the first cause (batch 5x, part A).
-            let causes = found.named.iter().cloned().chain(found.config.iter().cloned()).chain(found.unseen.iter().map(|text| format!("{text}{UNSEEN}")));
+            let causes = found
+                .named
+                .iter()
+                .cloned()
+                .chain(found.config.iter().cloned())
+                .chain(found.unseen.iter().map(|text| format!("{text}{UNSEEN}")));
             for text in causes {
                 if !body.stopped.contains(&text) {
                     body.stopped.push(text);
@@ -690,7 +804,12 @@ pub(crate) fn apply(bodies: &mut [BodyComparison], before: &Workspace, after: &W
         // The spotlight is only for a use in the changed statements. A body that is different
         // in the MIR: the reader reads the edit. Only the uses that Semilla sees get the
         // spotlight.
-        let uses: Vec<String> = near.config.iter().cloned().chain(near.unseen.iter().filter(|_| equal).map(|text| format!("{text}{UNSEEN}"))).collect();
+        let uses: Vec<String> = near
+            .config
+            .iter()
+            .cloned()
+            .chain(near.unseen.iter().filter(|_| equal).map(|text| format!("{text}{UNSEEN}")))
+            .collect();
         for text in uses {
             if !body.config.contains(&text) {
                 body.config.push(text);

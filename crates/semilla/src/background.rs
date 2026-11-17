@@ -25,7 +25,7 @@ use crate::app::App;
 
 /// One job of the queue.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Job {
+pub(crate) struct Job {
     /// `session` for the work in progress, or a commit hash.
     pub key: String,
     /// The hash of the change set at the time of the job.
@@ -42,7 +42,7 @@ pub struct Job {
 
 /// A stored report, with the hash of the change set that it checks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StoredReport {
+pub(crate) struct StoredReport {
     pub key: String,
     /// The tree of the commit of `key` (empty for the session). A report is valid only for this
     /// commit and this tree, so a copied report note is not valid for another commit.
@@ -61,7 +61,7 @@ pub struct StoredReport {
 /// Stored review data (design 37.21): the data of `semilla review` for one change set. The
 /// data has no notice: each command computes the notices.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StoredReview {
+pub(crate) struct StoredReview {
     pub key: String,
     /// The tree of the commit of `key` (empty for the session), as in [`StoredReport`].
     #[serde(default)]
@@ -77,25 +77,40 @@ pub struct StoredReview {
 }
 
 fn review_data_file(app: &App, key: &str) -> PathBuf {
-    app.repo.cache_dir().join("review-data").join(format!("{key}.{:?}.json", app.mode).to_lowercase())
+    app.repo
+        .cache_dir()
+        .join("review-data")
+        .join(format!("{key}.{:?}.json", app.mode).to_lowercase())
 }
 
 /// The hash of the decisions of the reviewer (empty for no file).
 fn review_hash(app: &App) -> String {
-    std::fs::read(app.review_file()).map(|bytes| format!("{:016x}", crate::store::stable_hash(&bytes))).unwrap_or_default()
+    std::fs::read(app.review_file()).map_or_default(|bytes| format!("{:016x}", crate::store::stable_hash(&bytes)))
 }
 
 /// The tree that a result of a key belongs to: empty for the session.
 fn key_tree(app: &App, key: &str) -> String {
-    if key == "session" { String::new() } else { app.repo.commit_tree(key).unwrap_or_default() }
+    if key == "session" {
+        String::new()
+    } else {
+        app.repo.commit_tree(key).unwrap_or_default()
+    }
 }
 
 /// Stores the review data of a change set. A result of the syntax phase is not stored.
-pub fn store_review(app: &App, key: &str, hash: &str, data: &semilla_ui::UiData) -> Result<()> {
+pub(crate) fn store_review(app: &App, key: &str, hash: &str, data: &semilla_ui::UiData) -> Result<()> {
     if data.report.phase != "full" {
         return Ok(());
     }
-    let stored = StoredReview { key: key.to_string(), tree: key_tree(app, key), hash: hash.to_string(), tools: app.tools_key(), mode: app.mode, review: review_hash(app), data: data.clone() };
+    let stored = StoredReview {
+        key: key.to_string(),
+        tree: key_tree(app, key),
+        hash: hash.to_string(),
+        tools: app.tools_key(),
+        mode: app.mode,
+        review: review_hash(app),
+        data: data.clone(),
+    };
     let file = review_data_file(app, key);
     std::fs::create_dir_all(file.parent().unwrap())?;
     // A reader never sees a part of the file: the write goes to a new name first.
@@ -107,18 +122,23 @@ pub fn store_review(app: &App, key: &str, hash: &str, data: &semilla_ui::UiData)
 
 /// The stored review data of a key for a change set hash, if each input is the same: the
 /// change set, the commit tree, the tools, the mode, the phase, and the reviewer decisions.
-pub fn stored_review(app: &App, key: &str, hash: &str) -> Option<semilla_ui::UiData> {
+pub(crate) fn stored_review(app: &App, key: &str, hash: &str) -> Option<semilla_ui::UiData> {
     if app.no_bodies {
         return None;
     }
     let text = std::fs::read_to_string(review_data_file(app, key)).ok()?;
     let stored: StoredReview = serde_json::from_str(&text).ok()?;
-    let same = stored.key == key && stored.hash == hash && stored.tools == app.tools_key() && stored.mode == app.mode && stored.review == review_hash(app) && stored.tree == key_tree(app, key);
+    let same = stored.key == key
+        && stored.hash == hash
+        && stored.tools == app.tools_key()
+        && stored.mode == app.mode
+        && stored.review == review_hash(app)
+        && stored.tree == key_tree(app, key);
     same.then_some(stored.data)
 }
 
 /// The hash of a change set (its JSON form).
-pub fn changeset_hash(set: &ChangeSet) -> String {
+pub(crate) fn changeset_hash(set: &ChangeSet) -> String {
     let mut hasher = DefaultHasher::new();
     serde_json::to_string(set).unwrap_or_default().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
@@ -132,7 +152,10 @@ fn queue_dir(app: &App) -> PathBuf {
 /// the mark `build-code` in its name (design 28): a command with `--no-build-code` never reads
 /// that file.
 fn report_file(app: &App, key: &str, marked: bool) -> PathBuf {
-    app.repo.cache_dir().join("reports").join(format!("{key}{}.json", if marked { ".build-code" } else { "" }))
+    app.repo
+        .cache_dir()
+        .join("reports")
+        .join(format!("{key}{}.json", if marked { ".build-code" } else { "" }))
 }
 
 /// True if a result ran build code that the change set changes.
@@ -141,24 +164,31 @@ fn is_marked(report: &Report) -> bool {
 }
 
 /// Adds a job. A newer job for the same key replaces the old one.
-pub fn enqueue(app: &App, job: &Job) -> Result<()> {
+pub(crate) fn enqueue(app: &App, job: &Job) -> Result<()> {
     let dir = queue_dir(app);
     std::fs::create_dir_all(&dir)?;
     for entry in std::fs::read_dir(&dir)? {
         let path = entry?.path();
         // A job replaces only an older job of the same key and the same mode.
-        if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&format!("-{}{}.json", job.key, job.mode.suffix()))) {
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(&format!("-{}{}.json", job.key, job.mode.suffix())))
+        {
             let _ = std::fs::remove_file(path);
         }
     }
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-    std::fs::write(dir.join(format!("{nanos:024}-{}{}.json", job.key, job.mode.suffix())), serde_json::to_string(job)?)?;
+    std::fs::write(
+        dir.join(format!("{nanos:024}-{}{}.json", job.key, job.mode.suffix())),
+        serde_json::to_string(job)?,
+    )?;
     Ok(())
 }
 
 /// Removes each queued job of a key (each mode). `tag` calls it: the session jobs are done, and
 /// their result is stored under the tagged commit.
-pub fn remove_jobs(app: &App, key: &str) {
+pub(crate) fn remove_jobs(app: &App, key: &str) {
     for (path, job) in jobs(app) {
         if job.key == key {
             let _ = std::fs::remove_file(path);
@@ -167,22 +197,34 @@ pub fn remove_jobs(app: &App, key: &str) {
 }
 
 /// The jobs in the queue, oldest first.
-pub fn jobs(app: &App) -> Vec<(PathBuf, Job)> {
-    let Ok(entries) = std::fs::read_dir(queue_dir(app)) else { return Vec::new() };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+pub(crate) fn jobs(app: &App) -> Vec<(PathBuf, Job)> {
+    let Ok(entries) = std::fs::read_dir(queue_dir(app)) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .collect();
     paths.sort();
-    paths.into_iter().filter_map(|path| Some((path.clone(), serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?))).collect()
+    paths
+        .into_iter()
+        .filter_map(|path| Some((path.clone(), serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?)))
+        .collect()
 }
 
 /// Starts a worker in the background, unless `SEMILLA_NO_WORKER` is set. A second worker stops at
 /// once when one already runs.
-pub fn spawn_worker(app: &App) -> Result<()> {
+pub(crate) fn spawn_worker(app: &App) -> Result<()> {
+    use std::os::unix::process::CommandExt;
     // A process with no cache that stays (`--fresh`) runs each check itself.
     if std::env::var_os("SEMILLA_NO_WORKER").is_some() || app.repo.store.is_temporary() {
         return Ok(());
     }
-    use std::os::unix::process::CommandExt;
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(app.repo.cache_dir().join("worker.log"))?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(app.repo.cache_dir().join("worker.log"))?;
     std::process::Command::new(std::env::current_exe()?)
         .arg("--repo")
         .arg(&app.repo.root)
@@ -199,7 +241,7 @@ pub fn spawn_worker(app: &App) -> Result<()> {
 /// Runs all jobs, then returns. Returns false if another worker already runs. With `log`, each
 /// job writes one line to the standard error (the worker log). A run inside `status` writes no
 /// log line to the normal output (C8).
-pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
+pub(crate) fn run_worker(app: &mut App, log: bool) -> Result<bool> {
     let lock = std::fs::File::create(app.repo.cache_dir().join("worker.lock"))?;
     if lock.try_lock().is_err() {
         return Ok(false);
@@ -207,7 +249,9 @@ pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
     app.no_bodies = false;
     let mode = app.mode;
     loop {
-        let Some((path, job)) = jobs(app).into_iter().next() else { break };
+        let Some((path, job)) = jobs(app).into_iter().next() else {
+            break;
+        };
         // The job has the mode of the command that asked for it, not of this process.
         app.mode = job.mode;
         // The change set of a commit must belong to the commit (a copied note does not).
@@ -221,11 +265,26 @@ pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
         if let Some(set) = set.filter(|_| !done) {
             let started = std::time::Instant::now();
             // The check of the session gives the review data too, for `semilla review`.
-            let checked = if job.key == "session" { app.review_parts(&set, None).map(|(report, text, _)| (report, text)) } else { app.check_set(&set, true).map(|result| (result.report, result.text)) };
+            let checked = if job.key == "session" {
+                app.review_parts(&set, None).map(|(report, text, _)| (report, text))
+            } else {
+                app.check_set(&set, true).map(|result| (result.report, result.text))
+            };
             match checked {
                 Ok((report, text)) => {
-                    let tree = if job.key == "session" { String::new() } else { app.repo.commit_tree(&job.key).unwrap_or_default() };
-                    let stored = StoredReport { key: job.key.clone(), tree, hash: job.hash.clone(), tools: app.tools_key(), report, text };
+                    let tree = if job.key == "session" {
+                        String::new()
+                    } else {
+                        app.repo.commit_tree(&job.key).unwrap_or_default()
+                    };
+                    let stored = StoredReport {
+                        key: job.key.clone(),
+                        tree,
+                        hash: job.hash.clone(),
+                        tools: app.tools_key(),
+                        report,
+                        text,
+                    };
                     store(app, &stored)?;
                     if log {
                         eprintln!("[worker] {} checked in {:.1} s", job.key, started.elapsed().as_secs_f64());
@@ -234,10 +293,16 @@ pub fn run_worker(app: &mut App, log: bool) -> Result<bool> {
                 Err(error) => {
                     // The error stays in the log file, so that `status` can show the last error.
                     // A background worker writes its standard error to that file.
-                    if !log {
-                        let _ = std::fs::OpenOptions::new().create(true).append(true).open(app.repo.cache_dir().join("worker.log")).and_then(|mut file| std::io::Write::write_all(&mut file, format!("[worker] {} failed: {error:#}\n", job.key).as_bytes()));
-                    } else {
+                    if log {
                         eprintln!("[worker] {} failed: {error:#}", job.key);
+                    } else {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(app.repo.cache_dir().join("worker.log"))
+                            .and_then(|mut file| {
+                                std::io::Write::write_all(&mut file, format!("[worker] {} failed: {error:#}\n", job.key).as_bytes())
+                            });
                     }
                 }
             }
@@ -258,7 +323,8 @@ pub(crate) fn store(app: &App, stored: &StoredReport) -> Result<()> {
         store_content(app, stored);
         let note = app.repo.store.private_path("report-note");
         std::fs::write(&note, serde_json::to_string_pretty(stored)?)?;
-        app.repo.git(&["notes", "--ref=semilla-report", "add", "-f", "-F", &note.to_string_lossy(), &stored.key])?;
+        app.repo
+            .git(&["notes", "--ref=semilla-report", "add", "-f", "-F", &note.to_string_lossy(), &stored.key])?;
         let _ = std::fs::remove_file(note);
     }
     Ok(())
@@ -281,17 +347,22 @@ fn content_head(commit: &str, hash: &str, tools: &str) -> String {
 /// complete mark, not the report: a copy of the repository at a different path reads only that
 /// this machine did compute the full result.
 fn store_content(app: &App, stored: &StoredReport) {
-    let Some(file) = content_file(app, &stored.key, &stored.hash, &stored.tools, is_marked(&stored.report)) else { return };
+    let Some(file) = content_file(app, &stored.key, &stored.hash, &stored.tools, is_marked(&stored.report)) else {
+        return;
+    };
     let result = if stored.report.accepted { "accepted" } else { "rejected" };
     let complete = if stored.report.not_complete() { "partial" } else { "complete" };
     let _ = std::fs::create_dir_all(file.parent().unwrap_or(&file));
-    let _ = std::fs::write(&file, format!("{}{result}\n{complete}\n", content_head(&stored.key, &stored.hash, &stored.tools)));
+    let _ = std::fs::write(
+        &file,
+        format!("{}{result}\n{complete}\n", content_head(&stored.key, &stored.hash, &stored.tools)),
+    );
 }
 
 /// The full result that this machine did compute for a commit and a change set hash, in a
 /// folder of any path: `Some(true)` for an accepted result. The mode rule is the rule of
 /// [`candidates`]. The commit hash gives the tree, so the record needs no tree check.
-pub fn content_result(app: &App, commit: &str, hash: &str) -> Option<bool> {
+pub(crate) fn content_result(app: &App, commit: &str, hash: &str) -> Option<bool> {
     let allowed = app.mode.runs_build_code();
     let files = if allowed { vec![true, false] } else { vec![false] };
     let head = content_head(commit, hash, &app.tools_key());
@@ -312,7 +383,7 @@ pub fn content_result(app: &App, commit: &str, hash: &str) -> Option<bool> {
 }
 
 /// The stored report of a key, if one exists.
-pub fn stored(app: &App, key: &str) -> Option<StoredReport> {
+pub(crate) fn stored(app: &App, key: &str) -> Option<StoredReport> {
     candidates(app, key).into_iter().next()
 }
 
@@ -323,33 +394,36 @@ fn candidates(app: &App, key: &str) -> Vec<StoredReport> {
     // only if that result is complete. A command with `--no-build-code` reads only the plain
     // result.
     let files = if allowed { vec![true, false] } else { vec![false] };
-    files.into_iter().filter_map(|marked| {
-        let text = std::fs::read_to_string(report_file(app, key, marked)).ok()?;
-        let stored: StoredReport = serde_json::from_str(&text).ok()?;
-        if stored.tools != app.tools_key() {
-            return None;
-        }
-        // A report belongs to its commit: a report of a different tree (a moved branch, a copied
-        // file) is not valid.
-        if key != "session" && (stored.key != key || app.repo.commit_tree(key).ok().as_deref() != Some(stored.tree.as_str())) {
-            return None;
-        }
-        // The content decides, not only the file name.
-        if is_marked(&stored.report) != marked || (allowed && stored.report.not_complete()) {
-            return None;
-        }
-        Some(stored)
-    }).collect()
+    files
+        .into_iter()
+        .filter_map(|marked| {
+            let text = std::fs::read_to_string(report_file(app, key, marked)).ok()?;
+            let stored: StoredReport = serde_json::from_str(&text).ok()?;
+            if stored.tools != app.tools_key() {
+                return None;
+            }
+            // A report belongs to its commit: a report of a different tree (a moved branch, a copied
+            // file) is not valid.
+            if key != "session" && (stored.key != key || app.repo.commit_tree(key).ok().as_deref() != Some(stored.tree.as_str())) {
+                return None;
+            }
+            // The content decides, not only the file name.
+            if is_marked(&stored.report) != marked || (allowed && stored.report.not_complete()) {
+                return None;
+            }
+            Some(stored)
+        })
+        .collect()
 }
 
 /// The stored result of a key for a change set hash, in the mode of the command.
-pub fn stored_for(app: &App, key: &str, hash: &str) -> Option<StoredReport> {
+pub(crate) fn stored_for(app: &App, key: &str, hash: &str) -> Option<StoredReport> {
     candidates(app, key).into_iter().find(|stored| stored.hash == hash)
 }
 
 /// The state of the background check of a key.
 #[derive(Debug, PartialEq, Eq)]
-pub enum State {
+pub(crate) enum State {
     /// The stored report checks this change set.
     Ready,
     /// A job for this change set waits or runs.
@@ -360,7 +434,7 @@ pub enum State {
     Missing,
 }
 
-pub fn state(app: &App, key: &str, hash: &str) -> State {
+pub(crate) fn state(app: &App, key: &str, hash: &str) -> State {
     if stored_for(app, key, hash).is_some() {
         return State::Ready;
     }
@@ -372,7 +446,7 @@ pub fn state(app: &App, key: &str, hash: &str) -> State {
 
 /// Waits until a key is ready, at most `timeout`. Runs the worker in this process when no worker
 /// runs.
-pub fn wait(app: &mut App, key: &str, hash: &str, timeout: std::time::Duration) -> Result<State> {
+pub(crate) fn wait(app: &mut App, key: &str, hash: &str, timeout: std::time::Duration) -> Result<State> {
     let started = std::time::Instant::now();
     loop {
         let current = state(app, key, hash);
@@ -388,6 +462,7 @@ pub fn wait(app: &mut App, key: &str, hash: &str, timeout: std::time::Duration) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buildcode::Mode;
     use semilla_core::{Category, Compare, Fact};
 
     /// Puts the old category names of 8c into each `category` field of a JSON value, in turn.
@@ -414,22 +489,54 @@ mod tests {
         // Design 42: a stored record with the old names `logic`, `control flow`, and `value`
         // loads with no error, and each output shows `semantics`.
         let mut data = semilla_ui::fixture::demo_data();
-        let fact = |id: &str| Fact { id: id.into(), part: "edit".into(), description: "changed literal `1` → `2`".into(), status: "derived".into(), category: Category::Semantics, compare: Compare::CodeDifferent, ..Default::default() };
+        let fact = |id: &str| Fact {
+            id: id.into(),
+            part: "edit".into(),
+            description: "changed literal `1` → `2`".into(),
+            status: "derived".into(),
+            category: Category::Semantics,
+            compare: Compare::CodeDifferent,
+            ..Default::default()
+        };
         data.report.steps[0].facts.extend([fact("f8"), fact("f9"), fact("f10")]);
-        let review = StoredReview { key: "session".into(), tree: String::new(), hash: "h".into(), tools: "t".into(), mode: Default::default(), review: String::new(), data: data.clone() };
-        let report = StoredReport { key: "session".into(), tree: String::new(), hash: "h".into(), tools: "t".into(), report: data.report.clone(), text: String::new() };
+        let review = StoredReview {
+            key: "session".into(),
+            tree: String::new(),
+            hash: "h".into(),
+            tools: "t".into(),
+            mode: Mode::default(),
+            review: String::new(),
+            data: data.clone(),
+        };
+        let report = StoredReport {
+            key: "session".into(),
+            tree: String::new(),
+            hash: "h".into(),
+            tools: "t".into(),
+            report: data.report.clone(),
+            text: String::new(),
+        };
         let mut count = 0;
         let mut review_json = serde_json::to_value(&review).unwrap();
         old_names(&mut review_json, &mut count);
         let mut report_json = serde_json::to_value(&report).unwrap();
         old_names(&mut report_json, &mut count);
         let text = format!("{review_json}{report_json}");
-        assert!(count >= 6 && ["\"logic\"", "\"control_flow\"", "\"value\""].iter().all(|name| text.contains(name)) && !text.contains("\"semantics\""), "{count}");
+        assert!(
+            count >= 6 && ["\"logic\"", "\"control_flow\"", "\"value\""].iter().all(|name| text.contains(name)) && !text.contains("\"semantics\""),
+            "{count}"
+        );
         let loaded: StoredReview = serde_json::from_value(review_json).expect("an 8c review loads");
         let stored: StoredReport = serde_json::from_value(report_json).expect("an 8c report loads");
         assert_eq!(serde_json::to_value(&loaded).unwrap(), serde_json::to_value(&review).unwrap());
         assert_eq!(serde_json::to_value(&stored.report).unwrap(), serde_json::to_value(&data.report).unwrap());
         let markdown = semilla_ui::export::render_markdown(&loaded.data, false);
-        assert!(markdown.contains("\\[semantics · code different\\]") && ["logic", "control flow", "value"].iter().all(|old| !markdown.contains(&format!("{old} · code")) && !markdown.contains(&format!("category: {old}"))), "{markdown}");
+        assert!(
+            markdown.contains("\\[semantics · code different\\]")
+                && ["logic", "control flow", "value"]
+                    .iter()
+                    .all(|old| !markdown.contains(&format!("{old} · code")) && !markdown.contains(&format!("category: {old}"))),
+            "{markdown}"
+        );
     }
 }

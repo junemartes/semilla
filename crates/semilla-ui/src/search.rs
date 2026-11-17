@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use semilla_core::{Category, Compare};
 use semilla_core::view::Status;
+use semilla_core::{Category, Compare};
 
 use crate::ctx::{Ctx, contains, item_of, last_segment};
 use crate::graph;
@@ -65,6 +65,7 @@ pub struct Query {
 const KEYS: &[&str] = &["changed", "category", "compare", "step", "group", "kind", "callers", "callees", "path"];
 
 /// Parses a query. Unknown `key:` prefixes are plain words, so `Cart::total` is a symbol.
+#[must_use]
 pub fn parse(text: &str) -> Query {
     let mut query = Query::default();
     let chars: Vec<char> = text.chars().collect();
@@ -112,20 +113,35 @@ pub fn parse(text: &str) -> Query {
                 let rest: String = chars[start + "path:".len()..].iter().collect();
                 index = chars.len();
                 match rest.split_once("->") {
-                    Some((from, to)) if !from.trim().is_empty() && !to.trim().is_empty() => {
-                        query.terms.push(Term::Path { from: unquote(from), to: unquote(to) })
-                    }
+                    Some((from, to)) if !from.trim().is_empty() && !to.trim().is_empty() => query.terms.push(Term::Path {
+                        from: unquote(from),
+                        to: unquote(to),
+                    }),
                     _ => query.errors.push("path: needs the form `path:A -> B`".to_string()),
                 }
             }
             "changed" => query.terms.push(Term::Changed((!value.is_empty()).then_some(value))),
             "category" => match Category::from_name(&name_text(&value)) {
                 Some(category) => query.terms.push(Term::Category(category)),
-                None => query.errors.push(format!("unknown category `{value}`: use {}", Category::ALL.iter().map(|category| category.name().replace(' ', "-")).collect::<Vec<_>>().join(", "))),
+                None => query.errors.push(format!(
+                    "unknown category `{value}`: use {}",
+                    Category::ALL
+                        .iter()
+                        .map(|category| category.name().replace(' ', "-"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
             },
             "compare" => match Compare::from_name(&name_text(&value)) {
                 Some(compare) => query.terms.push(Term::Compare(compare)),
-                None => query.errors.push(format!("unknown compare result `{value}`: use {}", Compare::ALL.iter().map(|compare| compare.name().replace(' ', "-")).collect::<Vec<_>>().join(", "))),
+                None => query.errors.push(format!(
+                    "unknown compare result `{value}`: use {}",
+                    Compare::ALL
+                        .iter()
+                        .map(|compare| compare.name().replace(' ', "-"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
             },
             "step" => match value.parse() {
                 Ok(step) => query.terms.push(Term::Step(step)),
@@ -247,9 +263,12 @@ fn entities(ctx: &Ctx) -> BTreeMap<String, Entity> {
     }
     let mut out: BTreeMap<String, Entity> = BTreeMap::new();
     for node in &ctx.data.graph.nodes {
-        let kind = serde_json::to_value(node.kind).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+        let kind = serde_json::to_value(node.kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
         let entity = add(&mut out, &node.id, &node.label, &kind, Some(node.status));
-        entity.badges = node.badges.clone();
+        entity.badges.clone_from(&node.badges);
     }
     let mut stack = vec![&ctx.data.tree];
     while let Some(node) = stack.pop() {
@@ -286,6 +305,7 @@ fn entities(ctx: &Ctx) -> BTreeMap<String, Entity> {
 }
 
 /// The fuzzy score of a symbol name: exact, suffix, prefix, substring, then subsequence.
+#[must_use]
 pub fn fuzzy_score(query: &str, id: &str) -> u32 {
     let query = query.to_lowercase();
     let full = item_of(id).to_lowercase();
@@ -310,7 +330,7 @@ pub fn fuzzy_score(query: &str, id: &str) -> u32 {
     }
     // A subsequence match: all the characters of the query, in order.
     let mut chars = full.chars();
-    let mut matched = 0;
+    let mut matched: usize = 0;
     for wanted in query.chars() {
         if chars.by_ref().any(|c| c == wanted) {
             matched += 1;
@@ -318,7 +338,10 @@ pub fn fuzzy_score(query: &str, id: &str) -> u32 {
             return 0;
         }
     }
-    10 + (matched * 20 / full.chars().count().max(1)) as u32
+    // An empty `full` has no match, so the ratio is 0 for it.
+    let ratio = (matched * 20).checked_div(full.chars().count()).unwrap_or(0);
+    // The ratio is at most 20, because each matched character is a character of `full`.
+    10 + u32::try_from(ratio).unwrap_or(20)
 }
 
 /// The source text for the `kind:` checks: the after version, else the before version.
@@ -338,9 +361,12 @@ fn site_text<'a>(ctx: &'a Ctx, entity: &'a Entity) -> Vec<(&'static str, &'a str
 }
 
 /// True if the text has a site of this kind.
+#[must_use]
 pub fn has_site(kind: SiteKind, text: &str) -> bool {
     match kind {
-        SiteKind::Panic => ["unwrap(", "expect(", "panic!", "unreachable!", "todo!", "unimplemented!"].iter().any(|p| text.contains(p)),
+        SiteKind::Panic => ["unwrap(", "expect(", "panic!", "unreachable!", "todo!", "unimplemented!"]
+            .iter()
+            .any(|p| text.contains(p)),
         SiteKind::Unsafe => text.contains("unsafe"),
         SiteKind::Err => text.contains("Err(") || has_try(text),
     }
@@ -374,175 +400,234 @@ fn has_try(text: &str) -> bool {
     false
 }
 
-/// Runs a query.
-pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
-    let mut query = parse(text);
-    let mut paths = Vec::new();
-    let mut truncated = false;
+/// The graph terms of a query, resolved.
+#[derive(Default)]
+struct GraphTerms {
+    /// The IDs that the `callers:` and `callees:` terms allow. `None` allows all IDs.
+    allowed: Option<BTreeSet<String>>,
+    paths: Vec<Vec<String>>,
+    truncated: bool,
+}
 
-    // Resolve the graph terms first.
-    let mut allowed: Option<BTreeSet<String>> = None;
-    let restrict = |set: BTreeSet<String>, allowed: &mut Option<BTreeSet<String>>| {
-        *allowed = Some(match allowed.take() {
+impl GraphTerms {
+    /// Resolves the graph terms in query order. Each unknown symbol adds an error to the query.
+    fn resolve(ctx: &Ctx, query: &mut Query) -> GraphTerms {
+        let mut graph_terms = GraphTerms::default();
+        for term in query.terms.clone() {
+            graph_terms.resolve_term(ctx, term, &mut query.errors);
+        }
+        graph_terms
+    }
+
+    /// Keeps only the allowed IDs that are also in `set`.
+    fn restrict(&mut self, set: BTreeSet<String>) {
+        self.allowed = Some(match self.allowed.take() {
             Some(old) => old.intersection(&set).cloned().collect(),
             None => set,
         });
-    };
-    let only_paths = !query.terms.is_empty() && query.terms.iter().all(|term| matches!(term, Term::Path { .. }));
-    for term in query.terms.clone() {
+    }
+
+    fn resolve_term(&mut self, ctx: &Ctx, term: Term, errors: &mut Vec<String>) {
         let (callers, symbol) = match term {
             Term::Callers(symbol) => (true, symbol),
             Term::Callees(symbol) => (false, symbol),
             Term::Path { from, to } => {
-                match (graph::resolve(ctx, &from), graph::resolve(ctx, &to)) {
-                    (Some(from), Some(to)) => {
-                        let (found, cut) = graph::call_paths(ctx, &from, &to);
-                        paths.extend(found);
-                        truncated |= cut;
-                    }
-                    (from_id, _) => {
-                        let missing = if from_id.is_none() { from } else { to };
-                        query.errors.push(format!("unknown symbol `{missing}`"));
-                    }
-                }
-                continue;
+                self.resolve_path(ctx, from, to, errors);
+                return;
             }
-            _ => continue,
+            _ => return,
         };
-        match graph::resolve(ctx, &symbol) {
-            Some(id) => {
-                let map = if callers { &ctx.callers } else { &ctx.callees };
-                let set = map.get(&id).cloned().unwrap_or_default().into_iter().collect();
-                restrict(set, &mut allowed);
+        if let Some(id) = graph::resolve(ctx, &symbol) {
+            let map = if callers { &ctx.callers } else { &ctx.callees };
+            let set = map.get(&id).cloned().unwrap_or_default().into_iter().collect();
+            self.restrict(set);
+        } else {
+            errors.push(format!("unknown symbol `{symbol}`"));
+            self.restrict(BTreeSet::new());
+        }
+    }
+
+    fn resolve_path(&mut self, ctx: &Ctx, from: String, to: String, errors: &mut Vec<String>) {
+        match (graph::resolve(ctx, &from), graph::resolve(ctx, &to)) {
+            (Some(from), Some(to)) => {
+                let (found, cut) = graph::call_paths(ctx, &from, &to);
+                self.paths.extend(found);
+                self.truncated |= cut;
             }
-            None => {
-                query.errors.push(format!("unknown symbol `{symbol}`"));
-                restrict(BTreeSet::new(), &mut allowed);
+            (from_id, _) => {
+                let missing = if from_id.is_none() { from } else { to };
+                errors.push(format!("unknown symbol `{missing}`"));
             }
         }
     }
 
-    let mut hits = Vec::new();
-    if !only_paths && !query.terms.is_empty() {
-        let claims: Vec<(String, String, usize, Option<Category>)> = ctx
-            .all_claims()
-            .filter_map(|(step, claim)| claim.at.as_ref().map(|at| (claim.id.clone(), at.to_string(), step.index, ctx.claim_category(claim))))
-            .collect();
-        for entity in entities(ctx).into_values() {
-            if let Some(allowed) = &allowed
-                && !allowed.contains(&entity.id)
-            {
-                continue;
-            }
-            let mut entity_claims: Vec<String> = entity.tree_claims.clone();
-            let mut categories: Vec<Option<Category>> = entity.category.into_iter().map(Some).collect();
-            let mut steps = BTreeSet::new();
-            for (id, anchor, step, category) in &claims {
-                if contains(&entity.id, anchor) || entity_claims.contains(id) {
-                    if !entity_claims.contains(id) {
-                        entity_claims.push(id.clone());
-                    }
-                    categories.push(*category);
-                    steps.insert(*step);
+    fn allows(&self, entity: &Entity) -> bool {
+        self.allowed.as_ref().is_none_or(|allowed| allowed.contains(&entity.id))
+    }
+}
+
+/// A claim with an anchor: the claim ID, the anchor, the step, and the category.
+type AnchoredClaim = (String, String, usize, Option<Category>);
+
+/// The state of one entity while the terms of a query match it.
+struct EntityMatch {
+    entity_claims: Vec<String>,
+    categories: Vec<Option<Category>>,
+    steps: BTreeSet<usize>,
+    score: u32,
+    matched: Vec<String>,
+}
+
+impl EntityMatch {
+    fn new(ctx: &Ctx, entity: &Entity, claims: &[AnchoredClaim]) -> EntityMatch {
+        let mut entity_claims: Vec<String> = entity.tree_claims.clone();
+        let mut categories: Vec<Option<Category>> = entity.category.into_iter().map(Some).collect();
+        let mut steps = BTreeSet::new();
+        for (id, anchor, step, category) in claims {
+            if contains(&entity.id, anchor) || entity_claims.contains(id) {
+                if !entity_claims.contains(id) {
+                    entity_claims.push(id.clone());
                 }
+                categories.push(*category);
+                steps.insert(*step);
             }
-            for id in &entity.tree_claims {
-                if let Some(step) = ctx.claim_step.get(id) {
-                    steps.insert(*step);
-                }
+        }
+        for id in &entity.tree_claims {
+            if let Some(step) = ctx.claim_step.get(id) {
+                steps.insert(*step);
             }
-            let mut score = 0;
-            let mut matched = Vec::new();
-            let mut ok = true;
-            for term in &query.terms {
-                let pass = match term {
-                    Term::Fuzzy(word) => {
-                        let value = if entity.id.contains('/') { 0 } else { fuzzy_score(word, &entity.id) };
-                        score += value;
-                        if value > 0 {
-                            matched.push("name".to_string());
-                        }
-                        value > 0
-                    }
-                    Term::Text(needle) => {
-                        let needle = needle.to_lowercase();
-                        let mut found = false;
-                        for label in &entity.labels {
-                            if label.to_lowercase().contains(&needle) {
-                                found = true;
-                                matched.push("label".to_string());
-                                break;
-                            }
-                        }
-                        if let Some(pair) = ctx.data.sources.get(&entity.id) {
-                            for (name, text) in [("source before", &pair.before), ("source after", &pair.after)] {
-                                if text.as_deref().is_some_and(|text| text.to_lowercase().contains(&needle)) {
-                                    found = true;
-                                    matched.push(name.to_string());
-                                }
-                            }
-                        }
-                        if found {
-                            score += 40;
-                        }
-                        found
-                    }
-                    Term::Changed(kind) => {
-                        let is_changed = changed(entity.status) || !entity_claims.is_empty();
-                        is_changed && kind.as_deref().is_none_or(|kind| kind_matches(kind, &entity.kind))
-                    }
-                    Term::Category(category) => categories.contains(&Some(*category)),
-                    Term::Compare(compare) => entity.compare == Some(*compare),
-                    Term::Step(step) => steps.contains(step),
-                    Term::Group(group) => {
-                        steps.iter().any(|step| ctx.step_group.get(step).is_some_and(|owner| owner.eq_ignore_ascii_case(group)))
-                    }
-                    Term::Kind(kind) => {
-                        let badge = match kind {
-                            SiteKind::Panic => "never",
-                            SiteKind::Unsafe => "unsafe",
-                            SiteKind::Err => "err",
-                        };
-                        let found = entity.badges.iter().any(|known| known == badge)
-                            || site_text(ctx, &entity).iter().any(|(name, text)| {
-                                let hit = has_site(*kind, text);
-                                if hit {
-                                    matched.push(name.to_string());
-                                }
-                                hit
-                            });
-                        found
-                    }
-                    Term::Callers(_) | Term::Callees(_) => {
-                        matched.push("graph".to_string());
-                        true
-                    }
-                    Term::Path { .. } => true,
-                };
-                if !pass {
-                    ok = false;
-                    break;
-                }
-            }
-            if !ok {
-                continue;
-            }
-            matched.dedup();
-            hits.push(Hit {
-                flow: ctx.flow_function(&entity.id),
-                id: entity.id,
-                label: entity.label,
-                kind: entity.kind,
-                status: entity.status,
-                category: entity.category,
-                compare: entity.compare,
-                build_code: entity.build_code,
-                claims: entity_claims,
-                score,
-                matched,
-            });
+        }
+        EntityMatch {
+            entity_claims,
+            categories,
+            steps,
+            score: 0,
+            matched: Vec::new(),
         }
     }
+
+    /// The hit for the entity, if all the terms match it. The first term that fails stops the match.
+    fn hit(ctx: &Ctx, terms: &[Term], claims: &[AnchoredClaim], entity: Entity) -> Option<Hit> {
+        let mut state = EntityMatch::new(ctx, &entity, claims);
+        if !terms.iter().all(|term| state.pass(ctx, &entity, term)) {
+            return None;
+        }
+        state.matched.dedup();
+        Some(Hit {
+            flow: ctx.flow_function(&entity.id),
+            id: entity.id,
+            label: entity.label,
+            kind: entity.kind,
+            status: entity.status,
+            category: entity.category,
+            compare: entity.compare,
+            build_code: entity.build_code,
+            claims: state.entity_claims,
+            score: state.score,
+            matched: state.matched,
+        })
+    }
+
+    /// True if the term matches the entity.
+    fn pass(&mut self, ctx: &Ctx, entity: &Entity, term: &Term) -> bool {
+        match term {
+            Term::Fuzzy(word) => {
+                let value = if entity.id.contains('/') { 0 } else { fuzzy_score(word, &entity.id) };
+                self.score += value;
+                if value > 0 {
+                    self.matched.push("name".to_string());
+                }
+                value > 0
+            }
+            Term::Text(needle) => self.pass_text(ctx, entity, needle),
+            Term::Changed(kind) => {
+                let is_changed = changed(entity.status) || !self.entity_claims.is_empty();
+                is_changed && kind.as_deref().is_none_or(|kind| kind_matches(kind, &entity.kind))
+            }
+            Term::Category(category) => self.categories.contains(&Some(*category)),
+            Term::Compare(compare) => entity.compare == Some(*compare),
+            Term::Step(step) => self.steps.contains(step),
+            Term::Group(group) => self
+                .steps
+                .iter()
+                .any(|step| ctx.step_group.get(step).is_some_and(|owner| owner.eq_ignore_ascii_case(group))),
+            Term::Kind(kind) => self.pass_kind(ctx, entity, *kind),
+            Term::Callers(_) | Term::Callees(_) => {
+                self.matched.push("graph".to_string());
+                true
+            }
+            Term::Path { .. } => true,
+        }
+    }
+
+    fn pass_text(&mut self, ctx: &Ctx, entity: &Entity, needle: &str) -> bool {
+        let needle = needle.to_lowercase();
+        let mut found = false;
+        for label in &entity.labels {
+            if label.to_lowercase().contains(&needle) {
+                found = true;
+                self.matched.push("label".to_string());
+                break;
+            }
+        }
+        if let Some(pair) = ctx.data.sources.get(&entity.id) {
+            for (name, text) in [("source before", &pair.before), ("source after", &pair.after)] {
+                if text.as_deref().is_some_and(|text| text.to_lowercase().contains(&needle)) {
+                    found = true;
+                    self.matched.push(name.to_string());
+                }
+            }
+        }
+        if found {
+            self.score += 40;
+        }
+        found
+    }
+
+    fn pass_kind(&mut self, ctx: &Ctx, entity: &Entity, kind: SiteKind) -> bool {
+        let badge = match kind {
+            SiteKind::Panic => "never",
+            SiteKind::Unsafe => "unsafe",
+            SiteKind::Err => "err",
+        };
+
+        entity.badges.iter().any(|known| known == badge)
+            || site_text(ctx, entity).iter().any(|(name, text)| {
+                let hit = has_site(kind, text);
+                if hit {
+                    self.matched.push(name.to_string());
+                }
+                hit
+            })
+    }
+}
+
+/// Runs a query.
+#[must_use]
+pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
+    let mut query = parse(text);
+    // Resolve the graph terms first.
+    let only_paths = !query.terms.is_empty() && query.terms.iter().all(|term| matches!(term, Term::Path { .. }));
+    let graph_terms = GraphTerms::resolve(ctx, &mut query);
+
+    let mut hits: Vec<Hit> = if !only_paths && !query.terms.is_empty() {
+        let claims: Vec<AnchoredClaim> = ctx
+            .all_claims()
+            .filter_map(|(step, claim)| {
+                claim
+                    .at
+                    .as_ref()
+                    .map(|at| (claim.id.clone(), at.to_string(), step.index, ctx.claim_category(claim)))
+            })
+            .collect();
+        entities(ctx)
+            .into_values()
+            .filter(|entity| graph_terms.allows(entity))
+            .filter_map(|entity| EntityMatch::hit(ctx, &query.terms, &claims, entity))
+            .collect()
+    } else {
+        Vec::new()
+    };
     hits.sort_by(|a, b| {
         b.score
             .cmp(&a.score)
@@ -552,7 +637,13 @@ pub fn search(ctx: &Ctx, text: &str) -> SearchResult {
     });
     let total = hits.len();
     hits.truncate(MAX_RESULTS);
-    SearchResult { query, total, results: hits, paths, truncated: truncated || total > MAX_RESULTS }
+    SearchResult {
+        query,
+        total,
+        results: hits,
+        paths: graph_terms.paths,
+        truncated: graph_terms.truncated || total > MAX_RESULTS,
+    }
 }
 
 fn kind_matches(wanted: &str, kind: &str) -> bool {
@@ -605,14 +696,20 @@ mod tests {
     #[test]
     fn parse_symbols_and_paths() {
         assert_eq!(parse("Cart::total").terms, vec![Term::Fuzzy("Cart::total".into())]);
-        assert_eq!(parse("path:main -> Cart::total").terms, vec![Term::Path { from: "main".into(), to: "Cart::total".into() }]);
-        assert!(!parse("path:main").errors.is_empty());
-        assert!(!parse("category:huge").errors.is_empty());
-        assert!(!parse("compare:neutral").errors.is_empty());
+        assert_eq!(
+            parse("path:main -> Cart::total").terms,
+            vec![Term::Path {
+                from: "main".into(),
+                to: "Cart::total".into()
+            }]
+        );
+        assert_ne!(parse("path:main").errors, [] as [std::string::String; 0]);
+        assert_ne!(parse("category:huge").errors, [] as [std::string::String; 0]);
+        assert_ne!(parse("compare:neutral").errors, [] as [std::string::String; 0]);
         // The key `class` is gone (design 35): it is a symbol search now.
         assert_eq!(parse("class:logic").terms, vec![Term::Fuzzy("class:logic".into())]);
-        assert!(!parse("step:x").errors.is_empty());
-        assert!(!parse("kind:leak").errors.is_empty());
+        assert_ne!(parse("step:x").errors, [] as [std::string::String; 0]);
+        assert_ne!(parse("kind:leak").errors, [] as [std::string::String; 0]);
     }
 
     #[test]

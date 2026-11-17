@@ -4,6 +4,7 @@
 //! because the node routes take the rest of the path.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -48,7 +49,11 @@ impl<T: serde::Serialize> IntoResponse for Json<T> {
 fn json_hidden(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     for c in body.chars() {
-        if semilla_core::text::is_hidden(c) && c != '\n' { out.push_str(&format!("\\u{:04x}", c as u32)) } else { out.push(c) }
+        if semilla_core::text::is_hidden(c) && c != '\n' {
+            let _ = write!(out, "\\u{:04x}", c as u32);
+        } else {
+            out.push(c);
+        }
     }
     out
 }
@@ -68,9 +73,13 @@ fn not_found(what: impl std::fmt::Display) -> ApiError {
 
 type ApiResult = Result<Json<Value>, ApiError>;
 
-pub fn router(ctx: Ctx, review_file: PathBuf) -> Router {
+pub(crate) fn router(ctx: Ctx, review_file: PathBuf) -> Router {
     let review = ReviewFile::load(&review_file);
-    let state = Arc::new(AppState { ctx, review: Mutex::new(review), review_file });
+    let state = Arc::new(AppState {
+        ctx,
+        review: Mutex::new(review),
+        review_file,
+    });
     Router::new()
         .route("/api/changeset", get(changeset))
         .route("/api/group/{id}", get(group))
@@ -89,7 +98,7 @@ pub fn router(ctx: Ctx, review_file: PathBuf) -> Router {
 }
 
 fn review_of(state: &AppState) -> std::sync::MutexGuard<'_, ReviewFile> {
-    state.review.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    state.review.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 async fn changeset(State(state): State<Shared>) -> ApiResult {
@@ -99,7 +108,9 @@ async fn changeset(State(state): State<Shared>) -> ApiResult {
 
 async fn group(State(state): State<Shared>, Path(id): Path<String>) -> ApiResult {
     let review = review_of(&state);
-    summary::group_detail(&state.ctx, &review, &id).map(Json).ok_or_else(|| not_found(format!("group {id}")))
+    summary::group_detail(&state.ctx, &review, &id)
+        .map(Json)
+        .ok_or_else(|| not_found(format!("group {id}")))
 }
 
 #[derive(Deserialize)]
@@ -156,7 +167,7 @@ fn node_info(ctx: &Ctx, review: &ReviewFile, id: &str) -> ApiResult {
     if graph_node.is_none() && tree_node.is_none() && source.is_none() && claims.is_empty() {
         return Err(not_found(format!("node {id}")));
     }
-    let (source_key, pair) = ctx.source(id).map(|(key, pair)| (Some(key.to_string()), Some(pair))).unwrap_or((None, None));
+    let (source_key, pair) = ctx.source(id).map_or((None, None), |(key, pair)| (Some(key.to_string()), Some(pair)));
     let label = graph_node
         .map(|node| node.label.clone())
         .or_else(|| tree_node.map(|node| node.label.clone()))
@@ -202,7 +213,7 @@ fn node_children(ctx: &Ctx, id: &str) -> ApiResult {
     }
     Ok(Json(json!({
         "id": id,
-        "tree": tree_node.map(|node| node.children.iter().map(shallow).collect::<Vec<_>>()).unwrap_or_default(),
+        "tree": tree_node.map_or_default(|node| node.children.iter().map(shallow).collect::<Vec<_>>()),
         "graph": graph_children,
     })))
 }
@@ -219,8 +230,8 @@ fn node_neighbors(ctx: &Ctx, id: &str) -> ApiResult {
             })
             .collect()
     };
-    let callers = ctx.callers.get(id).cloned().unwrap_or_default();
-    let callees = ctx.callees.get(id).cloned().unwrap_or_default();
+    let upstream = ctx.callers.get(id).cloned().unwrap_or_default();
+    let downstream = ctx.callees.get(id).cloned().unwrap_or_default();
     let depends: Vec<String> = ctx
         .data
         .graph
@@ -237,16 +248,22 @@ fn node_neighbors(ctx: &Ctx, id: &str) -> ApiResult {
         .filter(|edge| edge.kind == semilla_core::view::GraphEdgeKind::Depends && edge.to == id)
         .map(|edge| edge.from.clone())
         .collect();
-    let children: Vec<String> =
-        ctx.data.graph.nodes.iter().filter(|other| other.parent.as_deref() == Some(id)).map(|other| other.id.clone()).collect();
+    let children: Vec<String> = ctx
+        .data
+        .graph
+        .nodes
+        .iter()
+        .filter(|other| other.parent.as_deref() == Some(id))
+        .map(|other| other.id.clone())
+        .collect();
     let edges: Vec<_> = ctx.data.graph.edges.iter().filter(|edge| edge.from == id || edge.to == id).collect();
     let impact: Vec<String> = graph::transitive_callers(ctx, id).into_iter().collect();
     Ok(Json(json!({
         "id": id,
         "node": node,
         "parent": node.parent,
-        "callers": lite(&callers),
-        "callees": lite(&callees),
+        "callers": lite(&upstream),
+        "callees": lite(&downstream),
         "depends_on": lite(&depends),
         "dependents": lite(&dependents),
         "children": lite(&children),
@@ -263,7 +280,9 @@ fn flow_response(ctx: &Ctx, flow: &FlowGraph, synthetic: bool) -> Value {
         .filter_map(|node| {
             let target = node.anchor.clone()?;
             // The link opens another flow view only if the target is in another frame.
-            let frame = ctx.flow_function(&target).or_else(|| graph::synthetic_flow(ctx, item_of(&target)).map(|flow| flow.function));
+            let frame = ctx
+                .flow_function(&target)
+                .or_else(|| graph::synthetic_flow(ctx, item_of(&target)).map(|flow| flow.function));
             let other_frame = frame.is_some_and(|frame| frame != flow.function);
             Some((node.id.clone(), json!({ "target": target, "flow": other_frame })))
         })
@@ -318,7 +337,9 @@ async fn path(State(state): State<Shared>, Query(params): Query<PathParams>) -> 
     let to = graph::resolve(ctx, &to_text).ok_or_else(|| not_found(format!("symbol {to_text}")))?;
     let tests = params.tests.as_deref().is_some_and(|value| matches!(value, "1" | "true" | "yes"));
     let sources = match params.from.filter(|from| !from.trim().is_empty()) {
-        Some(from_text) => vec![graph::resolve(ctx, &from_text).ok_or_else(|| not_found(format!("symbol {from_text}")))?],
+        Some(from_text) => {
+            vec![graph::resolve(ctx, &from_text).ok_or_else(|| not_found(format!("symbol {from_text}")))?]
+        }
         None => graph::entry_points(ctx, tests),
     };
     let mut paths = Vec::new();
@@ -347,9 +368,14 @@ async fn source(State(state): State<Shared>, Path(id): Path<String>, Query(param
     let id = id.trim_start_matches('/');
     let version = params.v.unwrap_or_else(|| "after".to_string());
     if version != "before" && version != "after" {
-        return Err(ApiError(StatusCode::BAD_REQUEST, format!("v must be `before` or `after`, not `{version}`")));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("v must be `before` or `after`, not `{version}`"),
+        ));
     }
-    let pick = |before: Option<&String>, after: Option<&String>| if version == "before" { before.cloned() } else { after.cloned() };
+    let pick = |before: Option<&String>, after: Option<&String>| {
+        if version == "before" { before.cloned() } else { after.cloned() }
+    };
     // 1. The exact anchor in the sources.
     if let Some(pair) = ctx.data.sources.get(id) {
         let text = pick(pair.before.as_ref(), pair.after.as_ref());
@@ -363,7 +389,9 @@ async fn source(State(state): State<Shared>, Path(id): Path<String>, Query(param
         .find(|result| result.before.is_some() || result.after.is_some());
     if let Some(result) = claim {
         let text = pick(result.before.as_ref(), result.after.as_ref());
-        return Ok(Json(json!({ "id": id, "version": version, "key": id, "from": "claim", "claim": result.claim, "text": text })));
+        return Ok(Json(
+            json!({ "id": id, "version": version, "key": id, "from": "claim", "claim": result.claim, "text": text }),
+        ));
     }
     // 3. The item of the anchor.
     if let Some((key, pair)) = ctx.source(id) {
@@ -386,7 +414,12 @@ async fn review_state(State(state): State<Shared>) -> ApiResult {
     let ctx = &state.ctx;
     let claims: BTreeMap<&str, review::ReviewState> = ctx
         .all_claims()
-        .map(|(_, claim)| (claim.id.as_str(), review.state(&claim.id, ctx.claim_hashes.get(&claim.id).map(String::as_str))))
+        .map(|(_, claim)| {
+            (
+                claim.id.as_str(),
+                review.state(&claim.id, ctx.claim_hashes.get(&claim.id).map(String::as_str)),
+            )
+        })
         .collect();
     Ok(Json(json!({ "file": state.review_file.display().to_string(), "claims": claims })))
 }
@@ -407,8 +440,18 @@ fn target_claims(ctx: &Ctx, target: &str) -> Option<(&'static str, Vec<String>)>
         }
         return Some(("group", claims));
     }
-    ctx.subgroup(target)
-        .map(|subgroup| ("subgroup", subgroup.subgroup.claims.iter().filter(|claim| ctx.claim(claim).is_some()).cloned().collect()))
+    ctx.subgroup(target).map(|subgroup| {
+        (
+            "subgroup",
+            subgroup
+                .subgroup
+                .claims
+                .iter()
+                .filter(|claim| ctx.claim(claim).is_some())
+                .cloned()
+                .collect(),
+        )
+    })
 }
 
 async fn review_mark(State(state): State<Shared>, Path(target): Path<String>) -> ApiResult {
@@ -434,9 +477,12 @@ fn review_change(state: &AppState, target: &str, mark: bool) -> ApiResult {
             review.unmark(claim);
         }
     }
-    review
-        .save(&state.review_file)
-        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("cannot write {}: {error}", state.review_file.display())))?;
+    review.save(&state.review_file).map_err(|error| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot write {}: {error}", state.review_file.display()),
+        )
+    })?;
     Ok(Json(json!({ "target": target, "kind": kind, "claims": claims, "reviewed": mark })))
 }
 
@@ -458,13 +504,21 @@ async fn pair_decision(State(state): State<Shared>, Query(params): Query<PairPar
     let decision = match params.decision.as_str() {
         "accepted" | "dismissed" => Some(params.decision.as_str()),
         "clear" => None,
-        other => return Err(ApiError(StatusCode::BAD_REQUEST, format!("unknown decision `{other}`; use accepted, dismissed, or clear"))),
+        other => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("unknown decision `{other}`; use accepted, dismissed, or clear"),
+            ));
+        }
     };
     let mut review = review_of(&state);
     review.set_pair(&key, decision, review::now());
-    review
-        .save(&state.review_file)
-        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("cannot write {}: {error}", state.review_file.display())))?;
+    review.save(&state.review_file).map_err(|error| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot write {}: {error}", state.review_file.display()),
+        )
+    })?;
     Ok(Json(json!({ "pair": key, "decision": decision })))
 }
 
@@ -474,7 +528,11 @@ async fn static_file(uri: Uri) -> Response {
         return not_found(format!("API route {path}")).into_response();
     }
     match assets::find(path) {
-        Some(asset) => ([(header::CONTENT_TYPE, asset.content_type), (header::CACHE_CONTROL, "no-cache")], asset.bytes).into_response(),
+        Some(asset) => (
+            [(header::CONTENT_TYPE, asset.content_type), (header::CACHE_CONTROL, "no-cache")],
+            asset.bytes,
+        )
+            .into_response(),
         None => (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "not found").into_response(),
     }
 }

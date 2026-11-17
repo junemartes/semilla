@@ -1,6 +1,6 @@
 //! The canonical text of a MIR body.
 //!
-//! The rustc_public printer (`Body::dump`) is not exact enough for a proof: it hides the cast
+//! The `rustc_public` printer (`Body::dump`) is not exact enough for a proof: it hides the cast
 //! kind, it prints short names for structs and enum variants, and it prints only an allocation
 //! number for a constant in memory. Two different bodies can then get the same text. This printer
 //! prints all the parts that have an effect on the behavior:
@@ -18,7 +18,7 @@
 //!   - a constant with a pointer chain deeper than `MAX_ALLOC_DEPTH`;
 //!   - a bound constant (`TyConstKind::Bound`), which does not occur in a body;
 //!   - a statement kind that the N0 rules remove (it does not occur after the rules);
-//!   - a body that the driver cannot read (a panic in rustc_public, see `failed_record`).
+//!   - a body that the driver cannot read (a panic in `rustc_public`, see `failed_record`).
 //!
 //! - Members by name, not by position (batch 5e). The source names a struct field and an enum
 //!   variant by its name; a step can change the map from names to positions (a reorder, or a new
@@ -46,14 +46,11 @@ use sha2::{Digest, Sha256};
 use rustc_public::mir::alloc::{AllocId, GlobalAlloc};
 use rustc_public::mir::visit::{Location, MirVisitor, PlaceContext};
 use rustc_public::mir::{
-    AggregateKind, AssertMessage, BasicBlock, BinOp, Body, BorrowKind, CastKind, InlineAsmOperand,
-    Local,
-    NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
-    UnwindAction,
+    AggregateKind, AssertMessage, BasicBlock, BinOp, Body, BorrowKind, CastKind, InlineAsmOperand, Local, NonDivergingIntrinsic, Operand, Place,
+    ProjectionElem, Rvalue, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_public::ty::{
-    AdtDef, AdtKind, Allocation, ConstantKind, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty,
-    TyConst, TyConstKind, TyKind, VariantIdx,
+    AdtDef, AdtKind, Allocation, ConstantKind, GenericArgKind, GenericArgs, MirConst, RigidTy, Ty, TyConst, TyConstKind, TyKind, VariantIdx,
 };
 use rustc_public::ty::{ConstDef, Promoted};
 use rustc_public::{CrateDef, rustc_internal};
@@ -84,7 +81,7 @@ const MAX_ALLOC_DEPTH: usize = 8;
 
 /// Prints the parts of a body. It also records the local functions that the body refers to.
 #[derive(Default)]
-pub struct Printer {
+pub(crate) struct Printer {
     /// The def paths of the local functions in the printed text.
     pub callees: BTreeSet<String>,
     /// The uses of the build configuration in the printed text (see `config.rs`).
@@ -108,7 +105,7 @@ struct BodyCtx {
 
 /// How a body uses a local that holds the discriminant of an enum.
 #[derive(Clone, Debug)]
-pub enum DiscriminantUse {
+pub(crate) enum DiscriminantUse {
     /// The only uses are `switchInt` operands, and each value of the switches is the
     /// discriminant of a variant. The value of each variant, with the variant path.
     Switch(Vec<(u128, String)>),
@@ -118,7 +115,7 @@ pub enum DiscriminantUse {
 }
 
 /// The path of a variant: `k::Kind::Small` for an enum, the type path for a struct or a union.
-pub fn variant_path(def: AdtDef, variant: VariantIdx) -> String {
+pub(crate) fn variant_path(def: AdtDef, variant: VariantIdx) -> String {
     if def.kind() != AdtKind::Enum {
         return def.name();
     }
@@ -129,7 +126,7 @@ pub fn variant_path(def: AdtDef, variant: VariantIdx) -> String {
 }
 
 /// The name of a field of a value of type `base`.
-pub enum FieldName {
+pub(crate) enum FieldName {
     /// A member of an ADT: `k::Pair.a`, `k::Ev::A.x`, or `k::T.0` (a tuple struct).
     Member(String),
     /// A field that the source names by position: of a tuple, a closure, or a coroutine.
@@ -139,7 +136,7 @@ pub enum FieldName {
 /// Returns the name of field `index` of a value of type `base`. `variant` is the variant of the
 /// downcast before the field, for an enum. The result is a unique word when the field is not
 /// known, so that a body with it is never equal to another body.
-pub fn field_name(base: Ty, variant: Option<VariantIdx>, index: usize) -> FieldName {
+pub(crate) fn field_name(base: Ty, variant: Option<VariantIdx>, index: usize) -> FieldName {
     let TyKind::RigidTy(RigidTy::Adt(def, _)) = base.kind() else {
         return FieldName::Position;
     };
@@ -148,7 +145,9 @@ pub fn field_name(base: Ty, variant: Option<VariantIdx>, index: usize) -> FieldN
         (AdtKind::Enum, None) => return FieldName::Member(unique("field")),
         _ => VariantIdx::to_val(0),
     };
-    let Some(found) = def.variant(variant) else { return FieldName::Member(unique("field")) };
+    let Some(found) = def.variant(variant) else {
+        return FieldName::Member(unique("field"));
+    };
     match found.fields().get(index) {
         Some(field) => FieldName::Member(format!("{}.{}", variant_path(def, variant), field.name)),
         None => FieldName::Member(unique("field")),
@@ -159,7 +158,9 @@ pub fn field_name(base: Ty, variant: Option<VariantIdx>, index: usize) -> FieldN
 fn opaque_locals(body: &Body) -> std::collections::HashSet<Local> {
     let mut found = std::collections::HashSet::new();
     for block in &body.blocks {
-        let TerminatorKind::Call { func, destination, .. } = &block.terminator.kind else { continue };
+        let TerminatorKind::Call { func, destination, .. } = &block.terminator.kind else {
+            continue;
+        };
         if !destination.projection.is_empty() || !crate::is_opaque_wrap(func) {
             continue;
         }
@@ -172,7 +173,7 @@ fn opaque_locals(body: &Body) -> std::collections::HashSet<Local> {
 }
 
 /// The discriminant value of each variant of an enum, with the variant path, sorted by path.
-pub fn discriminant_table(def: AdtDef) -> Vec<(u128, String)> {
+pub(crate) fn discriminant_table(def: AdtDef) -> Vec<(u128, String)> {
     let mut table: Vec<(u128, String)> = def
         .variants_iter()
         .map(|variant| (def.discriminant_for_variant(variant.idx()).val, variant_path(def, variant.idx())))
@@ -182,7 +183,7 @@ pub fn discriminant_table(def: AdtDef) -> Vec<(u128, String)> {
 }
 
 /// The text of a discriminant table: `[k::Kind::Large = 1, k::Kind::Small = 0]`.
-pub fn table_text(table: &[(u128, String)]) -> String {
+pub(crate) fn table_text(table: &[(u128, String)]) -> String {
     let parts: Vec<String> = table.iter().map(|(value, path)| format!("{path} = {value}")).collect();
     format!("[{}]", parts.join(", "))
 }
@@ -198,7 +199,7 @@ fn enum_of(ty: Ty) -> Option<AdtDef> {
 /// Finds the locals of a body that hold the discriminant of an enum: a local with exactly one
 /// assignment, `_n = discriminant(place)`. A local that is a `switchInt` operand only gets the
 /// variant paths of the switch values. Each other local prints the discriminant values.
-pub fn discriminant_uses(body: &Body) -> HashMap<Local, DiscriminantUse> {
+pub(crate) fn discriminant_uses(body: &Body) -> HashMap<Local, DiscriminantUse> {
     struct Mentions(Vec<usize>);
     impl MirVisitor for Mentions {
         fn visit_local(&mut self, local: &Local, _ptx: PlaceContext, _location: Location) {
@@ -218,7 +219,9 @@ pub fn discriminant_uses(body: &Body) -> HashMap<Local, DiscriminantUse> {
     let mut casts: BTreeSet<Local> = BTreeSet::new();
     for block in &body.blocks {
         for statement in &block.statements {
-            let StatementKind::Assign(place, rvalue) = &statement.kind else { continue };
+            let StatementKind::Assign(place, rvalue) = &statement.kind else {
+                continue;
+            };
             if place.projection.is_empty() {
                 *assignments.entry(place.local).or_default() += 1;
             }
@@ -232,15 +235,17 @@ pub fn discriminant_uses(body: &Body) -> HashMap<Local, DiscriminantUse> {
                 _ => {}
             }
         }
-        if let TerminatorKind::Call { destination, .. } = &block.terminator.kind {
-            if destination.projection.is_empty() {
-                *assignments.entry(destination.local).or_default() += 1;
-            }
+        if let TerminatorKind::Call { destination, .. } = &block.terminator.kind
+            && destination.projection.is_empty()
+        {
+            *assignments.entry(destination.local).or_default() += 1;
         }
     }
     let mut switches: HashMap<Local, (usize, bool)> = HashMap::new();
     for block in &body.blocks {
-        let TerminatorKind::SwitchInt { discr, targets } = &block.terminator.kind else { continue };
+        let TerminatorKind::SwitchInt { discr, targets } = &block.terminator.kind else {
+            continue;
+        };
         let Some(local) = plain(discr) else { continue };
         let Some(def) = enums.get(&local) else { continue };
         let table = discriminant_table(*def);
@@ -254,10 +259,10 @@ pub fn discriminant_uses(body: &Body) -> HashMap<Local, DiscriminantUse> {
         .map(|(local, def)| {
             let single = assignments.get(&local) == Some(&1);
             let use_ = match switches.get(&local) {
-                Some((count, true)) if single && mentions[local] == 1 + count => {
-                    DiscriminantUse::Switch(discriminant_table(def))
-                }
-                _ => DiscriminantUse::Value { cast: casts.contains(&local) },
+                Some((count, true)) if single && mentions[local] == 1 + count => DiscriminantUse::Switch(discriminant_table(def)),
+                _ => DiscriminantUse::Value {
+                    cast: casts.contains(&local),
+                },
             };
             (local, use_)
         })
@@ -266,7 +271,7 @@ pub fn discriminant_uses(body: &Body) -> HashMap<Local, DiscriminantUse> {
 
 impl Printer {
     /// Returns the canonical text of a body.
-    pub fn body(&mut self, body: &Body) -> String {
+    pub(crate) fn body(&mut self, body: &Body) -> String {
         let ctx = BodyCtx {
             locals: body.locals().iter().map(|decl| decl.ty).collect(),
             discriminants: discriminant_uses(body),
@@ -280,7 +285,7 @@ impl Printer {
 
     /// Prepares the printer for the parts of one body, without a print of the whole body (for
     /// the N4 terms).
-    pub fn for_body(body: &Body) -> Printer {
+    pub(crate) fn for_body(body: &Body) -> Printer {
         Printer {
             ctx: BodyCtx {
                 locals: body.locals().iter().map(|decl| decl.ty).collect(),
@@ -292,7 +297,7 @@ impl Printer {
     }
 
     /// How the body uses a discriminant local, or `None` for another local.
-    pub fn discriminant_use(&self, local: Local) -> Option<&DiscriminantUse> {
+    pub(crate) fn discriminant_use(&self, local: Local) -> Option<&DiscriminantUse> {
         self.ctx.discriminants.get(&local)
     }
 
@@ -333,7 +338,16 @@ impl Printer {
 
     /// The text of an opaque call (see `config.rs`): `_3 = opaque(const bool = true @cfg!(..))`.
     fn opaque_call(&mut self, terminator: &rustc_public::mir::Terminator) -> Option<String> {
-        let TerminatorKind::Call { func, args, destination, target: Some(target), .. } = &terminator.kind else { return None };
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            target: Some(target),
+            ..
+        } = &terminator.kind
+        else {
+            return None;
+        };
         if args.len() != 1 || !crate::is_opaque_wrap(func) {
             return None;
         }
@@ -352,10 +366,14 @@ impl Printer {
     /// - a call with no span on the result of a call with no span: the source is not known, and
     ///   the text is different from each other text;
     /// - each other call with no span: no source. The text of the value is sufficient.
-    pub fn opaque_mark(&mut self, span: rustc_public::ty::Span, arg: &Operand) -> String {
+    pub(crate) fn opaque_mark(&mut self, span: rustc_public::ty::Span, arg: &Operand) -> String {
         let source = rustc_middle::ty::tls::with(|tcx| {
             let span = rustc_internal::internal(tcx, span);
-            if span.is_dummy() { None } else { Some(crate::config::span_source(tcx, span)) }
+            if span.is_dummy() {
+                None
+            } else {
+                Some(crate::config::span_source(tcx, span))
+            }
         });
         match source {
             None => {
@@ -450,12 +468,14 @@ impl Printer {
             StatementKind::Intrinsic(NonDivergingIntrinsic::Assume(operand)) => {
                 format!("assume({})", self.operand(operand))
             }
-            StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(copy)) => format!(
-                "copy_nonoverlapping({}, {}, {})",
-                self.operand(&copy.src),
-                self.operand(&copy.dst),
-                self.operand(&copy.count)
-            ),
+            StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(copy)) => {
+                format!(
+                    "copy_nonoverlapping({}, {}, {})",
+                    self.operand(&copy.src),
+                    self.operand(&copy.dst),
+                    self.operand(&copy.count)
+                )
+            }
             // The N0 rules remove the other statements before the print. If one stays, it must
             // not make two bodies equal by accident, so it gets a unique word.
             _ => unique("statement"),
@@ -467,12 +487,10 @@ impl Printer {
             TerminatorKind::Goto { target } => format!("goto -> bb{target}"),
             TerminatorKind::SwitchInt { discr, targets } => {
                 let names = match discr {
-                    Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-                        match self.ctx.discriminants.get(&place.local) {
-                            Some(DiscriminantUse::Switch(table)) => Some(table.clone()),
-                            _ => None,
-                        }
-                    }
+                    Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => match self.ctx.discriminants.get(&place.local) {
+                        Some(DiscriminantUse::Switch(table)) => Some(table.clone()),
+                        _ => None,
+                    },
                     _ => None,
                 };
                 let mut arms: Vec<String> = targets
@@ -497,13 +515,15 @@ impl Printer {
             TerminatorKind::Return => "return".to_string(),
             TerminatorKind::Unreachable => "unreachable".to_string(),
             TerminatorKind::Drop { place, target, unwind } => {
-                format!(
-                    "drop({}) -> [return: bb{target}, {}]",
-                    self.place(place),
-                    unwind_text(unwind)
-                )
+                format!("drop({}) -> [return: bb{target}, {}]", self.place(place), unwind_text(unwind))
             }
-            TerminatorKind::Call { func, args, destination, target, unwind } => {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target,
+                unwind,
+            } => {
                 let args: Vec<String> = args.iter().map(|arg| self.operand(arg)).collect();
                 let target = match target {
                     Some(target) => format!("return: bb{target}"),
@@ -518,7 +538,13 @@ impl Printer {
                     unwind_text(unwind)
                 )
             }
-            TerminatorKind::Assert { cond, expected, msg, target, unwind } => format!(
+            TerminatorKind::Assert {
+                cond,
+                expected,
+                msg,
+                target,
+                unwind,
+            } => format!(
                 "assert({}{}, {}) -> [success: bb{target}, {}]",
                 if *expected { "" } else { "!" },
                 self.operand(cond),
@@ -533,8 +559,7 @@ impl Printer {
                 destination,
                 unwind,
             } => {
-                let operands: Vec<String> =
-                    operands.iter().map(|operand| self.asm_operand(operand)).collect();
+                let operands: Vec<String> = operands.iter().map(|operand| self.asm_operand(operand)).collect();
                 let destination = match destination {
                     Some(target) => format!("return: bb{target}"),
                     None => "no return".to_string(),
@@ -549,18 +574,18 @@ impl Printer {
     }
 
     fn asm_operand(&mut self, operand: &InlineAsmOperand) -> String {
-        let input = operand.in_value.as_ref().map(|value| self.operand(value)).unwrap_or_default();
-        let output = operand.out_place.as_ref().map(|place| self.place(place)).unwrap_or_default();
+        let input = operand.in_value.as_ref().map_or_default(|value| self.operand(value));
+        let output = operand.out_place.as_ref().map_or_default(|place| self.place(place));
         format!("in({input}) out({output}) {:?}", operand.raw_rpr)
     }
 
     /// Prints the kind of the message and all its operands.
-    pub fn assert_message(&mut self, msg: &AssertMessage) -> String {
+    pub(crate) fn assert_message(&mut self, msg: &AssertMessage) -> String {
         match msg {
             AssertMessage::BoundsCheck { len, index } => {
                 format!("bounds_check(len: {}, index: {})", self.operand(len), self.operand(index))
             }
-            AssertMessage::Overflow(op, left, right) => self.binary("overflow ", op, left, right),
+            AssertMessage::Overflow(op, left, right) => self.binary("overflow ", *op, left, right),
             AssertMessage::OverflowNeg(operand) => {
                 format!("overflow_neg({})", self.operand(operand))
             }
@@ -597,8 +622,15 @@ impl Printer {
     ///
     /// The list has the types with an exact symmetric operation: the integers, `bool`, and
     /// `char`. Each other type (a float, a pointer) keeps the order of rustc.
-    fn binary(&mut self, prefix: &str, op: &BinOp, left: &Operand, right: &Operand) -> String {
-        let exact = |ty: Option<Ty>| ty.is_some_and(|ty| matches!(ty.kind(), TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::Bool | RigidTy::Char)));
+    fn binary(&mut self, prefix: &str, op: BinOp, left: &Operand, right: &Operand) -> String {
+        let exact = |ty: Option<Ty>| {
+            ty.is_some_and(|ty| {
+                matches!(
+                    ty.kind(),
+                    TyKind::RigidTy(RigidTy::Int(_) | RigidTy::Uint(_) | RigidTy::Bool | RigidTy::Char)
+                )
+            })
+        };
         let exact = exact(self.operand_ty(left)) && exact(self.operand_ty(right));
         let (mut first, mut second) = (self.operand(left), self.operand(right));
         let mut name = format!("{op:?}");
@@ -608,7 +640,17 @@ impl Printer {
                     name = if matches!(op, BinOp::Gt) { "Lt" } else { "Le" }.to_string();
                     std::mem::swap(&mut first, &mut second);
                 }
-                BinOp::Add | BinOp::AddUnchecked | BinOp::Mul | BinOp::MulUnchecked | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Eq | BinOp::Ne if first > second => {
+                BinOp::Add
+                | BinOp::AddUnchecked
+                | BinOp::Mul
+                | BinOp::MulUnchecked
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Eq
+                | BinOp::Ne
+                    if first > second =>
+                {
                     std::mem::swap(&mut first, &mut second);
                 }
                 _ => {}
@@ -635,7 +677,7 @@ impl Printer {
         Some(ty)
     }
 
-    pub fn place(&mut self, place: &Place) -> String {
+    pub(crate) fn place(&mut self, place: &Place) -> String {
         let mut text = format!("_{}", place.local);
         // The type of the place so far, and the variant of a downcast just before.
         let mut base = self.ctx.locals.get(place.local).copied();
@@ -659,7 +701,11 @@ impl Printer {
                     format!("({text}.{name}: {})", self.ty(*ty))
                 }
                 ProjectionElem::Index(local) => format!("{text}[_{local}]"),
-                ProjectionElem::ConstantIndex { offset, min_length, from_end } => {
+                ProjectionElem::ConstantIndex {
+                    offset,
+                    min_length,
+                    from_end,
+                } => {
                     format!("{text}[{}{offset} of {min_length}]", if *from_end { "-" } else { "" })
                 }
                 ProjectionElem::Subslice { from, to, from_end } => {
@@ -682,7 +728,7 @@ impl Printer {
         text
     }
 
-    pub fn operand(&mut self, operand: &Operand) -> String {
+    pub(crate) fn operand(&mut self, operand: &Operand) -> String {
         match operand {
             Operand::Copy(place) => self.place(place),
             Operand::Move(place) => format!("move {}", self.place(place)),
@@ -691,36 +737,31 @@ impl Printer {
         }
     }
 
-    pub fn rvalue(&mut self, rvalue: &Rvalue) -> String {
+    pub(crate) fn rvalue(&mut self, rvalue: &Rvalue) -> String {
         match rvalue {
             Rvalue::AddressOf(kind, place) => format!("&raw {kind:?} {}", self.place(place)),
             Rvalue::Aggregate(kind, operands) => {
                 let head = self.aggregate_kind(kind);
-                let operands: Vec<String> =
-                    operands.iter().map(|operand| self.operand(operand)).collect();
+                let operands: Vec<String> = operands.iter().map(|operand| self.operand(operand)).collect();
                 match aggregate_fields(kind, operands.len()) {
                     Some(names) => {
                         // Sorted: the order of the operands has no effect (see the module doc).
-                        let mut parts: Vec<String> = names
-                            .iter()
-                            .zip(&operands)
-                            .map(|(name, operand)| format!("{name}: {operand}"))
-                            .collect();
+                        let mut parts: Vec<String> = names.iter().zip(&operands).map(|(name, operand)| format!("{name}: {operand}")).collect();
                         parts.sort();
                         format!("{head} fields {{{}}}", parts.join(", "))
                     }
                     None => format!("{head}({})", operands.join(", ")),
                 }
             }
-            Rvalue::BinaryOp(op, left, right) => self.binary("", op, left, right),
+            Rvalue::BinaryOp(op, left, right) => self.binary("", *op, left, right),
             Rvalue::Cast(kind, operand, ty) => {
                 let note = match self.operand_ty(operand) {
-                    Some(source) => cast_note(kind, source, *ty),
+                    Some(source) => cast_note(*kind, source, *ty),
                     None => unique("cast"),
                 };
-                format!("{} as {} ({}){note}", self.operand(operand), self.ty(*ty), cast_kind_text(kind))
+                format!("{} as {} ({}){note}", self.operand(operand), self.ty(*ty), cast_kind_text(*kind))
             }
-            Rvalue::CheckedBinaryOp(op, left, right) => self.binary("Checked", op, left, right),
+            Rvalue::CheckedBinaryOp(op, left, right) => self.binary("Checked", *op, left, right),
             Rvalue::CopyForDeref(place) => format!("CopyForDeref({})", self.place(place)),
             Rvalue::Discriminant(place) => {
                 let text = format!("discriminant({})", self.place(place));
@@ -731,7 +772,7 @@ impl Printer {
             }
             Rvalue::Len(place) => format!("len({})", self.place(place)),
             Rvalue::Ref(_, kind, place) => {
-                format!("&{} {}", borrow_kind_text(kind), self.place(place))
+                format!("&{} {}", borrow_kind_text(*kind), self.place(place))
             }
             Rvalue::Reborrow(target, mutability, place) => {
                 format!("reborrow {mutability:?} {} as {}", self.place(place), self.ty(*target))
@@ -768,7 +809,7 @@ impl Printer {
 
     /// Prints the kind of an aggregate with its full def path and its generic arguments. The
     /// variant of an enum is its path. The field names are in `aggregate_fields`.
-    pub fn aggregate_kind(&mut self, kind: &AggregateKind) -> String {
+    pub(crate) fn aggregate_kind(&mut self, kind: &AggregateKind) -> String {
         match kind {
             AggregateKind::Array(ty) => format!("array {}", self.ty(*ty)),
             AggregateKind::Tuple => "tuple".to_string(),
@@ -808,21 +849,21 @@ impl Printer {
     }
 
     /// Prints a type with full def paths. It records each local function in the type.
-    pub fn ty(&mut self, ty: Ty) -> String {
+    pub(crate) fn ty(&mut self, ty: Ty) -> String {
         self.note_fn_defs(ty);
         ty.to_string()
     }
 
     /// Records the local functions that a type refers to (a function item type).
     fn note_fn_defs(&mut self, ty: Ty) {
-        if let TyKind::RigidTy(RigidTy::FnDef(def, _)) = ty.kind() {
-            if def.krate().is_local {
-                self.callees.insert(def.name());
-            }
+        if let TyKind::RigidTy(RigidTy::FnDef(def, _)) = ty.kind()
+            && def.krate().is_local
+        {
+            self.callees.insert(def.name());
         }
     }
 
-    pub fn generic_args(&mut self, args: &GenericArgs) -> String {
+    pub(crate) fn generic_args(&mut self, args: &GenericArgs) -> String {
         if args.0.is_empty() {
             return String::new();
         }
@@ -842,7 +883,7 @@ impl Printer {
     /// configuration-free (see `config.rs`). The source makes two constants different that have
     /// the same value in the check build. It also stops each rule that reads the value from the
     /// text.
-    pub fn const_operand(&mut self, constant: &rustc_public::mir::ConstOperand) -> String {
+    pub(crate) fn const_operand(&mut self, constant: &rustc_public::mir::ConstOperand) -> String {
         let text = self.mir_const(&constant.const_);
         let source = rustc_middle::ty::tls::with(|tcx| {
             let span = rustc_internal::internal(tcx, constant.span);
@@ -859,7 +900,7 @@ impl Printer {
     }
 
     /// Prints a constant with its type and its full value.
-    pub fn mir_const(&mut self, constant: &MirConst) -> String {
+    pub(crate) fn mir_const(&mut self, constant: &MirConst) -> String {
         let ty = self.ty(constant.ty());
         match constant.kind() {
             // A zero-sized value has no bytes. Its type gives it fully, for example the type of a
@@ -882,7 +923,7 @@ impl Printer {
                 };
                 // A promoted constant of a generic body: print its MIR in place, with the
                 // same N0 rules. Its value depends only on this MIR and the generic arguments.
-                match self.promoted_body(&unevaluated.def, index) {
+                match self.promoted_body(unevaluated.def, index) {
                     Some(text) => format!("const {ty} = promoted{args} {{\n{text}}}"),
                     // The MIR is not available (for example a body of another crate without
                     // MIR in its metadata), or the promoted constants nest too deep.
@@ -902,10 +943,10 @@ impl Printer {
             if rustc_middle::ty::TypeVisitableExt::has_param(&internal.ty()) {
                 return None;
             }
-            if let rustc_middle::mir::Const::Unevaluated(unevaluated, _) = internal {
-                if !unevaluated.args.is_empty() {
-                    return None;
-                }
+            if let rustc_middle::mir::Const::Unevaluated(unevaluated, _) = internal
+                && !unevaluated.args.is_empty()
+            {
+                return None;
             }
             let typing = rustc_middle::ty::TypingEnv::fully_monomorphized();
             let value = internal.eval(tcx, typing, rustc_span::DUMMY_SP).ok()?;
@@ -919,12 +960,12 @@ impl Printer {
 
     /// Returns the canonical text of a promoted constant body: promoted `index` of the body of
     /// `def`. It reads the MIR from rustc, and uses the same N0 rules as for a normal body.
-    fn promoted_body(&mut self, def: &ConstDef, index: Promoted) -> Option<String> {
+    fn promoted_body(&mut self, def: ConstDef, index: Promoted) -> Option<String> {
         let def_id = rustc_middle::ty::tls::with(|tcx| rustc_internal::internal(tcx, def.def_id()));
         self.promoted_text(def_id, index)
     }
 
-    pub fn ty_const(&mut self, constant: &TyConst) -> String {
+    pub(crate) fn ty_const(&mut self, constant: &TyConst) -> String {
         match constant.kind() {
             TyConstKind::Param(param) => format!("param {}#{}", param.name, param.index),
             TyConstKind::Bound(..) => unique("bound_const"),
@@ -943,15 +984,9 @@ impl Printer {
     fn scalar_or_alloc(&mut self, ty: Ty, alloc: &Allocation) -> String {
         if alloc.provenance.ptrs.is_empty() && alloc.bytes.iter().all(Option::is_some) {
             let value = match ty.kind() {
-                TyKind::RigidTy(RigidTy::Int(_)) => {
-                    alloc.read_int().ok().map(|value| value.to_string())
-                }
-                TyKind::RigidTy(RigidTy::Uint(_)) => {
-                    alloc.read_uint().ok().map(|value| value.to_string())
-                }
-                TyKind::RigidTy(RigidTy::Bool) => {
-                    alloc.read_bool().ok().map(|value| value.to_string())
-                }
+                TyKind::RigidTy(RigidTy::Int(_)) => alloc.read_int().ok().map(|value| value.to_string()),
+                TyKind::RigidTy(RigidTy::Uint(_)) => alloc.read_uint().ok().map(|value| value.to_string()),
+                TyKind::RigidTy(RigidTy::Bool) => alloc.read_bool().ok().map(|value| value.to_string()),
                 _ => None,
             };
             if let Some(value) = value {
@@ -991,13 +1026,19 @@ impl Printer {
             self.callees.extend(callees);
             return text;
         }
-        let mut inner = Printer { promoted_depth: self.promoted_depth, ..Printer::default() };
+        let mut inner = Printer {
+            promoted_depth: self.promoted_depth,
+            ..Printer::default()
+        };
         let mut text = inner.global_alloc_text(id, depth);
         if text.len() > MAX_ALLOC_TEXT {
             // A long text becomes its SHA-256 hash. Two allocations with the same hash have the
             // same text (the hash is collision resistant), so the compare stays exact.
             let digest = Sha256::digest(text.as_bytes());
-            let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+            let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
             text = format!("sha256:{hex} ({} characters)", text.len());
         }
         let callees: Vec<String> = inner.callees.into_iter().collect();
@@ -1019,11 +1060,7 @@ impl Printer {
                 let trait_text = match trait_ref {
                     Some(binder) => {
                         let trait_ref = binder.skip_binder();
-                        format!(
-                            "{}{}",
-                            trait_ref.def_id.name(),
-                            self.generic_args(&trait_ref.generic_args)
-                        )
+                        format!("{}{}", trait_ref.def_id.name(), self.generic_args(&trait_ref.generic_args))
                     }
                     None => "auto".to_string(),
                 };
@@ -1038,8 +1075,10 @@ impl Printer {
 
 /// The field paths of the operands of an ADT aggregate, in the order of the operands, or `None`
 /// for an aggregate whose operands have positions only (a tuple, an array, a closure).
-pub fn aggregate_fields(kind: &AggregateKind, count: usize) -> Option<Vec<String>> {
-    let AggregateKind::Adt(def, variant, _, _, active_field) = kind else { return None };
+pub(crate) fn aggregate_fields(kind: &AggregateKind, count: usize) -> Option<Vec<String>> {
+    let AggregateKind::Adt(def, variant, _, _, active_field) = kind else {
+        return None;
+    };
     let path = variant_path(*def, *variant);
     let fields = match def.variant(*variant) {
         Some(found) => found.fields(),
@@ -1059,7 +1098,7 @@ pub fn aggregate_fields(kind: &AggregateKind, count: usize) -> Option<Vec<String
 /// A note for a cast that reads the bytes of a value in another type: a transmute, or a cast of
 /// a pointer to another pointee type. The result depends on the layout of the local ADTs in the
 /// two types, so the note gives their layouts (see `layout_note`). Empty for another cast.
-pub fn cast_note(kind: &CastKind, source: Ty, target: Ty) -> String {
+pub(crate) fn cast_note(kind: CastKind, source: Ty, target: Ty) -> String {
     if !matches!(kind, CastKind::Transmute | CastKind::PtrToPtr) {
         return String::new();
     }
@@ -1070,19 +1109,22 @@ pub fn cast_note(kind: &CastKind, source: Ty, target: Ty) -> String {
 /// (`std::mem::discriminant`, the `discriminant_value` intrinsic): the value of each variant.
 /// The result (for example its hash) depends on the values, so a reorder must change the text.
 fn discriminant_call_note(func: &Operand) -> String {
-    let Operand::Constant(constant) = func else { return String::new() };
+    let Operand::Constant(constant) = func else {
+        return String::new();
+    };
     let TyKind::RigidTy(RigidTy::FnDef(def, args)) = constant.const_.ty().kind() else {
         return String::new();
     };
     let name = def.name();
-    let reads = ["std::", "core::"].iter().any(|krate| {
-        name == format!("{krate}mem::discriminant")
-            || name == format!("{krate}intrinsics::discriminant_value")
-    });
+    let reads = ["std::", "core::"]
+        .iter()
+        .any(|krate| name == format!("{krate}mem::discriminant") || name == format!("{krate}intrinsics::discriminant_value"));
     if !reads {
         return String::new();
     }
-    let Some(GenericArgKind::Type(ty)) = args.0.first() else { return String::new() };
+    let Some(GenericArgKind::Type(ty)) = args.0.first() else {
+        return String::new();
+    };
     match enum_of(*ty) {
         Some(adt) => format!(" reads the values of {} {}", adt.name(), table_text(&discriminant_table(adt))),
         None => String::new(),
@@ -1109,10 +1151,10 @@ fn local_adts(ty: Ty, found: &mut Vec<Ty>, seen: &mut BTreeSet<String>) -> bool 
                 }
             }
             for arg in &args.0 {
-                if let GenericArgKind::Type(inner) = arg {
-                    if !local_adts(*inner, found, seen) {
-                        return false;
-                    }
+                if let GenericArgKind::Type(inner) = arg
+                    && !local_adts(*inner, found, seen)
+                {
+                    return false;
                 }
             }
             if def.krate().is_local {
@@ -1127,12 +1169,9 @@ fn local_adts(ty: Ty, found: &mut Vec<Ty>, seen: &mut BTreeSet<String>) -> bool 
             }
             true
         }
-        TyKind::RigidTy(
-            RigidTy::Ref(_, inner, _)
-            | RigidTy::RawPtr(inner, _)
-            | RigidTy::Array(inner, _)
-            | RigidTy::Slice(inner),
-        ) => local_adts(inner, found, seen),
+        TyKind::RigidTy(RigidTy::Ref(_, inner, _) | RigidTy::RawPtr(inner, _) | RigidTy::Array(inner, _) | RigidTy::Slice(inner)) => {
+            local_adts(inner, found, seen)
+        }
         TyKind::RigidTy(RigidTy::Tuple(items)) => items.iter().all(|item| local_adts(*item, found, seen)),
         _ => true,
     }
@@ -1156,7 +1195,9 @@ fn layout_note(ty: Ty) -> String {
         let parts: Vec<String> = found
             .iter()
             .map(|adt| {
-                let TyKind::RigidTy(RigidTy::Adt(def, args)) = adt.kind() else { unreachable!("an ADT") };
+                let TyKind::RigidTy(RigidTy::Adt(def, args)) = adt.kind() else {
+                    unreachable!("an ADT")
+                };
                 let variants: Vec<String> = def
                     .variants_iter()
                     .map(|variant| {
@@ -1174,7 +1215,7 @@ fn layout_note(ty: Ty) -> String {
                     .collect();
                 let shape = match adt.layout() {
                     Ok(layout) => format!("{:?}", layout.shape()),
-                    Err(_) if crate::is_generic(adt) => declared_layout(&def, &args),
+                    Err(_) if crate::is_generic(adt) => declared_layout(def, &args),
                     Err(_) => unique("layout"),
                 };
                 format!("layout-of {adt}: {} {shape}", variants.join("; "))
@@ -1192,7 +1233,7 @@ fn layout_note(ty: Ty) -> String {
 /// `repr` options and the type of each member, in the order of the declaration. The caller
 /// prints the member paths and the discriminant values. Each local ADT in a member type gets its
 /// own text (`local_adts`). The text is the same in each build of the same declaration.
-fn declared_layout(def: &AdtDef, args: &GenericArgs) -> String {
+fn declared_layout(def: AdtDef, args: &GenericArgs) -> String {
     use rustc_public::CrateDefType;
     let types: Vec<String> = def
         .variants_iter()
@@ -1213,13 +1254,13 @@ fn unwind_text(unwind: &UnwindAction) -> String {
     }
 }
 
-pub fn cast_kind_text(kind: &CastKind) -> String {
+pub(crate) fn cast_kind_text(kind: CastKind) -> String {
     format!("{kind:?}")
 }
 
 /// Prints a borrow kind. All mutable kinds (default, two-phase, closure capture) give the same
 /// runtime code, so they get the same text. A fake borrow has no runtime effect.
-pub fn borrow_kind_text(kind: &BorrowKind) -> &'static str {
+pub(crate) fn borrow_kind_text(kind: BorrowKind) -> &'static str {
     match kind {
         BorrowKind::Shared => "shared",
         BorrowKind::Fake(_) => "fake",
@@ -1229,12 +1270,11 @@ pub fn borrow_kind_text(kind: &BorrowKind) -> &'static str {
 
 /// Returns a word that no other call returns, in this process or in another process. Use it for
 /// a part that the printer cannot see, so that the body is never equal to another body.
-pub fn unique(what: &str) -> String {
+pub(crate) fn unique(what: &str) -> String {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|time| time.as_nanos())
-        .unwrap_or_default();
+        .map_or_default(|time| time.as_nanos());
     format!(
         "unknown_{what}#{}.{}.{nanos}",
         std::process::id(),

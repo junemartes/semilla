@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use semilla_core::{Anchor, Claim, ClaimStatus, Segment};
 use semilla_syntax::Node;
 
+use crate::ExprOracle;
 use crate::checks::{Context, Outcome};
 
 const META: &str = "__semilla_meta_";
@@ -18,7 +19,7 @@ const META: &str = "__semilla_meta_";
 fn parse_pattern(text: &str) -> Option<Node> {
     let mut source = String::new();
     let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
+    for c in chars.by_ref() {
         if c == '$' {
             source.push_str(META);
         } else {
@@ -33,12 +34,11 @@ fn parse_pattern(text: &str) -> Option<Node> {
 fn matches(pattern: &Node, node: &Node, bindings: &mut BTreeMap<String, String>) -> bool {
     if pattern.kind == "path" && pattern.text.starts_with(META) && !pattern.text.contains(' ') {
         let name = pattern.text.trim_start_matches(META).to_string();
-        return match bindings.get(&name) {
-            Some(bound) => bound == &node.text,
-            None => {
-                bindings.insert(name, node.text.clone());
-                true
-            }
+        return if let Some(bound) = bindings.get(&name) {
+            bound == &node.text
+        } else {
+            bindings.insert(name, node.text.clone());
+            true
         };
     }
     if pattern.kind != node.kind || pattern.attr != node.attr || pattern.children.len() != node.children.len() {
@@ -47,7 +47,11 @@ fn matches(pattern: &Node, node: &Node, bindings: &mut BTreeMap<String, String>)
     if pattern.children.is_empty() {
         return pattern.text == node.text;
     }
-    pattern.children.iter().zip(&node.children).all(|(p, n)| p.role == n.role && matches(p, n, bindings))
+    pattern
+        .children
+        .iter()
+        .zip(&node.children)
+        .all(|(p, n)| p.role == n.role && matches(p, n, bindings))
 }
 
 /// Builds the text of `to` with the bindings, in normalized token form.
@@ -66,7 +70,7 @@ fn instantiate(to: &str, bindings: &BTreeMap<String, String>) -> Option<String> 
 /// Removes the parentheses that `instantiate` adds around single tokens, so the text compares.
 fn strip_parens(text: &str) -> String {
     let node = semilla_syntax::tree::expr_text_node("x", text);
-    node.map(|n| canonical(&n)).unwrap_or_else(|| text.to_string())
+    node.map_or_else(|| text.to_string(), |n| canonical(&n))
 }
 
 /// A text form without parentheses: the kinds, attributes, and leaf texts.
@@ -95,24 +99,44 @@ fn sites<'a>(pattern: &Node, root: &'a Node, out: &mut Vec<(Vec<String>, &'a Nod
 }
 
 fn to_anchor(item: &str, path: &[String]) -> Anchor {
-    let text = std::iter::once(item.to_string()).chain(path.iter().cloned()).collect::<Vec<_>>().join("/");
+    let text = std::iter::once(item.to_string())
+        .chain(path.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("/");
     text.parse().unwrap_or_else(|_| Anchor::item(item))
 }
 
-pub fn check(context: &Context, claim: &Claim) -> Outcome {
+pub fn check<E: ExprOracle>(context: &Context<'_, E>, claim: &Claim) -> Outcome {
     let (Some(from), Some(to)) = (claim.arg_str("from"), claim.arg_str("to")) else {
-        return outcome(ClaimStatus::Malformed { reason: "`rewrite-pattern` needs `from` and `to`".into() }, Vec::new());
+        return outcome(
+            ClaimStatus::Malformed {
+                reason: "`rewrite-pattern` needs `from` and `to`".into(),
+            },
+            Vec::new(),
+        );
     };
     let Some(pattern) = parse_pattern(from) else {
-        return outcome(ClaimStatus::Malformed { reason: format!("`{from}` is not an expression pattern") }, Vec::new());
+        return outcome(
+            ClaimStatus::Malformed {
+                reason: format!("`{from}` is not an expression pattern"),
+            },
+            Vec::new(),
+        );
     };
     if parse_pattern(to).is_none() {
-        return outcome(ClaimStatus::Malformed { reason: format!("`{to}` is not an expression pattern") }, Vec::new());
+        return outcome(
+            ClaimStatus::Malformed {
+                reason: format!("`{to}` is not an expression pattern"),
+            },
+            Vec::new(),
+        );
     }
-    // The scope: one item (the anchor), or the whole workspace.
-    // The scope: an item, or a module or a crate (all its items).
-    let scope = claim.at.as_ref().map(|a| a.item.clone());
-    let in_scope = |item: &str| scope.as_ref().is_none_or(|scope| item == scope || item.starts_with(&format!("{scope}::")));
+    let rewrite = Rewrite {
+        context,
+        pattern,
+        to,
+        scope: claim.at.as_ref().map(|a| a.item.clone()),
+    };
     // `sites`: `all` (the default), or the exact list of the site anchors.
     let listed: Option<Vec<String>> = match claim.args.get("sites") {
         None => None,
@@ -121,77 +145,139 @@ pub fn check(context: &Context, claim: &Claim) -> Outcome {
     };
     let all_sites = listed.is_none();
 
-    let mut explains = Vec::new();
-    let mut rewritten = Vec::new();
-    for (index, edit) in context.edits.iter().enumerate() {
-        let (Some(before_anchor), Some(after_anchor)) = (&edit.before, &edit.after) else { continue };
-        if !in_scope(&before_anchor.item) {
-            continue;
-        }
-        // Walk up from the edit to the site that matches the pattern.
-        let mut site = before_anchor.clone();
-        let mut after_site = after_anchor.clone();
-        loop {
-            if let Some(node) = semilla_syntax::resolve_node(context.before, &site) {
-                let mut bindings = BTreeMap::new();
-                if matches(&pattern, node, &mut bindings) {
-                    let expected = instantiate(to, &bindings);
-                    let actual = semilla_syntax::resolve_node(context.after, &after_site).map(canonical);
-                    if expected.is_some() && expected == actual {
-                        explains.push(index);
-                        rewritten.push(site.clone());
-                    }
-                    break;
-                }
-            }
-            match (site.parent(), after_site.parent()) {
-                (Some(parent), Some(after_parent)) if !parent.path.is_empty() && !matches!(parent.path.last(), Some(Segment::Stmt(_))) || site.path.len() > 1 => {
-                    site = parent;
-                    after_site = after_parent;
-                }
-                _ => break,
-            }
-            if site.path.is_empty() {
-                break;
-            }
-        }
-    }
+    let (explains, rewritten): (Vec<usize>, Vec<Anchor>) = context
+        .edits
+        .iter()
+        .enumerate()
+        .filter_map(|(index, edit)| Some((index, rewrite.site(edit)?)))
+        .unzip();
     if explains.is_empty() {
         return outcome(ClaimStatus::Empty, explains);
     }
 
     if all_sites {
-        let mut missed = Vec::new();
-        for item in context.before.items.values().filter(|item| in_scope(&item.path)) {
-            let Some(body) = &item.body else { continue };
-            let mut found = Vec::new();
-            sites(&pattern, body, &mut found);
-            for (path, _, _) in found {
-                let anchor = to_anchor(&item.path, &path);
-                if !rewritten.iter().any(|done| done == &anchor || done.contains(&anchor) || anchor.contains(done)) {
-                    missed.push(anchor.to_string());
-                }
-            }
-        }
+        let missed = rewrite.missed(&rewritten);
         if !missed.is_empty() {
-            let mut result = outcome(ClaimStatus::Refuted { reason: format!("{} site(s) match `{from}` but were not rewritten: {}", missed.len(), missed.join(", ")) }, Vec::new());
+            let mut result = outcome(
+                ClaimStatus::Refuted {
+                    reason: format!("{} site(s) match `{from}` but were not rewritten: {}", missed.len(), missed.join(", ")),
+                },
+                Vec::new(),
+            );
             result.hint = Some("Rewrite the missed sites, or use `sites: [..]` with the exact list.".into());
             return result;
         }
     }
     if let Some(listed) = &listed {
-        let mut done: Vec<String> = rewritten.iter().map(|a| a.to_string()).collect();
+        let mut done: Vec<String> = rewritten.iter().map(std::string::ToString::to_string).collect();
         let mut wanted = listed.clone();
         done.sort();
         wanted.sort();
         if done != wanted {
-            return outcome(ClaimStatus::Refuted { reason: format!("`sites` lists {}, but the rewritten sites are {}", wanted.join(", "), done.join(", ")) }, Vec::new());
+            return outcome(
+                ClaimStatus::Refuted {
+                    reason: format!("`sites` lists {}, but the rewritten sites are {}", wanted.join(", "), done.join(", ")),
+                },
+                Vec::new(),
+            );
         }
     }
-    let mut result = outcome(ClaimStatus::Verified { proof: format!("pattern ({} sites)", rewritten.len()) }, explains);
+    let mut result = outcome(
+        ClaimStatus::Verified {
+            proof: format!("pattern ({} sites)", rewritten.len()),
+        },
+        explains,
+    );
     result.before = Some(from.to_string());
     result.after = Some(to.to_string());
     result
+}
+
+/// The parts of a `rewrite-pattern` claim: the pattern, the text after the rewrite, and the
+/// scope.
+struct Rewrite<'c, 'a, E: ExprOracle> {
+    context: &'c Context<'a, E>,
+    pattern: Node,
+    to: &'c str,
+    /// The scope: an item, or a module or a crate (all its items). `None`: the whole
+    /// workspace.
+    scope: Option<String>,
+}
+
+impl<E: ExprOracle> Rewrite<'_, '_, E> {
+    fn in_scope(&self, item: &str) -> bool {
+        self.scope
+            .as_ref()
+            .is_none_or(|scope| item == scope || item.starts_with(&format!("{scope}::")))
+    }
+
+    /// The site of an edit that the claim rewrites: the edit walks up to the site that matches
+    /// the pattern, and the site after the step must be the instance of `to`.
+    fn site(&self, edit: &semilla_syntax::Edit) -> Option<Anchor> {
+        let (Some(before_anchor), Some(after_anchor)) = (&edit.before, &edit.after) else {
+            return None;
+        };
+        if !self.in_scope(&before_anchor.item) {
+            return None;
+        }
+        let mut site = before_anchor.clone();
+        let mut after_site = after_anchor.clone();
+        loop {
+            if let Some(found) = self.matched(&site, &after_site) {
+                return found.then_some(site);
+            }
+            match (site.parent(), after_site.parent()) {
+                (Some(parent), Some(after_parent))
+                    if !parent.path.is_empty() && !matches!(parent.path.last(), Some(Segment::Stmt(_))) || site.path.len() > 1 =>
+                {
+                    site = parent;
+                    after_site = after_parent;
+                }
+                _ => return None,
+            }
+            if site.path.is_empty() {
+                return None;
+            }
+        }
+    }
+
+    /// `None` if the site does not match the pattern. Otherwise true if the site after the
+    /// step is the instance of `to`.
+    fn matched(&self, site: &Anchor, after_site: &Anchor) -> Option<bool> {
+        let node = semilla_syntax::resolve_node(self.context.before, site)?;
+        let mut bindings = BTreeMap::new();
+        if !matches(&self.pattern, node, &mut bindings) {
+            return None;
+        }
+        let expected = instantiate(self.to, &bindings);
+        let actual = semilla_syntax::resolve_node(self.context.after, after_site).map(canonical);
+        Some(expected.is_some() && expected == actual)
+    }
+
+    /// Each site in the scope that matches the pattern and that is not in `rewritten`.
+    fn missed(&self, rewritten: &[Anchor]) -> Vec<String> {
+        let found = self
+            .context
+            .before
+            .items
+            .values()
+            .filter(|item| self.in_scope(&item.path))
+            .flat_map(|item| {
+                let mut found = Vec::new();
+                if let Some(body) = &item.body {
+                    sites(&self.pattern, body, &mut found);
+                }
+                found.into_iter().map(|(path, _, _)| to_anchor(&item.path, &path))
+            });
+        found
+            .filter(|anchor| {
+                !rewritten
+                    .iter()
+                    .any(|done| done == anchor || done.contains(anchor) || anchor.contains(done))
+            })
+            .map(|anchor| anchor.to_string())
+            .collect()
+    }
 }
 
 fn outcome(status: ClaimStatus, explains: Vec<usize>) -> Outcome {
@@ -232,4 +318,3 @@ mod tests {
         assert!(!matches(&pattern, &no, &mut BTreeMap::new()));
     }
 }
-

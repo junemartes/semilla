@@ -26,9 +26,23 @@ pub fn flow_view(item: &Item, statuses: &BTreeMap<String, Status>, removed: usiz
     let frame_path = common_block_prefix(body, &changed);
     let frame = descend(body, &frame_path)?;
 
-    let mut builder = Builder { nodes: Vec::new(), edges: Vec::new(), statuses, fold_compound: false };
-    let entry_label = if frame_path.is_empty() { "entry".to_string() } else { format!("from: {}", short(&parent_label(body, &frame_path), 40)) };
-    let entry = builder.add(entry_label, if frame_path.is_empty() { FlowKind::Entry } else { FlowKind::Stub }, Status::Same, None);
+    let mut builder = Builder {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        statuses,
+        fold_compound: false,
+    };
+    let entry_label = if frame_path.is_empty() {
+        "entry".to_string()
+    } else {
+        format!("from: {}", short(&parent_label(body, &frame_path), 40))
+    };
+    let entry = builder.add(
+        entry_label,
+        if frame_path.is_empty() { FlowKind::Entry } else { FlowKind::Stub },
+        Status::Same,
+        None,
+    );
     let exit = builder.add("exit".to_string(), FlowKind::Exit, Status::Same, None);
     let mut loops = Vec::new();
     let ends = builder.block(frame, &frame_path.join("/"), vec![(entry.clone(), None)], &exit, &mut loops);
@@ -41,7 +55,12 @@ pub fn flow_view(item: &Item, statuses: &BTreeMap<String, Status>, removed: usiz
     }
     if builder.nodes.len() > NODE_BUDGET {
         // Too large: build again and fold the unchanged compound statements.
-        let mut folded = Builder { nodes: Vec::new(), edges: Vec::new(), statuses, fold_compound: true };
+        let mut folded = Builder {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            statuses,
+            fold_compound: true,
+        };
         let entry = folded.add(builder.nodes[0].label.clone(), builder.nodes[0].kind, Status::Same, None);
         let exit = folded.add("exit".to_string(), FlowKind::Exit, Status::Same, None);
         let ends = folded.block(frame, &frame_path.join("/"), vec![(entry.clone(), None)], &exit, &mut Vec::new());
@@ -65,8 +84,17 @@ pub fn flow_view(item: &Item, statuses: &BTreeMap<String, Status>, removed: usiz
             node = child;
         }
     }
-    let function = if frame_path.is_empty() { item.path.clone() } else { format!("{}/{}", item.path, frame_path.join("/")) };
-    Some(FlowGraph { function, breadcrumb, nodes: builder.nodes, edges: builder.edges })
+    let function = if frame_path.is_empty() {
+        item.path.clone()
+    } else {
+        format!("{}/{}", item.path, frame_path.join("/"))
+    };
+    Some(FlowGraph {
+        function,
+        breadcrumb,
+        nodes: builder.nodes,
+        edges: builder.edges,
+    })
 }
 
 /// The longest role path of a block that is a prefix of all changed paths.
@@ -88,7 +116,7 @@ fn common_block_prefix(body: &Node, changed: &[&String]) -> Vec<String> {
         node = child;
         // A frame must be a block, and a change on the block's own statement is outside it.
         if node.kind == "block" && split.iter().all(|parts| parts.len() > index + 1) {
-            best = prefix.clone();
+            best.clone_from(&prefix);
         }
     }
     best
@@ -118,7 +146,7 @@ fn parent_label(body: &Node, path: &[String]) -> String {
 
 /// The header of a compound statement: `if cond`, `for x in v`, `match m`, `while c`, `loop`.
 fn header_label(node: &Node) -> String {
-    let child_text = |role: &str| node.child(role).map(|child| child.text.clone()).unwrap_or_default();
+    let child_text = |role: &str| node.child(role).map_or_default(|child| child.text.clone());
     match node.kind {
         "if" => format!("if {}", child_text("cond")),
         "for" => format!("for {} in {}", child_text("pat"), child_text("iter")),
@@ -137,7 +165,11 @@ impl Builder<'_> {
         collect_closure_args(node, path, &mut found);
         for (closure_path, closure) in found {
             let status = self.status(&closure_path);
-            let label = format!("|{}| {}", closure.attr.as_deref().unwrap_or(""), short(closure.child("body").map(|b| b.text.as_str()).unwrap_or(""), 40));
+            let label = format!(
+                "|{}| {}",
+                closure.attr.as_deref().unwrap_or(""),
+                short(closure.child("body").map_or("", |b| b.text.as_str()), 40)
+            );
             let id = self.add(label, FlowKind::Statement, status, Some(closure_path));
             self.edge(statement, &id, Some("called 0..n times".into()), Status::Same);
             self.edge(&id, statement, Some("returns".into()), Status::Same);
@@ -161,7 +193,11 @@ fn collect_closure_args<'a>(node: &'a Node, path: &str, out: &mut Vec<(String, &
 /// True if a `?` in the statement can return from the function. A `?` inside a closure or an
 /// `async` block returns from that closure or block, not from the function.
 fn returns_error(node: &Node) -> bool {
-    node.kind == "try" || node.children.iter().any(|child| !matches!(child.kind, "closure" | "closure_block" | "async") && returns_error(child))
+    node.kind == "try"
+        || node
+            .children
+            .iter()
+            .any(|child| !matches!(child.kind, "closure" | "closure_block" | "async") && returns_error(child))
 }
 
 /// A loose end: the node and the label of the edge that leaves it.
@@ -177,12 +213,23 @@ struct Builder<'a> {
 impl Builder<'_> {
     fn add(&mut self, label: String, kind: FlowKind, status: Status, anchor: Option<String>) -> String {
         let id = format!("n{}", self.nodes.len());
-        self.nodes.push(FlowNode { id: id.clone(), label, kind, status, anchor });
+        self.nodes.push(FlowNode {
+            id: id.clone(),
+            label,
+            kind,
+            status,
+            anchor,
+        });
         id
     }
 
     fn edge(&mut self, from: &str, to: &str, label: Option<String>, status: Status) {
-        self.edges.push(FlowEdge { from: from.to_string(), to: to.to_string(), label, status });
+        self.edges.push(FlowEdge {
+            from: from.to_string(),
+            to: to.to_string(),
+            label,
+            status,
+        });
     }
 
     fn connect(&mut self, ends: Vec<End>, to: &str) {
@@ -197,7 +244,11 @@ impl Builder<'_> {
             return *status;
         }
         let prefix = format!("{path}/");
-        if self.statuses.keys().any(|key| key.starts_with(&prefix)) { Status::Changed } else { Status::Same }
+        if self.statuses.keys().any(|key| key.starts_with(&prefix)) {
+            Status::Changed
+        } else {
+            Status::Same
+        }
     }
 
     fn has_change(&self, path: &str) -> bool {
@@ -206,7 +257,9 @@ impl Builder<'_> {
 
     /// Adds the statements of a block. Returns the loose ends after the block.
     fn block(&mut self, block: &Node, path: &str, mut ends: Vec<End>, exit: &str, loops: &mut Vec<(String, Vec<End>)>) -> Vec<End> {
-        let join = |path: &str, role: &str| if path.is_empty() { role.to_string() } else { format!("{path}/{role}") };
+        let join = |path: &str, role: &str| {
+            if path.is_empty() { role.to_string() } else { format!("{path}/{role}") }
+        };
         let mut unchanged_run: Vec<&Node> = Vec::new();
         for statement in &block.children {
             let statement_path = join(path, &statement.role);
@@ -227,7 +280,11 @@ impl Builder<'_> {
         if run.is_empty() {
             return ends;
         }
-        let label = if run.len() == 1 { short(&header_label(run[0]), 50) } else { format!("… {} statements unchanged", run.len()) };
+        let label = if run.len() == 1 {
+            short(&header_label(run[0]), 50)
+        } else {
+            format!("… {} statements unchanged", run.len())
+        };
         let kind = if run.len() == 1 { FlowKind::Statement } else { FlowKind::Summary };
         let id = self.add(label, kind, Status::Same, None);
         self.connect(ends, &id);
@@ -248,55 +305,16 @@ impl Builder<'_> {
                     out.extend(self.block(then, &child_path("then"), vec![(id.clone(), Some("yes".into()))], exit, loops));
                 }
                 match node.child("else") {
-                    Some(other) if other.kind == "block" => out.extend(self.block(other, &child_path("else"), vec![(id.clone(), Some("no".into()))], exit, loops)),
+                    Some(other) if other.kind == "block" => {
+                        out.extend(self.block(other, &child_path("else"), vec![(id.clone(), Some("no".into()))], exit, loops));
+                    }
                     Some(other) => out.extend(self.statement(other, &child_path("else"), vec![(id.clone(), Some("no".into()))], exit, loops)),
                     None => out.push((id, Some("no".into()))),
                 }
                 out
             }
-            "match" => {
-                let id = self.add(short(&header_label(node), 50), FlowKind::Branch, status, anchor);
-                self.connect(ends, &id);
-                let mut out = Vec::new();
-                let mut index = 0;
-                while let Some(pattern) = node.child(&format!("arm[{index}].pat")) {
-                    let label = Some(short(&pattern.text, 20));
-                    let role = format!("arm[{index}].body");
-                    if let Some(body) = node.child(&role) {
-                        if body.kind == "block" {
-                            out.extend(self.block(body, &child_path(&role), vec![(id.clone(), label)], exit, loops));
-                        } else {
-                            let arm_status = self.status(&child_path(&role));
-                            let arm = self.add(short(&body.text, 40), FlowKind::Statement, arm_status, Some(child_path(&role)));
-                            self.edge(&id, &arm, label, Status::Same);
-                            if matches!(body.kind, "return") {
-                                self.edge(&arm, exit, Some("return".into()), Status::Same);
-                            } else {
-                                out.push((arm, None));
-                            }
-                        }
-                    }
-                    index += 1;
-                }
-                out
-            }
-            "for" | "while" | "loop" => {
-                let id = self.add(short(&header_label(node), 50), FlowKind::Loop, status, anchor);
-                self.connect(ends, &id);
-                loops.push((id.clone(), Vec::new()));
-                if let Some(body) = node.child("body") {
-                    let body_ends = self.block(body, &child_path("body"), vec![(id.clone(), Some(if node.kind == "loop" { "next".into() } else { "each".into() }))], exit, loops);
-                    for (from, label) in body_ends {
-                        self.edge(&from, &id, label.or(Some("again".into())), Status::Same);
-                    }
-                }
-                let (_, breaks) = loops.pop().unwrap_or_default();
-                let mut out = breaks;
-                if node.kind != "loop" {
-                    out.push((id, Some("done".into())));
-                }
-                out
-            }
+            "match" => self.match_statement(node, path, ends, exit, loops),
+            "for" | "while" | "loop" => self.loop_statement(node, path, ends, exit, loops),
             "return" => {
                 let id = self.add(short(&node.text, 50), FlowKind::Statement, status, anchor);
                 self.connect(ends, &id);
@@ -336,6 +354,65 @@ impl Builder<'_> {
             }
         }
     }
+
+    /// Adds a `match` statement: the branch node and the body of each arm.
+    fn match_statement(&mut self, node: &Node, path: &str, ends: Vec<End>, exit: &str, loops: &mut Vec<(String, Vec<End>)>) -> Vec<End> {
+        let status = self.status(path);
+        let anchor = Some(path.to_string());
+        let child_path = |role: &str| format!("{path}/{role}");
+        let id = self.add(short(&header_label(node), 50), FlowKind::Branch, status, anchor);
+        self.connect(ends, &id);
+        let mut out = Vec::new();
+        let mut index = 0;
+        while let Some(pattern) = node.child(&format!("arm[{index}].pat")) {
+            let label = Some(short(&pattern.text, 20));
+            let role = format!("arm[{index}].body");
+            if let Some(body) = node.child(&role) {
+                if body.kind == "block" {
+                    out.extend(self.block(body, &child_path(&role), vec![(id.clone(), label)], exit, loops));
+                } else {
+                    let arm_status = self.status(&child_path(&role));
+                    let arm = self.add(short(&body.text, 40), FlowKind::Statement, arm_status, Some(child_path(&role)));
+                    self.edge(&id, &arm, label, Status::Same);
+                    if matches!(body.kind, "return") {
+                        self.edge(&arm, exit, Some("return".into()), Status::Same);
+                    } else {
+                        out.push((arm, None));
+                    }
+                }
+            }
+            index += 1;
+        }
+        out
+    }
+
+    /// Adds a `for`, `while`, or `loop` statement: the loop node and its body.
+    fn loop_statement(&mut self, node: &Node, path: &str, ends: Vec<End>, exit: &str, loops: &mut Vec<(String, Vec<End>)>) -> Vec<End> {
+        let status = self.status(path);
+        let anchor = Some(path.to_string());
+        let child_path = |role: &str| format!("{path}/{role}");
+        let id = self.add(short(&header_label(node), 50), FlowKind::Loop, status, anchor);
+        self.connect(ends, &id);
+        loops.push((id.clone(), Vec::new()));
+        if let Some(body) = node.child("body") {
+            let body_ends = self.block(
+                body,
+                &child_path("body"),
+                vec![(id.clone(), Some(if node.kind == "loop" { "next".into() } else { "each".into() }))],
+                exit,
+                loops,
+            );
+            for (from, label) in body_ends {
+                self.edge(&from, &id, label.or(Some("again".into())), Status::Same);
+            }
+        }
+        let (_, breaks) = loops.pop().unwrap_or_default();
+        let mut out = breaks;
+        if node.kind != "loop" {
+            out.push((id, Some("done".into())));
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -354,7 +431,12 @@ mod tests {
         let graph = flow_view(item, &statuses, 0).unwrap();
         assert_eq!(graph.function, "demo::total/S3/body");
         assert!(graph.breadcrumb.iter().any(|part| part.starts_with("for x in v")));
-        let changed: Vec<_> = graph.nodes.iter().filter(|n| n.status == Status::Changed).map(|n| n.label.as_str()).collect();
+        let changed: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.status == Status::Changed)
+            .map(|n| n.label.as_str())
+            .collect();
         assert_eq!(changed, ["if * x <= max"]);
         assert!(graph.nodes.iter().any(|n| n.kind == FlowKind::Stub));
         let mermaid = graph.to_mermaid();
@@ -369,8 +451,16 @@ mod tests {
         let statuses = BTreeMap::from([("S1".to_string(), Status::Changed), ("S2".to_string(), Status::Changed)]);
         let graph = flow_view(item, &statuses, 0).unwrap();
         let exit = graph.nodes.iter().find(|n| n.kind == FlowKind::Exit).unwrap().id.clone();
-        let err_sources: Vec<&str> = graph.edges.iter().filter(|e| e.to == exit && e.label.as_deref() == Some("err")).map(|e| e.from.as_str()).collect();
-        let labels: Vec<&str> = err_sources.iter().map(|id| graph.nodes.iter().find(|n| &n.id == id).unwrap().label.as_str()).collect();
+        let err_sources: Vec<&str> = graph
+            .edges
+            .iter()
+            .filter(|e| e.to == exit && e.label.as_deref() == Some("err"))
+            .map(|e| e.from.as_str())
+            .collect();
+        let labels: Vec<&str> = err_sources
+            .iter()
+            .map(|id| graph.nodes.iter().find(|n| &n.id == id).unwrap().label.as_str())
+            .collect();
         assert_eq!(labels.len(), 1, "{labels:?}");
         assert!(labels[0].starts_with("let c"), "{labels:?}");
     }

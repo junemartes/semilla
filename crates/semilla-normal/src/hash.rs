@@ -14,6 +14,7 @@
 //! hash.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use sha2::{Digest, Sha256};
 
@@ -23,24 +24,24 @@ use crate::paths::replace_functions;
 pub type HashInput = BTreeMap<String, (String, Vec<String>)>;
 
 /// The SHA-256 digest of a text, in hexadecimal digits.
+#[must_use]
 pub fn sha(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    digest.iter().fold(String::new(), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
 }
 
 /// Returns the content hash of each body, as the token `#h:<hex>`.
+#[must_use]
 pub fn content_hashes(bodies: &HashInput) -> BTreeMap<String, String> {
     let names: Vec<&String> = bodies.keys().collect();
-    let index: BTreeMap<&str, usize> =
-        names.iter().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
+    let index: BTreeMap<&str, usize> = names.iter().enumerate().map(|(i, name)| (name.as_str(), i)).collect();
     let edges: Vec<Vec<usize>> = names
         .iter()
         .map(|name| {
-            let mut targets: Vec<usize> = bodies[*name]
-                .1
-                .iter()
-                .filter_map(|callee| index.get(callee.as_str()).copied())
-                .collect();
+            let mut targets: Vec<usize> = bodies[*name].1.iter().filter_map(|callee| index.get(callee.as_str()).copied()).collect();
             targets.sort_unstable();
             targets.dedup();
             targets
@@ -64,8 +65,7 @@ pub fn content_hashes(bodies: &HashInput) -> BTreeMap<String, String> {
         }
 
         // Mask the member calls, and sort the members by their masked text.
-        let masks: Vec<(String, String)> =
-            members.iter().map(|m| (m.to_string(), "@scc".to_string())).collect();
+        let masks: Vec<(String, String)> = members.iter().map(|m| (m.to_string(), "@scc".to_string())).collect();
         let mut keyed: Vec<(String, &str)> = members
             .iter()
             .map(|member| {
@@ -84,31 +84,20 @@ pub fn content_hashes(bodies: &HashInput) -> BTreeMap<String, String> {
                 .collect();
             let mut pairs = external.clone();
             pairs.extend(positions);
-            let texts: Vec<String> = keyed
-                .iter()
-                .map(|(_, member)| replace_functions(&bodies[*member].0, &pairs))
-                .collect();
+            let texts: Vec<String> = keyed.iter().map(|(_, member)| replace_functions(&bodies[*member].0, &pairs)).collect();
             let component_hash = sha(&format!("scc\n{}", texts.join("\n---\n")));
             for (i, (_, member)) in keyed.iter().enumerate() {
-                hashes.insert(
-                    member.to_string(),
-                    format!("#h:{}", sha(&format!("{component_hash}#{i}"))),
-                );
+                hashes.insert(member.to_string(), format!("#h:{}", sha(&format!("{component_hash}#{i}"))));
             }
         } else {
             // The order is not unique: include the names.
             let texts: Vec<String> = members
                 .iter()
-                .map(|member| {
-                    format!("{member}\n{}", replace_functions(&bodies[*member].0, &external))
-                })
+                .map(|member| format!("{member}\n{}", replace_functions(&bodies[*member].0, &external)))
                 .collect();
             let component_hash = sha(&format!("scc-named\n{}", texts.join("\n---\n")));
             for member in &members {
-                hashes.insert(
-                    member.to_string(),
-                    format!("#h:{}", sha(&format!("{component_hash}#{member}"))),
-                );
+                hashes.insert(member.to_string(), format!("#h:{}", sha(&format!("{component_hash}#{member}"))));
             }
         }
     }
@@ -118,6 +107,12 @@ pub fn content_hashes(bodies: &HashInput) -> BTreeMap<String, String> {
 /// Returns the strongly connected components of a graph, callees first (reverse topological
 /// order). Each component lists its nodes in increasing order. This is Tarjan's algorithm,
 /// without recursion.
+///
+/// # Panics
+///
+/// Panics if the stack of the algorithm has no node of a finished component. A correct run
+/// always has the node.
+#[must_use]
 pub fn strongly_connected_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let count = edges.len();
     let mut index = vec![usize::MAX; count];
@@ -179,7 +174,7 @@ mod tests {
             .map(|(name, text, callees)| {
                 (
                     name.to_string(),
-                    (text.to_string(), callees.iter().map(|c| c.to_string()).collect()),
+                    (text.to_string(), callees.iter().map(std::string::ToString::to_string).collect()),
                 )
             })
             .collect()
@@ -201,10 +196,8 @@ mod tests {
 
     #[test]
     fn renamed_callee_gives_the_same_caller_hash() {
-        let before =
-            input(&[("k::helper", "x + 1", &[]), ("k::f", "call {k::helper}", &["k::helper"])]);
-        let after =
-            input(&[("k::add_one", "x + 1", &[]), ("k::f", "call {k::add_one}", &["k::add_one"])]);
+        let before = input(&[("k::helper", "x + 1", &[]), ("k::f", "call {k::helper}", &["k::helper"])]);
+        let after = input(&[("k::add_one", "x + 1", &[]), ("k::f", "call {k::add_one}", &["k::add_one"])]);
         let (b, a) = (content_hashes(&before), content_hashes(&after));
         assert_eq!(b["k::helper"], a["k::add_one"]);
         assert_eq!(b["k::f"], a["k::f"]);
@@ -212,10 +205,8 @@ mod tests {
 
     #[test]
     fn changed_callee_changes_the_caller_hash() {
-        let before =
-            input(&[("k::helper", "x + 1", &[]), ("k::f", "call {k::helper}", &["k::helper"])]);
-        let after =
-            input(&[("k::helper", "x + 2", &[]), ("k::f", "call {k::helper}", &["k::helper"])]);
+        let before = input(&[("k::helper", "x + 1", &[]), ("k::f", "call {k::helper}", &["k::helper"])]);
+        let after = input(&[("k::helper", "x + 2", &[]), ("k::f", "call {k::helper}", &["k::helper"])]);
         assert_ne!(content_hashes(&before)["k::f"], content_hashes(&after)["k::f"]);
     }
 
@@ -239,24 +230,16 @@ mod tests {
     #[test]
     fn cycle_hash_keeps_which_member_is_called() {
         // The masked texts are the same, but `a` calls the members in another order.
-        let before = input(&[
-            ("k::a", "A {k::b} {k::a}", &["k::a", "k::b"]),
-            ("k::b", "B {k::a}", &["k::a"]),
-        ]);
-        let after = input(&[
-            ("k::a", "A {k::a} {k::b}", &["k::a", "k::b"]),
-            ("k::b", "B {k::a}", &["k::a"]),
-        ]);
+        let before = input(&[("k::a", "A {k::b} {k::a}", &["k::a", "k::b"]), ("k::b", "B {k::a}", &["k::a"])]);
+        let after = input(&[("k::a", "A {k::a} {k::b}", &["k::a", "k::b"]), ("k::b", "B {k::a}", &["k::a"])]);
         assert_ne!(content_hashes(&before)["k::a"], content_hashes(&after)["k::a"]);
     }
 
     #[test]
     fn equal_masked_members_keep_their_names() {
         // Two members with the same masked text: the hash includes the names.
-        let first =
-            input(&[("k::a", "call {k::b}", &["k::b"]), ("k::b", "call {k::a}", &["k::a"])]);
-        let second =
-            input(&[("k::x", "call {k::y}", &["k::y"]), ("k::y", "call {k::x}", &["k::x"])]);
+        let first = input(&[("k::a", "call {k::b}", &["k::b"]), ("k::b", "call {k::a}", &["k::a"])]);
+        let second = input(&[("k::x", "call {k::y}", &["k::y"]), ("k::y", "call {k::x}", &["k::x"])]);
         assert_ne!(content_hashes(&first)["k::a"], content_hashes(&second)["k::x"]);
     }
 }

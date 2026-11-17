@@ -40,19 +40,36 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
         _ => (crate::buildcode::Mode::Run, None),
     };
     app.mode = mode;
-    let guard = guard.map(|line| format!("{line}\n")).unwrap_or_default();
+    let guard = guard.map_or_default(|line| format!("{line}\n"));
     match name {
         "ops" => {
-            let ops: Vec<&semilla_core::ops::OpInfo> = semilla_core::ops::OPS.iter().filter(|op| crate::onestep::CLAIMS.contains(&op.name)).collect();
+            let ops: Vec<&semilla_core::ops::OpInfo> = semilla_core::ops::OPS
+                .iter()
+                .filter(|op| crate::onestep::CLAIMS.contains(&op.name))
+                .collect();
             Ok(serde_json::to_string_pretty(&ops)?)
         }
         "step" => {
-            let strings = |key: &str| args.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+            let strings = |key: &str| {
+                args.get(key)
+                    .and_then(Value::as_array)
+                    .map_or_default(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+            };
             let reasons = match args.get("reasons") {
-                Some(Value::Object(map)) => map.iter().map(|(anchor, text)| format!("{anchor}={}", text.as_str().unwrap_or(""))).collect(),
+                Some(Value::Object(map)) => map
+                    .iter()
+                    .map(|(anchor, text)| format!("{anchor}={}", text.as_str().unwrap_or("")))
+                    .collect(),
                 _ => strings("reasons"),
             };
-            let request = crate::onestep::StepRequest { intent: text("intent").context("`intent` is required")?.to_string(), group: text("group").map(str::to_string), claims: strings("claims"), reasons, tree: args.get("tree").and_then(Value::as_bool).unwrap_or(false), fast: args.get("fast").and_then(Value::as_bool).unwrap_or(false) };
+            let request = crate::onestep::StepRequest {
+                intent: text("intent").context("`intent` is required")?.to_string(),
+                group: text("group").map(str::to_string),
+                claims: strings("claims"),
+                reasons,
+                tree: args.get("tree").and_then(Value::as_bool).unwrap_or(false),
+                fast: args.get("fast").and_then(Value::as_bool).unwrap_or(false),
+            };
             let (text, stored) = app.step_once(&request)?;
             if !stored {
                 anyhow::bail!("{text}");
@@ -60,7 +77,11 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             Ok(text)
         }
         "undo" => app.undo(),
-        "pair_refuse" => app.pair_refuse(text("old").context("`old` is required")?, text("new").context("`new` is required")?, text("reason")),
+        "pair_refuse" => app.pair_refuse(
+            text("old").context("`old` is required")?,
+            text("new").context("`new` is required")?,
+            text("reason"),
+        ),
         "replay_begin" => app.replay_begin(text("commit")),
         "replay_status" => app.replay_status(),
         "replay_plan" => Ok(serde_json::to_string_pretty(&app.replay_plan()?)?),
@@ -71,12 +92,25 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
         }
         "replay_end" => app.replay_end(),
         "replay_abort" => app.replay_abort(),
-        "results" => Ok(format!("{guard}{}", app.status(text("commit"), args.get("wait").and_then(Value::as_u64), args.get("verbose").and_then(Value::as_bool).unwrap_or(false))?)),
+        "results" => Ok(format!(
+            "{guard}{}",
+            app.status(
+                text("commit"),
+                args.get("wait").and_then(Value::as_u64),
+                args.get("verbose").and_then(Value::as_bool).unwrap_or(false)
+            )?
+        )),
         "verify" => {
             let (cover, result) = app.verify(args.get("final").and_then(Value::as_bool).unwrap_or(false))?;
             // The line that says what the result covers (batch 5y, A1), then the build code line
             // of the result (design 28.4), then the configurations.
-            let head: String = app.build_code_notice(&result.report).into_iter().chain(crate::app::config_lines(&result.report)).map(|line| format!("{line}\n")).collect();
+            let head = crate::app::surround_each(
+                App::build_code_notice(&result.report)
+                    .into_iter()
+                    .chain(crate::app::config_lines(&result.report)),
+                "",
+                "\n",
+            );
             Ok(format!("{guard}{cover}\n{head}{}\n{}", result.text, result.tree.render()))
         }
         "tag" => app.tag(text("commit").unwrap_or("HEAD")),
@@ -85,7 +119,7 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
 }
 
 /// Serves MCP over stdin and stdout until stdin closes.
-pub fn serve(dir: &Path) -> Result<()> {
+pub(crate) fn serve(dir: &Path) -> Result<()> {
     let mut app = App::open(dir)?;
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -95,7 +129,10 @@ pub fn serve(dir: &Path) -> Result<()> {
             continue;
         }
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
-            write_message(&mut stdout, &json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "parse error"}}))?;
+            write_message(
+                &mut stdout,
+                &json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "parse error"}}),
+            )?;
             continue;
         };
         if let Some(response) = handle(&mut app, &message) {
@@ -106,14 +143,16 @@ pub fn serve(dir: &Path) -> Result<()> {
 }
 
 /// Handles one JSON-RPC message. Notifications get no response.
-pub fn handle(app: &mut App, message: &Value) -> Option<Value> {
+pub(crate) fn handle(app: &mut App, message: &Value) -> Option<Value> {
     let id = message.get("id").cloned();
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let params = message.get("params").cloned().unwrap_or(json!({}));
     let result = match method {
         "initialize" => {
             let version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("2025-06-18");
-            Ok(json!({"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "semilla", "version": env!("CARGO_PKG_VERSION")}}))
+            Ok(
+                json!({"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "semilla", "version": env!("CARGO_PKG_VERSION")}}),
+            )
         }
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),

@@ -38,6 +38,7 @@
 //! elements gives the same blocks.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
@@ -120,6 +121,7 @@ pub struct RecordElements {
 impl RecordElements {
     /// The ranges of each element: the tokens and the outermost macro call. `None` if the
     /// data is not valid.
+    #[must_use]
     pub fn ranges(&self) -> Option<Vec<(Option<Place>, Option<Place>)>> {
         let mut out = vec![(None, None); self.n];
         let place = |file: i64, start: i64, end: i64| -> Option<Option<Place>> {
@@ -146,11 +148,19 @@ impl RecordElements {
 }
 
 /// Writes shared element ranges (for `BodyRecord::elements`).
+///
+/// # Errors
+///
+/// Returns the error of the serializer.
 pub fn serialize_shared<S: serde::Serializer>(value: &Option<std::sync::Arc<RecordElements>>, serializer: S) -> Result<S::Ok, S::Error> {
     value.as_deref().serialize(serializer)
 }
 
 /// Reads shared element ranges (for `BodyRecord::elements`).
+///
+/// # Errors
+///
+/// Returns the error of the deserializer, for example for a value that is not element ranges.
 pub fn deserialize_shared<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<std::sync::Arc<RecordElements>>, D::Error> {
     Ok(Option::<RecordElements>::deserialize(deserializer)?.map(std::sync::Arc::new))
 }
@@ -168,7 +178,12 @@ struct Parsed<'a> {
 }
 
 fn parse(text: &str) -> Parsed<'_> {
-    let mut parsed = Parsed { other: Vec::new(), locals: BTreeMap::new(), args: 0, elements: Vec::new() };
+    let mut parsed = Parsed {
+        other: Vec::new(),
+        locals: BTreeMap::new(),
+        args: 0,
+        elements: Vec::new(),
+    };
     let mut block = 0;
     for line in text.lines() {
         if let Some(element) = line.strip_prefix("        ") {
@@ -189,8 +204,14 @@ fn parse(text: &str) -> Parsed<'_> {
                 parsed.args = arg_count(line);
                 // The type of each argument: the text up to the next argument.
                 for arg in 1..=parsed.args {
-                    let Some(from) = line.find(&format!("_{arg}: ")).map(|at| at + format!("_{arg}: ").len()) else { break };
-                    let next = if arg < parsed.args { format!(", _{}: ", arg + 1) } else { ") -> ".to_string() };
+                    let Some(from) = line.find(&format!("_{arg}: ")).map(|at| at + format!("_{arg}: ").len()) else {
+                        break;
+                    };
+                    let next = if arg < parsed.args {
+                        format!(", _{}: ", arg + 1)
+                    } else {
+                        ") -> ".to_string()
+                    };
                     let to = line[from..].find(&next).map_or(line.len(), |at| from + at);
                     parsed.locals.insert(arg, &line[from..to]);
                 }
@@ -254,7 +275,19 @@ fn key(text: &str) -> (String, Vec<Number>) {
 
 /// The operations whose operands the printer sorts by their text (see the driver, `print.rs`,
 /// `binary`): the order of the operands has no effect.
-const SYMMETRIC: &[&str] = &["Add(", "Mul(", "BitAnd(", "BitOr(", "BitXor(", "Eq(", "Ne(", "AddUnchecked(", "MulUnchecked(", "CheckedAdd(", "CheckedMul("];
+const SYMMETRIC: &[&str] = &[
+    "Add(",
+    "Mul(",
+    "BitAnd(",
+    "BitOr(",
+    "BitXor(",
+    "Eq(",
+    "Ne(",
+    "AddUnchecked(",
+    "MulUnchecked(",
+    "CheckedAdd(",
+    "CheckedMul(",
+];
 
 /// The text of an element with the two locals of each symmetric operation in the order of their
 /// numbers. The printer sorts them by their text, and `_100` comes before `_99`: a new local
@@ -280,7 +313,8 @@ fn symmetric_order(text: &str) -> std::borrow::Cow<'_, str> {
         if let Some((a, b)) = inner.split_once(", ")
             && let (Some(x), Some(y)) = (local(a), local(b))
         {
-            out.push_str(&if x <= y { format!("{a}, {b}") } else { format!("{b}, {a}") });
+            let (first, second) = if x <= y { (a, b) } else { (b, a) };
+            let _ = write!(out, "{first}, {second}");
             rest = &rest[close..];
         }
     }
@@ -297,7 +331,9 @@ const MOST_CELLS: usize = 4_000_000;
 /// the start or from the end of the body). The common start and end with anchored pairs align first.
 fn align(old: &[String], new: &[String], anchored: impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
     let start = (0..old.len().min(new.len())).take_while(|&i| old[i] == new[i] && anchored(i, i)).count();
-    let end = (0..(old.len() - start).min(new.len() - start)).take_while(|&k| old[old.len() - 1 - k] == new[new.len() - 1 - k] && anchored(old.len() - 1 - k, new.len() - 1 - k)).count();
+    let end = (0..(old.len() - start).min(new.len() - start))
+        .take_while(|&k| old[old.len() - 1 - k] == new[new.len() - 1 - k] && anchored(old.len() - 1 - k, new.len() - 1 - k))
+        .count();
     let mut pairs: Vec<(usize, usize)> = (0..start).map(|i| (i, i)).collect();
     let (a, b) = (&old[start..old.len() - end], &new[start..new.len() - end]);
     if !a.is_empty() && !b.is_empty() && (a.len() + 1).saturating_mul(b.len() + 1) <= MOST_CELLS {
@@ -307,7 +343,11 @@ fn align(old: &[String], new: &[String], anchored: impl Fn(usize, usize) -> bool
         for i in (0..a.len()).rev() {
             for j in (0..b.len()).rev() {
                 let skip = table[(i + 1) * width + j].max(table[i * width + j + 1]);
-                table[i * width + j] = if a[i] == b[j] { skip.max(table[(i + 1) * width + j + 1] + weight(i, j)) } else { skip };
+                table[i * width + j] = if a[i] == b[j] {
+                    skip.max(table[(i + 1) * width + j + 1] + weight(i, j))
+                } else {
+                    skip
+                };
             }
         }
         let (mut i, mut j) = (0, 0);
@@ -344,13 +384,20 @@ fn fold_copies(parsed: &Parsed, keys: &mut [(String, Vec<Number>)], args: usize)
         let (Number::Local(temp), Number::Local(source)) = (match keys[index].1[..] {
             [first, second] if keys[index].0 == "_ = _" => (first, second),
             _ => continue,
-        }) else { continue };
+        }) else {
+            continue;
+        };
         let next = index + 1;
         let typed = parsed.locals.get(&temp).is_some_and(|ty| parsed.locals.get(&source) == Some(ty));
-        if temp <= args || !typed || parsed.elements[next].1 != parsed.elements[index].1 || uses.get(&temp) != Some(&2) || !keys[next].1.contains(&Number::Local(temp)) {
+        if temp <= args
+            || !typed
+            || parsed.elements[next].1 != parsed.elements[index].1
+            || uses.get(&temp) != Some(&2)
+            || !keys[next].1.contains(&Number::Local(temp))
+        {
             continue;
         }
-        for number in keys[next].1.iter_mut() {
+        for number in &mut keys[next].1 {
             if *number == Number::Local(temp) {
                 *number = Number::Local(source);
             }
@@ -434,11 +481,16 @@ pub fn diff_cached(old: (&str, &RecordElements), new: (&str, &RecordElements)) -
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (old, new).hash(&mut hasher);
     let key = hasher.finish();
-    if let Some(found) = DIFFS.lock().unwrap_or_else(|error| error.into_inner()).as_ref().and_then(|known| known.get(&key)) {
+    if let Some(found) = DIFFS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|known| known.get(&key))
+    {
         return found.clone();
     }
     let found = diff(old, new);
-    let mut known = DIFFS.lock().unwrap_or_else(|error| error.into_inner());
+    let mut known = DIFFS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let known = known.get_or_insert_with(Default::default);
     if known.len() >= MOST_DIFFS {
         known.clear();
@@ -447,8 +499,288 @@ pub fn diff_cached(old: (&str, &RecordElements), new: (&str, &RecordElements)) -
     found
 }
 
+/// The source ranges of each element of a body: its tokens and its outermost macro call.
+type Ranges = Vec<(Option<Place>, Option<Place>)>;
+
+/// The key of each element: the text with no numbers, and the numbers in the text.
+type Keys = Vec<(String, Vec<Number>)>;
+
+/// The target pairs of each element of the old side: a block of the old side and a block of
+/// the new side.
+type Targets = Vec<Vec<(usize, usize)>>;
+
+/// One side of a diff of two canonical texts.
+struct DiffSide<'a> {
+    parsed: Parsed<'a>,
+    ranges: Ranges,
+    /// The key of each element, after the fold of the copies.
+    keys: Keys,
+    /// For each element: the element that the copy folds into, if the element is a copy.
+    folded: Vec<Option<usize>>,
+    /// The elements in the order of the source.
+    order: Vec<usize>,
+    bounds: Option<(String, usize, usize)>,
+}
+
+impl<'a> DiffSide<'a> {
+    /// Step 1: a copy into a temporary that the next element uses one time folds into that
+    /// element. Step 2 needs the order of the source.
+    fn new(parsed: Parsed<'a>, ranges: Ranges, args: usize) -> Self {
+        let mut keys: Keys = parsed.elements.iter().map(|(text, _)| key(&symmetric_order(text))).collect();
+        let folded = fold_copies(&parsed, &mut keys, args);
+        let order = source_order(&ranges, &folded);
+        let bounds = bounds(&ranges);
+        DiffSide {
+            parsed,
+            ranges,
+            keys,
+            folded,
+            order,
+            bounds,
+        }
+    }
+
+    /// The key text of each element, in the order of the source.
+    fn ordered(&self) -> Vec<String> {
+        self.order.iter().map(|index| self.keys[*index].0.clone()).collect()
+    }
+
+    /// The key text of each element with its numbers, in the order of the source. `map` gives
+    /// the number of a local, and a local with no number is `?`.
+    fn concrete(&self, map: impl Fn(usize) -> Option<usize>) -> Vec<String> {
+        self.order
+            .iter()
+            .map(|index| {
+                let (key, numbers) = &self.keys[*index];
+                let numbers: Vec<String> = numbers
+                    .iter()
+                    .map(|number| match number {
+                        Number::Local(local) => map(*local).map_or("?".to_string(), |found| found.to_string()),
+                        Number::Block(_) => "b".to_string(),
+                    })
+                    .collect();
+                format!("{key}|{}", numbers.join(","))
+            })
+            .collect()
+    }
+
+    /// The first element of each block.
+    fn heads(&self) -> BTreeMap<usize, usize> {
+        let mut heads = BTreeMap::new();
+        for (index, (_, block)) in self.parsed.elements.iter().enumerate() {
+            heads.entry(*block).or_insert(index);
+        }
+        heads
+    }
+
+    /// A folded copy is the same as its use (the use comes later in the list).
+    fn fold_same(&self, same: &mut [bool]) {
+        (0..self.folded.len())
+            .rev()
+            .filter_map(|index| self.folded[index].map(|user| (index, user)))
+            .for_each(|(index, user)| same[index] = same[user]);
+    }
+
+    /// The element at `index`, with its range and its branch data.
+    fn element(&self, index: usize) -> Element {
+        let (parsed, ranges) = (&self.parsed, &self.ranges);
+        let (targets, exit) = branch(parsed.elements[index].0);
+        // An element with no range (a value that the driver wraps as opaque just before its
+        // use) gets the range of the next element of its block with a range, else of the next
+        // element with a range, else of the element before it.
+        let block = parsed.elements[index].1;
+        let in_block = |at: &usize| parsed.elements[*at].1 == block && (ranges[*at].0.is_some() || ranges[*at].1.is_some());
+        let has_range = |at: &usize| ranges[*at].0.is_some() || ranges[*at].1.is_some();
+        let near = (!has_range(&index))
+            .then(|| {
+                (index + 1..ranges.len())
+                    .find(in_block)
+                    .or_else(|| (index + 1..ranges.len()).find(has_range))
+                    .or_else(|| (0..index).rev().find(has_range))
+            })
+            .flatten();
+        let (tokens, call) = ranges[near.unwrap_or(index)].clone();
+        let text = parsed.elements[index].0;
+        let jump = text.starts_with("goto -> ") || matches!(text, "return" | "resume" | "unreachable");
+        let glue = jump || text.starts_with("drop(");
+        Element {
+            tokens,
+            call,
+            targets,
+            exit,
+            glue,
+            jump,
+        }
+    }
+
+    /// Each element that is not the same.
+    fn changed(&self, same: &[bool]) -> Vec<Element> {
+        (0..self.parsed.elements.len()).filter(|i| !same[*i]).map(|i| self.element(i)).collect()
+    }
+}
+
+/// The two sides of a diff.
+struct Sides<'a> {
+    old: DiffSide<'a>,
+    new: DiffSide<'a>,
+}
+
+impl Sides<'_> {
+    /// True if the old element `a` and the new element `b` have the same length and the same
+    /// place relative to the start or to the end of their bodies.
+    fn anchored(&self, a: usize, b: usize) -> bool {
+        let (Some(x), Some(y), Some((file_a, start_a, end_a)), Some((file_b, start_b, end_b))) = (
+            place_of(&self.old.ranges[a]),
+            place_of(&self.new.ranges[b]),
+            &self.old.bounds,
+            &self.new.bounds,
+        ) else {
+            return false;
+        };
+        let same_length = x.end - x.start == y.end - y.start;
+        x.file == *file_a
+            && y.file == *file_b
+            && same_length
+            && (x.start.checked_sub(*start_a) == y.start.checked_sub(*start_b) || end_a.checked_sub(x.end) == end_b.checked_sub(y.end))
+    }
+
+    /// The weighted alignment of two key lists in the order of the source, as pairs of element
+    /// indexes.
+    fn pairs(&self, old: &[String], new: &[String]) -> Vec<(usize, usize)> {
+        align(old, new, |i, j| self.anchored(self.old.order[i], self.new.order[j]))
+            .into_iter()
+            .map(|(i, j)| (self.old.order[i], self.new.order[j]))
+            .collect()
+    }
+
+    /// Each pair votes for the pairs of its locals. The pairs with the most votes win,
+    /// one-to-one, with equal types.
+    fn vote(&self, pairs: &[(usize, usize)], locals: &mut Bijection) {
+        let mut votes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+        for (a, b) in pairs {
+            for (x, y) in self.old.keys[*a].1.iter().zip(&self.new.keys[*b].1) {
+                if let (Number::Local(x), Number::Local(y)) = (x, y) {
+                    *votes.entry((*x, *y)).or_default() += 1;
+                }
+            }
+        }
+        let mut ranked: Vec<((usize, usize), usize)> = votes.into_iter().collect();
+        ranked.sort_by(|(p, a), (q, b)| b.cmp(a).then(p.cmp(q)));
+        for ((x, y), _) in ranked {
+            let typed = self
+                .old
+                .parsed
+                .locals
+                .get(&x)
+                .is_some_and(|ty| self.new.parsed.locals.get(&y) == Some(ty));
+            if typed && !locals.forward.contains_key(&x) && !locals.back.contains_key(&y) {
+                locals.add(x, y);
+            }
+        }
+    }
+
+    /// Steps 2 to 4: the pairs of the second alignment, and the map of the locals.
+    fn local_map(&self, args: usize) -> (Vec<(usize, usize)>, Bijection) {
+        // Step 2: the order of the source, and the weighted alignment.
+        let pairs = self.pairs(&self.old.ordered(), &self.new.ordered());
+        // Step 3: the map of the locals by votes.
+        let mut locals = Bijection::default();
+        for local in 0..=args {
+            locals.add(local, local);
+        }
+        self.vote(&pairs, &mut locals);
+        // Step 4: a second alignment with the locals of the map: two elements with equal keys and
+        // locals that do not agree with the map do not pair. A local with no partner is `?` on the
+        // two sides. Then the new pairs vote for the locals with no partner.
+        let old_concrete = self.old.concrete(|local| locals.forward.get(&local).copied());
+        let new_concrete = self.new.concrete(|local| locals.back.contains_key(&local).then_some(local));
+        let pairs = self.pairs(&old_concrete, &new_concrete);
+        self.vote(&pairs, &mut locals);
+        (pairs, locals)
+    }
+
+    /// Pass 1: a pair fits if each of its locals has its partner in the map. The result is the
+    /// partner of each element of the old side, and the block targets of the pair.
+    fn fits(&self, pairs: Vec<(usize, usize)>, locals: &Bijection) -> (Vec<Option<usize>>, Targets) {
+        let mut partner: Vec<Option<usize>> = vec![None; self.old.parsed.elements.len()];
+        let mut targets: Targets = vec![Vec::new(); self.old.parsed.elements.len()];
+        for (a, b) in pairs {
+            let (old_numbers, new_numbers) = (&self.old.keys[a].1, &self.new.keys[b].1);
+            let mut fits = old_numbers.len() == new_numbers.len();
+            let mut block_pairs = Vec::new();
+            for (x, y) in old_numbers.iter().zip(new_numbers) {
+                match (x, y) {
+                    (Number::Local(x), Number::Local(y)) => fits &= locals.forward.get(x) == Some(y),
+                    (Number::Block(x), Number::Block(y)) => block_pairs.push((*x, *y)),
+                    _ => fits = false,
+                }
+            }
+            if fits {
+                partner[a] = Some(b);
+                targets[a] = block_pairs;
+            }
+        }
+        (partner, targets)
+    }
+
+    /// Pass 2: a target goes to a block, and a block starts with its first element. Each
+    /// target of a pair must go to the first elements of two partner blocks. A pair that breaks
+    /// this rule differs; the check runs again until no pair changes.
+    fn settle(&self, partner: &mut [Option<usize>], targets: &Targets) {
+        let heads = [self.old.heads(), self.new.heads()];
+        while Self::settle_once(partner, targets, &heads) {}
+    }
+
+    /// One run of the check of pass 2. Returns true if a pair breaks.
+    fn settle_once(partner: &mut [Option<usize>], targets: &Targets, heads: &[BTreeMap<usize, usize>; 2]) -> bool {
+        let taken: BTreeSet<usize> = partner.iter().flatten().copied().collect();
+        // Each element gets the check: the count does not stop at the first broken pair.
+        (0..partner.len())
+            .filter(|a| Self::unpair(*a, partner, &targets[*a], &taken, heads))
+            .count()
+            > 0
+    }
+
+    /// Breaks the pair of the old element `a` if a target of the pair does not fit. Returns true
+    /// if the pair breaks.
+    fn unpair(
+        a: usize,
+        partner: &mut [Option<usize>],
+        targets: &[(usize, usize)],
+        taken: &BTreeSet<usize>,
+        heads: &[BTreeMap<usize, usize>; 2],
+    ) -> bool {
+        if partner[a].is_none() {
+            return false;
+        }
+        let [old_heads, new_heads] = heads;
+        // A first element that differs is the place of a change with its own elements (code
+        // that a step adds before the old first element): the target fits.
+        let fits = targets
+            .iter()
+            .all(|(x, y)| matches!((old_heads.get(x), new_heads.get(y)), (Some(hx), Some(hy)) if partner[*hx] == Some(*hy) || partner[*hx].is_none() || !taken.contains(hy)));
+        if !fits {
+            partner[a] = None;
+        }
+        !fits
+    }
+
+    /// The elements of each side that are the same as an element of the other side.
+    fn same(&self, partner: &[Option<usize>]) -> (Vec<bool>, Vec<bool>) {
+        let mut same: Vec<bool> = partner.iter().map(Option::is_some).collect();
+        let mut same_new = vec![false; self.new.parsed.elements.len()];
+        for b in partner.iter().flatten() {
+            same_new[*b] = true;
+        }
+        self.old.fold_same(&mut same);
+        self.new.fold_same(&mut same_new);
+        (same, same_new)
+    }
+}
+
 /// Compares two canonical texts with their element ranges. `None` if the ranges do not fit the
 /// texts (an old record, or a text with a line that is not an element).
+#[must_use]
 pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Option<ElementDiff> {
     let sides = [old, new].map(|(text, elements)| (parse(text), elements.ranges()));
     for (parsed, ranges) in &sides {
@@ -458,152 +790,25 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
     }
     let [(old, old_ranges), (new, new_ranges)] = sides;
     let (old_ranges, new_ranges) = (old_ranges?, new_ranges?);
-    let keys = |parsed: &Parsed| -> Vec<(String, Vec<Number>)> { parsed.elements.iter().map(|(text, _)| key(&symmetric_order(text))).collect() };
-    let (mut old_keys, mut new_keys) = (keys(&old), keys(&new));
     let args = old.args.min(new.args);
-    // Step 1: a copy into a temporary that the next element uses one time folds into that
-    // element.
-    let old_folded = fold_copies(&old, &mut old_keys, args);
-    let new_folded = fold_copies(&new, &mut new_keys, args);
-    // Step 2: the order of the source, and the weighted alignment.
-    let old_order = source_order(&old_ranges, &old_folded);
-    let new_order = source_order(&new_ranges, &new_folded);
-    let (old_bounds, new_bounds) = (bounds(&old_ranges), bounds(&new_ranges));
-    let anchored = |a: usize, b: usize| -> bool {
-        let (Some(x), Some(y), Some((file_a, start_a, end_a)), Some((file_b, start_b, end_b))) = (place_of(&old_ranges[a]), place_of(&new_ranges[b]), &old_bounds, &new_bounds) else { return false };
-        let same_length = x.end - x.start == y.end - y.start;
-        x.file == *file_a && y.file == *file_b && same_length && (x.start.checked_sub(*start_a) == y.start.checked_sub(*start_b) || end_a.checked_sub(x.end) == end_b.checked_sub(y.end))
+    let sides = Sides {
+        old: DiffSide::new(old, old_ranges, args),
+        new: DiffSide::new(new, new_ranges, args),
     };
-    let ordered = |order: &[usize], keys: &[(String, Vec<Number>)]| -> Vec<String> { order.iter().map(|index| keys[*index].0.clone()).collect() };
-    let pairs: Vec<(usize, usize)> = align(&ordered(&old_order, &old_keys), &ordered(&new_order, &new_keys), |i, j| anchored(old_order[i], new_order[j])).into_iter().map(|(i, j)| (old_order[i], new_order[j])).collect();
-    // Step 3: the map of the locals by votes. Each pair votes for the pairs of its locals; the
-    // pairs with the most votes win, one-to-one, with equal types.
-    let mut locals = Bijection::default();
-    for local in 0..=args {
-        locals.add(local, local);
-    }
-    let vote = |pairs: &[(usize, usize)], locals: &mut Bijection| {
-        let mut votes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-        for (a, b) in pairs {
-            for (x, y) in old_keys[*a].1.iter().zip(&new_keys[*b].1) {
-                if let (Number::Local(x), Number::Local(y)) = (x, y) {
-                    *votes.entry((*x, *y)).or_default() += 1;
-                }
-            }
-        }
-        let mut ranked: Vec<((usize, usize), usize)> = votes.into_iter().collect();
-        ranked.sort_by(|(p, a), (q, b)| b.cmp(a).then(p.cmp(q)));
-        for ((x, y), _) in ranked {
-            let typed = old.locals.get(&x).is_some_and(|ty| new.locals.get(&y) == Some(ty));
-            if typed && !locals.forward.contains_key(&x) && !locals.back.contains_key(&y) {
-                locals.add(x, y);
-            }
-        }
-    };
-    vote(&pairs, &mut locals);
-    // Step 4: a second alignment with the locals of the map: two elements with equal keys and
-    // locals that do not agree with the map do not pair. A local with no partner is `?` on the
-    // two sides. Then the new pairs vote for the locals with no partner.
-    let concrete = |order: &[usize], keys: &[(String, Vec<Number>)], map: &dyn Fn(usize) -> Option<usize>| -> Vec<String> {
-        order
-            .iter()
-            .map(|index| {
-                let (key, numbers) = &keys[*index];
-                let numbers: Vec<String> = numbers.iter().map(|number| match number {
-                    Number::Local(local) => map(*local).map_or("?".to_string(), |found| found.to_string()),
-                    Number::Block(_) => "b".to_string(),
-                }).collect();
-                format!("{key}|{}", numbers.join(","))
-            })
-            .collect()
-    };
-    let old_concrete = concrete(&old_order, &old_keys, &|local| locals.forward.get(&local).copied());
-    let new_concrete = concrete(&new_order, &new_keys, &|local| locals.back.contains_key(&local).then_some(local));
-    let pairs: Vec<(usize, usize)> = align(&old_concrete, &new_concrete, |i, j| anchored(old_order[i], new_order[j])).into_iter().map(|(i, j)| (old_order[i], new_order[j])).collect();
-    vote(&pairs, &mut locals);
-    // Pass 1: a pair fits if each of its locals has its partner in the map. The partner of
-    // each element of the old side, and the block targets of the pair.
-    let mut partner: Vec<Option<usize>> = vec![None; old.elements.len()];
-    let mut targets: Vec<Vec<(usize, usize)>> = vec![Vec::new(); old.elements.len()];
-    for (a, b) in pairs {
-        let (old_numbers, new_numbers) = (&old_keys[a].1, &new_keys[b].1);
-        let mut fits = old_numbers.len() == new_numbers.len();
-        let mut block_pairs = Vec::new();
-        for (x, y) in old_numbers.iter().zip(new_numbers) {
-            match (x, y) {
-                (Number::Local(x), Number::Local(y)) => fits &= locals.forward.get(x) == Some(y),
-                (Number::Block(x), Number::Block(y)) => block_pairs.push((*x, *y)),
-                _ => fits = false,
-            }
-        }
-        if fits {
-            partner[a] = Some(b);
-            targets[a] = block_pairs;
-        }
-    }
-    // Pass 2: a target goes to a block, and a block starts with its first element. Each
-    // target of a pair must go to the first elements of two partner blocks. A pair that breaks
-    // this rule differs; the check runs again until no pair changes.
-    let heads = |parsed: &Parsed| -> BTreeMap<usize, usize> {
-        let mut heads = BTreeMap::new();
-        for (index, (_, block)) in parsed.elements.iter().enumerate() {
-            heads.entry(*block).or_insert(index);
-        }
-        heads
-    };
-    let (old_heads, new_heads) = (heads(&old), heads(&new));
-    loop {
-        let mut changed = false;
-        let taken: BTreeSet<usize> = partner.iter().flatten().copied().collect();
-        for a in 0..old.elements.len() {
-            if partner[a].is_none() {
-                continue;
-            }
-            // A first element that differs is the place of a change with its own elements (code
-            // that a step adds before the old first element): the target fits.
-            let fits = targets[a].iter().all(|(x, y)| matches!((old_heads.get(x), new_heads.get(y)), (Some(hx), Some(hy)) if partner[*hx] == Some(*hy) || partner[*hx].is_none() || !taken.contains(hy)));
-            if !fits {
-                partner[a] = None;
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    let mut same: Vec<bool> = partner.iter().map(Option::is_some).collect();
-    let mut same_new = vec![false; new.elements.len()];
-    for b in partner.iter().flatten() {
-        same_new[*b] = true;
-    }
-    // A folded copy is the same as its use (the use comes later in the list).
-    for (same, folded) in [(&mut same, &old_folded), (&mut same_new, &new_folded)] {
-        for index in (0..folded.len()).rev() {
-            if let Some(user) = folded[index] {
-                same[index] = same[user];
-            }
-        }
-    }
-    let element = |parsed: &Parsed, ranges: &[(Option<Place>, Option<Place>)], index: usize| {
-        let (targets, exit) = branch(parsed.elements[index].0);
-        // An element with no range (a value that the driver wraps as opaque just before its
-        // use) gets the range of the next element of its block with a range, else of the next
-        // element with a range, else of the element before it.
-        let block = parsed.elements[index].1;
-        let in_block = |at: &usize| parsed.elements[*at].1 == block && (ranges[*at].0.is_some() || ranges[*at].1.is_some());
-        let ranged = |at: &usize| ranges[*at].0.is_some() || ranges[*at].1.is_some();
-        let near = (!ranged(&index)).then(|| (index + 1..ranges.len()).find(in_block).or_else(|| (index + 1..ranges.len()).find(ranged)).or_else(|| (0..index).rev().find(ranged))).flatten();
-        let (tokens, call) = ranges[near.unwrap_or(index)].clone();
-        let text = parsed.elements[index].0;
-        let jump = text.starts_with("goto -> ") || matches!(text, "return" | "resume" | "unreachable");
-        let glue = jump || text.starts_with("drop(");
-        Element { tokens, call, targets, exit, glue, jump }
-    };
+    let (pairs, locals) = sides.local_map(args);
+    let (mut partner, targets) = sides.fits(pairs, &locals);
+    sides.settle(&mut partner, &targets);
+    let (same, same_new) = sides.same(&partner);
+    let (old, new) = (&sides.old, &sides.new);
     let mut out = ElementDiff {
-        old: (0..old.elements.len()).filter(|i| !same[*i]).map(|i| element(&old, &old_ranges, i)).collect(),
-        new: (0..new.elements.len()).filter(|i| !same_new[*i]).map(|i| element(&new, &new_ranges, i)).collect(),
-        other: old.other != new.other || old.args != new.args,
-        pairs: partner.iter().enumerate().filter_map(|(a, b)| Some((old_ranges[a].0.clone()?, new_ranges[(*b)?].0.clone()?))).collect(),
+        old: old.changed(&same),
+        new: new.changed(&same_new),
+        other: old.parsed.other != new.parsed.other || old.parsed.args != new.parsed.args,
+        pairs: partner
+            .iter()
+            .enumerate()
+            .filter_map(|(a, b)| Some((old.ranges[a].0.clone()?, new.ranges[(*b)?].0.clone()?)))
+            .collect(),
     };
     out.old.sort();
     out.old.dedup();
@@ -619,7 +824,16 @@ mod tests {
     use super::*;
 
     fn record(n: usize) -> RecordElements {
-        RecordElements { n, f: vec!["src/lib.rs".into()], r: (0..n).map(|i| vec![i as i64, 1, 0, i as i64 * 10, i as i64 * 10 + 5]).collect() }
+        RecordElements {
+            n,
+            f: vec!["src/lib.rs".into()],
+            r: (0..n)
+                .map(|i| {
+                    let i = i64::try_from(i).unwrap();
+                    vec![i, 1, 0, i * 10, i * 10 + 5]
+                })
+                .collect(),
+        }
     }
 
     fn text(elements: &[&str]) -> String {
@@ -627,10 +841,10 @@ mod tests {
         let mut out = "fn _(_1: u32) -> u32 {\n    let _0: u32;\n    let _2: u32;\n    let _3: u32;\n    bb0: {\n".to_string();
         let mut block = 0;
         for (index, element) in elements.iter().enumerate() {
-            out.push_str(&format!("        {element};\n"));
+            let _ = writeln!(out, "        {element};");
             if (*element == "return" || element.starts_with("switchInt")) && index + 1 < elements.len() {
                 block += 1;
-                out.push_str(&format!("    }}\n    bb{block}: {{\n"));
+                let _ = write!(out, "    }}\n    bb{block}: {{\n");
             }
         }
         out.push_str("    }\n}\n");
@@ -658,8 +872,20 @@ mod tests {
 
     #[test]
     fn a_swap_of_two_targets_differs_and_a_switch_has_its_targets() {
-        let old = text(&["switchInt(_1) -> [0: bb1, otherwise: bb2]", "_0 = const u32 = 1", "return", "_0 = const u32 = 2", "return"]);
-        let new = text(&["switchInt(_1) -> [0: bb2, otherwise: bb1]", "_0 = const u32 = 1", "return", "_0 = const u32 = 2", "return"]);
+        let old = text(&[
+            "switchInt(_1) -> [0: bb1, otherwise: bb2]",
+            "_0 = const u32 = 1",
+            "return",
+            "_0 = const u32 = 2",
+            "return",
+        ]);
+        let new = text(&[
+            "switchInt(_1) -> [0: bb2, otherwise: bb1]",
+            "_0 = const u32 = 1",
+            "return",
+            "_0 = const u32 = 2",
+            "return",
+        ]);
         let diff = super::diff((&old, &record(5)), (&new, &record(5))).unwrap();
         assert!(!diff.old.is_empty() && !diff.new.is_empty(), "{diff:?}");
         let old = text(&["_0 = _1", "return"]);
@@ -674,7 +900,7 @@ mod tests {
         let old = text(&["_2 = _1", "_0 = _2", "return"]);
         let new = old.replace("let _2: u32", "let _2: u64");
         let found = diff((&old, &record(3)), (&new, &record(3))).unwrap();
-        assert!(!found.old.is_empty());
+        assert_ne!(found.old, [] as [Element; 0]);
         let new = old.replace("fn _(_1: u32)", "fn _(_1: u64)");
         assert!(diff_other(&old, &new));
     }
@@ -687,7 +913,11 @@ mod tests {
     fn ranges_that_do_not_fit_give_no_diff() {
         let old = text(&["_0 = _1", "return"]);
         assert!(diff((&old, &record(3)), (&old, &record(2))).is_none());
-        let runs = RecordElements { n: 2, f: vec!["a.rs".into()], r: vec![vec![0, 2, 0, 4, 9, 0, 1, 20]] };
+        let runs = RecordElements {
+            n: 2,
+            f: vec!["a.rs".into()],
+            r: vec![vec![0, 2, 0, 4, 9, 0, 1, 20]],
+        };
         let ranges = runs.ranges().unwrap();
         assert_eq!(ranges[1].0.as_ref().unwrap().start, 4);
         assert_eq!(ranges[1].1.as_ref().unwrap().end, 20);
@@ -695,16 +925,27 @@ mod tests {
 
     /// The element ranges with the given starts (each range has the length 5).
     fn record_at(starts: &[usize]) -> RecordElements {
-        RecordElements { n: starts.len(), f: vec!["src/lib.rs".into()], r: starts.iter().enumerate().map(|(i, start)| vec![i as i64, 1, 0, *start as i64, *start as i64 + 5]).collect() }
+        RecordElements {
+            n: starts.len(),
+            f: vec!["src/lib.rs".into()],
+            r: starts
+                .iter()
+                .enumerate()
+                .map(|(i, start)| {
+                    let (i, start) = (i64::try_from(i).unwrap(), i64::try_from(*start).unwrap());
+                    vec![i, 1, 0, start, start + 5]
+                })
+                .collect(),
+        }
     }
 
     /// A text with explicit blocks.
     fn blocks(blocks: &[&[&str]]) -> String {
         let mut out = "fn _(_1: u32) -> u32 {\n    let _0: u32;\n    let _2: u32;\n    let _3: u32;\n".to_string();
         for (index, block) in blocks.iter().enumerate() {
-            out.push_str(&format!("    bb{index}: {{\n"));
+            let _ = writeln!(out, "    bb{index}: {{");
             for element in *block {
-                out.push_str(&format!("        {element};\n"));
+                let _ = writeln!(out, "        {element};");
             }
             out.push_str("    }\n");
         }
@@ -725,13 +966,29 @@ mod tests {
     fn the_order_of_the_source_aligns_blocks_in_a_new_order() {
         // Fix round 1, D1: a negated condition swaps the targets, and the blocks come in a new
         // order. The order of the source pairs them; only the switch differs.
-        let old = blocks(&[&["switchInt(_1) -> [0: bb1, otherwise: bb2]"], &["_0 = const u32 = 1", "return"], &["_0 = Add(_1, const u32 = 2)", "return"]]);
-        let new = blocks(&[&["_2 = Not(_1)", "switchInt(_2) -> [0: bb1, otherwise: bb2]"], &["_0 = Add(_1, const u32 = 2)", "return"], &["_0 = const u32 = 1", "return"]]);
+        let old = blocks(&[
+            &["switchInt(_1) -> [0: bb1, otherwise: bb2]"],
+            &["_0 = const u32 = 1", "return"],
+            &["_0 = Add(_1, const u32 = 2)", "return"],
+        ]);
+        let new = blocks(&[
+            &["_2 = Not(_1)", "switchInt(_2) -> [0: bb1, otherwise: bb2]"],
+            &["_0 = Add(_1, const u32 = 2)", "return"],
+            &["_0 = const u32 = 1", "return"],
+        ]);
         let found = super::diff((&old, &record_at(&[0, 10, 12, 30, 32])), (&new, &record_at(&[0, 0, 30, 32, 10, 12]))).unwrap();
-        let starts = |list: &[Element]| -> Vec<usize> { list.iter().filter_map(|element| element.tokens.as_ref().map(|place| place.start)).collect() };
+        let starts = |list: &[Element]| -> Vec<usize> {
+            list.iter()
+                .filter_map(|element| element.tokens.as_ref().map(|place| place.start))
+                .collect()
+        };
         assert_eq!((starts(&found.old), starts(&found.new)), (vec![0], vec![0, 0]), "{found:?}");
         // The same switch with the old targets now goes to the other value: it differs.
-        let swapped = blocks(&[&["switchInt(_1) -> [0: bb1, otherwise: bb2]"], &["_0 = Add(_1, const u32 = 2)", "return"], &["_0 = const u32 = 1", "return"]]);
+        let swapped = blocks(&[
+            &["switchInt(_1) -> [0: bb1, otherwise: bb2]"],
+            &["_0 = Add(_1, const u32 = 2)", "return"],
+            &["_0 = const u32 = 1", "return"],
+        ]);
         let found = super::diff((&old, &record_at(&[0, 10, 12, 30, 32])), (&swapped, &record_at(&[0, 30, 32, 10, 12]))).unwrap();
         assert_eq!((starts(&found.old), starts(&found.new)), (vec![0], vec![0]), "{found:?}");
     }
@@ -744,7 +1001,11 @@ mod tests {
         let old = text(&["_2 = Add(_1, const u32 = 1)", "_3 = Add(_1, const u32 = 1)", "_0 = Mul(_3, _3)", "return"]);
         let new = text(&["_2 = Add(_1, const u32 = 1)", "_0 = Mul(_2, _2)", "return"]);
         let found = super::diff((&old, &record_at(&[0, 10, 20, 30])), (&new, &record_at(&[0, 10, 20]))).unwrap();
-        let starts = |list: &[Element]| -> Vec<usize> { list.iter().filter_map(|element| element.tokens.as_ref().map(|place| place.start)).collect() };
+        let starts = |list: &[Element]| -> Vec<usize> {
+            list.iter()
+                .filter_map(|element| element.tokens.as_ref().map(|place| place.start))
+                .collect()
+        };
         assert_eq!((starts(&found.old), found.new.len()), (vec![0], 0), "{found:?}");
     }
 
@@ -753,11 +1014,14 @@ mod tests {
         // Fix round 2: the printer sorts `_100` before `_99`. A removed local renumbers the
         // locals, and an unchanged addition got a new order of its operands.
         assert_eq!(symmetric_order("_101 = CheckedAdd(_100, _99)"), "_101 = CheckedAdd(_99, _100)");
-        assert_eq!(symmetric_order("assert(!(_101.1: bool), overflow Add(_100, _99)) -> [success: bb72]"), "assert(!(_101.1: bool), overflow Add(_99, _100)) -> [success: bb72]");
+        assert_eq!(
+            symmetric_order("assert(!(_101.1: bool), overflow Add(_100, _99)) -> [success: bb72]"),
+            "assert(!(_101.1: bool), overflow Add(_99, _100)) -> [success: bb72]"
+        );
         assert_eq!(symmetric_order("_3 = Sub(_10, _9)"), "_3 = Sub(_10, _9)");
         assert_eq!(symmetric_order("_3 = Add(_10, const u32 = 1)"), "_3 = Add(_10, const u32 = 1)");
         let old = text(&["_2 = Add(_3, _1)", "_0 = _2", "return"]);
-        let new = text(&["_3 = Add(_2, _1)", "_0 = _3", "return"]).replace("let _2: u32;\n    let _3: u32;", "let _2: u32;\n    let _3: u32;");
+        let new = text(&["_3 = Add(_2, _1)", "_0 = _3", "return"]);
         let found = super::diff((&old, &record(3)), (&new, &record(3))).unwrap();
         assert!(found.old.is_empty() && found.new.is_empty(), "{found:?}");
     }
@@ -769,6 +1033,3 @@ mod tests {
         assert_eq!(numbers.len(), 3);
     }
 }
-
-
-

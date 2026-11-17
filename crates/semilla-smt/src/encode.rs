@@ -12,7 +12,9 @@
 //! - Each operation that can panic adds a "no panic" condition. The guard of the
 //!   operation (the short-circuit conditions above it) limits the condition.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 
 use crate::lower::{BinOp, Leaf, LeafKind, Node, NodeKind, Side, UnOp, Unsupported};
 use crate::types::{RustType, TypeEnv};
@@ -132,10 +134,7 @@ impl Infer {
             (x, y) => x.or(y),
         };
         let intlike = self.slots[a].intlike || self.slots[b].intlike;
-        let name = self.slots[a]
-            .name
-            .clone()
-            .or_else(|| self.slots[b].name.clone());
+        let name = self.slots[a].name.clone().or_else(|| self.slots[b].name.clone());
         self.slots[b].parent = a;
         self.slots[a].known = known;
         self.slots[a].intlike = intlike;
@@ -188,17 +187,18 @@ impl Infer {
     fn node(&mut self, node: &mut Node, env: &TypeEnv) -> Result<usize, Unsupported> {
         let tv = match &mut node.kind {
             NodeKind::Bool(_) => self.fresh(Some(Known::Bool)),
-            NodeKind::Int { suffix, .. } => match suffix {
-                Some(RustType::Int { bits, signed }) => self.fresh(Some(Known::Bv {
-                    bits: *bits,
-                    signed: *signed,
-                })),
-                _ => {
+            NodeKind::Int { suffix, .. } => {
+                if let Some(RustType::Int { bits, signed }) = suffix {
+                    self.fresh(Some(Known::Bv {
+                        bits: *bits,
+                        signed: *signed,
+                    }))
+                } else {
                     let tv = self.fresh(None);
                     self.slots[tv].intlike = true;
                     tv
                 }
-            },
+            }
             NodeKind::Char(_) => self.fresh(Some(Known::Char)),
             NodeKind::Float => self.fresh(Some(Known::Float)),
             NodeKind::Leaf(leaf) => self.leaf(leaf, env)?,
@@ -322,12 +322,7 @@ pub(crate) struct Problem {
 }
 
 impl Problem {
-    pub(crate) fn build(
-        before: &Side,
-        after: &Side,
-        env: &TypeEnv,
-        top: Top,
-    ) -> Result<Problem, Skip> {
+    pub(crate) fn build(before: &Side, after: &Side, env: &TypeEnv, top: Top) -> Result<Problem, Skip> {
         let mut before_root = before.root.clone();
         let mut after_root = after.root.clone();
         let mut infer = Infer::default();
@@ -373,35 +368,14 @@ impl Problem {
             decls.push('\n');
         }
         for sym in &encoder.syms {
-            decls.push_str(&format!("; {} = {}\n", sym.name, sym.display));
-            decls.push_str(&format!(
-                "(declare-const {} {})\n",
-                sym.name,
-                sym.sort.smt()
-            ));
+            let _ = writeln!(decls, "; {} = {}", sym.name, sym.display);
+            let _ = writeln!(decls, "(declare-const {} {})", sym.name, sym.sort.smt());
         }
-        decls.push_str(&format!(
-            "(define-fun inputs_valid () Bool {})\n",
-            and(&encoder.domain)
-        ));
-        decls.push_str(&format!(
-            "(define-fun before () {} {})\n",
-            sort.smt(),
-            before_out.term
-        ));
-        decls.push_str(&format!(
-            "(define-fun after () {} {})\n",
-            sort.smt(),
-            after_out.term
-        ));
-        decls.push_str(&format!(
-            "(define-fun no_panic_before () Bool {})\n",
-            and(&before_out.no_panic)
-        ));
-        decls.push_str(&format!(
-            "(define-fun no_panic_after () Bool {})\n",
-            and(&after_out.no_panic)
-        ));
+        let _ = writeln!(decls, "(define-fun inputs_valid () Bool {})", and(&encoder.domain));
+        let _ = writeln!(decls, "(define-fun before () {} {})", sort.smt(), before_out.term);
+        let _ = writeln!(decls, "(define-fun after () {} {})", sort.smt(), after_out.term);
+        let _ = writeln!(decls, "(define-fun no_panic_before () Bool {})", and(&before_out.no_panic));
+        let _ = writeln!(decls, "(define-fun no_panic_after () Bool {})", and(&after_out.no_panic));
         Ok(Problem {
             syms: encoder.syms,
             decls,
@@ -415,7 +389,7 @@ impl Problem {
     pub(crate) fn body(&self, assertions: &[&str]) -> String {
         let mut body = self.decls.clone();
         for assertion in assertions {
-            body.push_str(&format!("(assert {assertion})\n"));
+            let _ = writeln!(body, "(assert {assertion})");
         }
         body
     }
@@ -423,7 +397,11 @@ impl Problem {
     /// The inputs of an unknown integer type: a model can give them a width that Rust does not
     /// have, so a model with them is not a real example (B3).
     pub(crate) fn unknown_width_inputs(&self) -> Vec<String> {
-        self.syms.iter().filter(|sym| matches!(sym.sort, Sort::Int { .. })).map(|sym| sym.display.clone()).collect()
+        self.syms
+            .iter()
+            .filter(|sym| matches!(sym.sort, Sort::Int { .. }))
+            .map(|sym| sym.display.clone())
+            .collect()
     }
 
     pub(crate) fn sym_names(&self) -> Vec<String> {
@@ -432,27 +410,16 @@ impl Problem {
 
     /// Formats a model as `name = value` pairs.
     pub(crate) fn witness(&self, model: &[(String, String)]) -> String {
-        let values: HashMap<&str, &str> = model
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
-            .collect();
+        let values: HashMap<&str, &str> = model.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
         let parts: Vec<String> = self
             .syms
             .iter()
             .filter_map(|sym| {
                 let value = values.get(sym.name.as_str())?;
-                Some(format!(
-                    "{} = {}",
-                    sym.display,
-                    format_value(value, sym.sort)
-                ))
+                Some(format!("{} = {}", sym.display, format_value(value, sym.sort)))
             })
             .collect();
-        if parts.is_empty() {
-            "any input".to_string()
-        } else {
-            parts.join(", ")
-        }
+        if parts.is_empty() { "any input".to_string() } else { parts.join(", ") }
     }
 }
 
@@ -502,13 +469,7 @@ impl Encoder {
         });
     }
 
-    fn leaf(
-        &mut self,
-        node: &Node,
-        leaf: &Leaf,
-        guard: &str,
-        out: &mut SideOut,
-    ) -> Result<String, Skip> {
+    fn leaf(&mut self, node: &Node, leaf: &Leaf, guard: &str, out: &mut SideOut) -> Result<String, Skip> {
         let sort = self.sort(node)?;
         if leaf.kind == LeafKind::Call {
             out.call_guards.push(guard.to_string());
@@ -550,31 +511,31 @@ impl Encoder {
     /// An overflow check. A build with no overflow checks does not panic: the operation wraps.
     /// Returns true if the build has overflow checks. If not, the caller gives the term of the
     /// wrapped result.
-    fn overflow(&mut self, out: &mut SideOut, guard: &str, ok: String) -> bool {
+    fn overflow(out: &mut SideOut, guard: &str, ok: &str) -> bool {
         let checks = crate::build::current().overflow_checks;
         if checks {
-            self.no_panic(out, guard, ok);
+            Self::no_panic(out, guard, ok);
         }
         checks
     }
 
     /// The wrapped result of an operation on integers with no known width: a function of the
     /// true result. The encoding does not know the function.
-    fn wrapped(&mut self, class: usize, result: String) -> String {
+    fn wrapped(&mut self, class: usize, result: &str) -> String {
         self.exact = false;
-        self.opaque("wrap", class, &[&result])
+        self.opaque("wrap", class, &[result])
     }
 
-    fn no_panic(&mut self, out: &mut SideOut, guard: &str, ok: String) {
+    fn no_panic(out: &mut SideOut, guard: &str, ok: &str) {
         out.can_panic = true;
-        out.no_panic.push(implies(guard, &ok));
+        out.no_panic.push(implies(guard, ok));
     }
 
     fn node(&mut self, node: &Node, guard: &str, out: &mut SideOut) -> Result<String, Skip> {
         match &node.kind {
             NodeKind::Bool(value) => Ok(value.to_string()),
             NodeKind::Int { mag, neg, .. } => self.int_literal(node, *mag, *neg),
-            NodeKind::Char(code) => Ok(bv(*code as u128, 32)),
+            NodeKind::Char(code) => Ok(bv(u128::from(*code), 32)),
             NodeKind::Float => Err(Skip::Float),
             NodeKind::Leaf(leaf) => self.leaf(node, leaf, guard, out),
             NodeKind::Unary(op, inner) => {
@@ -592,17 +553,19 @@ impl Encoder {
                             is_char: false,
                         },
                     ) => {
-                        self.overflow(out, guard, format!("(not (= {term} {}))", signed_min(bits)));
+                        Self::overflow(out, guard, &format!("(not (= {term} {}))", signed_min(bits)));
                         Ok(format!("(bvneg {term})"))
                     }
                     (UnOp::Neg, Sort::Int { class }) => {
                         let result = format!("(- {term})");
                         let ok = self.in_range(class, &result);
-                        if self.overflow(out, guard, ok) { Ok(result) } else { Ok(self.wrapped(class, result)) }
+                        if Self::overflow(out, guard, &ok) {
+                            Ok(result)
+                        } else {
+                            Ok(self.wrapped(class, &result))
+                        }
                     }
-                    _ => Err(Skip::Unsupported(format!(
-                        "the operator {op:?} on the type {sort:?}"
-                    ))),
+                    _ => Err(Skip::Unsupported(format!("the operator {op:?} on the type {sort:?}"))),
                 }
             }
             NodeKind::Binary(op, lhs, rhs) => self.binary(node, *op, lhs, rhs, guard, out),
@@ -633,31 +596,17 @@ impl Encoder {
                 Ok(bv(value, bits))
             }
             Sort::Int { class } => {
-                let term = if neg {
-                    format!("(- {mag})")
-                } else {
-                    mag.to_string()
-                };
+                let term = if neg { format!("(- {mag})") } else { mag.to_string() };
                 // The program compiles, so the literal fits in its type.
                 let fact = self.in_range(class, &term);
                 self.domain.push(fact);
                 Ok(term)
             }
-            sort => Err(Skip::Unsupported(format!(
-                "an integer literal of the type {sort:?}"
-            ))),
+            sort => Err(Skip::Unsupported(format!("an integer literal of the type {sort:?}"))),
         }
     }
 
-    fn binary(
-        &mut self,
-        node: &Node,
-        op: BinOp,
-        lhs: &Node,
-        rhs: &Node,
-        guard: &str,
-        out: &mut SideOut,
-    ) -> Result<String, Skip> {
+    fn binary(&mut self, node: &Node, op: BinOp, lhs: &Node, rhs: &Node, guard: &str, out: &mut SideOut) -> Result<String, Skip> {
         if matches!(op, BinOp::And | BinOp::Or) {
             let l = self.node(lhs, guard, out)?;
             // The right operand runs only when the left operand does not decide the result.
@@ -675,11 +624,7 @@ impl Encoder {
         let sort = self.sort(lhs)?;
         let l = self.node(lhs, guard, out)?;
         let r = self.node(rhs, guard, out)?;
-        let unsupported = || {
-            Err(Skip::Unsupported(format!(
-                "the operator {op:?} on the type {sort:?}"
-            )))
-        };
+        let unsupported = || Err(Skip::Unsupported(format!("the operator {op:?} on the type {sort:?}")));
         match sort {
             Sort::Bool => match op {
                 BinOp::BitAnd => Ok(format!("(and {l} {r})")),
@@ -720,23 +665,17 @@ impl Encoder {
                         let extra = if op == BinOp::Mul { bits } else { 1 };
                         let ext = if signed { "sign_extend" } else { "zero_extend" };
                         let result = format!("({smt_op} {l} {r})");
-                        let ok = format!(
-                            "(= ((_ {ext} {extra}) {result}) ({smt_op} ((_ {ext} {extra}) {l}) ((_ {ext} {extra}) {r})))"
-                        );
+                        let ok = format!("(= ((_ {ext} {extra}) {result}) ({smt_op} ((_ {ext} {extra}) {l}) ((_ {ext} {extra}) {r})))");
                         // The bit vector operation gives the wrapped result.
-                        self.overflow(out, guard, ok);
+                        Self::overflow(out, guard, &ok);
                         Ok(result)
                     }
                     BinOp::Div | BinOp::Rem => {
                         let mut ok = format!("(not (= {r} {}))", bv(0, bits));
                         if signed {
-                            ok = format!(
-                                "(and {ok} (not (and (= {l} {}) (= {r} {}))))",
-                                signed_min(bits),
-                                bv(mask(bits), bits)
-                            );
+                            ok = format!("(and {ok} (not (and (= {l} {}) (= {r} {}))))", signed_min(bits), bv(mask(bits), bits));
                         }
-                        self.no_panic(out, guard, ok);
+                        Self::no_panic(out, guard, &ok);
                         let smt_op = match (op, signed) {
                             (BinOp::Div, true) => "bvsdiv",
                             (BinOp::Div, false) => "bvudiv",
@@ -748,64 +687,56 @@ impl Encoder {
                     _ => unsupported(),
                 }
             }
-            Sort::Int { class } => match op {
-                BinOp::Eq => Ok(format!("(= {l} {r})")),
-                BinOp::Ne => Ok(format!("(distinct {l} {r})")),
-                BinOp::Lt => Ok(format!("(< {l} {r})")),
-                BinOp::Le => Ok(format!("(<= {l} {r})")),
-                BinOp::Gt => Ok(format!("(> {l} {r})")),
-                BinOp::Ge => Ok(format!("(>= {l} {r})")),
-                BinOp::BitAnd => Ok(self.opaque("and", class, &[&l, &r])),
-                BinOp::BitOr => Ok(self.opaque("or", class, &[&l, &r])),
-                BinOp::BitXor => Ok(self.opaque("xor", class, &[&l, &r])),
-                BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                    let smt_op = match op {
-                        BinOp::Add => "+",
-                        BinOp::Sub => "-",
-                        _ => "*",
-                    };
-                    let result = format!("({smt_op} {l} {r})");
-                    let ok = self.in_range(class, &result);
-                    if self.overflow(out, guard, ok) { Ok(result) } else { Ok(self.wrapped(class, result)) }
-                }
-                BinOp::Div | BinOp::Rem => {
-                    self.truncating_division();
-                    // The quotient is out of range only for a divisor of -1: then
-                    // `|quotient| <= |dividend|` is false only for `MIN / -1`.
-                    // `MIN / -1` and `MIN % -1` panic.
-                    let quotient = format!("(tdiv {l} {r})");
-                    let negation = self.in_range(class, &format!("(- {l})"));
-                    self.no_panic(
-                        out,
-                        guard,
-                        format!("(and (not (= {r} 0)) (or (not (= {r} (- 1))) {negation}))"),
-                    );
-                    if op == BinOp::Div {
-                        Ok(quotient)
-                    } else {
-                        Ok(format!("(trem {l} {r})"))
-                    }
-                }
-                _ => unsupported(),
-            },
+            Sort::Int { class } => self.int_binary(op, class, &l, &r, guard, out),
         }
     }
 
-    fn shift(
-        &mut self,
-        node: &Node,
-        op: BinOp,
-        lhs: &Node,
-        rhs: &Node,
-        guard: &str,
-        out: &mut SideOut,
-    ) -> Result<String, Skip> {
+    /// A binary operation on integers with no known width.
+    fn int_binary(&mut self, op: BinOp, class: usize, l: &str, r: &str, guard: &str, out: &mut SideOut) -> Result<String, Skip> {
+        let unsupported = || Err(Skip::Unsupported(format!("the operator {op:?} on the type {:?}", Sort::Int { class })));
+        match op {
+            BinOp::Eq => Ok(format!("(= {l} {r})")),
+            BinOp::Ne => Ok(format!("(distinct {l} {r})")),
+            BinOp::Lt => Ok(format!("(< {l} {r})")),
+            BinOp::Le => Ok(format!("(<= {l} {r})")),
+            BinOp::Gt => Ok(format!("(> {l} {r})")),
+            BinOp::Ge => Ok(format!("(>= {l} {r})")),
+            BinOp::BitAnd => Ok(self.opaque("and", class, &[l, r])),
+            BinOp::BitOr => Ok(self.opaque("or", class, &[l, r])),
+            BinOp::BitXor => Ok(self.opaque("xor", class, &[l, r])),
+            BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                let smt_op = match op {
+                    BinOp::Add => "+",
+                    BinOp::Sub => "-",
+                    _ => "*",
+                };
+                let result = format!("({smt_op} {l} {r})");
+                let ok = self.in_range(class, &result);
+                if Self::overflow(out, guard, &ok) {
+                    Ok(result)
+                } else {
+                    Ok(self.wrapped(class, &result))
+                }
+            }
+            BinOp::Div | BinOp::Rem => {
+                self.truncating_division();
+                // The quotient is out of range only for a divisor of -1: then
+                // `|quotient| <= |dividend|` is false only for `MIN / -1`.
+                // `MIN / -1` and `MIN % -1` panic.
+                let quotient = format!("(tdiv {l} {r})");
+                let negation = self.in_range(class, &format!("(- {l})"));
+                Self::no_panic(out, guard, &format!("(and (not (= {r} 0)) (or (not (= {r} (- 1))) {negation}))"));
+                if op == BinOp::Div { Ok(quotient) } else { Ok(format!("(trem {l} {r})")) }
+            }
+            _ => unsupported(),
+        }
+    }
+
+    fn shift(&mut self, node: &Node, op: BinOp, lhs: &Node, rhs: &Node, guard: &str, out: &mut SideOut) -> Result<String, Skip> {
         let sort = self.sort(node)?;
         let l = self.node(lhs, guard, out)?;
         let literal = match rhs.kind {
-            NodeKind::Int {
-                mag, neg: false, ..
-            } => Some(mag),
+            NodeKind::Int { mag, neg: false, .. } => Some(mag),
             NodeKind::Int { neg: true, .. } => {
                 return Err(Skip::Unsupported("a shift by a negative amount".into()));
             }
@@ -817,66 +748,50 @@ impl Encoder {
                 signed,
                 is_char: false,
             } => {
-                let amount = match literal {
-                    Some(k) => {
-                        if k >= bits as u128 {
-                            return Err(Skip::Unsupported(format!(
-                                "a shift by {k} on a {bits}-bit value"
-                            )));
-                        }
-                        // Rust checks the type of the literal. Do not encode it.
-                        bv(k, bits)
+                let amount = if let Some(k) = literal {
+                    if k >= u128::from(bits) {
+                        return Err(Skip::Unsupported(format!("a shift by {k} on a {bits}-bit value")));
                     }
-                    None => {
-                        let r = self.node(rhs, guard, out)?;
-                        let (ok, amount) = match self.sort(rhs)? {
-                            Sort::Bv {
-                                bits: m,
-                                signed: rs,
-                                is_char: false,
-                            } => {
-                                let n = bits as u128;
-                                let ok = if rs {
-                                    let max = (1u128 << (m - 1)) - 1;
-                                    if n <= max {
-                                        format!(
-                                            "(and (bvsge {r} {}) (bvslt {r} {}))",
-                                            bv(0, m),
-                                            bv(n, m)
-                                        )
-                                    } else {
-                                        format!("(bvsge {r} {})", bv(0, m))
-                                    }
-                                } else if m >= 128 || n < (1u128 << m) {
-                                    format!("(bvult {r} {})", bv(n, m))
+                    // Rust checks the type of the literal. Do not encode it.
+                    bv(k, bits)
+                } else {
+                    let r = self.node(rhs, guard, out)?;
+                    let (ok, amount) = match self.sort(rhs)? {
+                        Sort::Bv {
+                            bits: m,
+                            signed: rs,
+                            is_char: false,
+                        } => {
+                            let n = u128::from(bits);
+                            let ok = if rs {
+                                let max = (1u128 << (m - 1)) - 1;
+                                if n <= max {
+                                    format!("(and (bvsge {r} {}) (bvslt {r} {}))", bv(0, m), bv(n, m))
                                 } else {
-                                    "true".to_string()
-                                };
-                                let amount = if m < bits {
-                                    format!("((_ zero_extend {}) {r})", bits - m)
-                                } else if m > bits {
-                                    format!("((_ extract {} 0) {r})", bits - 1)
-                                } else {
-                                    r
-                                };
-                                (ok, amount)
-                            }
-                            Sort::Int { .. } => (
-                                format!("(and (>= {r} 0) (< {r} {bits}))"),
-                                format!("((_ int2bv {bits}) {r})"),
-                            ),
-                            other => {
-                                return Err(Skip::Unsupported(format!(
-                                    "a shift amount of the type {other:?}"
-                                )));
-                            }
-                        };
-                        if self.overflow(out, guard, ok) {
-                            amount
-                        } else {
-                            // With no overflow checks, the shift uses the low bits of the amount.
-                            format!("(bvand {amount} {})", bv(bits as u128 - 1, bits))
+                                    format!("(bvsge {r} {})", bv(0, m))
+                                }
+                            } else if m >= 128 || n < (1u128 << m) {
+                                format!("(bvult {r} {})", bv(n, m))
+                            } else {
+                                "true".to_string()
+                            };
+                            let amount = match m.cmp(&bits) {
+                                Ordering::Less => format!("((_ zero_extend {}) {r})", bits - m),
+                                Ordering::Greater => format!("((_ extract {} 0) {r})", bits - 1),
+                                Ordering::Equal => r,
+                            };
+                            (ok, amount)
                         }
+                        Sort::Int { .. } => (format!("(and (>= {r} 0) (< {r} {bits}))"), format!("((_ int2bv {bits}) {r})")),
+                        other => {
+                            return Err(Skip::Unsupported(format!("a shift amount of the type {other:?}")));
+                        }
+                    };
+                    if Self::overflow(out, guard, &ok) {
+                        amount
+                    } else {
+                        // With no overflow checks, the shift uses the low bits of the amount.
+                        format!("(bvand {amount} {})", bv(u128::from(bits) - 1, bits))
                     }
                 };
                 let smt_op = match (op, signed) {
@@ -888,9 +803,7 @@ impl Encoder {
             }
             Sort::Int { class } => {
                 let Some(k) = literal else {
-                    return Err(Skip::Unsupported(
-                        "a shift by a variable amount on a value of an unknown type".into(),
-                    ));
+                    return Err(Skip::Unsupported("a shift by a variable amount on a value of an unknown type".into()));
                 };
                 if k >= 128 {
                     return Err(Skip::Unsupported(format!("a shift by {k}")));
@@ -900,7 +813,7 @@ impl Encoder {
                 self.defs
                     .entry(name.clone())
                     .or_insert_with(|| format!("(declare-fun {name} (Int) Bool)"));
-                let checks = self.overflow(out, guard, format!("({name} {k})"));
+                let checks = Self::overflow(out, guard, &format!("({name} {k})"));
                 if op == BinOp::Shr && checks {
                     // An arithmetic or logical right shift is a division by 2^k that rounds down.
                     Ok(format!("(div {l} {})", 1u128 << k))
@@ -909,33 +822,23 @@ impl Encoder {
                     Ok(self.opaque("shl", class, &[&l, &k.to_string()]))
                 }
             }
-            other => Err(Skip::Unsupported(format!(
-                "a shift of a value of the type {other:?}"
-            ))),
+            other => Err(Skip::Unsupported(format!("a shift of a value of the type {other:?}"))),
         }
     }
 
-    fn cast(
-        &mut self,
-        inner: &Node,
-        target: RustType,
-        guard: &str,
-        out: &mut SideOut,
-    ) -> Result<String, Skip> {
+    fn cast(&mut self, inner: &Node, target: RustType, guard: &str, out: &mut SideOut) -> Result<String, Skip> {
         let source = self.sort(inner)?;
         let term = self.node(inner, guard, out)?;
         match target {
             RustType::Int { bits, .. } => match source {
                 Sort::Bool => Ok(format!("(ite {term} {} {})", bv(1, bits), bv(0, bits))),
-                Sort::Bv {
-                    bits: m, signed, ..
-                } => Ok(if m < bits {
-                    let ext = if signed { "sign_extend" } else { "zero_extend" };
-                    format!("((_ {ext} {}) {term})", bits - m)
-                } else if m > bits {
-                    format!("((_ extract {} 0) {term})", bits - 1)
-                } else {
-                    term
+                Sort::Bv { bits: m, signed, .. } => Ok(match m.cmp(&bits) {
+                    Ordering::Less => {
+                        let ext = if signed { "sign_extend" } else { "zero_extend" };
+                        format!("((_ {ext} {}) {term})", bits - m)
+                    }
+                    Ordering::Greater => format!("((_ extract {} 0) {term})", bits - 1),
+                    Ordering::Equal => term,
                 }),
                 // For any integer type, `x as uN` and `x as iN` keep the value modulo 2^N.
                 Sort::Int { .. } => Ok(format!("((_ int2bv {bits}) {term})")),
@@ -947,9 +850,7 @@ impl Encoder {
                     is_char: false,
                 } => Ok(format!("((_ zero_extend 24) {term})")),
                 Sort::Bv { is_char: true, .. } => Ok(term),
-                _ => Err(Skip::Unsupported(
-                    "a cast to `char` from a type other than `u8`".into(),
-                )),
+                _ => Err(Skip::Unsupported("a cast to `char` from a type other than `u8`".into())),
             },
             RustType::Float => Err(Skip::Float),
             _ => Err(Skip::Unsupported(format!("a cast to {target:?}"))),
@@ -974,19 +875,11 @@ fn and_guard(guard: &str, cond: &str) -> String {
 }
 
 fn implies(guard: &str, ok: &str) -> String {
-    if guard == "true" {
-        ok.to_string()
-    } else {
-        format!("(=> {guard} {ok})")
-    }
+    if guard == "true" { ok.to_string() } else { format!("(=> {guard} {ok})") }
 }
 
 fn mask(bits: u32) -> u128 {
-    if bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << bits) - 1
-    }
+    if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 }
 }
 
 fn bv(value: u128, bits: u32) -> String {
@@ -1004,21 +897,13 @@ pub(crate) fn format_value(text: &str, sort: Sort) -> String {
         return text.to_string();
     };
     match sort {
-        Sort::Bv {
-            bits,
-            signed,
-            is_char,
-        } => {
+        Sort::Bv { bits, signed, is_char } => {
             let raw = match &expr {
-                Sexp::Atom(atom) if atom.starts_with("#x") => {
-                    u128::from_str_radix(&atom[2..], 16).ok()
-                }
-                Sexp::Atom(atom) if atom.starts_with("#b") => {
-                    u128::from_str_radix(&atom[2..], 2).ok()
-                }
+                Sexp::Atom(atom) if atom.starts_with("#x") => u128::from_str_radix(&atom[2..], 16).ok(),
+                Sexp::Atom(atom) if atom.starts_with("#b") => u128::from_str_radix(&atom[2..], 2).ok(),
                 Sexp::List(items) if items.len() == 3 => match &items[1] {
                     Sexp::Atom(atom) => atom.strip_prefix("bv").and_then(|d| d.parse().ok()),
-                    _ => None,
+                    Sexp::List(_) => None,
                 },
                 _ => None,
             };
@@ -1026,15 +911,16 @@ pub(crate) fn format_value(text: &str, sort: Sort) -> String {
                 return text.to_string();
             };
             if is_char {
-                return match char::from_u32(raw as u32) {
+                return match u32::try_from(raw).ok().and_then(char::from_u32) {
                     Some(c) if !c.is_control() => format!("{c:?}"),
                     _ => format!("'\\u{{{raw:x}}}'"),
                 };
             }
+            // `cast_signed` wraps: that is the two's complement value of the raw bits.
             if signed && bits < 128 && raw >= (1u128 << (bits - 1)) {
-                ((raw as i128) - (1i128 << bits)).to_string()
+                (raw.cast_signed() - (1i128 << bits)).to_string()
             } else if signed {
-                (raw as i128).to_string()
+                raw.cast_signed().to_string()
             } else {
                 raw.to_string()
             }
@@ -1081,10 +967,6 @@ mod tests {
             signed: true,
             is_char: false,
         };
-        assert_eq!(
-            format_value(&format!("(_ bv{} 128)", u128::MAX), i128s),
-            "-1"
-        );
+        assert_eq!(format_value(&format!("(_ bv{} 128)", u128::MAX), i128s), "-1");
     }
 }
-

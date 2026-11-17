@@ -19,13 +19,13 @@ use std::collections::{BTreeSet, HashSet};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_public::mir::visit::{Location, MirVisitor};
 use rustc_public::mir::{Body, CastKind, PointerCoercion, Rvalue, StatementKind, TerminatorKind};
-use rustc_public::ty::MirConst;
 use rustc_public::rustc_internal;
+use rustc_public::ty::MirConst;
 use rustc_span::def_id::DefId;
 
 /// The facts of one body.
 #[derive(Default)]
-pub struct Reach {
+pub(crate) struct Reach {
     /// The types and the traits whose trait impls can run: the def path and the crate. A type of
     /// the standard library is in the list only for a call to another crate.
     pub types: BTreeSet<(String, String)>,
@@ -52,10 +52,12 @@ pub struct Reach {
 /// For a crate that the code gets with an `extern crate` item (`#![no_std]` with `extern crate
 /// std;`), the compiler prints the path of the item first: `data_encoding::std::fs::metadata`.
 /// This function puts the name of the crate in the place of the path of the item.
-pub fn extern_crate_path(tcx: TyCtxt<'_>, path: String) -> String {
+pub(crate) fn extern_crate_path(tcx: TyCtxt<'_>, path: String) -> String {
     use rustc_crate_store::ExternCrateSource;
     for krate in tcx.crates(()) {
-        let Some(ExternCrateSource::Extern(item)) = tcx.extern_crate(*krate).map(|found| found.src) else { continue };
+        let Some(ExternCrateSource::Extern(item)) = tcx.extern_crate(*krate).map(|found| found.src) else {
+            continue;
+        };
         if !item.is_local() {
             continue;
         }
@@ -69,17 +71,19 @@ pub fn extern_crate_path(tcx: TyCtxt<'_>, path: String) -> String {
 
 /// The def path of an item in the crate that defines it (no re-export path), with the crate
 /// name first.
-pub fn real_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
-    ty::print::with_no_visible_paths!(ty::print::with_resolve_crate_name!(ty::print::with_no_trimmed_paths!(tcx.def_path_str(def_id))))
+pub(crate) fn real_path(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    ty::print::with_no_visible_paths!(ty::print::with_resolve_crate_name!(ty::print::with_no_trimmed_paths!(
+        tcx.def_path_str(def_id)
+    )))
 }
 
 /// The name of the crate that defines an item.
-pub fn crate_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+pub(crate) fn crate_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     tcx.crate_name(def_id.krate).to_string()
 }
 
 /// True for a crate of the standard library.
-pub fn is_std(name: &str) -> bool {
+pub(crate) fn is_std(name: &str) -> bool {
     matches!(name, "core" | "alloc" | "std" | "proc_macro" | "test")
 }
 
@@ -126,7 +130,7 @@ fn note_types<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, site: Site, reach: &mut Rea
             }
             ty::FnPtr(..) => gap(reach, "a call to another crate with a function pointer in its generic arguments"),
             ty::Param(_) | ty::Alias(..) | ty::Placeholder(_) | ty::Bound(..) | ty::Infer(_) => {
-                gap(reach, "a call to another crate with a type parameter in its generic arguments")
+                gap(reach, "a call to another crate with a type parameter in its generic arguments");
             }
             ty::FnDef(def_id, _) => {
                 if def_id.is_local() {
@@ -199,7 +203,7 @@ fn note_drops<'tcx>(tcx: TyCtxt<'tcx>, typing: ty::TypingEnv<'tcx>, ty: Ty<'tcx>
             }
         }
         ty::Tuple(items) => {
-            for item in items.iter() {
+            for item in *items {
                 note_drops(tcx, typing, item, reach, seen);
             }
         }
@@ -250,9 +254,11 @@ fn note_inputs<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, out: &mut BTreeSet<(String
                 }
             }
         }
-        ty::Ref(_, inner, _) | ty::RawPtr(inner, _) | ty::Array(inner, _) | ty::Slice(inner) | ty::Pat(inner, _) => note_inputs(tcx, *inner, out, seen),
+        ty::Ref(_, inner, _) | ty::RawPtr(inner, _) | ty::Array(inner, _) | ty::Slice(inner) | ty::Pat(inner, _) => {
+            note_inputs(tcx, *inner, out, seen);
+        }
         ty::Tuple(items) => {
-            for item in items.iter() {
+            for item in *items {
                 note_inputs(tcx, item, out, seen);
             }
         }
@@ -305,7 +311,7 @@ fn note_layout<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, field: bool, out: &mut BTr
         }
         ty::Array(inner, _) | ty::Slice(inner) | ty::Pat(inner, _) => note_layout(tcx, *inner, field, out, seen),
         ty::Tuple(items) => {
-            for item in items.iter() {
+            for item in *items {
                 note_layout(tcx, item, field, out, seen);
             }
         }
@@ -344,7 +350,7 @@ const WHOLE_VALUE: [&str; 8] = [
 /// Batch 5o: an entry `touch PATH` for a type in the generic arguments of a callee that is
 /// not in `WHOLE_VALUE` (the callee can be an intrinsic that reads the layout). An entry
 /// `cfg PATH` for a type of the local crate that a `#[cfg]` attribute selects.
-pub fn adts(body: &Body) -> Vec<String> {
+pub(crate) fn adts(body: &Body) -> Vec<String> {
     ty::tls::with(|tcx| {
         struct Consts<'a, 'tcx> {
             tcx: TyCtxt<'tcx>,
@@ -361,7 +367,14 @@ pub fn adts(body: &Body) -> Vec<String> {
                         let path = real_path(self.tcx, *def_id);
                         // A method of a trait is not an intrinsic, and no normal form looks into
                         // a callee with generic arguments.
-                        let whole = self.tcx.trait_of_assoc(*def_id).is_some() || WHOLE_VALUE.iter().any(|entry| if entry.ends_with("::") { path.starts_with(entry) } else { path == *entry });
+                        let whole = self.tcx.trait_of_assoc(*def_id).is_some()
+                            || WHOLE_VALUE.iter().any(|entry| {
+                                if entry.ends_with("::") {
+                                    path.starts_with(entry)
+                                } else {
+                                    path == *entry
+                                }
+                            });
                         for inner in args.skip_binder().types() {
                             if whole {
                                 note_layout(self.tcx, inner, false, self.out, self.seen);
@@ -381,12 +394,23 @@ pub fn adts(body: &Body) -> Vec<String> {
         for local in body.locals() {
             note_layout(tcx, rustc_internal::internal(tcx, local.ty), false, &mut out, &mut seen);
         }
-        Consts { tcx, out: &mut out, touch: &mut touch, seen: &mut seen, seen_touch: &mut seen_touch }.visit_body(body);
+        Consts {
+            tcx,
+            out: &mut out,
+            touch: &mut touch,
+            seen: &mut seen,
+            seen_touch: &mut seen_touch,
+        }
+        .visit_body(body);
         // A crate outside the workspace (batch 5l, P10): the verifier cannot read its source, so
         // it cannot see a variant, a field, or a `Drop` impl under `cfg`. The entry `foreign PATH`
         // makes the type opaque. Two crates with one name: the type is foreign if one of them is.
-        let foreign: HashSet<String> =
-            tcx.crates(()).iter().filter(|krate| !crate::config::is_workspace_crate(tcx, **krate)).map(|krate| tcx.crate_name(*krate).to_string()).collect();
+        let foreign: HashSet<String> = tcx
+            .crates(())
+            .iter()
+            .filter(|krate| !crate::config::is_workspace_crate(tcx, **krate))
+            .map(|krate| tcx.crate_name(*krate).to_string())
+            .collect();
         let mut entries: BTreeSet<String> = BTreeSet::new();
         for (set, prefix) in [(out, ""), (touch, "touch ")] {
             for (path, krate) in set {
@@ -406,17 +430,36 @@ pub fn adts(body: &Body) -> Vec<String> {
     })
 }
 
-/// The facts of a body. `owner` is the item of the body.
-pub fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
-    ty::tls::with(|tcx| {
-        let owner = rustc_internal::internal(tcx, owner);
-        let typing = ty::TypingEnv::post_analysis(tcx, owner);
-        let mut reach = Reach::default();
-        let mut seen = HashSet::new();
-        let mut seen_real = HashSet::new();
-        let mut real_drops: BTreeSet<String> = BTreeSet::new();
-        let locals = body.locals();
+/// Notes the facts of a call terminator in a body. `ty` is the type of the callee.
+fn note_call<'tcx>(tcx: TyCtxt<'tcx>, typing: ty::TypingEnv<'tcx>, ty: Ty<'tcx>, reach: &mut Reach, seen: &mut HashSet<Ty<'tcx>>) {
+    let ty::FnDef(def_id, args) = ty.kind() else { return };
+    // The opaque value of `config.rs` is not a call of the source.
+    if crate::config::is_black_box(tcx, *def_id) {
+        return;
+    }
+    if tcx.is_foreign_item(*def_id) {
+        let text = format!("a call of the foreign function `{}`", tcx.def_path_str(*def_id));
+        if !reach.gaps.contains(&text) {
+            reach.gaps.push(text);
+        }
+    }
+    let site = if def_id.is_local() { Site::LocalCall } else { Site::ExternCall };
+    let before = reach.drops.clone();
+    for inner in args.skip_binder().types() {
+        note_types(tcx, inner, site, reach);
+        // Generic code can drop a value of each type that it knows.
+        note_drops(tcx, typing, inner, reach, seen);
+    }
+    // D9: the cause of these types is this call. It is not a drop in the body.
+    let new: Vec<String> = reach.drops.difference(&before).map(|(path, _)| path.clone()).collect();
+    for path in new {
+        reach.drop_calls.entry(path).or_insert_with(|| tcx.def_path_str(*def_id));
+    }
+}
 
+/// The facts of a body. `owner` is the item of the body.
+pub(crate) fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
+    ty::tls::with(|tcx| {
         // A function or a closure as a value: in the type of a local or of a constant.
         struct Values<'a, 'tcx> {
             tcx: TyCtxt<'tcx>,
@@ -435,6 +478,14 @@ pub fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
                 }
             }
         }
+        let owner = rustc_internal::internal(tcx, owner);
+        let typing = ty::TypingEnv::post_analysis(tcx, owner);
+        let mut reach = Reach::default();
+        let mut seen = HashSet::new();
+        let mut seen_real = HashSet::new();
+        let mut real_drops: BTreeSet<String> = BTreeSet::new();
+        let locals = body.locals();
+
         // The parameters of a function. The parameters of a closure come from its function or
         // from the code that calls the closure.
         if !tcx.is_closure_like(owner) {
@@ -448,11 +499,19 @@ pub fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
         for local in locals {
             note_types(tcx, rustc_internal::internal(tcx, local.ty), Site::Value, &mut reach);
         }
-        Values { tcx, reach: &mut reach, seen: HashSet::new() }.visit_body(body);
+        Values {
+            tcx,
+            reach: &mut reach,
+            seen: HashSet::new(),
+        }
+        .visit_body(body);
 
         for block in &body.blocks {
             for statement in &block.statements {
-                let StatementKind::Assign(_, Rvalue::Cast(CastKind::PointerCoercion(PointerCoercion::Unsize), operand, target)) = &statement.kind else { continue };
+                let StatementKind::Assign(_, Rvalue::Cast(CastKind::PointerCoercion(PointerCoercion::Unsize), operand, target)) = &statement.kind
+                else {
+                    continue;
+                };
                 if let Ok(source) = operand.ty(locals) {
                     note_types(tcx, rustc_internal::internal(tcx, source), Site::Cast, &mut reach);
                 }
@@ -461,30 +520,7 @@ pub fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
             match &block.terminator.kind {
                 TerminatorKind::Call { func, .. } => {
                     let Ok(ty) = func.ty(locals) else { continue };
-                    let ty = rustc_internal::internal(tcx, ty);
-                    let ty::FnDef(def_id, args) = ty.kind() else { continue };
-                    // The opaque value of `config.rs` is not a call of the source.
-                    if crate::config::is_black_box(tcx, *def_id) {
-                        continue;
-                    }
-                    if tcx.is_foreign_item(*def_id) {
-                        let text = format!("a call of the foreign function `{}`", tcx.def_path_str(*def_id));
-                        if !reach.gaps.contains(&text) {
-                            reach.gaps.push(text);
-                        }
-                    }
-                    let site = if def_id.is_local() { Site::LocalCall } else { Site::ExternCall };
-                    let before = reach.drops.clone();
-                    for inner in args.skip_binder().types() {
-                        note_types(tcx, inner, site, &mut reach);
-                        // Generic code can drop a value of each type that it knows.
-                        note_drops(tcx, typing, inner, &mut reach, &mut seen);
-                    }
-                    // D9: the cause of these types is this call. It is not a drop in the body.
-                    let new: Vec<String> = reach.drops.difference(&before).map(|(path, _)| path.clone()).collect();
-                    for path in new {
-                        reach.drop_calls.entry(path).or_insert_with(|| tcx.def_path_str(*def_id));
-                    }
+                    note_call(tcx, typing, rustc_internal::internal(tcx, ty), &mut reach, &mut seen);
                 }
                 TerminatorKind::Drop { place, .. } => {
                     let Ok(ty) = place.ty(locals) else {
@@ -503,10 +539,8 @@ pub fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
                         }
                     }
                 }
-                TerminatorKind::InlineAsm { .. } => {
-                    if !reach.gaps.iter().any(|g| g == "inline assembly") {
-                        reach.gaps.push("inline assembly".to_string());
-                    }
+                TerminatorKind::InlineAsm { .. } if !reach.gaps.iter().any(|g| g == "inline assembly") => {
+                    reach.gaps.push("inline assembly".to_string());
                 }
                 _ => {}
             }
@@ -519,10 +553,12 @@ pub fn body_reach(owner: rustc_public::DefId, body: &Body) -> Reach {
 /// For a method of a trait impl: the types of the impl header and its trait (full def paths, no
 /// item of the standard library). For a provided method of a trait: the trait. The second
 /// value is the type of a `Drop` impl, for its `drop` method.
-pub fn impl_header(owner: rustc_public::DefId) -> (Vec<String>, Option<String>) {
+pub(crate) fn impl_header(owner: rustc_public::DefId) -> (Vec<String>, Option<String>) {
     ty::tls::with(|tcx| {
         let def_id = rustc_internal::internal(tcx, owner);
-        let Some(assoc) = tcx.opt_associated_item(def_id) else { return (Vec::new(), None) };
+        let Some(assoc) = tcx.opt_associated_item(def_id) else {
+            return (Vec::new(), None);
+        };
         let parent = tcx.parent(def_id);
         let mut found = BTreeSet::new();
         let mut drop_of = None;
@@ -552,10 +588,10 @@ pub fn impl_header(owner: rustc_public::DefId) -> (Vec<String>, Option<String>) 
                         }
                     }
                 }
-                if tcx.lang_items().drop_trait() == Some(trait_ref.def_id) {
-                    if let ty::Adt(def, _) = trait_ref.self_ty().kind() {
-                        drop_of = Some(real_path(tcx, def.did()));
-                    }
+                if tcx.lang_items().drop_trait() == Some(trait_ref.def_id)
+                    && let ty::Adt(def, _) = trait_ref.self_ty().kind()
+                {
+                    drop_of = Some(real_path(tcx, def.did()));
                 }
             }
             ty::AssocContainer::InherentImpl => {}
@@ -565,12 +601,12 @@ pub fn impl_header(owner: rustc_public::DefId) -> (Vec<String>, Option<String>) 
 }
 
 /// The crate and the def path of a function of another crate.
-pub fn origin(def_id: DefId) -> (String, String) {
+pub(crate) fn origin(def_id: DefId) -> (String, String) {
     ty::tls::with(|tcx| (crate_name(tcx, def_id), real_path(tcx, def_id)))
 }
 
 /// The printed path of a function of another crate, as the call list prints it.
-pub fn printed_path(def_id: DefId) -> String {
+pub(crate) fn printed_path(def_id: DefId) -> String {
     ty::tls::with(|tcx| extern_crate_path(tcx, tcx.def_path_str(def_id)))
 }
 
@@ -586,17 +622,57 @@ fn live_blocks(body: &Body) -> Vec<bool> {
 /// The live blocks (see [`live_blocks`]), and the normal successors of each live block: the
 /// successors after the constant conditions fold, with no unwind edge (batch 5w, part C).
 fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
+    let known = known_locals(body);
+    let mut live = vec![false; body.blocks.len()];
+    let mut next = vec![Vec::new(); body.blocks.len()];
+    let mut todo = vec![0usize];
+    while let Some(index) = todo.pop() {
+        if index >= live.len() || live[index] {
+            continue;
+        }
+        live[index] = true;
+        let terminator = &body.blocks[index].terminator;
+        match &terminator.kind {
+            TerminatorKind::SwitchInt { discr, targets } => {
+                if let Some(value) = known_operand(&known, discr) {
+                    let target = targets
+                        .branches()
+                        .find(|(guard, _)| *guard == value)
+                        .map_or(targets.otherwise(), |(_, target)| target);
+                    next[index].push(target);
+                    todo.push(target);
+                } else {
+                    next[index] = terminator.successors();
+                    todo.extend(terminator.successors());
+                }
+            }
+            kind => {
+                next[index] = match kind {
+                    TerminatorKind::Goto { target } | TerminatorKind::Drop { target, .. } | TerminatorKind::Assert { target, .. } => vec![*target],
+                    TerminatorKind::Call { target, .. } | TerminatorKind::InlineAsm { destination: target, .. } => target.iter().copied().collect(),
+                    _ => Vec::new(),
+                };
+                todo.extend(terminator.successors());
+            }
+        }
+    }
+    (live, next)
+}
+
+/// The value of each local that the body writes once with a known plain value, after the
+/// constant conditions fold. `None` for each other local.
+fn known_locals(body: &Body) -> Vec<Option<u128>> {
     use rustc_public::mir::visit::PlaceContext;
-    use rustc_public::mir::{BinOp, Operand, Place, UnOp};
-    use rustc_public::ty::{ConstantKind, RigidTy, TyKind};
+    use rustc_public::mir::{BinOp, Place, UnOp};
+    use rustc_public::ty::{RigidTy, TyKind};
 
     struct Writes(Vec<u32>);
     impl MirVisitor for Writes {
         fn visit_place(&mut self, place: &Place, context: PlaceContext, _location: Location) {
-            if context.is_mutating() {
-                if let Some(count) = self.0.get_mut(place.local) {
-                    *count += 1;
-                }
+            if context.is_mutating()
+                && let Some(count) = self.0.get_mut(place.local)
+            {
+                *count += 1;
             }
         }
     }
@@ -609,46 +685,26 @@ fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
             *count += 1;
         }
     }
-    let plain = |ty: rustc_public::ty::Ty| matches!(ty.kind(), TyKind::RigidTy(RigidTy::Bool | RigidTy::Uint(_) | RigidTy::Int(_) | RigidTy::Char));
-    // The order of two values of a type: a signed type has the sign in its top bit.
-    let order = |ty: rustc_public::ty::Ty, a: u128, b: u128| -> Option<std::cmp::Ordering> {
-        match ty.kind() {
-            TyKind::RigidTy(RigidTy::Bool | RigidTy::Uint(_) | RigidTy::Char) => Some(a.cmp(&b)),
-            TyKind::RigidTy(RigidTy::Int(int)) => {
-                let shift = 128 - 8 * int.num_bytes() as u32;
-                Some((((a << shift) as i128) >> shift).cmp(&(((b << shift) as i128) >> shift)))
-            }
-            _ => None,
-        }
-    };
     let mut known: Vec<Option<u128>> = vec![None; locals.len()];
-    let operand = |known: &[Option<u128>], operand: &Operand| -> Option<u128> {
-        match operand {
-            Operand::Constant(constant) if plain(constant.const_.ty()) => match constant.const_.kind() {
-                ConstantKind::Allocated(alloc) => alloc.read_uint().ok(),
-                _ => None,
-            },
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => known.get(place.local).copied().flatten(),
-            _ => None,
-        }
-    };
     let rvalue = |known: &[Option<u128>], rvalue: &Rvalue| -> Option<u128> {
         match rvalue {
-            Rvalue::Use(value, _) => operand(known, value),
-            Rvalue::UnaryOp(UnOp::Not, value) if matches!(value.ty(locals).ok()?.kind(), TyKind::RigidTy(RigidTy::Bool)) => Some(operand(known, value)? ^ 1),
+            Rvalue::Use(value, _) => known_operand(known, value),
+            Rvalue::UnaryOp(UnOp::Not, value) if matches!(value.ty(locals).ok()?.kind(), TyKind::RigidTy(RigidTy::Bool)) => {
+                Some(known_operand(known, value)? ^ 1)
+            }
             Rvalue::BinaryOp(op, left, right) => {
                 let ty = left.ty(locals).ok()?;
-                let (a, b) = (operand(known, left)?, operand(known, right)?);
+                let (a, b) = (known_operand(known, left)?, known_operand(known, right)?);
                 match op {
-                    BinOp::Eq if plain(ty) => Some((a == b) as u128),
-                    BinOp::Ne if plain(ty) => Some((a != b) as u128),
-                    BinOp::Lt => Some(order(ty, a, b)?.is_lt() as u128),
-                    BinOp::Le => Some(order(ty, a, b)?.is_le() as u128),
-                    BinOp::Gt => Some(order(ty, a, b)?.is_gt() as u128),
-                    BinOp::Ge => Some(order(ty, a, b)?.is_ge() as u128),
-                    BinOp::BitAnd if plain(ty) => Some(a & b),
-                    BinOp::BitOr if plain(ty) => Some(a | b),
-                    BinOp::BitXor if plain(ty) => Some(a ^ b),
+                    BinOp::Eq if is_plain(ty) => Some(u128::from(a == b)),
+                    BinOp::Ne if is_plain(ty) => Some(u128::from(a != b)),
+                    BinOp::Lt => Some(u128::from(value_order(ty, a, b)?.is_lt())),
+                    BinOp::Le => Some(u128::from(value_order(ty, a, b)?.is_le())),
+                    BinOp::Gt => Some(u128::from(value_order(ty, a, b)?.is_gt())),
+                    BinOp::Ge => Some(u128::from(value_order(ty, a, b)?.is_ge())),
+                    BinOp::BitAnd if is_plain(ty) => Some(a & b),
+                    BinOp::BitOr if is_plain(ty) => Some(a | b),
+                    BinOp::BitXor if is_plain(ty) => Some(a ^ b),
                     _ => None,
                 }
             }
@@ -660,7 +716,9 @@ fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
         let mut changed = false;
         for block in &body.blocks {
             for statement in &block.statements {
-                let StatementKind::Assign(place, value) = &statement.kind else { continue };
+                let StatementKind::Assign(place, value) = &statement.kind else {
+                    continue;
+                };
                 if !place.projection.is_empty() || writes.0.get(place.local) != Some(&1) || known[place.local].is_some() {
                     continue;
                 }
@@ -674,38 +732,43 @@ fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
             break;
         }
     }
-    let mut live = vec![false; body.blocks.len()];
-    let mut next = vec![Vec::new(); body.blocks.len()];
-    let mut todo = vec![0usize];
-    while let Some(index) = todo.pop() {
-        if index >= live.len() || live[index] {
-            continue;
+    known
+}
+
+/// True for a type with a plain value: `bool`, an integer, or `char`.
+fn is_plain(ty: rustc_public::ty::Ty) -> bool {
+    use rustc_public::ty::{RigidTy, TyKind};
+    matches!(
+        ty.kind(),
+        TyKind::RigidTy(RigidTy::Bool | RigidTy::Uint(_) | RigidTy::Int(_) | RigidTy::Char)
+    )
+}
+
+/// The order of two values of a type: a signed type has the sign in its top bit.
+fn value_order(ty: rustc_public::ty::Ty, a: u128, b: u128) -> Option<std::cmp::Ordering> {
+    use rustc_public::ty::{RigidTy, TyKind};
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Bool | RigidTy::Uint(_) | RigidTy::Char) => Some(a.cmp(&b)),
+        TyKind::RigidTy(RigidTy::Int(int)) => {
+            let shift = 128 - 8 * u32::try_from(int.num_bytes()).ok()?;
+            Some(((a << shift).cast_signed() >> shift).cmp(&((b << shift).cast_signed() >> shift)))
         }
-        live[index] = true;
-        let terminator = &body.blocks[index].terminator;
-        match &terminator.kind {
-            TerminatorKind::SwitchInt { discr, targets } => match operand(&known, discr) {
-                Some(value) => {
-                    let target = targets.branches().find(|(guard, _)| *guard == value).map(|(_, target)| target).unwrap_or(targets.otherwise());
-                    next[index].push(target);
-                    todo.push(target);
-                }
-                None => {
-                    next[index] = terminator.successors();
-                    todo.extend(terminator.successors());
-                }
-            },
-            kind => {
-                next[index] = match kind {
-                    TerminatorKind::Goto { target } | TerminatorKind::Drop { target, .. } | TerminatorKind::Assert { target, .. } => vec![*target],
-                    TerminatorKind::Call { target, .. } | TerminatorKind::InlineAsm { destination: target, .. } => target.iter().copied().collect(),
-                    _ => Vec::new(),
-                };
-                todo.extend(terminator.successors());
-            }
-        }
+        _ => None,
     }
-    (live, next)
+}
+
+/// The known value of an operand: a plain constant, or a local with a value in `known`.
+fn known_operand(known: &[Option<u128>], operand: &rustc_public::mir::Operand) -> Option<u128> {
+    use rustc_public::mir::Operand;
+    use rustc_public::ty::ConstantKind;
+    match operand {
+        Operand::Constant(constant) if is_plain(constant.const_.ty()) => match constant.const_.kind() {
+            ConstantKind::Allocated(alloc) => alloc.read_uint().ok(),
+            _ => None,
+        },
+        Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => known.get(place.local).copied().flatten(),
+        _ => None,
+    }
 }
 
 /// The functions that a body calls on each path from its start to a normal return (batch 5w,
@@ -728,7 +791,11 @@ fn flow(body: &Body) -> (Vec<bool>, Vec<Vec<usize>>) {
 ///   before the sure callee `NAME`.
 /// - `first`: the sure callees with no call, no assert, and no drop before them. In a
 ///   `#[should_panic]` test, only such a call runs in each run.
-pub fn sure_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> Option<(Vec<String>, std::collections::BTreeMap<String, Vec<String>>)> {
+pub(crate) fn sure_callees(
+    owner: rustc_public::DefId,
+    body: &Body,
+    bodies: &std::collections::HashMap<rustc_public::DefId, &Body>,
+) -> Option<SureCallees> {
     ty::tls::with(|tcx| {
         let owner = rustc_internal::internal(tcx, owner);
         // Only a function has the fact. The descriptor constant of a test has the name of the
@@ -757,9 +824,26 @@ pub fn sure_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::colle
             // The call can be in a closure that the body calls: each ender of the closure
             // counts (a conservative rule).
             let inner: Vec<Ender> = closures.into_iter().map(|def| Ender::Local(def, String::new())).collect();
-            put(format!("before {name}"), flat(tcx, &facts, own.iter().filter(|(index, _)| seen[*index]).map(|(_, ender)| ender).chain(&inner)));
-            let can_panic = |kind: &TerminatorKind| matches!(kind, TerminatorKind::Call { .. } | TerminatorKind::Assert { .. } | TerminatorKind::Drop { .. } | TerminatorKind::InlineAsm { .. });
-            if !body.blocks.iter().enumerate().any(|(index, block)| seen[index] && can_panic(&block.terminator.kind)) {
+            put(
+                format!("before {name}"),
+                flat(
+                    tcx,
+                    &facts,
+                    own.iter().filter(|(index, _)| seen[*index]).map(|(_, ender)| ender).chain(&inner),
+                ),
+            );
+            let can_panic = |kind: &TerminatorKind| {
+                matches!(
+                    kind,
+                    TerminatorKind::Call { .. } | TerminatorKind::Assert { .. } | TerminatorKind::Drop { .. } | TerminatorKind::InlineAsm { .. }
+                )
+            };
+            if !body
+                .blocks
+                .iter()
+                .enumerate()
+                .any(|(index, block)| seen[index] && can_panic(&block.terminator.kind))
+            {
                 first.push(name);
             }
         }
@@ -792,7 +876,7 @@ thread_local! {
 }
 
 /// The facts of [`EndFacts`] for the crate. One driver process compiles one crate.
-fn end_facts<'tcx>(tcx: TyCtxt<'tcx>, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> std::rc::Rc<EndFacts> {
+fn end_facts(tcx: TyCtxt<'_>, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> std::rc::Rc<EndFacts> {
     if let Some(found) = END_FACTS.with(|cell| cell.borrow().clone()) {
         return found;
     }
@@ -810,7 +894,11 @@ fn end_facts<'tcx>(tcx: TyCtxt<'tcx>, bodies: &std::collections::HashMap<rustc_p
     };
     let mut maybe: HashSet<DefId> = HashSet::new();
     loop {
-        let more: Vec<DefId> = scans.iter().filter(|(def, list)| !maybe.contains(*def) && list.iter().any(|(_, ender)| unknown(ender, &maybe))).map(|(def, _)| *def).collect();
+        let more: Vec<DefId> = scans
+            .iter()
+            .filter(|(def, list)| !maybe.contains(*def) && list.iter().any(|(_, ender)| unknown(ender, &maybe)))
+            .map(|(def, _)| *def)
+            .collect();
         if more.is_empty() {
             break;
         }
@@ -854,16 +942,16 @@ fn panic_code(name: &str) -> bool {
 /// The enders of the live blocks of a body, with the block index. The types of the constants
 /// of a block give the functions that the block calls or gives to a different function, and
 /// the closures.
-fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, Ender)> {
-    use rustc_public::mir::AggregateKind;
+fn enders(tcx: TyCtxt<'_>, owner: DefId, body: &Body) -> Vec<(usize, Ender)> {
     use rustc_public::CrateDef;
+    use rustc_public::mir::AggregateKind;
 
-    struct Types<'tcx> {
+    struct TypeScan<'tcx> {
         tcx: TyCtxt<'tcx>,
         types: Vec<Ty<'tcx>>,
         made: Vec<DefId>,
     }
-    impl MirVisitor for Types<'_> {
+    impl MirVisitor for TypeScan<'_> {
         fn visit_mir_const(&mut self, constant: &MirConst, _location: Location) {
             self.types.push(rustc_internal::internal(self.tcx, constant.ty()));
         }
@@ -883,7 +971,11 @@ fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, End
         if !live[index] {
             continue;
         }
-        let mut types = Types { tcx, types: Vec::new(), made: Vec::new() };
+        let mut types = TypeScan {
+            tcx,
+            types: Vec::new(),
+            made: Vec::new(),
+        };
         types.visit_basic_block(block);
         let mut defs: Vec<DefId> = types.made;
         for ty in types.types {
@@ -894,11 +986,12 @@ fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, End
                         let mut target = *def_id;
                         if matches!(tcx.def_kind(*def_id), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
                             let args = args.skip_binder();
-                            let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
-                            if let Ok(Ok(Some(instance))) = resolved {
-                                if let ty::InstanceKind::Item(item) = instance.def {
-                                    target = item;
-                                }
+                            let resolved =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
+                            if let Ok(Ok(Some(instance))) = resolved
+                                && let ty::InstanceKind::Item(item) = instance.def
+                            {
+                                target = item;
                             }
                         }
                         defs.push(target);
@@ -910,7 +1003,9 @@ fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, End
         }
         // A call with no return through a function pointer: Semilla does not know the function.
         if let TerminatorKind::Call { func, target: None, .. } = &block.terminator.kind {
-            let direct = func.ty(body.locals()).ok().is_some_and(|ty| matches!(rustc_internal::internal(tcx, ty).kind(), ty::FnDef(..)));
+            let direct = func
+                .ty(body.locals())
+                .is_ok_and(|ty| matches!(rustc_internal::internal(tcx, ty).kind(), ty::FnDef(..)));
             if !direct {
                 found.push((index, Ender::End("a call with no return through a function pointer".to_string())));
             }
@@ -930,16 +1025,16 @@ fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, End
             let library = is_std(&crate_name(tcx, def));
             let ender = if tcx.is_foreign_item(def) {
                 // A foreign function can do each thing (`exit` of the C library).
-                (!library).then(|| Ender::End(name))
+                (!library).then_some(Ender::End(name))
             } else if local {
                 Some(Ender::Local(def, name))
             } else if name.ends_with("CommandExt>::exec") || name.ends_with("CommandExt::exec") {
                 // `exec` puts a different program in the process.
                 Some(Ender::End(name))
             } else if tcx.fn_sig(def).skip_binder().output().skip_binder().is_never() {
-                (!(library && panic_code(&name))).then(|| Ender::End(name))
+                (!(library && panic_code(&name))).then_some(Ender::End(name))
             } else {
-                (!library).then(|| Ender::Extern(name))
+                (!library).then_some(Ender::Extern(name))
             };
             found.extend(ender.map(|ender| (index, ender)));
         }
@@ -947,10 +1042,24 @@ fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, End
     found
 }
 
-fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>, open: &mut HashSet<DefId>, mut opens: Option<&mut Vec<(String, Vec<bool>, Vec<DefId>)>>) -> BTreeSet<String> {
+/// The sure callees of a body, and the facts for the ends of a run that are not a return.
+type SureCallees = (Vec<String>, std::collections::BTreeMap<String, Vec<String>>);
+
+/// A sure callee: its name, the blocks that can run before it, and the closures that give the
+/// name through a direct call.
+type OpenCall = (String, Vec<bool>, Vec<DefId>);
+
+fn sure_walk(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    body: &Body,
+    bodies: &std::collections::HashMap<rustc_public::DefId, &Body>,
+    open: &mut HashSet<DefId>,
+    mut opens: Option<&mut Vec<OpenCall>>,
+) -> BTreeSet<String> {
+    use rustc_public::mir::Operand;
     // The closures that give a callee name through a direct call.
     let mut through: std::collections::BTreeMap<String, Vec<DefId>> = std::collections::BTreeMap::new();
-    use rustc_public::mir::Operand;
 
     let typing = ty::TypingEnv::post_analysis(tcx, owner);
     let (live, next) = flow(body);
@@ -960,21 +1069,32 @@ fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
         if !live[index] {
             continue;
         }
-        let TerminatorKind::Call { func: Operand::Constant(func), .. } = &block.terminator.kind else { continue };
-        let ty::FnDef(def_id, args) = rustc_internal::internal(tcx, func.const_.ty()).kind() else { continue };
+        let TerminatorKind::Call {
+            func: Operand::Constant(func),
+            ..
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        let ty::FnDef(def_id, args) = rustc_internal::internal(tcx, func.const_.ty()).kind() else {
+            continue;
+        };
         let mut target = *def_id;
         if matches!(tcx.def_kind(*def_id), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
             let args = args.skip_binder();
             let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
-            if let Ok(Ok(Some(instance))) = resolved {
-                if let ty::InstanceKind::Item(item) = instance.def {
-                    target = item;
-                }
+            if let Ok(Ok(Some(instance))) = resolved
+                && let ty::InstanceKind::Item(item) = instance.def
+            {
+                target = item;
             }
         }
         let names: Vec<String> = if tcx.is_closure_like(target) {
             // A direct call of a closure: the sure callees of the closure body.
-            match bodies.get(&rustc_internal::stable(target)).filter(|_| target.is_local() && open.insert(target)) {
+            match bodies
+                .get(&rustc_internal::stable(target))
+                .filter(|_| target.is_local() && open.insert(target))
+            {
                 Some(inner) => {
                     let found = sure_walk(tcx, target, inner, bodies, open, None);
                     open.remove(&target);
@@ -1010,8 +1130,23 @@ fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
     };
     let all = reach(&[]);
     let is_end = |index: usize, kind: &TerminatorKind| all[index] && next[index].is_empty() && !matches!(kind, TerminatorKind::Resume);
-    let returns: Vec<usize> = body.blocks.iter().enumerate().filter(|(index, block)| all[*index] && matches!(block.terminator.kind, TerminatorKind::Return)).map(|(index, _)| index).collect();
-    let ends: Vec<usize> = if returns.is_empty() { body.blocks.iter().enumerate().filter(|(index, block)| is_end(*index, &block.terminator.kind)).map(|(index, _)| index).collect() } else { returns };
+    let returns: Vec<usize> = body
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(index, block)| all[*index] && matches!(block.terminator.kind, TerminatorKind::Return))
+        .map(|(index, _)| index)
+        .collect();
+    let ends: Vec<usize> = if returns.is_empty() {
+        body.blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| is_end(*index, &block.terminator.kind))
+            .map(|(index, _)| index)
+            .collect()
+    } else {
+        returns
+    };
     let mut sure = BTreeSet::new();
     for (name, blocks) in sites {
         // The call is sure if no end can run when the call blocks are closed. A call block
@@ -1032,7 +1167,11 @@ fn sure_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
 /// impl when the types are known. The walk goes into each local closure and coroutine that a
 /// call of a live block names in its types, and into the coroutine of an `async fn`. `bodies`
 /// gives the body of a local item.
-pub fn live_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>) -> Option<Vec<String>> {
+pub(crate) fn live_callees(
+    owner: rustc_public::DefId,
+    body: &Body,
+    bodies: &std::collections::HashMap<rustc_public::DefId, &Body>,
+) -> Option<Vec<String>> {
     ty::tls::with(|tcx| {
         let owner = rustc_internal::internal(tcx, owner);
         // The body that makes a closure has the calls of the closure.
@@ -1046,16 +1185,23 @@ pub fn live_callees(owner: rustc_public::DefId, body: &Body, bodies: &std::colle
     })
 }
 
-fn live_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::collections::HashMap<rustc_public::DefId, &Body>, found: &mut BTreeSet<String>, seen: &mut HashSet<DefId>) {
-    use rustc_public::mir::AggregateKind;
+fn live_walk(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    body: &Body,
+    bodies: &std::collections::HashMap<rustc_public::DefId, &Body>,
+    found: &mut BTreeSet<String>,
+    seen: &mut HashSet<DefId>,
+) {
     use rustc_public::CrateDef;
+    use rustc_public::mir::AggregateKind;
 
-    struct Types<'tcx> {
+    struct TypeScan<'tcx> {
         tcx: TyCtxt<'tcx>,
         types: Vec<Ty<'tcx>>,
         made: Vec<DefId>,
     }
-    impl MirVisitor for Types<'_> {
+    impl MirVisitor for TypeScan<'_> {
         fn visit_mir_const(&mut self, constant: &MirConst, _location: Location) {
             self.types.push(rustc_internal::internal(self.tcx, constant.ty()));
         }
@@ -1065,7 +1211,10 @@ fn live_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
             // call names its type.
             if let Rvalue::Aggregate(AggregateKind::Coroutine(def, _), _) = rvalue {
                 let def = rustc_internal::internal(self.tcx, def.def_id());
-                if matches!(self.tcx.coroutine_kind(def), Some(rustc_hir::CoroutineKind::Desugared(_, rustc_hir::CoroutineSource::Fn))) {
+                if matches!(
+                    self.tcx.coroutine_kind(def),
+                    Some(rustc_hir::CoroutineKind::Desugared(_, rustc_hir::CoroutineSource::Fn))
+                ) {
                     self.made.push(def);
                 }
             }
@@ -1074,7 +1223,11 @@ fn live_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
     }
     let typing = ty::TypingEnv::post_analysis(tcx, owner);
     let live = live_blocks(body);
-    let mut types = Types { tcx, types: Vec::new(), made: Vec::new() };
+    let mut types = TypeScan {
+        tcx,
+        types: Vec::new(),
+        made: Vec::new(),
+    };
     for (block, live) in body.blocks.iter().zip(&live) {
         if *live {
             types.visit_basic_block(block);
@@ -1089,11 +1242,12 @@ fn live_walk<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body, bodies: &std::c
                     let mut target = *def_id;
                     if matches!(tcx.def_kind(*def_id), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
                         let args = args.skip_binder();
-                        let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
-                        if let Ok(Ok(Some(instance))) = resolved {
-                            if let ty::InstanceKind::Item(item) = instance.def {
-                                target = item;
-                            }
+                        let resolved =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ty::Instance::try_resolve(tcx, typing, *def_id, args)));
+                        if let Ok(Ok(Some(instance))) = resolved
+                            && let ty::InstanceKind::Item(item) = instance.def
+                        {
+                            target = item;
                         }
                     }
                     if tcx.is_closure_like(target) {

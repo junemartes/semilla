@@ -1,6 +1,7 @@
 //! Verification results.
 
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 use crate::anchor::Anchor;
 use crate::ops::{Category, Compare};
@@ -35,15 +36,18 @@ pub enum ClaimStatus {
 }
 
 impl ClaimStatus {
+    #[must_use]
     pub fn is_verified(&self) -> bool {
         matches!(self, ClaimStatus::Verified { .. })
     }
 
+    #[must_use]
     pub fn is_pending(&self) -> bool {
         matches!(self, ClaimStatus::Pending { .. })
     }
 
     /// The text form, for example "verified (mir)" or "refuted: …".
+    #[must_use]
     pub fn text(&self) -> String {
         match self {
             ClaimStatus::Verified { proof } => format!("verified ({proof})"),
@@ -109,6 +113,7 @@ pub struct ClaimResult {
 impl ClaimResult {
     /// The mark for an output, with a space before it. It is empty for a claim with no proof,
     /// and for a proof that used only the build code of the base.
+    #[must_use]
     pub fn mark(&self) -> String {
         match self.build_code {
             Some(step) if self.status.is_verified() => format!(" {}", build_code_mark(step)),
@@ -224,32 +229,52 @@ pub struct MirMapCounts {
 }
 
 impl MirMapCounts {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         *self == MirMapCounts::default()
     }
 
     /// The line of `semilla status --verbose`.
+    #[must_use]
     pub fn line(&self) -> String {
-        let mut line = format!("MIR map: {} map error(s); {} edit(s) own a changed MIR element; {} edit(s) with equal code in a changed body; {} edit(s) with the doubt rule", self.errors, self.owners, self.equal, self.doubt);
+        let mut line = format!(
+            "MIR map: {} map error(s); {} edit(s) own a changed MIR element; {} edit(s) with equal code in a changed body; {} edit(s) with the doubt rule",
+            self.errors, self.owners, self.equal, self.doubt
+        );
         if !self.examples.is_empty() {
-            line.push_str(&format!(" (first map errors: {})", self.examples.join(", ")));
+            let _ = write!(line, " (first map errors: {})", self.examples.join(", "));
         }
         if self.checked > 0 {
-            line.push_str(&format!("; statement map: {} pair(s) checked, {} do not agree with the MIR alignment, {} with no aligned element", self.checked, self.disagree, self.unaligned));
+            let _ = write!(
+                line,
+                "; statement map: {} pair(s) checked, {} do not agree with the MIR alignment, {} with no aligned element",
+                self.checked, self.disagree, self.unaligned
+            );
             if !self.disagree_examples.is_empty() {
-                line.push_str(&format!(" (first: {})", self.disagree_examples.join("; ")));
+                let _ = write!(line, " (first: {})", self.disagree_examples.join("; "));
             }
         }
         if self.round3 + self.composites + self.gap_pairs > 0 {
-            line.push_str(&format!("; mapper: {} round 3 pair(s), {} composite pair(s), {} pair(s) of the 8b gap rules", self.round3, self.composites, self.gap_pairs));
+            let _ = write!(
+                line,
+                "; mapper: {} round 3 pair(s), {} composite pair(s), {} pair(s) of the 8b gap rules",
+                self.round3, self.composites, self.gap_pairs
+            );
         }
         if !self.mapper_skipped.is_empty() {
-            line.push_str(&format!("; the statement mapper did not run for {} body(ies) above its limit: {}", self.mapper_skipped.len(), self.mapper_skipped.join(", ")));
+            let _ = write!(
+                line,
+                "; the statement mapper did not run for {} body(ies) above its limit: {}",
+                self.mapper_skipped.len(),
+                self.mapper_skipped.join(", ")
+            );
         }
         line
     }
 }
 
+// Serde `skip_serializing_if` passes the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(count: &usize) -> bool {
     *count == 0
 }
@@ -374,21 +399,34 @@ pub const KIND_KEY: &str = "kind:";
 pub const KIND_REASON_MIN: usize = 4;
 
 /// The kind of a spotlight text, or `None` for a text with no kind name.
+#[must_use]
 pub fn spotlight_kind(why: &str) -> Option<&'static str> {
     SPOTLIGHT_KINDS.iter().find(|(_, start)| why.starts_with(start)).map(|(name, _)| *name)
 }
 
 /// The names of the kinds that a kind reason can cover, for a message.
+#[must_use]
 pub fn kind_names() -> String {
-    SPOTLIGHT_KINDS.iter().filter(|(name, _)| *name != BUILD_CODE_KIND).map(|(name, _)| format!("`{name}`")).collect::<Vec<_>>().join(", ")
+    SPOTLIGHT_KINDS
+        .iter()
+        .filter(|(name, _)| *name != BUILD_CODE_KIND)
+        .map(|(name, _)| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl Fact {
     /// The label of the reason in each output. It has the key of the agent, when the key is
     /// the path of the item and not the exact key of the fact (batch 5x, part D).
+    #[must_use]
     pub fn reason_label(&self) -> String {
         match &self.reason_key {
-            Some(key) if self.reason_covers > 0 => format!("reason (key `{key}`; one reason covers {} spotlight{} of the kind {})", self.reason_covers, if self.reason_covers == 1 { "" } else { "s" }, key.strip_prefix(KIND_KEY).unwrap_or(key)),
+            Some(key) if self.reason_covers > 0 => format!(
+                "reason (key `{key}`; one reason covers {} spotlight{} of the kind {})",
+                self.reason_covers,
+                if self.reason_covers == 1 { "" } else { "s" },
+                key.strip_prefix(KIND_KEY).unwrap_or(key)
+            ),
             Some(key) => format!("reason (key `{key}`)"),
             None => "reason".to_string(),
         }
@@ -400,23 +438,27 @@ impl Fact {
     }
 
     /// The exact key of the reason of this fact: its anchor, or its part.
+    #[must_use]
     pub fn reason_place(&self) -> String {
-        self.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| self.part.clone())
+        self.at.as_ref().map_or_else(|| self.part.clone(), std::string::ToString::to_string)
     }
 
     /// The text in the brackets of the first line of the fact: "rename · code equal".
+    #[must_use]
     pub fn label(&self) -> String {
         format!("{} · {}", self.category.name(), self.compare.name())
     }
 
     /// True if the fact has the mismatch mark (design 35.2): the text of the change gives no
     /// cause for different compiled code, and the compiled code is different.
+    #[must_use]
     pub fn mismatch(&self) -> bool {
         self.category.expects_equal() && self.compare == Compare::CodeDifferent
     }
 
     /// The text after the list of the affected bodies: " (with N other edits of this body)".
     /// Empty if the fact is the only edit of its body.
+    #[must_use]
     pub fn other_edits_text(&self) -> String {
         match self.other_edits {
             0 => String::new(),
@@ -428,6 +470,7 @@ impl Fact {
     /// True if the text of the fact has the note of a public API change (design 36.3). The
     /// compare does not see the code of a different crate, so each output shows [`API_LINE`]
     /// with the fact.
+    #[must_use]
     pub fn api_change(&self) -> bool {
         !self.is_api_note() && (self.description.contains("(the public API can change") || self.description.contains("(the public API changes"))
     }
@@ -440,6 +483,7 @@ impl Fact {
     /// - 3: each other code fact;
     /// - 4: a manifest fact;
     /// - 5: a docs fact, a file fact, and each other fact with `no code`.
+    #[must_use]
     pub fn text_rank(&self) -> u8 {
         match self.category {
             Category::Manifest => 4,
@@ -454,6 +498,7 @@ impl Fact {
 
     /// The place of the fact in a group of the review report (design 35.7, 36.3): a
     /// spotlight, a mismatch mark, a public API change, then the compare results.
+    #[must_use]
     pub fn order(&self) -> u8 {
         if self.spotlight {
             0
@@ -469,6 +514,7 @@ impl Fact {
     /// The mark for the first line of the fact in an output, with a space before it. Only the
     /// result `code equal` has it. It is empty for a compare that used only the build code of
     /// the base.
+    #[must_use]
     pub fn mark(&self) -> String {
         match self.build_code {
             Some(step) if self.compare == Compare::CodeEqual => format!(" {}", build_code_mark(step)),
@@ -479,23 +525,31 @@ impl Fact {
     /// The mark for a part of the fact that shows equal compiled code: the list of the bodies
     /// with an equal MIR, and the note of the configurations. It is empty for a compare that
     /// used only the build code of the base.
+    #[must_use]
     pub fn part_mark(&self) -> String {
-        self.build_code.map(|step| format!(" {}", build_code_mark(step))).unwrap_or_default()
+        self.build_code.map_or_default(|step| format!(" {}", build_code_mark(step)))
     }
 
     /// True if the description names each place of a site group (a fold of equal type changes:
     /// "type `u32` → `u64` in 8 places: …"). A view does not show the sites of the group again.
     /// True for a fact of a doc comment change with no doc test. A doc comment has no MIR.
+    #[must_use]
     pub fn is_doc(&self) -> bool {
-        self.category == Category::Docs && self.part == "edit" && ["changed docs", "added docs", "removed docs"].iter().any(|start| self.description.starts_with(start))
+        self.category == Category::Docs
+            && self.part == "edit"
+            && ["changed docs", "added docs", "removed docs"]
+                .iter()
+                .any(|start| self.description.starts_with(start))
     }
 
     /// True for the fact of a derived rename or move that changes the public API (design 31.8).
     /// The fact is text for the reviewer about the identity fact: it is no second change.
+    #[must_use]
     pub fn is_api_note(&self) -> bool {
         self.part == "public api"
     }
 
+    #[must_use]
     pub fn names_sites(&self, group: &SiteGroup) -> bool {
         self.description.starts_with(&format!("{} in ", group.edit))
     }
@@ -503,8 +557,11 @@ impl Fact {
     /// True if the fact is the fold of the sites of the group: its description has the count
     /// and the text of the group ("3 site(s): changed path `a` → `b`"). A view shows the text
     /// one time, then the anchors (batch 5x, part E).
+    #[must_use]
     pub fn folds(&self, group: &SiteGroup) -> bool {
-        ["site(s)", "bodies"].iter().any(|what| self.description.starts_with(&format!("{} {what}: {}", group.sites.len(), group.edit)))
+        ["site(s)", "bodies"]
+            .iter()
+            .any(|what| self.description.starts_with(&format!("{} {what}: {}", group.sites.len(), group.edit)))
     }
 }
 
@@ -530,6 +587,7 @@ pub struct LineCounts {
 }
 
 impl LineCounts {
+    #[must_use]
     pub fn total(&self) -> usize {
         self.fine + self.new + self.removed + self.rewritten
     }
@@ -542,11 +600,19 @@ impl LineCounts {
     }
 
     /// The precision: the part of the lines that fine-grained claims explain.
+    #[must_use]
+    // A line count is far below 2^52, so the `f64` value is exact.
+    #[allow(clippy::cast_precision_loss)]
     pub fn precision(&self) -> f64 {
-        if self.total() == 0 { 1.0 } else { self.fine as f64 / self.total() as f64 }
+        if self.total() == 0 {
+            1.0
+        } else {
+            self.fine as f64 / self.total() as f64
+        }
     }
 
     /// One line of text for the agent and the reviewer.
+    #[must_use]
     pub fn summary(&self) -> String {
         format!(
             "lines: {} fine-grained ({:.0}%), {} new, {} removed, {} rewritten",
@@ -594,23 +660,43 @@ pub struct PairName {
 
 impl PairWarning {
     /// The key of the pair in the review file and in the refusals.
+    #[must_use]
     pub fn key(&self) -> String {
         format!("{} -> {}", self.old, self.new)
     }
 
+    #[must_use]
     pub fn text(&self) -> String {
-        let parent = |path: &str| path.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default();
+        let parent = |path: &str| path.rsplit_once("::").map_or_default(|(p, _)| p.to_string());
         let last = |path: &str| path.rsplit("::").next().unwrap_or(path).rsplit('.').next().unwrap_or(path).to_string();
-        let what = if parent(&self.old) == parent(&self.new) && last(&self.old) != last(&self.new) { "name" } else { "place" };
-        let mut text = format!("`{}` (removed) and `{}` (added) are {:.0}% similar: they can be one item with a new {what} and a second change", self.old, self.new, self.similarity * 100.0);
+        let what = if parent(&self.old) == parent(&self.new) && last(&self.old) != last(&self.new) {
+            "name"
+        } else {
+            "place"
+        };
+        let mut text = format!(
+            "`{}` (removed) and `{}` (added) are {:.0}% similar: they can be one item with a new {what} and a second change",
+            self.old,
+            self.new,
+            self.similarity * 100.0
+        );
         if let Some(cause) = &self.stopped {
             // The cause that stopped the derivation (design 36.1).
-            text.push_str(&format!(". Semilla does not derive one item: {cause}"));
+            let _ = write!(text, ". Semilla does not derive one item: {cause}");
         }
         if !self.resolves.is_empty() {
             // B5 of batch 5k: the texts are equal, and a name has a different meaning in the new
             // place. The advice "own step" does not help: the move itself changes the code.
-            let names: Vec<String> = self.resolves.iter().map(|name| format!("`{}` is `{}` in the removed item and `{}` in the added item", name.name, name.old, name.new)).collect();
+            let names: Vec<String> = self
+                .resolves
+                .iter()
+                .map(|name| {
+                    format!(
+                        "`{}` is `{}` in the removed item and `{}` in the added item",
+                        name.name, name.old, name.new
+                    )
+                })
+                .collect();
             text = format!(
                 "`{}` (removed) and `{}` (added) have the same text, but a name in the text points to a different item: {}. The move changes the meaning of the code: it is not one item in a new place",
                 self.old,
@@ -619,7 +705,7 @@ impl PairWarning {
             );
         }
         if let Some(reason) = &self.refusal {
-            text.push_str(&format!("; the agent refused: {}", crate::text::quoted(reason)));
+            let _ = write!(text, "; the agent refused: {}", crate::text::quoted(reason));
         }
         match self.reviewer.as_deref() {
             Some("accepted") => text.push_str("; the reviewer accepted the warning: rewrite the pair"),
@@ -631,6 +717,7 @@ impl PairWarning {
 }
 
 impl StepReport {
+    #[must_use]
     pub fn accepted(&self) -> bool {
         self.errors.is_empty()
             && self.uncovered.is_empty()
@@ -746,6 +833,7 @@ pub struct ConfigGap {
 impl ConfigGap {
     /// The kind of the cause: its text before the compiler error. The first error line of a
     /// build can be different in each run, because cargo compiles the targets in parallel.
+    #[must_use]
     pub fn kind(&self) -> &str {
         self.cause.split(": error").next().unwrap_or(&self.cause)
     }
@@ -760,6 +848,7 @@ impl ConfigNote {
     pub const NARROW: &'static str = " (libraries and binaries only)";
 
     /// The line of the checked configurations and the target.
+    #[must_use]
     pub fn checked_line(&self) -> String {
         // The name of a smaller build ends with a note (batch 5t, part C).
         let show = |name: &String| match name.strip_suffix(Self::NARROW) {
@@ -771,14 +860,35 @@ impl ConfigNote {
         let mark = |added: &ConfigAdded| match added.steps.len() {
             0 => " (added for a joint state)".to_string(),
             1 => format!(" (added for a joint state in step {})", added.steps[0]),
-            _ => format!(" (added for a joint state in steps {})", added.steps.iter().map(|step| step.to_string()).collect::<Vec<_>>().join(", ")),
+            _ => format!(
+                " (added for a joint state in steps {})",
+                added.steps.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(", ")
+            ),
         };
-        let mut list: Vec<String> = self.checked.iter().map(|name| format!("{}{}", show(name), self.added.iter().find(|added| added.name == *name).map(mark).unwrap_or_default())).collect();
-        list.extend(self.added.iter().filter(|added| !self.checked.contains(&added.name)).map(|added| format!("{}{}", show(&added.name), mark(added))));
+        let mut list: Vec<String> = self
+            .checked
+            .iter()
+            .map(|name| {
+                format!(
+                    "{}{}",
+                    show(name),
+                    self.added.iter().find(|added| added.name == *name).map_or_default(mark)
+                )
+            })
+            .collect();
+        list.extend(
+            self.added
+                .iter()
+                .filter(|added| !self.checked.contains(&added.name))
+                .map(|added| format!("{}{}", show(&added.name), mark(added))),
+        );
         // A configuration of the default list that only some steps have (batch 5y, C4.4).
         let steps = |entry: &ConfigAdded| match entry.steps.len() {
             1 => format!(" (only in step {})", entry.steps[0]),
-            _ => format!(" (only in steps {})", entry.steps.iter().map(|step| step.to_string()).collect::<Vec<_>>().join(", ")),
+            _ => format!(
+                " (only in steps {})",
+                entry.steps.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(", ")
+            ),
         };
         list.extend(self.in_steps.iter().map(|entry| format!("{}{}", show(&entry.name), steps(entry))));
         let list = if list.is_empty() { "none".to_string() } else { list.join(", ") };
@@ -788,12 +898,16 @@ impl ConfigNote {
     /// The lines of the configurations that Semilla did not check: one line for each cause.
     /// `all_steps`: the number of steps of the change set. A line starts with `!`: it is a
     /// warning.
+    #[must_use]
     pub fn gap_lines(&self, all_steps: usize) -> Vec<String> {
         // The configurations with the same kind of cause in the same steps go into one line.
         // The line shows the compiler error of the first one.
         let mut groups: Vec<(&ConfigGap, Vec<&str>)> = Vec::new();
         for gap in &self.not_checked {
-            match groups.iter_mut().find(|(first, _)| first.kind() == gap.kind() && first.steps == gap.steps) {
+            match groups
+                .iter_mut()
+                .find(|(first, _)| first.kind() == gap.kind() && first.steps == gap.steps)
+            {
                 Some((_, names)) => names.push(&gap.name),
                 None => groups.push((gap, vec![&gap.name])),
             }
@@ -801,14 +915,18 @@ impl ConfigNote {
         groups
             .into_iter()
             .map(|(gap, names)| {
-                let steps: Vec<String> = gap.steps.iter().map(|step| step.to_string()).collect();
+                let steps: Vec<String> = gap.steps.iter().map(std::string::ToString::to_string).collect();
                 let place = match gap.steps.len() {
                     count if count >= all_steps => String::new(),
                     1 => format!(" in step {}", steps[0]),
                     _ => format!(" in steps {}", steps.join(", ")),
                 };
                 let list: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
-                let (noun, verb) = if names.len() == 1 { ("configuration", "is") } else { ("configurations", "are") };
+                let (noun, verb) = if names.len() == 1 {
+                    ("configuration", "is")
+                } else {
+                    ("configurations", "are")
+                };
                 format!("! {noun} {} {verb} not checked{place}: {}", list.join(", "), gap.cause)
             })
             .collect()
@@ -816,6 +934,7 @@ impl ConfigNote {
 
     /// The line of the configurations that Semilla added for a joint state, if one exists: the line
     /// of `step`.
+    #[must_use]
     pub fn added_line(&self) -> Option<String> {
         if self.added.is_empty() {
             return None;
@@ -826,11 +945,17 @@ impl ConfigNote {
     }
 
     /// The line of the conditions that the checked configurations do not cover, if one exists.
+    #[must_use]
     pub fn condition_line(&self) -> Option<String> {
         if self.not_covered.is_empty() {
             return None;
         }
-        let shown: Vec<String> = self.not_covered.iter().take(Self::MOST_CONDITIONS).map(|text| format!("`{text}`")).collect();
+        let shown: Vec<String> = self
+            .not_covered
+            .iter()
+            .take(Self::MOST_CONDITIONS)
+            .map(|text| format!("`{text}`"))
+            .collect();
         let more = match self.not_covered.len().saturating_sub(Self::MOST_CONDITIONS) {
             0 => String::new(),
             count => format!(", and {count} more"),
@@ -840,6 +965,7 @@ impl ConfigNote {
 
     /// The line of the conditions for an agent command (batch 5x, part E). The short line has
     /// the count and the first condition. The line of `--verbose` has each condition.
+    #[must_use]
     pub fn agent_condition_line(&self, verbose: bool) -> Option<String> {
         let first = self.not_covered.first()?;
         let count = self.not_covered.len();
@@ -850,12 +976,16 @@ impl ConfigNote {
         if count == 1 {
             return self.condition_line();
         }
-        Some(format!("! {count} `cfg` conditions that Semilla did not check: `{first}`, and {} more (`semilla status --verbose` shows each one)", count - 1))
+        Some(format!(
+            "! {count} `cfg` conditions that Semilla did not check: `{first}`, and {} more (`semilla status --verbose` shows each one)",
+            count - 1
+        ))
     }
 
     /// The line of the configurations that are not in the list, because a different
     /// configuration has the same feature state (batch 5y, C4.4), if one exists.
     /// `all_steps`: the number of steps of the change set.
+    #[must_use]
     pub fn same_line(&self, all_steps: usize) -> Option<String> {
         if self.same.is_empty() {
             return None;
@@ -867,16 +997,23 @@ impl ConfigNote {
                 let place = match same.steps.len() {
                     count if count >= all_steps => String::new(),
                     1 => format!(" in step {}", same.steps[0]),
-                    _ => format!(" in steps {}", same.steps.iter().map(|step| step.to_string()).collect::<Vec<_>>().join(", ")),
+                    _ => format!(
+                        " in steps {}",
+                        same.steps.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(", ")
+                    ),
                 };
                 format!("`{}` = `{}`{place}", same.name, same.same_as)
             })
             .collect();
-        Some(format!("not in the list, because the features are the same (also for `release`): {}", list.join(", ")))
+        Some(format!(
+            "not in the list, because the features are the same (also for `release`): {}",
+            list.join(", ")
+        ))
     }
 
     /// The lines at the top of an output for the reviewer. The last line gives the scope of
     /// each compare result (design 35.5).
+    #[must_use]
     pub fn lines(&self, all_steps: usize) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
         lines.extend(self.same_line(all_steps));
@@ -887,6 +1024,7 @@ impl ConfigNote {
     }
 
     /// The lines at the top of an output of an agent command (batch 5x, part E).
+    #[must_use]
     pub fn agent_lines(&self, all_steps: usize, verbose: bool) -> Vec<String> {
         let mut lines = vec![self.checked_line()];
         lines.extend(self.same_line(all_steps));
@@ -912,18 +1050,25 @@ pub struct BuildCodeChange {
 
 impl BuildCodeChange {
     /// "from step 3 on", or "in steps 1–3" when a later step has the build code of the base again.
+    #[must_use]
     pub fn span(&self) -> String {
-        if self.to_end { format!("from step {} on", self.step) } else { format!("in {}", step_ranges(&self.steps)) }
+        if self.to_end {
+            format!("from step {} on", self.step)
+        } else {
+            format!("in {}", step_ranges(&self.steps))
+        }
     }
 }
 
 /// The mark of a result that used build code that step `step` changes (design 28, invariant I6).
+#[must_use]
 pub fn build_code_mark(step: usize) -> String {
     format!("(with the build code of step {step})")
 }
 
 /// The part of a count of results that says how many have the mark, or an empty text. `steps`
 /// are the steps of the marks.
+#[must_use]
 pub fn count_mark(marked: usize, steps: &[usize]) -> String {
     match (marked, steps) {
         (0, _) => String::new(),
@@ -946,11 +1091,17 @@ pub struct BuildCodeNote {
 
 impl BuildCodeNote {
     /// The steps that have no check.
+    #[must_use]
     pub fn not_checked(&self) -> Vec<usize> {
-        if self.ran { Vec::new() } else { self.changes.iter().flat_map(|change| change.steps.iter().copied()).collect() }
+        if self.ran {
+            Vec::new()
+        } else {
+            self.changes.iter().flat_map(|change| change.steps.iter().copied()).collect()
+        }
     }
 
     /// The step whose build code change the check of `step` used, if the check ran it.
+    #[must_use]
     pub fn mark_of(&self, step: usize) -> Option<usize> {
         if !self.ran {
             return None;
@@ -960,6 +1111,7 @@ impl BuildCodeNote {
 
     /// The line of `step` for a step: the full line in the step that changes the build code, a
     /// short form in a later step. `None` if the step uses no changed build code.
+    #[must_use]
     pub fn step_line(&self, step: usize) -> Option<String> {
         self.step_line_with(step, None)
     }
@@ -967,11 +1119,14 @@ impl BuildCodeNote {
     /// [`Self::step_line`] for a process whose builds have a missing limit of the sandbox
     /// (batch 5w, D5). `missing` is the state, for example "the network limit is missing
     /// (the cause)". The line then does not say that the code runs in the sandbox.
+    #[must_use]
     pub fn step_line_with(&self, step: usize, missing: Option<&str>) -> Option<String> {
         let change = self.changes.iter().find(|change| change.steps.contains(&step))?;
         let runs = match missing {
             None => "It runs in the sandbox during each check".to_string(),
-            Some(missing) => format!("This check ran it with a sandbox that is not complete: {missing}. It runs during each check"),
+            Some(missing) => {
+                format!("This check ran it with a sandbox that is not complete: {missing}. It runs during each check")
+            }
         };
         Some(if change.step == step {
             format!(
@@ -981,17 +1136,34 @@ impl BuildCodeNote {
                 build_code_mark(step)
             )
         } else {
-            format!("! build code changed in step {} ({}): each result `code equal` and each verified claim of this step has the mark {}.", change.step, change.parts, build_code_mark(change.step))
+            format!(
+                "! build code changed in step {} ({}): each result `code equal` and each verified claim of this step has the mark {}.",
+                change.step,
+                change.parts,
+                build_code_mark(change.step)
+            )
         })
     }
 
     /// The part of the result line, with no separator.
+    #[must_use]
     pub fn tag_text(&self) -> String {
-        let spans: Vec<String> = self.changes.iter().map(|change| if change.to_end { format!("from step {}", change.step) } else { change.span() }).collect();
+        let spans: Vec<String> = self
+            .changes
+            .iter()
+            .map(|change| {
+                if change.to_end {
+                    format!("from step {}", change.step)
+                } else {
+                    change.span()
+                }
+            })
+            .collect();
         format!("build code changed {}", spans.join(", "))
     }
 
     /// The line at the top of a result that ran the changed build code.
+    #[must_use]
     pub fn ran_line(&self) -> String {
         self.ran_line_with(None)
     }
@@ -1003,7 +1175,11 @@ impl BuildCodeNote {
             None => "The check ran it in the sandbox.".to_string(),
             Some(missing) => format!("The check ran it with a sandbox that is not complete: {missing}."),
         };
-        let parts: Vec<String> = self.changes.iter().map(|change| format!("step {} ({})", change.step, change.parts)).collect();
+        let parts: Vec<String> = self
+            .changes
+            .iter()
+            .map(|change| format!("step {} ({})", change.step, change.parts))
+            .collect();
         let spans: Vec<String> = self.changes.iter().map(BuildCodeChange::span).collect();
         let marks: Vec<String> = self.changes.iter().map(|change| build_code_mark(change.step)).collect();
         format!(
@@ -1015,12 +1191,22 @@ impl BuildCodeNote {
     }
 
     /// The text of a result that is not complete, after the result of the checked steps.
+    #[must_use]
     pub fn not_checked_text(&self) -> String {
-        let causes: Vec<String> = self.changes.iter().map(|change| format!("build code changed in step {} ({})", change.step, change.parts)).collect();
-        format!("{} not checked: {}. The command does not run it (the option --no-build-code, or a build sandbox that is not complete).", step_ranges(&self.not_checked()), causes.join("; "))
+        let causes: Vec<String> = self
+            .changes
+            .iter()
+            .map(|change| format!("build code changed in step {} ({})", change.step, change.parts))
+            .collect();
+        format!(
+            "{} not checked: {}. The command does not run it (the option --no-build-code, or a build sandbox that is not complete).",
+            step_ranges(&self.not_checked()),
+            causes.join("; ")
+        )
     }
 
     /// The part of a count of `code equal` facts that says how many have the mark, or an empty text.
+    #[must_use]
     pub fn count_text(&self, marked: usize) -> String {
         if marked == 0 {
             return String::new();
@@ -1033,6 +1219,7 @@ impl BuildCodeNote {
 }
 
 /// A list of step numbers as ranges: `steps 0–2, 5`.
+#[must_use]
 pub fn step_ranges(steps: &[usize]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut index = 0;
@@ -1041,7 +1228,11 @@ pub fn step_ranges(steps: &[usize]) -> String {
         while end + 1 < steps.len() && steps[end + 1] == steps[end] + 1 {
             end += 1;
         }
-        out.push(if end == index { steps[index].to_string() } else { format!("{}–{}", steps[index], steps[end]) });
+        out.push(if end == index {
+            steps[index].to_string()
+        } else {
+            format!("{}–{}", steps[index], steps[end])
+        });
         index = end + 1;
     }
     format!("{} {}", if steps.len() == 1 { "step" } else { "steps" }, out.join(", "))
@@ -1057,17 +1248,27 @@ impl Report {
         for step in &self.steps {
             self.lines.add(&step.lines);
         }
-        self.pending = self.steps.iter().flat_map(|step| &step.claims).filter(|claim| claim.status.is_pending()).count();
+        self.pending = self
+            .steps
+            .iter()
+            .flat_map(|step| &step.claims)
+            .filter(|claim| claim.status.is_pending())
+            .count();
         let rank = |level: &str| match level {
             "major" => 2,
             "minor" => 1,
             _ => 0,
         };
-        self.api_level = self.steps.iter().filter_map(|step| step.api_level.clone()).max_by_key(|level| rank(level));
+        self.api_level = self
+            .steps
+            .iter()
+            .filter_map(|step| step.api_level.clone())
+            .max_by_key(|level| rank(level));
     }
 
     /// True if a step has no check, because it uses build code that the change set changes and
     /// the command had `--no-build-code` (design 28).
+    #[must_use]
     pub fn not_complete(&self) -> bool {
         self.build_code.as_ref().is_some_and(|note| !note.ran && !note.changes.is_empty())
     }
@@ -1075,30 +1276,39 @@ impl Report {
     /// The text of the changed lines by the kind of claim, or `None`. The count has only the
     /// lines that a claim explains. So it shows only for a change set with no fact: with a fact,
     /// the count does not agree with the change (trial 4, D9).
+    #[must_use]
     pub fn lines_text(&self) -> Option<String> {
         (self.lines.total() > 0 && self.steps.iter().all(|step| step.facts.is_empty())).then(|| self.lines.summary())
     }
 
     /// The counts for the result line and for the summary table (design 35.6).
+    #[must_use]
     pub fn fact_counts(&self) -> FactCounts {
         FactCounts::of(self.steps.iter().flat_map(|step| &step.facts))
     }
 
     /// The count of the facts with the result `code equal` that have the mark of changed
     /// build code (design 28).
+    #[must_use]
     pub fn marked_count(&self) -> usize {
-        self.steps.iter().flat_map(|step| &step.facts).filter(|fact| fact.compare == Compare::CodeEqual && fact.build_code.is_some()).count()
+        self.steps
+            .iter()
+            .flat_map(|step| &step.facts)
+            .filter(|fact| fact.compare == Compare::CodeEqual && fact.build_code.is_some())
+            .count()
     }
 
     /// The facts part of the result line: "40 facts: 29 code different, 5 code equal (1 with
     /// a spotlight)". The count of `code equal` has the mark of changed build code.
+    #[must_use]
     pub fn facts_text(&self) -> String {
         self.fact_counts().text(&self.marked_text(self.marked_count()))
     }
 
     /// The text of [`BuildCodeNote::count_text`] for a count of marked facts.
+    #[must_use]
     pub fn marked_text(&self, marked: usize) -> String {
-        self.build_code.as_ref().map(|note| note.count_text(marked)).unwrap_or_default()
+        self.build_code.as_ref().map_or_default(|note| note.count_text(marked))
     }
 }
 
@@ -1133,30 +1343,46 @@ pub struct FactCounts {
 
 impl FactCounts {
     pub fn of<'a>(facts: impl Iterator<Item = &'a Fact>) -> FactCounts {
+        fn count(facts: &[&Fact], test: impl Fn(&Fact) -> bool) -> usize {
+            facts.iter().filter(|fact| test(fact)).count()
+        }
         let facts: Vec<&Fact> = facts.collect();
-        let count = |test: &dyn Fn(&Fact) -> bool| facts.iter().filter(|fact| test(fact)).count();
         FactCounts {
             total: facts.len(),
-            compare: Compare::ALL.iter().map(|&compare| (compare, count(&|fact| fact.compare == compare))).filter(|(_, count)| *count > 0).collect(),
-            category: Category::ALL.iter().map(|&category| (category, count(&|fact| fact.category == category))).filter(|(_, count)| *count > 0).collect(),
-            spotlight: count(&|fact| fact.spotlight),
-            mismatch: count(&|fact| fact.mismatch()),
+            compare: Compare::ALL
+                .iter()
+                .map(|&compare| (compare, count(&facts, |fact| fact.compare == compare)))
+                .filter(|(_, count)| *count > 0)
+                .collect(),
+            category: Category::ALL
+                .iter()
+                .map(|&category| (category, count(&facts, |fact| fact.category == category)))
+                .filter(|(_, count)| *count > 0)
+                .collect(),
+            spotlight: count(&facts, |fact| fact.spotlight),
+            mismatch: count(&facts, Fact::mismatch),
         }
     }
 
     /// The count of one compare result.
+    #[must_use]
     pub fn count(&self, compare: Compare) -> usize {
-        self.compare.iter().find(|(found, _)| *found == compare).map(|(_, count)| *count).unwrap_or(0)
+        self.compare.iter().find(|(found, _)| *found == compare).map_or(0, |(_, count)| *count)
     }
 
     /// The facts part of the result line. `marked` is the text of the build code mark for the
     /// count of `code equal`, or an empty text.
+    #[must_use]
     pub fn text(&self, marked: &str) -> String {
         let noun = if self.total == 1 { "fact" } else { "facts" };
         if self.total == 0 {
             return format!("0 {noun}");
         }
-        let parts: Vec<String> = self.compare.iter().map(|(compare, count)| format!("{count} {}{}", compare.name(), if *compare == Compare::CodeEqual { marked } else { "" })).collect();
+        let parts: Vec<String> = self
+            .compare
+            .iter()
+            .map(|(compare, count)| format!("{count} {}{}", compare.name(), if *compare == Compare::CodeEqual { marked } else { "" }))
+            .collect();
         // A count of zero is not in the line.
         let mut marks = Vec::new();
         if self.spotlight > 0 {
@@ -1165,7 +1391,11 @@ impl FactCounts {
         if self.mismatch > 0 {
             marks.push(format!("{} with a mismatch mark", self.mismatch));
         }
-        let marks = if marks.is_empty() { String::new() } else { format!(" ({})", marks.join(", ")) };
+        let marks = if marks.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", marks.join(", "))
+        };
         format!("{} {noun}: {}{marks}", self.total, parts.join(", "))
     }
 }
@@ -1180,6 +1410,7 @@ pub const CAUSE_LIMIT: usize = 5;
 
 /// The scope of a long list of bodies (batch 5x, part E): "the crate `humantime`", or
 /// "2 crates: `a` (30), `b` (15)". The crate is the first segment of the name of a body.
+#[must_use]
 pub fn list_scope(bodies: &[String]) -> String {
     let mut crates: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for body in bodies {
@@ -1188,7 +1419,14 @@ pub fn list_scope(bodies: &[String]) -> String {
     }
     match crates.len() {
         1 => format!("the crate `{}`", crates.keys().next().copied().unwrap_or_default()),
-        count => format!("{count} crates: {}", crates.iter().map(|(name, count)| format!("`{name}` ({count})")).collect::<Vec<_>>().join(", ")),
+        count => format!(
+            "{count} crates: {}",
+            crates
+                .iter()
+                .map(|(name, count)| format!("`{name}` ({count})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1201,10 +1439,15 @@ pub fn list_scope(bodies: &[String]) -> String {
 /// A property claim changes no code, so it does not count. A doc fact has no code, so it does
 /// not count (trial 4, D9): a rename with its doc comments is a `rename`. The API fact of a
 /// rename or a move does not count: a rename of a public item is a rename.
+#[must_use]
 pub fn derived_kind(steps: &[&StepReport]) -> Option<crate::GroupKind> {
     let all: Vec<&Fact> = steps.iter().flat_map(|s| &s.facts).filter(|f| !f.is_api_note()).collect();
     let facts: Vec<&Fact> = all.iter().copied().filter(|f| !f.is_doc()).collect();
-    let claims: Vec<&ClaimResult> = steps.iter().flat_map(|s| &s.claims).filter(|c| c.category.is_some() || !c.status.is_verified()).collect();
+    let claims: Vec<&ClaimResult> = steps
+        .iter()
+        .flat_map(|s| &s.claims)
+        .filter(|c| c.category.is_some() || !c.status.is_verified())
+        .collect();
     if all.is_empty() && claims.is_empty() {
         return None;
     }
@@ -1223,6 +1466,7 @@ pub fn derived_kind(steps: &[&StepReport]) -> Option<crate::GroupKind> {
 }
 
 /// The kind of a group after one more step: equal kinds stay; each mix gives `change`.
+#[must_use]
 pub fn merge_kinds(old: crate::GroupKind, new: crate::GroupKind) -> crate::GroupKind {
     if old == new { old } else { crate::GroupKind::Change }
 }
@@ -1232,35 +1476,59 @@ mod tests {
     use super::*;
 
     fn change(step: usize, steps: &[usize], to_end: bool) -> BuildCodeChange {
-        BuildCodeChange { step, parts: "crates/core/build.rs".into(), steps: steps.to_vec(), to_end }
+        BuildCodeChange {
+            step,
+            parts: "crates/core/build.rs".into(),
+            steps: steps.to_vec(),
+            to_end,
+        }
     }
 
     #[test]
     fn the_build_code_lines_of_the_step_command() {
         // Design 28.4: the full line in the step of the change, a short form later.
-        let note = BuildCodeNote { changes: vec![change(3, &[3, 4, 5, 6], true)], ran: true };
+        let note = BuildCodeNote {
+            changes: vec![change(3, &[3, 4, 5, 6], true)],
+            ran: true,
+        };
         assert_eq!(note.step_line(2), None);
         assert_eq!(
             note.step_line(3).unwrap(),
             "! build code changed in step 3: crates/core/build.rs. It runs in the sandbox during each check, and it can change each result from step 3 on. Each result `code equal` and each verified claim that depends on it has the mark (with the build code of step 3)."
         );
-        assert_eq!(note.step_line(5).unwrap(), "! build code changed in step 3 (crates/core/build.rs): each result `code equal` and each verified claim of this step has the mark (with the build code of step 3).");
+        assert_eq!(
+            note.step_line(5).unwrap(),
+            "! build code changed in step 3 (crates/core/build.rs): each result `code equal` and each verified claim of this step has the mark (with the build code of step 3)."
+        );
         assert_eq!(note.tag_text(), "build code changed from step 3");
-        assert!(note.not_checked().is_empty());
+        assert_eq!(note.not_checked(), [] as [usize; 0]);
         assert_eq!((note.mark_of(2), note.mark_of(3), note.mark_of(6)), (None, Some(3), Some(3)));
         assert_eq!(note.count_text(0), "");
         assert_eq!(note.count_text(2), " (2 with the build code of step 3)");
         // The count of the verified claims has the same text.
-        assert_eq!((count_mark(0, &[3]), count_mark(2, &[3]), count_mark(2, &[1, 3])), (String::new(), " (2 with the build code of step 3)".to_string(), " (2 with changed build code)".to_string()));
+        assert_eq!(
+            (count_mark(0, &[3]), count_mark(2, &[3]), count_mark(2, &[1, 3])),
+            (
+                String::new(),
+                " (2 with the build code of step 3)".to_string(),
+                " (2 with changed build code)".to_string()
+            )
+        );
     }
 
     #[test]
     fn the_build_code_lines_of_a_result() {
         // Design 28.4: the result with `--no-build-code`, and the default result.
-        let mut note = BuildCodeNote { changes: vec![change(3, &[3, 4, 5, 6], true)], ran: false };
+        let mut note = BuildCodeNote {
+            changes: vec![change(3, &[3, 4, 5, 6], true)],
+            ran: false,
+        };
         assert_eq!(note.not_checked(), vec![3, 4, 5, 6]);
         assert_eq!(note.mark_of(4), None, "a step with no check has no mark");
-        assert_eq!(note.not_checked_text(), "steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete).");
+        assert_eq!(
+            note.not_checked_text(),
+            "steps 3–6 not checked: build code changed in step 3 (crates/core/build.rs). The command does not run it (the option --no-build-code, or a build sandbox that is not complete)."
+        );
         note.ran = true;
         // Batch 5w, D5: with a missing limit, the two lines do not say "in the sandbox".
         let missing = "the network limit is missing (a test)";
@@ -1275,12 +1543,21 @@ mod tests {
             "! build code changed in step 3 (crates/core/build.rs). The check ran it in the sandbox. It can change each result from step 3 on. Read that change first. Each result `code equal` and each verified claim that depends on it has the mark (with the build code of step 3)."
         );
         // Case 7: the build code goes back to the base in step 3.
-        let note = BuildCodeNote { changes: vec![change(1, &[1, 2, 3], false)], ran: false };
+        let note = BuildCodeNote {
+            changes: vec![change(1, &[1, 2, 3], false)],
+            ran: false,
+        };
         assert_eq!(note.not_checked(), vec![1, 2, 3]);
-        assert!(note.not_checked_text().starts_with("steps 1–3 not checked: build code changed in step 1 (crates/core/build.rs)."));
+        assert!(
+            note.not_checked_text()
+                .starts_with("steps 1–3 not checked: build code changed in step 1 (crates/core/build.rs).")
+        );
         assert_eq!(note.tag_text(), "build code changed in steps 1–3");
         // Two changes: the count names no step.
-        let note = BuildCodeNote { changes: vec![change(1, &[1, 2], false), change(4, &[4], true)], ran: true };
+        let note = BuildCodeNote {
+            changes: vec![change(1, &[1, 2], false), change(4, &[4], true)],
+            ran: true,
+        };
         assert_eq!((note.mark_of(2), note.mark_of(3), note.mark_of(4)), (Some(1), None, Some(4)));
         assert_eq!(note.count_text(3), " (3 with changed build code)");
     }
@@ -1288,8 +1565,16 @@ mod tests {
     #[test]
     fn the_mark_is_on_each_equal_result_of_a_fact_and_on_each_verified_claim() {
         // Invariant I6: a result `code equal` that used changed build code has the mark.
-        let mut fact = Fact { category: Category::Semantics, compare: Compare::CodeEqual, ..Default::default() };
-        assert_eq!((fact.mark(), fact.part_mark()), (String::new(), String::new()), "a compare with the build code of the base has no mark");
+        let mut fact = Fact {
+            category: Category::Semantics,
+            compare: Compare::CodeEqual,
+            ..Default::default()
+        };
+        assert_eq!(
+            (fact.mark(), fact.part_mark()),
+            (String::new(), String::new()),
+            "a compare with the build code of the base has no mark"
+        );
         fact.build_code = Some(2);
         assert_eq!(fact.mark(), " (with the build code of step 2)");
         assert_eq!(fact.part_mark(), " (with the build code of step 2)");
@@ -1303,12 +1588,28 @@ mod tests {
         assert_eq!(fact.order(), 1);
         // Batch 7b, part 3: a public API change is after a mismatch mark and before each
         // fact with `code different`, also when its compare result is `code equal`.
-        let api = Fact { category: Category::Visibility, compare: Compare::CodeEqual, description: "visibility of `m::f`: `private` → `pub` (the public API changes: a different crate can now use the item)".into(), ..Default::default() };
-        let different = Fact { category: Category::Semantics, compare: Compare::CodeDifferent, ..Default::default() };
-        let equal = Fact { category: Category::Semantics, compare: Compare::CodeEqual, ..Default::default() };
+        let api = Fact {
+            category: Category::Visibility,
+            compare: Compare::CodeEqual,
+            description: "visibility of `m::f`: `private` → `pub` (the public API changes: a different crate can now use the item)".into(),
+            ..Default::default()
+        };
+        let different = Fact {
+            category: Category::Semantics,
+            compare: Compare::CodeDifferent,
+            ..Default::default()
+        };
+        let equal = Fact {
+            category: Category::Semantics,
+            compare: Compare::CodeEqual,
+            ..Default::default()
+        };
         assert!(api.api_change() && !equal.api_change());
         assert!(fact.order() < api.order() && api.order() < different.order() && different.order() < equal.order());
-        let possible = Fact { description: "qualifiers of `m::f` removed: `const` (the public API can change: a different crate can use the item)".into(), ..equal.clone() };
+        let possible = Fact {
+            description: "qualifiers of `m::f` removed: `const` (the public API can change: a different crate can use the item)".into(),
+            ..equal.clone()
+        };
         assert!(possible.api_change() && possible.order() == api.order());
         let mut claim = ClaimResult {
             claim: "c1".into(),
@@ -1331,8 +1632,13 @@ mod tests {
 
     #[test]
     fn the_facts_part_of_the_result_line_leaves_out_a_count_of_zero() {
-        let fact = |category, compare, spotlight| Fact { category, compare, spotlight, ..Default::default() };
-        let facts = vec![
+        let fact = |category, compare, spotlight| Fact {
+            category,
+            compare,
+            spotlight,
+            ..Default::default()
+        };
+        let facts = [
             fact(Category::Semantics, Compare::CodeDifferent, false),
             fact(Category::Semantics, Compare::CodeDifferent, true),
             fact(Category::Rename, Compare::CodeEqual, false),
@@ -1340,10 +1646,16 @@ mod tests {
         ];
         let counts = FactCounts::of(facts.iter());
         assert_eq!(counts.text(""), "4 facts: 2 code different, 1 code equal, 1 no code (1 with a spotlight)");
-        assert_eq!(counts.text(" (1 with the build code of step 3)"), "4 facts: 2 code different, 1 code equal (1 with the build code of step 3), 1 no code (1 with a spotlight)");
-        assert_eq!(counts.category, vec![(Category::Rename, 1), (Category::Semantics, 2), (Category::Docs, 1)]);
+        assert_eq!(
+            counts.text(" (1 with the build code of step 3)"),
+            "4 facts: 2 code different, 1 code equal (1 with the build code of step 3), 1 no code (1 with a spotlight)"
+        );
+        assert_eq!(
+            counts.category,
+            vec![(Category::Rename, 1), (Category::Semantics, 2), (Category::Docs, 1)]
+        );
         assert_eq!(FactCounts::of([].iter()).text(""), "0 facts");
-        let one = vec![fact(Category::Import, Compare::CodeDifferent, false)];
+        let one = [fact(Category::Import, Compare::CodeDifferent, false)];
         assert_eq!(FactCounts::of(one.iter()).text(""), "1 fact: 1 code different (1 with a mismatch mark)");
     }
 
@@ -1359,9 +1671,15 @@ mod tests {
     fn a_result_with_a_step_that_is_not_checked_is_not_complete_and_not_accepted() {
         let mut report = Report::default();
         assert!(!report.not_complete());
-        report.build_code = Some(BuildCodeNote { changes: vec![change(0, &[0], true)], ran: true });
+        report.build_code = Some(BuildCodeNote {
+            changes: vec![change(0, &[0], true)],
+            ran: true,
+        });
         assert!(!report.not_complete(), "the result ran the build code: it is complete");
-        report.build_code = Some(BuildCodeNote { changes: vec![change(0, &[0], true)], ran: false });
+        report.build_code = Some(BuildCodeNote {
+            changes: vec![change(0, &[0], true)],
+            ran: false,
+        });
         assert!(report.not_complete());
         assert_eq!(step_ranges(&[0, 1, 2, 5]), "steps 0–2, 5");
         assert_eq!(step_ranges(&[4]), "step 4");
@@ -1372,47 +1690,146 @@ mod tests {
 mod config_note_tests {
     use super::*;
 
+    fn gap(name: &str, steps: &[usize]) -> ConfigGap {
+        ConfigGap {
+            name: name.into(),
+            cause: "it does not build before the step: error: no".into(),
+            steps: steps.to_vec(),
+        }
+    }
+
+    fn added(name: &str, steps: &[usize]) -> ConfigAdded {
+        ConfigAdded {
+            name: name.into(),
+            steps: steps.to_vec(),
+        }
+    }
+
     #[test]
     fn the_lines_of_the_configurations_name_each_gap_and_at_most_eight_conditions() {
-        let gap = |name: &str, steps: &[usize]| ConfigGap { name: name.into(), cause: "it does not build before the step: error: no".into(), steps: steps.to_vec() };
         let note = ConfigNote {
             target: "x86_64-unknown-linux-gnu".into(),
             checked: vec!["dev".into(), "release".into()],
-            not_checked: vec![gap("dev, all features", &[0, 1]), gap("release, all features", &[0, 1]), gap("dev, no default features", &[1])],
+            not_checked: vec![
+                gap("dev, all features", &[0, 1]),
+                gap("release, all features", &[0, 1]),
+                gap("dev, no default features", &[1]),
+            ],
             not_covered: (0..10).map(|index| format!("c{index}")).collect(),
             ..ConfigNote::default()
         };
+        check_gap_and_condition_lines(&note);
+        let note = check_one_line_for_one_cause(note);
+        let note = check_smaller_build(note);
+        check_added_configurations(note);
+        check_older_report_and_part_configurations();
+    }
+
+    /// Checks the lines of the gaps and of the conditions.
+    fn check_gap_and_condition_lines(note: &ConfigNote) {
         let lines = note.lines(2);
         assert_eq!(lines[0], "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `release`");
-        assert_eq!(lines[1], "! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no");
-        assert_eq!(lines[2], "! configuration `dev, no default features` is not checked in step 1: it does not build before the step: error: no");
-        assert_eq!(lines[3], "! `cfg` conditions that Semilla did not check: `c0`, `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, and 2 more");
+        assert_eq!(
+            lines[1],
+            "! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no"
+        );
+        assert_eq!(
+            lines[2],
+            "! configuration `dev, no default features` is not checked in step 1: it does not build before the step: error: no"
+        );
+        assert_eq!(
+            lines[3],
+            "! `cfg` conditions that Semilla did not check: `c0`, `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, and 2 more"
+        );
         // An agent command has the count and the first condition (batch 5x, part E).
-        assert_eq!(note.agent_lines(2, false)[3], "! 10 `cfg` conditions that Semilla did not check: `c0`, and 9 more (`semilla status --verbose` shows each one)");
+        assert_eq!(
+            note.agent_lines(2, false)[3],
+            "! 10 `cfg` conditions that Semilla did not check: `c0`, and 9 more (`semilla status --verbose` shows each one)"
+        );
         assert!(note.agent_lines(2, true)[3].ends_with("`c7`, `c8`, `c9`"));
-        let one = ConfigNote { not_covered: vec!["c0".into()], ..note.clone() };
+        let one = ConfigNote {
+            not_covered: vec!["c0".into()],
+            ..note.clone()
+        };
         assert_eq!(one.agent_condition_line(false), one.condition_line());
+    }
+
+    /// Checks one line for one kind of cause, and the note with no gap and no condition.
+    fn check_one_line_for_one_cause(note: ConfigNote) -> ConfigNote {
         // The first error line can be different in each build: one line for one kind of cause.
-        let other = ConfigGap { name: "release, all features".into(), cause: "it does not build before the step: error[E0599]: other".into(), steps: vec![0, 1] };
-        let note = ConfigNote { not_checked: vec![gap("dev, all features", &[0, 1]), other], ..note };
-        assert_eq!(note.gap_lines(2), ["! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no"]);
+        let other = ConfigGap {
+            name: "release, all features".into(),
+            cause: "it does not build before the step: error[E0599]: other".into(),
+            steps: vec![0, 1],
+        };
+        let note = ConfigNote {
+            not_checked: vec![gap("dev, all features", &[0, 1]), other],
+            ..note
+        };
+        assert_eq!(
+            note.gap_lines(2),
+            ["! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error: no"]
+        );
         // No gap and no condition: one line, and the line of the scope (design 35.5).
-        let note = ConfigNote { not_checked: Vec::new(), not_covered: Vec::new(), ..note };
+        let note = ConfigNote {
+            not_checked: Vec::new(),
+            not_covered: Vec::new(),
+            ..note
+        };
         assert_eq!(note.lines(2).len(), 2);
         assert_eq!(note.lines(2)[1], CONFIG_SCOPE);
         assert_eq!(note.agent_lines(2, false)[1], CONFIG_SCOPE);
+        note
+    }
+
+    /// Checks the line of a smaller build.
+    fn check_smaller_build(note: ConfigNote) -> ConfigNote {
         // A smaller build (batch 5t, part C): the note is not a part of the name.
-        let note = ConfigNote { checked: vec!["dev".into(), "dev, no default features (libraries and binaries only)".into()], ..note };
-        assert_eq!(note.checked_line(), "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, no default features` (libraries and binaries only: the other targets do not build)");
+        let note = ConfigNote {
+            checked: vec!["dev".into(), "dev, no default features (libraries and binaries only)".into()],
+            ..note
+        };
+        assert_eq!(
+            note.checked_line(),
+            "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, no default features` (libraries and binaries only: the other targets do not build)"
+        );
+        note
+    }
+
+    /// Checks the mark of an added configuration.
+    fn check_added_configurations(note: ConfigNote) {
         // An added configuration (batch 5u, part C) has a mark. A configuration that only some
         // steps have is not in `checked`: the mark names the steps.
         assert_eq!(note.added_line(), None);
-        let added = |name: &str, steps: &[usize]| ConfigAdded { name: name.into(), steps: steps.to_vec() };
-        let note = ConfigNote { checked: vec!["dev".into(), "dev, features fa".into()], added: vec![added("dev, features fa", &[]), added("dev, features fb", &[1]), added("dev, features fc", &[0, 2])], ..note };
-        assert_eq!(note.checked_line(), "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, features fa` (added for a joint state), `dev, features fb` (added for a joint state in step 1), `dev, features fc` (added for a joint state in steps 0, 2)");
-        assert_eq!(note.added_line().unwrap(), "Semilla added the configurations `dev, features fa`, `dev, features fb`, `dev, features fc` for a joint state");
-        let note = ConfigNote { added: vec![added("dev, features fa", &[])], ..note };
-        assert_eq!(note.added_line().unwrap(), "Semilla added the configuration `dev, features fa` for a joint state");
+        let note = ConfigNote {
+            checked: vec!["dev".into(), "dev, features fa".into()],
+            added: vec![
+                added("dev, features fa", &[]),
+                added("dev, features fb", &[1]),
+                added("dev, features fc", &[0, 2]),
+            ],
+            ..note
+        };
+        assert_eq!(
+            note.checked_line(),
+            "checked configurations (target `x86_64-unknown-linux-gnu`): `dev`, `dev, features fa` (added for a joint state), `dev, features fb` (added for a joint state in step 1), `dev, features fc` (added for a joint state in steps 0, 2)"
+        );
+        assert_eq!(
+            note.added_line().unwrap(),
+            "Semilla added the configurations `dev, features fa`, `dev, features fb`, `dev, features fc` for a joint state"
+        );
+        let note = ConfigNote {
+            added: vec![added("dev, features fa", &[])],
+            ..note
+        };
+        assert_eq!(
+            note.added_line().unwrap(),
+            "Semilla added the configuration `dev, features fa` for a joint state"
+        );
+    }
+
+    /// Checks a report of an older version and the configurations of only some steps.
+    fn check_older_report_and_part_configurations() {
         // A report of an older version has no data.
         let report: Report = serde_json::from_str(r#"{"steps":[],"organization":[],"warnings":[],"accepted":true}"#).unwrap();
         assert!(report.configs.is_none());
@@ -1421,12 +1838,29 @@ mod config_note_tests {
             target: "t".into(),
             checked: vec!["dev".into()],
             in_steps: vec![added("dev, all features", &[1])],
-            same: vec![ConfigSame { name: "dev, no default features".into(), same_as: "dev".into(), steps: vec![0, 1] }, ConfigSame { name: "dev, all features".into(), same_as: "dev".into(), steps: vec![0] }],
+            same: vec![
+                ConfigSame {
+                    name: "dev, no default features".into(),
+                    same_as: "dev".into(),
+                    steps: vec![0, 1],
+                },
+                ConfigSame {
+                    name: "dev, all features".into(),
+                    same_as: "dev".into(),
+                    steps: vec![0],
+                },
+            ],
             ..ConfigNote::default()
         };
-        assert_eq!(part.checked_line(), "checked configurations (target `t`): `dev`, `dev, all features` (only in step 1)");
-        assert_eq!(part.lines(2)[1], "not in the list, because the features are the same (also for `release`): `dev, no default features` = `dev`, `dev, all features` = `dev` in step 0");
+        assert_eq!(
+            part.checked_line(),
+            "checked configurations (target `t`): `dev`, `dev, all features` (only in step 1)"
+        );
+        assert_eq!(
+            part.lines(2)[1],
+            "not in the list, because the features are the same (also for `release`): `dev, no default features` = `dev`, `dev, all features` = `dev` in step 0"
+        );
         let note: ConfigNote = serde_json::from_str(r#"{"target":"t","checked":["dev"],"not_checked":[],"not_covered":[]}"#).unwrap();
-        assert!(note.added.is_empty());
+        assert_eq!(note.added, [] as [ConfigAdded; 0]);
     }
 }
