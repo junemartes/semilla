@@ -6959,6 +6959,21 @@ fn count_after() -> String {
 }
 
 #[test]
+fn an_idle_edit_of_a_binding_that_copies_a_place_keeps_the_doubt_rule() {
+    // Fix round 1 of design 46: rule 3c moves `let s = t;` into its use, so the binding has no
+    // element, and the use belongs to a different edit. The edit of the binding keeps the
+    // doubt rule. The negative is the test below: an init with a call has its own element.
+    let before = "pub fn f(a: u32, t: u32) -> u32 {\n    let s = a;\n    s + 1\n}\n";
+    let after = before.replace("let s = a;", "let s = t;").replace("s + 1", "s + 2");
+    let body = changed_body("demo::f", vec![element_at(before, "s + 1")], vec![element_at(&after, "s + 2")]);
+    let report = run_elements(before, &after, Vec::new(), &ElementBodies(vec![body]));
+    let compare = |text: &str| report.facts.iter().find(|fact| fact.description.contains(text)).map(|fact| fact.compare.clone()).unwrap_or_else(|| panic!("{text}: {report:#?}"));
+    assert_eq!((compare("`a` → `t`"), compare("`1` → `2`")), (Compare::CodeDifferent, Compare::CodeDifferent));
+    assert_eq!((report.mir_map.owners, report.mir_map.equal, report.mir_map.doubt), (1, 0, 1));
+    assert!(super::owners::place_init("let s = t.0;") && super::owners::place_init("&mut t") && !super::owners::place_init("let n = v.len();") && !super::owners::place_init("a / 2"));
+}
+
+#[test]
 fn each_edit_gets_the_compare_result_of_its_own_mir_elements() {
     // Design 40.3: the call in a new form owns no element that differs, and each element that
     // differs has an owner: `code equal`. The literal owns the changed addition.

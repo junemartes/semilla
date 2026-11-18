@@ -388,8 +388,10 @@ fn two_versions_of_a_two_crate_workspace() {
 
     // Batch 5n, A5: `x += y` against `x = x + (y)`, `a > b` against `b < a`, and `a + b` against
     // `b + a` on integers. The optimizer of rustc orders the operands by the source text, and the
-    // printer gives them one order. An operation that is not symmetric stays different.
-    assert!(matches!(status(&results, "core_a::climb"), BodyStatus::Equal { level, .. } if level == "n2"), "{:?}", status(&results, "core_a::climb"));
+    // printer gives them one order. An operation that is not symmetric stays different. Since
+    // fix round 1 of design 46, rule 3c forwards the copy of `x` into both reads of the overflow
+    // check, so level N0 has the proof (before: N2).
+    assert!(matches!(status(&results, "core_a::climb"), BodyStatus::Equal { level, .. } if level == "n0"), "{:?}", status(&results, "core_a::climb"));
     assert!(matches!(status(&results, "core_a::drop_off"), BodyStatus::Different { .. }), "{:?}", status(&results, "core_a::drop_off"));
 
     // Batch 5n: a call of a trait method with a `const` parameter in its arguments

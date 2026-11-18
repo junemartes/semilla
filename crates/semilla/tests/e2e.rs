@@ -4206,9 +4206,10 @@ fn a_trait_fact_of_a_different_configuration_can_change_a_call() {
     // Design 40.5: the category comes from the syntax (a call), not from the compiled code.
     assert!(out.contains("added statement `t.low()` at `shop_core::by_fact/tail` [semantics · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // The control: the calls of an honest rewrite have no rival with such a fact. The step
-    // inlines a variable (design 41.5): one `move` fact.
+    // inlines a variable (design 41.5): one `move` fact. Since fix round 1 of design 46, rule 3c
+    // forwards the copy of `n` into both reads of the overflow check: equal code.
     let out = step("    let n = v.iter().map(|y| y + 1).sum::<u64>();\n    n + a\n", "    v.iter().map(|y| y + 1).sum::<u64>() + a\n", 0);
-    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
+    assert!(out.contains("[move · code equal]") && !out.contains(CONFIG_NOTE) && !out.contains("spotlight") && !out.contains("the call means"), "{out}");
     // A path in the signature of a nested item (`I::Item`) has no type check result in the
     // body around it. The driver must not ask for one.
     let out = step("    let v = first([a].into_iter()).unwrap_or(0);\n    v\n", "    first([a].into_iter()).unwrap_or(0)\n", 0);
@@ -4686,9 +4687,10 @@ fn a_proof_holds_in_each_checked_configuration() {
     assert!(out.contains("[move · code different]") && !out.contains("no compare") && !out.contains("spotlight"), "{out}");
 
     // Part C: the list covers `debug_assertions`, so a call of a function with a definition for
-    // each value gives no note.
+    // each value gives no note. Since fix round 1 of design 46, rule 3c forwards the copy of `b`
+    // into both reads of the overflow check: equal code.
     let out = step(&base.replace("    chk(a) + 1\n", "    let b = chk(a);\n    b + 1\n"), 0);
-    assert!(out.contains("[move · code different]") && !out.contains(CONFIG_NOTE), "{out}");
+    assert!(out.contains("[move · code equal]") && !out.contains(CONFIG_NOTE), "{out}");
 
     // B1: each output for the reviewer names the checked configurations, the target, and the
     // conditions that the list does not cover.
@@ -4842,7 +4844,9 @@ fn a_configuration_that_builds_only_its_libraries_and_binaries_is_checked() {
     // A step that builds: the header names the smaller builds, and no configuration has a gap.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ a / m::lim() }", "{\n    let l = m::lim();\n    a / l\n}"));
     let out = run(repo, &["step", "an honest rewrite"], 0);
-    assert!(out.contains("[move · code different]") && !out.contains("no compare") && !out.contains("not checked"), "{out}");
+    // Since fix round 1 of design 46, rule 3c forwards the copy of `a` into both reads of the
+    // division check, also across the call (no pointer to `a` exists): equal code.
+    assert!(out.contains("[move · code equal]") && !out.contains("no compare") && !out.contains("not checked"), "{out}");
     let out = run(repo, &["status", "--wait", "600"], 0);
     let line = out.lines().find(|line| line.contains("checked configurations (target `")).unwrap_or_default();
     assert!(line.contains("`dev, no default features` (libraries and binaries only: the other targets do not build), `release, no default features` (libraries and binaries only: the other targets do not build)"), "{out}");
@@ -4915,16 +4919,18 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     assert!(out.contains("note: this body uses `#[cfg(not(unix))]`, which Semilla did not check (`shop_core::gate`)") && !out.contains("spotlight:") && out.contains("[semantics · code equal]"), "{out}");
     run(repo, &["undo"], 0);
 
-    // An edit of the code that reads the condition: the compare is different in one profile,
-    // and the same note names the condition. The step needs no reason.
+    // The swap of the operands of the code that reads the condition. Before fix round 1 of
+    // design 46, the copy of `a` had two reads in `dev` (the overflow check) and one in
+    // `release`, so the compare was different in `dev` only. Since then, rule 3c forwards the
+    // copy into both reads: equal code in both profiles, and the same note.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ l0() + a }", "{ a + l0() }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[semantics · code different]") && out.contains(&format!("note: the compiled code is equal in `release`; different in `dev`; {}", &note["note: ".len()..])) && !out.contains("spotlight:"), "{out}");
+    assert!(shown(&out) && !out.contains("different in `dev`"), "{out}");
     run(repo, &["undo"], 0);
     // Negative: a body with no name under `cfg` has no note of a condition.
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("    amount * rate / 100\n}\n\npub fn scaled", "    rate * amount / 100\n}\n\npub fn scaled"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[semantics · code different]") && out.contains("note: the compiled code is equal in `release`; different in `dev`") && !out.contains("which Semilla did not check"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains("code different") && !out.contains("which Semilla did not check"), "{out}");
 }
 
 #[test]
@@ -5209,15 +5215,20 @@ fn rules_5u_setup() -> common::TestDir {
 fn a_read_of_a_local_moves_across_a_call_only_when_no_pointer_to_it_exists() {
     // Batch 5u, rule 3c2 (parts E and F3): the read of a local with no pointer to it gives the
     // same value before and after a call. The compare is the MIR level N0 after the rename
-    // map (design 35.4): rule 3c2 does not run, and the rewrite is `code different`. The
-    // functions have the form of `bs58-c-0001` and `bs58-c-0019`.
+    // map (design 35.4). The functions have the form of `bs58-c-0001` and `bs58-c-0019`.
     let dir = rules_5u_setup();
     let repo = &dir.path().join("repo");
     let out = rules_5u_probe(repo, "i < encode.len()", "encode.len() > i");
-    // Design 40.5, 42: a changed condition is `semantics`.
-    assert!(out.contains("[semantics · code different]") && !out.contains("code equal]"), "{out}");
+    // Design 40.5, 42: a changed condition is `semantics`. Design 46: rule 3c forwards the read
+    // of `i` along each path, also across the two calls of the `const fn` (the `opaque` call of
+    // the driver and `len`). Before 46, rule 3c2 took one call only, and the rewrite was
+    // `code different`.
+    assert!(out.contains("[semantics · code equal]") && !out.contains("code different]"), "{out}");
+    // Since fix round 1 of design 46, rule 3c forwards the copy of `index` into both reads of
+    // the overflow check, also across the call of `valid_up_to` (no pointer to `index` exists):
+    // equal code. Before, the copy had two reads, and the rewrite was `code different`.
     let out = rules_5u_probe(repo, "index += e.valid_up_to();", "index = index + (e.valid_up_to());");
-    assert!(out.contains("[semantics · code different]") && !out.contains("code equal]"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && !out.contains("code different]"), "{out}");
     // Negative tests: the callee can write the place. Each of these steps changes the result
     // of the function. No fact is `neutral`.
     for (old, new) in [
@@ -5258,6 +5269,242 @@ fn a_branch_on_not_equal_is_a_branch_on_equal_only_for_a_primitive_type() {
     let new = "pub fn differ_odd(a: &Odd, b: &Odd) -> u64 {\n    if !(a == b) { 1 } else { 2 }";
     let out = rules_5u_probe(repo, old, new);
     assert!(!out.contains("code equal"), "{out}");
+}
+
+/// The functions for the tests of rule 3c along each path (design 46). The functions `n_*` read
+/// the copy `t` of `s` after a write of `s`.
+const RULES_46: &str = "
+pub fn h46(x: u32) -> u32 {
+    x ^ 5
+}
+
+pub fn bump46(x: &mut u32) {
+    *x = x.wrapping_add(1);
+}
+
+pub fn look46(x: &u32) -> u32 {
+    *x + 1
+}
+
+pub fn pair46(x: u32, y: u32) -> u32 {
+    x ^ y
+}
+
+pub fn ends(a: u32, b: u32) -> u32 {
+    let s = a + b;
+    let t = s * 2;
+    t - a
+}
+
+pub fn ends_q(a: u32, b: u32, o: Option<u32>) -> Option<u32> {
+    let s = a + b;
+    let t = s * 2;
+    Some(t - a)
+}
+
+pub fn late_borrow(a: u32, b: u32) -> u32 {
+    let x = a ^ b;
+    let y = pair46(x, a + b);
+    y
+}
+
+pub async fn later(a: u32, b: u32) -> u32 {
+    let s = a + b;
+    let t = s * 2;
+    t - b
+}
+
+pub fn n_write(a: u32, b: u32) -> u32 {
+    let mut s = a + b;
+    let t = s;
+    s = 9;
+    t + 1
+}
+
+pub fn n_call(a: u32, b: u32) -> u32 {
+    let mut s = a + b;
+    let t = s;
+    s = h46(b);
+    t + 2
+}
+
+pub fn n_arm(a: u32, b: u32, c: bool) -> u32 {
+    let mut s = a + b;
+    let t = s;
+    if c {
+        s = 0;
+    }
+    t + 3
+}
+
+pub fn n_loop(a: u32, b: u32) -> u32 {
+    let mut s = a + b;
+    let t = s;
+    for i in 0..b {
+        s = s.wrapping_add(i);
+    }
+    t + 4
+}
+
+pub fn n_borrow(a: u32, b: u32) -> u32 {
+    let mut s = a + b;
+    let t = s;
+    bump46(&mut s);
+    t + 5
+}
+
+pub fn n_cycle(a: u32, b: u32) -> u32 {
+    let mut s = a + b;
+    let t = s;
+    let mut out = 0;
+    for _ in 0..b {
+        out ^= t;
+        s ^= 1;
+    }
+    out ^ s
+}
+";
+
+#[test]
+fn a_copy_moves_to_its_use_along_each_path_only_when_no_path_changes_its_value() {
+    // Design 46: rule 3c forwards a copy along each path from the copy to the use, not only in
+    // one block. Then an added statement with a block end (an overflow check, a `?`) between a
+    // binding and its use does not change the canonical text of the binding and the use.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", &format!("{FEES}{RULES_46}"));
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "rules"]);
+    let probe = |old: &str, new: &str| -> String {
+        let base = format!("{FEES}{RULES_46}");
+        assert!(base.contains(old), "{old}");
+        write(repo, "crates/shop-core/src/lib.rs", &base.replacen(old, new, 1));
+        let out = run(repo, &["step", "probe"], 0);
+        run(repo, &["undo"], 0);
+        out
+    };
+    // An added `let` with an overflow check, an added `?`, and a borrow after the last use.
+    for (old, new) in [
+        ("    let s = a + b;\n    let t = s * 2;\n    t - a\n", "    let s = a + b;\n    let k = b + 7;\n    let t = s * 2;\n    t - k\n"),
+        ("    let s = a + b;\n    let t = s * 2;\n    Some(t - a)\n", "    let s = a + b;\n    let _k = o?;\n    let t = s * 2;\n    Some(t - a)\n"),
+        ("    let y = pair46(x, a + b);\n    y\n", "    let y = pair46(x, a + b);\n    y + look46(&x)\n"),
+    ] {
+        let out = probe(old, new);
+        assert!(out.contains("[semantics · code different]") && !out.contains("[indirect") && !out.contains("code equal"), "{new}: {out}");
+    }
+    // The needles: the old code reads the copy `t` of `s` after a write of `s`, and the new
+    // code inlines `t` and reads `s`. A write in a statement, by a call, in one arm, and in a
+    // loop (condition 2); a borrow (condition 3); in `n_cycle`, a write after the use in the
+    // block of the use, in a loop that does not run the copy (a cycle). A forward past the
+    // write makes the two sides equal, and the inline gets `code equal`.
+    for (old, new) in [
+        ("    let t = s;\n    s = 9;\n    t + 1\n", "    s = 9;\n    s + 1\n"),
+        ("    let t = s;\n    s = h46(b);\n    t + 2\n", "    s = h46(b);\n    s + 2\n"),
+        ("    let t = s;\n    if c {\n        s = 0;\n    }\n    t + 3\n", "    if c {\n        s = 0;\n    }\n    s + 3\n"),
+        ("    let t = s;\n    for i in 0..b {\n        s = s.wrapping_add(i);\n    }\n    t + 4\n", "    for i in 0..b {\n        s = s.wrapping_add(i);\n    }\n    s + 4\n"),
+        ("    let t = s;\n    bump46(&mut s);\n    t + 5\n", "    bump46(&mut s);\n    s + 5\n"),
+        ("    let t = s;\n    let mut out = 0;\n    for _ in 0..b {\n        out ^= t;\n", "    let mut out = 0;\n    for _ in 0..b {\n        out ^= s;\n"),
+    ] {
+        let out = probe(old, new);
+        assert!(out.contains("inlined variable `t` = `s`") && out.contains("code different]") && !out.contains("code equal"), "{new}: {out}");
+    }
+    // Condition 5: inline assembly on a path and a coroutine body stop the rule. The binding
+    // stays on one side, so the unchanged statements keep an `indirect` fact.
+    let out = probe("    let s = a + b;\n    let t = s * 2;\n    t - a\n", "    let s = a + b;\n    unsafe { core::arch::asm!(\"nop\") };\n    let t = s * 2;\n    t - a\n");
+    assert!(out.contains("[indirect · code different]") && !out.contains("code equal"), "{out}");
+    let out = probe("    let s = a + b;\n    let t = s * 2;\n    t - b\n", "    let s = a + b;\n    let k = b + 7;\n    let t = s * 2;\n    t - k\n");
+    assert!(out.contains("[indirect · code different]") && !out.contains("code equal"), "{out}");
+}
+
+const RULES_46F: &str = "
+pub fn note46(x: u32) {
+    std::hint::black_box(x);
+}
+
+pub fn weight46(x: u32, y: u32) -> u32 {
+    x ^ y
+}
+
+pub fn scale(a: u32, b: u32) -> u32 {
+    let s = a + b;
+    note46(s);
+    s * 2
+}
+
+pub fn count(a: usize, v: &[u32]) -> usize {
+    let n = a / 2;
+    let mut i = 0;
+    let mut t = 0;
+    while i < n {
+        t += v[i] as usize;
+        i += 1;
+    }
+    t
+}
+
+pub fn best(a: u32, b: u32, c: u32) -> u32 {
+    let t = a + b + 1;
+    let u = weight46(c, a);
+    core::cmp::min(t, u)
+}
+
+pub fn twice(a: u32, b: u32) -> u32 {
+    let mut t = (a, b);
+    let n = t.0;
+    note46(n);
+    t.1 = 3;
+    n + 1 + t.1
+}
+
+pub fn alias(a: u32) -> u32 {
+    let s = a / 2;
+    s ^ 1
+}
+";
+
+#[test]
+fn a_binding_that_rule_3c_forwards_on_one_side_keeps_the_cause_of_its_edit() {
+    // Fix round 1 of design 46. Form A: an added or deleted read of a binding changed the count
+    // of its uses, and rule 3c forwarded the kept use on one side only. Form B: a changed init
+    // makes the binding a copy of a place on one side only; test 2b of the dependence gives
+    // the use the causes of the changed locals.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = format!("{FEES}{RULES_46F}");
+    write(repo, "crates/shop-core/src/lib.rs", &base);
+    commit_all(repo, "rules");
+    let probe = |old: &str, new: &str| -> String {
+        assert!(base.contains(old), "{old}");
+        write(repo, "crates/shop-core/src/lib.rs", &base.replacen(old, new, 1));
+        let out = run(repo, &["step", "probe"], 0);
+        run(repo, &["undo"], 0);
+        out
+    };
+    for (old, new) in [
+        // Form A: a deleted and a changed read (a call argument).
+        ("    note46(s);\n    s * 2", "    s * 2"),
+        ("    note46(s);\n    s * 2", "    note46(a);\n    s * 2"),
+        // Form B: a division and an operator with an overflow check; an operator and a call.
+        ("let n = a / 2;", "let n = a * 2;"),
+        ("let t = a + b + 1;", "let t = weight46(a, b);"),
+    ] {
+        let out = probe(old, new);
+        assert!(out.contains("[semantics · code different]") && !out.contains("[indirect") && !out.contains("code equal"), "{new}: {out}");
+    }
+    // The needles: a write of the source place `t.0` between two uses of `n`. Form A forwards
+    // `n` into the first use only. The inline form reads `t.0` after the write: a forward past
+    // the write would make the two sides equal.
+    let out = probe("    note46(n);\n    t.1 = 3;", "    note46(n);\n    t.0 = 9;\n    t.1 = 3;");
+    assert!(out.contains("added statement `t.0 = 9`") && out.contains("[semantics · code different]") && !out.contains("code equal"), "{out}");
+    let out = probe("    let n = t.0;\n    note46(n);\n    t.1 = 3;\n    n + 1", "    note46(t.0);\n    t.0 = 9;\n    t.1 = 3;\n    t.0 + 1");
+    assert!(out.contains("code different]") && !out.contains("code equal"), "{out}");
+    // Safety: an added alias `let s = t;` shadows `s`. Rule 3c forwards it into the use, so it
+    // has no element, and the use has the cause of a different edit (here rule 1 of the edit
+    // `1` → `2`). The alias keeps the doubt rule: not `code equal`.
+    let out = probe("    let s = a / 2;\n    s ^ 1", "    let s = a / 2;\n    let t = a ^ 5;\n    let s = t;\n    s ^ 2");
+    assert!(out.contains("added `let` `let s = t;` at `shop_core::alias/S2` [semantics · code different]") && !out.contains("code equal"), "{out}");
+    let out = probe("    let s = a / 2;\n    s ^ 1", "    let s = a / 3;\n    let t = a ^ 5;\n    let s = t;\n    s ^ 1");
+    assert!(out.contains("added `let` `let s = t;` at `shop_core::alias/S2` [semantics · code different]") && !out.contains("code equal"), "{out}");
 }
 
 #[test]
@@ -6382,8 +6629,14 @@ fn a_small_edit_gives_no_indirect_fact_for_the_code_around_it() {
     write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod d1;\n");
     write(repo, "crates/shop-core/src/d1.rs", D1_FORMS);
     commit_all(repo, "the forms");
+    // Since fix round 1 of design 46, rule 3c forwards the copy of `transpositions` into both
+    // reads of the division: the compound assignment and its long form have equal code.
+    write(repo, "crates/shop-core/src/d1.rs", &D1_FORMS.replacen("    transpositions /= 2;", "    transpositions = transpositions / (2);", 1));
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(!out.contains("[indirect") && out.contains("[semantics · code equal]") && !out.contains("code different]"), "{out}");
+    run(repo, &["undo"], 0);
+    write(repo, "crates/shop-core/src/d1.rs", D1_FORMS);
     for (from, to) in [
-        ("    transpositions /= 2;", "    transpositions = transpositions / (2);"),
         ("        while i < encode.len() {", "        while !(i < encode.len()) {"),
         ("        if self.keys[at] == 0 {", "        if !(self.keys[at] == 0) {"),
         ("        self.0.zeroize();\n", ""),

@@ -209,7 +209,12 @@ pub fn assign(input: &Input, report: &mut StepReport) {
                 // Safety (design 44): a link can take an element that an edit of a different
                 // place changes (a type, a path, a pattern, a signature, a bound, a `use` line).
                 // With a link in the body, such an edit keeps the doubt rule.
-                let (risky, safe): (Vec<usize>, Vec<usize>) = idle.into_iter().partition(|edit| own.linked > 0 && remote_form(&input.edits[*edit]));
+                // Safety (fix round 1 of design 46): rule 3c of the normal form moves the value
+                // of a binding that copies a place into its uses, so the binding has no element,
+                // and a use can have the cause of a different edit (rule 1 at the use, or a
+                // dependence). So an idle edit of a binding keeps the doubt rule. A rename and a
+                // move keep their rules.
+                let (risky, safe): (Vec<usize>, Vec<usize>) = idle.into_iter().partition(|edit| (own.linked > 0 && remote_form(&input.edits[*edit])) || (binding_form(&input.edits[*edit]) && !refactoring.contains(edit)));
                 map.idle_equal.extend(safe);
                 map.idle_doubt.extend(risky.iter().copied());
                 let mut kept = owning;
@@ -578,6 +583,38 @@ fn remote_form(edit: &Edit) -> bool {
         || role.starts_with("param")
         || edit.attr_before.as_deref() == Some("use")
         || edit.attr_after.as_deref() == Some("use")
+}
+
+/// True for an edit of a binding whose whole value rule 3c (or 3d) of the normal form can move
+/// into its uses, at other places (fix round 1 of design 46): a pattern (of a `let`, an `if
+/// let`, a `for`), or a `let` statement or its init where the init is a place on one side (`t`,
+/// `t.0`, `&t`). An init with a call or an operator keeps its own elements at its place.
+fn binding_form(edit: &Edit) -> bool {
+    let roles: Vec<String> = [edit.before.as_ref(), edit.after.as_ref()].into_iter().flatten().flat_map(|anchor| anchor.path.iter()).map(|segment| segment.to_string()).collect();
+    if roles.iter().any(|role| role == "pat") {
+        return true;
+    }
+    let statement = [edit.node_before, edit.node_after].into_iter().flatten().any(|kind| kind == "let");
+    let texts = [edit.source_before.as_ref().or(edit.text_before.as_ref()), edit.source_after.as_ref().or(edit.text_after.as_ref())];
+    (statement || roles.iter().any(|role| role == "init")) && texts.into_iter().flatten().any(|text| place_init(text))
+}
+
+/// True if the init of a `let` statement text, or an init text, is a place: a name with fields
+/// (`t`, `t.0`, `self.a`), with a borrow or not. A part of an init (`0` of `t.0`, also a literal
+/// such as `2`) counts too: a doubt is safe.
+pub(crate) fn place_init(text: &str) -> bool {
+    let text = text.trim().trim_end_matches(';').trim();
+    let init = match text.strip_prefix("let ") {
+        Some(rest) => match rest.split_once('=') {
+            Some((_, init)) => init,
+            None => return false,
+        },
+        None => text,
+    };
+    let init = init.trim();
+    let init = init.strip_prefix("&mut ").or_else(|| init.strip_prefix('&')).unwrap_or(init);
+    let init: String = init.chars().filter(|c| !c.is_whitespace()).collect();
+    !init.is_empty() && init.split('.').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }
 
 /// Adds the symbols of the links of a body to the facts of their edits (design 44).

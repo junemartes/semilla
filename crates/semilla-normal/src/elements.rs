@@ -11,7 +11,8 @@
 //!    in the order of their numbers first: the printer sorts them as text (`_100` before `_99`).
 //! 2. A copy into a temporary (`_t = _p`) that the next element of the same block uses one time,
 //!    with no other use, folds into that element: the use reads `_p`. (One side can have the
-//!    copy and the other not: the normal form forwards a copy only with no borrow of `_p`.)
+//!    copy and the other not: the normal form forwards a copy only if no borrow of `_p` has a
+//!    path to the use, design 46.)
 //! 3. The elements go in the order of the source (the start of the place, the longer place
 //!    first; an element with no place takes the place of an element of its own block), not in the
 //!    order of the blocks. So a swap of two branch targets, which changes
@@ -394,9 +395,25 @@ enum Number {
 /// The key of an element (its text without the numbers of the locals and the blocks), and the
 /// numbers in order.
 fn key(text: &str) -> (String, Vec<Number>) {
-    let bytes = text.as_bytes();
+    let spans = number_spans(text);
     let mut out = String::with_capacity(text.len());
-    let mut numbers = Vec::new();
+    let mut numbers = Vec::with_capacity(spans.len());
+    let mut at = 0;
+    for (start, end, number) in spans {
+        let prefix = if matches!(number, Number::Local(_)) { 1 } else { 2 };
+        out.push_str(&text[at..start + prefix]);
+        numbers.push(number);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    (out, numbers)
+}
+
+/// The numbers of an element text in order: the start and the end of each local (`_3`) and
+/// each block (`bb4`), and the number.
+fn number_spans(text: &str) -> Vec<(usize, usize, Number)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
     let mut at = 0;
     let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
     while at < bytes.len() {
@@ -413,17 +430,74 @@ fn key(text: &str) -> (String, Vec<Number>) {
             let end = at + prefix + digits;
             if digits > 0 && (end == bytes.len() || !word(bytes[end])) {
                 let value = text[at + prefix..end].parse().unwrap_or(usize::MAX);
-                numbers.push(if prefix == 1 { Number::Local(value) } else { Number::Block(value) });
-                out.push_str(&text[at..at + prefix]);
+                out.push((at, end, if prefix == 1 { Number::Local(value) } else { Number::Block(value) }));
                 at = end;
                 continue;
             }
         }
-        let next = text[at..].chars().next().map_or(1, char::len_utf8);
-        out.push_str(&text[at..at + next]);
-        at += next;
+        at += text[at..].chars().next().map_or(1, char::len_utf8);
     }
-    (out, numbers)
+    out
+}
+
+/// The text of an element with each field or downcast projection of a changed local replaced
+/// by the local (`(_3.0: u32)` and `((_3 as Some).Some.0: u32)` give `_3`; a deref or an index
+/// stops it), and for each local of the text in order, the projection that went away (its key
+/// with the types as `?T`) and the type of the field that it reads, or `None` (fix round 1 of
+/// design 46). Rule 3c of the normal form forwards such a place, not a deref or an index.
+fn unprojected(text: &str, changed: &BTreeSet<usize>) -> (String, Vec<(usize, Option<(String, String)>)>) {
+    // The end of the parenthesis that opens at `open`.
+    let matching = |open: usize| -> Option<usize> {
+        let mut depth = 0usize;
+        for (at, c) in text[open..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(open + at);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    // A layer after the inner place: `.0: T`, `.Some.0: T` (a field), or ` as Some` (a downcast).
+    let plain = |part: &str| !part.is_empty() && !part.contains([' ', '(', ')', ',']);
+    let layer = |rest: &str| -> bool {
+        if let Some(path) = rest.strip_prefix('.').and_then(|rest| rest.split_once(": ")).map(|(path, _)| path) {
+            return plain(path) && path.ends_with(|c: char| c.is_ascii_digit());
+        }
+        rest.strip_prefix(" as ").is_some_and(plain)
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut tags = Vec::new();
+    let mut at = 0;
+    for (start, end, number) in number_spans(text) {
+        let Number::Local(local) = number else { continue };
+        let mut range = (start, end);
+        // The type of the field that the outermost layer reads (none for a downcast).
+        let mut field = String::new();
+        if changed.contains(&local) {
+            while range.0 > at && text.as_bytes()[range.0 - 1] == b'(' {
+                match matching(range.0 - 1) {
+                    Some(close) if layer(&text[range.1..close]) => {
+                        field = text[range.1..close].split_once(": ").map(|(_, ty)| ty.to_string()).unwrap_or_default();
+                        range = (range.0 - 1, close + 1);
+                    }
+                    _ => break,
+                }
+            }
+        }
+        let tag = (range != (start, end)).then(|| (key(&projected(&text[range.0..range.1], &BTreeSet::from([local]))).0, field));
+        out.push_str(&text[at..range.0]);
+        out.push_str(&text[start..end]);
+        tags.push((local, tag));
+        at = range.1;
+    }
+    out.push_str(&text[at..]);
+    (out, tags)
 }
 
 /// The operations whose operands the printer sorts by their text (see the driver, `print.rs`,
@@ -955,6 +1029,11 @@ fn shape(key: &str, types: &[&str]) -> String {
 ///    other side after the types of the changed locals of each are replaced (and the unwind
 ///    action: an unwind edge that one side has and the other side has not needs a first
 ///    element of the cleanup block that differs, and takes its causes);
+/// 2b. it has no such pair, and its key is equal to the key of an element that differs on the
+///    other side after each field or downcast projection of a changed local is removed, with
+///    at least one removed projection, and with equal projections where both sides have one
+///    (fix round 1 of design 46: rule 3c forwards a binding that copies a place on one side
+///    only); then the checks of test 1 apply;
 /// 3. it has no counterpart, and it writes a changed temporary that a changed element reads,
 ///    or it drops a changed local, or it borrows or dereferences a changed local (an auto-ref):
 ///    the element exists for that local.
@@ -1013,11 +1092,11 @@ fn dependence(sides: &[Side; 2], locals: &Bijection, partner: &[Option<usize>], 
             _ => false,
         }
     };
-    // The check of a counterpart pair (old `a`, new `b`): each local that does not agree with
-    // the map is changed on the two sides, each target fits, and an unwind edge of one side
-    // only goes to a cleanup block whose first element differs. The groups, or `None`.
-    let mut check = |a: usize, b: usize| -> Option<Vec<Group>> {
-        let (old_numbers, new_numbers) = (&sides[0].keys[a].1, &sides[1].keys[b].1);
+    // The check of a counterpart pair (old `a`, new `b`, with the numbers of their keys): each
+    // local that does not agree with the map is changed on the two sides, each target fits,
+    // and an unwind edge of one side only goes to a cleanup block whose first element differs.
+    // The groups, or `None`.
+    let mut check = |a: usize, b: usize, old_numbers: &[Number], new_numbers: &[Number]| -> Option<Vec<Group>> {
         let (old_text, new_text) = (sides[0].parsed.elements[a].0, sides[1].parsed.elements[b].0);
         let (old_unwind, new_unwind) = (unwind_of(old_text), unwind_of(new_text));
         let strip = |numbers: &[Number], unwind: Option<Option<usize>>| -> Vec<Number> {
@@ -1104,7 +1183,7 @@ fn dependence(sides: &[Side; 2], locals: &Bijection, partner: &[Option<usize>], 
         }
         done[0][a] = true;
         done[1][b] = true;
-        if let Some(found) = check(a, b) {
+        if let Some(found) = check(a, b, &sides[0].keys[a].1, &sides[1].keys[b].1) {
             out[0][a].extend(found.iter().cloned());
             out[1][b].extend(found);
         }
@@ -1132,9 +1211,71 @@ fn dependence(sides: &[Side; 2], locals: &Bijection, partner: &[Option<usize>], 
         let (a, b) = (old_list[i].0, new_list[j].0);
         done[0][a] = true;
         done[1][b] = true;
-        if let Some(found) = check(a, b) {
+        if let Some(found) = check(a, b, &sides[0].keys[a].1, &sides[1].keys[b].1) {
             out[0][a].extend(found.iter().cloned());
             out[1][b].extend(found);
+        }
+    }
+    // Test 2b (fix round 1 of design 46): the elements with no pair yet, by the key with each
+    // field or downcast projection of a changed local removed. Rule 3c of the normal form
+    // forwards a binding that copies a place (`n = (_4.0: usize)`) on one side only, so the use
+    // reads the place on that side and the binding on the other side. A pair needs a removed
+    // projection, and at each local the projections of the two sides are equal, or one side
+    // has none. The numbers come from the text with no fold of a copy. The type of the field
+    // that a projection reads counts as a type of its local: the bare local of the other side
+    // has this type.
+    let stripped = |side: usize| -> Vec<(usize, String, Vec<Number>, Vec<Option<String>>)> {
+        let data = &sides[side];
+        let mut list: Vec<(usize, String, Vec<Number>, Vec<Option<String>>)> = (0..data.keys.len())
+            .filter(|index| !data.same[*index] && !done[side][*index])
+            .map(|index| {
+                let (text, removed) = unprojected(data.parsed.elements[index].0, &changed[side]);
+                let (bare, numbers) = key(&symmetric_order(&projected(&text, &changed[side])));
+                // The symmetric order swaps only two different locals, so the k-th number of a
+                // local is its k-th place in the text.
+                let mut places: BTreeMap<usize, std::collections::VecDeque<Option<(String, String)>>> = BTreeMap::new();
+                for (local, tag) in removed {
+                    places.entry(local).or_default().push_back(tag);
+                }
+                let mut types: Vec<&str> = Vec::new();
+                let mut fields: Vec<String> = Vec::new();
+                let mut tags = Vec::with_capacity(numbers.len());
+                for number in &numbers {
+                    let Number::Local(local) = number else {
+                        tags.push(None);
+                        continue;
+                    };
+                    let tag = places.get_mut(local).and_then(|list| list.pop_front()).flatten();
+                    if changed[side].contains(local) {
+                        types.extend(typed(side, *local));
+                    }
+                    tags.push(tag.map(|(tag, field)| {
+                        fields.push(field);
+                        tag
+                    }));
+                }
+                types.extend(fields.iter().map(String::as_str));
+                (index, shape(&bare, &types), numbers, tags)
+            })
+            .collect();
+        list.sort_by_key(|(index, ..)| (place_of(&data.ranges[near(data.blocks, data.ranges, *index)]).map(|place| (place.file.clone(), place.start, usize::MAX - place.end)), *index));
+        list
+    };
+    let (old_list, new_list) = (stripped(0), stripped(1));
+    let old_shapes: Vec<String> = old_list.iter().map(|(_, shape, ..)| shape.clone()).collect();
+    let new_shapes: Vec<String> = new_list.iter().map(|(_, shape, ..)| shape.clone()).collect();
+    for (i, j) in align(&old_shapes, &new_shapes, |_, _| false) {
+        let ((a, _, old_numbers, old_tags), (b, _, new_numbers, new_tags)) = (&old_list[i], &new_list[j]);
+        let removed = old_tags.iter().chain(new_tags).any(Option::is_some);
+        let agree = old_tags.len() == new_tags.len() && old_tags.iter().zip(new_tags).all(|(x, y)| x.is_none() || y.is_none() || x == y);
+        if !removed || !agree {
+            continue;
+        }
+        if let Some(found) = check(*a, *b, old_numbers, new_numbers) {
+            done[0][*a] = true;
+            done[1][*b] = true;
+            out[0][*a].extend(found.iter().cloned());
+            out[1][*b].extend(found);
         }
     }
     // Test 3: an element with no counterpart that writes a changed temporary for a changed
@@ -1385,6 +1526,53 @@ mod tests {
         let found = super::diff((&old, &record_at(&[0, 10, 20])), (&new, &record_at(&[0, 5, 10, 20]))).unwrap();
         assert!(found.old.iter().chain(&found.new).all(|element| element.sources.is_empty()), "{found:?}");
         assert!(!found.new.is_empty());
+    }
+
+    #[test]
+    fn a_projection_of_a_changed_local_goes_away_only_for_a_field_or_a_downcast() {
+        // Fix round 1 of design 46: the forms of a place that rule 3c forwards.
+        let changed = BTreeSet::from([4, 5]);
+        let (text, tags) = unprojected("_0 = Lt(_3, (_4.0: usize))", &changed);
+        assert_eq!(text, "_0 = Lt(_3, _4)");
+        assert_eq!(tags, vec![(0, None), (3, None), (4, Some(("(_.0: ?T)".to_string(), "usize".to_string())))]);
+        let (text, tags) = unprojected("_3 = f(((_5 as std::ops::ControlFlow::Continue).std::ops::ControlFlow::Continue.0: u32)) -> [return: bb1, unwind continue]", &changed);
+        assert_eq!(text, "_3 = f(_5) -> [return: bb1, unwind continue]");
+        assert_eq!(tags[1].1, Some(("((_ as std::ops::ControlFlow::Continue).std::ops::ControlFlow::Continue.0: ?T)".to_string(), "u32".to_string())));
+        // Two fields of one local: each place keeps its own projection.
+        let (text, tags) = unprojected("_8 = Eq((_4.0: usize), (_4.1: usize))", &changed);
+        assert_eq!(text, "_8 = Eq(_4, _4)");
+        assert!(tags[1].1.as_ref().is_some_and(|(tag, _)| tag == "(_.0: ?T)") && tags[2].1.as_ref().is_some_and(|(tag, _)| tag == "(_.1: ?T)"), "{tags:?}");
+        // A deref, a local that is not changed, and the parenthesis of a call stay.
+        for text in ["_0 = ((*_4).0: u32)", "_0 = Lt(_3, (_6.0: usize))", "_2 = f(_4, _5) -> [return: bb1, unwind continue]"] {
+            let (out, tags) = unprojected(text, &changed);
+            assert!(out == text && tags.iter().all(|(_, tag)| tag.is_none()), "{text}: {out} {tags:?}");
+        }
+    }
+
+    #[test]
+    fn a_use_that_reads_a_forwarded_place_on_one_side_takes_the_causes_of_the_changed_locals() {
+        // Fix round 1 of design 46, test 2b: `let n = a / 2;` → `let n = a * 2;` with the use
+        // `a < n`. The new binding copies a place (`(_2.0: usize)`), and rule 3c forwards it
+        // into the use on that side only.
+        let old = typed_body("fn _(_1: usize) -> bool", &[(0, "bool"), (2, "usize")], &[&["_2 = Div(_1, const usize = 2)", "_0 = Lt(_1, _2)", "return"]]);
+        let new = typed_body("fn _(_1: usize) -> bool", &[(0, "bool"), (2, "(usize, bool)")], &[&["_2 = CheckedMul(_1, const usize = 2)", "assert(!(_2.1: bool), \"x\") -> [success: bb1, unwind continue]"], &["_0 = Lt(_1, (_2.0: usize))", "return"]]);
+        let found = super::diff((&old, &record_at(&[0, 10, 20])), (&new, &record_at(&[0, 5, 10, 20]))).unwrap();
+        let at = |list: &[Element], start: usize| list.iter().find(|element| element.tokens.as_ref().is_some_and(|place| place.start == start)).cloned().unwrap_or_else(|| panic!("{start}: {found:?}"));
+        let (use_old, use_new) = (at(&found.old, 10), at(&found.new, 10));
+        assert_eq!(use_old.sources, use_new.sources, "{found:?}");
+        let writers = [Source::Element(0, Some(Place { file: "src/lib.rs".into(), start: 0, end: 5 }), None), Source::Element(1, Some(Place { file: "src/lib.rs".into(), start: 0, end: 5 }), None)];
+        assert!(writers.iter().all(|writer| use_new.sources.iter().any(|group| group.sources.contains(writer))), "{use_new:?}");
+        // Negative: the place is a field of a parameter, which is not changed (`let (n, _) =
+        // pair;`). The use reads a different value: no cause.
+        let old = typed_body("fn _(_1: usize, _2: (usize, usize)) -> bool", &[(0, "bool"), (3, "usize")], &[&["_3 = Div(_1, const usize = 2)", "_0 = Lt(_1, _3)", "return"]]);
+        let new = typed_body("fn _(_1: usize, _2: (usize, usize)) -> bool", &[(0, "bool")], &[&["_0 = Lt(_1, (_2.0: usize))", "return"]]);
+        let found = super::diff((&old, &record_at(&[0, 10, 20])), (&new, &record_at(&[10, 20]))).unwrap();
+        assert!(at(&found.old, 10).sources.is_empty() && at(&found.new, 10).sources.is_empty(), "{found:?}");
+        // Negative: two different fields of changed locals. The projections do not agree.
+        let old = typed_body("fn _(_1: usize) -> bool", &[(0, "bool"), (2, "(usize, usize)")], &[&["_2 = f(_1) -> [return: bb1, unwind continue]"], &["_0 = Lt(_1, (_2.0: usize))", "return"]]);
+        let new = typed_body("fn _(_1: usize) -> bool", &[(0, "bool"), (2, "(usize, usize, usize)")], &[&["_2 = g(_1) -> [return: bb1, unwind continue]"], &["_0 = Lt(_1, (_2.1: usize))", "return"]]);
+        let found = super::diff((&old, &record_at(&[0, 10, 20])), (&new, &record_at(&[0, 10, 20]))).unwrap();
+        assert!(at(&found.old, 10).sources.is_empty() && at(&found.new, 10).sources.is_empty(), "{found:?}");
     }
 
     #[test]
