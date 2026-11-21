@@ -7004,3 +7004,23 @@ fn a_link_never_takes_the_region_of_a_move() {
         assert!(fact_line(&out, moved).ends_with("[semantics · code different]"), "{form}\n{out}");
     }
 }
+
+/// Design 47 (G1): no order in the canonical text reads the text of a local number. The new
+/// `let` gives the temporaries of `(b + 1) * (c + 1)` numbers with two digits, and the order of
+/// the two operands stays. The step has no `indirect` fact. Negative: a swap of the operands of
+/// a subtraction stays `code different`.
+#[test]
+fn a_new_local_number_does_not_change_the_order_of_two_operands() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/order.rs";
+    let base = "pub fn f(a: u32, b: u32, c: u32, d: u32) -> u32 {\n    let p0 = a / 2;\n    let p1 = d / 3;\n    let m = (b + 1) * (c + 1);\n    m ^ p0 ^ p1\n}\n\npub fn g(a: u32, b: u32) -> u32 {\n    a - b\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\npub mod order;\n");
+    write(repo, file, base);
+    commit_all(repo, "order");
+    let added = base.replace("    let m = ", "    let e = a / 99;\n    let m = ").replace("m ^ p0 ^ p1", "m ^ p0 ^ p1 ^ e");
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &added)], "add");
+    assert!(out.starts_with("accepted") && !out.contains("[indirect") && out.contains("code different]"), "{out}");
+    let out = step_and_undo(repo, &[(file, base)], &[(file, &base.replace("a - b", "b - a"))], "swap");
+    assert!(out.starts_with("accepted") && !out.contains("code equal]") && out.contains("code different]"), "{out}");
+}

@@ -7,8 +7,9 @@
 //!
 //! The alignment does not depend on the numbers of the locals and of the blocks:
 //! 1. The key of an element is its text with each local number and each block number removed
-//!    (`_3 = Add(_1, _2)` gives `_ = Add(_, _)`). The two locals of a symmetric operation go
-//!    in the order of their numbers first: the printer sorts them as text (`_100` before `_99`).
+//!    (`_3 = Add(_1, _2)` gives `_ = Add(_, _)`). The printer gives the operands of a symmetric
+//!    operation an order that does not read the text of a local number (design 47, G1). A text
+//!    with a removed projection gets the order of two locals again (`symmetric_order`).
 //! 2. A copy into a temporary (`_t = _p`) that the next element of the same block uses one time,
 //!    with no other use, folds into that element: the use reads `_p`. (One side can have the
 //!    copy and the other not: the normal form forwards a copy only if no borrow of `_p` has a
@@ -500,14 +501,14 @@ fn unprojected(text: &str, changed: &BTreeSet<usize>) -> (String, Vec<(usize, Op
     (out, tags)
 }
 
-/// The operations whose operands the printer sorts by their text (see the driver, `print.rs`,
-/// `binary`): the order of the operands has no effect.
+/// The operations whose operands the printer sorts (see the driver, `print.rs`, `binary`): the
+/// order of the operands has no effect.
 const SYMMETRIC: &[&str] = &["Add(", "Mul(", "BitAnd(", "BitOr(", "BitXor(", "Eq(", "Ne(", "AddUnchecked(", "MulUnchecked(", "CheckedAdd(", "CheckedMul("];
 
 /// The text of an element with the two locals of each symmetric operation in the order of their
-/// numbers. The printer sorts them by their text, and `_100` comes before `_99`: a new local
-/// before a statement changed the order of the operands of an unchanged statement (fix
-/// round 2). The numbers follow the order of the first use, as on the other side.
+/// numbers. This is the tie rule of the printer (design 47, G1), for a text that the verifier
+/// changes after the print: [`projected`] removes a projection, and the printer sorted the
+/// operand with the projection. The text of the printer itself needs no new order.
 fn symmetric_order(text: &str) -> std::borrow::Cow<'_, str> {
     if !SYMMETRIC.iter().any(|op| text.contains(op)) {
         return std::borrow::Cow::Borrowed(text);
@@ -716,7 +717,7 @@ pub fn diff(old: (&str, &RecordElements), new: (&str, &RecordElements)) -> Optio
     }
     let [(old, old_ranges), (new, new_ranges)] = sides;
     let (old_ranges, new_ranges) = (old_ranges?, new_ranges?);
-    let keys = |parsed: &Parsed| -> Vec<(String, Vec<Number>)> { parsed.elements.iter().map(|(text, _)| key(&symmetric_order(text))).collect() };
+    let keys = |parsed: &Parsed| -> Vec<(String, Vec<Number>)> { parsed.elements.iter().map(|(text, _)| key(text)).collect() };
     let (mut old_keys, mut new_keys) = (keys(&old), keys(&new));
     let args = old.args.min(new.args);
     // Step 1: a copy into a temporary that the next element uses one time folds into that
@@ -1448,17 +1449,25 @@ mod tests {
     }
 
     #[test]
-    fn the_operands_of_a_symmetric_operation_go_in_the_order_of_their_numbers() {
-        // Fix round 2: the printer sorts `_100` before `_99`. A removed local renumbers the
-        // locals, and an unchanged addition got a new order of its operands.
+    fn the_key_keeps_the_order_of_the_operands_that_the_printer_gives() {
+        // Design 47, G1: the printer sorts the operands of a symmetric operation with no read of
+        // the text of a local number. The element compare keeps that order. A removed local
+        // gives new numbers, and the map of the locals stays one-to-one.
+        let old = text(&["_2 = Add(_1, _3)", "_0 = _2", "return"]);
+        let new = text(&["_3 = Add(_1, _2)", "_0 = _3", "return"]);
+        let found = super::diff((&old, &record(3)), (&new, &record(3))).unwrap();
+        assert!(found.old.is_empty() && found.new.is_empty(), "{found:?}");
+        // The tie rule for a text that the verifier changes after the print.
         assert_eq!(symmetric_order("_101 = CheckedAdd(_100, _99)"), "_101 = CheckedAdd(_99, _100)");
         assert_eq!(symmetric_order("assert(!(_101.1: bool), overflow Add(_100, _99)) -> [success: bb72]"), "assert(!(_101.1: bool), overflow Add(_99, _100)) -> [success: bb72]");
         assert_eq!(symmetric_order("_3 = Sub(_10, _9)"), "_3 = Sub(_10, _9)");
         assert_eq!(symmetric_order("_3 = Add(_10, const u32 = 1)"), "_3 = Add(_10, const u32 = 1)");
-        let old = text(&["_2 = Add(_3, _1)", "_0 = _2", "return"]);
-        let new = text(&["_3 = Add(_2, _1)", "_0 = _3", "return"]).replace("let _2: u32;\n    let _3: u32;", "let _2: u32;\n    let _3: u32;");
+        // Negative: a swap of the operands that the printer keeps is a change (`Sub`, or an
+        // addition of a type with no exact symmetric operation).
+        let old = text(&["_3 = Sub(_1, _2)", "_0 = _3", "return"]);
+        let new = text(&["_3 = Sub(_2, _1)", "_0 = _3", "return"]);
         let found = super::diff((&old, &record(3)), (&new, &record(3))).unwrap();
-        assert!(found.old.is_empty() && found.new.is_empty(), "{found:?}");
+        assert!(!found.old.is_empty() && !found.new.is_empty(), "{found:?}");
     }
 
     /// A body with the given signature line, locals, and blocks.

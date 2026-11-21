@@ -91,6 +91,9 @@ pub struct Printer {
     pub config: Vec<String>,
     /// The depth of the promoted bodies that the printer prints now.
     promoted_depth: usize,
+    /// The local numbers of a sort key (design 47, G1). While it is set, `place` prints the
+    /// mark `_#` in place of each local number, and records the number here.
+    numbers: Option<Vec<usize>>,
     /// The body that the printer prints now.
     ctx: BodyCtx,
 }
@@ -592,7 +595,8 @@ impl Printer {
     /// on the order of the source text. So `x += y` and `x = x + (y)` can get different texts.
     /// The operands are places and constants: the read of an operand has no effect, and the
     /// statements before the operation evaluate them. So for the types on the list below:
-    /// - a symmetric operation prints the operand with the smaller text first;
+    /// - a symmetric operation prints the operand with the smaller sort key first (`operand_key`:
+    ///   no order depends on the text of a local number, design 47);
     /// - `Gt(a, b)` prints as `Lt(b, a)`, and `Ge(a, b)` prints as `Le(b, a)`.
     ///
     /// The list has the types with an exact symmetric operation: the integers, `bool`, and
@@ -608,7 +612,7 @@ impl Printer {
                     name = if matches!(op, BinOp::Gt) { "Lt" } else { "Le" }.to_string();
                     std::mem::swap(&mut first, &mut second);
                 }
-                BinOp::Add | BinOp::AddUnchecked | BinOp::Mul | BinOp::MulUnchecked | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Eq | BinOp::Ne if first > second => {
+                BinOp::Add | BinOp::AddUnchecked | BinOp::Mul | BinOp::MulUnchecked | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Eq | BinOp::Ne if self.operand_key(left) > self.operand_key(right) => {
                     std::mem::swap(&mut first, &mut second);
                 }
                 _ => {}
@@ -635,8 +639,32 @@ impl Printer {
         Some(ty)
     }
 
+    /// The text of a local. In a sort key, the text is one mark, and the key keeps the number.
+    fn local(&mut self, local: usize) -> String {
+        match &mut self.numbers {
+            Some(numbers) => {
+                numbers.push(local);
+                "_#".to_string()
+            }
+            None => format!("_{local}"),
+        }
+    }
+
+    /// The sort key of an operand (design 47, G1): its text with one mark in place of each local
+    /// number, then the local numbers as numbers, in the order of the text. The text of a number
+    /// is never a part of an order: `_10` comes after `_9`.
+    fn operand_key(&mut self, operand: &Operand) -> (String, Vec<usize>) {
+        let outer = self.numbers.replace(Vec::new());
+        // The key adds no second record of a use of the build configuration.
+        let config = self.config.len();
+        let text = self.operand(operand);
+        self.config.truncate(config);
+        let numbers = std::mem::replace(&mut self.numbers, outer).unwrap_or_default();
+        (text, numbers)
+    }
+
     pub fn place(&mut self, place: &Place) -> String {
-        let mut text = format!("_{}", place.local);
+        let mut text = self.local(place.local);
         // The type of the place so far, and the variant of a downcast just before.
         let mut base = self.ctx.locals.get(place.local).copied();
         let mut variant = None;
@@ -658,7 +686,7 @@ impl Printer {
                     };
                     format!("({text}.{name}: {})", self.ty(*ty))
                 }
-                ProjectionElem::Index(local) => format!("{text}[_{local}]"),
+                ProjectionElem::Index(local) => format!("{text}[{}]", self.local(*local)),
                 ProjectionElem::ConstantIndex { offset, min_length, from_end } => {
                     format!("{text}[{}{offset} of {min_length}]", if *from_end { "-" } else { "" })
                 }

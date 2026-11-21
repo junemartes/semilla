@@ -2219,7 +2219,7 @@ An item with no name of its own had the name `item@LINE`. A new line above it ga
 
 The optimizer of rustc gives the operands of a symmetric operation an order that depends on the source text. So `x += y` and `x = x + (y)` got different MIR texts. The operands are places and constants: the read of an operand has no effect. Rule, for the types on the allow list (the integers, `bool`, `char`):
 
-- a symmetric operation prints the operand with the smaller text first;
+- a symmetric operation prints the operand with the smaller text first (since 47: the smaller sort key, which has no text of a local number);
 - `Gt(a, b)` prints as `Lt(b, a)`, and `Ge(a, b)` prints as `Le(b, a)`.
 
 Each other type (a float, a pointer) keeps the order of rustc.
@@ -3333,7 +3333,7 @@ The rule above each other rule stays: no change of the code is without a fact, a
 
 **The alignment (Decided by Claude, `semilla_normal::elements`; fix round 1).**
 
-1. The key of an element is its text with each local number and each block number removed. **Fix round 2:** the two locals of a symmetric operation (`Add`, `Mul`, `BitAnd`, `BitOr`, `BitXor`, `Eq`, `Ne`, and the checked forms) go in the order of their numbers first. Cause: the printer sorts them as text, so `_100` comes before `_99`. A removed statement renumbered the locals, and `i + search_range` in `strsim::generic_jaro` printed as `CheckedAdd(_100, _99)` before the step and `CheckedAdd(_97, _98)` after it. The numbers follow the order of the first use on each side, so this order is the same on the two sides.
+1. The key of an element is its text with each local number and each block number removed. **Fix round 2:** the two locals of a symmetric operation (`Add`, `Mul`, `BitAnd`, `BitOr`, `BitXor`, `Eq`, `Ne`, and the checked forms) go in the order of their numbers first. Cause: the printer sorts them as text, so `_100` comes before `_99`. A removed statement renumbered the locals, and `i + search_range` in `strsim::generic_jaro` printed as `CheckedAdd(_100, _99)` before the step and `CheckedAdd(_97, _98)` after it. The numbers follow the order of the first use on each side, so this order is the same on the two sides. (Since 47: the printer gives this order, and the verifier has no such rule.)
 2. A copy into a temporary (`_t = _p`) that the next element of the same block uses one time, with no other use and the same type, folds into that element. Cause: the normal form forwards a copy only if no borrow of `_p` exists, so a deleted borrow (`read_u32_into(&seed, &mut state);`) changed the element `Xo { s: state }` with no edit at its place. (Since 46: only if no borrow of `_p` has a path to the use. The fold stays for a borrow before the use.)
 3. The elements go in the order of the source (the start of the place, the longer place first), not in the order of the blocks. Cause: a negated condition swaps the targets of a switch, the blocks get a new order, and the old order paired the wrong elements (the body of an `if`, the `Ok(Self { encode, decode })` after a `while`).
 4. The longest common subsequence of the keys aligns the elements, with a weight: a pair of places with the same length and the same offset from the start or from the end of the body counts two times. Cause: after a deleted or a new statement, two elements with the same key (`_ = _`) are near the edit, and the first one paired with the wrong partner. A middle part with more than 4 000 000 cells is not aligned: each of its elements differs.
@@ -3825,7 +3825,7 @@ For each rule: the condition that reads code outside the elements that the rule 
 | 3e (`Ne` → `Eq`) | `_t` has two mentions and is the last statement | no: the compare and the switch come from one expression | – |
 | 4 (unreachable blocks) | the reachability from the entry | yes: an added `return` makes the code after it dead, and its elements are on one side only. The `indirect` fact is correct: the code does not run | `a_4_return`: `indirect` stays |
 | 5 (the order of the blocks) | a walk of the whole graph | no: the alignment uses the order of the source, and a key has no block number | – |
-| 6 (the numbers of the locals) | the first use in the whole body | no for a key, which has no local number. The key of a symmetric operation sorts its two locals by number, so the order of first use of the two locals counts. This order follows the order of their bindings in the source and the block order of rule 5. No example found | – |
+| 6 (the numbers of the locals) | the first use in the whole body | no for a key, which has no local number. The key of a symmetric operation sorts its two locals by number, so the order of first use of the two locals counts. This order follows the order of their bindings in the source and the block order of rule 5. No example found. (Since 47: the printer sorts the operands, with the same order for two locals.) | – |
 | 9 (the numbers of the closures) | the closures before it in the body | yes: an added closure before an unchanged closure gives it a new number | `a_9_closure`: `indirect` stays |
 | the fold of 40.3, item 2 (`elements.rs`) | the use is the next element of the same block; two mentions of `_t` | yes: with a borrow on one side only, a third mention of `_t` (an overflow check names its operands) stops the fold | `r_borrow_after`, `r_borrow_before`: `indirect` stays |
 
@@ -3886,7 +3886,7 @@ Rule 3c of `normalize.rs` replaces the block condition of rules 3c and 3c2 with 
 **Form B: test 2b (`elements.rs`, option (a)).** An element with no pair after tests 1 and 2 of 45.4: remove each field or downcast projection of a changed local (`(_4.0: usize)` gives `_4`; a deref or an index stops it). The key, with the types of the changed locals as `?T`, must be equal to the key of an element of the other side. The type of the field that a removed projection reads counts as a type of its local (the bare local of the other side has this type). At least one projection went away, and at each local the projections of the two sides are equal, or one side has none. Then the checks of test 1 apply: each local that does not agree with the map is changed on the two sides, and each target fits. The element takes the causes of these locals.
 
 - The proof of the cause: the two elements differ only in changed locals, and in a projection on one side where the other side reads a changed local with no projection. On each side, the operand reads a value that a changed element writes. This is the rule of test 1, with the place of the value in the local or in its field.
-- Decided by Claude: the numbers come from the text with no fold of a copy. The symmetric order applies to the text with no projection; it swaps only two different locals, so the k-th number of a local is its k-th place in the text.
+- Decided by Claude: the numbers come from the text with no fold of a copy. The symmetric order applies to the text with no projection; it swaps only two different locals, so the k-th number of a local is its k-th place in the text. (Since 47: the verifier does not change the order of the operands.)
 - Decided by Claude: a pair that fails the checks does not stop test 3 for its elements.
 
 **The options that this round measured.** Option (c) (no forward of a source with a projection, with form A): the form B cases lose their facts, except `fb_cast`. But 8 e2e tests fail (the 6 of form A; the e2e test of 46, where condition 5 has no effect; a test that waited for a stale background check, a time failure), the added `let r = &s;` of `r_borrow_after` and `r_borrow_before` goes to `code equal`, and `d_plus` and `x_infer` get one more element with no cause. Decided by Claude: no option (c). Option (b) (the source range of each forwarded copy in the records of the driver) was not built: it needs a new record field for each operand. It is the fix of the limits below.
@@ -3907,3 +3907,71 @@ Rule 3c of `normalize.rs` replaces the block condition of rules 3c and 3c2 with 
 - `fb_cast` (`a as u64 + 1` → `a as u64`): the new binding is the cast, and the map pairs it with the old cast temporary, so the use reads a different value (45.4, test 1). No change.
 - The safety rule is a doubt: an idle edit of a binding with a place init in a changed body gets `code different`, also when its code is equal. The mark of option (b) can make it exact.
 - No e2e probe now shows the note "equal in `release`; different in `dev`" together with a name under `cfg`. The unit test of the note and the e2e probe of the other order stay.
+
+## 47. Batch 8i: no order in the canonical text reads the text of a number (G1)
+
+### 47.1 The cause
+
+The printer sorted the two operands of a symmetric operation by their text (29.6). The text of a local number is not stable: `_10` comes before `_9`. Case `k7` adds `let e = a / 99;` before `let m = (b + 1) * (c + 1);`. The new local moves the numbers of the two temporaries from 9 and 10 to 11 and 12:
+
+- before the step: `_11 = CheckedMul((_10.0: u32), (_9.0: u32))`;
+- after the step: `_13 = CheckedMul((_11.0: u32), (_12.0: u32))`.
+
+The operands changed their order, so the unchanged multiplication was a changed element. The step got a false `indirect` fact for `(b + 1) * (c + 1)`. The verifier had a special rule for this defect (`symmetric_order`, 40.3 fix round 2), but only for two plain locals.
+
+### 47.2 The invariant G1
+
+**No order in the canonical text depends on the text of a local number or of a block number.**
+
+The rule in the printer (`print.rs`, `operand_key`):
+
+- The sort key of an operand is its text with one mark (`_#`) in place of each local number.
+- A tie of two keys compares the local numbers as numbers, in the order of the text.
+- A symmetric operation prints the operand with the smaller sort key first. The allow list of 29.6 does not change.
+
+The numbers of a tie are the numbers of rule 6 (the order of the first use). The text of a constant or of a path stays in the key: an added statement does not change it. With G1, case `k7` has `CheckedMul((_9.0: u32), (_10.0: u32))` before the step and `CheckedMul((_11.0: u32), (_12.0: u32))` after it. The two keys are equal, and the element does not differ.
+
+### 47.3 The audit of each order
+
+Each `sort`, `min`, `max`, and text compare of the driver, of `semilla-normal`, and of the verifier got a check. One order was wrong, and it has the fix of 47.2.
+
+| Order | The compare reads | Result |
+|---|---|---|
+| the operands of a symmetric operation (`print.rs`, `binary`) | the text of the operands | wrong; corrected (47.2) |
+| the variant table (`print.rs`) | the variant paths | safe: no number |
+| the named targets of a switch (`print.rs`; `sort_variant_lists`) | `path: bbN` | safe: the paths are different, so the compare ends before the block number |
+| a switch with number targets only | – | safe: it keeps the order of the driver (31.2) |
+| the fields of an aggregate (`print.rs`; `sort_aggregates`) | `field: operand` | safe: the field names are different, so the compare ends before the operand |
+| the branches and the pairs of a constant (`term.rs`) | the variant name, the field name | safe: no number |
+| the configuration lines, the trait lists, the paths (`normalize.rs`, `config.rs`, `traits.rs`, `main.rs`, `paths.rs`) | paths and configuration texts | safe: no number |
+| the members of a call cycle (`hash.rs`) | the hash of the whole masked text | safe: equal texts give equal hashes |
+| the texts of the targets of a body (`same_bodies`) | whole body texts, for a compare of two sets | safe: the order is not a part of a text |
+| the elements, the pairs, the groups of sources (`elements.rs`) | places and flags | safe: no text |
+| the order of the source, the votes of the map of the locals (`elements.rs`) | positions, counts, and local numbers as numbers | safe |
+| `symmetric_order` (`elements.rs`) | local numbers as numbers | safe (47.4) |
+| the verifier (`mirmap.rs`, `owners.rs`, `links.rs`) | source positions and paths | safe: the verifier does not read the canonical text |
+
+### 47.4 The rule `symmetric_order`
+
+Decided by Claude: the rule stays for one use, and it is the tie rule of 47.2 there.
+
+- The key of an element from the text of the printer does not use the rule: the printer gives the order.
+- `projected` (45.12, 46.7) removes a projection from an operand after the print. The printer sorted that operand with its projection (`(_4.0: u32)` comes before `_3`). The text after the projection has two plain locals, and they need the order of a tie again. `symmetric_order` gives it.
+
+Evidence: with the rule removed at each use, five cases of 46.7 (`fb_call`, `fb_div`, `fb_pattern`, `fb_question`, `fb_shift`) each got a new `indirect` fact. Test 2b paired the locals of the two operands in the wrong order.
+
+### 47.5 The measure
+
+The values are before → after (the binaries of 8h → the binaries of 8i).
+
+- **The cases of this batch (66):** facts 167 → 157, `indirect` facts 44 → 34, edits with the doubt rule 31 → 31, changed elements with no cause 147 → 127. Ten cases change: `k7` and one case for each symmetric operation (`Add`, `Mul`, `BitAnd`, `BitOr`, `BitXor`, `Eq`, `Ne`; `Add` and `Mul` also in a body with 99 locals). Each loses its false `indirect` fact (3 facts → 2). No fact changes its compare result.
+- **The controls:** a swap of the operands of an addition stays `code equal`. A swap of the operands of a subtraction (`x - y` → `y - x`), and a swap of two operands with overflow checks (`(x + 1) * (y + 1)` → `(y + 1) * (x + 1)`), stay `code different`.
+- **The 105 cases of 8g and 8h:** facts 165 → 165, `indirect` facts 18 → 18, edits with the doubt rule 9 → 9. One case changes: `fn_loop` has 7 → 3 changed elements with no cause, and its `indirect` fact shows `n + 1` in place of `n + 1 + t.0`.
+- **The ten fixtures of 7c:** the same first line, runs (2), reasons, and facts for each fixture. Facts 1608, `indirect` facts 6, edits with the doubt rule 26, changed elements with no cause 39: no value changes.
+- **The time** (the sum of the two runs of a step, one fixture at a time): `bytes` 56.7 s → 55.9 s with an empty cache and 30.5 s → 30.8 s with a warm cache; `quickcheck-2` 31.6 s → 32.1 s and 8.3 s → 8.3 s. The record size does not change.
+
+### 47.6 Limits
+
+- A tie uses the numbers of rule 6. A new statement that reads the second operand first changes the order of the two operands on one side. The key of the element stays equal, and the map of the locals can pair the two locals in the wrong order. The old rule had the same limit. No example found.
+- A type that is not on the allow list of 29.6 (a float, a pointer) keeps the order of rustc.
+- `symmetric_order` sorts two plain locals only. An operand that keeps a projection next to an operand that loses one can have a different position on the two sides. Then test 2b finds no pair, and an `indirect` fact stays. No example found.
