@@ -527,6 +527,8 @@ fn with_env(command: &mut Command, repo: &Path) {
     command.env("SEMILLA_CACHE_DIR", repo.parent().unwrap().join("cache"));
     // Design 50: these tests read the compare results, so each step has the compiled check.
     command.env("SEMILLA_COMPILED", "1");
+    // Design 53: the build check of a step is not the subject of these tests.
+    command.env("SEMILLA_NO_CHECK", "1");
     let z3 = root.join(".semilla/tools/z3");
     if z3.exists() {
         command.env("SEMILLA_Z3", z3);

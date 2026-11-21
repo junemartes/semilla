@@ -518,7 +518,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false, build_check: None };
             let mut map = semilla_verify::checks::renames(&rename_step, &before_ws);
             semilla_verify::sites::resolve(&mut map, &before_ws, &after_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
@@ -677,7 +677,7 @@ impl App {
 
     /// Applies a whole plan: starts again from the base of the replay, runs each step, and checks
     /// the change set (phase 1, or both phases with `full`).
-    pub fn replay_apply(&mut self, plan: &Plan, full: bool) -> Result<Applied> {
+    pub fn replay_apply(&mut self, plan: &Plan, full: bool, no_check: bool) -> Result<Applied> {
         let mut session = self.load_session()?;
         let replay = session.replay.clone().context("no replay is in progress; start one with `semilla replay begin`")?;
         let base = session.changeset.base_tree.clone();
@@ -710,6 +710,8 @@ impl App {
 
         let mut text = String::new();
         let mut problems = 0;
+        // The steps that do not build, and the steps with a build check that cannot run.
+        let mut build_stops = (0, 0);
         for (index, step) in plan.steps.iter().enumerate() {
             let mut lines: Vec<String> = Vec::new();
             self.step_begin(&step.intent)?;
@@ -741,12 +743,43 @@ impl App {
                     lines.push(format!("✗ claim {} at {}: {error:#}", claim.op, at.unwrap_or_default()));
                 }
             }
+            // Design 53: the build check of the new tree of the step. A step that does not build
+            // is a problem of the plan. A check that cannot run is a problem too, with its cause.
+            let mut notes: Vec<String> = Vec::new();
+            let mut build_text = String::new();
+            match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &after) {
+                crate::buildcheck::Outcome::Stored { record, lines } => {
+                    let mut session = self.load_session()?;
+                    if let Some(open) = session.open.as_mut() {
+                        open.build_check = Some(record);
+                    }
+                    self.save_session(&session)?;
+                    notes = lines;
+                }
+                crate::buildcheck::Outcome::Fails { text } => {
+                    build_stops.0 += 1;
+                    lines.push("✗ the code after the step does not build".to_string());
+                    build_text = text;
+                }
+                crate::buildcheck::Outcome::CannotRun { text } => {
+                    build_stops.1 += 1;
+                    lines.push("✗ the build check cannot run on this machine".to_string());
+                    build_text = text;
+                }
+            }
             self.step_end_with(false)?;
             problems += lines.len();
             let mark = if lines.is_empty() { "✓" } else { "✗" };
             put_line(&mut text, &format!("{mark} plan step {index}: {}", semilla_core::text::quoted(&step.intent)));
             for line in lines {
                 put_line(&mut text, &format!("    {line}"));
+            }
+            // The result line of the build check and the errors of the compiler: a block.
+            for line in build_text.lines() {
+                put_line(&mut text, &format!("    {line}"));
+            }
+            for note in notes {
+                put_line(&mut text, &format!("    {}", note.trim_start()));
             }
         }
         let mut session = self.load_session()?;
@@ -793,7 +826,12 @@ impl App {
         text.push_str(&if ok {
             if full { "the plan is accepted; run `semilla replay end`\n".to_string() } else { "phase 1 passed; `semilla status` shows phase 2. Then run `semilla replay end`\n".to_string() }
         } else {
-            "fix the plan and run `semilla replay apply` again (it starts again from the base)\n".to_string()
+            let build = match build_stops {
+                (0, 0) => "",
+                (_, 0) => "; a step that does not build needs a change of the plan, or `--no-check` (the record then says `build check: not run`)",
+                _ => "; for a build check that cannot run, correct the environment, or use `--no-check` (the record then says `build check: not run`)",
+            };
+            format!("fix the plan and run `semilla replay apply` again (it starts again from the base){build}\n")
         });
         Ok(Applied { text, ok })
     }

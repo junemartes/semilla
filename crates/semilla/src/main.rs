@@ -16,6 +16,7 @@ macro_rules! eprintln {
 
 mod app;
 mod background;
+mod buildcheck;
 mod buildcode;
 mod git;
 mod mcp;
@@ -93,10 +94,16 @@ enum Command {
         tree: bool,
         /// Also run the compiled check for this step: a build, a compare of the compiled code
         /// (MIR), and a compare result on each fact (`code equal`, `code different`, `no compare`,
-        /// `no code`). The default uses the syntax tree only: no build, no Rust tool chain. The
-        /// variable `SEMILLA_COMPILED=1` gives the same. A property claim turns it on.
+        /// `no code`). The default makes the facts from the syntax tree only. The variable
+        /// `SEMILLA_COMPILED=1` gives the same. A property claim turns it on.
         #[arg(long)]
         compiled: bool,
+        /// Do not run the build check of the step (`cargo check` on the new tree). The step
+        /// record keeps "build check: not run", and the review shows it. Use it for a step of
+        /// work in progress, or on a machine that cannot build the project. The variable
+        /// `SEMILLA_NO_CHECK=1` gives the same.
+        #[arg(long = "no-check")]
+        no_check: bool,
         /// Only with `--compiled`: run phase 1 now, and the compiled check in the background (for
         /// a large project). Without `--compiled` it has no effect.
         #[arg(long)]
@@ -252,9 +259,10 @@ enum Command {
     },
     /// Build the index of the working tree in `.semilla/index.json`.
     Index,
-    /// Remove each entry of the build code cache that no stored step uses: `semilla cache --clean`.
+    /// Remove each entry of the build code cache that no stored step uses, and the folder of
+    /// the build check: `semilla cache --clean`.
     Cache {
-        /// Remove the entries, and print the freed size.
+        /// Remove the entries and the folder, and print the freed size.
         #[arg(long)]
         clean: bool,
     },
@@ -322,6 +330,9 @@ enum ReplayAction {
         /// Also run phase 2 now (the MIR checks), and wait for it.
         #[arg(long)]
         full: bool,
+        /// Do not run the build check of each step (as `semilla step --no-check`).
+        #[arg(long = "no-check")]
+        no_check: bool,
     },
     /// Copy a part of the target into the working tree: `FILE`, `FILE:LINE`, `FILE:START-END`
     /// (target lines), or an item path.
@@ -337,7 +348,11 @@ enum StepAction {
     /// Start a step.
     Begin { intent: String },
     /// End the open step.
-    End,
+    End {
+        /// Do not run the build check of the step (as `semilla step --no-check`).
+        #[arg(long = "no-check")]
+        no_check: bool,
+    },
     /// Open the last step again, to fix its claims.
     Reopen,
     /// Change the intent of the open step.
@@ -485,11 +500,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 println!("wrote the draft plan to {}; check each step and claim, then run `semilla replay apply`", file.display());
             }
         }
-        Command::Replay { action: ReplayAction::Apply { plan, full } } => {
+        Command::Replay { action: ReplayAction::Apply { plan, full, no_check } } => {
             let plan = plan.unwrap_or_else(|| app.repo.state_dir().join("plan.json"));
             let text = std::fs::read_to_string(&plan).with_context(|| format!("read {}", plan.display()))?;
             let plan: plan::Plan = serde_json::from_str(&text).with_context(|| format!("{} is not a valid plan", plan.display()))?;
-            let applied = app.replay_apply(&plan, full)?;
+            let applied = app.replay_apply(&plan, full, no_check)?;
             print!("{}", applied.text);
             return Ok(if applied.ok { ExitCode::SUCCESS } else { ExitCode::from(1) });
         }
@@ -501,14 +516,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, reasons, tree, compiled, fast } => {
+        Command::Step { intent, group, claims, reasons, tree, compiled, no_check, fast } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast, compiled };
+            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast, compiled, no_check };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
             // newest other entries. A failure of the clean is not a failure of the step.
-            // A step with no compiled check made no entry, and it starts no cargo (design 50).
+            // A step with no compiled check made no entry (design 50). The build check has its
+            // own folder (design 53).
             if app.uses_cargo() {
                 let started = std::time::Instant::now();
                 let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
@@ -521,7 +537,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Undo => println!("{}", app.undo()?),
         Command::OldStep { action: StepAction::Begin { intent } } => println!("{}", app.step_begin(&intent)?),
-        Command::OldStep { action: StepAction::End } => println!("{}", app.step_end()?),
+        Command::OldStep { action: StepAction::End { no_check } } => println!("{}", app.step_end(no_check)?),
         Command::OldStep { action: StepAction::Reopen } => println!("{}", app.step_reopen()?),
         Command::OldStep { action: StepAction::Edit { intent } } => println!("{}", app.step_edit(intent.as_deref())?),
         Command::OldStep { action: StepAction::Drop } => println!("{}", app.step_drop()?),
@@ -688,7 +704,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Index => println!("{}", app.index()?),
-        Command::Cache { clean: false } => println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses."),
+        Command::Cache { clean: false } => println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses, and the folder of the build check."),
         Command::Cache { clean: true } => {
             // A background check can build in an entry now. The clean waits for its end.
             let lock = std::fs::File::create(app.repo.cache_dir().join("worker.lock"))?;
@@ -697,6 +713,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             lock.unlock()?;
             let entries = if count == 1 { "entry" } else { "entries" };
             println!("removed {count} {entries} of the build code cache that no stored step uses: {} freed", app::size_text(size));
+            // Design 53.2: the folder of the build check. The next build check is cold.
+            // A cache with no such folder has no line.
+            if let Some(size) = app.clean_build_check()? {
+                println!("removed the folder of the build check: {} freed (the next build check builds each dependency again)", app::size_text(size));
+            }
         }
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
         Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),

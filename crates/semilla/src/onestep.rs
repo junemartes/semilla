@@ -41,6 +41,8 @@ pub struct StepRequest {
     /// The step gets the compiled check (design 50): the build, the MIR compare, and a compare
     /// result on each fact.
     pub compiled: bool,
+    /// The build check of the step does not run (design 53).
+    pub no_check: bool,
 }
 
 /// One more place where a `--reason` text can split into a key and a reason (design 37.6).
@@ -105,6 +107,9 @@ impl StepRequest {
         }
         if self.fast {
             parts.push("--fast".into());
+        }
+        if self.no_check {
+            parts.push("--no-check".into());
         }
         parts.join(" ")
     }
@@ -360,7 +365,7 @@ impl App {
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: None });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -415,6 +420,20 @@ impl App {
         };
         let report = result.report.steps.first().cloned().unwrap_or_default();
         let accepted = report.accepted();
+        // Design 53: the build check of the new tree, after the syntax phase. It runs also for a
+        // step that the syntax phase does not accept, so that one result shows each cause. The
+        // result of a tree that builds is in the cache: the next command does not build again.
+        // Rule 9: a compiled check of this command that does not accept the step built the new
+        // tree, or it has a different cause for the reject. No second build runs.
+        let (build_record, build_lines, build_stop) = if compiled && !request.fast && !accepted {
+            (None, Vec::new(), None)
+        } else {
+            match self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree) {
+                crate::buildcheck::Outcome::Stored { record, lines } => (Some(record), lines, None),
+                crate::buildcheck::Outcome::Fails { text } => (None, Vec::new(), Some((true, text))),
+                crate::buildcheck::Outcome::CannotRun { text } => (None, Vec::new(), Some((false, text))),
+            }
+        };
         // A rejected step prints the full text of each failed claim in its first lines. The claim
         // list then has only the status and a short cause (brief 5g, item 4).
         let body = semilla_verify::views::text_report_with(std::slice::from_ref(&report), !accepted);
@@ -502,7 +521,7 @@ impl App {
         let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.gap_lines(1)).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).collect::<String>());
         // A configuration that Semilla added for a joint state of this step (batch 5u, part C): one line.
         let sandbox_line = format!("{sandbox_line}{}", result.report.configs.iter().flat_map(|note| note.added_line()).map(|line| format!("{}\n", semilla_verify::views::fit_line(&format!("  {line}")))).collect::<String>());
-        if !accepted {
+        if !accepted || build_stop.is_some() {
             // Nothing is stored. The reasons first, then the command to run again.
             let mut restore = saved;
             restore.open = None;
@@ -512,7 +531,21 @@ impl App {
                 restore.open = None;
             }
             self.save_session(&restore)?;
-            put_line(&mut text, &format!("rejected: step {index} {} is not stored", semilla_core::text::quoted(&request.intent)));
+            // Design 53: a check that cannot run is not a result of the code. The first line
+            // does not say "rejected" if this is the only cause.
+            if accepted && matches!(build_stop, Some((false, _))) {
+                put_line(&mut text, &format!("not stored: step {index} {}: the build check cannot run on this machine", semilla_core::text::quoted(&request.intent)));
+            } else {
+                put_line(&mut text, &format!("rejected: step {index} {} is not stored", semilla_core::text::quoted(&request.intent)));
+            }
+            // The errors of the compiler come before the facts of the syntax phase. A check
+            // with a good result has its line too: the build is not the cause of the reject.
+            if let Some((_, stop)) = &build_stop {
+                text.push_str(stop);
+            }
+            for line in &build_lines {
+                put_line(&mut text, line);
+            }
             text.push_str(&mode_lines);
             text.push_str(&base_line);
             text.push_str(&sandbox_line);
@@ -600,7 +633,15 @@ impl App {
                 text.push('\n');
             }
             let mut again = None;
-            if blocked.is_empty() {
+            if let (Some((fails, _)), true) = (&build_stop, blocked.is_empty()) {
+                // Design 53: the two ways out. Each command has each missing reason, as the
+                // command to run again.
+                let mut unchecked = corrected.clone();
+                unchecked.no_check = true;
+                let first = if *fails { "the code after the step does not build: correct the code" } else { "correct the environment (the cause is above)" };
+                put_line(&mut text, &format!("{first}, then run: {}", corrected.command(&missing)));
+                put_line(&mut text, &format!("or store the step with no build check (the record and the review then say `build check: not run`): {}", unchecked.command(&missing)));
+            } else if blocked.is_empty() {
                 let what = match (corrected.claims.len() < request.claims.len(), !widened.is_empty()) {
                     (true, true) => " (without the claim that failed, and with the complete list of `calls`)",
                     (true, false) => " (without the claim that failed)",
@@ -633,6 +674,11 @@ impl App {
             if let Some(error) = blocked.iter().find(|error| !error.starts_with("claim ")) {
                 causes.push(error.lines().next().unwrap_or("").chars().take(200).collect());
             }
+            match &build_stop {
+                Some((true, _)) => causes.push("the build check fails: the code after the step does not build".to_string()),
+                Some((false, _)) => causes.push("the build check cannot run on this machine".to_string()),
+                None => {}
+            }
             if causes.is_empty() {
                 causes.push("the result of the step says the cause".to_string());
             }
@@ -640,7 +686,12 @@ impl App {
             self.save_session(&restore)?;
             return Ok((text, false));
         }
-        // Accepted: store the step and its group.
+        // Accepted: store the step and its group. The record keeps the result of the build check.
+        let mut session = self.load_session()?;
+        if let Some(open) = session.open.as_mut() {
+            open.build_check = build_record;
+        }
+        self.save_session(&session)?;
         let stored = self.step_end_with(false)?;
         let title = request.group.clone().unwrap_or_else(|| request.intent.clone());
         let mut session = self.load_session()?;
@@ -723,6 +774,9 @@ impl App {
         self.save_session(&session)?;
         let result_line = if full { "accepted" } else { "accepted (phase 1; phase 2 runs in the background: `semilla status`)" };
         put_line(&mut text, &format!("{result_line}: step {index} {} stored in group {id} {}", semilla_core::text::quoted(&request.intent), semilla_core::text::quoted(&title)));
+        for line in &build_lines {
+            put_line(&mut text, line);
+        }
         text.push_str(&mode_lines);
         text.push_str(&base_line);
         text.push_str(&sandbox_line);

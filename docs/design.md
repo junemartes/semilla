@@ -4102,6 +4102,7 @@ Status: a decision of the user (2026-11-21) and the measure on stored results. T
 - Semilla derives each fact and each check from the syntax tree.
 - `code equal` and `code different` go away from each fact and from the step result.
 - The compiled compare stays as an optional check. It is off by default.
+- Since batch 9a4 (section 53): each step has a build check of its new tree (`cargo check`). The build check is not the compiled compare. It gives no fact and no compare result. `--no-check` turns it off.
 - Extract and inline of a function must not show as a change of behavior (49.6).
 
 ### 49.2 The cause
@@ -4140,7 +4141,7 @@ The six pull requests of 48.6 have 437 facts with the compiled compare.
 ### 49.5 The losses that the user accepted
 
 1. **Effects at a distance.** A change of a declaration, a macro, or a build input shows as an edit. Semilla does not show which bodies it changes.
-2. **The safety check of a `same` claim.** A rename can catch a different name by shadowing. A moved item can resolve a name differently. The compiler rejects most of these cases, but not each one.
+2. **The safety check of a `same` claim.** A rename can catch a different name by shadowing. A moved item can resolve a name differently. The compiler rejects most of these cases, but not each one. Since section 53, the build check of the step runs the compiler, so a case that the compiler rejects also rejects the step.
 3. **The proof for a small rewrite.** `a + b` → `b + a` is a `semantics` edit that the reviewer reads. The compare proves 89 of the 113 held-out controls of this kind equal. The share in the six pull requests is 9 of 437 facts.
 
 ### 49.6 Extract and inline of a function
@@ -4196,7 +4197,7 @@ Batch 9a. This section is the code change of the decision of section 49. The mod
 
 ### 50.1 The two modes
 
-- **The default mode.** `semilla step "<intent>"` runs only the syntax phase. It starts no build and no process of the Rust tool chain. A fact line ends with the category: "… [semantics]". No output of this mode has a compare result (`code equal`, `code different`, `no compare`, `no code`, `pending`, `not checked`), an `indirect` fact, or a line "affected bodies:", "branches:", "through:", or "! the compiled code changes:". A tree that does not build is accepted.
+- **The default mode.** `semilla step "<intent>"` makes the facts from the syntax phase only. Since section 53, it then runs the build check of the new tree (`cargo check`): the syntax phase starts no process of the Rust tool chain, and the build check does. With `--no-check`, the step starts no build and no process of the Rust tool chain. A fact line ends with the category: "… [semantics]". No output of this mode has a compare result (`code equal`, `code different`, `no compare`, `no code`, `pending`, `not checked`), an `indirect` fact, or a line "affected bodies:", "branches:", "through:", or "! the compiled code changes:". A tree that does not build is rejected by the build check (section 53). With `--no-check` it is accepted, and the record says `build check: not run`.
 - **The compiled check.** `semilla step "<intent>" --compiled` also runs phase 2 (the build, the MIR compare, the compare result on each fact). Its rules are the rules of the sections 35 to 47. The only changes of its output are the corrected rules of 50.3 and 50.4.
 - **Decided by Claude:** the variable `SEMILLA_COMPILED` (not empty and not `0`) gives the same as `--compiled`. The tests of the compiled check set it in their helper.
 - **Decided by Claude:** `--fast` has an effect only with a compiled check. Else the step prints one note: "note: `--fast` has an effect only with `--compiled`; this step has no compiled check".
@@ -4210,7 +4211,7 @@ Batch 9a. This section is the code change of the decision of section 49. The mod
 
 **The other commands follow the stored mode. Decided by Claude.**
 
-- `status`, `tag`, `verify`, `review`, and the MCP tools start a build only if a step of the change set has the compiled check. A change set with no such step has no build code state, no background check, and no cache entry of a build.
+- `status`, `tag`, `verify`, `review`, and the MCP tools of a review start a build only if a step of the change set has the compiled check. They do not run the build check of section 53: they read its stored result. A change set with no such step has no build code state, no background check, and no cache entry of a build.
 - `semilla status` of such a change set says: "the result of the syntax tree (computed now; no step has the compiled check):".
 - The result line has no compare counts: `result: accepted · 3 steps · 4 facts · 0 claims`. A change set with the two modes counts the compare results of its compiled steps and adds "N with no compiled check".
 - A list of items under a fact of a default step comes from the syntax tree (the items with a site of a generic type, the items that read a changed file). Its name is "items with a use:", not "affected bodies:".
@@ -4276,7 +4277,7 @@ The measure uses the binaries of batch 8i (`bin-8i`) and the binaries of this ba
 | `c_add_stmt` | no `indirect` fact | same output | 50.1: an effect at a distance is a compiled result |
 | `c_build_script` | no line "build code changed in step 0 …" | same output | 50.1: no build code state |
 | `c_manifest` | the spotlight has no text about the MIR; no note of the compare | same output | 50.1 |
-| `c_no_build`, `c_parse_error` | accepted (the build does not run) | rejected, as before (only the cache path differs) | 50.1; see 50.6 |
+| `c_no_build`, `c_parse_error` | accepted (the build does not run; since section 53 only with `--no-check`) | rejected, as before (only the cache path differs) | 50.1; see 50.6 |
 | `mv_needs_import` | move "with 1 `use` line(s)" (before: 2) and a fact "added `use` line: `use std::fmt;`" | the same change | 50.3, rule 4: the moved item does not use the name |
 | `mv_other_path` | new fact "changed path `other::over` → `util::over`" | the same fact, `code different`; the move is `code equal` | 50.3, rule 1 |
 | `mv_use_second` | new fact "removed `use` line: `use cart::{over, a::helper};`" | the same fact | 50.3, rule 2 |
@@ -4307,7 +4308,7 @@ The measure uses the binaries of batch 8i (`bin-8i`) and the binaries of this ba
   - Five pair warnings show at once, not after phase 2: two in `nu-ansi-term`, two in `quickcheck-2`, one in `rand_core-4`.
 - The default mode asks for the same reasons as `bin-8i --fast`. The count is not the count of `--compiled`: for example `nu-ansi-term` needs 49 reasons in the default mode and 17 with `--compiled`. The compiled check reads the result of a macro call; the default mode asks for a reason for each macro call that it cannot read.
 - No output of the default mode (60 cases, ten fixtures) has a compare result, an `indirect` fact, or a line "affected bodies:", "branches:", or "! the compiled code changes:".
-- The proof of no build: `strace -f -e trace=execve` of the first run of `socket2` in the default mode shows 22 started processes: `semilla`, 19 `git`, and 2 `z3 --version`. No process is `cargo`, `rustc`, `rustup`, or the MIR driver. Each default run above also has a `PATH` with no tool chain.
+- The proof of no build (the state of batch 9a; since section 53 this holds for a step with `--no-check`): `strace -f -e trace=execve` of the first run of `socket2` in the default mode shows 22 started processes: `semilla`, 19 `git`, and 2 `z3 --version`. No process is `cargo`, `rustc`, `rustup`, or the MIR driver. Each default run above also has a `PATH` with no tool chain.
 
 ### 50.6 The limits
 
@@ -4319,7 +4320,7 @@ The measure uses the binaries of batch 8i (`bin-8i`) and the binaries of this ba
 - The spotlights that read the compiled code do not exist in the default mode: inactive code, an indirect change, a build input or a macro definition that changes bodies with no edit.
 - The default mode has no build code state (it comes from `cargo metadata`). A new build script of a dependency shows only as the fact of its package in `Cargo.lock`. A changed build script of the workspace has its fact and its spotlight.
 - The default mode does not read the result of a macro call. A macro call that the syntax phase cannot read needs its own reason, and its fact does not list the items that the call makes.
-- The default mode accepts a step that does not compile, or that has a file with a parse error (the fact of the file shows). `--compiled` rejects it.
+- Batch 9a: the default mode accepts a step that does not compile, or that has a file with a parse error (the fact of the file shows). `--compiled` rejects it. Since section 53, the build check of the default mode rejects such a step. Only a step with `--no-check` is accepted, and its record says `build check: not run`.
 - The default mode reads the targets and the features from the manifests only. It does not know which configuration compiles an item.
 - The review UI shows a default step with the category only.
 - Not in this batch: `--same`, `--change`, and the gap list (9b); extract and inline of a function (9c).
@@ -4616,3 +4617,266 @@ The time is the smallest time of four step runs.
 - A fact with a cut text can hide the `;` of 52.1, decision 5, when the cut rule hides the end of the text.
 - **Open question: the fact of a renamed parameter.** A parameter with an upper-case name (`N: u32` → `M: u32`) keeps the signature fact "parameter `N` of `f` renamed to `M` [rename]". The body uses are now "changed path `N` → `M` [semantics]", because the name is not a sure binding (52.3). The rule of the brief is for an identifier in a pattern of a body. A decision is necessary: does the sure-binding rule apply to the parameter fact of a signature?
 - **Open question: the `;` alone.** A tail expression that becomes a statement with no other change has the text of batch 9a2 ("moved call: `g(a)` from `tail` to `S1`", "moved if: `if c { g(a) }`"). The fact is correct, but the text does not show the `;`.
+
+## 53. Batch 9a4: the build check of a step
+
+Date: 2026-11-21. Since batch 9a, `semilla step` runs only the syntax phase, so it accepts a step that does not compile (50.6). The user did not expect this. The decision of the user:
+
+> "Let's make the code check mandatory per step, we could remove it with --no-check"
+
+The code check is a **build check** of the new tree of the step. It is not the compiled compare: `--compiled` stays optional, and its rules do not change. No rule of the syntax phase changes. Each decision below that the brief of the batch did not make has the mark **Decided by Claude**.
+
+Batch 9a4b (the same date) corrected five items of the check: the three states of rule 8, the result words, the lines of `semilla tag`, the tool chain, and the cache. This section has the corrected text. Section 53.10 lists the five items and their results.
+
+### 53.1 The rules
+
+1. **The check.** Each command that stores a step runs `cargo check` on the new tree of the step, after the syntax phase. The routes: `semilla step`, the MCP tool `step`, the plan route (`semilla replay apply`, the MCP tool `replay_apply`), and the hidden command `old-step end`.
+2. **`passes`.** Each target of the tree builds. The step is stored as before. The output has one more line, after the first line: "build check: passes (1.2 s)". The fact lines do not change.
+3. **`fails`.** The step is rejected, and nothing is stored. The message shows the first errors of the compiler, with file and line, and the two ways out.
+4. **`not run`.** With `--no-check`, the check does not run. The step is stored. The record keeps the result `not run`. The step output, `semilla status`, and the review show it.
+5. **The variable `SEMILLA_NO_CHECK`** (not empty and not `0`) gives the same as `--no-check`. The MCP tools `step` and `replay_apply` have the argument `no_check`.
+6. **The record.** The step record keeps the result (`Step.build_check`). A reviewer command reads the record. It does not run the check again.
+7. **A check that cannot run** (no tool chain, a dependency that is not in the cargo cache, no space on the disk): the step is not stored. The words are "not stored" and "cannot run", not "rejected": the cause is the machine, not the code. Cargo runs with `--offline`.
+8. **A base that does not build.** Only a build error that the step makes rejects the step. A target of the tree before the step has one of three states: it **builds**, it **does not build**, or cargo did **not check** it (53.4). A target that does not build after the step rejects the step only if it builds before the step, or if it is new. In each other case the step is stored with the result `no new failure found`, and a line with a mark names the target and tells what Semilla did not check.
+9. **With `--compiled`.** The build of the compiled check is the build check. No second build runs.
+10. **No new fact, no new category, no compare result.** The check has only the results `passes`, `fails`, and `not run`, and the accepted result of rule 8, `no new failure found`. The word `passes` is only for a tree in which each target builds.
+
+### 53.2 The targets, the configuration, and the build folder
+
+**Decided by Claude:**
+
+- **The command.** `cargo check --workspace --all-targets --keep-going --offline --quiet --message-format=json`. The targets are the library, the binaries, the tests, the examples, and the benches of each package of the workspace: the code that the facts of the syntax phase cover. The configuration is the profile `dev` with the default features. This is the configuration `dev` of the compiled check (35.4).
+- **The tool chain** (batch 9a4b) is the tool chain that cargo uses for the author in the tree of the step. The check answers the question "does `cargo check` pass for the author?". Semilla finds it in this order (`semilla_normal::cargo::check_toolchain`):
+  1. the file `rust-toolchain` or `rust-toolchain.toml` at the root of the tree of the step (the key `channel` or `path` of the table `toolchain`; the file `rust-toolchain` can also have one line with the name);
+  2. the variable `RUSTUP_TOOLCHAIN`;
+  3. the default tool chain of rustup (`default_toolchain` in the file `settings.toml` of the rustup home);
+  4. the `cargo` of `PATH`, if it is not a program of rustup.
+- **No download.** Semilla finds the folder of the tool chain in `toolchains/` of the rustup home (`RUSTUP_HOME`, or `.rustup` in the home folder). It starts `bin/cargo` of this folder by its full path. It starts no program of rustup, so no tool chain is downloaded. A tool chain that is not on the machine gives "cannot run" with the cause and the command that installs it (53.3). The clean environment, the sandbox of a phase 2 build, and `--offline` stay. The check does not use the MIR driver. The pinned tool chain of Semilla is only for the compiled check (53.5).
+- **Decided by Claude (the tool chain):**
+  - The file of the tree comes before the variable. This is the order of the brief. Rustup itself reads the variable first. A cargo process that starts Semilla sets the variable to its own tool chain, so the file of the tree is the better source.
+  - Semilla reads only the file at the root of the tree. It does not read a `rustup override` of a folder, and it does not read a file in a folder above the repository. If the tree has the two files, `rust-toolchain` comes first, as in rustup.
+  - A name finds the folder with the same name, or the one folder with the name and the processor of this machine (`stable` finds `stable-x86_64-unknown-linux-gnu`). The name `nightly` does not find `nightly-2026-01-01-…`. Two folders for one name give "cannot run".
+  - A `path` key must be an absolute path. The build folder is a copy of the tree, so a relative path has no meaning there.
+  - The keys `components` and `targets` of the file are not read.
+  - Each tree uses its own file. If a step changes the tool chain file, the check of the tree before the step (rule 8) uses the tool chain of that tree.
+  - A cargo that does not have the option `--keep-going` (before version 1.74) gives "cannot run" with this cause.
+- **`--keep-going`** makes cargo build each target that does not depend on a failed target. So one run gives the full list of the failed targets for rule 8.
+- **A target** is a build unit of cargo, with the text of cargo: `` `shop-core` (lib) ``, `` `shop-core` (lib test) ``, `` `shop-app` (bin "shop-app") ``, `` `shop-core` (test "old") ``, `` `demo` (bench "speed") ``. A failure before cargo starts a build (a manifest that cargo rejects) has the pseudo target `` `workspace` (cargo starts no build) ``.
+- **The build folder** is `check/` in the cache folder of the repository: `check/build` (the tree, written with the code of phase 2, `Repo::checkout_build`), `check/target` (the target folder of cargo, kept between the steps, so the next check is incremental), `check/results` (one result file for each tree and each set of build settings), and `check/lock` (one check at a time). The check does not read or write the `target` folder of the user. It does not share a folder with the compiled check: the two builds have different compiler wrappers.
+- **The stored result of a tree.** A tree that passes has a result file. A second check of the same tree (after `semilla undo`, or a second run with a reason) reads the file: "build check: passes (a stored result of this tree)". A result `fails` of the new tree is not final: the check runs again. A result of the base tree (rule 8) is read from the file.
+- **The key of a stored result** (batch 9a4b, `check_settings_key`) has the build settings and the identity of the tool chain: its folder, and the size and the time of its `rustc` binary. So a different tool chain, or an update of `stable`, runs the check again. **Decided by Claude:** `check/target` is one folder for each tool chain. Cargo keeps the output of each compiler version apart, so a second tool chain builds each dependency one time and the folder becomes larger.
+- Only a command that stores a step uses the folder `check/`. `status`, `tag`, `verify`, `review`, and the UI do not start the build check.
+- **`semilla cache --clean`** (batch 9a4b) also removes the folder `check/`: "removed the folder of the build check: 45 MB freed (the next build check builds each dependency again)". The records of the stored steps stay. **Decided by Claude:** the line shows only if the folder is there, and the command waits for a build check that runs (`check/lock`).
+
+### 53.3 The order with the syntax phase, and the output
+
+**Decided by Claude:**
+
+- The build check runs after the syntax phase, also when the syntax phase does not accept the step (a missing reason, a false claim). So one run shows each cause. A tree that passes is in the result file, so the run with the reasons does not build again.
+- **`passes`:**
+
+```text
+accepted: step 0 "raise the limit" stored in group G1 "raise the limit"
+build check: passes (0.4 s)
+base `e86f84a`: no Semilla check (no checked commit before it)
+  ◆ f1 derived: changed literal `10` → `20` at `shop_app::main/S1` [semantics]
+```
+
+- **`fails`.** The first line, then the result line of the check, then the first 5 errors of the compiler (a count line tells the number of the others), then the facts of the syntax phase (they can help the author: a rename fact names the item that a call misses), then the two ways out. An error that two targets give (the library and its test build) shows one time.
+
+```text
+rejected: step 0 "rename `total` to `sum`" is not stored
+  ✗ build check: fails (0.4 s): after the step, the targets `shop-app` (bin "shop-app" test), `shop-app` (bin "shop-app") do not build
+
+    error[E0599]: no method named `total` found for struct `Cart` in the current scope
+     --> crates/shop-app/src/main.rs:3:25
+      |
+    3 |     println!("{}", cart.total(10));
+      |                         ^^^^^ method not found in `Cart`
+base `e86f84a`: no Semilla check (no checked commit before it)
+
+  ◆ f1 derived: renamed `shop_core::cart::Cart::total` → `shop_core::cart::Cart::sum` [rename]
+  ◆ f2 derived: public API: `shop_core::cart::Cart::total` is now `shop_core::cart::Cart::sum` (a different crate can no longer use the old path) [rename]
+the code after the step does not build: correct the code, then run: semilla step 'rename `total` to `sum`'
+or store the step with no build check (the record and the review then say `build check: not run`): semilla step 'rename `total` to `sum`' --no-check
+```
+
+- Each of the two commands has each missing reason of the syntax phase (`--reason '…=<why>'`). The exit code is 1. The record of the rejected step (`session.rejected`) has the cause "the build check fails: the code after the step does not build".
+- **`not run`:** the line "build check: not run (`--no-check`)" or "build check: not run (`SEMILLA_NO_CHECK`)" after the first line. No process of the tool chain starts.
+- **Cannot run:**
+
+```text
+not stored: step 0 "raise the limit": the build check cannot run on this machine
+  ! build check: cannot run: the toolchain `1.60.0` (the file `rust-toolchain.toml` of the tree) is not on this machine: `~/.rustup/toolchains` has no folder for it. The build check does not download a toolchain. Run `rustup toolchain install 1.60.0`
+base `e86f84a`: no Semilla check (no checked commit before it)
+
+  ◆ f1 derived: changed literal `10` → `20` at `shop_app::main/S1` [semantics]
+correct the environment (the cause is above), then run: semilla step 'raise the limit'
+or store the step with no build check (the record and the review then say `build check: not run`): semilla step 'raise the limit' --no-check
+```
+
+- The source in the brackets is one of: "the file `rust-toolchain.toml` of the tree", "the file `rust-toolchain` of the tree", "the variable RUSTUP_TOOLCHAIN", "the default of rustup". With no rustup default and no `cargo` in `PATH`: "cannot find a toolchain: rustup has no default toolchain, and `PATH` has no `cargo`. Run `rustup default stable`".
+- The causes of "cannot run": no tool chain; the sandbox or cargo does not start; a dependency that is not in the cargo cache ("a dependency is not in the cargo cache of this machine, and the build check does not download (cargo runs with `--offline`). Run `cargo fetch` in the repository.", then the lines of cargo); no space on the disk; no permission to write the build folder; the cache folder cannot be written. If the syntax phase also rejects the step, the first line says "rejected", and the line "! build check: cannot run: …" shows too.
+- **`no new failure found` (rule 8, batch 9a4b).** A target does not build after the step, and the step is not the known cause. The result line does not have the word `passes`. Each line below it has the mark `!` and tells in plain words what Semilla did not check. The time is the time of the two checks. **Decided by Claude:** the words of the result and of the two lines.
+
+```text
+accepted: step 0 "raise the limit" stored in group G1 "raise the limit"
+build check: no new failure found (0.9 s)
+  ! build check: the target `shop-core` (test "old") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it
+```
+
+```text
+accepted: step 0 "correct the price" stored in group G1 "correct the price"
+build check: no new failure found (0.2 s)
+  ! build check: the target `shop` (test "api") does not build after the step, and cargo did not check it before the step (the targets `shop` (lib test), `shop` (lib) did not build then), so Semilla cannot tell if the step makes this error
+```
+- A step that the syntax phase rejects shows the result line of a check that passes too: the build is not the cause of the reject.
+- **The plan route.** `semilla replay apply` runs the check for each step of the plan. A good result is one more line below the step: "✓ plan step 0: …", "    build check: passes (0.4 s)". A step that does not build is a problem of the plan: "    ✗ the code after the step does not build", then the result line and the errors. The last line names the ways out: "a step that does not build needs a change of the plan, or `--no-check`". `semilla old-step end` stops with "rejected: the step is not stored, and it stays open".
+
+### 53.4 A base that does not build (rule 8)
+
+**Decided by Claude:**
+
+- If the check of the new tree fails, Semilla runs the same check on the tree before the step. The result of this tree goes to its result file, so the next step with the same base does not build it again.
+- The compare is by target. Batch 9a4 compared two lists of failed targets. This was a defect: cargo does not check a target behind a failed target, so "not in the failed list of the tree before" does not mean "builds in the tree before".
+- **The three states (batch 9a4b).** A target of the tree before the step has one state, from the facts of the cargo run (`BuildRun::state`), not from the kind of the target:
+
+| State | The fact |
+|---|---|
+| does not build | cargo names the target in a line "could not compile" |
+| builds | the run has no failed target, or cargo gives a `compiler-artifact` message for the target (for the run of a build script: a `build-script-executed` message) |
+| not checked | the target is in the target list of the tree (`cargo metadata --no-deps`), and cargo gives no message for it |
+| new | the target is not in the target list of the tree |
+
+- **The result for each target that does not build after the step:**
+
+| State before the step | Result |
+|---|---|
+| builds, or new | the step is rejected (`fails`): the step makes the error |
+| does not build | no reject; the first list of the record; "did not check a new error of the step in this target" |
+| not checked | no reject; the second list of the record; "Semilla cannot tell if the step makes this error" |
+
+- **The example.** The library of `shop` has a type error, and `tests/api.rs` has a different type error. In the tree before the step, cargo gives only `` `shop` (lib) `` and `` `shop` (lib test) `` as failed. It does not check `` `shop` (test "api") ``. A step that corrects the library is stored with the second text of 53.3. Batch 9a4 rejected this step. The same step with a new error in a target that builds before the step (a package that does not use `shop`, or a build script) is rejected.
+- The message of a reject shows the errors of the targets of the step first. One line names each other target: "(not a cause of this result: the target `shop-core` (test "old") does not build before the step too)", and "(not a cause of this result: the target `shop` (test "api") does not build after the step, and cargo did not check it before the step)".
+- **Decided by Claude:**
+  - The target list comes from a second cargo process (`cargo metadata --no-deps`, with the same tool chain and sandbox). It runs only after a check that fails. The result file of the tree keeps the two lists (`built`, `targets`).
+  - A tree in which cargo starts no build (a manifest that cargo rejects) has the state "not checked" for each target.
+  - A target with no known state counts as new, so the step is rejected. This is the safe direction.
+  - The step output names the targets that did not build before the step as the cause. The record does not keep these names, so `status` and the review say "a different target did not build then".
+
+### 53.5 With `--compiled` (rule 9)
+
+**Decided by Claude:**
+
+- The compiled check builds each target of the new tree in the configuration `dev` (`cargo check --workspace --all-targets`, 35.4), with the MIR driver. If the compiled check of the command built this configuration for the step, the build check does not run cargo: "build check: passes (the build of the compiled check)". The record is `passes`.
+- If the compiled check does not accept the step, the build check does not run: the reject of the compiled check for a tree that does not build is the reject of before ("the code after the step does not compile in the configuration `dev` …"), and its output has no line of the build check.
+- The build check runs cargo itself in the other cases of an accepted compiled step: `--fast` (the compiled check runs in the background, later), the narrow configuration (the compiled check did not build each target), and a step with no body to compare.
+- **Rule 9 does not change in batch 9a4b.** The build of the compiled check still counts as the build check, and it uses the pinned tool chain of Semilla (`toolchain_root`), not the tool chain of the author. So the result "passes (the build of the compiled check)" is a result of the pinned tool chain. A build check that runs cargo itself uses the tool chain of 53.2.
+
+### 53.6 The record and the review
+
+**Decided by Claude:**
+
+- `Step.build_check` has the JSON form `{"result": "passes"}`, `{"result": "not_run"}`, or `{"result": "base_fails", "targets": ["…"], "not_checked": ["…"]}`. The record `base_fails` is the result `no new failure found`. It keeps two lists: `targets` (the targets that do not build before the step and after it) and `not_checked` (the targets that do not build after the step and that cargo did not check before it). An empty list `not_checked` is not written. **Decided by Claude:** the JSON name stays `base_fails`, so a record of batch 9a4 still reads. A rejected step has no record: it is not stored. A step of an older version has no field, and no output line.
+- The field is in the change set, so it is in the hash of the change set and in the git note of `semilla tag`. The reviewer of a tagged commit gets the record.
+- The record is not an input of the step check. The key of a step result in the memo of the process does not have the field (53.8).
+- `semilla status`, `semilla review --md`, `semilla review --html`, and the UI show one line for each result, after the base line: "build check of step 0: passes", "build check of each step: passes", "! build check of steps 1, 3: not run: the author turned the check off, so Semilla did not check that this code builds", "! build check of step 2: no new failure found: the target `demo` (bench "speed") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it". The mark `!` is on each line that tells a gap. A line with no mark has the word `passes`.
+- **`semilla tag`** (batch 9a4b) prints each line with the mark, after its own lines. It does not refuse the change set: the user decided that `--no-check` is permitted. A change set in which each step passes gets no line.
+
+### 53.7 The tests
+
+- The test support code turns the check off at one place for each helper (`SEMILLA_NO_CHECK=1` in `semilla_env`, in the MCP helpers, in the helper with no tool chain, and in the helper of `tests/large.rs`). A test of the build check gives `SEMILLA_NO_CHECK=0`. No test changed its expected facts.
+- Each new test builds the small workspace of the test file: it has no dependency from crates.io, and cargo runs with `--offline`.
+- A test of the build check uses the tool chain of the test run (cargo sets `RUSTUP_TOOLCHAIN`). The tests of the tool chain rule make a rustup home in the test folder, with one tool chain `proj-1.0` that is a link to the tool chain of the test run. No test downloads a tool chain.
+
+### 53.8 The results
+
+**The ten fixtures** (real crates, 300 to 1700 changed lines; release binaries; two runs; the time of the full `semilla step` command, and the time of the check alone in brackets). The cold run has an empty cache. The warm run is the next step, after a small edit of `src/lib.rs`.
+
+| Fixture | `--no-check` | Cold check | Warm check | Check folder |
+|---|---|---|---|---|
+| `bytes` | 0.95, 0.92 s | 3.71, 3.69 s (2.7 s) | 1.44, 1.44 s (0.5 s) | 49 MB |
+| `cpufeatures` | 0.08, 0.08 s | 0.22, 0.22 s (0.1 s) | 0.17, 0.17 s (0.1 s) | 2 MB |
+| `nu-ansi-term` | 0.30, 0.33 s | 2.26, 2.23 s (1.9 s) | 0.40, 0.41 s (0.1 s) | 31 MB |
+| `quickcheck` | 0.28, 0.27 s | 3.86, 3.89 s (3.6 s) | 0.41, 0.41 s (0.2 s) | 56 MB |
+| `quickcheck-2` | 0.40, 0.37 s | 2.80, 2.80 s (2.4 s) | 0.40, 0.40 s (0.2 s) | 34 MB |
+| `rand_chacha-2` | 0.14, 0.15 s | 2.99, 3.03 s (2.8 s) | 0.22, 0.20 s (0.1 s) | 55 MB |
+| `rand_core-4` | 0.33, 0.31 s | 0.50, 0.52 s (0.2 s) | 0.26, 0.26 s (0.1 s) | 3 MB |
+| `rand_xoshiro` | 0.25, 0.25 s | 2.10, 2.10 s (1.8 s) | 0.30, 0.28 s (0.1 s) | 19 MB |
+| `socket2` | 0.73, 0.73 s | 1.65, 1.66 s (0.9 s) | 0.78, 0.81 s (0.1 s) | 16 MB |
+| `utf8_iter` | 0.24, 0.24 s | 0.46, 0.48 s (0.2 s) | 0.19, 0.18 s (0.1 s) | 4 MB |
+
+- 10 of the 10 fixtures pass the check. No fixture has the result `fails` or a check that cannot run.
+- The first check of a repository adds 0.1 to 3.6 s: cargo checks each dependency. A next check adds 0.1 to 0.5 s.
+- A type error that a test adds to `cpufeatures` gives the result `fails` in 0.2 s.
+- A different job used a part of the machine during the measure.
+
+**The cases of the batches 9a, 9a2, and 9a3** (134 cases, default mode, with the check):
+
+| Set | Cases | `passes` | `no new failure found` | `fails` | Cannot run |
+|---|---|---|---|---|---|
+| 9a (`b9a/cases`) | 60 | 58 | 1 | 1 | 0 |
+| 9a2 (`b9a2/cases`) | 59 | 51 | 3 | 5 | 0 |
+| 9a3 (`b9a3/cases.py`) | 15 | 13 | 0 | 2 | 0 |
+| Total | 134 | 122 | 4 | 8 | 0 |
+
+- The 8 cases with `fails` have a new tree that does not build: `c_parse_error` (a delimiter that does not close), `r4_stale`, `r4_stale_field`, `r4_stale_ret`, `r4_stale_type`, `r4_stale_use` (a rename that misses a use: E0425, E0432), `n1b_turbofish` (E0277), `n3c_glob_edit` (E0308). Before this batch, the default mode stored each of these steps.
+- The 4 cases with `no new failure found` have a tree before the step that does not build: `c_no_build`, `cl_scope_local`, `cl_scope_pure`, `cl_scope_self`.
+- With the check off, each of the 134 cases gives the output of the binary of batch 9a3, plus the line "build check: not run". No fact line changes.
+
+**The tests.** `cargo test --workspace`: 793 tests pass (779 before, 14 new: 10 in `tests/e2e.rs`, 3 in `buildcheck.rs`, 1 in `semilla-core`). No test changed its expected output. The time of the full run: 134 s before; 150 s and 111 s after (two runs), with a different job on the machine. With the same machine load, `tests/e2e.rs` takes 53 s before and 55 s after, and `tests/large.rs` takes 47.5 s before and 47.2 s after. The 10 new tests of `tests/e2e.rs` take 1.7 s alone.
+
+**A defect that the time measure found.** The first version of this batch made `tests/large.rs` slow (77 s). The cause: the key of a step result in the memo of the process (`StepMemo::key`) was the JSON text of the step, and the step gets the record of the build check after the check. So `semilla step --compiled` ran the compiled check of a stored step a second time. **Decided by Claude:** the key does not have the field `build_check`: the record is not an input of the step check. A test counts the body compares of one compiled step.
+
+### 53.9 The limits and the open questions
+
+- **The record is the word of the machine of the author.** A reviewer command does not build the code. It shows the stored result. An author who edits the session file can change the record, as each text of the agent. A reviewer who needs a proof of the build must run `cargo check`, or CI must.
+- **The default mode now runs code of the tree.** `cargo check` runs the build scripts and the proc macros of the tree and of its dependencies, in the sandbox of a phase 2 build. Before this batch, `semilla step` with no `--compiled` ran no code of the tree. A reviewer command still runs none.
+- **One configuration.** The check builds the profile `dev` with the default features for the host platform. Code behind a different feature or a different platform is not checked.
+- **The tool chain.** The check uses the tool chain of the author (53.2). Semilla does not read a `rustup override`, a tool chain file above the repository, or the keys `components` and `targets` of the file. A machine with two hosts of one tool chain name (for example `gnu` and `musl`) gets "cannot run". The record does not name the tool chain of the check.
+- **Two tool chains.** A step with `--compiled` gets its result from the pinned tool chain of Semilla (53.5). A step with no `--compiled` gets it from the tool chain of the author. The two can differ for the same tree (a lint with `deny(warnings)`, a nightly feature).
+- **The compare of rule 8 is by target, not by error.** A step that adds a second error to a target that already does not build is stored with `no new failure found`. The marked line tells this limit.
+- **A target behind a failed target.** Cargo does not check a target that depends on a failed target. If the target that stops it fails before the step and after it, the check does not cover the target, and the line names only the failed target ("or in a target that needs it"). If the step corrects the failed target, an old error and a new error of the target behind it look the same: the step is stored, and the line says that Semilla cannot tell.
+- **The message shows 5 errors.** A count line tells the number of the others.
+- **`--compiled --fast`:** the build check runs in the foreground, and the compiled check builds the same tree later in the background, in a different folder.
+- **The disk.** `check/target` stays in the cache folder (2 to 56 MB for the fixtures) until `semilla cache --clean` removes it. No size limit removes it by itself.
+- **A manifest that does not parse** stops the command in the syntax phase, before the check, with the message of before.
+- **A large workspace** with many dependencies was not measured: each fixture is one crate. The first check can take much longer there.
+- **Open question: the review layout.** A step with `not run` has a line with `!` in the notices. Must a review also mark the step itself, or the result line ("accepted")?
+- **Open question: the order of the tool chain sources.** The file of the tree comes before `RUSTUP_TOOLCHAIN` (the brief). Rustup has the variable first. Is the order of the brief the final rule?
+- **Open question: the tool chain in the record.** Must the record name the tool chain of the check, so that a reviewer sees it?
+- **Open question: `--compiled`.** Must a step with `--compiled` also pass `cargo check` with the tool chain of the author, when this is not the pinned tool chain?
+- **Open question: the reviewer.** Must a reviewer command have an option that runs the build check again from the trees?
+- **Open question: the check of the last tree.** A plan of work in progress can use `--no-check` for each step. Must Semilla then check the last tree one time, at `tag`?
+
+### 53.10 Batch 9a4b: the fix round
+
+Date: 2026-11-21. The coordinator verified batch 9a4 and found five defects of the check. No rule of the syntax phase or of phase 2 changes.
+
+| Item | The defect | The correction | Where |
+|---|---|---|---|
+| F1 | Rule 8 compared two lists of failed targets. Cargo does not check a target behind a failed target, so a step that corrects a library was rejected for an old error of a test. | A target of the tree before the step has three states (53.4). Only a target that builds before the step, or a new target, rejects the step. | 53.1 rule 8, 53.4 |
+| F2 | "build check: passes, but the targets … do not build". | The result `no new failure found`, and a marked line for each limit. `passes` is only for a tree in which each target builds. | 53.3, 53.6 |
+| F3 | `semilla tag` printed no line of the build check. | `tag` prints each marked line. It does not refuse. | 53.6 |
+| F4 | The check used the pinned nightly tool chain of Semilla. | The tool chain of the author: the file of the tree, then the default of the machine. No download. The key of a stored result has the identity of the tool chain. | 53.2, 53.5 |
+| F5 | `semilla cache --clean` did not remove `check/`. | It removes the folder and tells the size. | 53.2 |
+
+**The ten fixtures with the tool chain of the author.** No fixture has a tool chain file, so the check uses the default of the machine (`stable`, cargo 1.100.0). Batch 9a4 used the pinned nightly (the table of 53.8). Release binaries; two runs; the time of the full `semilla step` command, and the time of the check alone in brackets.
+
+| Fixture | `--no-check` | Cold check | Warm check | Check folder |
+|---|---|---|---|---|
+| `bytes` | 1.13, 0.94 s | 3.96, 3.98 s (3.0 s) | 1.52, 1.51 s (0.6 s) | 45 MB |
+| `cpufeatures` | 0.08, 0.08 s | 0.24, 0.23 s (0.1 s) | 0.17, 0.16 s (0.1 s) | 2 MB |
+| `nu-ansi-term` | 0.31, 0.31 s | 2.35, 2.28 s (2.0 s) | 0.38, 0.40 s (0.1 s) | 30 MB |
+| `quickcheck` | 0.27, 0.27 s | 3.87, 3.87 s (3.6 s) | 0.40, 0.42 s (0.2 s) | 54 MB |
+| `quickcheck-2` | 0.40, 0.38 s | 2.90, 2.95 s (2.5 s) | 0.41, 0.42 s (0.2 s) | 32 MB |
+| `rand_chacha-2` | 0.13, 0.13 s | 2.93, 3.01 s (2.8 s) | 0.21, 0.23 s (0.1 s) | 54 MB |
+| `rand_core-4` | 0.30, 0.29 s | 0.50, 0.50 s (0.2 s) | 0.23, 0.24 s (0.1 s) | 3 MB |
+| `rand_xoshiro` | 0.26, 0.23 s | 2.12, 2.13 s (1.9 s) | 0.29, 0.29 s (0.1 s) | 18 MB |
+| `socket2` | 0.76, 0.73 s | 1.80, 1.77 s (1.0 s) | 0.86, 0.83 s (0.1 s) | 15 MB |
+| `utf8_iter` | 0.21, 0.25 s | 0.48, 0.48 s (0.3 s) | 0.18, 0.19 s (0.1 s) | 4 MB |
+
+- 10 of the 10 fixtures pass the check with `stable`. The times are equal to the times of batch 9a4 within 0.3 s.
+- **The 134 cases** with the check and `stable`: 122 `passes`, 4 `no new failure found`, 8 `fails`, 0 cannot run. These are the counts and the cases of 53.8. With `SEMILLA_NO_CHECK=1`, each case gives the output of the binary of batch 9a3, plus the line "build check: not run". No fact line changes.
+- **The held-out measure of the coordinator.** 27 real crates with 1,109 steps (changes of 300 to 7,000 lines), with the check on and the default tool chain `stable`: 1,108 steps get `passes`. One step gets `no new failure found`: a bench of its crate needs a nightly feature, so it does not build before the step and after it. No step is rejected, and no fact line changes. The longest check takes 3.4 s. With the check off, each held-out set gives the results of batch 9a3.
+- **The tests.** `cargo test --workspace`: 806 tests pass (793 before, 13 new: 7 in `tests/e2e.rs`, 4 in `semilla-normal`, 2 in `buildcheck.rs`). Two tests of batch 9a4 have new expected words (the base note, the text of a missing tool chain). No test changed its expected facts. The time of the full run: 154 s.

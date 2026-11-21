@@ -57,6 +57,107 @@ pub struct Step {
     /// with no field is a step of an earlier version: it has the compiled check.
     #[serde(default = "compiled_default", skip_serializing_if = "is_true")]
     pub compiled: bool,
+    /// The result of the build check of the new tree of the step (design 53), from the machine
+    /// of the author. A stored step with no field is a step of an earlier version: it has no
+    /// result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_check: Option<BuildCheck>,
+}
+
+/// The result of the build check of a stored step (design 53). A step that does not build is
+/// not stored, so the record has no result `fails`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum BuildCheck {
+    /// Each target of the new tree builds.
+    Passes,
+    /// The check did not run (`--no-check`, `SEMILLA_NO_CHECK`).
+    NotRun,
+    /// Some targets of the new tree do not build, and Semilla found no failure that the step
+    /// makes (rule 8 of design 53). The JSON name stays `base_fails`.
+    BaseFails {
+        /// The targets that do not build before the step and after it, in the words of cargo:
+        /// `` `demo` (bench "speed") ``.
+        #[serde(default)]
+        targets: Vec<String>,
+        /// The targets that do not build after the step, and that cargo did not check before
+        /// the step: a different target did not build then. Semilla cannot tell if the step
+        /// makes their errors.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        not_checked: Vec<String>,
+    },
+}
+
+/// "the target A" or "the targets A, B", with the verb for one target or for many.
+fn targets_text(targets: &[String], one: &str, many: &str) -> String {
+    if targets.len() == 1 { format!("the target {} {one}", targets[0]) } else { format!("the targets {} {many}", targets.join(", ")) }
+}
+
+impl BuildCheck {
+    /// The result, in the words of each output. Only a tree in which each target builds has
+    /// the word `passes`.
+    pub fn text(&self) -> &'static str {
+        match self {
+            BuildCheck::Passes => "passes",
+            BuildCheck::NotRun => "not run",
+            BuildCheck::BaseFails { .. } => "no new failure found",
+        }
+    }
+
+    /// What Semilla did not check, in plain words: one sentence for each gap. A result
+    /// `passes` has none. `base_failed` names the targets that did not build before the step,
+    /// when the caller knows them (the command that records the step).
+    pub fn limits(&self, base_failed: &[String]) -> Vec<String> {
+        match self {
+            BuildCheck::Passes => Vec::new(),
+            BuildCheck::NotRun => vec!["the author turned the check off, so Semilla did not check that this code builds".to_string()],
+            BuildCheck::BaseFails { targets, not_checked } => {
+                let mut lines = Vec::new();
+                if !targets.is_empty() {
+                    let these = if targets.len() == 1 { "this target" } else { "these targets" };
+                    let them = if targets.len() == 1 { "it" } else { "them" };
+                    lines.push(format!("{} before the step and after it, so Semilla did not check a new error of the step in {these}, or in a target that needs {them}", targets_text(targets, "does not build", "do not build")));
+                }
+                if !not_checked.is_empty() {
+                    let (it, error) = if not_checked.len() == 1 { ("it", "this error") } else { ("them", "these errors") };
+                    let cause = if base_failed.is_empty() { "a different target did not build then".to_string() } else { format!("{} then", targets_text(base_failed, "did not build", "did not build")) };
+                    lines.push(format!("{} after the step, and cargo did not check {it} before the step ({cause}), so Semilla cannot tell if the step makes {error}", targets_text(not_checked, "does not build", "do not build")));
+                }
+                lines
+            }
+        }
+    }
+
+    /// True for a result that a reviewer must see with a mark: Semilla did not see that each
+    /// target of the step builds.
+    pub fn is_gap(&self) -> bool {
+        !matches!(self, BuildCheck::Passes)
+    }
+}
+
+/// The lines of the build check for a reviewer of a change set (design 53): one line for each
+/// result, with its steps. A step with no stored result (an earlier version) has no line.
+pub fn build_check_lines(steps: &[Step]) -> Vec<String> {
+    let mut groups: Vec<(&BuildCheck, Vec<usize>)> = Vec::new();
+    for step in steps {
+        let Some(check) = &step.build_check else { continue };
+        match groups.iter_mut().find(|(known, _)| *known == check) {
+            Some((_, list)) => list.push(step.index),
+            None => groups.push((check, vec![step.index])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(check, list)| {
+            let place = if list.len() == steps.len() && list.len() > 1 {
+                "each step".to_string()
+            } else {
+                format!("step{} {}", if list.len() == 1 { "" } else { "s" }, list.iter().map(|index| index.to_string()).collect::<Vec<_>>().join(", "))
+            };
+            let why: String = check.limits(&[]).iter().enumerate().map(|(index, limit)| format!("{}{limit}", if index == 0 { ": " } else { "; " })).collect();
+            format!("{}build check of {place}: {}{why}", if check.is_gap() { "! " } else { "" }, check.text())
+        })
+        .collect()
 }
 
 /// The mode of a stored step that has no `compiled` field.
@@ -207,6 +308,49 @@ mod tests {
     }
 
     #[test]
+    fn the_build_check_record_and_its_lines() {
+        // Design 53: a stored step of an earlier version has no result, and no line.
+        let json = r#"{"index":0,"intent":"a","claims":[],"tree_before":"x","tree_after":"y"}"#;
+        let old: Step = serde_json::from_str(json).unwrap();
+        assert_eq!(old.build_check, None);
+        assert_eq!(serde_json::to_string(&old).unwrap(), json);
+        assert!(build_check_lines(std::slice::from_ref(&old)).is_empty());
+        let step = |index: usize, check: BuildCheck| Step { index, build_check: Some(check), ..old.clone() };
+        let stored = serde_json::to_string(&step(0, BuildCheck::NotRun)).unwrap();
+        assert!(stored.ends_with(r#""build_check":{"result":"not_run"}}"#), "{stored}");
+        assert_eq!(serde_json::from_str::<Step>(&stored).unwrap().build_check, Some(BuildCheck::NotRun));
+        assert_eq!(build_check_lines(&[step(0, BuildCheck::Passes), step(1, BuildCheck::Passes)]), ["build check of each step: passes"]);
+        let base = BuildCheck::BaseFails { targets: vec!["`demo` (bench \"speed\")".to_string()], not_checked: Vec::new() };
+        assert_eq!(
+            build_check_lines(&[step(0, BuildCheck::Passes), step(1, BuildCheck::NotRun), step(2, base), step(3, BuildCheck::NotRun)]),
+            [
+                "build check of step 0: passes",
+                "! build check of steps 1, 3: not run: the author turned the check off, so Semilla did not check that this code builds",
+                "! build check of step 2: no new failure found: the target `demo` (bench \"speed\") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it",
+            ]
+        );
+        // Only a tree in which each target builds has the word `passes`.
+        let api = vec!["`shop` (test \"api\")".to_string()];
+        let unknown = BuildCheck::BaseFails { targets: Vec::new(), not_checked: api.clone() };
+        assert!(!unknown.text().contains("passes") && unknown.is_gap());
+        let stored = serde_json::to_string(&unknown).unwrap();
+        assert_eq!(stored, r#"{"result":"base_fails","targets":[],"not_checked":["`shop` (test \"api\")"]}"#);
+        assert_eq!(serde_json::from_str::<BuildCheck>(&stored).unwrap(), unknown);
+        // A record of batch 9a4 has no second list.
+        assert_eq!(serde_json::from_str::<BuildCheck>(r#"{"result":"base_fails","targets":["a"]}"#).unwrap(), BuildCheck::BaseFails { targets: vec!["a".to_string()], not_checked: Vec::new() });
+        assert_eq!(
+            build_check_lines(&[step(0, unknown.clone())]),
+            ["! build check of step 0: no new failure found: the target `shop` (test \"api\") does not build after the step, and cargo did not check it before the step (a different target did not build then), so Semilla cannot tell if the step makes this error"]
+        );
+        // The command that records the step names the targets that did not build before it.
+        assert_eq!(
+            unknown.limits(&["`shop` (lib)".to_string(), "`shop` (lib test)".to_string()]),
+            ["the target `shop` (test \"api\") does not build after the step, and cargo did not check it before the step (the targets `shop` (lib), `shop` (lib test) did not build then), so Semilla cannot tell if the step makes this error"]
+        );
+        assert!(BuildCheck::Passes.limits(&[]).is_empty() && !BuildCheck::Passes.is_gap());
+    }
+
+    #[test]
     fn next_claim_id_skips_used_ids() {
         let step = Step {
             index: 0,
@@ -216,6 +360,7 @@ mod tests {
             tree_after: String::new(),
             reasons: Default::default(),
             compiled: false,
+            build_check: None,
         };
         let set = ChangeSet { steps: vec![step], ..Default::default() };
         assert_eq!(set.next_claim_id(), "c3");

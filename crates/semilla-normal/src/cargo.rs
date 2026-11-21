@@ -72,8 +72,7 @@ pub fn toolchain_root() -> Result<PathBuf> {
     static ROOT: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         let name = toolchain();
-        let absolute = |name: &str| std::env::var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
-        let Some(home) = absolute("RUSTUP_HOME").or_else(|| absolute("HOME").map(|home| home.join(".rustup"))) else {
+        let Some(home) = rustup_home() else {
             return Err("cannot find the rustup home: set RUSTUP_HOME or HOME to an absolute path".to_string());
         };
         let folder = home.join("toolchains");
@@ -92,6 +91,121 @@ pub fn toolchain_root() -> Result<PathBuf> {
     })
     .clone()
     .map_err(|text| anyhow::anyhow!(text))
+}
+
+/// The rustup home: `RUSTUP_HOME` if it is an absolute path, else `$HOME/.rustup`.
+fn rustup_home() -> Option<PathBuf> {
+    let absolute = |name: &str| std::env::var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+    absolute("RUSTUP_HOME").or_else(|| absolute("HOME").map(|home| home.join(".rustup")))
+}
+
+/// What the toolchain file of a tree names (`rust-toolchain.toml` or `rust-toolchain`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TreeToolchain {
+    /// The key `channel`, or the one line of a file in the old form.
+    Channel(String),
+    /// The key `path`: the folder of a toolchain.
+    Path(PathBuf),
+}
+
+/// The toolchain of the build check of a tree (design 53.2): the toolchain that cargo uses for
+/// the author in this tree. It is not the toolchain of the driver ([`toolchain_root`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckToolchain {
+    /// The folder of the toolchain. Semilla starts `bin/cargo` of this folder by its full path.
+    pub root: PathBuf,
+    /// The name and its source, for a message: "`stable` (the default of rustup)".
+    pub name: String,
+}
+
+/// True if a folder has the programs of a toolchain.
+fn is_toolchain(path: &Path) -> bool {
+    path.join("bin/cargo").is_file() && path.join("bin/rustc").is_file()
+}
+
+/// Finds the toolchain of the build check (design 53.2), in this order:
+///
+/// 1. the toolchain file of the tree (`tree`: what the file names, and the name of the file);
+/// 2. the variable `RUSTUP_TOOLCHAIN`;
+/// 3. the default toolchain of rustup (`default_toolchain` in `settings.toml` of the rustup home);
+/// 4. the `cargo` of `PATH`, if it is not a program of rustup.
+///
+/// Semilla starts no program of rustup, so it never downloads a toolchain. A toolchain that is
+/// not on the machine is an error with the command that installs it.
+pub fn check_toolchain(tree: Option<(&TreeToolchain, &str)>) -> Result<CheckToolchain> {
+    let variable = std::env::var("RUSTUP_TOOLCHAIN").ok().filter(|name| !name.is_empty());
+    let home = rustup_home();
+    let default = || {
+        let text = std::fs::read_to_string(home.as_ref()?.join("settings.toml")).ok()?;
+        let value = text.lines().find_map(|line| line.trim().strip_prefix("default_toolchain")?.trim().strip_prefix('=').map(|value| value.trim().trim_matches('"').to_string()))?;
+        (!value.is_empty()).then_some(value)
+    };
+    let (name, source) = match tree {
+        Some((TreeToolchain::Path(path), file)) => {
+            if path.is_absolute() && is_toolchain(path) {
+                return Ok(CheckToolchain { root: std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()), name: format!("`{}` (the file `{file}` of the tree)", path.display()) });
+            }
+            bail!("the file `{file}` of the tree names the toolchain folder `{}`. The build check can use only an absolute path of a folder with `bin/cargo` and `bin/rustc`", path.display());
+        }
+        Some((TreeToolchain::Channel(name), file)) => (name.clone(), format!("the file `{file}` of the tree")),
+        None => match (variable, default()) {
+            (Some(name), _) => (name, "the variable RUSTUP_TOOLCHAIN".to_string()),
+            (None, Some(name)) => (name, "the default of rustup".to_string()),
+            (None, None) => return path_toolchain(),
+        },
+    };
+    // `RUSTUP_TOOLCHAIN` can be the path of a toolchain folder.
+    if Path::new(&name).is_absolute() && is_toolchain(Path::new(&name)) {
+        return Ok(CheckToolchain { root: std::fs::canonicalize(&name).unwrap_or_else(|_| PathBuf::from(&name)), name: format!("`{name}` ({source})") });
+    }
+    let Some(home) = home else { bail!("cannot find the rustup home for the toolchain `{name}` ({source}): set RUSTUP_HOME or HOME to an absolute path") };
+    let folder = home.join("toolchains");
+    // The folder has the full name, or the name and the host of this machine
+    // (`stable-x86_64-unknown-linux-gnu`). The name `nightly` must not find `nightly-2026-01-01-…`.
+    let mut found: Vec<PathBuf> = vec![folder.join(&name)].into_iter().filter(|path| is_toolchain(path)).collect();
+    if found.is_empty() {
+        let start = format!("{name}-{}-", std::env::consts::ARCH);
+        found = std::fs::read_dir(&folder).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.file_name().is_some_and(|file| file.to_string_lossy().starts_with(&start)) && is_toolchain(path)).collect();
+        found.sort();
+    }
+    match found.as_slice() {
+        [one] => Ok(CheckToolchain { root: std::fs::canonicalize(one).unwrap_or_else(|_| one.clone()), name: format!("`{name}` ({source})") }),
+        [] => bail!("the toolchain `{name}` ({source}) is not on this machine: {} has no folder for it. The build check does not download a toolchain. Run `rustup toolchain install {name}`", folder.display()),
+        _ => bail!("{} has more than one toolchain `{name}` ({source}): give the full name with the host", folder.display()),
+    }
+}
+
+/// The toolchain of the `cargo` program of `PATH`, for a machine with no rustup default. A
+/// program of rustup is not a toolchain: it can download one.
+fn path_toolchain() -> Result<CheckToolchain> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let Some(cargo) = std::env::split_paths(&path).map(|folder| folder.join("cargo")).find(|file| file.is_file()) else {
+        bail!("cannot find a toolchain: rustup has no default toolchain, and `PATH` has no `cargo`. Run `rustup default stable`");
+    };
+    let real = std::fs::canonicalize(&cargo).unwrap_or_else(|_| cargo.clone());
+    let proxy = real.file_name().is_some_and(|name| name == "rustup") || cargo.with_file_name("rustup").is_file();
+    let root = real.parent().and_then(Path::parent).filter(|root| !proxy && is_toolchain(root));
+    match root {
+        Some(root) => Ok(CheckToolchain { root: root.to_path_buf(), name: format!("`{}` (the `cargo` of `PATH`)", cargo.display()) }),
+        None if proxy => bail!("cannot find a toolchain: `{}` is a program of rustup, and rustup has no default toolchain. Run `rustup default stable`", cargo.display()),
+        None => bail!("cannot find a toolchain: `{}` has no `rustc` in its folder", cargo.display()),
+    }
+}
+
+/// The key of a stored result of the build check (design 53.2): [`settings_key`] with no driver,
+/// and the identity of the toolchain of the check (its folder, and the size and the time of its
+/// compiler binary). So a different toolchain runs the check again.
+pub fn check_settings_key(build_base: &Path, toolchain: &CheckToolchain) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    settings_key(build_base, None).hash(&mut hasher);
+    let rustc = toolchain.root.join("bin/rustc");
+    std::fs::canonicalize(&rustc).unwrap_or_else(|_| rustc.clone()).hash(&mut hasher);
+    if let Ok(meta) = std::fs::metadata(&rustc) {
+        meta.len().hash(&mut hasher);
+        meta.modified().ok().hash(&mut hasher);
+    }
+    format!("{:012x}", hasher.finish() & 0xffff_ffff_ffff)
 }
 
 /// Each cargo configuration file outside the tree that a build in `build_base` reads: the files
@@ -755,7 +869,11 @@ enum Graph {
 }
 
 fn metadata_command(workspace: &Path, graph: Graph, sandbox: &crate::sandbox::Sandbox) -> Result<serde_json::Value> {
-    let root = toolchain_root()?;
+    metadata_command_with(&toolchain_root()?, workspace, graph, sandbox)
+}
+
+/// As [`metadata_command`], with the cargo of the toolchain folder `root`.
+fn metadata_command_with(root: &Path, workspace: &Path, graph: Graph, sandbox: &crate::sandbox::Sandbox) -> Result<serde_json::Value> {
     let mut command = Command::new(root.join("bin/cargo"));
     command.arg("metadata");
     match graph {
@@ -765,9 +883,9 @@ fn metadata_command(workspace: &Path, graph: Graph, sandbox: &crate::sandbox::Sa
     }
     command.args(["--offline", "--format-version", "1"]).current_dir(workspace);
     // A new environment (batch 5v, part A): no variable of the Semilla command goes to cargo.
-    build_environment(&mut command, &root, None);
+    build_environment(&mut command, root, None);
     let workspace_real = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    let sandbox = crate::sandbox::Sandbox { folders: sandbox.folders.clone(), files: sandbox.files.clone(), read: read_list(&workspace_real, &root) };
+    let sandbox = crate::sandbox::Sandbox { folders: sandbox.folders.clone(), files: sandbox.files.clone(), read: read_list(&workspace_real, root) };
     sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for `cargo metadata`: {cause}"))?;
     let output = crate::sandbox::run_and_stop(&mut command).context("cannot run cargo")?;
     if !output.status.success() {
@@ -800,6 +918,284 @@ pub fn missing_dependency(text: &str) -> bool {
     ]
     .iter()
     .any(|mark| text.contains(mark))
+}
+
+/// One error of the compiler in a build check: the target of cargo, and the text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BuildError {
+    /// The package ID of the target, as cargo writes it.
+    pub package: String,
+    /// The kinds of the target (`lib`, `bin`, `test`, `example`, `bench`, `custom-build`).
+    pub kinds: Vec<String>,
+    /// The name of the target.
+    pub name: String,
+    /// The text of the error, with the file and the line.
+    pub text: String,
+}
+
+impl BuildError {
+    /// True if the error can be an error of the build unit `unit`, in the words of cargo: for
+    /// example `` `demo` (lib test) `` or `` `demo` (test "api") ``.
+    pub fn in_unit(&self, unit: &str) -> bool {
+        let Some((package, rest)) = unit.strip_prefix('`').and_then(|rest| rest.split_once("` (")) else { return false };
+        if !(self.package.contains(&format!("/{package}#")) || self.package.contains(&format!("#{package}@")) || self.package.starts_with(&format!("{package} "))) {
+            return false;
+        }
+        let rest = rest.trim_end_matches(')');
+        let kind = rest.split(' ').next().unwrap_or_default();
+        match rest.split('"').nth(1) {
+            Some(name) => self.name == name && self.kinds.iter().any(|found| found == kind),
+            None if kind == "build" => self.kinds.iter().any(|found| found == "custom-build"),
+            None => !self.kinds.iter().any(|found| ["bin", "test", "example", "bench", "custom-build"].contains(&found.as_str())),
+        }
+    }
+}
+
+/// The result of the build check of one tree (design 53).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BuildRun {
+    /// The build units that do not build, in the words of cargo: `` `demo` (lib test) ``. The
+    /// list is empty if the tree builds.
+    pub failed: Vec<String>,
+    /// The errors of the compiler.
+    pub errors: Vec<BuildError>,
+    /// The `error` lines of cargo that name no build unit.
+    pub other: String,
+    /// The build units that cargo built in a run with a failure (the `compiler-artifact`
+    /// messages), in the words of cargo. Empty if the tree builds.
+    #[serde(default)]
+    pub built: Vec<String>,
+    /// Each build unit of the target list of the tree (`cargo metadata`), for a run with a
+    /// failure. Empty if the tree builds, or if cargo cannot read the manifests.
+    #[serde(default)]
+    pub targets: Vec<String>,
+}
+
+/// The state of a build unit in the build check of one tree (design 53.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitState {
+    /// Cargo built the unit. For a tree that builds, this is the state of each unit: a unit
+    /// that the tree does not have is a new unit, with the same effect.
+    Builds,
+    /// The unit does not build.
+    Fails,
+    /// The tree has the unit, but cargo did not check it: a unit that it needs does not build.
+    NotChecked,
+    /// The tree does not have the unit.
+    Absent,
+}
+
+impl BuildRun {
+    /// The state of a build unit in this run. The facts are the failed list, the
+    /// `compiler-artifact` messages, and the target list of the tree. If cargo started no build
+    /// (a manifest that it cannot read), no unit of the tree was checked.
+    pub fn state(&self, unit: &str) -> UnitState {
+        let has = |list: &[String]| list.iter().any(|known| known == unit);
+        if has(&self.failed) {
+            UnitState::Fails
+        } else if self.failed.is_empty() || has(&self.built) {
+            UnitState::Builds
+        } else if has(&self.targets) || self.failed.iter().any(|failed| failed == NO_UNIT) {
+            UnitState::NotChecked
+        } else {
+            UnitState::Absent
+        }
+    }
+}
+
+/// The name of a build unit in the words of cargo, from the package name, the kinds and the
+/// name of the target, and the test mode: `` `demo` (lib test) ``, `` `demo` (test "api") ``.
+fn unit_name(package: &str, kinds: &[&str], name: &str, test: bool) -> String {
+    let kind = kinds.iter().copied().find(|kind| ["bin", "test", "bench", "example", "custom-build"].contains(kind)).unwrap_or("lib");
+    let mode = if test && !["test", "bench", "custom-build"].contains(&kind) { " test" } else { "" };
+    match kind {
+        "lib" => format!("`{package}` (lib{mode})"),
+        "custom-build" => format!("`{package}` (build script)"),
+        _ => format!("`{package}` ({kind} \"{name}\"{mode})"),
+    }
+}
+
+/// The name of the unit of a build script that runs.
+fn script_run(package: &str) -> String {
+    format!("`{package}` (build script run)")
+}
+
+/// The package name in a package ID of cargo: `path+file:///work/demo#0.1.0`,
+/// `registry+https://…#serde@1.0.0`, or the old form `demo 0.1.0 (path+file:///work/demo)`.
+fn package_name(id: &str) -> String {
+    if let Some((name, _)) = id.split_once(' ') {
+        return name.to_string();
+    }
+    let (source, tail) = id.rsplit_once('#').unwrap_or((id, ""));
+    match tail.split_once('@') {
+        Some((name, _)) => name.to_string(),
+        None => source.rsplit('/').next().unwrap_or(source).to_string(),
+    }
+}
+
+/// The build units that cargo built: the `compiler-artifact` messages, and the build scripts
+/// that ran (`build-script-executed`). `names` has the package name of each package ID of the
+/// workspace.
+fn built_units(stdout: &str, names: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    let mut units = std::collections::BTreeSet::new();
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(id) = message.get("package_id").and_then(|id| id.as_str()) else { continue };
+        let package = names.get(id).cloned().unwrap_or_else(|| package_name(id));
+        match message.get("reason").and_then(|reason| reason.as_str()) {
+            Some("compiler-artifact") => {
+                let Some(target) = message.get("target") else { continue };
+                let kinds: Vec<&str> = target.get("kind").and_then(|kinds| kinds.as_array()).map(|kinds| kinds.iter().filter_map(|kind| kind.as_str()).collect()).unwrap_or_default();
+                let name = target.get("name").and_then(|name| name.as_str()).unwrap_or_default();
+                let test = message.get("profile").and_then(|profile| profile.get("test")).and_then(|test| test.as_bool()).unwrap_or(false);
+                units.insert(unit_name(&package, &kinds, name, test));
+            }
+            Some("build-script-executed") => drop(units.insert(script_run(&package))),
+            _ => {}
+        }
+    }
+    units.into_iter().collect()
+}
+
+/// The package names by package ID, and each build unit that `cargo check --all-targets` has
+/// for the target list of a workspace (the output of `cargo metadata --no-deps`).
+fn target_units(metadata: &serde_json::Value) -> (std::collections::BTreeMap<String, String>, Vec<String>) {
+    let mut names = std::collections::BTreeMap::new();
+    let mut units = std::collections::BTreeSet::new();
+    for package in metadata.get("packages").and_then(|packages| packages.as_array()).into_iter().flatten() {
+        let Some(package_name) = package.get("name").and_then(|name| name.as_str()) else { continue };
+        if let Some(id) = package.get("id").and_then(|id| id.as_str()) {
+            names.insert(id.to_string(), package_name.to_string());
+        }
+        for target in package.get("targets").and_then(|targets| targets.as_array()).into_iter().flatten() {
+            let kinds: Vec<&str> = target.get("kind").and_then(|kinds| kinds.as_array()).map(|kinds| kinds.iter().filter_map(|kind| kind.as_str()).collect()).unwrap_or_default();
+            let name = target.get("name").and_then(|name| name.as_str()).unwrap_or_default();
+            units.insert(unit_name(package_name, &kinds, name, false));
+            // A target with the test mode has a second unit. A build script has the unit of its run.
+            if target.get("test").and_then(|test| test.as_bool()).unwrap_or(false) {
+                units.insert(unit_name(package_name, &kinds, name, true));
+            }
+            if kinds.contains(&"custom-build") {
+                units.insert(script_run(package_name));
+            }
+        }
+    }
+    (names, units.into_iter().collect())
+}
+
+/// The name of the failed unit of a tree that cargo cannot start to build (design 53): for
+/// example a manifest that cargo cannot read.
+pub const NO_UNIT: &str = "`workspace` (cargo starts no build)";
+
+/// The build units of the lines `error: could not compile ...` of cargo, and each package
+/// with a build script that fails when it runs.
+fn failed_units(stderr: &str) -> Vec<String> {
+    let mut units: Vec<String> = stderr
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("error: could not compile "))
+        .filter_map(|rest| rest.find(") ").map(|end| rest[..=end].to_string()))
+        .collect();
+    let scripts = stderr.lines().filter_map(|line| line.trim_start().strip_prefix("error: failed to run custom build command for `"));
+    units.extend(scripts.filter_map(|rest| rest.split([' ', '`']).next()).map(script_run));
+    units.sort();
+    units.dedup();
+    units
+}
+
+/// The errors of the compiler in the JSON messages of cargo. An error text shows one time.
+fn build_errors(stdout: &str) -> Vec<BuildError> {
+    let mut errors: Vec<BuildError> = Vec::new();
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if message.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let Some(diagnostic) = message.get("message") else { continue };
+        if diagnostic.get("level").and_then(|l| l.as_str()).is_none_or(|level| !level.starts_with("error")) {
+            continue;
+        }
+        let Some(text) = diagnostic.get("rendered").and_then(|r| r.as_str()).or_else(|| diagnostic.get("message").and_then(|m| m.as_str())) else { continue };
+        let text = text.trim_end();
+        // The summary "aborting due to N previous errors" is not a cause.
+        if text.contains("aborting due to") {
+            continue;
+        }
+        let target = message.get("target");
+        let word = |key: &str| target.and_then(|target| target.get(key)).and_then(|value| value.as_str()).unwrap_or_default().to_string();
+        let kinds = target.and_then(|target| target.get("kind")).and_then(|kinds| kinds.as_array()).map(|kinds| kinds.iter().filter_map(|kind| kind.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        let error = BuildError { package: message.get("package_id").and_then(|id| id.as_str()).unwrap_or_default().to_string(), kinds, name: word("name"), text: text.to_string() };
+        // A library and its test build give the same error two times.
+        if !errors.iter().any(|known| known.text == error.text && known.package == error.package && known.kinds == error.kinds && known.name == error.name) {
+            errors.push(error);
+        }
+    }
+    errors
+}
+
+/// Runs the build check of a tree (design 53): `cargo check` for each target of the workspace,
+/// with the toolchain of the tree ([`check_toolchain`]), and with the new environment and the
+/// sandbox of a check build. The MIR driver does not run. `--keep-going` gives each build unit
+/// that does not build.
+///
+/// `Ok` is a result of the code: the units that do not build, and their errors. `Err` is a
+/// check that cannot run: no sandbox, a dependency that is not in the cargo cache, or a disk
+/// with no space.
+pub fn build_check(workspace: &Path, target_dir: &Path, toolchain: &CheckToolchain) -> Result<BuildRun> {
+    let root = toolchain.root.clone();
+    std::fs::create_dir_all(target_dir).with_context(|| format!("cannot create {}", target_dir.display()))?;
+    let target_dir = std::fs::canonicalize(target_dir)?;
+    let temporary = target_dir.join("tmp");
+    std::fs::create_dir_all(&temporary).with_context(|| format!("cannot create {}", temporary.display()))?;
+    let mut command = Command::new(root.join("bin/cargo"));
+    command.args(["check", "--workspace", "--quiet", "--offline", "--all-targets", "--keep-going", "--message-format=json"]);
+    command.arg("--target-dir").arg(&target_dir).current_dir(workspace);
+    build_environment(&mut command, &root, Some(&temporary));
+    // The sandbox of a check build (design 27): the build writes only its target folder.
+    let workspace_real = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let mut sandbox = crate::sandbox::Sandbox { folders: vec![target_dir.clone()], files: Vec::new(), read: read_list(&workspace_real, &root) };
+    // A tree with no lock file: cargo must write one, as in a check build of phase 2.
+    let lock = workspace.join("Cargo.lock");
+    if !lock.exists() && std::fs::write(&lock, "").is_ok() {
+        sandbox.files.push(lock);
+    }
+    sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the build check: {cause}"))?;
+    let output = crate::sandbox::run_and_stop(&mut command).with_context(|| format!("cannot run {}", root.join("bin/cargo").display()))?;
+    if output.status.success() {
+        return Ok(BuildRun::default());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let errors = build_errors(&stdout);
+    let all = format!("{stderr}\n{}", errors.iter().map(|error| error.text.as_str()).collect::<Vec<_>>().join("\n"));
+    // The causes that are not a defect of the code of the tree.
+    if missing_dependency(&all) {
+        bail!("a dependency is not in the cargo cache of this machine, and the build check does not download (cargo runs with `--offline`). Run `cargo fetch` in the repository.\n{}", first_errors(&stderr));
+    }
+    if all.contains("No space left on device") {
+        bail!("the disk has no space for the build folder {}.\n{}", target_dir.display(), first_errors(&stderr));
+    }
+    let mut failed = failed_units(&stderr);
+    // A cargo before version 1.74 does not have the option.
+    if failed.is_empty() && errors.is_empty() && stderr.contains("--keep-going") {
+        bail!("the cargo of the toolchain {} does not have the option `--keep-going` (cargo 1.74 or later has it).\n{}", toolchain.name, first_errors(&stderr));
+    }
+    if failed.is_empty() && errors.is_empty() && all.contains("Permission denied") {
+        bail!("the sandbox of the build stops a read or a write (the build writes only {}).\n{}", target_dir.display(), first_errors(&stderr));
+    }
+    if failed.is_empty() {
+        failed.push(NO_UNIT.to_string());
+    }
+    let other: Vec<&str> = stderr.lines().filter(|line| !line.trim_start().starts_with("error: could not compile ")).collect();
+    let mut other = if other.iter().any(|line| line.starts_with("error")) { first_errors(&other.join("\n")).trim_end().to_string() } else { String::new() };
+    // A file outside the tree that the sandbox does not let the build read.
+    if let Some(outside) = outside_files(&all) {
+        other = format!("{other}\n{outside}").trim_start().to_string();
+    }
+    // The facts for the state of each unit (design 53.4): the units that cargo built, and the
+    // target list of the tree. `cargo metadata --no-deps` starts no compiler and runs no code.
+    let (names, targets) = metadata_command_with(&root, workspace, Graph::NoDeps, &crate::sandbox::Sandbox::default()).map(|metadata| target_units(&metadata)).unwrap_or_default();
+    let built = built_units(&stdout, &names);
+    Ok(BuildRun { failed, errors, other, built, targets })
 }
 
 /// The output mode of the cargo command of a check build.
@@ -913,4 +1309,103 @@ fn run_check_command(
         return Err(anyhow::Error::new(FailedBuild { text, stdout }));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(test)]
+mod build_check_tests {
+    use super::*;
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|word| word.to_string()).collect()
+    }
+
+    #[test]
+    fn a_unit_has_the_name_that_cargo_gives() {
+        assert_eq!(unit_name("shop", &["lib"], "shop", false), "`shop` (lib)");
+        assert_eq!(unit_name("shop", &["rlib", "cdylib"], "shop", true), "`shop` (lib test)");
+        assert_eq!(unit_name("shop", &["proc-macro"], "shop", false), "`shop` (lib)");
+        assert_eq!(unit_name("shop", &["bin"], "tool", false), "`shop` (bin \"tool\")");
+        assert_eq!(unit_name("shop", &["bin"], "tool", true), "`shop` (bin \"tool\" test)");
+        assert_eq!(unit_name("shop", &["test"], "api", true), "`shop` (test \"api\")");
+        assert_eq!(unit_name("shop", &["bench"], "speed", true), "`shop` (bench \"speed\")");
+        assert_eq!(unit_name("shop", &["example"], "demo", false), "`shop` (example \"demo\")");
+        assert_eq!(unit_name("shop", &["custom-build"], "build-script-build", false), "`shop` (build script)");
+        assert_eq!(package_name("path+file:///work/shop#0.1.0"), "shop");
+        assert_eq!(package_name("path+file:///work/dir#shop@0.1.0"), "shop");
+        assert_eq!(package_name("registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0"), "serde");
+        assert_eq!(package_name("shop 0.1.0 (path+file:///work/shop)"), "shop");
+    }
+
+    #[test]
+    fn the_state_of_a_unit_comes_from_the_facts_of_the_cargo_run() {
+        // The base tree of design 53.4: the library does not build, so cargo does not check
+        // the integration test. The build script builds and runs.
+        let id = "path+file:///work/dir#0.1.0";
+        let metadata = serde_json::json!({"packages": [{"id": id, "name": "shop", "targets": [
+            {"kind": ["lib"], "name": "shop", "test": true},
+            {"kind": ["test"], "name": "api", "test": true},
+            {"kind": ["example"], "name": "demo", "test": false},
+            {"kind": ["custom-build"], "name": "build-script-build", "test": false},
+        ]}]});
+        let (names, targets) = target_units(&metadata);
+        assert_eq!(targets, words(&["`shop` (build script run)", "`shop` (build script)", "`shop` (example \"demo\")", "`shop` (lib test)", "`shop` (lib)", "`shop` (test \"api\")"]));
+        let artifact = |kind: &str, name: &str, test: bool| serde_json::json!({"reason": "compiler-artifact", "package_id": id, "target": {"kind": [kind], "name": name}, "profile": {"test": test}}).to_string();
+        let stdout = [artifact("custom-build", "build-script-build", false), serde_json::json!({"reason": "build-script-executed", "package_id": id}).to_string(), serde_json::json!({"reason": "build-finished", "success": false}).to_string()].join("\n");
+        // The package name comes from the target list: the folder name `dir` is not the name.
+        let built = built_units(&stdout, &names);
+        assert_eq!(built, words(&["`shop` (build script run)", "`shop` (build script)"]));
+        let run = BuildRun { failed: words(&["`shop` (lib test)", "`shop` (lib)"]), built, targets, ..Default::default() };
+        assert_eq!(run.state("`shop` (lib)"), UnitState::Fails);
+        assert_eq!(run.state("`shop` (build script)"), UnitState::Builds);
+        assert_eq!(run.state("`shop` (test \"api\")"), UnitState::NotChecked);
+        assert_eq!(run.state("`shop` (example \"demo\")"), UnitState::NotChecked);
+        // The tree does not have this target: a step that adds it makes its error.
+        assert_eq!(run.state("`shop` (test \"new\")"), UnitState::Absent);
+        // A tree that builds: each unit builds.
+        assert_eq!(BuildRun::default().state("`shop` (test \"api\")"), UnitState::Builds);
+        // Cargo started no build: no unit of the tree was checked.
+        let no_build = BuildRun { failed: words(&[NO_UNIT]), ..Default::default() };
+        assert_eq!(no_build.state("`shop` (lib)"), UnitState::NotChecked);
+        assert_eq!(no_build.state(NO_UNIT), UnitState::Fails);
+        // A stored result of batch 9a4 has no such lists: the state is not `NotChecked`.
+        let old: BuildRun = serde_json::from_str(r#"{"failed":["`shop` (lib)"],"errors":[],"other":""}"#).unwrap();
+        assert_eq!(old.state("`shop` (test \"api\")"), UnitState::Absent);
+    }
+
+    /// A folder with the two programs of a toolchain. `rustc` has the given content.
+    fn toolchain_folder(root: &Path, rustc: &str) {
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin/cargo"), "").unwrap();
+        std::fs::write(root.join("bin/rustc"), rustc).unwrap();
+    }
+
+    #[test]
+    fn the_key_of_a_stored_result_has_the_identity_of_the_toolchain() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one"), dir.path().join("two"));
+        toolchain_folder(&one, "a");
+        toolchain_folder(&two, "a");
+        let key = |root: &Path| check_settings_key(dir.path(), &CheckToolchain { root: root.to_path_buf(), name: String::new() });
+        let first = key(&one);
+        assert_eq!(first, key(&one));
+        // A different folder is a different toolchain.
+        assert_ne!(first, key(&two));
+        // A new compiler binary in the same folder (an update of `stable`) is a different toolchain.
+        std::fs::write(one.join("bin/rustc"), "a longer file").unwrap();
+        assert_ne!(first, key(&one));
+    }
+
+    #[test]
+    fn a_toolchain_path_of_the_tree_must_be_an_absolute_toolchain_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("custom");
+        toolchain_folder(&root, "a");
+        let found = check_toolchain(Some((&TreeToolchain::Path(root.clone()), "rust-toolchain.toml"))).unwrap();
+        assert_eq!(found.root, std::fs::canonicalize(&root).unwrap());
+        assert!(found.name.contains("the file `rust-toolchain.toml` of the tree"), "{}", found.name);
+        for path in [PathBuf::from("custom"), dir.path().join("no-such-folder")] {
+            let error = check_toolchain(Some((&TreeToolchain::Path(path), "rust-toolchain.toml"))).unwrap_err().to_string();
+            assert!(error.contains("can use only an absolute path of a folder with `bin/cargo` and `bin/rustc`"), "{error}");
+        }
+    }
 }

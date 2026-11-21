@@ -31,6 +31,9 @@ pub struct OpenStep {
     /// The mode of the step (design 50): true for a step with the compiled check.
     #[serde(default = "semilla_core::claim::compiled_default")]
     pub compiled: bool,
+    /// The result of the build check of the step (design 53), when the command has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_check: Option<semilla_core::BuildCheck>,
 }
 
 /// True if the environment asks for the compiled check of each step (`SEMILLA_COMPILED`, design
@@ -383,7 +386,10 @@ struct StepMemo {
 
 impl StepMemo {
     fn key(&self, step: &Step) -> String {
-        format!("{}\n{}", serde_json::to_string(step).unwrap_or_default(), self.inputs)
+        // The result of the build check (design 53) is not an input of the step check. The
+        // record gets it after the check, and the stored step must find the result of the check.
+        let step = Step { build_check: None, ..step.clone() };
+        format!("{}\n{}", serde_json::to_string(&step).unwrap_or_default(), self.inputs)
     }
 }
 
@@ -625,6 +631,24 @@ impl App {
         Ok((count, size))
     }
 
+    /// Removes the folder of the build check (design 53.2): the build folder, the target folder
+    /// of cargo, and the stored results. The next build check is cold. The result is the size
+    /// in bytes that the clean frees, or `None` if the cache has no such folder. The record of
+    /// a stored step does not change.
+    pub fn clean_build_check(&self) -> Result<Option<u64>> {
+        let folder = self.check_folder();
+        if !folder.is_dir() {
+            return Ok(None);
+        }
+        // A build check of a different process can use the folder now. The clean waits for
+        // its end. The lock file is in the folder, so it goes with the folder.
+        let lock = std::fs::File::create(folder.join("lock")).with_context(|| format!("cannot write the folder {}", folder.display()))?;
+        lock.lock()?;
+        let size = folder_size(&folder);
+        std::fs::remove_dir_all(&folder).with_context(|| format!("cannot remove the folder {}", folder.display()))?;
+        Ok(Some(size))
+    }
+
     /// The key of the shared folder set of a trusted base tree: the digest of its build code
     /// state. The result is in the cache folder of the user, by the tree and the tools. If
     /// Semilla cannot read the workspace or the dependency graph of the base, the key is the
@@ -768,7 +792,7 @@ impl App {
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
         }
-        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env() });
+        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env(), build_check: None });
         self.save_session(&session)?;
         let mut text = format!("step {} started at tree {tree}", session.changeset.steps.len());
         if session.changeset.steps.is_empty() {
@@ -908,14 +932,35 @@ impl App {
             group.steps.retain(|index| *index != step.index);
         }
         let claims = step.claims.len();
-        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled });
+        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled, build_check: None });
         self.save_session(&session)?;
         Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla old-step end`", step.index))
     }
 
-    /// Ends the open step. The current working tree is the "after" tree.
-    pub fn step_end(&mut self) -> Result<String> {
-        self.step_end_with(true)
+    /// True if the compiled check of this process built each target of the new tree of a step
+    /// in the configuration `dev` (design 53, rule 9). The log has the configuration only if the
+    /// build of the tree before the step and the build of the tree after it have no error.
+    pub(crate) fn compiled_build(&self, before: &str, after: &str) -> bool {
+        let key = (before.to_string(), after.to_string());
+        self.config_log.lock().is_ok_and(|log| log.get(&key).is_some_and(|configs| configs.checked.iter().any(|name| name == "dev")))
+    }
+
+    /// Ends the open step (`old-step end`). The current working tree is the "after" tree. The
+    /// build check runs first (design 53): a step that does not build stays open.
+    pub fn step_end(&mut self, no_check: bool) -> Result<String> {
+        let mut session = self.load_session()?;
+        let before = session.open.as_ref().context("no step is open")?.tree_before.clone();
+        let tree = self.repo.write_tree()?;
+        let (record, lines) = match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &tree) {
+            crate::buildcheck::Outcome::Stored { record, lines } => (record, lines),
+            crate::buildcheck::Outcome::Fails { text } => bail!("rejected: the step is not stored, and it stays open\n{text}\ncorrect the code, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
+            crate::buildcheck::Outcome::CannotRun { text } => bail!("not stored: the build check cannot run on this machine, and the step stays open\n{text}\ncorrect the environment, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
+        };
+        if let Some(open) = session.open.as_mut() {
+            open.build_check = Some(record);
+        }
+        self.save_session(&session)?;
+        Ok(format!("{}\n{}", self.step_end_with(true)?, lines.join("\n")))
     }
 
     /// Ends the open step. `queue` starts the background check (a plan queues it once, at the end).
@@ -924,7 +969,7 @@ impl App {
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
         let index = session.changeset.steps.len();
-        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled });
+        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         if queue {
@@ -1039,6 +1084,10 @@ impl App {
         // The build code of the base comes next to the base line (design 28.5).
         if let Some(notice) = self.base_build_code_notice(&set, commit.is_some().then_some(key.as_str())) {
             put_line(&mut text, &notice);
+        }
+        // Design 53: the stored result of the build check of each step.
+        for line in semilla_core::claim::build_check_lines(&set.steps) {
+            put_line(&mut text, &line);
         }
         // Batch 5y, C4.5. The hint of a result for a commit names the commit: `semilla status
         // --verbose` with no commit shows the session, which is a different result.
@@ -1447,7 +1496,7 @@ impl App {
         if let Some(open) = session.open {
             let tree = self.repo.write_tree()?;
             let index = set.steps.len();
-            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled });
+            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check });
             set.head_tree = tree;
         }
         Ok(set)
@@ -1890,7 +1939,10 @@ impl App {
             crate::background::spawn_worker(self)?;
         }
         let notice: String = self.base_notice(&set, Some(&commit)).into_iter().chain(self.base_build_code_notice(&set, Some(&commit))).map(|notice| format!("\n{notice}")).collect();
-        Ok(format!("{line}\ntagged {commit} with {} steps; the change set is closed{notice}", set.steps.len()))
+        // Design 53: `tag` shows each marked line of the build check that `status` shows (a step
+        // with no check, a step with a target that does not build). It does not refuse the tag.
+        let marks: String = semilla_core::claim::build_check_lines(&set.steps).iter().filter(|line| line.starts_with("! ")).map(|line| format!("\n{}", semilla_core::text::inline(line))).collect();
+        Ok(format!("{line}\ntagged {commit} with {} steps; the change set is closed{notice}{marks}", set.steps.len()))
     }
 
     /// Loads the change set of a tagged commit into the session (for a review).
@@ -2012,6 +2064,9 @@ impl App {
         report.notices.extend(self.build_code_notice(report));
         report.notices.extend(self.base_notice(set, commit));
         report.notices.extend(self.base_build_code_notice(set, commit));
+        // Design 53: the stored result of the build check of each step. A reviewer command
+        // reads the record. It does not run the check again.
+        report.notices.extend(semilla_core::claim::build_check_lines(&set.steps));
         // The checked configurations come next to the base line (batch 5s, B1).
         report.notices.extend(config_lines(report));
     }

@@ -40,6 +40,9 @@ fn semilla_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     // Design 50: the default of `semilla step` has no compiled check. The tests of the compare
     // results get it from this variable. A test of the default mode gives the value `0`.
     command.env("SEMILLA_COMPILED", "1");
+    // Design 53: the build check of a step is not the subject of most tests, and some test
+    // crates do not build on purpose. A test of the build check gives the value `0`.
+    command.env("SEMILLA_NO_CHECK", "1");
     command.envs(env.iter().copied());
     let z3 = root.join(".semilla/tools/z3");
     if z3.exists() {
@@ -209,6 +212,7 @@ fn mcp_flow(repo: &Path) {
         .arg("mcp")
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
         .env("SEMILLA_COMPILED", "1")
+        .env("SEMILLA_NO_CHECK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -252,6 +256,12 @@ fn mcp_flow(repo: &Path) {
 
 /// Calls tools of `semilla mcp` in one session. Gives the text and the error mark of each call.
 fn mcp_calls(repo: &Path, calls: &[(&str, serde_json::Value)]) -> Vec<(String, bool)> {
+    mcp_calls_env(repo, calls, &[])
+}
+
+/// As [`mcp_calls`], with more environment variables. The build check of a step is off
+/// (design 53): a test of the build check gives `SEMILLA_NO_CHECK` with the value `0`.
+fn mcp_calls_env(repo: &Path, calls: &[(&str, serde_json::Value)], env: &[(&str, &str)]) -> Vec<(String, bool)> {
     let root = workspace_root();
     let mut child = Command::new(env!("CARGO_BIN_EXE_semilla"))
         .env("SEMILLA_CACHE_DIR", cache_dir(repo))
@@ -259,6 +269,8 @@ fn mcp_calls(repo: &Path, calls: &[(&str, serde_json::Value)]) -> Vec<(String, b
         .arg("mcp")
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
         .env("SEMILLA_COMPILED", "1")
+        .env("SEMILLA_NO_CHECK", "1")
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -7055,6 +7067,8 @@ fn semilla_no_tool_chain(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
     for name in ["CARGO", "RUSTC", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "SEMILLA_MIR_DRIVER", "SEMILLA_COMPILED"] {
         command.env_remove(name);
     }
+    // Design 53: the build check needs a tool chain. These tests are for the syntax phase.
+    command.env("SEMILLA_NO_CHECK", "1");
     // `semilla tag` writes a git note.
     for who in ["AUTHOR", "COMMITTER"] {
         command.env(format!("GIT_{who}_NAME"), "t").env(format!("GIT_{who}_EMAIL"), "t@t");
@@ -7182,4 +7196,496 @@ fn the_item_list_of_a_default_step_comes_from_the_syntax_tree() {
     assert_eq!(code_2, Some(0), "{out}");
     assert!(fact_line(&out, "generics of `shop_core::cart::tier`").ends_with("generic arguments go by position: 1 site(s) in 1 other item(s) [declaration]"), "{out}");
     assert!(out.contains("      items with a use: shop_core::cart::gold\n") && !out.contains("affected bodies:"), "{out}");
+}
+
+// ---- Batch 9a4 (design 53): the build check of a step ----
+
+/// Runs semilla in the default mode with the build check. Gives the exit code and the text of
+/// stdout and stderr.
+fn semilla_checked(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String) {
+    let mut all = vec![("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "0")];
+    all.extend(env.iter().copied());
+    let output = semilla_env(repo, args, &all);
+    (output.status.code(), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
+}
+
+/// The stored steps of the session file.
+fn session_steps(repo: &Path) -> Vec<serde_json::Value> {
+    let session: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap()).unwrap();
+    session["changeset"]["steps"].as_array().cloned().unwrap_or_default()
+}
+
+/// The folder of the build check in the cache of the repository.
+fn check_folder(repo: &Path) -> PathBuf {
+    repo_cache(repo).join("check")
+}
+
+/// A cart with a type error in `total`.
+fn cart_type_error() -> String {
+    CART_V0.replace("        s\n    }", "        \"sum\"\n    }")
+}
+
+#[test]
+fn a_step_that_builds_has_the_result_line_and_a_review_reads_the_record() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    let lines: Vec<&str> = step.lines().collect();
+    assert!(lines[0].starts_with("accepted: step 0"), "{step}");
+    assert!(lines[1].starts_with("build check: passes (") && lines[1].ends_with(" s)"), "{step}");
+    // The check adds no fact and no compare result.
+    assert!(fact_line(&step, "changed literal `10` → `20`").ends_with("[semantics]"), "{step}");
+    assert!(!COMPILED_TEXTS.iter().any(|text| step.contains(text)), "{step}");
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
+    // The check has its own folder in the cache. The repository has no `target` folder.
+    assert!(check_folder(repo).join("target").is_dir() && !repo.join("target").exists());
+
+    // A review reads the record. It does not run the check: this machine has no tool chain,
+    // and no result is new in the cache.
+    let results = || std::fs::read_dir(check_folder(repo).join("results")).unwrap().count();
+    let before = results();
+    let (code, status) = semilla_no_tool_chain(repo, &["status"]);
+    assert_eq!(code, Some(0), "{status}");
+    assert!(status.contains("\nbuild check of step 0: passes\n"), "{status}");
+    let report = dir.path().join("review.md");
+    let (code, out) = semilla_no_tool_chain(repo, &["review", "--md", report.to_str().unwrap()]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(std::fs::read_to_string(&report).unwrap().contains("build check of step 0: passes"));
+    assert_eq!(results(), before);
+
+    // The same tree again: the stored result of the tree, and no new build.
+    run(repo, &["undo"], 0);
+    let (code, again) = semilla_checked(repo, &["step", "raise the limit"], &[]);
+    assert_eq!(code, Some(0), "{again}");
+    assert!(again.contains("\nbuild check: passes (a stored result of this tree)\n"), "{again}");
+}
+
+#[test]
+fn a_step_with_a_type_error_is_rejected_with_the_error_of_the_compiler() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", &cart_type_error());
+    let (code, step) = semilla_checked(repo, &["step", "give the sum as a text"], &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 0 \"give the sum as a text\" is not stored\n  ✗ build check: fails ("), "{step}");
+    assert!(step.contains("after the step, the targets `shop-core` (lib test), `shop-core` (lib) do not build"), "{step}");
+    // The error of the compiler has the file and the line. It shows one time.
+    assert!(step.contains("\n\n    error[E0308]: mismatched types\n      --> crates/shop-core/src/cart.rs:13:9\n"), "{step}");
+    assert_eq!(step.matches("error[E0308]").count(), 1, "{step}");
+    // The facts of the syntax phase come after the errors. Then the two ways out.
+    let fact = step.find("◆").expect("a fact line");
+    assert!(step.find("error[E0308]").unwrap() < fact, "{step}");
+    let end = &step[fact..];
+    assert!(end.contains("the code after the step does not build: correct the code, then run: semilla step 'give the sum as a text'\n"), "{step}");
+    assert!(end.contains("or store the step with no build check (the record and the review then say `build check: not run`): semilla step 'give the sum as a text' --no-check\n"), "{step}");
+    assert!(session_steps(repo).is_empty());
+
+    // `SEMILLA_NO_CHECK` with the value `0` or with an empty value does not turn the check off.
+    for value in ["0", ""] {
+        let (code, step) = semilla_checked(repo, &["step", "give the sum as a text"], &[("SEMILLA_NO_CHECK", value)]);
+        assert_eq!(code, Some(1), "{step}");
+        assert!(step.contains("✗ build check: fails (") && step.contains("error[E0308]"), "`{value}`: {step}");
+    }
+    assert!(session_steps(repo).is_empty());
+
+    // The route of the old protocol has the same check.
+    write(repo, "crates/shop-core/src/cart.rs", CART_V0);
+    run(repo, &["old-step", "begin", "give the sum as a text"], 0);
+    write(repo, "crates/shop-core/src/cart.rs", &cart_type_error());
+    let (code, ended) = semilla_checked(repo, &["old-step", "end"], &[]);
+    assert_ne!(code, Some(0), "{ended}");
+    assert!(ended.contains("rejected: the step is not stored, and it stays open") && ended.contains("error[E0308]") && ended.contains("`semilla old-step end --no-check`"), "{ended}");
+    let (code, ended) = semilla_checked(repo, &["old-step", "end", "--no-check"], &[]);
+    assert_eq!(code, Some(0), "{ended}");
+    assert!(ended.contains("build check: not run (`--no-check`)"), "{ended}");
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "not_run"}));
+}
+
+#[test]
+fn a_rename_that_misses_one_call_is_rejected() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // The method gets a new name. The call in the binary keeps the old name.
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V0.replace("pub fn total(", "pub fn sum("));
+    let (code, step) = semilla_checked(repo, &["step", "rename `total` to `sum`"], &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 0"), "{step}");
+    assert!(step.contains("after the step, the targets `shop-app` (bin \"shop-app\" test), `shop-app` (bin \"shop-app\") do not build"), "{step}");
+    assert!(step.contains("error[E0599]: no method named `total` found for struct `Cart`") && step.contains(" --> crates/shop-app/src/main.rs:3:25\n"), "{step}");
+    assert!(session_steps(repo).is_empty());
+    // With the call, the step builds.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V0.replace("cart.total(", "cart.sum("));
+    let (code, step) = semilla_checked(repo, &["step", "rename `total` to `sum`"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.contains("\nbuild check: passes ("), "{step}");
+}
+
+#[test]
+fn no_check_stores_the_step_and_the_record_and_the_review_show_not_run() {
+    for (args, env, cause) in [(vec!["step", "give the sum as a text", "--no-check"], vec![], "`--no-check`"), (vec!["step", "give the sum as a text"], vec![("SEMILLA_NO_CHECK", "1")], "`SEMILLA_NO_CHECK`")] {
+        let dir = setup();
+        let repo = &dir.path().join("repo");
+        write(repo, "crates/shop-core/src/cart.rs", &cart_type_error());
+        let (code, step) = semilla_checked(repo, &args, &env);
+        assert_eq!(code, Some(0), "{step}");
+        let lines: Vec<&str> = step.lines().collect();
+        assert!(lines[0].starts_with("accepted: step 0"), "{step}");
+        assert_eq!(lines[1], format!("build check: not run ({cause})"), "{step}");
+        assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "not_run"}));
+        // No build runs.
+        assert!(!check_folder(repo).exists());
+        let not_run = "! build check of step 0: not run: the author turned the check off, so Semilla did not check that this code builds";
+        let status = run(repo, &["status"], 0);
+        assert!(status.contains(not_run), "{status}");
+        let report = dir.path().join("review.md");
+        run(repo, &["review", "--md", report.to_str().unwrap()], 0);
+        let review = std::fs::read_to_string(&report).unwrap();
+        assert!(review.contains(&not_run[2..]), "{review}");
+        let page = dir.path().join("review.html");
+        run(repo, &["review", "--html", page.to_str().unwrap()], 0);
+        assert!(std::fs::read_to_string(&page).unwrap().contains("build check of step 0: not run"));
+    }
+}
+
+#[test]
+fn a_target_that_does_not_build_in_the_base_does_not_reject_the_step() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // The base has a test target that does not build.
+    write(repo, "crates/shop-core/tests/old.rs", "#[test]\nfn old() {\n    let count: u32 = \"three\";\n    assert_eq!(count, 3);\n}\n");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a test that does not build"]);
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    // The result word is not `passes`: a target of the tree does not build. The line below
+    // says what Semilla did not check.
+    let limit = "the target `shop-core` (test \"old\") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it";
+    let lines: Vec<&str> = step.lines().collect();
+    assert!(lines[1].starts_with("build check: no new failure found (") && lines[1].ends_with(" s)"), "{step}");
+    assert_eq!(lines[2], format!("  ! build check: {limit}"), "{step}");
+    assert!(!step.contains("three") && !step.contains("passes"), "{step}");
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "base_fails", "targets": ["`shop-core` (test \"old\")"]}));
+    let status = run(repo, &["status"], 0);
+    assert!(status.contains(&format!("! build check of step 0: no new failure found: {limit}\n")) && !status.contains("passes"), "{status}");
+    let report = dir.path().join("review.md");
+    run(repo, &["review", "--md", report.to_str().unwrap()], 0);
+    let review = std::fs::read_to_string(&report).unwrap();
+    assert!(review.contains("build check of step 0: no new failure found: the target") && !review.contains("build check of step 0: passes"), "{review}");
+
+    // A second error, in a different target: the step is rejected. The message shows the
+    // error of the step, not the error of the base.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("cart.total(20)", "cart.total(\"all\")"));
+    let (code, step) = semilla_checked(repo, &["step", "give a text as the limit"], &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 1"), "{step}");
+    assert!(step.contains("`shop-app` (bin \"shop-app\")") && step.contains("(not a cause of this result: the target `shop-core` (test \"old\") does not build before the step too)"), "{step}");
+    assert!(step.contains(" --> crates/shop-app/src/main.rs:3:31\n") && !step.contains("three"), "{step}");
+    assert_eq!(session_steps(repo).len(), 1);
+}
+
+#[test]
+fn a_build_check_that_cannot_run_does_not_store_the_step() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // A rustup home with no tool chain.
+    let home = dir.path().join("no-rustup");
+    std::fs::create_dir_all(&home).unwrap();
+    let env = [("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "stable")];
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &env);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("not stored: step 0 \"raise the limit\": the build check cannot run on this machine\n  ! build check: cannot run: the toolchain `stable` (the variable RUSTUP_TOOLCHAIN) is not on this machine: "), "{step}");
+    assert!(step.contains("The build check does not download a toolchain. Run `rustup toolchain install stable`\n"), "{step}");
+    assert!(!step.contains("rejected") && !step.contains("fails"), "{step}");
+    assert!(step.contains("correct the environment (the cause is above), then run: semilla step 'raise the limit'\n") && step.contains("semilla step 'raise the limit' --no-check\n"), "{step}");
+    // The facts of the syntax phase show.
+    assert!(fact_line(&step, "changed literal `10` → `20`").ends_with("[semantics]"), "{step}");
+    assert!(session_steps(repo).is_empty());
+    // The way out.
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit", "--no-check"], &env);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.contains("build check: not run (`--no-check`)"), "{step}");
+}
+
+#[test]
+fn the_compiled_check_is_the_build_check_and_no_second_build_runs() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // A tree that does not build: the reject of the compiled check, as before design 53.
+    write(repo, "crates/shop-core/src/cart.rs", &cart_type_error());
+    let output = semilla_env(repo, &["step", "give the sum as a text", "--compiled"], &[("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "0")]);
+    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("mismatched types") && !text.contains("build check"), "{text}");
+    assert!(session_steps(repo).is_empty() && !check_folder(repo).exists());
+    // A tree that builds: the build of the compiled check gives the result.
+    write(repo, "crates/shop-core/src/cart.rs", CART_V0);
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let output = semilla_env(repo, &["step", "raise the limit", "--compiled"], &[("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "0"), ("SEMILLA_TIMING", "1")]);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("\nbuild check: passes (the build of the compiled check)\n") && text.contains("code different]"), "{text}");
+    // The record of the build check does not make the compiled check of the stored step run a
+    // second time: the step result of this process serves the stored step.
+    let timing = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(timing.matches("total of compare the bodies").count(), 1, "{timing}");
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
+    assert!(!check_folder(repo).exists());
+}
+
+#[test]
+fn the_mcp_tool_has_the_build_check_and_the_parameter_no_check() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", &cart_type_error());
+    let env = [("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "0")];
+    let calls = mcp_calls_env(repo, &[("step", serde_json::json!({"intent": "give the sum as a text"})), ("step", serde_json::json!({"intent": "give the sum as a text", "no_check": true})), ("results", serde_json::json!({}))], &env);
+    assert!(calls[0].1 && calls[0].0.contains("rejected: step 0") && calls[0].0.contains("error[E0308]: mismatched types"), "{}", calls[0].0);
+    assert!(!calls[1].1 && calls[1].0.contains("accepted: step 0") && calls[1].0.contains("build check: not run (`--no-check`)"), "{}", calls[1].0);
+    assert!(calls[2].0.contains("! build check of step 0: not run"), "{}", calls[2].0);
+}
+
+#[test]
+fn the_plan_route_has_the_build_check() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "raise the limit"]);
+    run(repo, &["replay", "begin", "--commit", "HEAD"], 0);
+    let plan = |replace: &str| {
+        let plan = serde_json::json!({"steps": [{"intent": "raise the limit", "edits": [{"file": "crates/shop-app/src/main.rs", "find": "cart.total(10)", "replace": replace}]}]});
+        std::fs::write(repo.join(".semilla/plan.json"), serde_json::to_string_pretty(&plan).unwrap()).unwrap();
+    };
+    // A step of the plan that does not build is a problem of the plan.
+    plan("cart.total(\"all\")");
+    let (_, out) = semilla_checked(repo, &["replay", "apply"], &[]);
+    assert!(out.contains("✗ plan step 0") && out.contains("    ✗ the code after the step does not build\n      ✗ build check: fails ("), "{out}");
+    assert!(out.contains("error[E0308]: mismatched types") && out.contains("a step that does not build needs a change of the plan, or `--no-check`"), "{out}");
+    let (_, out) = semilla_checked(repo, &["replay", "apply", "--no-check"], &[]);
+    assert!(out.contains("build check: not run (`--no-check`)") && !out.contains("does not build"), "{out}");
+    // A plan that builds.
+    plan("cart.total(20)");
+    let (code, out) = semilla_checked(repo, &["replay", "apply"], &[]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("✓ plan step 0") && out.contains("    build check: passes ("), "{out}");
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
+}
+
+#[test]
+fn a_dependency_that_is_not_in_the_cargo_cache_is_a_check_that_cannot_run() {
+    // Rule 7 of design 53. Cargo runs with `--offline`: this test opens no network connection.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let manifest = std::fs::read_to_string(repo.join("crates/shop-core/Cargo.toml")).unwrap();
+    write(repo, "crates/shop-core/Cargo.toml", &format!("{manifest}\n[dependencies]\nzz-not-in-the-cargo-cache = \"1\"\n"));
+    let reason = "crates/shop-core/Cargo.toml:dependencies.zz-not-in-the-cargo-cache=a test";
+    let (code, step) = semilla_checked(repo, &["step", "add a dependency", "--reason", reason], &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("not stored: step 0 \"add a dependency\": the build check cannot run on this machine\n  ! build check: cannot run: a dependency is not in the cargo cache of this machine"), "{step}");
+    assert!(step.contains("no matching package named `zz-not-in-the-cargo-cache` found") && !step.contains("rejected"), "{step}");
+    assert!(session_steps(repo).is_empty());
+}
+
+// ---- Batch 9a4b (design 53): the fix round of the build check ----
+
+/// The example of design 53.4: the library of `shop` has a type error, and its integration
+/// test has a different type error. Cargo does not check the test in this tree. The package
+/// `tool` does not use `shop`, so it builds.
+fn shop_with_two_errors() -> common::TestDir {
+    let dir = common::TestDir::new();
+    let repo = &dir.path().join("repo");
+    write(repo, "Cargo.toml", "[workspace]\nresolver = \"2\"\nmembers = [\"shop\", \"tool\"]\n");
+    write(repo, ".gitignore", "/target\n/.semilla/\n");
+    write(repo, "shop/Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+    write(repo, "shop/src/lib.rs", "pub fn price() -> u32 {\n    \"ten\"\n}\n");
+    write(repo, "shop/tests/api.rs", "#[test]\nfn api() {\n    let count: u32 = \"three\";\n    assert_eq!(shop::price(), count);\n}\n");
+    write(repo, "tool/Cargo.toml", "[package]\nname = \"tool\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+    write(repo, "tool/src/main.rs", "fn main() {\n    let count: u32 = 3;\n    println!(\"{count}\");\n}\n");
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit_all(repo, "base");
+    dir
+}
+
+const SHOP_LIB_CORRECT: &str = "pub fn price() -> u32 {\n    10\n}\n";
+const API_NOT_CHECKED: &str = "the target `shop` (test \"api\") does not build after the step, and cargo did not check it before the step";
+
+#[test]
+fn a_target_that_cargo_did_not_check_in_the_base_does_not_reject_the_step() {
+    let dir = shop_with_two_errors();
+    let repo = &dir.path().join("repo");
+    // The step corrects the library. Cargo now checks the test, and the old error of the test
+    // shows. The step did not make it.
+    write(repo, "shop/src/lib.rs", SHOP_LIB_CORRECT);
+    let (code, step) = semilla_checked(repo, &["step", "correct the price"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    let lines: Vec<&str> = step.lines().collect();
+    assert!(lines[0].starts_with("accepted: step 0"), "{step}");
+    assert!(lines[1].starts_with("build check: no new failure found ("), "{step}");
+    assert_eq!(lines[2], format!("  ! build check: {API_NOT_CHECKED} (the targets `shop` (lib test), `shop` (lib) did not build then), so Semilla cannot tell if the step makes this error"), "{step}");
+    assert!(!step.contains("rejected") && !step.contains("passes") && !step.contains("three"), "{step}");
+    // The record keeps the two lists. The library builds after the step: the first list is empty.
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "base_fails", "targets": [], "not_checked": ["`shop` (test \"api\")"]}));
+    let status = run(repo, &["status"], 0);
+    assert!(status.contains(&format!("! build check of step 0: no new failure found: {API_NOT_CHECKED} (a different target did not build then), so Semilla cannot tell if the step makes this error\n")), "{status}");
+}
+
+#[test]
+fn an_error_in_a_target_that_builds_in_the_base_rejects_the_step_of_the_same_example() {
+    let dir = shop_with_two_errors();
+    let repo = &dir.path().join("repo");
+    // The step corrects the library, and it adds an error to a target that builds in the base.
+    write(repo, "shop/src/lib.rs", SHOP_LIB_CORRECT);
+    write(repo, "tool/src/main.rs", "fn main() {\n    let count: u32 = \"3\";\n    println!(\"{count}\");\n}\n");
+    let (code, step) = semilla_checked(repo, &["step", "correct the price"], &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 0"), "{step}");
+    assert!(step.contains("after the step, the targets `tool` (bin \"tool\" test), `tool` (bin \"tool\") do not build\n"), "{step}");
+    assert!(step.contains(&format!("    (not a cause of this result: {API_NOT_CHECKED})\n")), "{step}");
+    // The message shows the error of the step, not the old error of the test.
+    assert!(step.contains(" --> tool/src/main.rs:2:22\n") && !step.contains("three"), "{step}");
+    assert!(session_steps(repo).is_empty());
+
+    // A new target with an error: the base tree does not have it, so the step makes its error.
+    write(repo, "tool/src/main.rs", "fn main() {\n    let count: u32 = 3;\n    println!(\"{count}\");\n}\n");
+    write(repo, "shop/tests/more.rs", "#[test]\nfn more() {\n    let count: u32 = \"four\";\n    assert_eq!(count, 4);\n}\n");
+    let (code, step) = semilla_checked(repo, &["step", "correct the price"], &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.contains("after the step, the target `shop` (test \"more\") does not build\n") && step.contains(" --> shop/tests/more.rs:3:22\n"), "{step}");
+    assert!(session_steps(repo).is_empty());
+}
+
+#[test]
+fn tag_prints_each_marked_line_of_the_build_check() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    // The base has a test target that does not build: step 0 gets `no new failure found`.
+    write(repo, "crates/shop-core/tests/old.rs", "#[test]\nfn old() {\n    let count: u32 = \"three\";\n    assert_eq!(count, 3);\n}\n");
+    commit_all(repo, "a test that does not build");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    // Step 1 has no build check.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("cart.total(20)", "cart.total(30)"));
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit again", "--no-check"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    let status = run(repo, &["status"], 0);
+    let marked: Vec<&str> = status.lines().filter(|line| line.starts_with("! build check of step ")).collect();
+    assert_eq!(marked.len(), 2, "{status}");
+    assert!(marked[0].starts_with("! build check of step 0: no new failure found: ") && marked[1].starts_with("! build check of step 1: not run: "), "{status}");
+    commit_all(repo, "raise the limit");
+    // `tag` does not refuse the change set. It prints each marked line.
+    let (code, tagged) = semilla_checked(repo, &["tag"], &[]);
+    assert_eq!(code, Some(0), "{tagged}");
+    assert!(tagged.contains("tagged ") && marked.iter().all(|line| tagged.contains(&format!("\n{line}\n"))), "{tagged}");
+    assert_eq!(tagged.matches("build check").count(), 2, "{tagged}");
+}
+
+#[test]
+fn tag_prints_no_line_of_a_build_check_that_passes() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.contains("\nbuild check: passes ("), "{step}");
+    commit_all(repo, "raise the limit");
+    let (code, tagged) = semilla_checked(repo, &["tag"], &[]);
+    assert_eq!(code, Some(0), "{tagged}");
+    assert!(tagged.contains("tagged ") && !tagged.contains("build check"), "{tagged}");
+}
+
+/// A rustup home with one tool chain, `proj-1.0`: a link to the tool chain of this test run.
+/// The file `settings.toml` gives `default` as the default tool chain.
+fn rustup_home_with_proj(dir: &Path, default: &str) -> PathBuf {
+    let output = Command::new("rustc").current_dir(workspace_root()).args(["--print", "sysroot"]).output().unwrap();
+    let root = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    assert!(root.join("bin/cargo").is_file(), "the tool chain of the test run has no cargo: {}", root.display());
+    let home = dir.join("rustup-home");
+    if !home.exists() {
+        std::fs::create_dir_all(home.join("toolchains")).unwrap();
+        std::os::unix::fs::symlink(&root, home.join(format!("toolchains/proj-1.0-{}-unknown-test", std::env::consts::ARCH))).unwrap();
+    }
+    std::fs::write(home.join("settings.toml"), format!("version = \"12\"\ndefault_toolchain = \"{default}\"\n")).unwrap();
+    home
+}
+
+#[test]
+fn the_build_check_uses_the_tool_chain_file_of_the_tree() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let home = rustup_home_with_proj(dir.path(), "proj-1.0");
+    // The tree names a tool chain that is not on the machine. The variable and the default of
+    // rustup name a tool chain that is there, but the file of the tree comes first. Semilla
+    // does not download the tool chain: the check cannot run.
+    write(repo, "rust-toolchain.toml", "[toolchain]\nchannel = \"gone-2.0\"\n");
+    commit_all(repo, "pin a tool chain");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "proj-1.0")]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("not stored: step 0 \"raise the limit\": the build check cannot run on this machine\n  ! build check: cannot run: the toolchain `gone-2.0` (the file `rust-toolchain.toml` of the tree) is not on this machine: "), "{step}");
+    assert!(step.contains("The build check does not download a toolchain. Run `rustup toolchain install gone-2.0`\n"), "{step}");
+    assert!(session_steps(repo).is_empty() && !home.join("toolchains/gone-2.0").exists());
+
+    // The tree names a tool chain of the machine. The variable names one that is not there.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V0);
+    write(repo, "rust-toolchain.toml", "[toolchain]\nchannel = \"proj-1.0\"\n");
+    commit_all(repo, "pin a tool chain of the machine");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "gone-2.0")]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.lines().nth(1).is_some_and(|line| line.starts_with("build check: passes (") && line.ends_with(" s)")), "{step}");
+}
+
+#[test]
+fn a_tree_with_no_tool_chain_file_uses_the_default_of_the_machine() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    // The default of rustup is not on the machine, and no variable names a tool chain.
+    let home = rustup_home_with_proj(dir.path(), "gone-2.0");
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "")]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.contains("  ! build check: cannot run: the toolchain `gone-2.0` (the default of rustup) is not on this machine: ") && step.contains("Run `rustup toolchain install gone-2.0`\n"), "{step}");
+    assert!(session_steps(repo).is_empty());
+    // The variable comes before the default of rustup.
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "proj-1.0")]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.contains("\nbuild check: passes ("), "{step}");
+    // The default of rustup, with no variable. The tool chain is the same, so the stored
+    // result of the tree applies.
+    run(repo, &["undo"], 0);
+    rustup_home_with_proj(dir.path(), "proj-1.0");
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "")]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.contains("\nbuild check: passes (a stored result of this tree)\n"), "{step}");
+}
+
+#[test]
+fn cache_clean_removes_the_folder_of_the_build_check() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let build_code = "removed 0 entries of the build code cache that no stored step uses: 0 B freed\n";
+    // No build check ran: there is no folder, and the output has no line for it.
+    assert_eq!(run(repo, &["cache", "--clean"], 0), build_code);
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(check_folder(repo).join("target").is_dir());
+    let cleaned = run(repo, &["cache", "--clean"], 0);
+    let lines: Vec<&str> = cleaned.lines().collect();
+    assert_eq!(lines.len(), 2, "{cleaned}");
+    assert_eq!(format!("{}\n", lines[0]), build_code);
+    assert!(lines[1].starts_with("removed the folder of the build check: ") && lines[1].ends_with(" freed (the next build check builds each dependency again)") && !lines[1].contains(": 0 B freed"), "{cleaned}");
+    assert!(!check_folder(repo).exists());
+    // The record of the step stays, and the second run finds no folder.
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
+    assert_eq!(run(repo, &["cache", "--clean"], 0), build_code);
+    // The next check is cold: it runs again and does not read a stored result.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("cart.total(20)", "cart.total(30)"));
+    let (code, step) = semilla_checked(repo, &["step", "raise the limit again"], &[]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.lines().nth(1).is_some_and(|line| line.starts_with("build check: passes (") && line.ends_with(" s)")), "{step}");
 }
