@@ -4084,5 +4084,9 @@ Findings:
 ### 48.8 Open points
 
 - The effort of the agent with the new options is not yet measured against the floor of section 24 (8 commands, 0 claims).
-- The step model is not yet measured on the controls and the mutants: a pure refactoring step must be `code equal`, and each mutant step must be `code different`.
+- **A pure refactoring step is usually `code different`.** The held-out sets have one edit for each step, so their results are step results (batch 8i):
+  - mutants (one change of behavior): 1271 of 1277 steps are `code different`; 5 are a false `code equal`, and 1 has no compare;
+  - a refactoring with one change of behavior: 33 of 33 steps are `code different`;
+  - a pure refactoring: 13 of 60 steps are `code equal`, and 47 are `code different` (each extracted function, each inlined function, each moved statement between two functions, and most of the extracted variables and the moved statements).
+  Thus a `same` claim of the kind `extract`, `inline`, or `move` of a statement needs more than the step result. Two options: the shape check with exact conditions, or a compare of the compiled code under the claim (the cross-body compare of 48.7). No decision yet.
 - A check build does not download. A dependency that is not in the cargo cache stops the body check (4 of the 6 pull requests needed `cargo fetch` first).
