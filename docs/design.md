@@ -3975,3 +3975,114 @@ The values are before → after (the binaries of 8h → the binaries of 8i).
 - A tie uses the numbers of rule 6. A new statement that reads the second operand first changes the order of the two operands on one side. The key of the element stays equal, and the map of the locals can pair the two locals in the wrong order. The old rule had the same limit. No example found.
 - A type that is not on the allow list of 29.6 (a float, a pointer) keeps the order of rustc.
 - `symmetric_order` sorts two plain locals only. An operand that keeps a projection next to an operand that loses one can have a different position on the two sides. Then test 2b finds no pair, and an `indirect` fact stays. No example found.
+
+## 48. The step model and the facts of the agent
+
+Status: a design, with no code change yet. The user decided each rule that has no mark. A rule with the mark "Decided by Claude" is a default that the user can change.
+
+### 48.1 The step is the smallest unit
+
+- The agent groups one logical unit of work into a step. This is the hardest part, and the agent does it.
+- The compare result belongs to the step: `code equal` or `code different`.
+- Decided by Claude: the list of the bodies that differ is the evidence of the result.
+- Semilla gives no compare result to one edit.
+- `indirect` is a fact of the step. Semilla does not search for the edit that causes it, and the product has no compile for each unit.
+- Decided by Claude: a build input (`Cargo.toml` features, edition, lints) is a cause of the full step. Evidence: in a pilot with one compile for each hunk of 7 version updates, 24 of 55 results that did not agree were build inputs.
+
+Cause of this decision: a change can differ at one place and be equal as a whole (an extracted function changes two bodies, and the step keeps the behavior). The attribution of a compiled change to one edit costs many compiles, and it is often wrong. In the same pilot, only 64% of the hunks compile alone.
+
+### 48.2 The facts of the agent
+
+Each step comes with an intent line and a short list of facts. The facts are very simple and high-level. The agent has the pull request and the repository when it writes them.
+
+| Kind | Meaning | The agent gives | The check of Semilla |
+|---|---|---|---|
+| `same` | an exact claim that keeps the behavior | `rename`, `move`, `extract`, `inline`, or `rewrite`, with `from` and `to` | the shape: the code maps exactly under the claim at each place |
+| `change` | the behavior of existing code changes on purpose | the items, and one sentence | the effect: the compiled code of each item differs |
+
+Rules:
+
+- The agent writes no fact for a new item, a removed item, a signature, a bound, docs, imports, layout, or tests. Semilla finds these from the edit.
+- A missing fact is never a reject. Semilla fills it in.
+- A step usually has 1 to 3 facts. A step can have zero facts.
+- Semilla cannot check the intent. It checks only that the kind agrees with the change.
+- Each fact shows its origin: stated by the agent and checked, or filled in by Semilla.
+
+### 48.3 The result that the reviewer reads
+
+1. The intent of the step, and the facts of the agent, each with its check result.
+2. **Not stated:** each existing body with a compiled difference that no `change` item and no `same` claim explains. This is the gap list.
+3. The facts that Semilla filled in, in groups: new and removed items, the bodies that follow a declaration, the tests and the benches.
+
+A `same` claim makes one review unit of all its places.
+
+### 48.4 Protocol rules (Decided by Claude)
+
+- **One `change` fact for each item set.** Two facts with the same items become one fact with two sentences. Semilla cannot check them separately.
+- **A `change` item can be an old path or a new path.** Code that moves and changes has no stable path.
+- **A `same` claim has a shape check only.** The compiled code at its places can differ (a call replaces a field read). The step result shows this. The claim does not predict `code equal`.
+- **Semilla resolves a loose item path.** Each agent of the trial guessed the path form of a trait impl function. If a path does not resolve, Semilla prints the candidates. A path that resolves to one item is not a reject.
+- **Derived code follows its declaration.** A new field changes the derived `PartialEq`, `Debug`, and serde code. Semilla shows these bodies with the field edit, not in the gap list.
+- **A `rewrite` claim is a pattern of the syntax tree, with variables.** A text pattern is too narrow (48.6, socket2).
+- **A body on one side only is a new or a removed item.** It is not an `indirect` fact.
+
+### 48.5 The command (Decided by Claude)
+
+One command for each step. The new options stay next to `--claim` and `--reason`:
+
+```
+semilla step "<intent>" \
+  --same 'rename OLD NEW' \
+  --same 'rewrite FROM => TO' \
+  --change 'ITEM[,ITEM]=TEXT'
+```
+
+The present claim `rewrite-pattern` becomes `--same 'rewrite …'`. The replay plan gets the same two keys for each step.
+
+### 48.6 Data
+
+Six real pull requests (329 to 727 changed lines; `nu-ansi-term` #43, `rand` #1382, #1484, #1493, `socket2` #222, `ctutils` #1376). One blind agent wrote the facts for each pull request. Limits: one run for each pull request, one model, and my own reference sets are a judgment.
+
+**The facts of the agent (two trials):**
+
+| Trial | Context of the agent | Facts asked | Agent facts | Bytes of the facts |
+|---|---|---|---|---|
+| 1 | diff and description | one tag for each logical change, 11 tags | 78 | 22 116 |
+| 2 | repository, description, commit messages, diff | `same` and `change` only | 26 | 8 858 |
+
+In trial 1, 45 of 78 tags were form tags (`added`, `removed`, `declaration`, `docs`) that Semilla derives alone. My reference sets have 28 facts for trial 1 and 11 facts for trial 2. In trial 2, the `change` items of the agent agree with mine in each pull request.
+
+**The check against Semilla (batch 8i, each pull request as one step):** each step is accepted. Semilla gives 437 facts. A script outside the product puts each body with a compiled difference into one class. The script uses name rules for the tests and the benches, so the counts are a model, not a product result.
+
+| Pull request | Semilla facts | Agent facts | Bodies that differ | stated (`change`) | explained (`same`) | new or removed | follow a declaration | test or bench | not stated |
+|---|---|---|---|---|---|---|---|---|---|
+| nu-ansi-term #43 | 53 | 3 | 86 | 6 | 0 | 17 | 52 | 9 | 2 |
+| rand #1382 | 105 | 8 | 83 | 16 | 0 | 7 | 14 | 46 | 0 |
+| rand #1484 | 36 | 3 | 25 | 2 | 0 | 2 | 19 | 2 | 0 |
+| rand #1493 | 27 | 6 | 24 | 2 | 0 | 2 | 19 | 1 | 0 |
+| socket2 #222 | 128 | 3 | 99 | 1 | 85 | 8 | 0 | 0 | 5 |
+| ctutils #1376 | 88 | 3 | 60 | 8 | 0 | 14 | 23 | 15 | 0 |
+| **Total** | **437** | **26** | **377** | **35** | **85** | **50** | **127** | **73** | **7** |
+
+Findings:
+
+- **The `change` items are correct.** 38 of 43 item mentions name a body with a compiled difference. No item names a body with equal code. The other 5: one type (`Socket`; its declaration fact is the check), one function that only Windows compiles (no compare: a result holds only for a checked configuration), and three loose names of a bench file.
+- **The gap list is short.** 7 of 377 bodies are not stated. 5 are bodies of socket2 with a different form of the constructor rewrite. 2 are generated serde bodies of nu-ansi-term, which the rule "derived code follows its declaration" must move to the field edit.
+- **A text pattern is too narrow.** The claim `.inner` to `.as_raw()` explains 93 of 109 edits and 85 bodies fully. The claim `Socket { inner: raw }` to `Socket::from_raw(raw)` explains 1 edit as text. The code has three other forms: `Socket { inner }`, `|inner| Socket { inner }` to `Socket::from_raw`, and an index form.
+- **A rename claim agrees with the rename fact of Semilla** (rand #1382, `WeightedError` to `WeightError`). The agent also claimed a variant rename; Semilla shows that variant as one removed and one added variant.
+- **The rename fact of today hides edits.** In rand #1382, a path changes its type name and its variant at one place (`WeightedError::TooMany` to `WeightError::InvalidInput`). Semilla puts this edit into the rename fact, with the line "the compiled code changes" and 10 bodies. In the step model, the rename claim covers only the exact rename, and each of these bodies is a `change` item or a gap.
+- **Two fill-in defects of Semilla.** 7 bodies of a removed module (ctutils) are `indirect` facts with no cause. 23 bench bodies of rand #1382 are `indirect` facts ("the MIR changed, but the text did not").
+- **An `extract` claim has no check yet** (rand #1493, two claims that the agent doubts).
+
+### 48.7 What this section removes
+
+- The compare result of one edit, and the per-edit mark of the category rule.
+- The element attribution rules as a product goal: the owner rules, the dependence as a cause, the doubt rule for an idle edit. No new rule has the removal of an `indirect` fact as its only goal.
+- The invariant G2 of batch 8i (47), and the cross-body compare of batch 8e as an attribution rule.
+- The cross-body compare stays as an option: a later check that a `same` claim of the kind `extract` or `inline` also keeps the compiled code.
+
+### 48.8 Open points
+
+- The effort of the agent with the new options is not yet measured against the floor of section 24 (8 commands, 0 claims).
+- The step model is not yet measured on the controls and the mutants: a pure refactoring step must be `code equal`, and each mutant step must be `code different`.
+- A check build does not download. A dependency that is not in the cargo cache stops the body check (4 of the 6 pull requests needed `cargo fetch` first).
