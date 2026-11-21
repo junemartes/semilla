@@ -37,6 +37,9 @@ fn semilla_env(repo: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     // The cache folder of the user: a folder next to the test repository, not the home folder.
     // A test can give a different folder in `env`.
     command.env("SEMILLA_CACHE_DIR", cache_dir(repo));
+    // Design 50: the default of `semilla step` has no compiled check. The tests of the compare
+    // results get it from this variable. A test of the default mode gives the value `0`.
+    command.env("SEMILLA_COMPILED", "1");
     command.envs(env.iter().copied());
     let z3 = root.join(".semilla/tools/z3");
     if z3.exists() {
@@ -205,6 +208,7 @@ fn mcp_flow(repo: &Path) {
         .current_dir(repo)
         .arg("mcp")
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
+        .env("SEMILLA_COMPILED", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -254,6 +258,7 @@ fn mcp_calls(repo: &Path, calls: &[(&str, serde_json::Value)]) -> Vec<(String, b
         .current_dir(repo)
         .arg("mcp")
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
+        .env("SEMILLA_COMPILED", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -287,6 +292,7 @@ fn ui_flow(repo: &Path) {
         .current_dir(repo)
         .args(["ui", "--port", &port.to_string()])
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
+        .env("SEMILLA_COMPILED", "1")
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -658,6 +664,8 @@ fn a_function_moves_to_another_crate() {
     assert_eq!(gone.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&gone.stderr).contains("the claim `move-item` is gone: Semilla derives each rename and each move"), "{}", String::from_utf8_lossy(&gone.stderr));
     let check = run(repo, &["check", "--full"], 0);
+    // Design 50: the `use` line gets the new name `LIMIT` because the moved item uses it, and
+    // the name gave the same item in the old module. The move fact covers the line.
     assert!(check.contains("moved `shop_core::over` → `shop_app::over`, with 1 `use` line(s) [move · code equal]"), "{check}");
     assert!(!check.contains("uncovered"), "{check}");
 
@@ -2264,6 +2272,7 @@ fn a_cache_folder_that_semilla_cannot_use_gives_one_note_and_a_result() {
         let out = Command::new(env!("CARGO_BIN_EXE_semilla"))
             .current_dir(repo)
             .env("SEMILLA_MIR_DRIVER", workspace_root().join("target/debug/semilla-mir-driver"))
+            .env("SEMILLA_COMPILED", "1")
             .env("SEMILLA_CACHE_DIR", &cache)
             .args(["status", "HEAD"])
             .output()
@@ -2296,6 +2305,7 @@ fn a_stored_result_of_other_tools_is_not_valid() {
         let out = Command::new(env!("CARGO_BIN_EXE_semilla"))
             .current_dir(repo)
             .env("SEMILLA_MIR_DRIVER", workspace_root().join("target/debug/semilla-mir-driver"))
+            .env("SEMILLA_COMPILED", "1")
             .env("SEMILLA_CACHE_DIR", cache_dir(repo))
             .env("SEMILLA_Z3", &other)
             .env("SEMILLA_NO_WORKER", "1")
@@ -2721,6 +2731,7 @@ fn ui_get(repo: &Path, args: &[&str], paths: &[&str]) -> Vec<String> {
         .args(["ui", "--port", &port.to_string()])
         .args(args)
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
+        .env("SEMILLA_COMPILED", "1")
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -6282,6 +6293,7 @@ fn shell(repo: &Path, line: &str) -> (i32, String) {
         .env("PATH", path)
         .env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"))
         .env("SEMILLA_CACHE_DIR", cache_dir(repo))
+        .env("SEMILLA_COMPILED", "1")
         .output()
         .unwrap();
     (output.status.code().unwrap_or(-1), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
@@ -7023,4 +7035,151 @@ fn a_new_local_number_does_not_change_the_order_of_two_operands() {
     assert!(out.starts_with("accepted") && !out.contains("[indirect") && out.contains("code different]"), "{out}");
     let out = step_and_undo(repo, &[(file, base)], &[(file, &base.replace("a - b", "b - a"))], "swap");
     assert!(out.starts_with("accepted") && !out.contains("code equal]") && out.contains("code different]"), "{out}");
+}
+
+// ---- Batch 9a (design 50): the syntax tree model is the default ----
+
+/// The texts that only the compiled check gives. No output of the default mode has them.
+const COMPILED_TEXTS: [&str; 10] = ["code equal", "code different", "no compare", "no code", "pending", "not checked", "indirect", "affected bodies:", "branches:", "! the compiled code changes:"];
+
+/// Runs semilla in the default mode with a `PATH` that has only `git`: no `cargo`, no `rustc`.
+fn semilla_no_tool_chain(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
+    let bin = repo.parent().unwrap().join("only-git");
+    if !bin.exists() {
+        std::fs::create_dir_all(&bin).unwrap();
+        let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|folder| folder.join("git")).find(|path| path.is_file()).expect("git in PATH");
+        std::os::unix::fs::symlink(git, bin.join("git")).unwrap();
+    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
+    command.current_dir(repo).args(args).env("PATH", &bin).env("SEMILLA_CACHE_DIR", cache_dir(repo));
+    for name in ["CARGO", "RUSTC", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "SEMILLA_MIR_DRIVER", "SEMILLA_COMPILED"] {
+        command.env_remove(name);
+    }
+    // `semilla tag` writes a git note.
+    for who in ["AUTHOR", "COMMITTER"] {
+        command.env(format!("GIT_{who}_NAME"), "t").env(format!("GIT_{who}_EMAIL"), "t@t");
+    }
+    let output = command.output().unwrap();
+    (output.status.code(), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
+}
+
+#[test]
+fn the_default_step_needs_no_tool_chain_and_gives_no_compare_result() {
+    // Design 50: `semilla step` derives the facts from the syntax tree. It starts no build.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let (code, step) = semilla_no_tool_chain(repo, &["step", "raise the limit"]);
+    assert_eq!(code, Some(0), "{step}");
+    assert!(step.starts_with("accepted: step 0"), "{step}");
+    assert!(fact_line(&step, "changed literal `10` → `20`").ends_with("[semantics]"), "{step}");
+    // The stored step has its mode.
+    let session: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap()).unwrap();
+    assert_eq!(session["changeset"]["steps"][0]["compiled"], false, "{session}");
+    // A tree that does not build: the result is the same kind of result.
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}pub fn broken() -> u32 {{\n    \"not a number\"\n}}\n"));
+    let (code, broken) = semilla_no_tool_chain(repo, &["step", "add a function that does not build"]);
+    assert_eq!(code, Some(0), "{broken}");
+    assert!(fact_line(&broken, "added `shop_core::cart::broken`").ends_with("[added]"), "{broken}");
+    // Each other command follows the stored mode: no build, no compare result.
+    let (code, status) = semilla_no_tool_chain(repo, &["status", "--verbose"]);
+    assert_eq!(code, Some(0), "{status}");
+    assert!(status.contains("the result of the syntax tree (computed now; no step has the compiled check):"), "{status}");
+    let (code, json) = semilla_no_tool_chain(repo, &["verify", "--json"]);
+    assert_eq!(code, Some(0), "{json}");
+    let report: serde_json::Value = serde_json::from_str(&json).unwrap_or_else(|error| panic!("{error}: {json}"));
+    let facts: Vec<&serde_json::Value> = report["steps"].as_array().unwrap().iter().flat_map(|step| step["facts"].as_array().unwrap()).collect();
+    assert!(facts.len() == 2 && facts.iter().all(|fact| fact.get("compare").is_none()), "{json}");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "two steps"]);
+    let (code, tag) = semilla_no_tool_chain(repo, &["tag"]);
+    assert_eq!(code, Some(0), "{tag}");
+    assert!(tag.contains("result: accepted · 2 steps · 2 facts · 0 claims"), "{tag}");
+    for output in [&step, &broken, &status, &tag] {
+        for text in COMPILED_TEXTS {
+            assert!(!output.contains(text), "the default mode has no `{text}`:\n{output}");
+        }
+    }
+    // The cache has no build folder: no step started cargo.
+    let builds: Vec<PathBuf> = std::fs::read_dir(repo_cache(repo)).unwrap().flatten().map(|entry| entry.path()).filter(|path| path.join("target").exists() || path.file_name().is_some_and(|name| name == "target")).collect();
+    assert!(builds.is_empty(), "{builds:?}");
+}
+
+#[test]
+fn the_option_compiled_gives_the_compare_results_and_a_mixed_set_tells_its_modes() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let default = [("SEMILLA_COMPILED", "0")];
+    let text = |output: Output| format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    // `--fast` is an option of the compiled check: the default mode gives one note.
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let fast = text(semilla_env(repo, &["step", "raise the limit", "--fast"], &default));
+    assert_eq!(fast.matches("note: `--fast` has an effect only with `--compiled`; this step has no compiled check").count(), 1, "{fast}");
+    assert!(fast.starts_with("accepted: step 0") && fact_line(&fast, "changed literal `10` → `20`").ends_with("[semantics]"), "{fast}");
+    // The option gives the compiled check of today for its step.
+    write(repo, "crates/shop-core/src/cart.rs", CART_V1);
+    let compiled = text(semilla_env(repo, &["step", "rename the local", "--compiled"], &default));
+    assert!(compiled.starts_with("accepted: step 1") && compiled.contains("code equal]") && !compiled.contains("note: `--fast`"), "{compiled}");
+    let session: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap()).unwrap();
+    let steps = session["changeset"]["steps"].as_array().unwrap();
+    // A step with no `compiled` field is a compiled step (the form of each older session).
+    assert!(steps[0]["compiled"] == false && steps[1].get("compiled").is_none(), "{session}");
+    // A property claim needs the compiled code: its step gets the compiled check, with one note.
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V1}pub fn two() -> u32 {{\n    2\n}}\n"));
+    let claim = text(semilla_env(repo, &["step", "add two", "--claim", "no-panic shop_core::cart::two"], &default));
+    assert_eq!(claim.matches("note: the claim `no-panic` is a property claim, so this step runs the compiled check (as with `--compiled`)").count(), 1, "{claim}");
+    assert!(claim.starts_with("accepted: step 2") && claim.contains("verified (mir)"), "{claim}");
+    // `rewrite-pattern` is not a property claim: the step keeps the default mode.
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V1.replace("vec![1, 2, 3]", "vec![1, 2, 4]"));
+    let last = text(semilla_env(repo, &["step", "a new item"], &default));
+    assert!(last.starts_with("accepted: step 3") && !last.contains("compiled check"), "{last}");
+    for output in [&fast, &last] {
+        for text in COMPILED_TEXTS {
+            assert!(!output.contains(text), "the default mode has no `{text}`:\n{output}");
+        }
+    }
+    // The result line of a mixed change set tells the count of the facts with no compiled check.
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "four steps"]);
+    let tag = text(semilla_env(repo, &["tag"], &default));
+    assert!(tag.lines().any(|line| line.starts_with("result: accepted · 4 steps · ") && line.contains("2 with no compiled check")), "{tag}");
+}
+
+#[test]
+fn a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning() {
+    // Design 50: two name maps pass with the same count of other facts. The items show as
+    // removed and added, with the note and the pair warnings. No later check comes.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let twins = "fn one(a: u32) -> u32 {\n    a + 1\n}\nfn two(a: u32) -> u32 {\n    a + 1\n}\n";
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{twins}"));
+    let (code, added) = semilla_no_tool_chain(repo, &["step", "add two functions"]);
+    assert_eq!(code, Some(0), "{added}");
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{}", twins.replace("fn one", "fn first").replace("fn two", "fn second")));
+    let (code, renamed) = semilla_no_tool_chain(repo, &["step", "rename the two functions"]);
+    assert_eq!(code, Some(0), "{renamed}");
+    assert!(fact_line(&renamed, "removed `shop_core::cart::one`").ends_with("[removed]") && fact_line(&renamed, "added `shop_core::cart::first`").ends_with("[added]"), "{renamed}");
+    assert!(renamed.contains("show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map"), "{renamed}");
+    assert!(renamed.contains("  ! pair: `shop_core::cart::one` (removed) and `shop_core::cart::first` (added) are 100% similar"), "{renamed}");
+    // One pair has one map: the rename fact shows, with no pair warning.
+    run(repo, &["undo"], 0);
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{}", twins.replace("fn one", "fn first")));
+    let (code, renamed) = semilla_no_tool_chain(repo, &["step", "rename one function"]);
+    assert_eq!(code, Some(0), "{renamed}");
+    assert!(fact_line(&renamed, "renamed `shop_core::cart::one` → `shop_core::cart::first`").ends_with("[rename]") && !renamed.contains("! pair:"), "{renamed}");
+}
+
+#[test]
+fn the_item_list_of_a_default_step_comes_from_the_syntax_tree() {
+    // Design 50: a default step has no line "affected bodies:". The items with a site of a
+    // generic item (design 22, brief 5h) are a list of the syntax tree with its own name.
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let code = "\npub fn tier<const F: u64, const P: u64>(amount: u64) -> u64 {\n    F + amount * P / 100\n}\n\npub fn gold(amount: u64) -> u64 {\n    tier::<10, 2>(amount)\n}\n";
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{code}"));
+    let (code_1, added) = semilla_no_tool_chain(repo, &["step", "add tier"]);
+    assert_eq!(code_1, Some(0), "{added}");
+    write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{}", code.replace("tier<const F: u64, const P: u64>", "tier<const P: u64, const F: u64>")));
+    let (code_2, out) = semilla_no_tool_chain(repo, &["step", "reorder tier"]);
+    assert_eq!(code_2, Some(0), "{out}");
+    assert!(fact_line(&out, "generics of `shop_core::cart::tier`").ends_with("generic arguments go by position: 1 site(s) in 1 other item(s) [declaration]"), "{out}");
+    assert!(out.contains("      items with a use: shop_core::cart::gold\n") && !out.contains("affected bodies:"), "{out}");
 }

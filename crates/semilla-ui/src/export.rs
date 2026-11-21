@@ -304,6 +304,8 @@ impl<'a> Model<'a> {
         match self.report().phase.as_str() {
             "" => "unknown".to_string(),
             "syntax" => "1 (syntax)".to_string(),
+            // Design 50: a change set with no compiled step has no phase 2.
+            "full" if self.report().steps.iter().any(|step| !step.facts.is_empty()) && self.report().steps.iter().flat_map(|step| &step.facts).all(|fact| fact.compare.is_off()) => "syntax tree (no compiled check)".to_string(),
             "full" => "2 (full)".to_string(),
             other => other.to_string(),
         }
@@ -1364,8 +1366,8 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
             if let Some(branches) = &fact.branches {
                 text.push_str(&format!("; branches: {branches}"));
             }
-            // A public API change (design 36.3).
-            if fact.api_change() {
+            // A public API change (design 36.3). No line for a fact with no compare (design 50).
+            if fact.api_change() && !fact.compare.is_off() {
                 text.push_str(&format!("; {}", semilla_core::report::API_LINE));
             }
             // A changed body with `unsafe` code (design 36.5).

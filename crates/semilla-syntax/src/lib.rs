@@ -17,10 +17,11 @@ pub mod load;
 mod mapper;
 pub mod rs;
 mod net;
+pub mod sites;
 pub mod tree;
 pub mod tt;
 
-pub use diff::{BodyMaps, Edit, EditKind, Refactor, Renames, StatementMap, diff, diff_maps};
+pub use diff::{BodyMaps, Edit, EditKind, Refactor, Renames, SiteCount, StatementMap, diff, diff_maps};
 pub use load::{BodyItem, BodyItems, CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
 pub use tree::Node;
 
@@ -192,6 +193,7 @@ mod tests {
     }
 
     // The edition of the test code (`async fn`); a package with no edition is 2015 code (design 39.1).
+
     const MANIFEST: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
 
     #[test]

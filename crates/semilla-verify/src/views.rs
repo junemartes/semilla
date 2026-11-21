@@ -140,7 +140,7 @@ fn step_edits(outcomes: &[StepOutcome]) -> Vec<StepEdit<'_>> {
     let mut all = Vec::new();
     for (position, outcome) in outcomes.iter().enumerate() {
         let mut marks: BTreeMap<String, Mark> = outcome.report.claims.iter().map(|c| (c.claim.clone(), (c.category, None))).collect();
-        marks.extend(outcome.report.facts.iter().map(|f| (f.id.clone(), (Some(f.category), Some(f.compare)))));
+        marks.extend(outcome.report.facts.iter().map(|f| (f.id.clone(), (Some(f.category), (!f.compare.is_off()).then_some(f.compare)))));
         for (index, edit) in outcome.edits.iter().enumerate() {
             // A fact owns its edits like a claim: the tree shows the fact ID (`f1`).
             let owner = outcome.owners[index].map(|claim| outcome_claim_id(outcome, claim)).or_else(|| fact_id(outcome, index));
@@ -199,7 +199,8 @@ fn final_edits_with(outcomes: &[StepOutcome], base: &Workspace, head: &Workspace
         let finals = steps.iter().map(|step| FinalEdit { edit: step.edit.clone(), steps: Vec::new(), owners: step.owner.clone().into_iter().collect(), mark: step.mark, covered: step.owner.is_some() }).collect();
         return (finals, Vec::new());
     }
-    let (renames, _) = composed_renames(outcomes);
+    let (mut renames, _) = composed_renames(outcomes);
+    crate::sites::resolve(&mut renames, base, head);
     let all_covered = steps.iter().all(|step| step.owner.is_some());
     let mut shown = vec![false; steps.len()];
     let mut finals = Vec::new();
@@ -483,6 +484,8 @@ fn summarize(node: &mut TreeNode) -> BTreeMap<&'static str, usize> {
         let key = match (node.status, node.compare) {
             (Status::Uncovered, _) => "uncovered",
             (_, Some(compare)) => compare.name(),
+            // A fact of a step with no compiled check (design 50).
+            (_, None) if node.category.is_some() => "changed",
             _ => "other",
         };
         *counts.entry(key).or_default() += 1;
@@ -828,7 +831,15 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     }
     if !fact.affected.is_empty() {
         // The mismatch mark (design 35.2) replaces the list name. It asks for no reason.
-        let name = if fact.mismatch() { semilla_core::report::MISMATCH } else { "affected bodies:" };
+        // A step with no compiled check has no body list from a compare (design 50). Its list
+        // comes from the syntax tree: the items with a use of the changed item or file.
+        let name = if fact.mismatch() {
+            semilla_core::report::MISMATCH
+        } else if fact.compare == Compare::Off {
+            "items with a use:"
+        } else {
+            "affected bodies:"
+        };
         put(&format!("      {name} {}", shared.bodies(fact, names)));
     }
     if !fact.equal_sites.is_empty() {
@@ -844,8 +855,10 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     if let Some(branches) = &fact.branches {
         put(&format!("      branches: {branches}"));
     }
-    // A public API change (design 36.3): the line asks for no reason.
-    if fact.api_change() {
+    // A public API change (design 36.3): the line asks for no reason. The line is about the
+    // compare, so a fact with no compare result (design 50) does not have it: the fact text
+    // tells the API change.
+    if fact.api_change() && !fact.compare.is_off() {
         put(&format!("      {}", semilla_core::report::API_LINE));
     }
     // A changed body with `unsafe` code (design 36.5): the line asks for no reason.

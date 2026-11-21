@@ -52,6 +52,20 @@ pub struct Step {
     /// reason`). Free text for the reviewer.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub reasons: std::collections::BTreeMap<String, String>,
+    /// The mode of the step (design 50). True: the step has the compiled check (phase 2), and
+    /// each fact has a compare result. False: the step has the syntax check only. A stored step
+    /// with no field is a step of an earlier version: it has the compiled check.
+    #[serde(default = "compiled_default", skip_serializing_if = "is_true")]
+    pub compiled: bool,
+}
+
+/// The mode of a stored step that has no `compiled` field.
+pub fn compiled_default() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// The kind of a group. Some kinds have rules that the verifier checks.
@@ -201,6 +215,7 @@ mod tests {
             tree_before: String::new(),
             tree_after: String::new(),
             reasons: Default::default(),
+            compiled: false,
         };
         let set = ChangeSet { steps: vec![step], ..Default::default() };
         assert_eq!(set.next_claim_id(), "c3");

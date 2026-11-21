@@ -28,6 +28,7 @@ pub mod links;
 pub mod made;
 pub mod mirmap;
 mod opaque;
+pub mod sites;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
 mod uncompiled;
@@ -569,6 +570,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         }
         item_reasons(input, &mut plain.report);
         kind_reasons(input, &mut plain.report);
+        no_compare_result(input.step, &mut plain.report);
         return plain;
     }
     let mut outcome = identity::derive(input, bodies, exprs, plain);
@@ -578,7 +580,22 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     identity_api_facts(input, &mut outcome);
     item_reasons(input, &mut outcome.report);
     kind_reasons(input, &mut outcome.report);
+    no_compare_result(input.step, &mut outcome.report);
     outcome
+}
+
+/// A step with no compiled check (design 50): no fact has a compare result. This is the last
+/// pass, so a fact that a later rule made (a derived rename, a folded fact) has none too.
+fn no_compare_result(step: &Step, report: &mut StepReport) {
+    if !step.compiled {
+        for fact in &mut report.facts {
+            fact.compare = Compare::Off;
+            // No note gives a cause for a compare that Semilla did not make.
+            if fact.note.as_deref().is_some_and(|note| note.starts_with(uncompiled::NO_COMPARE)) {
+                fact.note = None;
+            }
+        }
+    }
 }
 
 /// The parts of the name of an item of a trait impl (`m::<Type as Trait<A>>::method#0`,
@@ -858,6 +875,8 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     checks::moved_impls(step, input.before, input.after, &mut renames);
     // The impl blocks of a renamed type or trait (design 37.2).
     report.notes.extend(checks::renamed_impls(step, input.before, input.after, &mut renames));
+    // The map of a rename is a map of the references to the item (design section 51).
+    sites::resolve(&mut renames, input.before, input.after);
     let renames = renames;
     let (edits, body_maps) = semilla_syntax::diff_maps(input.before, input.after, &renames);
 
@@ -1589,7 +1608,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     report.api_changes = api_changes;
 
     // The compare result of each fact (design 35).
-    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed, &truths);
+    set_compare(&mut report, &body_index, input.before, input.after, &renames, build_failed, &truths, step.compiled);
 
     // An edit in code that no checked configuration compiles has no compare (batch 5w, part A).
     if body_index.available {
@@ -1627,6 +1646,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
 ///
+/// 0. A step with no compiled check (design 50): no fact has a compare result.
 /// 1. A fact with the result `not checked` keeps it.
 /// 2. A doc test: `no compare`. Semilla does not compile a doc test.
 /// 3. A failed build: `no compare`, with the cause.
@@ -1636,7 +1656,8 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
 /// 6. A fact in a function that no checked configuration compiles: `no compare`.
 /// 7. A doc text, a comment, a manifest key, and a file with no changed body: `no code`.
 /// 8. Each other fact: `code equal`.
-fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool, truths: &[Vec<ConfigTruth>; 2]) {
+#[allow(clippy::too_many_arguments)]
+fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: &Workspace, after: &Workspace, renames: &semilla_syntax::Renames, build_failed: bool, truths: &[Vec<ConfigTruth>; 2], compiled: bool) {
     let twin_compiled = |function: &str| twin_compiled(before, after, truths, function);
     let note = |fact: &mut semilla_core::Fact, text: String| {
         fact.note = Some(match fact.note.take() {
@@ -1663,6 +1684,12 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
         };
     }
     for fact in report.facts.iter_mut() {
+        // A step with no compiled check (design 50): no fact has a compare result, and no note
+        // gives a cause for a compare that Semilla did not make.
+        if !compiled {
+            fact.compare = Compare::Off;
+            continue;
+        }
         if fact.compare == Compare::NotChecked {
             continue;
         }
@@ -2019,6 +2046,12 @@ fn identity_step(
             continue;
         }
         owners[index] = results.iter().position(|(claim, outcome)| claim.op == "move-item" && outcome.status.is_verified() && claim.arg_str("to").is_some_and(|to| to.strip_prefix(module.path.as_str()).is_some_and(|rest| rest.starts_with("::") && !rest[2..].contains("::"))));
+    }
+    // A step with no compiled check (design 50): the syntax tree is the proof of a derived
+    // rename or move. The check of the claim made the name map, and each edit that the map does
+    // not give keeps its own fact (`with_changes`).
+    if !body_index.available && with_changes && !step.compiled {
+        return Some((ClaimStatus::Verified { proof: "syntax tree".into() }, None));
     }
     if !body_index.available {
         return Some((ClaimStatus::Pending { reason: "the compare of the rename or the move runs in the background check (phase 2)".into() }, None));
@@ -3103,7 +3136,9 @@ pub fn verify_changeset_cached(
                 // Phase 1 has no MIR: the identity proof of a rename or a move waits for phase 2.
                 // Phase 2 proves the identity (then the pair is one item), or it gives the pair
                 // warning. Phase 1 gives no warning for such a pair.
-                if outcome.report.identity_candidates && outcome.bodies.is_empty() && matches!(bodies.facts(step), Ok(None)) {
+                // A step with no compiled check has its final result now (design 50): its pair
+                // warning shows.
+                if step.compiled && outcome.report.identity_candidates && outcome.bodies.is_empty() && matches!(bodies.facts(step), Ok(None)) {
                     pending_pairs.extend(identity::candidates(&before, &after).0.into_iter().map(|pair| (pair.old, pair.new)));
                 }
                 // The removed and added items of the derived facts are pair candidates too.

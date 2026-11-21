@@ -154,10 +154,25 @@ pub enum Compare {
     /// No compare: the step uses build code that the change set changes, and the command had
     /// `--no-build-code` (design 28).
     NotChecked,
+    /// The step has no compiled check (design 50): the fact comes from the syntax tree only. No
+    /// output shows a compare result for it, and the JSON form of the fact has no `compare`
+    /// field.
+    Off,
 }
 
 impl Compare {
-    /// Each compare result, in the order of the result line.
+    /// The value of a fact with no `compare` field (design 50).
+    pub fn off() -> Compare {
+        Compare::Off
+    }
+
+    /// True for a fact of a step with no compiled check.
+    pub fn is_off(&self) -> bool {
+        *self == Compare::Off
+    }
+
+    /// Each compare result, in the order of the result line. [`Compare::Off`] is not a compare
+    /// result.
     pub const ALL: &'static [Compare] = &[Compare::CodeDifferent, Compare::CodeEqual, Compare::NoCompare, Compare::Pending, Compare::NotChecked, Compare::NoCode];
 
     /// The text of the compare result in each output.
@@ -169,6 +184,7 @@ impl Compare {
             Compare::NoCode => "no code",
             Compare::Pending => "pending",
             Compare::NotChecked => "not checked",
+            Compare::Off => "",
         }
     }
 
@@ -186,6 +202,8 @@ impl Compare {
             Compare::NotChecked => 3,
             Compare::CodeEqual => 4,
             Compare::NoCode => 5,
+            // Each fact of a step with no compiled check has the same place.
+            Compare::Off => 2,
         }
     }
 }

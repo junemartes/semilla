@@ -1455,7 +1455,7 @@ A fact owns its forced edits. The review shows all sites under the fact.
 | # | Rule |
 |---|---|
 | F1 | A parameter is added: each call gets one new argument at that position. A parameter is removed: each call drops that argument. |
-| F2 | A field is added: each struct literal gets the field, and each pattern gets the field or `..`. A field is removed: the literals and the patterns drop it. |
+| F2 | A field is added: each struct literal gets the field, and each pattern gets the field or `..`. A field is removed: the literals and the patterns drop it. (Since 50: the site line names the exact edit of each pattern; 50.3, rule 5.) |
 | F3 | A variant field change covers the constructors and the patterns. |
 | F4 | A trait method fact covers the same fact in each impl. |
 | F5 | The verifier computes the affected bodies: bodies with a changed MIR that use the changed entity. The MIR callee list is the evidence where it exists. Other changed bodies get the fact "indirect change, cause not known" (8.16). This replaces the hand-written `affects` list. |
@@ -1558,7 +1558,7 @@ Rules:
 1. **Each edit gets a fact.** Semilla uses the shape rules and the checkers of the old ops. An edit with no exact shape gets the general fact "changed NODE: A → B". So an uncovered edit cannot exist.
 2. **The class comes from the proofs.** A body with equal MIR is "neutral (proved Nk)", and its edits fold under one line. A body with a changed MIR lists its facts with their classes. SMT computes the effect of a changed condition.
 3. **Semilla names a neutral rewrite when it can.** Example: "extracted `helper` from `total` (proved N2)". If no name fits, the text is "neutral rewrite of the body".
-4. **Identity is derived when the step is neutral.** Semilla finds candidate pairs (a removed and an added entity of the same kind). It tries the name map. If the rules of 22.4 hold, it derives "renamed" or "moved" with the proof. If the step has other changes, the pair shows as removed and added, with a note: "put the rename in its own step to get a proof". This note does not reject the step.
+4. **Identity is derived when the step is neutral.** Semilla finds candidate pairs (a removed and an added entity of the same kind). It tries the name map. If the rules of 22.4 hold, it derives "renamed" or "moved" with the proof. If the step has other changes, the pair shows as removed and added, with a note: "put the rename in its own step to get a proof". This note does not reject the step. (Since 50: the default mode derives the rename or the move from the syntax tree, with no MIR, also in a step with other changes; 50.2.)
 5. **Explicit claims are optional.** They stay for these cases:
    - `rename`, `move-item`: when the search finds no pair, or finds more than one map;
    - `rewrite-pattern`: the statement that a rule covers all sites;
@@ -1610,7 +1610,7 @@ This section replaces these parts of older sections: the agent loop of 7 (the cl
   - Limits: at most 4 removed and 4 added entities of one kind in one owner, and at most 24 name maps (the matchings with the most pairs). Above a limit, or when more than one map passes, Semilla derives nothing and gives a note.
   - The proof: each map becomes `rename` and `move-item` claims, and the step is checked with them by the same function as a claimed identity (`verify_core`, design 22.4). A map passes when each of its claims is verified and the check has no error. The claims then become facts: "renamed `A` → `B` (proved …)" or "moved `A` → `B` (proved …)", with the edits and the bodies of the claims. A derived body of another trait than `Debug` puts the first identity fact in the spotlight, so it needs a reason (the anchor is the old item).
   - A pair that does not pass shows as removed and added, with the note "… show(s) as removed and added: REASON. Put the rename in its own step to get a proof". The note does not reject the step.
-  - Phase 1 has no MIR: a step with a candidate gets the note "phase 2 tries the proof" and the flag `identity_candidates`. The `step` command then runs phase 2 at once.
+  - Phase 1 has no MIR: a step with a candidate gets the note "phase 2 tries the proof" and the flag `identity_candidates`. The `step` command then runs phase 2 at once. (Since 50: only for a step with the compiled check. The default mode makes the same check on the two syntax trees and gives the result at once; 50.2.)
   - A public rename or move is in the public API changes.
 - **Short output** (`edits::fold`): two edit facts fold when the text (without the place), the class, and the spotlight are equal; two neutral body facts fold when the proof text is equal. The places go to `sites`, and the text report prints "in: BODY (N), …". In phase 1 of the new protocol, the syntax call graph gives the call sites of a parameter fact (only for the display; the class stays pending, and phase 2 uses the MIR callee list). A removed and an added parameter of one function with the same type at the same position give one fact "parameter `a` of `f` renamed to `b`".
 - **Messages**: a rejection prints the text form of the claim status and the claim text; the "run again" command removes the false claims and uses the computed class; a cause that only a code change can fix prints no command. The class error names the facts and the claims that give the class. Phase 1 prints no score. `status --wait` starts a lost job again and runs it in the process. `semilla --help` lists `step`, `undo`, `tag`, `status`, `review`, `ops` first and hides the old commands.
@@ -2626,7 +2626,7 @@ The mutant run on other crates (236 declaration mutants) agrees with the table. 
 
 **The cause (trial 9).** The honest move of `transform` to a new module changed `use crate::{lowercase, transform};` in 9 files. The rule of batch 5x permitted only a `use` line with the same shape, so the move showed as 16 facts with no proof.
 
-**The rule. Decided by Claude.** The identity check compares, for each module, the set of the names that the private `use` lines import: the name, the full path of its target after the rename map, and the glob mark. If each module has the same set before and after, the `use` edits are forced edits of the move. A line can change, split, join, or go. The fact says "…, with N `use` line(s)". These stay facts to read, or stop the proof: an import of a different item with the same name, a new name, a new glob import, a `pub use` or a `pub(crate) use` line, a line with an attribute, and a body edit of the moved item. The MIR compare with the rename map stays the proof of each body.
+**The rule. Decided by Claude.** The identity check compares, for each module, the set of the names that the private `use` lines import: the name, the full path of its target after the rename map, and the glob mark. If each module has the same set before and after, the `use` edits are forced edits of the move. A line can change, split, join, or go. (Since 50: the rule is for each line, not for the whole module, and the map must be the cause of the edit; 50.3, rules 2 to 4.) The fact says "…, with N `use` line(s)". These stay facts to read, or stop the proof: an import of a different item with the same name, a new name, a new glob import, a `pub use` or a `pub(crate) use` line, a line with an attribute, and a body edit of the moved item. The MIR compare with the rename map stays the proof of each body.
 
 ### 33.7 A body from a macro call goes under its cause (part B2)
 
@@ -2734,7 +2734,7 @@ Batch 7a. This section replaces the verdict rules of the sections 8.2, 22.4, and
 **User decision (2026-11-14, variant B).**
 
 - Semilla does not decide if a change is neutral. The verdict `neutral (proved)` is gone.
-- Each fact has exactly one category and exactly one compare result.
+- Each fact has exactly one category and exactly one compare result. (Since 50: a fact has a compare result only in a step with the compiled check; 50.1.)
 - The category says what kind of change the text shows. It does not say if the change has an effect.
 - The compare result is an observation of the compiled code. It is not a verdict.
 - The reviewer reads each fact. An equal compare never hides the text of an edit.
@@ -2874,10 +2874,10 @@ Batch 7b. The model of 35.1 stays (the user decided only that model). The rule a
 
 1. A removed item and an added item of the same kind are a candidate pair when their texts are similar (`PAIR_THRESHOLD` = 0.7). The score does not count a doc comment, an attribute, and a visibility. The step can have other changes: in the item, in a different item, and more pairs.
 2. Semilla checks each name map of the pairs. The map with the highest sum of the scores that passes the check gives the facts. Maps with the same score: the map that leaves the smallest number of other facts wins.
-3. The pair gives one `rename` fact or one `move` fact, with the forced edits under it: "renamed `semver::eval::matches_caret` → `semver::eval::matches_caret_op` [rename · code equal]".
+3. The pair gives one `rename` fact or one `move` fact, with the forced edits under it: "renamed `semver::eval::matches_caret` → `semver::eval::matches_caret_op` [rename · code equal]". (Since 50: a path is a forced edit only if it names the item on each side; 50.3, rule 1.)
 4. Each difference of the pair that the new name does not force is its own fact at the new path: "changed operator `ver.minor > minor` → `ver.minor >= minor` at `semver::eval::matches_caret_op/S3/then/S0/then/S0/value` [logic · code different]" (since 42: `semantics`). This applies to a signature, a visibility, an attribute, a doc comment, a member, and each edit of a body.
 5. A changed body with an edit fact goes to that fact. A changed body that no fact explains goes to the identity fact. Then the identity fact has `code different` and the mismatch mark.
-6. A type moves with its `impl` blocks: "moved `semver::error::QuotedChar` → `semver::quoted::QuotedChar`, with 1 impl and 2 `use` line(s) [move · code equal]". No "trait impl removed" fact and no "trait impl added" fact shows.
+6. A type moves with its `impl` blocks: "moved `semver::error::QuotedChar` → `semver::quoted::QuotedChar`, with 1 impl and 2 `use` line(s) [move · code equal]". No "trait impl removed" fact and no "trait impl added" fact shows. (Since 50: a `use` line goes under the fact only by the rules of 50.3.)
 7. A renamed local or parameter with a second edit in the same body gives one `rename` fact and one fact for each other edit. (Since 44: only a fact of an edit of the text of the body takes the body from the rename fact, not a symbol link; 44.5.)
 8. A pair that Semilla does not derive shows as removed and added. The note gives the cause: "… show(s) as removed and added: Semilla does not derive the rename (…)". The pair warning shows only for such a pair. The text "Semilla derives a rename only in a step with no other change" is gone.
 
@@ -4189,3 +4189,279 @@ Limit: "visible" does not prove that the needle is in the text of the fact. The 
 2. Batch 9b: the options `--same` and `--change` of 48.5, with their checks and the gap list.
 3. Batch 9c: extract and inline of a function in the syntax tree (49.6).
 4. Batch 9d: the forced inliner in the optional check (49.6).
+
+## 50. Batch 9a: the syntax tree model is the default
+
+Batch 9a. This section is the code change of the decision of section 49. The model of 49.3 stays. The rule above each rule of this section: no difference of the syntax tree is without a fact, and no fact text says less than the difference. Each detail below that section 49 did not decide has the mark **Decided by Claude**.
+
+### 50.1 The two modes
+
+- **The default mode.** `semilla step "<intent>"` runs only the syntax phase. It starts no build and no process of the Rust tool chain. A fact line ends with the category: "… [semantics]". No output of this mode has a compare result (`code equal`, `code different`, `no compare`, `no code`, `pending`, `not checked`), an `indirect` fact, or a line "affected bodies:", "branches:", "through:", or "! the compiled code changes:". A tree that does not build is accepted.
+- **The compiled check.** `semilla step "<intent>" --compiled` also runs phase 2 (the build, the MIR compare, the compare result on each fact). Its rules are the rules of the sections 35 to 47. The only changes of its output are the corrected rules of 50.3 and 50.4.
+- **Decided by Claude:** the variable `SEMILLA_COMPILED` (not empty and not `0`) gives the same as `--compiled`. The tests of the compiled check set it in their helper.
+- **Decided by Claude:** `--fast` has an effect only with a compiled check. Else the step prints one note: "note: `--fast` has an effect only with `--compiled`; this step has no compiled check".
+- **Decided by Claude (49.4):** a property claim (`tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`) starts the compiled check for its step, with one note: "note: the claim `no-panic` is a property claim, so this step runs the compiled check (as with `--compiled`)". The claim `rewrite-pattern` needs no compiled code.
+
+**The stored form. Decided by Claude.**
+
+- A step stores its mode: `Step.compiled` (`"compiled": false` for a default step). A step with no such field is a step of an older version: it has the compiled check.
+- A fact of a default step has the compare value `Compare::Off`. The JSON form of such a fact has no field `compare`. `Fact::label()` gives the category only.
+- A note that starts with "no compare:" gives the cause of a compare that Semilla did not make. A default step has no such note.
+
+**The other commands follow the stored mode. Decided by Claude.**
+
+- `status`, `tag`, `verify`, `review`, and the MCP tools start a build only if a step of the change set has the compiled check. A change set with no such step has no build code state, no background check, and no cache entry of a build.
+- `semilla status` of such a change set says: "the result of the syntax tree (computed now; no step has the compiled check):".
+- The result line has no compare counts: `result: accepted · 3 steps · 4 facts · 0 claims`. A change set with the two modes counts the compare results of its compiled steps and adds "N with no compiled check".
+- A list of items under a fact of a default step comes from the syntax tree (the items with a site of a generic type, the items that read a changed file). Its name is "items with a use:", not "affected bodies:".
+- A default step has its final result at once. So a pair that Semilla does not derive gets its pair warning in the same output.
+
+### 50.2 The proof of a rename and a move from the syntax tree
+
+The candidate pairs, the limits, and the name maps are the ones of 24.6 and 36.1. The proof changes.
+
+1. **The pair check.** The pair passes when the old item is equal to the new item after the map of the names, and the map explains each forced edit. The check is the function of a claimed identity (`check_rename`, `checks.rs`) on the two syntax trees. The default mode gives the result at once; it does not wait for a MIR compare.
+2. **A forced edit** is a use of the item, a `use` line, or a `mod` line that the map explains (50.3 has the exact rules). It goes under the rename or move fact.
+3. **Each other difference is its own fact**, with the full old and new text. Example: with the rename `Fault` → `Problem`, the use `Fault::Low` → `Problem::High` gives "changed path `Fault::Low` → `Problem::High` at `demo::fourth/tail` [semantics]". An item with a body edit keeps its rename or move fact, and the edit is a fact at the new path (36.1, rule 4).
+4. **More than one map.** The map with the highest sum of the scores wins; then the map with the smallest number of other facts. A tie gives no rename fact: the items show as removed and added with the note of 36.1, rule 8, and the pair warning. A limit of 24.6 gives the same.
+5. **Decided by Claude:** with `--compiled`, the MIR proof of the pair stays as it was (the smaller change). The rules 2 and 3 are the same in the two modes, because the syntax phase makes the facts in the two modes.
+
+**The limit that the user accepted (49.5, loss 2).** Semilla does not resolve the names again after the map. After an exact map, a name can resolve to a different definition: by shadowing (a local with the new name, an item of an outer scope), by a glob import, or by a method of two traits. The author made no extra edit in such a case. The compiler rejects most of these cases. Semilla adds no check for them. The cases `shadow_item` and `shadow_local` record the behavior.
+
+**Corrected in batch 9a2 (section 51).** The first text of this paragraph said "The map is a map of words" and called this the accepted limit. That was an error. A map of words hides a second edit of the author that also changes the old word to the new word. The map is now a map of the references to the item (51.2).
+
+### 50.3 The exact rules of the forced edits
+
+Before this batch, three rules could put a difference under a rename or move fact, and only the compare result showed it (49.8). **Each rule below: Decided by Claude.**
+
+1. **A path.** A changed path is a forced edit only if it names the item on each side: the old path resolves to the old item, the new path resolves to the new item, and the other segments are equal. Before: a path with the old name as a word before and the new name as a word after was forced. So `Fault::Low` → `Problem::High` was under the rename of `Fault`, and `other::over` → `util::over` was under the move of `cart::over`.
+2. **A `use` line, the line rule.** A changed private `use` line is forced if the names of the old line after the map are the names of the new line (the name, the full target, the glob mark), and the map changes a target of the old line. A line with a new order of its names and no changed target is not an effect of the map: it keeps its fact.
+3. **A `use` line, the module rule.** A removed, an added, or a changed private `use` line with no attribute is forced if each name of its old line (after the map) and each name of its new line follows the map, and the map is the cause. A name follows the map if the module imports it on the two sides with the same target, or if the map explains that it is gone or new. The map is the cause if it touches a line of the edit, or a name of the edit comes from such a line or goes to one (a line that splits or joins). Before: the rule compared the name sets of the whole module (33.6), and a move permitted each private `use` line of its two modules.
+4. **The scope rule.** The map explains a new name if an item that the map moves into the module uses the name, and the name gave the same target in the old module of the item. The map explains a name that is gone in the same way for an item that moves out. An `impl` block that moves with its type is such an item. So "moved `shop_core::over` → `shop_app::over`, with 1 `use` line(s)" takes the new import of `LIMIT`, and a new line `use std::fmt;` that the moved item does not use is "added `use` line: `use std::fmt;` in `demo::quota` [import]".
+5. **A site of a field in a pattern** (22.6, F2). The site line names the exact edit: "add `..` to the pattern", "add the field `cap` to the pattern", "drop the field `cap` from the pattern". Before: one line "add `..` or the field to the pattern" for the different edits.
+
+### 50.4 The audit of the rules that drop, fold, or absorb a difference
+
+| Rule | File | Result | Test |
+|---|---|---|---|
+| A path edit under a rename or a move | `checks.rs`, `forced_path` | corrected (50.3, rule 1) | `a_rename_from_the_syntax_tree_and_a_use_with_a_second_difference`, `a_path_to_a_different_item_is_not_a_forced_edit_of_a_move` |
+| A `use` line under a rename or a move | `checks.rs`, `imports_follow_map`, `ImportMap::forced` | corrected (50.3, rules 2 to 4); it relied on phase 2 | `a_use_line_with_a_second_difference_gets_its_own_fact`, `an_import_that_a_moved_item_needs_goes_under_the_move_fact`, `a_use_line_that_the_map_does_not_change_keeps_its_fact` |
+| A site of a field in a pattern | `facts.rs`, `pattern_site` | corrected (50.3, rule 5) | `a_pattern_site_names_the_exact_edit` |
+| A note "no compare: …" in a step with no compare | `lib.rs`, `no_compare_result` | corrected: the default mode has no such note | `a_doc_test_fact_of_the_default_mode_has_no_note_about_the_compare` |
+| The pair warning of a pair that waits for phase 2 | `lib.rs`, `verify_changeset_cached` | corrected: a default step waits for nothing | `a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning` |
+| The list of items under a fact (the sites of a generic item, the items that read a changed file) | `views.rs` | exact: the list comes from the syntax tree; the default mode names it "items with a use:" | `the_item_list_of_a_default_step_comes_from_the_syntax_tree` |
+| A use of a removed or an added member that changes to a different member | `facts.rs` | exact | `a_use_that_changes_to_a_different_variant_gets_its_own_fact` |
+| A call site of a parameter fact, a literal site of a field fact | `facts.rs`, `call_site`, `literal_site` | exact: the site line has the full text of the argument or the field | cases `add_param_calls`, `rm_param_calls`, `add_field_literals`, `rm_field_uses` |
+| The fold "N site(s): …" of equal facts | `edits.rs`, `fold` | exact: only facts with equal full texts fold | case `p4_fold_sites` |
+| The type change "in N places" | `edits.rs`, `type_change` | exact: the fact names each place | `a_type_change_in_the_default_mode_names_each_place` |
+| The fold of a renamed macro and of a renamed local | `edits.rs`, `hints.rs` | exact: each site is equal after the map | cases `rn_local`, `rn_param`, `r2_local_use` |
+| The cut mark `…` in a long text | `edits.rs`, `short_texts` | exact for a pair of texts (the changed part shows). A text of one side is a label: the field `content` of the fact has the full text | `a_fact_with_a_cut_text_has_the_full_text` |
+| The children of a removed, an added, or a moved owner; ", with N impl" | `edits.rs`, `identity.rs` | exact: each other edit of a moved block is its own fact | `a_moved_type_with_a_second_change_is_a_move_and_one_fact_for_each_change` |
+| A macro call, a comment | `edits.rs` | exact: one fact for each changed argument; "changed comment `…` → `…`" | cases `p4_macro_call`, `c_comment` |
+| "The MIR proof of a body covers the edits inside that body" | `lib.rs` | relies on phase 2. Only a retired identity claim reaches it; the default mode does not | none |
+| The map of a rename (`Renames.sites`) | `sites.rs` (two crates), `diff.rs` | exact since batch 9a2: the map changes only a reference to the item (51.2). A site by name has the count in a note (51.3, R3). The accepted limit of 50.2 stays | the cases of `b9a2/cases/`; the tests of section 51 in `tests.rs`; cases `shadow_item`, `shadow_local` |
+
+### 50.5 The results
+
+The measure uses the binaries of batch 8i (`bin-8i`) and the binaries of this batch. The machine and the cache state are the same for each run. Each run starts with an empty cache.
+
+**The 60 cases.** A case is a small repository with one change. Each case runs in three ways: `bin-8i` (with the compare), the default mode (a `PATH` with no tool chain), and `--compiled`.
+
+- 49 cases: the default mode gives the same fact texts as `bin-8i`, and `--compiled` gives the same output as `bin-8i`.
+- A case takes 0.04 to 0.11 s in the default mode. It takes 0.24 to 0.31 s with `bin-8i` and with `--compiled` (each run).
+- The 11 cases with a difference:
+
+| Case | The default mode against `bin-8i` | `--compiled` against `bin-8i` | Cause |
+|---|---|---|---|
+| `c_add_stmt` | no `indirect` fact | same output | 50.1: an effect at a distance is a compiled result |
+| `c_build_script` | no line "build code changed in step 0 …" | same output | 50.1: no build code state |
+| `c_manifest` | the spotlight has no text about the MIR; no note of the compare | same output | 50.1 |
+| `c_no_build`, `c_parse_error` | accepted (the build does not run) | rejected, as before (only the cache path differs) | 50.1; see 50.6 |
+| `mv_needs_import` | move "with 1 `use` line(s)" (before: 2) and a fact "added `use` line: `use std::fmt;`" | the same change | 50.3, rule 4: the moved item does not use the name |
+| `mv_other_path` | new fact "changed path `other::over` → `util::over`" | the same fact, `code different`; the move is `code equal` | 50.3, rule 1 |
+| `mv_use_second` | new fact "removed `use` line: `use cart::{over, a::helper};`" | the same fact | 50.3, rule 2 |
+| `p4_pattern_field` | three exact site lines (before: one text for the three sites) | the same lines | 50.3, rule 5 |
+| `p4_type_places` | one fact "in 8 places" (before: two facts, 2 and 6 places) | same output | the compare result divided the fact; the default mode has no compare result |
+| `r2_enum_use` | new fact "changed path `Fault::Low` → `Problem::High`" | the same fact, `code different`; the rename is `code equal` | 50.3, rule 1 |
+
+**The ten fixtures (real crates, two releases each).** The default mode, with a `PATH` that has no tool chain. Each fixture needs two runs: the first run asks for the reasons, the second run is accepted.
+
+| Fixture | First line | Runs | Reasons | Facts | Facts by category | Site lines | Folded lines | Time of each run (s) | `bin-8i` (s) | `--compiled` (s) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `bytes` | rejected | 2 | 13 | 177 | added 11, attribute 1, declaration 39, docs 14, file 6, import 14, manifest 4, removed 46, semantics 41, visibility 1 | 6 | 2 | 0.89 0.89 | 22.78 9.58 | 22.97 9.51 |
+| `cpufeatures` | rejected | 2 | 13 | 72 | added 1, attribute 1, declaration 5, docs 6, file 2, manifest 46, removed 8, semantics 2, text 1 | 0 | 0 | 0.09 0.08 | 0.52 0.23 | 0.51 0.21 |
+| `nu-ansi-term` | rejected | 2 | 49 | 249 | added 66, attribute 4, declaration 48, docs 9, file 5, import 16, manifest 41, removed 14, semantics 46 | 4 | 1 | 0.31 0.30 | 11.62 2.40 | 11.56 2.39 |
+| `quickcheck` | rejected | 2 | 5 | 131 | added 5, declaration 19, docs 1, file 3, import 21, macro 3, manifest 37, removed 5, semantics 37 | 2 | 0 | 0.27 0.28 | 14.77 1.97 | 14.65 1.96 |
+| `quickcheck-2` | rejected | 2 | 21 | 290 | added 25, attribute 3, declaration 71, docs 12, file 3, import 17, macro 7, manifest 36, removed 33, semantics 83 | 7 | 0 | 0.37 0.39 | 15.04 2.63 | 15.05 2.62 |
+| `rand_chacha-2` | rejected | 2 | 14 | 87 | added 5, attribute 3, declaration 9, docs 2, file 3, import 9, manifest 30, removed 1, semantics 25 | 6 | 0 | 0.15 0.14 | 14.89 0.74 | 14.69 0.74 |
+| `rand_core-4` | rejected | 2 | 9 | 197 | added 37, attribute 7, declaration 15, docs 18, file 2, import 18, manifest 27, removed 26, rename 1, semantics 44, visibility 2 | 18 | 0 | 0.32 0.34 | 10.05 6.30 | 9.96 6.29 |
+| `rand_xoshiro` | rejected | 2 | 7 | 119 | added 8, attribute 3, declaration 28, docs 5, file 3, import 29, macro 2, manifest 17, removed 15, semantics 9 | 3 | 0 | 0.25 0.25 | 6.68 6.57 | 6.53 6.70 |
+| `socket2` | rejected | 2 | 3 | 123 | added 12, attribute 73, declaration 3, import 24, manifest 2, removed 1, semantics 8 | 1 | 0 | 0.68 0.70 | 3.57 1.68 | 3.54 1.73 |
+| `utf8_iter` | rejected | 2 | 8 | 130 | added 28, attribute 9, declaration 11, docs 6, file 1, import 43, manifest 13, move 2, removed 14, rename 2, semantics 1 | 4 | 0 | 0.23 0.22 | 1.13 0.68 | 1.17 0.69 |
+
+- The default mode takes 0.08 to 0.89 s for a run. `bin-8i` takes 0.5 to 23 s for the first run.
+- `--compiled` against `bin-8i`: nine fixtures have the same fact lines, the same counts of each compare result, the same count of reasons, and the same lines of sites. `utf8_iter` has 130 facts (before: 124). The cause is 50.3, rules 3 and 4.
+- The differences of the syntax tree that `bin-8i --fast` did not show and the default mode shows:
+  - `utf8_iter`: five added `use` lines in `utf8_iter::basic` and one removed `use` line in `utf8_iter`. Before, they were under the fact "moved `utf8_iter::Utf8CharsEx` → `utf8_iter::basic::Utf8CharsEx`, with 6 `use` line(s)". The moved trait uses none of these names: a new item of the module uses them.
+  - The nine other fixtures: none. Each fact text is equal.
+  - Five pair warnings show at once, not after phase 2: two in `nu-ansi-term`, two in `quickcheck-2`, one in `rand_core-4`.
+- The default mode asks for the same reasons as `bin-8i --fast`. The count is not the count of `--compiled`: for example `nu-ansi-term` needs 49 reasons in the default mode and 17 with `--compiled`. The compiled check reads the result of a macro call; the default mode asks for a reason for each macro call that it cannot read.
+- No output of the default mode (60 cases, ten fixtures) has a compare result, an `indirect` fact, or a line "affected bodies:", "branches:", or "! the compiled code changes:".
+- The proof of no build: `strace -f -e trace=execve` of the first run of `socket2` in the default mode shows 22 started processes: `semilla`, 19 `git`, and 2 `z3 --version`. No process is `cargo`, `rustc`, `rustup`, or the MIR driver. Each default run above also has a `PATH` with no tool chain.
+
+### 50.6 The limits
+
+- The default mode does not show an effect at a distance, a change of the compiled code with no edit, or a proof for a small rewrite (49.5).
+- The name resolution after the map (50.2).
+- The scope rule (50.3, rule 4) reads the text of the moved item and of its `impl` blocks that move. An import that a trait impl needs, when the impl does not move with the map, is its own fact.
+- A one-side text with a cut mark ("added `let` `…`") shows a part of the text in the output. The JSON form and the review have the full text.
+- A rename of a type with a derive other than `Debug` gets no spotlight in the default mode: the spotlight reads the compiled bodies of the derive.
+- The spotlights that read the compiled code do not exist in the default mode: inactive code, an indirect change, a build input or a macro definition that changes bodies with no edit.
+- The default mode has no build code state (it comes from `cargo metadata`). A new build script of a dependency shows only as the fact of its package in `Cargo.lock`. A changed build script of the workspace has its fact and its spotlight.
+- The default mode does not read the result of a macro call. A macro call that the syntax phase cannot read needs its own reason, and its fact does not list the items that the call makes.
+- The default mode accepts a step that does not compile, or that has a file with a parse error (the fact of the file shows). `--compiled` rejects it.
+- The default mode reads the targets and the features from the manifests only. It does not know which configuration compiles an item.
+- The review UI shows a default step with the category only.
+- Not in this batch: `--same`, `--change`, and the gap list (9b); extract and inline of a function (9c).
+
+## 51. Batch 9a2: the map of a rename is a map of references
+
+Batch 9a2. This section corrects a defect of batch 9a. The model of 49.3 stays. Each detail below that the brief of the batch did not decide has the mark **Decided by Claude**.
+
+### 51.1 The defect
+
+The soundness rule of 49.3 says: each difference of the syntax tree is in exactly one fact, and a rename fact covers a place only if the place is equal after the exact map of the fact.
+
+The map of batch 9a was a map of words. `Renames::apply` changed each word that was equal to the old name. `Renames.fields` changed each member name after `.`. So a rename fact hid a second edit of the author when that edit also changed the old word to the new word. The default mode has no compare result, so no fact showed the edit. The map also changed a word in a string, so a pure rename gave false facts for places with no change.
+
+### 51.2 The rule and the classes
+
+**The map of a rename is a map of the references to the item. It is not a map of words.** A token with the old name is in one of four classes:
+
+1. **Never a site.** A token in a string, a character, or a byte string literal. A comment or a doc text. A lifetime or a label. A token that declares a different thing (a different item, a local, a parameter, a generic parameter).
+2. **A sure site.** The declaration of the item. A path that the syntax tree resolves to the item: through the module scope, a `use` line, `crate`, `self`, `super`, `Self`, and a glob import of a module or an enum of the workspace.
+3. **A sure other thing.** A path that resolves to a different item, to a local of the body, or to an external crate.
+4. **Not sure (by name).** A member after `.`. A path that the tree cannot resolve (an external glob import, a `use` line in a block, a path with a generic parameter). A token in the input of a macro that the syntax phase cannot read.
+
+A path with no sure resolution is in class 4. No token is in class 2 on a guess.
+
+### 51.3 The rules
+
+- **R1.** The map changes only a sure site, and a by-name site that passes R2. Each other token stays. Then the compare of 50.2 runs. So each other difference is its own fact, with the full old text and the full new text of the place.
+- **R2.** A by-name site is under the rename fact only if the name is free: in the tree before the step and in the tree after it, no other declaration of the same kind of name has the old name or the new name. A local or a parameter of the same body counts for a name in a path. If the name is not free, each such site is an edit with its own fact. Equal edits fold with the fold rule of 50.4 ("2 site(s): changed expression `t.level` → `t.depth`").
+- **R3.** A rename fact with one or more by-name sites has a note: "note: 2 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)".
+- **R4.** No fact has two equal texts. No fact exists for a place with no difference. One exception: a site that the author did not change. Its fact says what the old name gives after the step (51.4, decision 7).
+- **R5.** The same rule applies to each map: an item, a field, a variant, a method, a trait method with its impl methods, a constant, a module, the children of a renamed type, and a renamed local or parameter. The scope of a local is its body: a token after `.`, a path with `::`, and a literal are never its sites. A move with no new name has no map of a name: the rules of 50.3 explain its `use` lines, its `mod` lines, and its paths.
+- **R6.** The rule applies in the two modes, because the syntax phase makes the facts in the two modes. The MIR proof of `--compiled` did not change.
+
+**The code.**
+
+- `semilla-syntax/src/sites.rs` (new) reads a text and gives the place of each word: a declaration, a member after `.`, a field label, a segment of a path with its qualifier, a macro name, an alias of a `use` line. A word in a literal, a comment, or a lifetime has no place. Each place has a key.
+- `semilla-verify/src/sites.rs` (new) gives each place of the old tree its class. It uses the resolution of `identity.rs` (`target_in`, `use_names`) and the scope of the body. It writes the site table `Renames.sites` (old item → key of the place → new name) and the count of each class (`Renames.counts`).
+- `Renames::apply` and `Renames::spans` (`diff.rs`) change a name only at a place of the table. `Renames.idents` with no scope and `Renames.fields` do not apply when the table exists. A renamed local changes only at a bare name of its body.
+- `lib.rs`, `views.rs`, and `plan.rs` build the table before each compare (`sites::resolve`). `identity.rs` adds the note of R3 (`sites::count_line`).
+- `edits.rs` and `facts.rs` make the texts of R4. `hints.rs` and `edits.rs` use the map of the step for the fold of a renamed local.
+
+### 51.4 The decisions of the batch
+
+Each item is **Decided by Claude**.
+
+1. **The kinds of a name (R2).** A method name, a field name, a name in a path (a value and a type together), a macro name. A word in a macro input that the syntax phase cannot read is each kind. A local is a name in a path, not a member: a local `total` does not take the name of a method `total`.
+2. **The compare is strict.** A text is equal only after the map of the table. A by-name site is under the fact only if the new item does not keep the place with the old name, and the old item does not have the place with the new name.
+3. **`self.name` and `self.name()`** in an `impl` of a type of the workspace that has the member are sure sites.
+4. **A bare name that the tree cannot resolve** is a forced edit of 50.3 only if no other value or type has the old name or the new name.
+5. **The words of the note of R3.** The variable `SEMILLA_SITE_COUNTS=1` adds a line with the three counts to each rename fact ("sites: 10 sure, 0 by name, 0 with their own fact"). It is a tool of the measure.
+6. **The fold of a renamed local.** The fact "renamed local `a` → `b`, N edit(s)" has an edit only if the map of the step plus the bare names of the locals gives the new text of the edit. Else rule 7 of 36.1 decides.
+7. **The texts of R4.** The fact of a site that did not follow the rename has one of four texts. A `use` line has a fifth text:
+   - "`load` still names the old item `load` (the place did not follow the rename to `fetch`; the syntax tree shows no other item with the old name for the place)": no declaration of the tree after the step gives the name.
+   - "`load` now names a different item: `load` is `depot::net::load` after the step (before the step: the item with the new name `fetch`)": the tree resolves the old name to a different item.
+   - "`load` did not follow the rename to `fetch`: a `use` line gives the old name `load` to the renamed item `depot::disk::fetch`".
+   - "`c: &Cart` did not follow the rename to `Basket`: a call of the macro `alias` has the old name `Cart` in its input and can make an item with this name".
+   - "the `use` line still names the old item (the line did not follow the rename): `use crate::disk::load;` in `depot::ui`".
+8. **R4 for a long macro call.** The fact "changed macro call `…` → `…`" cut each side at 60 characters. A change after the cut gave two equal texts. The fact now uses the cut rule of 50.4 (the changed part shows). If the cut hides the name of the macro, the text gives the name first: "changed macro call `quickcheck!`: `…> bool { true } }` → `…> bool { true } fn cstring(_p: CString) -> bool { true } }`".
+9. **An inline argument of a format string** (`format!("{total}")`) is not a site of a renamed local. The changed literal is its own fact.
+10. **A comment between two items** still has no fact (51.6).
+11. **The test of a step of PR size** (`large.rs`) has 3 facts with the name `count_above`, not 2: the changed call `pair.count_above(3)` is a by-name site, and 11 other types have a method with the name (R2).
+
+### 51.5 The results
+
+The measure uses the binaries of batch 9a (`b9a/bin`) and the binaries of this batch (`b9a2/bin`), in the default mode. The folder `b9a2/` has the cases, the tools, and each output.
+
+**The defects of the brief.** The example crate has the function `disk::load`, a second function `net::load`, a type `net::Link` with the members `load` and `fetch`, and the word in two strings. The step renames `disk::load` to `disk::fetch`.
+
+| Id | The second edit | Batch 9a | Batch 9a2 |
+|---|---|---|---|
+| D1 | `crate::net::load(1)` → `crate::net::fetch(1)` | hidden | "changed path `crate::net::load` → `crate::net::fetch` at `depot::net::a/tail/callee`" |
+| D2 | `load(2)` → `fetch(2)` in `net::b` | hidden | "changed path `load` → `fetch` at `depot::net::b/tail/callee`" |
+| D3 | `l.load()` → `l.fetch()` | hidden | "changed method_call: `l.load()` → `l.fetch()` at `depot::net::c/tail`" |
+| D4 | `l.load` → `l.fetch` | hidden | "changed field: `l.load` → `l.fetch` at `depot::net::d/tail`" |
+| D5 | `Link::load(l)` → `Link::fetch(l)` | hidden | "changed path `Link::load` → `Link::fetch` at `depot::net::e/tail/callee`" |
+| D6 | `use crate::net::load as net_load;` → `use crate::net::fetch as net_load;` | hidden | "changed `use` line: `use crate::net::load as net_load;` → `use crate::net::fetch as net_load;` in `depot::ui`" |
+| D7 | `"load"` → `"fetch"` | hidden | "changed literal `"load"` → `"fetch"` at `depot::net::name/tail`" |
+| D8 | `format!("load {}", …)` → `format!("fetch {}", …)` | hidden | "changed literal `"load {}"` → `"fetch {}"` at `depot::ui::show/tail/args[0]`" |
+| D9 | `let load = 5; load + 1` → `let fetch = 5; fetch + 1` | hidden | "`depot::net::local`: renamed local `load` → `fetch`, 2 edit(s)" |
+| D10 | none (the pure rename) | 3 false facts (a `use` line with two equal texts, "moved code: `load fetch`", "replace macro input …") | the rename fact and its public API fact only |
+| D11 | a field: `p.level` → `p.depth` of a second type | hidden | "changed field: `p.level` → `p.depth` at `demo::p/tail`"; the two uses of the renamed field are "2 site(s): changed expression `t.level` → `t.depth`" (R2: the name is not free) |
+| D11 | a type: `old::Cart::size` → `old::Basket::size` | hidden | "changed path `old::Cart::size` → `old::Basket::size` at `demo::size/tail/callee`" |
+| D11 | a variant: `Gear::Slow` → `Gear::Careful` | a false fact "moved code: `Slow Careful`" | "changed path `Gear::Slow` → `Gear::Careful` at `demo::g/tail`" |
+| D11 | a constant: `m::LIMIT` → `m::CEILING` | hidden | "changed path `m::LIMIT` → `m::CEILING` at `demo::c/tail/lhs`" |
+| D11 | a module: `other::fees::charge` → `other::costs::charge` | hidden | "changed path `other::fees::charge` → `other::costs::charge` at `demo::c/tail/callee`" |
+| D11 | a trait method: `p.area()` → `p.size()` of a second type | a false fact "moved code: `area size`" | "changed method_call: `p.area()` → `p.size()` at `demo::p/tail`" |
+| D11 | a local: `"n"` → `"m"` in the body of the renamed local `n` | under the fact ("4 edit(s)") | "changed literal `"n"` → `"m"` at `demo::f/tail/args[1]`"; the fact has "3 edit(s)" |
+
+In each row the rename fact stays.
+
+**The cases of `b9a2/cases/` (59).** 46 cases have different fact lines. The cause of each one is a rule of 51.3. The 13 cases with equal fact lines are five pure renames with sure sites only, the two cases of a move, the case of an external glob import, the four comment cases, and one case of a place that did not follow the rename (`r4_stale_new_item`).
+
+**The 60 cases of `b9a/cases/`.** 55 cases have the same output. Five cases have one more line, the note of R3, and no other change: `rn_field` (3 sites by name), `rn_method` (3), `rn_variant` (1), `r2_field_op` (4), `r2_variant_use` (1). The cause for the variant: the word is in the input of `matches!`, which the syntax phase does not read.
+
+**The ten fixtures of `b7cfix/`.**
+
+| Fixture | Facts, 9a | Facts, 9a2 | Reasons, 9a | Reasons, 9a2 | Time of a step, 9a (s) | Time of a step, 9a2 (s) |
+|---|---|---|---|---|---|---|
+| `bytes` | 173 | 173 | 13 | 13 | 0.93 | 1.18 |
+| `cpufeatures` | 72 | 72 | 13 | 13 | 0.08 | 0.07 |
+| `nu-ansi-term` | 247 | 247 | 49 | 49 | 0.30 | 0.29 |
+| `quickcheck` | 131 | 131 | 5 | 5 | 0.26 | 0.45 |
+| `quickcheck-2` | 290 | 290 | 21 | 21 | 0.35 | 0.55 |
+| `rand_chacha-2` | 87 | 87 | 14 | 14 | 0.13 | 0.12 |
+| `rand_core-4` | 197 | 197 | 9 | 9 | 0.29 | 0.28 |
+| `rand_xoshiro` | 119 | 119 | 7 | 7 | 0.23 | 0.22 |
+| `socket2` | 123 | 123 | 3 | 3 | 0.70 | 0.67 |
+| `utf8_iter` | 130 | 131 | 8 | 8 | 0.20 | 0.21 |
+
+- The time is the smaller time of the two step runs of a fixture. A different job used the machine during the measure, so a difference of some tenths of a second is noise. The ten fixtures with two runs each and the copy of each fixture: 16.3 s with batch 9a, 13.7 s with batch 9a2.
+- The count of facts in each category is the same for nine fixtures. `utf8_iter`: `declaration` 11 → 12.
+
+- The count of reasons is the same for each fixture.
+- One fact is new: `utf8_iter`, "return type of `utf8_iter::basic::Utf8CharsEx::char_indices` `-> Utf8CharIndices<'_>` did not follow the rename to `Utf8CharIndicesWithHandler`: a call of the macro `named_iterators_from_no_argument_handler` has the old name `Utf8CharIndices` in its input and can make an item with this name". The cause: the step renames the struct `Utf8CharIndices`, and a macro call of the new version makes a new type with the old name. The return type has the same text, but it names a different item after the step. Batch 9a did not show this place.
+- No fact is gone.
+- 30 facts "changed macro call" have a new text (decision 8): `cpufeatures` 2, `nu-ansi-term` 22, `quickcheck-2` 1, `rand_chacha-2` 4, `socket2` 1. The fact is the same, and the text shows the changed part. With batch 9a, four of them had two equal texts.
+- The fixtures have one rename fact of an item and one move fact. `utf8_iter::indices::Utf8CharIndices` → `Utf8CharIndicesWithHandler`: 10 sure sites, 0 by name, 0 with their own fact. `utf8_iter::Utf8CharsEx` → `utf8_iter::basic::Utf8CharsEx` (a move with no new name): no site of a name. No rename fact of a fixture loses a site. The parameter rename of `rand_core` (`dest` → `dst`) is the same.
+- No output of the two sets of cases and of the fixtures has a fact with two equal texts. With batch 9a: 2 facts in the cases of `b9a2/cases/`, 4 facts in the fixtures.
+
+**The compiled check.** `utf8_iter` with `--compiled`: 131 facts, the same count in each category as in the default mode. 130 fact lines have the same text plus the compare result (`code different` 59, `code equal` 54, `no code` 15, `no compare` 3). One fact has a different text, as in batch 9a: "added macro call …" lists the items that the call makes (50.6). The compare adds its lines (`affected bodies`, the marks) and one fact of the compiled code with no edit at its place, so the step needs 9 reasons, not 8.
+
+**The tests.** `cargo test --workspace`: 763 tests pass (728 before).
+
+### 51.6 The limits
+
+- The accepted limit of 50.2 stays: Semilla does not resolve the names again after the map.
+- A by-name site with a free name is under the rename fact. An external type can have the two member names. The note of R3 gives the count of these sites.
+- A member after `.` is always by name, also when the type of the receiver is clear to a reader. Only `self.name` in an `impl` is a sure site.
+- A place in the input of a macro that the syntax phase cannot read (for example `matches!`) is by name.
+- A `use` line in a block of a body is not read. The intent is: a path through it is by name. The code does not do this (see 51.7, defect N3). An item that a macro makes can shadow a glob import: the tree does not show it.
+- The declaration of a variant `Load(Load)` or of a field `load: load::Cfg` can change at two words when one item with this name has a rename.
+- A short label with `ref` or `mut` (`S { ref a }`) is a bare path, not a field label: its edit is its own fact. A short label is never a site of a renamed constant.
+- A closure with a return type and a block (`|x| -> Type { … }`) can look like a struct literal to the place reader.
+- The texts of R4 exist for an edit in a body, a `use` line, and a part of a signature or of a member. Each other text route can still show two equal texts for a site that did not follow the rename. The first text of decision 7 ("still names the old item") is not sure when a macro of a different crate makes the name.
+- An inline argument of a format string is not a site of a renamed local (decision 9).
+- **A comment between two items has no fact.** A changed `//` comment in a body gives "changed comment … [docs]". A comment between two items is in no item. A fact for it needs a new entity (the comments of a module) with its own pairing: with a simple rule, an added or a removed item next to a banner or a file header gives a fact "removed comment" for a comment that the author did not change. This is more than a small change, so the batch did not do it. The case `cm_between` records the behavior. A comment between two items of an inline module is in the text of the module, so the fact of the module shows it (`cm_mod_between`).
+
+### 51.7 Known defects after the batch
+
+Decided by Claude: the commit of batch 9a and batch 9a2 has these three defects. Probes after the batch found them. Fix round 9a3 gets a general rule for each one. N1 and N2 are older than batch 9a (batch 8i has them); the compiled compare showed their effect in the old default mode.
+
+- **N1, a lost token of a node.** When a node has a difference in its own tokens and a difference in one child, the compare goes down to the child and drops the difference of the node. Examples: the label of a `break` with a value (`break 'p 1` → `break 'q 2` shows only `1` → `2`), the type list of a method call (`.sum::<u64>()` → `.sum::<u128>()`), the `move` of a closure or of an `async` block, the return type of a closure. Each such token difference alone has a fact.
+- **N2, an identifier pattern that is not a binding.** An identifier in a pattern that names a variant, a constant, or a unit struct gets the fact "renamed local … [rename]" (`Idle => …` → `Halt => …` with `use Mode::*`; `LOW => …` → `HIGH => …`). The edit changes which values the arm matches.
+- **N3, a `use` line in a block.** A bare name that a `use` line of a block gives resolves through the module scope and becomes a sure site. A pure rename gives the false fact "still names the old item" for a body with a block `use` of a different item with the old name. An edit of such a call from the old name to the new name is hidden under the rename fact.

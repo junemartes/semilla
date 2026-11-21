@@ -28,6 +28,15 @@ pub struct OpenStep {
     /// The reasons for the spotlight facts, by the anchor of the fact (`semilla reason`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reasons: BTreeMap<String, String>,
+    /// The mode of the step (design 50): true for a step with the compiled check.
+    #[serde(default = "semilla_core::claim::compiled_default")]
+    pub compiled: bool,
+}
+
+/// True if the environment asks for the compiled check of each step (`SEMILLA_COMPILED`, design
+/// 50): the same as `--compiled` on each `semilla step`. An empty value and `0` do not ask.
+pub fn compiled_env() -> bool {
+    std::env::var("SEMILLA_COMPILED").is_ok_and(|value| !value.is_empty() && value != "0")
 }
 
 pub use semilla_core::ops::optional_args;
@@ -103,54 +112,72 @@ pub struct App {
     /// What the command does with the build code that the change set changes (design 28): it
     /// runs it in the sandbox, or, with `--no-build-code`, it does not run it.
     pub mode: Mode,
+    /// True if a step of the command has the compiled check (design 50). Then cargo gives the
+    /// packages and the targets of each tree. If not, the manifests give them, and the command
+    /// starts no program of the Rust tool chain.
+    cargo: bool,
     /// The base trees that a commit gives: the tree of the parent of a commit that this process
     /// checked against its note. The build code of such a tree is trusted.
     trusted_bases: std::cell::RefCell<BTreeSet<String>>,
 }
 
+/// True if a step of the change set has the compiled check (design 50).
+pub fn compiled_set(set: &ChangeSet) -> bool {
+    set.steps.iter().any(|step| step.compiled)
+}
+
 /// Gives no body data for the steps that the command does not check (`--no-build-code`): these
-/// steps get the answers of phase 1.
+/// steps get the answers of phase 1. A step with no compiled check (design 50) gets no body
+/// data too.
 struct Guard<'a> {
     inner: &'a dyn semilla_verify::BodyOracle,
     skip: &'a BTreeSet<usize>,
     code: &'a BuildCode,
 }
 
+impl Guard<'_> {
+    /// True if the step gets no body data.
+    fn off(&self, step: &Step) -> bool {
+        !step.compiled || self.skip.contains(&step.index)
+    }
+}
+
 impl semilla_verify::BodyOracle for Guard<'_> {
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<semilla_verify::BodyComparison>> {
-        if self.skip.contains(&step.index) { Ok(Vec::new()) } else { self.inner.compare(step, renames, added) }
+        if self.off(step) { Ok(Vec::new()) } else { self.inner.compare(step, renames, added) }
     }
 
     fn compare_with(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String], opaque: &dyn semilla_verify::OpaqueInputs) -> Result<Vec<semilla_verify::BodyComparison>> {
-        if self.skip.contains(&step.index) { Ok(Vec::new()) } else { self.inner.compare_with(step, renames, added, opaque) }
+        if self.off(step) { Ok(Vec::new()) } else { self.inner.compare_with(step, renames, added, opaque) }
     }
 
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {
-        if self.skip.contains(&step.index) { Ok(None) } else { self.inner.facts(step) }
+        if self.off(step) { Ok(None) } else { self.inner.facts(step) }
     }
 
     fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
-        if self.skip.contains(&step.index) { Ok(Default::default()) } else { self.inner.truths(step) }
+        if self.off(step) { Ok(Default::default()) } else { self.inner.truths(step) }
     }
 
     fn tests(&self, step: &Step) -> Result<Option<[std::collections::BTreeSet<String>; 2]>> {
-        if self.skip.contains(&step.index) { Ok(None) } else { self.inner.tests(step) }
+        if self.off(step) { Ok(None) } else { self.inner.tests(step) }
     }
 
     fn made(&self, step: &Step) -> Result<Option<[semilla_verify::made::Made; 2]>> {
-        if self.skip.contains(&step.index) { Ok(None) } else { self.inner.made(step) }
+        if self.off(step) { Ok(None) } else { self.inner.made(step) }
     }
 
     fn defs(&self, step: &Step) -> Result<[semilla_verify::DefMap; 2]> {
-        if self.skip.contains(&step.index) { Ok(Default::default()) } else { self.inner.defs(step) }
+        if self.off(step) { Ok(Default::default()) } else { self.inner.defs(step) }
     }
 
     fn build_code_files(&self, step: &Step) -> Vec<(String, String)> {
-        self.code.host_files(step)
+        // The build code rule is a rule of the compiled check (design 50).
+        if step.compiled { self.code.host_files(step) } else { Vec::new() }
     }
 
     fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
-        if self.skip.contains(&step.index) { Ok(false) } else { self.inner.set_selections(step, selections) }
+        if self.off(step) { Ok(false) } else { self.inner.set_selections(step, selections) }
     }
 }
 
@@ -390,7 +417,22 @@ impl App {
             std::fs::create_dir_all(repo.state_dir())?;
             std::fs::write(&ignore, "*\n")?;
         }
-        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), trusted_bases: Default::default() })
+        Ok(App { repo, workspaces: BTreeMap::new(), step_memo: BTreeMap::new(), config_log: Default::default(), no_bodies: std::env::var_os("SEMILLA_NO_BODIES").is_some(), mode: Mode::default(), cargo: false, trusted_bases: Default::default() })
+    }
+
+    /// True if a step of this command had the compiled check (design 50). With a compiled step,
+    /// cargo gives the targets of each tree: a workspace that the manifests gave does not stay.
+    pub fn uses_cargo(&self) -> bool {
+        self.cargo
+    }
+
+    /// Tells the app the mode of the steps of a command (design 50).
+    pub(crate) fn set_compiled(&mut self, compiled: bool) {
+        if compiled && !self.cargo {
+            self.cargo = true;
+            self.workspaces.clear();
+            self.step_memo.clear();
+        }
     }
 
     /// The review state of the reviewer (the decisions in the UI). It is in the cache folder of
@@ -423,7 +465,7 @@ impl App {
     fn tool_warnings(&self) -> Vec<String> {
         let tools = [
             ("the Semilla binary", std::env::current_exe().ok()),
-            ("the MIR driver", if self.no_bodies { None } else { semilla_normal::cargo::find_driver().ok() }),
+            ("the MIR driver", if self.no_bodies || !self.cargo { None } else { semilla_normal::cargo::find_driver().ok() }),
             ("the solver", SmtOracle::for_repo(&self.repo).path().map(std::path::Path::to_path_buf)),
         ];
         tools
@@ -460,9 +502,15 @@ impl App {
         let started = std::time::Instant::now();
         // Cargo gives the packages and the targets of the tree, so Semilla and cargo agree on
         // each root file (I4). The name of a file does not decide if it is Rust code.
-        let metadata = semilla_normal::cargo::cargo_metadata(&dir).with_context(|| format!("read the cargo targets of tree {tree}"))?;
-        crate::timing("cargo metadata", started);
-        let mut ws = Workspace::load_with_metadata(&dir, &metadata).with_context(|| format!("load the workspace of tree {tree}"))?;
+        let mut ws = if self.cargo {
+            let metadata = semilla_normal::cargo::cargo_metadata(&dir).with_context(|| format!("read the cargo targets of tree {tree}"))?;
+            crate::timing("cargo metadata", started);
+            Workspace::load_with_metadata(&dir, &metadata).with_context(|| format!("load the workspace of tree {tree}"))?
+        } else {
+            // No step has the compiled check (design 50): the command starts no cargo. The
+            // manifests give the packages and the targets, with the default target rules of cargo.
+            Workspace::load(&dir).with_context(|| format!("load the workspace of tree {tree}"))?
+        };
         // The git tree has each entry, also a submodule and a file in an ignored folder. Its
         // modes and hashes are exact, so the diff compares them instead of the folder.
         ws.files = self.repo.tree_entries(tree)?;
@@ -487,6 +535,14 @@ impl App {
     pub fn build_code(&mut self, set: &ChangeSet) -> Result<BuildCode> {
         let started = std::time::Instant::now();
         let base = set.base_tree.clone();
+        // The build code rule and the sandbox are parts of the compiled check (design 50). A
+        // change set with no compiled step runs no build, so it has no build code state.
+        // A set with no step is the input of a command that builds a tree (`semilla index`).
+        let compiled = set.steps.is_empty() || compiled_set(set);
+        self.set_compiled(compiled);
+        if !compiled {
+            return Ok(BuildCode { base, ..Default::default() });
+        }
         let mut code = BuildCode { base: base.clone(), ..Default::default() };
         let trusted = self.base_is_trusted(&base);
         let key = self.tools_key();
@@ -712,7 +768,7 @@ impl App {
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
         }
-        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new() });
+        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env() });
         self.save_session(&session)?;
         let mut text = format!("step {} started at tree {tree}", session.changeset.steps.len());
         if session.changeset.steps.is_empty() {
@@ -852,7 +908,7 @@ impl App {
             group.steps.retain(|index| *index != step.index);
         }
         let claims = step.claims.len();
-        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons });
+        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled });
         self.save_session(&session)?;
         Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla old-step end`", step.index))
     }
@@ -868,7 +924,7 @@ impl App {
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
         let index = session.changeset.steps.len();
-        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons });
+        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         if queue {
@@ -931,10 +987,14 @@ impl App {
             }
         };
         let hash = crate::background::changeset_hash(&set);
-        let mut state = crate::background::state(self, &key, &hash);
+        // Design 50: a change set with no compiled step has no phase 2. Its result comes from
+        // the trees now: no background check, no build, no stored result.
+        let tree_only = !set.steps.is_empty() && !compiled_set(&set);
+        let mut state = if tree_only { crate::background::State::Ready } else { crate::background::state(self, &key, &hash) };
+        let wait = if tree_only { None } else { wait };
         // A process with no cache that stays (`--fresh`, or no cache folder that Semilla can
         // write) has no worker: it runs the check itself.
-        let wait = if self.repo.store.is_temporary() { Some(wait.unwrap_or(600)) } else { wait };
+        let wait = if self.repo.store.is_temporary() && !tree_only { Some(wait.unwrap_or(600)) } else { wait };
         // No check for this change set exists on this machine (a stale report, a forged or copied
         // report note, a new clone): start the check now.
         if matches!(state, crate::background::State::Stale | crate::background::State::Missing) && !set.steps.is_empty() {
@@ -961,13 +1021,13 @@ impl App {
         let phase1 = self.check_set(&set, commit.is_some());
         self.no_bodies = saved;
         let phase1 = phase1?;
-        let stored = crate::background::stored_for(self, &key, &hash);
+        let stored = if tree_only { None } else { crate::background::stored_for(self, &key, &hash) };
         // The first line: the state of the check of this key. The jobs of other keys are not
         // the business of this result (trial 5: "queued; 1 job(s)" just after `tag`). The line
         // comes from the result that the command prints: a result that is there is `ready`,
         // also when the worker stored it after the last look at the queue (batch 5m, B2).
         let mut text = match state {
-            _ if stored.is_some() => format!("{key}: ready\n"),
+            _ if stored.is_some() || tree_only => format!("{key}: ready\n"),
             crate::background::State::Queued => format!("{key}: phase 2 runs in the background\n"),
             // The result went away after the last look (a change of the tools): no result.
             crate::background::State::Ready => format!("{key}: missing\n"),
@@ -1012,6 +1072,10 @@ impl App {
                         put_line(&mut text, &format!("step {}: {}", step.step, step.mir_map.line()));
                     }
                 }
+            }
+            None if tree_only => {
+                text.push_str("the result of the syntax tree (computed now; no step has the compiled check):\n");
+                text.push_str(&if verbose { phase1.text } else { short(&phase1.report) });
             }
             None => {
                 text.push_str("phase 1 (computed now):\n");
@@ -1215,6 +1279,11 @@ impl App {
         // An error is not a result: the line says that this machine has no full result.
         let Ok(phase1) = phase1 else { return CommitCheck::DataOnly };
         let rejected = !phase1.report.organization.is_empty() || phase1.report.steps.iter().any(hard_problem);
+        // Design 50: a change set with no compiled step has no phase 2. This result is its full
+        // result, and this machine computed it now.
+        if !compiled_set(&set) && !set.steps.is_empty() {
+            return if phase1.report.accepted { CommitCheck::Accepted } else { CommitCheck::Rejected };
+        }
         let _ = std::fs::create_dir_all(file.parent().unwrap_or(&file));
         let _ = std::fs::write(&file, if rejected { "rejected" } else { "data" });
         if rejected { CommitCheck::Rejected } else { CommitCheck::DataOnly }
@@ -1269,7 +1338,9 @@ impl App {
     /// [`crate::buildcode::BASE_WALK`] commits before it (first parents), and git names the
     /// commits that changed the files. No state is stored. The line is information only.
     pub fn base_build_code_notice(&mut self, set: &ChangeSet, commit: Option<&str>) -> Option<String> {
-        if set.steps.is_empty() {
+        // Design 50: the line is about the proofs of the compiled check. A change set with no
+        // compiled step ran no build code.
+        if set.steps.is_empty() || !compiled_set(set) {
             return None;
         }
         let base = match commit {
@@ -1342,6 +1413,8 @@ impl App {
     /// Builds the index of the working tree: the workspace graph, the items, and the MIR content
     /// hash of each body. Writes `.semilla/index.json` and returns a summary.
     pub fn index(&mut self) -> Result<String> {
+        // The body hashes come from a build: cargo gives the targets.
+        self.set_compiled(!self.no_bodies);
         let tree = self.repo.write_tree()?;
         let ws = self.workspace(&tree)?;
         let graph = semilla_syntax::graph::workspace_graph(&ws, &BTreeMap::new(), &BTreeMap::new());
@@ -1374,7 +1447,7 @@ impl App {
         if let Some(open) = session.open {
             let tree = self.repo.write_tree()?;
             let index = set.steps.len();
-            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons });
+            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled });
             set.head_tree = tree;
         }
         Ok(set)
@@ -1450,7 +1523,12 @@ impl App {
         }
         // The build code state comes from the full change set: the base of the change set is the
         // trusted tree, not the tree before one step.
-        let code = self.build_code(&set)?;
+        // The check of one step with no compiled check uses no build code state (design 50):
+        // it starts no cargo, also when an other step of the change set has the compiled check.
+        let code = match only_step.and_then(|index| set.steps.get(index)) {
+            Some(step) if !step.compiled => BuildCode { base: set.base_tree.clone(), ..Default::default() },
+            _ => self.build_code(&set)?,
+        };
         if let Some(index) = only_step {
             let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
             set = ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), ..Default::default() };
@@ -1526,9 +1604,15 @@ impl App {
         // A command with `--no-build-code` does not check a step that uses a tree with changed
         // build code. Such a step gets its phase 1 facts, with no MIR data.
         let note = code.note(self.mode.runs_build_code());
-        let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().collect();
+        let off: BTreeSet<usize> = set.steps.iter().filter(|step| !step.compiled).map(|step| step.index).collect();
+        self.set_compiled(off.len() < set.steps.len());
+        // A step with no compiled check has no result `not checked`: it has no compare result.
+        let skip: BTreeSet<usize> = note.as_ref().map(|note| note.not_checked()).unwrap_or_default().into_iter().filter(|step| !off.contains(step)).collect();
         let log = self.config_log.clone();
-        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default() }) };
+        // A change set with no compiled step has no phase 2 (design 50): its syntax result is
+        // the full result.
+        let tree_only = off.len() == set.steps.len();
+        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies || tree_only { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
         let exprs = SmtOracle::for_repo(&self.repo);
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
@@ -1553,7 +1637,9 @@ impl App {
             let paths = code.change_paths(step.step);
             for fact in &mut step.facts {
                 fact.build_code = mark;
-                fact.build_code_change = fact.file.as_ref().is_some_and(|file| paths.contains(file));
+                // Design 50: a step with no compiled check has no build code state. The category
+                // of the fact (from the syntax phase) tells a change of build code.
+                fact.build_code_change = fact.file.as_ref().is_some_and(|file| paths.contains(file)) || (off.contains(&step.step) && fact.category == semilla_core::Category::BuildCode && fact.file.is_some());
             }
             for claim in &mut step.claims {
                 claim.build_code = mark;
@@ -1592,7 +1678,7 @@ impl App {
                 });
             }
         }
-        report.phase = if self.no_bodies { "syntax".into() } else { "full".into() };
+        report.phase = if self.no_bodies && !tree_only { "syntax".into() } else { "full".into() };
         report.finish();
         // A build with a limit of the sandbox missing comes first: code of the change set could
         // change the result. A file of the records folder that is not a record comes next.
@@ -1990,7 +2076,10 @@ impl App {
         }
         let head = self.workspace(&set.head_tree).unwrap_or_default();
         let mut graph: WorkspaceGraph = semilla_verify::views::graph(&result.outcomes, &head);
-        self.add_external_calls(&mut graph, &head, &set.head_tree, &code);
+        // The external calls come from the records of the compiled check.
+        if compiled_set(&set) {
+            self.add_external_calls(&mut graph, &head, &set.head_tree, &code);
+        }
         let mut data = semilla_ui::UiData { changeset: set, report: result.report, tree: result.tree, flows, graph, sources, fact_sources };
         // A failed write only costs time: the next command computes the data again.
         let _ = crate::background::store_review(self, commit.unwrap_or("session"), &crate::background::changeset_hash(input), &data);

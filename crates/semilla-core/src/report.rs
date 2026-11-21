@@ -293,6 +293,8 @@ pub struct Fact {
     /// category is a record of an older Semilla: it gives an error.
     pub category: Category,
     /// The compare result (design 35): an observation of the compiled code. It is no verdict.
+    /// A fact of a step with no compiled check has no such field (design 50).
+    #[serde(default = "Compare::off", skip_serializing_if = "Compare::is_off")]
     pub compare: Compare,
     /// The bodies whose MIR changed (design 22.6, F5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -428,8 +430,12 @@ impl Fact {
         self.at.as_ref().map(|at| at.to_string()).unwrap_or_else(|| self.part.clone())
     }
 
-    /// The text in the brackets of the first line of the fact: "rename · code equal".
+    /// The text in the brackets of the first line of the fact: "rename · code equal". A fact
+    /// of a step with no compiled check has the category only: "rename" (design 50).
     pub fn label(&self) -> String {
+        if self.compare.is_off() {
+            return self.category.name().to_string();
+        }
         format!("{} · {}", self.category.name(), self.compare.name())
     }
 
@@ -1153,6 +1159,8 @@ pub struct FactCounts {
     pub category: Vec<(Category, usize)>,
     pub spotlight: usize,
     pub mismatch: usize,
+    /// The count of the facts of the steps with no compiled check (design 50).
+    pub off: usize,
 }
 
 impl FactCounts {
@@ -1165,6 +1173,7 @@ impl FactCounts {
             category: Category::ALL.iter().map(|&category| (category, count(&|fact| fact.category == category))).filter(|(_, count)| *count > 0).collect(),
             spotlight: count(&|fact| fact.spotlight),
             mismatch: count(&|fact| fact.mismatch()),
+            off: count(&|fact| fact.compare.is_off()),
         }
     }
 
@@ -1180,7 +1189,12 @@ impl FactCounts {
         if self.total == 0 {
             return format!("0 {noun}");
         }
-        let parts: Vec<String> = self.compare.iter().map(|(compare, count)| format!("{count} {}{}", compare.name(), if *compare == Compare::CodeEqual { marked } else { "" })).collect();
+        let mut parts: Vec<String> = self.compare.iter().map(|(compare, count)| format!("{count} {}{}", compare.name(), if *compare == Compare::CodeEqual { marked } else { "" })).collect();
+        // A change set with the two modes (design 50): the facts with no compare result have
+        // one count. A change set with no compiled step has no compare counts.
+        if self.off > 0 && !parts.is_empty() {
+            parts.push(format!("{} with no compiled check", self.off));
+        }
         // A count of zero is not in the line.
         let mut marks = Vec::new();
         if self.spotlight > 0 {
@@ -1190,6 +1204,9 @@ impl FactCounts {
             marks.push(format!("{} with a mismatch mark", self.mismatch));
         }
         let marks = if marks.is_empty() { String::new() } else { format!(" ({})", marks.join(", ")) };
+        if parts.is_empty() {
+            return format!("{} {noun}{marks}", self.total);
+        }
         format!("{} {noun}: {}{marks}", self.total, parts.join(", "))
     }
 }

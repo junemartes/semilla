@@ -229,6 +229,16 @@ pub fn likely_local_renames(edits: &[Edit], before: &semilla_syntax::Workspace, 
     found
 }
 
+/// True if the renames of the step and the local renames `pairs` of one item give the new
+/// text: the old text is equal to the new text after the map of the sites (design 51, rule
+/// R5). A site of a local is a bare name. A member after `.`, a path with `::`, and a literal
+/// are not sites. `item` is the path of the item before the step.
+pub(crate) fn locals_explain(renames: &semilla_syntax::Renames, pairs: &[(String, String)], item: &str, old: &str, new: &str) -> bool {
+    let mut renames = renames.clone();
+    renames.idents.extend(pairs.iter().map(|(old, new)| (Some(item.to_string()), old.clone(), new.clone())));
+    renames.exact() && renames.apply(item, old) == new
+}
+
 /// True if each use of `name` in the words of an item text can be a local variable or a
 /// parameter (design 36.1, rule 7). A macro (`name!`), a part of a path (`a::name`), and a
 /// field label of a struct literal or pattern are not such a use. A field after a dot

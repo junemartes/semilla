@@ -152,6 +152,42 @@ fn moved_text(edit: &Edit) -> Option<String> {
     })
 }
 
+/// Design 51, rule R4: the text of an edit with two equal sides at a site of a rename. The map
+/// of the rename changes the old text, but the author did not change the place. The text says
+/// what the old name gives at the place in the tree after the step: a different item, the
+/// renamed item through a `use` line, a possible item of a macro call, or no item (the place
+/// still names the old item). `None` for each other edit.
+pub(crate) fn stale_site(renames: &semilla_syntax::Renames, tree_after: &Workspace, edit: &Edit) -> Option<String> {
+    let (before, after) = (edit.before.as_ref()?, edit.after.as_ref()?);
+    let (old, new) = (edit.text_before.as_deref()?, edit.text_after.as_deref()?);
+    if edit.kind == EditKind::Moved || old.trim().is_empty() || old != new || before.path != after.path || !renames.exact() {
+        return None;
+    }
+    let (start, end, to) = renames.spans(&before.item, old).into_iter().next()?;
+    let (text, name) = (short(&edit.source_before, &edit.text_before), &old[start..end]);
+    // The path that ends at the name. A member after `.` and a path with a generic argument
+    // have no path that the tree resolves.
+    let mut segments = vec![name];
+    let mut head = old[..start].trim_end();
+    let mut clear = !head.ends_with('.');
+    while let Some(rest) = head.strip_suffix("::") {
+        let rest = rest.trim_end();
+        let at = rest.rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + rest[i..].chars().next().map_or(1, char::len_utf8));
+        clear &= at < rest.len();
+        segments.insert(0, &rest[at..]);
+        head = rest[..at].trim_end();
+    }
+    let now = if clear { crate::sites::path_item(tree_after, &after.item, &segments) } else { None };
+    Some(match now {
+        Some(path) if renames.items.values().any(|renamed| *renamed == path) => format!("`{text}` did not follow the rename to `{to}`: a `use` line gives the old name `{name}` to the renamed item `{path}`"),
+        Some(path) => format!("`{text}` now names a different item: `{name}` is `{path}` after the step (before the step: the item with the new name `{to}`)"),
+        None => match crate::sites::macro_call_with(tree_after, name).filter(|_| clear) {
+            Some(call) => format!("`{text}` did not follow the rename to `{to}`: a call of the macro `{call}` has the old name `{name}` in its input and can make an item with this name"),
+            None => format!("`{text}` still names the old item `{name}` (the place did not follow the rename to `{to}`; the syntax tree shows no other item with the old name for the place)"),
+        },
+    })
+}
+
 fn short_pair(edit: &Edit) -> (String, String) {
     let (old, new) = full_pair(edit);
     short_texts(old, new)
@@ -534,6 +570,18 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         if renamed.iter().any(|(owner, old, new)| owner == item && (old == "_" || new == "_")) {
             continue;
         }
+        // Design 51, rule R5: the sites of a local are the bare names of the body. A member
+        // after `.`, a path with `::`, and a literal are not its sites. If the map of the sites
+        // does not give the new text, the names come from the binding places (rule 7 below),
+        // and each other edit keeps its own fact.
+        // A function with a new name or a new module has a different path before the step.
+        let old_path = context.renames.items.iter().find(|(_, new)| *new == item).map_or(item, |(old, _)| old);
+        let local_pairs: Vec<(String, String)> = renamed.iter().filter(|(owner, _, _)| owner == item).map(|(_, old, new)| (old.clone(), new.clone())).collect();
+        let explained = match (context.before.items.get(old_path), context.after.items.get(item)) {
+            (Some(old), Some(new)) => crate::hints::locals_explain(context.renames, &local_pairs, old_path, &old.text, &new.text),
+            _ => false,
+        };
+        let renamed = if explained { renamed } else { Vec::new() };
         let mut pairs: Vec<String> = renamed.iter().filter(|(owner, _, _)| owner == item).map(|(_, old, new)| format!("`{old}` → `{new}`")).collect();
         let mut body = body;
         if pairs.is_empty() {
@@ -541,8 +589,6 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             // name changes: a parameter rename, or a pattern edit that changes one name. The
             // edits that change only these names fold under the rename fact. Each other edit
             // keeps its own fact, with the full text of its two sides.
-            // A function with a new name or a new module has a different path before the step.
-            let old_path = context.renames.items.iter().find(|(_, new)| *new == item).map_or(item, |(old, _)| old);
             let (Some(old_item), Some(new_item)) = (context.before.items.get(old_path), context.after.items.get(item)) else { continue };
             let mut places: Vec<(String, String)> = facts
                 .iter()
@@ -555,7 +601,12 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             let is_pattern = |edit: &Edit| edit.anchor().is_some_and(|anchor| anchor.path.last().is_some_and(|last| last.to_string() == "pat" || last.to_string().ends_with(".pat")));
             places.extend(body.iter().filter(|&&i| is_pattern(&edits[i])).filter_map(|&i| crate::hints::pattern_name_change(edits[i].text_before.as_deref()?, edits[i].text_after.as_deref()?)));
             let renamed = crate::hints::local_renames_with_edits(old_item, new_item, &places);
-            body.retain(|&i| crate::hints::only_names_change(edits[i].text_before.as_deref().unwrap_or(""), edits[i].text_after.as_deref().unwrap_or(""), &renamed));
+            // An edit also folds if the renames of the step and the names of the locals give its
+            // new text (design 51): `S { old: old }` with a renamed field and a renamed local.
+            body.retain(|&i| {
+                let (old, new) = (edits[i].text_before.as_deref().unwrap_or(""), edits[i].text_after.as_deref().unwrap_or(""));
+                crate::hints::only_names_change(old, new, &renamed) || (edits[i].kind != EditKind::Moved && !old.is_empty() && crate::hints::locals_explain(context.renames, &renamed, old_path, old, new))
+            });
             // Only the names that an edit of the body shows.
             let shown = |pair: &(String, String)| body.iter().any(|&i| crate::hints::code_words(edits[i].text_before.as_deref().unwrap_or("")).contains(&pair.0.as_str()));
             pairs = renamed.iter().filter(|pair| shown(pair)).map(|(old, new)| format!("`{old}` → `{new}`")).collect();
@@ -603,7 +654,13 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         let (description, indexes) = match added {
             Some(added) => {
                 paired.insert(added);
-                (format!("changed `use` line: {}{}", sides_text(&line_text(edit), &line_text(&edits[added])), in_module(&item)), vec![index, added])
+                // Design 51, rule R4: a line with no change that names a renamed item.
+                let text = if line_text(edit) == line_text(&edits[added]) {
+                    format!("the `use` line still names the old item (the line did not follow the rename): `{}`{}", semilla_syntax::tree::short(&line_text(edit), 100), in_module(&item))
+                } else {
+                    format!("changed `use` line: {}{}", sides_text(&line_text(edit), &line_text(&edits[added])), in_module(&item))
+                };
+                (text, vec![index, added])
             }
             None => (format!("removed `use` line: `{}`{}", semilla_syntax::tree::short(&line_text(edit), 100), in_module(&item)), vec![index]),
         };
@@ -750,6 +807,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 };
                 let mut text = match operand_note(edit) {
                     Some(note) => note.to_string(),
+                    None if stale_site(context.renames, context.after, edit).is_some() => format!("{}: {}", words(op), stale_site(context.renames, context.after, edit).unwrap_or_default()),
                     None if moved_text(edit).is_some() => format!("{}: {text}", words(op)),
                     // A doc comment with no text on one side (batch 6a, A2).
                     None if op == "edit-doc" && edit.text_before.as_deref().is_none_or(|side| side.trim().is_empty()) => format!("added docs `{}`", short_pair(edit).1),
@@ -796,6 +854,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             let (old, new) = short_pair(edit);
             match operand_note(edit) {
                 Some(note) => note.to_string(),
+                None if stale_site(context.renames, context.after, edit).is_some() => format!("changed {node}: {}", stale_site(context.renames, context.after, edit).unwrap_or_default()),
                 None if moved_text(edit).is_some() => format!("moved {node}: {}", moved_text(edit).unwrap_or_default()),
                 // An operator expression that is a statement has no op: use the words of
                 // `replace-expression`.
@@ -830,7 +889,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
         });
         let place = anchor.clone().map(|a| a.to_string()).unwrap_or_else(|| item.clone());
         // The text of a move has its two places.
-        let location = anchor.as_ref().filter(|a| !a.path.is_empty() && moved_text(edit).is_none() && !is_local_const && !is_local_order).map(|a| format!(" at `{a}`")).unwrap_or_default();
+        let location = anchor.as_ref().filter(|a| !a.path.is_empty() && (moved_text(edit).is_none() || stale_site(context.renames, context.after, edit).is_some()) && !is_local_const && !is_local_order).map(|a| format!(" at `{a}`")).unwrap_or_default();
         // C1: a doc edit has no MIR: its category is `docs`, also in a body that changed.
         let category = if matches!(edit.kind, EditKind::Docs | EditKind::Comment) {
             Category::Docs

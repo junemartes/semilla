@@ -89,9 +89,14 @@ pub(crate) fn in_range(item: &Item, place: (&str, usize, usize)) -> bool {
 
 /// The text of a macro call for a fact: `same!(&str)`.
 pub(crate) fn call_text(item: &Item) -> String {
+    semilla_syntax::tree::short(&call_full(item), 60)
+}
+
+/// The full text of a macro call on one line, with no comment line and no attribute line.
+fn call_full(item: &Item) -> String {
     let text = item.source.lines().filter(|line| !line.trim_start().starts_with("//") && !line.trim_start().starts_with("#[")).collect::<Vec<_>>().join(" ");
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    semilla_syntax::tree::short(text.trim_end_matches(';').trim_end(), 60)
+    text.trim_end_matches(';').trim_end().to_string()
 }
 
 /// The name of a macro definition: `same` for `m::same!` and for `m::same!#1`.
@@ -351,7 +356,15 @@ pub(crate) fn apply(step: &Step, edits: &[Edit], fact_of: &[Option<usize>], befo
                 (None, Some(new)) => Some(format!("added macro call `{name}` ({})", list_text(new, "makes"))),
                 (Some(old), None) => Some(format!("removed macro call `{name}` ({})", list_text(old, "made"))),
                 (Some(old), Some(new)) => {
-                    let sides = format!("changed macro call `{}` → `{name}`", change.old.map(call_text).unwrap_or_default());
+                    // Design 51, rule R4: a cut never hides the changed part of a long call. If
+                    // the cut hides the name of the macro, the text gives the name first.
+                    let full = call_full(call);
+                    let (old_side, new_side) = crate::edits::sides(&change.old.map(call_full).unwrap_or_default(), &full);
+                    let head = match full.split_once('!') {
+                        Some((path, _)) if old_side.starts_with('…') || new_side.starts_with('…') => format!(" `{}!`:", path.trim()),
+                        _ => String::new(),
+                    };
+                    let sides = format!("changed macro call{head} `{old_side}` → `{new_side}`");
                     let (made, makes) = (list_text(old, "made"), list_text(new, "makes"));
                     Some(if made.strip_prefix("made") == makes.strip_prefix("makes") { format!("{sides} ({makes})") } else { format!("{sides} ({made}; {makes})") })
                 }

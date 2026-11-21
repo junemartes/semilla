@@ -42,7 +42,8 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: serde_json::Value) -> Claim
 }
 
 fn step(claims: Vec<Claim>) -> Step {
-    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default() }
+    // The tests of the compare results need a step with the compiled check (design 50).
+    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: true }
 }
 
 fn run(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)], effect: Option<Effect>) -> StepReport {
@@ -1333,7 +1334,7 @@ fn a_field_fact_owns_its_literals_and_patterns() {
     assert!(report.uncovered.is_empty(), "{:#?}", report.uncovered);
     assert_eq!(facts_of(&report), ["member added demo::A.y"]);
     let groups: Vec<(String, usize)> = report.facts[0].sites.iter().map(|g| (g.edit.clone(), g.sites.len())).collect();
-    assert_eq!(groups, [("add the field `y : 0`".to_string(), 1), ("add `..` or the field to the pattern".to_string(), 1)]);
+    assert_eq!(groups, [("add the field `y : 0`".to_string(), 1), ("add `..` to the pattern".to_string(), 1)]);
     assert!(report.accepted(), "{:#?}", report);
     // A changed body that does not use the type stays an indirect-change error.
     let mut changed = bodies;
@@ -7603,4 +7604,704 @@ fn a_changed_type_in_a_pattern_is_no_new_name_of_a_local() {
     assert_eq!(hints::pattern_name_change("x: u32", "y: u32"), Some(("x".to_string(), "y".to_string())));
     assert_eq!(hints::pattern_name_change("(a, b): (u32, u32)", "(a, c): (u32, u32)"), Some(("b".to_string(), "c".to_string())));
     assert_eq!(hints::pattern_name_change("mut x: Vec<T>", "mut x: Vec<U>"), None);
+}
+
+// ---- Batch 9a (design 50): the syntax tree model is the default ----
+
+/// A step check in the default mode (design 50): no compiled check and no body oracle.
+fn run_tree(before: &str, after: &str) -> StepReport {
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let mut step = step(Vec::new());
+    step.compiled = false;
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
+}
+
+/// The fact texts with no note about the public API.
+fn plain_texts(report: &StepReport) -> Vec<String> {
+    report.facts.iter().map(|fact| fact.description.split(" (the public API").next().unwrap_or_default().to_string()).collect()
+}
+
+const CONDITION: &str = "pub fn f(x: u32) -> u32 {\n    if x > 3 {\n        1\n    } else {\n        0\n    }\n}\n";
+
+/// Design 50: a fact of the default mode has no compare result, also not in the JSON form.
+#[test]
+fn a_fact_of_the_default_mode_has_no_compare_result() {
+    let after = CONDITION.replace("x > 3", "x > 3 && x < 9");
+    let report = run_tree(CONDITION, &after);
+    assert!(report.accepted() && report.errors.is_empty(), "{report:#?}");
+    assert_eq!(report.facts.len(), 1, "{report:#?}");
+    let fact = &report.facts[0];
+    assert!(fact.compare.is_off() && fact.label() == "semantics" && fact.affected.is_empty(), "{fact:#?}");
+    let json = serde_json::to_value(fact).unwrap();
+    assert!(json.get("compare").is_none(), "{json}");
+    // The step with the compiled check keeps the compare result.
+    let report = run_derived(CONDITION, &after, &[("demo::f", different(false))]);
+    let fact = &report.facts[0];
+    assert!(fact.compare == Compare::CodeDifferent && fact.label() == "semantics · code different", "{fact:#?}");
+    assert_eq!(serde_json::to_value(fact).unwrap()["compare"], "code_different");
+}
+
+/// Design 50: no note gives a cause for a compare that Semilla did not make.
+#[test]
+fn a_doc_test_fact_of_the_default_mode_has_no_note_about_the_compare() {
+    let before = "/// Adds one.\n///\n/// ```\n/// assert_eq!(demo::inc(1), 2);\n/// ```\npub fn inc(x: u32) -> u32 {\n    x + 1\n}\n";
+    let after = before.replace("inc(1), 2", "inc(2), 3");
+    let report = run_tree(before, &after);
+    assert_eq!(plain_texts(&report), ["doc test of `demo::inc` changed"]);
+    assert!(report.facts[0].note.is_none() && report.facts[0].compare.is_off(), "{report:#?}");
+    let report = run_derived(before, &after, &[("demo::inc", equal("n0"))]);
+    assert!(report.facts[0].note.as_deref().is_some_and(|note| note.starts_with("no compare:")), "{report:#?}");
+}
+
+const ENUM_USES: &str = "enum Fault {\n    Low,\n    High,\n}\nfn first() -> Fault {\n    Fault::Low\n}\nfn second() -> Fault {\n    Fault::High\n}\nfn third() -> Fault {\n    Fault::Low\n}\n";
+
+/// Design 50, part 3: the proof of a rename uses only the syntax tree. The rename fact covers a
+/// use only if the use is equal after the map.
+#[test]
+fn a_rename_from_the_syntax_tree_and_a_use_with_a_second_difference() {
+    let renamed = ENUM_USES.replace("Fault", "Problem");
+    let report = run_tree(ENUM_USES, &renamed);
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["renamed `demo::Fault` → `demo::Problem`"]);
+    assert!(report.facts[0].compare.is_off(), "{report:#?}");
+    // The use in `third` changes to a different variant: it gets its own fact with the full
+    // old text and the full new text.
+    let second = renamed.replace("fn third() -> Problem {\n    Problem::Low", "fn third() -> Problem {\n    Problem::High");
+    let report = run_tree(ENUM_USES, &second);
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["renamed `demo::Fault` → `demo::Problem`", "changed path `Fault::Low` → `Problem::High` at `demo::third/tail`"]);
+    // The same rule with the compiled check.
+    let report = run_derived(ENUM_USES, &second, &[("demo::first", equal("n0")), ("demo::second", equal("n0")), ("demo::third", different(false))]);
+    assert_eq!(plain_texts(&report), ["renamed `demo::Fault` → `demo::Problem`", "changed path `Fault::Low` → `Problem::High` at `demo::third/tail`"], "{report:#?}");
+}
+
+const MOVE_PATHS: &str = "mod cart {\n    pub fn over(x: u32, limit: u32) -> u32 {\n        if x > limit { x - limit } else { 0 }\n    }\n    pub fn keep(x: u32) -> u32 {\n        x\n    }\n}\nmod other {\n    pub fn over(x: u32, limit: u32) -> u32 {\n        x + limit\n    }\n}\nmod util {\n    pub fn half(x: u32) -> u32 {\n        x / 2\n    }\n}\npub fn a(x: u32) -> u32 {\n    cart::over(x, 3) + cart::keep(x) + util::half(x)\n}\npub fn c(x: u32) -> u32 {\n    other::over(x, 5)\n}\n";
+
+fn move_paths_after() -> String {
+    let item = "    pub fn over(x: u32, limit: u32) -> u32 {\n        if x > limit { x - limit } else { 0 }\n    }\n";
+    MOVE_PATHS.replacen(item, "", 1).replace("        x / 2\n    }\n", &format!("        x / 2\n    }}\n{item}")).replace("cart::over(x, 3)", "util::over(x, 3)")
+}
+
+/// Design 50, part 3: a path edit is a forced edit of a move only if the path names the item on
+/// each side.
+#[test]
+fn a_path_to_a_different_item_is_not_a_forced_edit_of_a_move() {
+    let after = move_paths_after();
+    let report = run_tree(MOVE_PATHS, &after);
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["moved `demo::cart::over` → `demo::util::over`"]);
+    // `other::over` is a different item. The edit to `util::over` is a decision of the author.
+    let report = run_tree(MOVE_PATHS, &after.replace("other::over(x, 5)", "util::over(x, 5)"));
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["moved `demo::cart::over` → `demo::util::over`", "changed path `other::over` → `util::over` at `demo::c/tail/callee`"]);
+}
+
+const MOVE_USES: &str = "mod cart {\n    pub fn over(x: u32, limit: u32) -> u32 {\n        if x > limit { x - limit } else { 0 }\n    }\n    pub mod a {\n        pub fn helper(x: u32) -> u32 {\n            x + 1\n        }\n    }\n    pub mod b {\n        pub fn helper(x: u32) -> u32 {\n            x + 2\n        }\n    }\n}\nmod util {\n    pub fn half(x: u32) -> u32 {\n        x / 2\n    }\n}\nuse cart::a::helper;\nuse cart::over;\npub fn a(x: u32) -> u32 {\n    over(x, 3) + helper(x) + util::half(x)\n}\n";
+
+/// Design 50, part 3: a `use` line is a forced edit of a move only if the map gives the new line.
+#[test]
+fn a_use_line_with_a_second_difference_gets_its_own_fact() {
+    let item = "    pub fn over(x: u32, limit: u32) -> u32 {\n        if x > limit { x - limit } else { 0 }\n    }\n";
+    let moved = MOVE_USES.replacen(item, "", 1).replace("        x / 2\n    }\n", &format!("        x / 2\n    }}\n{item}")).replace("use cart::over;", "use util::over;");
+    let report = run_tree(MOVE_USES, &moved);
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["moved `demo::cart::over` → `demo::util::over`, with 1 `use` line(s)"]);
+    // The second `use` line changes to a different item: the move fact does not take it.
+    let report = run_tree(MOVE_USES, &moved.replace("use cart::a::helper;", "use cart::b::helper;"));
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    let texts = plain_texts(&report);
+    assert!(texts[0].starts_with("moved `demo::cart::over` → `demo::util::over`"), "{texts:#?}");
+    assert!(texts.iter().any(|text| text.contains("`use` line") && text.contains("use cart::a::helper;") && text.contains("use cart::b::helper;")) || (texts.iter().any(|text| text.starts_with("removed `use` line: `use cart::a::helper;`")) && texts.iter().any(|text| text.starts_with("added `use` line: `use cart::b::helper;`"))), "{texts:#?}");
+}
+
+/// Design 50, part 3: two maps pass with the same score. The default mode gives no rename fact.
+#[test]
+fn a_tie_of_two_maps_gives_removed_and_added_in_the_default_mode() {
+    let twins = "fn one(a: u32) -> u32 {\n    a + 1\n}\nfn two(a: u32) -> u32 {\n    a + 1\n}\n";
+    let report = run_tree(twins, &twins.replace("fn one", "fn first").replace("fn two", "fn second"));
+    assert_eq!(plain_texts(&report), ["removed `demo::one`", "removed `demo::two`", "added `demo::first`", "added `demo::second`"]);
+    assert!(report.notes.len() == 1 && report.notes[0].contains("show(s) as removed and added: Semilla does not derive the rename or the move (more than one name map"), "{:#?}", report.notes);
+    // One pair has one map: the rename fact shows.
+    let report = run_tree(twins, &twins.replace("fn one", "fn first"));
+    assert_eq!(plain_texts(&report), ["renamed `demo::one` → `demo::first`"]);
+    assert!(report.notes.is_empty(), "{:#?}", report.notes);
+}
+
+/// Design 50, part 3: an item with a new name and an edit in its body. The rename fact stays,
+/// and the edit gets its own fact at the new path.
+#[test]
+fn a_renamed_item_with_a_body_edit_keeps_the_rename_fact() {
+    let before = "fn scale(x: u32) -> u32 {\n    x * 2 + 1\n}\npub fn a(x: u32) -> u32 {\n    scale(x)\n}\n";
+    let report = run_tree(before, &before.replace("scale", "double").replace("x * 2 + 1", "x * 2 + 2"));
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["renamed `demo::scale` → `demo::double`", "changed literal `1` → `2` at `demo::double/tail/rhs`"]);
+}
+
+const PATTERNS: &str = "pub struct Tank {\n    pub level: u32,\n}\npub fn a(t: &Tank) -> u32 {\n    let Tank { level } = t;\n    *level\n}\npub fn b(t: &Tank) -> u32 {\n    let Tank { level } = t;\n    *level + 1\n}\npub fn c(t: &Tank) -> u32 {\n    let Tank { level } = t;\n    *level + 2\n}\n";
+
+/// Design 50, part 4: the site line of a pattern names the exact edit (`..` or the field text).
+#[test]
+fn a_pattern_site_names_the_exact_edit() {
+    let after = PATTERNS.replace("    pub level: u32,\n}", "    pub level: u32,\n    pub cap: u32,\n}").replacen("let Tank { level } = t;\n    *level\n", "let Tank { level, .. } = t;\n    *level\n", 1).replace("let Tank { level } = t;\n    *level + 1", "let Tank { level, cap } = t;\n    *level + 1").replace("let Tank { level } = t;\n    *level + 2", "let Tank { level, cap: _c } = t;\n    *level + 2");
+    let report = run_tree(PATTERNS, &after);
+    assert!(report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["field `demo::Tank.cap` added: `u32`"]);
+    let groups: Vec<(String, usize)> = report.facts[0].sites.iter().map(|group| (group.edit.clone(), group.sites.len())).collect();
+    assert_eq!(groups, [("add `..` to the pattern".to_string(), 1), ("add the field `cap` to the pattern".to_string(), 1), ("add the field `cap : _c` to the pattern".to_string(), 1)]);
+    // A pattern with a second difference is not a site of the field fact.
+    let second = PATTERNS.replace("    pub level: u32,\n}", "    pub level: u32,\n    pub cap: u32,\n}").replace("let Tank { level } = t;\n    *level + 2", "let Tank { level: other, .. } = t;\n    *other + 2");
+    let report = run_tree(PATTERNS, &second);
+    assert!(report.facts[0].sites.iter().all(|group| group.sites.iter().all(|site| site.item != "demo::c")), "{report:#?}");
+    assert!(report.facts.len() > 1 && report.facts[1..].iter().any(|fact| fact.at.as_ref().is_some_and(|at| at.item == "demo::c")), "{report:#?}");
+}
+
+/// Design 50, part 4: a use that changes to a different variant is a decision of the author.
+/// The fact of the removed variant does not take it.
+#[test]
+fn a_use_that_changes_to_a_different_variant_gets_its_own_fact() {
+    let before = "pub enum Mode {\n    Slow,\n    Quick,\n    Off,\n}\npub fn a() -> Mode {\n    Mode::Slow\n}\npub fn b() -> Mode {\n    Mode::Slow\n}\npub fn c() -> Mode {\n    Mode::Slow\n}\n";
+    let after = before.replace("    Slow,\n", "").replace("pub fn c() -> Mode {\n    Mode::Slow", "pub fn c() -> Mode {\n    Mode::Off").replace("Mode::Slow", "Mode::Quick");
+    let report = run_tree(before, &after);
+    assert!(report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["variant `demo::Mode::Slow` removed: `Slow`", "2 site(s): changed path `Mode::Slow` → `Mode::Quick`", "changed path `Mode::Slow` → `Mode::Off` at `demo::c/tail`"]);
+    assert!(report.facts[0].sites.is_empty(), "{report:#?}");
+}
+
+/// Design 50, part 4: the cut mark `…` of a one-side text is a label. The fact has the full text
+/// of the node in `content`.
+#[test]
+fn a_fact_with_a_cut_text_has_the_full_text() {
+    let before = "pub fn f(a: u32, b: u32) -> u32 {\n    let s = a + b;\n    s\n}\n";
+    let after = before.replace("    s\n", "    let t = s.wrapping_mul(31).wrapping_add(a).wrapping_mul(17).wrapping_add(b).rotate_left(5) ^ 0x5bd1e995;\n    s + t\n");
+    let report = run_tree(before, &after);
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("added `let`")).expect("the fact of the added statement");
+    assert!(fact.description.contains('…'), "{fact:#?}");
+    assert!(fact.content.as_deref().is_some_and(|content| content.contains("rotate_left(5) ^ 0x5bd1e995")), "{fact:#?}");
+    // A pair of texts has a cut only in an equal part: each different part shows.
+    let pair = report.facts.iter().find(|fact| fact.description.starts_with("changed expression")).expect("the fact of the tail");
+    assert_eq!(pair.description, "changed expression `s` → `s + t` at `demo::f/tail`");
+}
+
+/// Design 50, part 4: a type change in N places is one fact in the default mode, and the fact
+/// names each place.
+#[test]
+fn a_type_change_in_the_default_mode_names_each_place() {
+    let before = "pub struct Pair {\n    pub a: u32,\n    pub b: u32,\n}\npub fn one(x: u32) -> u32 {\n    x\n}\n";
+    let report = run_tree(before, &before.replace("u32", "u64"));
+    assert_eq!(report.facts.len(), 1, "{report:#?}");
+    let text = &report.facts[0].description;
+    assert!(text.starts_with("type `u32` → `u64` in 4 places: ") && !text.contains('…'), "{text}");
+    for place in ["`demo::Pair.a`", "`demo::Pair.b`", "parameter `x` of `demo::one`", "return type of `demo::one`"] {
+        assert!(text.contains(place), "{place}: {text}");
+    }
+    // A place with a different new type is not in the fold.
+    let report = run_tree(before, &before.replace("u32", "u64").replace("pub b: u64", "pub b: u16"));
+    assert!(report.facts.iter().any(|fact| fact.description.contains("`u32` → `u16`")) && report.facts.iter().any(|fact| fact.description.starts_with("type `u32` → `u64` in 3 places: ")), "{:#?}", descriptions(&report));
+}
+
+/// Design 50, part 3 (the scope rule): the import that a moved item needs goes under the move
+/// fact. An import that the map does not explain keeps its own fact.
+#[test]
+fn an_import_that_a_moved_item_needs_goes_under_the_move_fact() {
+    let before = "mod audit {\n    pub struct Holder(pub u32);\n    pub fn limit() -> u32 { 9 }\n    pub fn check(h: &Holder) -> bool { h.0 < limit() }\n}\nmod quota {\n    pub fn half(x: u32) -> u32 { x / 2 }\n}\nmod stock {\n    use std::fmt;\n    pub fn error() -> fmt::Error { fmt::Error }\n}\npub fn a(h: &audit::Holder) -> bool { audit::check(h) }\n";
+    let after = "mod audit {\n    pub struct Holder(pub u32);\n    pub fn limit() -> u32 { 9 }\n}\nmod quota {\n    use crate::audit::{limit, Holder};\n    pub fn half(x: u32) -> u32 { x / 2 }\n    pub fn check(h: &Holder) -> bool { h.0 < limit() }\n}\nmod stock {\n    use std::fmt;\n    pub fn error() -> fmt::Error { fmt::Error }\n}\npub fn a(h: &audit::Holder) -> bool { quota::check(h) }\n";
+    let report = run_tree(before, after);
+    assert!(report.accepted() && report.uncovered.is_empty(), "{report:#?}");
+    assert_eq!(plain_texts(&report), ["moved `demo::audit::check` → `demo::quota::check`, with 1 `use` line(s)"]);
+    // The moved item does not use the name `fmt`: the second new line keeps its own fact.
+    let report = run_tree(before, &after.replace("    use crate::audit::{limit, Holder};\n", "    use crate::audit::{limit, Holder};\n    use std::fmt;\n"));
+    let texts = plain_texts(&report);
+    assert!(texts[0].ends_with("with 1 `use` line(s)") && texts[1..] == ["added `use` line: `use std::fmt;` in `demo::quota`"], "{texts:#?}");
+    // A module with no item of the map: the map is not the cause of a `use` edit there.
+    let report = run_tree(before, &after.replace("    use std::fmt;\n", "    use std::fmt::{self, Formatter};\n"));
+    let texts = plain_texts(&report);
+    assert!(texts[0].ends_with("with 1 `use` line(s)") && texts[1..] == ["removed `use` line: `use std::fmt;` in `demo::stock`", "added `use` line: `use std::fmt::{self, Formatter};` in `demo::stock`"], "{texts:#?}");
+}
+
+/// Design 50, part 3: a `use` line with a new order of its names is not an effect of a rename.
+#[test]
+fn a_use_line_that_the_map_does_not_change_keeps_its_fact() {
+    let before = "use std::collections::{BTreeMap, BTreeSet};\nfn one() -> (BTreeMap<u32, u32>, BTreeSet<u32>) {\n    (BTreeMap::new(), BTreeSet::new())\n}\n";
+    let report = run_tree(before, &before.replace("fn one", "fn first").replace("{BTreeMap, BTreeSet}", "{BTreeSet, BTreeMap}"));
+    let texts = plain_texts(&report);
+    assert_eq!(texts.len(), 2, "{texts:#?}");
+    assert!(texts[0] == "renamed `demo::one` → `demo::first`" && texts[1].contains("`use` line") && texts[1].contains("{BTreeSet, BTreeMap}"), "{texts:#?}");
+}
+
+// ---- Batch 9a2 (design 51): the map of a rename is a map of the references to the item ----
+
+/// The text with each pair replaced. Each old text must be in the text.
+fn swap(text: &str, pairs: &[(&str, &str)]) -> String {
+    pairs.iter().fold(text.to_string(), |text, (old, new)| {
+        assert!(text.contains(old), "the text has no `{old}`");
+        text.replace(old, new)
+    })
+}
+
+/// The rename and move facts of a report, and each other fact. A fact of the public API does
+/// not count.
+fn rename_and_other(report: &StepReport) -> (Vec<String>, Vec<String>) {
+    plain_texts(report).into_iter().filter(|text| !text.starts_with("public API: ")).partition(|text| text.starts_with("renamed `") || text.starts_with("moved `"))
+}
+
+/// The note of the fact with this text.
+fn note_of<'a>(report: &'a StepReport, text: &str) -> Option<&'a str> {
+    report.facts.iter().find(|fact| fact.description.starts_with(text)).unwrap_or_else(|| panic!("no fact `{text}`: {report:#?}")).note.as_deref()
+}
+
+/// A pure rename: the facts are the rename facts, and no fact has a note.
+fn pure_rename(before: &str, after: &str, renames: &[&str]) {
+    let report = run_tree(before, after);
+    assert_eq!(rename_and_other(&report), (renames.iter().map(|text| text.to_string()).collect(), Vec::new()), "{report:#?}");
+    assert!(report.facts.iter().all(|fact| fact.note.is_none()), "{report:#?}");
+}
+
+/// A rename with one more edit: the rename fact stays, and the second edit has its own fact.
+fn rename_with_second_edit(before: &str, after: &str, rename: &str, second: &[&str]) {
+    let report = run_tree(before, after);
+    let (renames, other) = rename_and_other(&report);
+    assert_eq!(renames, [rename], "{report:#?}");
+    assert_eq!(other, second, "{report:#?}");
+}
+
+/// The example crate of design 51. The step renames `disk::load` to `disk::fetch`.
+const DEPOT: &str = r#"
+pub mod disk {
+    pub fn load(k: u32) -> u32 { k + 1 }
+    pub fn twice(k: u32) -> u32 { load(k) * 2 }
+}
+pub mod net {
+    pub fn load(k: u32) -> u32 { k }
+    pub fn fetch(k: u32) -> u32 { k + 100 }
+    pub struct Link { pub load: u32, pub fetch: u32 }
+    impl Link {
+        pub fn load(&self) -> u32 { self.load }
+        pub fn fetch(&self) -> u32 { self.fetch }
+    }
+    pub fn a() -> u32 { crate::net::load(1) }
+    pub fn b() -> u32 { load(2) }
+    pub fn c(l: &Link) -> u32 { l.load() }
+    pub fn d(l: &Link) -> u32 { l.load }
+    pub fn e(l: &Link) -> u32 { Link::load(l) }
+    pub fn name() -> &'static str { "load" }
+    pub fn local() -> u32 { let load = 5; load + 1 }
+}
+pub mod ui {
+    use crate::disk::load;
+    use crate::net::load as net_load;
+    pub fn show() -> String { format!("load {}", load(3)) }
+    pub fn other() -> u32 { net_load(4) }
+}
+"#;
+const DEPOT_RENAME: [(&str, &str); 4] = [("pub fn load(k: u32) -> u32 { k + 1 }", "pub fn fetch(k: u32) -> u32 { k + 1 }"), ("{ load(k) * 2 }", "{ fetch(k) * 2 }"), ("use crate::disk::load;", "use crate::disk::fetch;"), (", load(3))", ", fetch(3))")];
+const DEPOT_FACT: &str = "renamed `demo::disk::load` → `demo::disk::fetch`";
+
+/// The rename of the example crate with one more edit.
+fn depot_second_edit(pair: (&str, &str), second: &str) {
+    rename_with_second_edit(DEPOT, &swap(&swap(DEPOT, &DEPOT_RENAME), &[pair]), DEPOT_FACT, &[second]);
+}
+
+/// Design 51, D10: a pure rename gives only the facts of the rename. The old word in a string,
+/// in a different module, and as a member of a different type is not a site. Before: three
+/// false facts (a `use` line with two equal texts, "moved code" in `Link`, a macro input).
+#[test]
+fn a_pure_rename_gives_no_fact_for_a_place_with_the_old_word_that_is_not_a_site() {
+    pure_rename(DEPOT, &swap(DEPOT, &DEPOT_RENAME), &[DEPOT_FACT]);
+}
+
+/// Design 51, D1: a path with a qualifier that resolves to a different item (class 3).
+#[test]
+fn a_changed_path_to_a_different_module_is_not_under_the_rename_fact() {
+    depot_second_edit(("crate::net::load(1)", "crate::net::fetch(1)"), "changed path `crate::net::load` → `crate::net::fetch` at `demo::net::a/tail/callee`");
+}
+
+/// Design 51, D2: a bare name that the module scope resolves to a different item (class 3).
+#[test]
+fn a_changed_bare_name_of_a_module_with_its_own_item_is_not_under_the_rename_fact() {
+    depot_second_edit(("{ load(2) }", "{ fetch(2) }"), "changed path `load` → `fetch` at `demo::net::b/tail/callee`");
+}
+
+/// Design 51, D3: a method call. A different declaration has the name, so the name is not free.
+#[test]
+fn a_changed_method_call_with_the_name_of_a_renamed_function_is_not_under_the_rename_fact() {
+    depot_second_edit(("l.load()", "l.fetch()"), "changed method_call: `l.load()` → `l.fetch()` at `demo::net::c/tail`");
+}
+
+/// Design 51, D4: a field after `.`.
+#[test]
+fn a_changed_field_use_with_the_name_of_a_renamed_function_is_not_under_the_rename_fact() {
+    depot_second_edit(("{ l.load }", "{ l.fetch }"), "changed field: `l.load` → `l.fetch` at `demo::net::d/tail`");
+}
+
+/// Design 51, D5: a path to a method of a type (class 3).
+#[test]
+fn a_changed_path_to_a_method_of_a_type_is_not_under_the_rename_fact() {
+    depot_second_edit(("Link::load(l)", "Link::fetch(l)"), "changed path `Link::load` → `Link::fetch` at `demo::net::e/tail/callee`");
+}
+
+/// Design 51, D6: a `use` line of a different item.
+#[test]
+fn a_changed_use_line_of_a_different_item_is_not_under_the_rename_fact() {
+    depot_second_edit(("use crate::net::load as net_load;", "use crate::net::fetch as net_load;"), "changed `use` line: `use crate::net::load as net_load;` → `use crate::net::fetch as net_load;` in `demo::ui`");
+}
+
+/// Design 51, D7: a string literal is never a site (class 1).
+#[test]
+fn a_changed_string_literal_with_the_old_name_is_not_under_the_rename_fact() {
+    depot_second_edit((r#"{ "load" }"#, r#"{ "fetch" }"#), r#"changed literal `"load"` → `"fetch"` at `demo::net::name/tail`"#);
+}
+
+/// Design 51, D8: the format string of a macro call is never a site (class 1).
+#[test]
+fn a_changed_format_string_with_the_old_name_is_not_under_the_rename_fact() {
+    depot_second_edit((r#"format!("load {}""#, r#"format!("fetch {}""#), r#"changed literal `"load {}"` → `"fetch {}"` at `demo::ui::show/tail/args[0]`"#);
+}
+
+/// Design 51, D9: a local declares a different thing (class 1), and its uses resolve to the
+/// local (class 3). The rename of the local has its own fact.
+#[test]
+fn a_renamed_local_with_the_name_of_a_renamed_function_has_its_own_fact() {
+    depot_second_edit(("let load = 5; load + 1", "let fetch = 5; fetch + 1"), "`demo::net::local`: renamed local `load` → `fetch`, 2 edit(s)");
+}
+
+/// Design 51, rule R6: the syntax phase makes the facts in the two modes.
+#[test]
+fn the_second_edit_has_its_own_fact_with_the_compiled_check() {
+    let after = swap(&swap(DEPOT, &DEPOT_RENAME), &[("crate::net::load(1)", "crate::net::fetch(1)")]);
+    let report = run_derived(DEPOT, &after, &[("demo::net::a", different(false))]);
+    let texts = plain_texts(&report);
+    assert!(texts.iter().any(|text| text == DEPOT_FACT) && texts.iter().any(|text| text.starts_with("changed path `crate::net::load` → `crate::net::fetch`")), "{report:#?}");
+}
+
+const TANK: &str = r#"
+pub struct Tank { pub level: u32, pub cap: u32 }
+pub fn a(t: &Tank) -> u32 { t.level + 1 }
+pub fn b(t: &Tank) -> bool { t.level < t.cap }
+pub fn c() -> Tank { Tank { level: 1, cap: 2 } }
+"#;
+const TANK_RENAME: [(&str, &str); 4] = [("pub level", "pub depth"), ("t.level + 1", "t.depth + 1"), ("t.level < t.cap", "t.depth < t.cap"), ("Tank { level: 1", "Tank { depth: 1")];
+const TANK_FACT: &str = "renamed `demo::Tank.level` → `demo::Tank.depth`";
+const PUMP: &str = r#"pub struct Pump { pub level: u32, pub depth: u32 }
+pub fn p(p: &Pump) -> u32 { p.level }
+pub fn q() -> Pump { Pump { level: 1, depth: 2 } }
+"#;
+
+/// Design 51, rules R2 and R3: a member after `.` is a site by name. With a free name, the
+/// sites stay under the rename fact, and the fact gives their count. The label of a struct
+/// literal with the path of the type is a sure site.
+#[test]
+fn a_field_rename_with_a_free_name_keeps_its_sites_and_gives_their_count() {
+    let report = run_tree(TANK, &swap(TANK, &TANK_RENAME));
+    assert_eq!(rename_and_other(&report), (vec![TANK_FACT.to_string()], Vec::new()), "{report:#?}");
+    assert_eq!(note_of(&report, TANK_FACT), Some("2 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)"), "{report:#?}");
+}
+
+/// Design 51, rule R2: a second type has the member name. So the name is not free, and each
+/// site by name is an edit with its own fact (equal edits fold). The rename fact has no count.
+#[test]
+fn a_field_rename_with_a_name_of_a_second_type_gives_each_site_by_name_its_own_fact() {
+    let vat = "pub struct Vat { pub level: u32 }\n";
+    let (before, after) = (format!("{TANK}{vat}"), format!("{}{vat}", swap(TANK, &TANK_RENAME)));
+    rename_with_second_edit(&before, &after, TANK_FACT, &["2 site(s): changed expression `t.level` → `t.depth`"]);
+    assert_eq!(note_of(&run_tree(&before, &after), TANK_FACT), None);
+    // The new name of a second type also takes the name.
+    let vat = "pub struct Vat { pub depth: u32 }\n";
+    rename_with_second_edit(&format!("{TANK}{vat}"), &format!("{}{vat}", swap(TANK, &TANK_RENAME)), TANK_FACT, &["2 site(s): changed expression `t.level` → `t.depth`"]);
+}
+
+/// Design 51, D11, a field: a use of the member of a different type, the labels of its
+/// literal, and a string are not under the rename fact of the field.
+#[test]
+fn a_second_edit_at_a_field_rename_has_its_own_fact() {
+    let (before, pure) = (format!("{TANK}{PUMP}"), format!("{}{PUMP}", swap(TANK, &TANK_RENAME)));
+    let sites = "2 site(s): changed expression `t.level` → `t.depth`";
+    rename_with_second_edit(&before, &pure, TANK_FACT, &[sites]);
+    rename_with_second_edit(&before, &swap(&pure, &[("{ p.level }", "{ p.depth }")]), TANK_FACT, &[sites, "changed field: `p.level` → `p.depth` at `demo::p/tail`"]);
+    rename_with_second_edit(&before, &swap(&pure, &[("Pump { level: 1, depth: 2 }", "Pump { depth: 1, level: 2 }")]), TANK_FACT, &[sites, "changed struct: `Pump { level: 1, depth: 2 }` → `Pump { depth: 1, level: 2 }` at `demo::q/tail`"]);
+}
+
+const CART_TOTAL: &str = r#"
+pub struct Cart { pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.items.iter().sum() }
+}
+pub fn a(c: &Cart) -> u32 { c.total() }
+pub fn b(c: &Cart) -> u32 { c.total() + 1 }
+pub fn c(c: &Cart) -> bool { Cart::total(c) > 9 }
+"#;
+const CART_TOTAL_RENAME: [(&str, &str); 4] = [("pub fn total", "pub fn sum"), ("{ c.total() }", "{ c.sum() }"), ("c.total() + 1", "c.sum() + 1"), ("Cart::total(c)", "Cart::sum(c)")];
+const CART_TOTAL_FACT: &str = "renamed `demo::Cart::total` → `demo::Cart::sum`";
+
+/// Design 51, rules R2 and R3 for a method: the two calls after `.` are sites by name, and the
+/// path `Cart::total` is a sure site.
+#[test]
+fn a_method_rename_with_a_free_name_keeps_its_sites_and_gives_their_count() {
+    let report = run_tree(CART_TOTAL, &swap(CART_TOTAL, &CART_TOTAL_RENAME));
+    assert_eq!(rename_and_other(&report), (vec![CART_TOTAL_FACT.to_string()], Vec::new()), "{report:#?}");
+    assert!(note_of(&report, CART_TOTAL_FACT).is_some_and(|note| note.starts_with("2 site(s) by name (")), "{report:#?}");
+}
+
+/// Design 51, rule R2 for a method: a method of a second type has the old name or the new name.
+#[test]
+fn a_method_rename_with_a_name_of_a_second_type_gives_each_call_its_own_fact() {
+    let calls = ["changed method_call: `c.total()` → `c.sum()` at `demo::a/tail`", "changed expression `c.total()` → `c.sum()` at `demo::b/tail/lhs`"];
+    for name in ["total", "sum"] {
+        let bill = format!("pub struct Bill {{ pub lines: Vec<u32> }}\nimpl Bill {{\n    pub fn {name}(&self) -> u32 {{ self.lines.len() as u32 }}\n}}\n");
+        let (before, after) = (format!("{CART_TOTAL}{bill}"), format!("{}{bill}", swap(CART_TOTAL, &CART_TOTAL_RENAME)));
+        rename_with_second_edit(&before, &after, CART_TOTAL_FACT, &calls);
+        assert_eq!(note_of(&run_tree(&before, &after), CART_TOTAL_FACT), None);
+    }
+}
+
+const CART: &str = r#"
+pub struct Cart { pub items: Vec<u32> }
+impl Cart { pub fn new() -> Cart { Cart { items: Vec::new() } } }
+pub mod old {
+    pub struct Cart;
+    pub struct Basket;
+    impl Cart { pub fn size() -> u32 { 1 } }
+    impl Basket { pub fn size() -> u32 { 2 } }
+    pub fn inner() -> u32 { Cart::size() }
+}
+pub fn a(c: &Cart) -> usize { c.items.len() }
+pub fn b() -> Cart { Cart::new() }
+pub fn size() -> u32 { old::Cart::size() }
+pub fn name() -> &'static str { "Cart" }
+"#;
+const CART_RENAME: [(&str, &str); 4] = [("pub struct Cart { pub items", "pub struct Basket { pub items"), ("impl Cart { pub fn new() -> Cart { Cart { items", "impl Basket { pub fn new() -> Basket { Basket { items"), ("c: &Cart", "c: &Basket"), ("-> Cart { Cart::new", "-> Basket { Basket::new")];
+const CART_FACT: &str = "renamed `demo::Cart` → `demo::Basket`";
+
+/// Design 51, D11, a type: a path to a type of a different module with the same two names, the
+/// bare name in that module, and a string are not under the rename fact of the type.
+#[test]
+fn a_second_edit_at_a_type_rename_has_its_own_fact() {
+    let pure = swap(CART, &CART_RENAME);
+    pure_rename(CART, &pure, &[CART_FACT]);
+    rename_with_second_edit(CART, &swap(&pure, &[("old::Cart::size()", "old::Basket::size()")]), CART_FACT, &["changed path `old::Cart::size` → `old::Basket::size` at `demo::size/tail/callee`"]);
+    rename_with_second_edit(CART, &swap(&pure, &[("{ Cart::size() }", "{ Basket::size() }")]), CART_FACT, &["changed path `Cart::size` → `Basket::size` at `demo::old::inner/tail/callee`"]);
+    rename_with_second_edit(CART, &swap(&pure, &[(r#""Cart""#, r#""Basket""#)]), CART_FACT, &[r#"changed literal `"Cart"` → `"Basket"` at `demo::name/tail`"#]);
+}
+
+/// Design 51, D11, a variant: a path to a variant of a different enum with the same two names.
+#[test]
+fn a_second_edit_at_a_variant_rename_has_its_own_fact() {
+    let before = "pub enum Mode { Slow, Quick }\npub enum Gear { Slow, Careful }\npub fn a() -> Mode { Mode::Slow }\npub fn c(m: &Mode) -> u32 { match m { Mode::Slow => 1, Mode::Quick => 2 } }\npub fn g() -> Gear { Gear::Slow }\n";
+    let pure = swap(before, &[("Mode { Slow,", "Mode { Careful,"), ("{ Mode::Slow }", "{ Mode::Careful }"), ("Mode::Slow => 1", "Mode::Careful => 1")]);
+    let fact = "renamed `demo::Mode::Slow` → `demo::Mode::Careful`";
+    pure_rename(before, &pure, &[fact]);
+    rename_with_second_edit(before, &swap(&pure, &[("Gear::Slow }", "Gear::Careful }")]), fact, &["changed path `Gear::Slow` → `Gear::Careful` at `demo::g/tail`"]);
+}
+
+/// Design 51, D11, a constant: a path to a constant of a different module, and the bare name in
+/// that module.
+#[test]
+fn a_second_edit_at_a_constant_rename_has_its_own_fact() {
+    let before = "const LIMIT: u32 = 10;\npub mod m {\n    pub const LIMIT: u32 = 1;\n    pub const CEILING: u32 = 2;\n    pub fn inner() -> u32 { LIMIT }\n}\npub fn a(x: u32) -> bool { x > LIMIT }\npub fn b(x: u32) -> u32 { x + LIMIT }\npub fn c() -> u32 { m::LIMIT * 2 }\n";
+    let pure = swap(before, &[("const LIMIT: u32 = 10;", "const CEILING: u32 = 10;"), ("x > LIMIT", "x > CEILING"), ("x + LIMIT", "x + CEILING")]);
+    let fact = "renamed `demo::LIMIT` → `demo::CEILING`";
+    pure_rename(before, &pure, &[fact]);
+    rename_with_second_edit(before, &swap(&pure, &[("m::LIMIT * 2", "m::CEILING * 2")]), fact, &["changed path `m::LIMIT` → `m::CEILING` at `demo::c/tail/lhs`"]);
+    rename_with_second_edit(before, &swap(&pure, &[("{ LIMIT }", "{ CEILING }")]), fact, &["changed path `LIMIT` → `CEILING` at `demo::m::inner/tail`"]);
+}
+
+/// Design 51, D11, a module: a path through a different module with the same two names, and a
+/// string.
+#[test]
+fn a_second_edit_at_a_module_rename_has_its_own_fact() {
+    let before = "mod fees {\n    pub fn charge(x: u32) -> u32 { x + 2 }\n}\nmod other {\n    pub mod fees { pub fn charge(x: u32) -> u32 { x + 3 } }\n    pub mod costs { pub fn charge(x: u32) -> u32 { x + 4 } }\n}\npub fn a(x: u32) -> u32 { fees::charge(x) }\npub fn c(x: u32) -> u32 { other::fees::charge(x) }\npub fn name() -> &'static str { \"fees\" }\n";
+    let pure = swap(before, &[("mod fees {\n    pub fn charge(x: u32) -> u32 { x + 2 }", "mod costs {\n    pub fn charge(x: u32) -> u32 { x + 2 }"), ("{ fees::charge(x) }", "{ costs::charge(x) }")]);
+    let fact = "renamed `demo::fees` → `demo::costs`";
+    pure_rename(before, &pure, &[fact]);
+    rename_with_second_edit(before, &swap(&pure, &[("other::fees::charge(x)", "other::costs::charge(x)")]), fact, &["changed path `other::fees::charge` → `other::costs::charge` at `demo::c/tail/callee`"]);
+    rename_with_second_edit(before, &swap(&pure, &[("\"fees\"", "\"costs\"")]), fact, &[r#"changed literal `"fees"` → `"costs"` at `demo::name/tail`"#]);
+}
+
+/// Design 51, D11, a trait method with its impl methods: a call of a method of a different type
+/// and a path to that method are not under the rename fact. The call `s.area()` is a site by
+/// name, and the name is not free here. The path `Shape::area` is a sure site.
+#[test]
+fn a_second_edit_at_a_trait_method_rename_has_its_own_fact() {
+    let before = "pub trait Shape { fn area(&self) -> u32; }\npub struct Sq(pub u32);\nimpl Shape for Sq { fn area(&self) -> u32 { self.0 * self.0 } }\npub struct Plot { pub area: u32, pub size: u32 }\nimpl Plot {\n    pub fn area(&self) -> u32 { self.area }\n    pub fn size(&self) -> u32 { self.size }\n}\npub fn a(s: &Sq) -> u32 { s.area() }\npub fn b(s: &Sq) -> u32 { Shape::area(s) + 1 }\npub fn p(p: &Plot) -> u32 { p.area() }\npub fn q(p: &Plot) -> u32 { Plot::area(p) }\n";
+    let pure = swap(before, &[("Shape { fn area(&self)", "Shape { fn size(&self)"), ("Sq { fn area(&self)", "Sq { fn size(&self)"), ("s.area()", "s.size()"), ("Shape::area(s)", "Shape::size(s)")]);
+    let fact = "renamed `demo::Shape::area` → `demo::Shape::size`";
+    let site = "changed method_call: `s.area()` → `s.size()` at `demo::a/tail`";
+    rename_with_second_edit(before, &pure, fact, &[site]);
+    rename_with_second_edit(before, &swap(&pure, &[("p.area()", "p.size()")]), fact, &[site, "changed method_call: `p.area()` → `p.size()` at `demo::p/tail`"]);
+    rename_with_second_edit(before, &swap(&pure, &[("Plot::area(p)", "Plot::size(p)")]), fact, &[site, "changed path `Plot::area` → `Plot::size` at `demo::q/tail/callee`"]);
+}
+
+/// Design 51, D11 and rule R5, a local: the scope of the map is the body. A literal and a
+/// member after `.` are never sites of a local.
+#[test]
+fn a_second_edit_at_a_local_rename_has_its_own_fact() {
+    let before = "pub struct P { pub n: u32, pub m: u32 }\npub fn f(a: u32, p: &P) -> String {\n    let n = a + 1;\n    let twice = n * 2;\n    format!(\"{} {} {}\", \"n\", n + twice, p.n)\n}\n";
+    let pure = swap(before, &[("let n = a + 1", "let m = a + 1"), ("twice = n * 2", "twice = m * 2"), ("n + twice", "m + twice")]);
+    let fact = "`demo::f`: renamed local `n` → `m`, 3 edit(s)";
+    assert_eq!(plain_texts(&run_tree(before, &pure)), [fact]);
+    assert_eq!(plain_texts(&run_tree(before, &swap(&pure, &[("\"n\"", "\"m\"")]))), [fact, r#"changed literal `"n"` → `"m"` at `demo::f/tail/args[1]`"#]);
+    assert_eq!(plain_texts(&run_tree(before, &swap(&pure, &[("p.n)", "p.m)")]))), [fact, "changed expression `p.n` → `p.m` at `demo::f/tail/args[3]`"]);
+}
+
+/// Design 51, rule R5, a parameter: the same rule as a local.
+#[test]
+fn a_second_edit_at_a_parameter_rename_has_its_own_fact() {
+    let before = "pub struct P { pub count: u32, pub n: u32 }\npub fn f(count: u32, p: &P) -> u32 {\n    let twice = count * 2;\n    twice + count + p.count\n}\n";
+    let pure = swap(before, &[("f(count: u32", "f(n: u32"), ("count * 2", "n * 2"), ("twice + count", "twice + n")]);
+    let facts = ["parameter `count` of `demo::f` renamed to `n`: `u32`", "`demo::f`: renamed local `count` → `n`, 2 edit(s)"];
+    assert_eq!(plain_texts(&run_tree(before, &pure)), facts);
+    let found = plain_texts(&run_tree(before, &swap(&pure, &[("p.count", "p.n")])));
+    assert_eq!(found[..2], facts, "{found:#?}");
+    assert!(found.len() == 3 && found[2].contains("`p.count` → `p.n`"), "{found:#?}");
+}
+
+const MOVE: &str = "pub mod a {\n    pub fn cost(k: u32) -> u32 { k * 3 }\n    pub fn other(k: u32) -> u32 { k }\n}\npub mod b {\n    pub fn other(k: u32) -> u32 { k + 9 }\n}\npub fn one() -> u32 { a::cost(1) }\npub fn two() -> u32 { a::other(2) }\npub fn name() -> &'static str { \"a::cost\" }\n";
+const MOVE_NEW: &str = "pub mod a {\n    pub fn other(k: u32) -> u32 { k }\n}\npub mod b {\n    pub fn cost(k: u32) -> u32 { k * 3 }\n    pub fn other(k: u32) -> u32 { k + 9 }\n}\npub fn one() -> u32 { b::cost(1) }\npub fn two() -> u32 { a::other(2) }\npub fn name() -> &'static str { \"a::cost\" }\n";
+
+/// Design 51, rule R5, a move: the map of a move changes only a path to the moved item.
+#[test]
+fn a_second_edit_at_a_move_has_its_own_fact() {
+    let fact = "moved `demo::a::cost` → `demo::b::cost`";
+    pure_rename(MOVE, MOVE_NEW, &[fact]);
+    let after = swap(MOVE_NEW, &[("a::other(2)", "b::other(2)"), ("\"a::cost\"", "\"b::cost\"")]);
+    rename_with_second_edit(MOVE, &after, fact, &[r#"changed literal `"a::cost"` → `"b::cost"` at `demo::name/tail`"#, "changed path `a::other` → `b::other` at `demo::two/tail/callee`"]);
+}
+
+const SCOPE: &str = r#"
+pub mod disk {
+    pub struct Disk { pub size: u32 }
+    impl Disk {
+        pub fn load(&self) -> u32 { self.size }
+        pub fn twice(&self) -> u32 { Self::load(self) * 2 + self.load() }
+    }
+    pub fn load(k: u32) -> u32 { k + 1 }
+    pub fn shadow(k: u32) -> u32 { let load = k; load + 1 }
+    pub fn param(load: u32) -> u32 { load + 2 }
+    pub mod deep {
+        pub fn up(k: u32) -> u32 { super::load(k) }
+    }
+}
+pub mod glob {
+    use crate::disk::*;
+    pub fn all(k: u32) -> u32 { load(k) }
+}
+pub mod far {
+    pub fn full(k: u32) -> u32 { crate::disk::load(k) + self::near() }
+    pub fn near() -> u32 { demo::disk::load(1) }
+}
+"#;
+const SCOPE_RENAME: [(&str, &str); 5] = [("pub fn load(k: u32)", "pub fn fetch(k: u32)"), ("super::load(k)", "super::fetch(k)"), ("{ load(k) }", "{ fetch(k) }"), ("crate::disk::load(k)", "crate::disk::fetch(k)"), ("demo::disk::load(1)", "demo::disk::fetch(1)")];
+
+/// Design 51, class 2: a path through `super`, `crate`, the name of the crate, and a glob import
+/// of a module of the workspace is a sure site. Class 1 and class 3: a local, a parameter, and
+/// a method with the old name stay. No site is a site by name, so the fact has no count.
+#[test]
+fn a_path_that_the_syntax_tree_resolves_to_the_item_is_a_sure_site() {
+    pure_rename(SCOPE, &swap(SCOPE, &SCOPE_RENAME), &[DEPOT_FACT]);
+}
+
+/// Design 51, class 3: a use of a local with the old name resolves to the local. A change of the
+/// local is not under the rename fact of the item.
+#[test]
+fn a_local_with_the_old_name_is_not_a_site_of_the_item_rename() {
+    let after = swap(&swap(SCOPE, &SCOPE_RENAME), &[("let load = k; load + 1", "let fetch = k; fetch + 1")]);
+    rename_with_second_edit(SCOPE, &after, DEPOT_FACT, &["`demo::disk::shadow`: renamed local `load` → `fetch`, 2 edit(s)"]);
+}
+
+const MACRO_INPUT: &str = "macro_rules! twice { ($f:ident, $x:expr) => { $f($f($x)) }; }\npub fn load(k: u32) -> u32 { k + 1 }\npub fn a(k: u32) -> u32 { twice!(load, k) }\npub fn b(k: u32) -> u32 { load(k) }\n";
+const MACRO_INPUT_RENAME: [(&str, &str); 3] = [("pub fn load", "pub fn fetch"), ("twice!(load, k)", "twice!(fetch, k)"), ("{ load(k) }", "{ fetch(k) }")];
+
+/// Design 51, class 4: a word in a macro input that the syntax phase cannot read is a site by
+/// name. A free name keeps the site under the rename fact, with the count. A name that is not
+/// free gives the macro call its own fact.
+#[test]
+fn a_word_in_a_macro_input_is_a_site_by_name() {
+    let fact = "renamed `demo::load` → `demo::fetch`";
+    let report = run_tree(MACRO_INPUT, &swap(MACRO_INPUT, &MACRO_INPUT_RENAME));
+    assert_eq!(rename_and_other(&report), (vec![fact.to_string()], Vec::new()), "{report:#?}");
+    assert!(note_of(&report, fact).is_some_and(|note| note.starts_with("1 site(s) by name (")), "{report:#?}");
+    let taken = "pub mod m { pub fn fetch() {} }\n";
+    let (before, after) = (format!("{MACRO_INPUT}{taken}"), format!("{}{taken}", swap(MACRO_INPUT, &MACRO_INPUT_RENAME)));
+    rename_with_second_edit(&before, &after, fact, &["replace macro input `twice!(load, k)` → `twice!(fetch, k)` at `demo::a/tail`"]);
+    assert_eq!(note_of(&run_tree(&before, &after), fact), None);
+}
+
+/// Design 51, rule R4: a sure site that the author did not change still names the old item (the
+/// tree does not build). The fact says so, and it does not show two equal texts.
+#[test]
+fn a_sure_site_that_did_not_follow_the_rename_says_that_it_names_the_old_item() {
+    let pure = swap(DEPOT, &DEPOT_RENAME);
+    // A path in a body.
+    rename_with_second_edit(DEPOT, &swap(&pure, &[("{ fetch(k) * 2 }", "{ load(k) * 2 }")]), DEPOT_FACT, &["changed path: `load` still names the old item `load` (the place did not follow the rename to `fetch`; the syntax tree shows no other item with the old name for the place) at `demo::disk::twice/tail/lhs/callee`"]);
+    // A `use` line.
+    rename_with_second_edit(DEPOT, &swap(&pure, &[("use crate::disk::fetch;", "use crate::disk::load;")]), DEPOT_FACT, &["the `use` line still names the old item (the line did not follow the rename): `use crate::disk::load;` in `demo::ui`"]);
+    // A type in a signature and in a field.
+    let pure = swap(CART, &CART_RENAME);
+    rename_with_second_edit(CART, &swap(&pure, &[("c: &Basket", "c: &Cart")]), CART_FACT, &["parameter of `demo::a` `c: &Cart` still names the old item `Cart` (the place did not follow the rename to `Basket`; the syntax tree shows no other item with the old name for the place)"]);
+    let holder = "pub struct Holder { pub c: Cart }\n";
+    rename_with_second_edit(&format!("{CART}{holder}"), &format!("{pure}{holder}"), CART_FACT, &["type of `demo::Holder.c`: `Cart` still names the old item `Cart` (the place did not follow the rename to `Basket`; the syntax tree shows no other item with the old name for the place)"]);
+}
+
+/// Design 51, rule R4: the fact of a place that did not follow the rename does not say "the old
+/// item" if the syntax tree gives a different target for the old name after the step.
+#[test]
+fn a_place_that_did_not_follow_the_rename_names_the_item_that_the_old_name_gives() {
+    let pure = swap(DEPOT, &DEPOT_RENAME);
+    // A new `use` line gives the old name to a different item.
+    let other = swap(&pure, &[("{ fetch(k) * 2 }", "{ load(k) * 2 }"), ("pub mod disk {\n", "pub mod disk {\n    use crate::net::load;\n")]);
+    let (rename, facts) = rename_and_other(&run_tree(DEPOT, &other));
+    assert_eq!(rename, [DEPOT_FACT]);
+    assert!(facts.contains(&"changed path: `load` now names a different item: `load` is `demo::net::load` after the step (before the step: the item with the new name `fetch`) at `demo::disk::twice/tail/lhs/callee`".to_string()), "{facts:#?}");
+    // A `use` line gives the old name to the renamed item.
+    let alias = swap(&pure, &[("use crate::disk::fetch;", "use crate::disk::fetch as load;"), ("fetch(3)", "load(3)")]);
+    let (_, facts) = rename_and_other(&run_tree(DEPOT, &alias));
+    assert_eq!(facts, ["changed path: `load` did not follow the rename to `fetch`: a `use` line gives the old name `load` to the renamed item `demo::disk::fetch` at `demo::ui::show/tail/args[1]/callee`"]);
+    // A macro call can make an item with the old name. The syntax phase cannot list this item.
+    let alias = "macro_rules! alias { ($n:ident) => { pub type $n = Basket; }; }\nalias!(Cart);\n";
+    let made = format!("{}{alias}", swap(&swap(CART, &CART_RENAME), &[("c: &Basket", "c: &Cart")]));
+    let (_, facts) = rename_and_other(&run_tree(CART, &made));
+    assert!(facts.iter().any(|text| text.starts_with("parameter of `demo::a` `c: &Cart` did not follow the rename to `Basket`: a call of the macro `alias` has the old name `Cart` in its input and can make an item with this name")), "{facts:#?}");
+}
+
+/// Design 51, rule R4: no fact has two equal texts, and a place with no difference has no fact.
+#[test]
+fn no_fact_of_a_rename_step_has_two_equal_texts() {
+    let pure = swap(DEPOT, &DEPOT_RENAME);
+    let steps = [pure.clone(), swap(&pure, &[("{ fetch(k) * 2 }", "{ load(k) * 2 }")]), swap(&pure, &[("use crate::disk::fetch;", "use crate::disk::load;")]), swap(&pure, &[("l.load()", "l.fetch()")])];
+    for after in steps {
+        let report = run_tree(DEPOT, &after);
+        for text in plain_texts(&report) {
+            let equal = text.split_once("` → `").is_some_and(|(old, new)| old.rsplit_once('`').is_some_and(|(_, old)| new.split('`').next() == Some(old)));
+            assert!(!equal, "{text}");
+        }
+    }
+}
+
+/// Design 51, the negative tests: each pure rename of the cases of batch 9a keeps its facts. A
+/// rename with only sure sites has no count. A member rename with a free name has the count,
+/// and the input of `matches!` is one site by name.
+#[test]
+fn the_pure_renames_of_batch_9a_keep_their_facts() {
+    let by_name = |count: usize| format!("{count} site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)");
+    let cases: [(&str, &str, &[&str], Option<usize>); 7] = [
+        ("fn scale(x: u32) -> u32 { x * 2 }\npub fn a(x: u32) -> u32 { scale(x) }\npub fn b(x: u32) -> u32 { scale(x) + 1 }\npub fn c(x: u32) -> u32 { scale(scale(x)) }\n", "scale=double", &["renamed `demo::scale` → `demo::double`"], None),
+        ("#[derive(Debug, Clone)]\npub struct Cart { pub items: Vec<u32> }\nimpl Cart { pub fn new() -> Cart { Cart { items: Vec::new() } } }\npub fn a(c: &Cart) -> usize { c.items.len() }\npub fn b() -> Cart { Cart::new() }\npub fn c(list: Vec<Cart>) -> usize { list.len() }\n", "Cart=Basket", &["renamed `demo::Cart` → `demo::Basket`"], None),
+        ("pub struct Tank { pub level: u32, pub cap: u32 }\npub fn a(t: &Tank) -> u32 { t.level + 1 }\npub fn b(t: &Tank) -> bool { t.level < t.cap }\npub fn c(t: &mut Tank) { t.level = 0; }\npub fn d() -> Tank { Tank { level: 1, cap: 2 } }\n", "level=depth", &["renamed `demo::Tank.level` → `demo::Tank.depth`"], Some(3)),
+        ("pub enum Mode { Slow, Quick, Off }\npub fn a() -> Mode { Mode::Slow }\npub fn b(m: &Mode) -> bool { matches!(m, Mode::Slow) }\npub fn c(x: u32) -> Mode { if x > 1 { Mode::Slow } else { Mode::Off } }\n", "Slow=Careful", &["renamed `demo::Mode::Slow` → `demo::Mode::Careful`"], Some(1)),
+        ("pub struct Cart { pub items: Vec<u32> }\nimpl Cart {\n    pub fn total(&self) -> u32 { self.items.iter().sum() }\n}\npub fn a(c: &Cart) -> u32 { c.total() }\npub fn b(c: &Cart) -> u32 { c.total() + 1 }\npub fn c(c: &Cart) -> bool { c.total() > 9 }\n", "total=sum", &["renamed `demo::Cart::total` → `demo::Cart::sum`"], Some(3)),
+        ("const LIMIT: u32 = 10;\npub fn a(x: u32) -> bool { x > LIMIT }\npub fn b(x: u32) -> u32 { x + LIMIT }\npub fn c() -> u32 { LIMIT * 2 }\n", "LIMIT=CEILING", &["renamed `demo::LIMIT` → `demo::CEILING`"], None),
+        ("mod fees {\n    pub fn charge(x: u32) -> u32 { x + 2 }\n    pub fn refund(x: u32) -> u32 { x - 2 }\n}\npub fn a(x: u32) -> u32 { fees::charge(x) }\npub fn b(x: u32) -> u32 { fees::refund(x) }\npub fn c(x: u32) -> u32 { fees::charge(fees::refund(x)) }\n", "fees=costs", &["renamed `demo::fees` → `demo::costs`"], None),
+    ];
+    for (before, words, renames, count) in cases {
+        let (old, new) = words.split_once('=').unwrap();
+        let report = run_tree(before, &before.replace(old, new));
+        let (found, other) = rename_and_other(&report);
+        assert_eq!((found.iter().map(String::as_str).collect::<Vec<_>>(), other), (renames.to_vec(), Vec::new()), "{report:#?}");
+        assert_eq!(note_of(&report, renames[0]).map(str::to_string), count.map(by_name), "{report:#?}");
+    }
+    // A local and a parameter.
+    let local = "pub fn f(a: u32, b: u32) -> u32 {\n    let sum = a + b;\n    let twice = sum * 2;\n    let more = sum + twice;\n    more + sum\n}\n";
+    assert_eq!(plain_texts(&run_tree(local, &local.replace("sum", "total"))), ["`demo::f`: renamed local `sum` → `total`, 4 edit(s)"]);
+    let param = "pub fn f(count: u32, b: u32) -> u32 {\n    let twice = count * 2;\n    let more = count + twice;\n    more + count + b\n}\n";
+    assert_eq!(plain_texts(&run_tree(param, &param.replace("count", "n"))), ["parameter `count` of `demo::f` renamed to `n`: `u32`", "`demo::f`: renamed local `count` → `n`, 3 edit(s)"]);
 }

@@ -886,6 +886,232 @@ pub(crate) fn use_line_names(workspace: &Workspace, item: &semilla_syntax::Item)
     Some(out)
 }
 
+/// The owner of an item path: the path with no last name (`a::T.f` gives `a::T`).
+fn owner_path(path: &str) -> &str {
+    let owner = &path[..path.len() - last_segment(path).len()];
+    owner.strip_suffix("::").or_else(|| owner.strip_suffix('.')).unwrap_or(owner)
+}
+
+/// The target of a `use` name after the item map of the step (old path → new path).
+fn mapped_target(target: String, renames: Option<&Renames>) -> String {
+    let Some(renames) = renames else { return target };
+    let moved = renames.items.iter().filter(|(old, new)| old != new).find(|(old, _)| target == **old || target.strip_prefix(old.as_str()).is_some_and(|tail| tail.starts_with("::")));
+    match moved {
+        Some((old, new)) => format!("{new}{}", &target[old.len()..]),
+        None => target,
+    }
+}
+
+/// The item that a name gives in the scope of a module: an item of the module, or the target of
+/// a private `use` line. With `renames`, the result is the path after the item map of the step.
+fn scope_target(workspace: &Workspace, module: &str, name: &str, renames: Option<&Renames>) -> Option<String> {
+    let local = format!("{module}::{name}");
+    if workspace.items.contains_key(&local) {
+        return Some(mapped_target(local, renames));
+    }
+    module_imports(workspace, module, renames)?.into_iter().find(|(import, _, glob)| !glob && import == name).map(|(_, target, _)| target)
+}
+
+/// Design 50: the private `use` lines of a module follow the name map of the step. This is true
+/// if each name of the module points to the same item after the map:
+///
+/// - the old imports, after the map, are the new imports, or
+/// - an import is gone because its item is now an item of the module, or
+/// - an import is new because its item was an item of the module and the map moves it, or
+/// - an import is new because an item that the map moves into the module uses the name, and the
+///   name gave the same item in the old module of that item, or
+/// - an import is gone because an item that the map moves out of the module used the name, and
+///   the name gives the same item in the new module of that item.
+///
+/// A `use` line is a forced edit if each of its names follows the map and the map is the cause
+/// of the edit ([`ImportMap::forced`]). A glob import with a difference does not follow the map.
+/// A line that does not parse gives `None`.
+fn imports_follow_map(context: &Context, module: &str) -> Option<ImportMap> {
+    // The module can have a new path after the step (a rename of the module).
+    let before_module = context.renames.items.iter().find(|(_, new)| new.as_str() == module).map_or(module, |(old, _)| old.as_str());
+    let (old, new) = (module_imports(context.before, before_module, Some(context.renames))?, module_imports(context.after, module, None)?);
+    let uses = |workspace: &Workspace, item: &str, name: &str| workspace.items.get(item).is_some_and(|item| path_tokens(&item.source).contains(&name));
+    // The items that the map moves to a different module (an item, or an `impl` block that
+    // moves with its type), with the old module and the new module.
+    let moves: Vec<(&String, &String, &str, &str)> = context
+        .renames
+        .items
+        .iter()
+        .filter_map(|(from, to)| {
+            let (old_module, new_module) = (crate::identity::module_of(from, context.before)?, crate::identity::module_of(to, context.after)?);
+            (old_module != new_module).then_some((from, to, old_module, new_module))
+        })
+        .collect();
+    let with_item_in = |name: &str, target: &String| moves.iter().any(|(_, to, old_module, new_module)| *new_module == module && *old_module != before_module && uses(context.after, to, name) && scope_target(context.before, old_module, name, Some(context.renames)).as_ref() == Some(target));
+    let with_item_out = |name: &str, target: &String| moves.iter().any(|(from, _, old_module, new_module)| *old_module == before_module && *new_module != module && uses(context.before, from, name) && scope_target(context.after, new_module, name, None).as_ref() == Some(target));
+    let gone = |(name, target, glob): &(String, String, bool)| !glob && ((*target == format!("{module}::{name}") && context.after.items.contains_key(target)) || with_item_out(name, target));
+    let come = |(name, target, glob): &(String, String, bool)| !glob && (context.renames.items.get(&format!("{before_module}::{name}")) == Some(target) || with_item_in(name, target));
+    let raw = module_imports(context.before, before_module, None)?;
+    let (gone, come): (ImportNames, ImportNames) = (old.difference(&new).filter(|entry| gone(entry)).cloned().collect(), new.difference(&old).filter(|entry| come(entry)).cloned().collect());
+    // The names of the lines that the map touches. The map touches an old line if it changes a
+    // target of the line, or if it explains a name that is gone. It touches a new line if the
+    // line has a target that the map gives, or a new name that the map explains.
+    let lines = |workspace: &Workspace, module: &str, renames: Option<&Renames>| -> Vec<ImportNames> {
+        let items = workspace.items.values().filter(|item| item.kind == semilla_syntax::ItemKind::Use && parent(&item.path) == module && item.vis.is_empty() && item.attrs.is_empty());
+        items.filter_map(|item| Some(use_line_names(workspace, item)?.into_iter().map(|(name, target, glob)| (name, mapped_target(target, renames), glob)).collect())).collect()
+    };
+    let mut map = ImportMap { old_names: old.iter().filter(|entry| new.contains(*entry) || gone.contains(*entry)).cloned().collect(), new_names: new.iter().filter(|entry| old.contains(*entry) || come.contains(*entry)).cloned().collect(), raw, old, gone, come, old_touched: ImportNames::new(), new_touched: ImportNames::new() };
+    let old_touched: ImportNames = lines(context.before, before_module, Some(context.renames)).into_iter().filter(|line| map.touches_old(line)).flatten().collect();
+    let new_touched: ImportNames = lines(context.after, module, None).into_iter().filter(|line| map.touches_new(line)).flatten().collect();
+    (map.old_touched, map.new_touched) = (old_touched, new_touched);
+    Some(map)
+}
+
+/// The private `use` lines of one module under the name map of the step (design 50).
+struct ImportMap {
+    /// The old names with no map.
+    raw: ImportNames,
+    /// The old names after the map.
+    old: ImportNames,
+    /// The old names (after the map) and the new names that follow the map.
+    old_names: ImportNames,
+    new_names: ImportNames,
+    /// The names that are gone or new, and that the map explains.
+    gone: ImportNames,
+    come: ImportNames,
+    /// The names of the old lines and of the new lines that the map touches.
+    old_touched: ImportNames,
+    new_touched: ImportNames,
+}
+
+impl ImportMap {
+    fn touches_old(&self, line: &ImportNames) -> bool {
+        line.iter().any(|entry| !self.raw.contains(entry) || self.gone.contains(entry))
+    }
+
+    fn touches_new(&self, line: &ImportNames) -> bool {
+        line.iter().any(|entry| self.come.contains(entry) || (self.old.contains(entry) && !self.raw.contains(entry)))
+    }
+
+    /// The edit of a `use` line is a forced edit of the map: each name of its old line (after
+    /// the map) and each name of its new line follows the map, and the map is the cause. The
+    /// map is the cause if it touches a line of the edit, or if a name of the edit comes from
+    /// a line that the map touches, or goes to one (a line that splits or joins).
+    fn forced(&self, old: Option<&ImportNames>, new: Option<&ImportNames>) -> bool {
+        let follows = old.is_none_or(|line| line.is_subset(&self.old_names)) && new.is_none_or(|line| line.is_subset(&self.new_names));
+        let cause = old.is_some_and(|line| self.touches_old(line) || !line.is_disjoint(&self.new_touched)) || new.is_some_and(|line| self.touches_new(line) || !line.is_disjoint(&self.old_touched));
+        follows && cause
+    }
+}
+
+/// The names of the private `use` lines of a module: the name, the target, and the glob mark.
+type ImportNames = BTreeSet<(String, String, bool)>;
+
+/// One side of a path edit for [`forced_path`]: the name and the owner of the item of the
+/// pair, and the module of the edit.
+struct PathSide<'a> {
+    name: &'a str,
+    owner: &'a str,
+    module: Option<String>,
+    workspace: &'a Workspace,
+    /// The item of the pair on this side, and the item of the edit.
+    target: &'a str,
+    item: Option<&'a str>,
+    /// The name of the pair is free (design 51, rule R2).
+    free: &'a dyn Fn() -> bool,
+}
+
+impl PathSide<'_> {
+    /// The qualifier of a path (the segments before the name) names the owner of the item.
+    /// An empty qualifier names the item through the scope: the name must resolve to the item
+    /// of the pair (design 51). A name that the tree cannot resolve is a site by name: it
+    /// names the item only if the name is free (rule R2).
+    fn names_owner(&self, qualifier: &[&str]) -> bool {
+        if qualifier.is_empty() {
+            return match self.item.and_then(|item| crate::sites::bare_name(self.workspace, item, self.name, self.target)) {
+                Some(found) => found,
+                None => (self.free)(),
+            };
+        }
+        let owner: Vec<&str> = self.owner.split("::").collect();
+        let resolved = self.module.as_deref().and_then(|module| {
+            let (first, mut rest) = qualifier.split_first()?;
+            let mut base = match *first {
+                "crate" => module.split("::").next()?.to_string(),
+                "self" => module.to_string(),
+                "super" => parent(module).to_string(),
+                "Self" => return None,
+                name if self.workspace.crates.iter().any(|krate| krate.name == name) && !self.workspace.items.contains_key(&format!("{module}::{name}")) => name.to_string(),
+                name => crate::identity::target_in(module, name, self.workspace, 8)?,
+            };
+            while let Some((segment, tail)) = rest.split_first() {
+                base = if *segment == "super" { parent(&base).to_string() } else { format!("{base}::{segment}") };
+                rest = tail;
+            }
+            Some(base)
+        });
+        match resolved {
+            Some(path) => path == self.owner,
+            // No clear target (a type parameter, a glob import, a different crate): the text
+            // of the qualifier must be the end of the owner path.
+            None => {
+                let plain: Vec<&str> = qualifier.iter().copied().skip_while(|segment| matches!(*segment, "crate" | "self" | "super")).collect();
+                !plain.is_empty() && owner.ends_with(&plain)
+            }
+        }
+    }
+}
+
+/// The words and the marks of a path text. `::` is one mark. Spaces give no token.
+fn path_tokens(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let len = if c.is_whitespace() {
+            rest = &rest[c.len_utf8()..];
+            continue;
+        } else if c.is_alphanumeric() || c == '_' {
+            rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len())
+        } else if rest.starts_with("::") {
+            2
+        } else {
+            c.len_utf8()
+        };
+        out.push(&rest[..len]);
+        rest = &rest[len..];
+    }
+    out
+}
+
+/// Design 50: a path edit is a forced edit of the pair (old item → new item) only if the old
+/// text is equal to the new text after the name map. The path names the item of the pair on
+/// each side: the name, with a qualifier that names the owner of the item. Each other part of
+/// the path is equal on the two sides. So `Fault::Low` → `Problem::High` is not a forced edit
+/// of `Fault` → `Problem`, and `other::over` → `util::over` is not a forced edit of
+/// `cart::over` → `util::over`.
+fn forced_path(before: &str, after: &str, old: &PathSide, new: &PathSide) -> bool {
+    let (b, a) = (path_tokens(before), path_tokens(after));
+    let word = |token: &str| token.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+    // The start of the qualifier of the name at `at`: the chain of `segment ::` before it.
+    let start = |tokens: &[&str], at: usize| {
+        let mut start = at;
+        while start >= 2 && tokens[start - 1] == "::" && word(tokens[start - 2]) {
+            start -= 2;
+        }
+        start
+    };
+    for i in (0..b.len()).filter(|&i| b[i] == old.name) {
+        for j in (0..a.len()).filter(|&j| a[j] == new.name) {
+            let (sb, sa) = (start(&b, i), start(&a, j));
+            if b[i + 1..] != a[j + 1..] || b[..sb] != a[..sa] {
+                continue;
+            }
+            let segments = |tokens: &[&str]| -> Vec<String> { tokens.iter().filter(|token| **token != "::").map(|token| token.to_string()).collect() };
+            let (qb, qa) = (segments(&b[sb..i]), segments(&a[sa..j]));
+            let (qb, qa): (Vec<&str>, Vec<&str>) = (qb.iter().map(String::as_str).collect(), qa.iter().map(String::as_str).collect());
+            if old.names_owner(&qb) && new.names_owner(&qa) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     let at = claim.at.as_ref().unwrap();
     let to = full_path(&at.item, claim.arg_str("to").unwrap());
@@ -895,52 +1121,66 @@ fn check_rename(context: &Context, claim: &Claim) -> Outcome {
     if !context.after.items.contains_key(&to) {
         return Outcome::malformed(format!("`{to}` does not exist after the step"));
     }
-    // The diff applied the rename first. The claim also explains the private `use` lines and the
-    // paths that name the item. `move-item` also explains the private `use` lines of the source
-    // module and the destination module (the moved body can need other imports). This is sound:
-    // a `use` change that changes a meaning changes a MIR body, and the indirect-change rule
-    // reports that body. A `pub use` line is API, so it needs its own claim.
+    // The diff applied the rename first. The claim also explains the forced edits of the pair:
+    // a path that names the item, and a private `use` line. Design 50: the claim explains an
+    // edit only if the old text is equal to the new text after the name map (old path → new
+    // path). Each other edit keeps its own fact, with the full old text and the full new text.
+    // This rule uses no MIR. A `pub use` line is API, so it needs its own fact.
     let (old_name, new_name) = (last_segment(&at.item), last_segment(&to));
-    let modules = [parent(&at.item), parent(&to)];
-    // Batch 6a, B1: the claim also explains each private `use` edit of a module that imports
-    // the same names after the step. The old paths go through the map of the step (old path →
-    // new path). So a `use` line can change, split, or join, and a line can go or come.
-    let use_modules: BTreeSet<&str> = context.edits.iter().filter(|edit| edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use")).filter_map(|edit| edit.item().map(parent)).collect();
-    let same_imports: BTreeSet<&str> = use_modules
-        .into_iter()
-        .filter(|module| {
-            let old = module_imports(context.before, module, Some(context.renames));
-            old.is_some() && old == module_imports(context.after, module, None)
-        })
-        .collect();
+    let (old_owner, new_owner) = (owner_path(&at.item), owner_path(&to));
+    // The private `use` lines of a module are forced edits if the module imports the same
+    // names after the step. The old paths go through the map of the step (batch 6a, B1). So a
+    // `use` line can change, split, or join.
+    let mut import_modules: BTreeMap<&str, Option<ImportMap>> = BTreeMap::new();
     let explains: Vec<usize> = context
         .edits
         .iter()
         .enumerate()
         .filter(|(_, edit)| {
-            let mentions = |text: &Option<String>, name: &str| text.as_deref().is_some_and(|text| text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name));
             let is_use = edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use");
             let is_path = edit.kind == EditKind::Replaced && edit.node_before == Some("path") && edit.node_after == Some("path");
-            let names_item = mentions(&edit.text_before, old_name) || mentions(&edit.text_after, new_name);
-            // A path edit is a forced edit only if it has the old name before and the new name
-            // after (design 36.1). A path that changes to the item from a different name, or
-            // from the item to a different name, is its own fact.
-            let forced_path = mentions(&edit.text_before, old_name) && mentions(&edit.text_after, new_name);
             if is_use {
                 let private = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.vis.is_empty()));
-                let module = edit.item().map(parent);
-                let in_module = claim.op == "move-item" && module.is_some_and(|m| modules.contains(&m));
-                let plain = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.attrs.is_empty()));
-                let same = module.is_some_and(|m| same_imports.contains(m)) && plain(&edit.before, context.before) && plain(&edit.after, context.after);
-                // A line that imports a different item with the same name is not a forced edit
-                // (design 36.1): it is its own fact.
-                let target_ok = |anchor: &Option<Anchor>, ws: &Workspace, name: &str, path: &str| {
-                    anchor.as_ref().and_then(|a| ws.items.get(&a.item)).is_none_or(|line| use_line_names(ws, line).is_some_and(|names| names.iter().all(|(found, target, glob)| *glob || found != name || target == path)))
+                if !private(&edit.before, context.before) || !private(&edit.after, context.after) {
+                    return false;
+                }
+                // One line: the names of the old line, after the map, are the names of the new line.
+                let line = |anchor: &Option<Anchor>, ws: &Workspace, renames: Option<&Renames>| {
+                    let item = anchor.as_ref().and_then(|a| ws.items.get(&a.item))?;
+                    let names: BTreeSet<(String, String, bool)> = use_line_names(ws, item)?.into_iter().map(|(name, target, glob)| (name, mapped_target(target, renames), glob)).collect();
+                    Some((item.attrs.clone(), names))
                 };
-                let names_item = names_item && target_ok(&edit.before, context.before, old_name, &at.item) && target_ok(&edit.after, context.after, new_name, &to);
-                private(&edit.before, context.before) && private(&edit.after, context.after) && (names_item || in_module || same)
+                let (old, new) = (line(&edit.before, context.before, Some(context.renames)), line(&edit.after, context.after, None));
+                // The map must change a target of the old line. Else the edit is not an effect
+                // of the map (for example a new order of the names), and it keeps its fact.
+                if old.is_some() && old == new && old != line(&edit.before, context.before, None) {
+                    return true;
+                }
+                let plain = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().is_none_or(|a| ws.items.get(&a.item).is_some_and(|item| item.attrs.is_empty()));
+                let Some(module) = edit.item().map(parent) else { return false };
+                if !plain(&edit.before, context.before) || !plain(&edit.after, context.after) {
+                    return false;
+                }
+                // The module: each name of the old line and each name of the new line follows
+                // the map. Each other line keeps its own fact.
+                let Some(map) = import_modules.entry(module).or_insert_with(|| imports_follow_map(context, module)) else { return false };
+                // A side of the edit with a line that does not parse is not a forced edit.
+                if old.is_none() != edit.before.is_none() || new.is_none() != edit.after.is_none() {
+                    return false;
+                }
+                map.forced(old.as_ref().map(|(_, names)| names), new.as_ref().map(|(_, names)| names))
+            } else if is_path {
+                let (Some(before), Some(after)) = (edit.text_before.as_deref(), edit.text_after.as_deref()) else { return false };
+                let module = |anchor: &Option<Anchor>, ws: &Workspace| anchor.as_ref().and_then(|a| crate::identity::module_of(&a.item, ws).map(str::to_string));
+                let free = || crate::sites::path_name_free(context.before, context.after, &at.item, &to);
+                fn item(anchor: &Option<Anchor>) -> Option<&str> {
+                    anchor.as_ref().map(|a| a.item.as_str())
+                }
+                let old_side = PathSide { name: old_name, owner: old_owner, module: module(&edit.before, context.before), workspace: context.before, target: &at.item, item: item(&edit.before), free: &free };
+                let new_side = PathSide { name: new_name, owner: new_owner, module: module(&edit.after, context.after), workspace: context.after, target: &to, item: item(&edit.after), free: &free };
+                forced_path(before, after, &old_side, &new_side)
             } else {
-                is_path && forced_path
+                false
             }
         })
         .map(|(index, _)| index)

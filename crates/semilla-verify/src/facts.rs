@@ -199,6 +199,12 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             },
             _ => None,
         };
+        // Design 51, rule R4: no fact has two equal texts. The fact of a site of a rename
+        // that the author did not change says what the old name gives after the step.
+        let found = found.map(|(key, text)| match crate::edits::stale_site(renames, after, edit) {
+            Some(stale) if text.contains(&old_new()) => (key, text.replace(&old_new(), &stale)),
+            _ => (key, text),
+        });
         if let Some((key, description)) = found {
             fact_key[index] = Some(key.clone());
             let anchor = if key.1 == "tuple fields" || key.1 == crate::bounds::PART { Anchor::item(&key.0) } else { anchor };
@@ -701,20 +707,21 @@ fn pattern_site(old: &str, new: &str, keys: &[Key]) -> Option<(Key, String)> {
         }
         if key.1 == "member added" {
             // `..` added, and the fields are the same.
+            // Design 50: the text of the site tells the exact change of the pattern.
             if old.rest.is_none() && new.rest.is_some() && fields(&old) == fields(&new) {
-                return Some((key.clone(), "add `..` or the field to the pattern".into()));
+                return Some((key.clone(), "add `..` to the pattern".into()));
             }
             // The field added, and the rest is the same.
             if old.rest.is_some() == new.rest.is_some() && !names(&old).contains(&field) {
                 let kept: Vec<String> = new.list.iter().filter(|f| member(f) != field).map(tokens).collect();
-                if names(&new).contains(&field) && kept == fields(&old) {
-                    return Some((key.clone(), "add `..` or the field to the pattern".into()));
+                if let Some(new_field) = new.list.iter().find(|f| member(f) == field).filter(|_| kept == fields(&old)) {
+                    return Some((key.clone(), format!("add the field `{}` to the pattern", tokens(new_field))));
                 }
             }
         } else if old.rest.is_some() == new.rest.is_some() && names(&old).contains(&field) && !names(&new).contains(&field) {
             let kept: Vec<String> = old.list.iter().filter(|f| member(f) != field).map(tokens).collect();
-            if kept == fields(&new) {
-                return Some((key.clone(), "drop the field from the pattern".into()));
+            if let Some(old_field) = old.list.iter().find(|f| member(f) == field).filter(|_| kept == fields(&new)) {
+                return Some((key.clone(), format!("drop the field `{}` from the pattern", tokens(old_field))));
             }
         }
     }

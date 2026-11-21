@@ -91,8 +91,14 @@ enum Command {
         /// Also print the change tree.
         #[arg(long)]
         tree: bool,
-        /// Run only phase 1 now, and phase 2 in the background (for a large project). Without it,
-        /// the command runs phase 2 and prints the final result of the step.
+        /// Also run the compiled check for this step: a build, a compare of the compiled code
+        /// (MIR), and a compare result on each fact (`code equal`, `code different`, `no compare`,
+        /// `no code`). The default uses the syntax tree only: no build, no Rust tool chain. The
+        /// variable `SEMILLA_COMPILED=1` gives the same. A property claim turns it on.
+        #[arg(long)]
+        compiled: bool,
+        /// Only with `--compiled`: run phase 1 now, and the compiled check in the background (for
+        /// a large project). Without `--compiled` it has no effect.
         #[arg(long)]
         fast: bool,
     },
@@ -146,9 +152,10 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Show the check of the session, or of a tagged commit. Phase 1 runs again; phase 2 comes
-    /// only from a check on this machine (else it starts now). With a commit, the command waits
-    /// for phase 2 (at most 600 seconds).
+    /// Show the check of the session, or of a tagged commit. Phase 1 runs again. Phase 2 runs
+    /// only for a step with the compiled check (`step --compiled`): it comes only from a check
+    /// on this machine (else it starts now), and with a commit the command waits for it (at
+    /// most 600 seconds). A change set with no compiled step starts no build.
     #[command(display_order = 4)]
     Status {
         commit: Option<String>,
@@ -254,7 +261,8 @@ enum Command {
     /// (old protocol, for the replay) Print the change tree.
     #[command(hide = true)]
     Show,
-    /// After `git commit`: the final check with phase 2, the result, and the git note (default HEAD).
+    /// After `git commit`: the final check with the result and the git note (default HEAD). Only a
+    /// step with the compiled check (`step --compiled`) gets a build and phase 2.
     #[command(display_order = 3)]
     Tag { commit: Option<String> },
     /// Load the change set of a tagged commit for a review.
@@ -493,16 +501,19 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, reasons, tree, fast } => {
+        Command::Step { intent, group, claims, reasons, tree, compiled, fast } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast };
+            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast, compiled };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
             // newest other entries. A failure of the clean is not a failure of the step.
-            let started = std::time::Instant::now();
-            let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
-            timing("clean the build code cache", started);
+            // A step with no compiled check made no entry, and it starts no cargo (design 50).
+            if app.uses_cargo() {
+                let started = std::time::Instant::now();
+                let _ = app.clean_build_code(app::BUILD_CODE_KEEP);
+                timing("clean the build code cache", started);
+            }
             if !stored {
                 // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
                 return Ok(ExitCode::from(1));
@@ -572,6 +583,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             // check, or a review stored it. Then the command checks nothing again.
             let data = match app.stored_ui_data(&key, &set) {
                 Some(data) => data,
+                // Design 50: a change set with no compiled step has no background check. The
+                // trees give the review data now.
+                None if !app::compiled_set(&set) => app.ui_data_for(&set, (key != "session").then_some(key.as_str()))?,
                 None => {
                     // A result of an older state or of an other mode (design 28) is not the
                     // result of this command: the check runs again.

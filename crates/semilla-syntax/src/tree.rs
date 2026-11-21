@@ -588,7 +588,7 @@ pub fn expr_text_node(role: &str, text: &str) -> Option<Node> {
 }
 
 /// The `std` macros whose input is a list of expressions (design 4.1).
-const EXPRESSION_MACROS: &[&str] = &[
+pub(crate) const EXPRESSION_MACROS: &[&str] = &[
     "println", "print", "eprintln", "eprint", "format", "format_args", "write", "writeln", "panic", "assert", "assert_eq",
     "assert_ne", "debug_assert", "debug_assert_eq", "debug_assert_ne", "vec", "dbg", "todo", "unimplemented", "unreachable",
 ];

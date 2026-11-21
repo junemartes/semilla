@@ -44,7 +44,7 @@ pub struct Candidate {
 }
 
 /// The owner of an entity: the struct of a field, else the parent path.
-fn owner(path: &str) -> &str {
+pub(crate) fn owner(path: &str) -> &str {
     if let Some((owner, field)) = path.rsplit_once('.').filter(|(_, field)| !field.contains("::")) {
         let _ = field;
         return owner;
@@ -367,8 +367,9 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
         plain.report.notes.push(format!("{} show(s) as removed and added: Semilla does not derive the rename or the move (the pairs have more than {MAX_MAPS} name maps)", pair_text(&pairs)));
         return plain;
     };
-    // Phase 1 has no MIR: the derivation waits for phase 2.
-    if plain.bodies.is_empty() {
+    // Phase 1 of a step with the compiled check has no MIR: the derivation waits for phase 2. A
+    // step with no compiled check derives from the syntax tree (design 50).
+    if plain.bodies.is_empty() && input.step.compiled {
         plain.report.notes.push(format!("a rename or a move is possible ({}): phase 2 tries the derivation", pair_text(&maps[0])));
         return plain;
     }
@@ -560,7 +561,11 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
             spotlight: spotlight_why.is_some(),
             spotlight_why,
             reason: input.step.reasons.get(&pair.old).cloned(),
-            note: note.take(),
+            // The count of the sites that the tree cannot resolve (design 51, rule R3).
+            note: match (note.take(), crate::sites::count_line(&outcome.renames, &pair.old)) {
+                (Some(note), Some(sites)) => Some(format!("{note}; {sites}")),
+                (note, sites) => note.or(sites),
+            },
             ..Default::default()
         });
     }
@@ -585,7 +590,7 @@ fn convert(input: &StepInput, map: &[Candidate], claims: &[Claim], mut outcome: 
 }
 
 /// The module of an item: the nearest owner that is a module or a crate root.
-fn module_of<'a>(path: &'a str, workspace: &Workspace) -> Option<&'a str> {
+pub(crate) fn module_of<'a>(path: &'a str, workspace: &Workspace) -> Option<&'a str> {
     let mut current = owner(path);
     while !current.is_empty() {
         if workspace.items.get(current).is_some_and(|item| item.kind == ItemKind::Mod) || workspace.crates.iter().any(|krate| krate.name == current) {
@@ -597,7 +602,7 @@ fn module_of<'a>(path: &'a str, workspace: &Workspace) -> Option<&'a str> {
 }
 
 /// The names that a `use` item gives to its module: the name and the path segments.
-fn use_names(tree: &UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
+pub(crate) fn use_names(tree: &UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
     let with = |ident: &str| -> Vec<String> {
         // `a::b::{self}` is `a::b`.
         if ident == "self" { prefix.to_vec() } else { prefix.iter().cloned().chain([ident.to_string()]).collect() }
@@ -620,7 +625,7 @@ fn use_names(tree: &UseTree, prefix: &[String], out: &mut Vec<(String, Vec<Strin
 /// The item of the workspace that the name `name` points to in the module `module`: an item of
 /// the module, or a `use` of the module with the full path (also through a re-export with the
 /// full path). `None` when these rules do not give one item of the workspace.
-fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> Option<String> {
+pub(crate) fn target_in(module: &str, name: &str, workspace: &Workspace, depth: usize) -> Option<String> {
     let direct = format!("{module}::{name}");
     if workspace.items.get(&direct).is_some_and(|item| !matches!(item.kind, ItemKind::Use | ItemKind::Impl)) {
         return Some(direct);

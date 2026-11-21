@@ -406,7 +406,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     take_item(t, &batch, "impl fmt::Display for BatchRecord {");
     changes.push(Change { name: "remove a trait impl", facts: vec![expect("removed", "code different", &["trait impl `<BatchRecord as fmt::Display>` removed with: `fn fmt`"])] });
     replace_one(t, &batch, "use std::fmt;\n", "");
-    changes.push(Change { name: "import: remove an import", facts: vec![expect("import", "code equal", &["removed `use` line: `use std::fmt;`"])] });
+    changes.push(Change { name: "import: remove an import", facts: vec![expect("import", "code equal", &["removed `use` line: `use std::fmt;` in `depot::batch`"])] });
 
     // Declaration changes.
     replace_one(t, &ledger, "pub fn ledger_sum_of(x: u32, y: u32) -> u32 {", "pub fn ledger_sum_of(x: u32, y: u32, z: u32) -> u32 {");
@@ -440,7 +440,8 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     changes.push(Change { name: "import: add an import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::cmp::Ordering;`"])] });
     replace_one(t, &stock, "use std::fmt;\n", "use std::fmt::{self, Formatter};\n");
     replace_one(t, &stock, "f: &mut fmt::Formatter<'_>", "f: &mut Formatter<'_>");
-    changes.push(Change { name: "import: use a name through a new import", facts: vec![expect("import", "code equal", &["added `use` line: `use std::fmt::{self, Formatter};`"]), expect("declaration", "code equal", &["parameter of `depot::stock::<StockEntry as fmt::Display>::fmt` `f: &mut fmt::Formatter<'_>` → `f: &mut Formatter<'_>`"])] });
+    // The old line is a difference too. No rename of the module explains it (design 50).
+    changes.push(Change { name: "import: use a name through a new import", facts: vec![expect("import", "code equal", &["removed `use` line: `use std::fmt;` in `depot::stock`"]), expect("import", "code equal", &["added `use` line: `use std::fmt::{self, Formatter};`"]), expect("declaration", "code equal", &["parameter of `depot::stock::<StockEntry as fmt::Display>::fmt` `f: &mut fmt::Formatter<'_>` → `f: &mut Formatter<'_>`"])] });
 
     // A manifest change.
     replace_one(t, "depot/Cargo.toml", "version = \"0.1.0\"", "version = \"0.2.0\"");
@@ -524,6 +525,8 @@ fn with_env(command: &mut Command, repo: &Path) {
     command.current_dir(repo);
     command.env("SEMILLA_MIR_DRIVER", root.join("target/debug/semilla-mir-driver"));
     command.env("SEMILLA_CACHE_DIR", repo.parent().unwrap().join("cache"));
+    // Design 50: these tests read the compare results, so each step has the compiled check.
+    command.env("SEMILLA_COMPILED", "1");
     let z3 = root.join(".semilla/tools/z3");
     if z3.exists() {
         command.env("SEMILLA_Z3", z3);
@@ -682,8 +685,11 @@ fn a_step_of_pr_size_is_accepted_and_each_change_has_its_fact() {
         assert!(wrong.is_empty(), "{wrong:?}");
     }
     // A method with the name of the renamed method in a different type has no fact (design
-    // 37.10): the 11 other `count_above` methods and their calls did not change.
-    assert_eq!(facts.iter().filter(|fact| fact.text.contains("count_above")).count(), 2, "{facts:#?}");
+    // 37.10): the 11 other `count_above` methods and their calls did not change. The changed
+    // call `pair.count_above(3)` is a site by name, and the name is not free: the call has its
+    // own fact (design 51, rule R2). The two other facts are the rename and the public API.
+    assert_eq!(facts.iter().filter(|fact| fact.text.contains("count_above")).count(), 3, "{facts:#?}");
+    assert!(facts.iter().any(|fact| fact.text.starts_with("changed expression `pair.count_above(3)` → `pair.count_over(3)`")), "{facts:#?}");
     // The time of the step with a cold cache, on a machine with other work.
     let time = start.elapsed().as_secs();
     assert!(time < 120, "the step needs {time} s");

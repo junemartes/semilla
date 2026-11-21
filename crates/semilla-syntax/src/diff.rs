@@ -190,11 +190,106 @@ pub struct Renames {
     /// before `:` in a struct literal or pattern, and as a shorthand field (`S { old }` gives
     /// `S { new: old }`). A local variable with the same name does not change.
     pub fields: Vec<(String, String)>,
+    /// The site table (design section 51): for an item of the "before" side, the key of each
+    /// place that is a site of a rename, with the new name. With a table, the map changes a
+    /// name only at a site: `idents` with no scope and `fields` do not apply. `None`: the map
+    /// has no table (a map that a test builds by hand). Then the map of words applies.
+    pub sites: Option<BTreeMap<String, BTreeMap<String, String>>>,
+    /// The count of the sites of each renamed item (the key is the old path).
+    pub counts: BTreeMap<String, SiteCount>,
+}
+
+/// The count of the places of one renamed item, by class (design 51.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteCount {
+    /// The places that the syntax tree resolves to the item.
+    pub sure: usize,
+    /// The places that have the name, that the tree cannot resolve, and that the rename has.
+    pub by_name: usize,
+    /// The changed places that have the name, that the tree cannot resolve, and that the rename
+    /// does not have (the name is not free). Each one is an edit of its own.
+    pub own: usize,
 }
 
 impl Renames {
-    /// Applies the identifier renames to a token text, for an item on the "before" side.
+    /// Applies the renames to a token text, for an item on the "before" side.
     pub fn apply(&self, item: &str, text: &str) -> String {
+        if self.sites.is_none() {
+            return self.apply_words(item, text);
+        }
+        let spans = self.spans(item, text);
+        if spans.is_empty() {
+            return text.to_string();
+        }
+        let mut out = String::with_capacity(text.len() + 16);
+        let mut from = 0;
+        for (start, end, new) in &spans {
+            out.push_str(&text[from..*start]);
+            out.push_str(new);
+            from = *end;
+        }
+        out.push_str(&text[from..]);
+        out
+    }
+
+    /// True if the map has a site table. Then a text is equal only after the map.
+    pub fn exact(&self) -> bool {
+        self.sites.is_some()
+    }
+
+    /// The parts of `text` that the map changes: (start, end, new text). A renamed local
+    /// changes at a bare name only. Each other name changes only at a site of the table.
+    pub fn spans(&self, item: &str, text: &str) -> Vec<(usize, usize, String)> {
+        use crate::sites::PlaceKind;
+        let Some(sites) = &self.sites else { return Vec::new() };
+        let table = sites.get(item);
+        let locals: Vec<(&str, &str)> = self.idents.iter().filter(|(scope, _, _)| scope.as_deref() == Some(item)).map(|(_, old, new)| (old.as_str(), new.as_str())).collect();
+        if table.is_none() && locals.is_empty() {
+            return Vec::new();
+        }
+        let wanted = |word: &str| locals.iter().any(|(old, _)| *old == word) || table.is_some_and(|table| table.keys().any(|key| key.rsplit(':').next() == Some(word)));
+        let mut out = Vec::new();
+        for place in crate::sites::places(text, &wanted) {
+            let local = locals.iter().find(|(old, _)| *old == place.name).map(|(_, new)| *new);
+            let new = match (&place.kind, local) {
+                (PlaceKind::Path { qualifier: Some(qualifier), more: false }, Some(new)) if qualifier.is_empty() => new.to_string(),
+                // `S { old }` is `S { old : old }`: the label stays, the local changes.
+                (PlaceKind::Key { short: true, .. }, Some(new)) => format!("{} : {new}", place.name),
+                _ => match table.and_then(|table| table.get(&place.key())) {
+                    // The label changes, the local stays.
+                    Some(new) if matches!(place.kind, PlaceKind::Key { short: true, .. }) => format!("{new} : {}", place.name),
+                    Some(new) => new.clone(),
+                    None => continue,
+                },
+            };
+            out.push((place.start, place.end, new));
+        }
+        out
+    }
+
+    /// Applies the renames to the attribute of a node: the name of a method call, the name of
+    /// a field, the name of a macro, or a text.
+    pub fn apply_attr(&self, item: &str, node: &Node) -> Option<String> {
+        let attr = node.attr.as_deref()?;
+        let Some(sites) = &self.sites else { return Some(self.apply(item, attr)) };
+        let on_self = if node.children.first().is_some_and(|child| child.text == "self") { "s" } else { "" };
+        let (key, name) = match node.kind {
+            "method_call" => (format!("c{on_self}:{attr}"), attr),
+            "field" => (format!("f{on_self}:{attr}"), attr),
+            "macro" => {
+                let name = attr.rsplit("::").next().unwrap_or(attr);
+                (format!("m:{name}"), name)
+            }
+            _ => return Some(self.apply(item, attr)),
+        };
+        match sites.get(item).and_then(|table| table.get(&key)) {
+            Some(new) => Some(format!("{}{new}", &attr[..attr.len() - name.len()])),
+            None => Some(attr.to_string()),
+        }
+    }
+
+    /// The map of words: the map of a `Renames` with no site table.
+    fn apply_words(&self, item: &str, text: &str) -> String {
         let renames: Vec<_> = self
             .idents
             .iter()
@@ -544,7 +639,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
     }
     // A signature with an equal text on the two sides did not change (design 37.10): a rename of
     // a name applies only where the text changed. A different item can have the same name.
-    if before.kind != ItemKind::Mod && before.signature != after.signature && apply(&before.signature) != after.signature {
+    if before.kind != ItemKind::Mod && (renames.exact() || before.signature != after.signature) && apply(&before.signature) != after.signature {
         // A function signature: one edit for each changed part (design 22.3, A5).
         let parts = match (&before.sig, &after.sig) {
             (Some(old), Some(new)) => signature_parts(before, after, old, new, renames),
@@ -580,7 +675,10 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
             .find_map(|path| renames.items.get(path))
             .map(|new| new.rsplit(['.', ':']).next().unwrap_or(new).to_string())
     };
-    let old_members: Vec<String> = before.members.iter().map(|member| renamed_member(member).unwrap_or_else(|| apply(member))).collect();
+    // A member of a struct, an enum, or a variant is a bare name (a field, a variant): it changes
+    // only with its item. A member of an impl or a trait is a declaration (`fn name`).
+    let bare = renames.exact() && matches!(before.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Variant);
+    let old_members: Vec<String> = before.members.iter().map(|member| renamed_member(member).unwrap_or_else(|| if bare { member.clone() } else { apply(member) })).collect();
     if old_members != after.members {
         // The kind of the owner, for the hints (a struct, a variant, an enum, a trait, an impl).
         let list_edit = |old: String, new: String| {
@@ -889,7 +987,9 @@ impl Context<'_> {
     /// can have the same name (`a.len()` and `b.len()`). A place that keeps the old name and gets
     /// a different meaning shows in the compare of the compiled code.
     fn same(&self, before: &Node, after: &Node) -> bool {
-        before.text == after.text || self.renames.apply(self.item_before, &before.text) == after.text
+        // With a site table the map is exact (design 51.3): a site that keeps the old name is a
+        // difference.
+        (!self.renames.exact() && before.text == after.text) || self.renames.apply(self.item_before, &before.text) == after.text
     }
 
     fn anchor(item: &str, path: &[String]) -> Anchor {
@@ -1331,7 +1431,7 @@ impl Context<'_> {
                 self.node(old_child, new_child, &bp, &ap);
             }
         }
-        let attr_changed = before.attr.as_deref().map(|attr| self.renames.apply(self.item_before, attr)) != after.attr;
+        let attr_changed = self.renames.apply_attr(self.item_before, before) != after.attr;
         if attr_changed && self.edits.len() > edits_before && !before.has_block() && !after.has_block() {
             // The node itself and a part of it changed (`a * b / 100` → `a / 100 * b`): one edit
             // for the full expression, not one edit for the node and one for each part (trial 4,

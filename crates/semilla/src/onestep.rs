@@ -21,7 +21,7 @@ pub const CLAIMS: &[&str] = &["rewrite-pattern", "no-panic", "no-unsafe", "no-io
 pub fn retired_claim(op: &str) -> Option<String> {
     // Design 35.3: Semilla derives each rename and each move. A claim cannot add to the fact.
     if matches!(op, "rename" | "move-item") {
-        return Some(format!("the claim `{op}` is gone: Semilla derives each rename and each move as a fact, with the compare result of the compiled code; remove the claim (the claims that stay: {})", CLAIMS.join(", ")));
+        return Some(format!("the claim `{op}` is gone: Semilla derives each rename and each move as a fact; remove the claim (the claims that stay: {})", CLAIMS.join(", ")));
     }
     (!CLAIMS.contains(&op) && semilla_core::ops::op(op).is_some()).then(|| format!("the claim `{op}` is retired: Semilla derives this change as a fact; remove the claim (the claims that stay: {})", CLAIMS.join(", ")))
 }
@@ -36,8 +36,11 @@ pub struct StepRequest {
     /// Each reason as `ANCHOR=TEXT`.
     pub reasons: Vec<String>,
     pub tree: bool,
-    /// Phase 1 only; phase 2 runs in the background (B1).
+    /// Phase 1 only; phase 2 runs in the background (B1). Only with `compiled`.
     pub fast: bool,
+    /// The step gets the compiled check (design 50): the build, the MIR compare, and a compare
+    /// result on each fact.
+    pub compiled: bool,
 }
 
 /// One more place where a `--reason` text can split into a key and a reason (design 37.6).
@@ -96,6 +99,9 @@ impl StepRequest {
         }
         for reason in self.reasons.iter().chain(extra) {
             parts.push(format!("--reason {}", quote(reason)));
+        }
+        if self.compiled {
+            parts.push("--compiled".into());
         }
         if self.fast {
             parts.push("--fast".into());
@@ -336,11 +342,25 @@ impl App {
         // B1: phase 2 runs in the command, so the result is final: phase 2 can reject a step (an
         // indirect change with no known cause). With `--fast`, phase 2 runs now only when a
         // property claim or an identity candidate needs it.
-        let mut full = !request.fast || claims.iter().any(|c| semilla_core::ops::op(&c.op).is_some_and(|i| i.kind == semilla_core::OpKind::Property));
+        let property = claims.iter().find(|c| semilla_core::ops::op(&c.op).is_some_and(|i| i.kind == semilla_core::OpKind::Property)).map(|c| c.op.clone());
+        // Design 50: the syntax tree gives the facts of a step. The compiled check (the build,
+        // the MIR compare, a compare result on each fact) runs only for a step that asks for it:
+        // the option `--compiled`, the variable `SEMILLA_COMPILED`, or a property claim (its
+        // proof comes from the compiled code).
+        let asked = request.compiled || crate::app::compiled_env();
+        let compiled = asked || property.is_some();
+        let mut mode_lines = String::new();
+        if let (Some(op), false) = (&property, asked) {
+            put_line(&mut mode_lines, &format!("note: the claim `{op}` is a property claim, so this step runs the compiled check (as with `--compiled`)"));
+        }
+        if request.fast && !compiled {
+            put_line(&mut mode_lines, "note: `--fast` has an effect only with `--compiled`; this step has no compiled check");
+        }
+        let mut full = !compiled || !request.fast || property.is_some();
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -493,6 +513,7 @@ impl App {
             }
             self.save_session(&restore)?;
             put_line(&mut text, &format!("rejected: step {index} {} is not stored", semilla_core::text::quoted(&request.intent)));
+            text.push_str(&mode_lines);
             text.push_str(&base_line);
             text.push_str(&sandbox_line);
             if closed.is_none() {
@@ -642,10 +663,14 @@ impl App {
         // Design 37.21: a change set of one step has its full result in this process. The step
         // stores it, so the background check and `semilla review` do not check the step again.
         // A failure here is not a failure of the step: the background check does the work.
-        if full && !self.no_bodies && stored_set.steps.len() == 1 {
-            let _ = self.store_session_result(&stored_set);
+        // A step with no compiled check (design 50) stores no result and starts no background
+        // check: `semilla status` computes its result from the trees.
+        if compiled {
+            if full && !self.no_bodies && stored_set.steps.len() == 1 {
+                let _ = self.store_session_result(&stored_set);
+            }
+            self.queue_session(&stored_set)?;
         }
-        self.queue_session(&stored_set)?;
         // B4: a commit between the steps makes `tag` fail. Say it now, with the fix.
         if index > 0 {
             let head = self.repo.commit_tree("HEAD").unwrap_or_default();
@@ -664,7 +689,7 @@ impl App {
         let mut first_rejected = None;
         let mut final_lines = String::new();
         for earlier in session.fast_steps.keys().copied().collect::<Vec<_>>() {
-            let report = if full {
+            let report = if full && compiled {
                 match self.check(Some(earlier), false) {
                     Ok(result) => result.report.steps.first().cloned(),
                     Err(error) => {
@@ -698,6 +723,7 @@ impl App {
         self.save_session(&session)?;
         let result_line = if full { "accepted" } else { "accepted (phase 1; phase 2 runs in the background: `semilla status`)" };
         put_line(&mut text, &format!("{result_line}: step {index} {} stored in group {id} {}", semilla_core::text::quoted(&request.intent), semilla_core::text::quoted(&title)));
+        text.push_str(&mode_lines);
         text.push_str(&base_line);
         text.push_str(&sandbox_line);
         text.push_str(&fast_lines);

@@ -290,9 +290,38 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     // variant): the pair gives it.
     let own_name = |item: &Item| item.path.rsplit(['.', ':']).next().unwrap_or("").split('#').next().unwrap_or("").to_string();
     let (old_name, new_name) = (own_name(before), own_name(after));
-    let renamed: Vec<String> = old_texts.iter().map(|text| if *text == old_name { new_name.clone() } else { renames.apply(&before.path, text) }).collect();
+    let renamed: Vec<String> = if renames.exact() {
+        // The map of references (design section 51) needs the place of each token: it reads the
+        // text of all tokens. A token that the map changes gets the new text.
+        let mut starts = Vec::with_capacity(old.len());
+        let mut text = String::new();
+        for (index, token) in old.iter().enumerate() {
+            if index > 0 && old[index - 1].end != token.at {
+                text.push('\n');
+            }
+            starts.push(text.len());
+            text.push_str(&token.text);
+        }
+        let mut out = old_texts.clone();
+        for (start, _, new) in renames.spans(&before.path, &text) {
+            if let Ok(index) = starts.binary_search(&start) {
+                out[index] = new;
+            }
+        }
+        // The declaration of the item: the first token with the old name.
+        if let Some(index) = old_texts.iter().position(|text| *text == old_name).filter(|index| out[*index] == old_name) {
+            out[index] = new_name.clone();
+        }
+        out
+    } else {
+        old_texts.iter().map(|text| if *text == old_name { new_name.clone() } else { renames.apply(&before.path, text) }).collect()
+    };
     let with_name: Vec<Token> = old.iter().zip(&renamed).map(|(token, text)| Token { text: text.clone(), ..token.clone() }).collect();
-    if renamed == new_texts || renames.apply(&before.path, &join(&with_name)) == join(&new) {
+    // A label with no `:` (`S { a }`) becomes `S { b : a }` in one token: the compare ignores
+    // the white space.
+    let squash = |text: String| text.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let same_text = if renames.exact() { squash(join(&with_name)) == squash(join(&new)) } else { renames.apply(&before.path, &join(&with_name)) == join(&new) };
+    if renamed == new_texts || same_text {
         return None;
     }
     // The common start and the common end keep the table of the compare small.
