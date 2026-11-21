@@ -3978,6 +3978,8 @@ The values are before → after (the binaries of 8h → the binaries of 8i).
 
 ## 48. The step model and the facts of the agent
 
+(Since 49: the step result and each check of this section use the syntax tree. The compiled compare is an optional check.)
+
 Status: a design, with no code change yet. The user decided each rule that has no mark. A rule with the mark "Decided by Claude" is a default that the user can change.
 
 ### 48.1 The step is the smallest unit
@@ -4090,3 +4092,100 @@ Findings:
   - a pure refactoring: 13 of 60 steps are `code equal`, and 47 are `code different` (each extracted function, each inlined function, each moved statement between two functions, and most of the extracted variables and the moved statements).
   Thus a `same` claim of the kind `extract`, `inline`, or `move` of a statement needs more than the step result. Two options: the shape check with exact conditions, or a compare of the compiled code under the claim (the cross-body compare of 48.7). No decision yet.
 - A check build does not download. A dependency that is not in the cargo cache stops the body check (4 of the 6 pull requests needed `cargo fetch` first).
+
+## 49. The syntax tree model: the compiled compare becomes an optional check
+
+Status: a decision of the user (2026-11-21) and the measure on stored results. The code change is batch 9a and later.
+
+### 49.1 The decision
+
+- Semilla derives each fact and each check from the syntax tree.
+- `code equal` and `code different` go away from each fact and from the step result.
+- The compiled compare stays as an optional check. It is off by default.
+- Extract and inline of a function must not show as a change of behavior (49.6).
+
+### 49.2 The cause
+
+The six pull requests of 48.6 have 437 facts with the compiled compare.
+
+| Group | Facts | What the compare result adds |
+|---|---|---|
+| a body edit with `code different` | 160 | nothing: the edit shows the change |
+| a body edit with `code equal` | 9 | a proof that the edit keeps the code (8 are moved statements) |
+| a form fact with `code equal` (import, visibility, bound, attribute) | 52 | little: the category tells this |
+| an `indirect` fact | 38 | at least 30 are noise (23 bench bodies, 7 bodies of a removed module) |
+| other (added, removed, docs, no compare) | 178 | nothing that the syntax tree does not give |
+
+- A pure refactoring step is `code different` in 47 of 60 held-out steps (48.8).
+- A step takes 5 to 69 seconds with the compare (the first run of each of the six pull requests). The syntax phase alone takes 0.5 seconds for `socket2` #222.
+- The compare needs a nightly toolchain, each dependency in the cargo cache, and a tree that builds in each checked configuration.
+- The syntax phase folds equal edits. `socket2` #222 has 41 facts with the syntax phase alone and 128 facts with the compare. One of the 41 is "84 site(s): changed expression `self.inner` → `self.as_raw()`".
+
+### 49.3 The model
+
+- A fact is a difference of the syntax tree. The category comes from the edit (rule 5 of the core rules).
+- **Soundness rule (Decided by Claude):** each difference of the syntax tree is in exactly one fact, and the text of the fact shows it. A fact of the category `rename`, `move`, `declaration`, `added`, or `removed` covers a place only if the place is equal after the exact map of the fact. One more difference at the place is an edit with its own fact.
+- A `same` claim is correct if each edit that it covers maps exactly under the claim.
+- A `change` fact is correct if each of its items has an edit that no `same` claim covers. An item can also be a new or a removed item; then the check is that the item fact exists.
+- The gap list is each item with an edit that no `same` claim covers and no `change` fact names.
+- A step has no result `code equal` or `code different`. The result is the list of the facts and the gap list.
+
+### 49.4 The optional compiled check
+
+- An option of the `step` command runs the compare of today.
+- Decided by Claude: a property claim (`tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`) needs the compiled code, so it starts the check for its step.
+- Decided by Claude: the check gets no new attribution rule and no new normal form rule, with one exception (49.6).
+- Later (not in batch 9a): the output of the check becomes one list for the step, the bodies that change with no edit.
+
+### 49.5 The losses that the user accepted
+
+1. **Effects at a distance.** A change of a declaration, a macro, or a build input shows as an edit. Semilla does not show which bodies it changes.
+2. **The safety check of a `same` claim.** A rename can catch a different name by shadowing. A moved item can resolve a name differently. The compiler rejects most of these cases, but not each one.
+3. **The proof for a small rewrite.** `a + b` → `b + a` is a `semantics` edit that the reviewer reads. The compare proves 89 of the 113 held-out controls of this kind equal. The share in the six pull requests is 9 of 437 facts.
+
+### 49.6 Extract and inline of a function
+
+- **In the syntax tree:** the mapper across functions of the stopped batch 8e comes back as a rule. It maps the statements of the new function to the removed statements of the caller, with each parameter in place of its argument. In its 27 cases it gives one fact for 23.
+- **In the optional check:** Semilla turns the MIR inliner of rustc off (`-Zinline-mir=no`), so an extracted function is always a call plus a new body. Plan: the driver forces the inliner for the one function of the claim, then compares. This is not tested yet.
+
+### 49.7 The measure on stored results (no code change)
+
+The stored output of batch 8i, read with no compare result and with no `indirect` fact.
+
+**The six pull requests:**
+
+| Measure | Count |
+|---|---|
+| facts | 399 |
+| edits in a body | 185 |
+| edits that a `same` claim of the agent covers | 96 |
+| items with an edit | 121 |
+| items: each edit covered by a `same` claim | 91 |
+| items: named by a `change` fact | 19 |
+| items: a test or a bench | 4 |
+| items: not stated (the gap list) | 7 |
+
+The 43 item mentions of the `change` facts: 23 name an item with an edit; 17 name a new, a removed, or a moved item, or a declaration; 1 names an item whose edits a `same` claim covers; 2 do not resolve (a bench macro).
+
+**The held-out sets:** a step counts as visible if it has a fact that is not a rename, a move, a docs fact, or a file fact.
+
+| Set | Accepted steps | Visible |
+|---|---|---|
+| mutants in a body (families f1, f2, x) | 1116 | 1116 |
+| mutants with a rename (family r) | 161 | 161 |
+| a refactoring with one change of behavior (family rfx) | 33 | 33 |
+| declaration mutants (family d) | 227 | 227 |
+
+Limit: "visible" does not prove that the needle is in the text of the fact. The oracle of each family must run again with the binaries of batch 9a.
+
+### 49.8 Known defects of the syntax phase of today
+
+- **A rename needs the compare.** Semilla finds a candidate pair in the syntax phase and proves it with the MIR (24.2, rule 4). The proof must become a check of the syntax tree: the item and each use are equal after the map of the names.
+- **A rename fact absorbs a second difference.** In `rand` #1382, `WeightedError::TooMany` → `WeightError::InvalidInput` is in the rename fact of the type. The body has no edit fact. Only the mark "the compiled code changes" shows it. The soundness rule of 49.3 corrects this.
+
+### 49.9 The plan
+
+1. Batch 9a: the syntax tree model is the default; the compare is an option; the rename check and the soundness rule.
+2. Batch 9b: the options `--same` and `--change` of 48.5, with their checks and the gap list.
+3. Batch 9c: extract and inline of a function in the syntax tree (49.6).
+4. Batch 9d: the forced inliner in the optional check (49.6).
