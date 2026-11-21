@@ -221,7 +221,9 @@ pub fn likely_local_renames(edits: &[Edit], before: &semilla_syntax::Workspace, 
         let consistent = old_tokens.iter().zip(&new_tokens).filter(|(a, b)| a != b).all(|(a, b)| is_ident(a) && is_ident(b) && *map.entry(*a).or_insert(*b) == *b);
         let olds: std::collections::BTreeSet<&str> = old_tokens.iter().copied().collect();
         let injective = map.values().collect::<std::collections::BTreeSet<_>>().len() == map.len();
-        let bindings = map.iter().all(|(old, new)| !olds.contains(new) && crate::checks::is_binding(old_item, old));
+        // Design 52.2: a rename of a local needs a sure binding on the two sides.
+        let sure = |old: &str, new: &str| crate::sites::sure_binding(before, old_item, old) && crate::sites::sure_binding(after, new_item, new);
+        let bindings = map.iter().all(|(old, new)| !olds.contains(new) && crate::checks::is_binding(old_item, old) && sure(old, new));
         if consistent && injective && bindings {
             found.extend(map.into_iter().map(|(old, new)| (path.to_string(), old.to_string(), new.to_string())));
         }

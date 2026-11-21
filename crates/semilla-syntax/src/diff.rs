@@ -267,27 +267,6 @@ impl Renames {
         out
     }
 
-    /// Applies the renames to the attribute of a node: the name of a method call, the name of
-    /// a field, the name of a macro, or a text.
-    pub fn apply_attr(&self, item: &str, node: &Node) -> Option<String> {
-        let attr = node.attr.as_deref()?;
-        let Some(sites) = &self.sites else { return Some(self.apply(item, attr)) };
-        let on_self = if node.children.first().is_some_and(|child| child.text == "self") { "s" } else { "" };
-        let (key, name) = match node.kind {
-            "method_call" => (format!("c{on_self}:{attr}"), attr),
-            "field" => (format!("f{on_self}:{attr}"), attr),
-            "macro" => {
-                let name = attr.rsplit("::").next().unwrap_or(attr);
-                (format!("m:{name}"), name)
-            }
-            _ => return Some(self.apply(item, attr)),
-        };
-        match sites.get(item).and_then(|table| table.get(&key)) {
-            Some(new) => Some(format!("{}{new}", &attr[..attr.len() - name.len()])),
-            None => Some(attr.to_string()),
-        }
-    }
-
     /// The map of words: the map of a `Renames` with no site table.
     fn apply_words(&self, item: &str, text: &str) -> String {
         let renames: Vec<_> = self
@@ -949,8 +928,43 @@ struct Context<'a> {
 
 /// The source text of a node, cut from the source of its item.
 fn node_source(item: &Item, node: &Node) -> Option<String> {
+    source_between(item, node.start, node.end).map(|text| dedent(&text, node.start.1))
+}
+
+/// The source text of the own tokens of a node on one line (design 52.1): `…` is in place of
+/// each child, and `{…}` is in place of each block.
+fn own_source(item: &Item, node: &Node) -> Option<String> {
+    let mut out = String::new();
+    let mut at = node.start;
+    for child in &node.children {
+        if child.start < at || child.end > node.end {
+            return None;
+        }
+        out.push_str(&source_between(item, at, child.start)?);
+        out.push_str(if child.kind == "block" { "{…}" } else { crate::tree::CHILD_MARK });
+        at = child.end;
+    }
+    out.push_str(&source_between(item, at, node.end)?);
+    Some(crate::tree::one_line(&out))
+}
+
+/// Adds the `;` of a statement to its source text when only one side has the `;` (design
+/// 52.1). The source text of an expression statement stops before its `;`.
+fn show_semicolon(before: &Node, after: &Node, old: &mut Option<String>, new: &mut Option<String>) {
+    let has = |node: &Node| node.stmt && node.text.ends_with(';');
+    if has(before) == has(after) {
+        return;
+    }
+    if let Some(text) = if has(before) { old } else { new }
+        && !text.ends_with(';')
+    {
+        text.push(';');
+    }
+}
+
+/// The source text of an item between two places.
+fn source_between(item: &Item, start: Pos, end: Pos) -> Option<String> {
     let lines: Vec<&str> = item.source.lines().collect();
-    let (start, end) = (node.start, node.end);
     let first = start.0.checked_sub(item.line_start)?;
     let last = end.0.checked_sub(item.line_start)?;
     if last >= lines.len() || first > last {
@@ -966,7 +980,7 @@ fn node_source(item: &Item, node: &Node) -> Option<String> {
         }
         text.extend(&chars[from.min(to)..to]);
     }
-    Some(dedent(&text, start.1))
+    Some(text)
 }
 
 /// Removes `column` spaces from the lines after the first, so that the text reads as if the node
@@ -990,6 +1004,30 @@ impl Context<'_> {
         // With a site table the map is exact (design 51.3): a site that keeps the old name is a
         // difference.
         (!self.renames.exact() && before.text == after.text) || self.renames.apply(self.item_before, &before.text) == after.text
+    }
+
+    /// True if the own tokens of two paired nodes are different after the map of the step
+    /// (design 52.1). The map applies to the full text of the old node, so each name has the
+    /// key of its place. With `marks`, the place of each child in the own tokens counts.
+    fn own_changed(&self, before: &Node, after: &Node, marks: bool) -> bool {
+        let tidy = |text: String| if marks { text } else { text.split(' ').filter(|word| *word != crate::tree::CHILD_MARK).collect::<Vec<_>>().join(" ") };
+        let new = tidy(after.own_text(&[]));
+        if self.renames.exact() {
+            return tidy(before.own_text(&self.renames.spans(self.item_before, &before.text))) != new;
+        }
+        let old = tidy(before.own_text(&[]));
+        old != new && self.renames.apply(self.item_before, &old) != new
+    }
+
+    /// The edit of a node with a block whose own tokens changed (design 52.1). The parts of the
+    /// node keep their edits. The texts of this edit show the own tokens only.
+    fn own_edit(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
+        self.edit(EditKind::Modified, Some((before, before_path)), Some((after, after_path)));
+        if let Some(edit) = self.edits.last_mut() {
+            (edit.text_before, edit.text_after) = (Some(before.own_text(&[])), Some(after.own_text(&[])));
+            (edit.source_before, edit.source_after) = (own_source(self.source_before, before), own_source(self.source_after, after));
+            show_semicolon(before, after, &mut edit.source_before, &mut edit.source_after);
+        }
     }
 
     fn anchor(item: &str, path: &[String]) -> Anchor {
@@ -1029,6 +1067,12 @@ impl Context<'_> {
             note: None,
             refactor: None,
         });
+        // Two equal source texts keep the fact of a statement that only gets or loses its `;`.
+        if let (Some((old, _)), Some((new, _)), Some(edit)) = (before, after, self.edits.last_mut())
+            && edit.source_before != edit.source_after
+        {
+            show_semicolon(old, new, &mut edit.source_before, &mut edit.source_after);
+        }
     }
 
     /// Compares two blocks. `before_path` and `after_path` are the role paths of the blocks.
@@ -1423,6 +1467,12 @@ impl Context<'_> {
             ap.push(new_child.role.clone());
             if old_child.kind == "block" && new_child.kind == "block" {
                 if !self.same(old_child, new_child) {
+                    // The own tokens of a block: its delimiters and its inner attributes. The
+                    // count of the statements can be different: each statement has its own
+                    // edit. The item compare has the inner attributes of the body of an item.
+                    if self.own_changed(old_child, new_child, false) {
+                        self.own_edit(old_child, new_child, &bp, &ap);
+                    }
                     self.block(old_child, new_child, &bp, &ap);
                 } else {
                     self.mark_visited(old_child, new_child);
@@ -1431,8 +1481,11 @@ impl Context<'_> {
                 self.node(old_child, new_child, &bp, &ap);
             }
         }
-        let attr_changed = self.renames.apply_attr(self.item_before, before) != after.attr;
-        if attr_changed && self.edits.len() > edits_before && !before.has_block() && !after.has_block() {
+        // The own tokens of the node (design 52.1): each token that is not in a child. The
+        // rule does not depend on the kind of the node.
+        let own_changed = self.own_changed(before, after, true);
+        let parts_changed = self.edits.len() > edits_before;
+        if own_changed && parts_changed && !before.has_block() && !after.has_block() {
             // The node itself and a part of it changed (`a * b / 100` → `a / 100 * b`): one edit
             // for the full expression, not one edit for the node and one for each part (trial 4,
             // D7: one expression edit gave up to four facts that overlap).
@@ -1444,7 +1497,11 @@ impl Context<'_> {
         // variable, have their own edits: a composite whose other text is equal has no edit of
         // its own.
         let explained = self.map.as_ref().is_some_and(|map| self.variable_edits.len() > variables_before || map.old_text(&self.renames.apply(self.item_before, &crate::mapper::shell(before))) == crate::mapper::shell(after));
-        if attr_changed || (self.edits.len() == edits_before && !explained) {
+        if own_changed && parts_changed {
+            // A node with a block: its parts keep their edits, and the node gets one edit for
+            // its own tokens.
+            self.own_edit(before, after, before_path, after_path);
+        } else if own_changed || (self.edits.len() == edits_before && !explained) {
             // The node itself changed: an operator, a method name, or text outside the children.
             self.edit(EditKind::Modified, Some((before, before_path)), Some((after, after_path)));
         }

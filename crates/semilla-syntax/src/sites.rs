@@ -386,9 +386,79 @@ pub fn places(text: &str, wanted: &dyn Fn(&str) -> bool) -> Vec<Place> {
     out
 }
 
+/// A `use` line in a block of a text (design 52.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockUse {
+    /// The offsets of the `{` and of the `}` of the block. A place between them is in the
+    /// scope of the line.
+    pub open: usize,
+    pub close: usize,
+    /// The text of the line, from `use` to `;`.
+    pub text: String,
+}
+
+/// The `use` lines in the blocks of a text. A line in the input of a macro that the syntax
+/// phase cannot read is not in the list.
+pub fn block_uses(text: &str) -> Vec<BlockUse> {
+    let mut out: Vec<BlockUse> = Vec::new();
+    if !text.contains("use") {
+        return out;
+    }
+    let tokens: Vec<Token> = lex(text).into_iter().filter(|token| token.kind != Kind::Comment).collect();
+    let word = |index: Option<usize>| index.and_then(|index| tokens.get(index)).filter(|token| token.kind == Kind::Word).map(|token| token.text);
+    let punct = |index: Option<usize>, text: &str| index.and_then(|index| tokens.get(index)).is_some_and(|token| token.kind == Kind::Punct && token.text == text);
+    // Each open bracket: the offset of a `{` that is not a group of a `use` line, and true
+    // for the input of a macro that the syntax phase cannot read.
+    let mut stack: Vec<(Option<usize>, bool)> = Vec::new();
+    // The line in work: the depth and the offset of its start, and the offset of its block.
+    let mut line: Option<(usize, usize, usize)> = None;
+    for (index, token) in tokens.iter().enumerate() {
+        match (token.kind, token.text) {
+            (Kind::Punct, "{" | "(" | "[") => {
+                let inherited = stack.last().is_some_and(|frame| frame.1);
+                let call = punct(index.checked_sub(1), "!").then(|| word(index.checked_sub(2))).flatten();
+                let rules = punct(index.checked_sub(2), "!") && word(index.checked_sub(3)) == Some("macro_rules");
+                let opaque = inherited || rules || call.is_some_and(|name| !EXPRESSION_MACROS.contains(&name));
+                stack.push(((token.text == "{" && line.is_none()).then_some(token.start), opaque));
+            }
+            (Kind::Punct, "}" | ")" | "]") => {
+                if let Some((Some(open), _)) = stack.pop() {
+                    out.iter_mut().filter(|found| found.open == open && found.close == usize::MAX).for_each(|found| found.close = token.start);
+                }
+            }
+            (Kind::Punct, ";") => {
+                if let Some((_, start, open)) = line.filter(|(depth, _, _)| *depth == stack.len()) {
+                    out.push(BlockUse { open, close: usize::MAX, text: text[start..token.start + 1].to_string() });
+                    line = None;
+                }
+            }
+            // `use < 'a >` is a part of a type (the captures of an `impl Trait`).
+            (Kind::Word, "use") if line.is_none() && !punct(Some(index + 1), "<") => {
+                if let Some((Some(open), false)) = stack.last().copied() {
+                    line = Some((stack.len(), token.start, open));
+                }
+            }
+            _ => {}
+        }
+    }
+    out.iter_mut().for_each(|found| found.close = found.close.min(text.len()));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Design 52.3: each `use` line of a block has the range of its block.
+    #[test]
+    fn a_use_line_in_a_block_has_the_range_of_its_block() {
+        let text = "{ use a :: b ; { use c :: { d , e as f } ; d () } my ! { use g :: h ; } vec ! [{ use i :: * ; 1 }] ; fn k () -> impl Sized + use < > { } }";
+        let found = block_uses(text);
+        let lines: Vec<(&str, &str)> = found.iter().map(|line| (line.text.as_str(), &text[line.open..=line.close])).collect();
+        assert_eq!(lines, [("use a :: b ;", text), ("use c :: { d , e as f } ;", "{ use c :: { d , e as f } ; d () }"), ("use i :: * ;", "{ use i :: * ; 1 }")]);
+        // A `use` line of a module is not in a block.
+        assert_eq!(block_uses("use a :: { b , c } ;"), []);
+    }
 
     fn keys(text: &str, name: &str) -> Vec<String> {
         places(text, &|word| word == name).iter().map(Place::key).collect()

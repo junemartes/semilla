@@ -53,10 +53,44 @@ enum Class {
     ByName(NameKind),
 }
 
+#[derive(Clone, PartialEq, Eq)]
 enum Lookup {
     Item(String),
     External,
     Unknown,
+    /// Two places of one name in one item give different things (design 52.3). The site
+    /// table has no place of a token, so no place of the name is a site.
+    Mixed,
+}
+
+/// A `use` line in a block of the body of an item (design 52.3).
+struct BlockUse {
+    /// The offsets of the block in the compare text of the body.
+    open: usize,
+    close: usize,
+    /// Each name that the line gives, with its path. The path of a line with a leading `::`
+    /// starts with [`ROOT`].
+    names: Vec<(String, Vec<String>)>,
+    /// The path of each glob import of the line.
+    globs: Vec<Vec<String>>,
+    /// False for a line that the parser cannot read.
+    clear: bool,
+}
+
+fn block_uses(item: &Item) -> Vec<BlockUse> {
+    let Some(body) = &item.body else { return Vec::new() };
+    let lines = semilla_syntax::sites::block_uses(&body.text).into_iter();
+    lines
+        .map(|line| {
+            let mut out = BlockUse { open: line.open, close: line.close, names: Vec::new(), globs: Vec::new(), clear: false };
+            let Some(parsed) = semilla_syntax::rs::parse_use(&line.text) else { return out };
+            let root: Vec<String> = parsed.leading_colon.then(|| ROOT.to_string()).into_iter().collect();
+            use_names(&parsed.tree, &root, &mut out.names);
+            glob_prefixes(&parsed.tree, &mut root.clone(), &mut out.globs);
+            out.clear = true;
+            out
+        })
+        .collect()
 }
 
 /// The last name of an item path, with no twin number and no `!`.
@@ -99,11 +133,13 @@ fn texts(item: &Item) -> Vec<(&str, bool)> {
 }
 
 /// The names that an item binds: a local, a parameter, a generic parameter, an inner item.
-/// `patterns` has the names that only an identifier pattern binds.
+/// `patterns` has the names that only an identifier pattern binds. `marked` has the names of
+/// the identifier patterns with `ref`, `mut`, or `@`.
 #[derive(Default)]
 struct Bound {
     names: BTreeSet<String>,
     patterns: BTreeSet<String>,
+    marked: BTreeSet<String>,
 }
 
 fn bound(item: &Item) -> Bound {
@@ -115,7 +151,11 @@ fn bound(item: &Item) -> Bound {
     let mut other = BTreeSet::new();
     for node in root.descendants() {
         if let Some(pat) = ast::IdentPat::cast(node.clone()) {
-            out.patterns.extend(pat.name().map(|name| name.text().to_string()));
+            let name = pat.name().map(|name| name.text().to_string());
+            if pat.ref_token().is_some() || pat.mut_token().is_some() || pat.at_token().is_some() {
+                out.marked.extend(name.clone());
+            }
+            out.patterns.extend(name);
         } else if let Some(param) = ast::TypeParam::cast(node.clone()) {
             other.extend(param.name().map(|name| name.text().to_string()));
         } else if let Some(param) = ast::ConstParam::cast(node.clone()) {
@@ -152,12 +192,14 @@ struct Scope<'a> {
     item: &'a Item,
     module: Option<&'a str>,
     bound: Option<Bound>,
+    /// The `use` lines in the blocks of the body.
+    blocks: Option<Vec<BlockUse>>,
 }
 
 impl<'a> Scope<'a> {
     fn new(item: &'a Item, workspace: &'a Workspace) -> Self {
         let module = if item.kind == ItemKind::Use { Some(owner(&item.path)) } else { module_of(&item.path, workspace) };
-        Scope { workspace, item, module, bound: None }
+        Scope { workspace, item, module, bound: None, blocks: None }
     }
 
     fn bound(&mut self) -> &Bound {
@@ -254,7 +296,149 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The item of a path from the module of the item.
+    /// The thing that the first name of a path gives at its places in the body (design
+    /// 52.3). The scope of a place is the chain of its blocks, then the module. `None`: no
+    /// `use` line of a block gives the name at a place, and the scope of the module decides.
+    fn in_blocks(&mut self, name: &str) -> Option<Lookup> {
+        let item = self.item;
+        if self.blocks.get_or_insert_with(|| block_uses(item)).is_empty() {
+            return None;
+        }
+        let body = item.body.as_ref()?;
+        let mut found: Option<Option<Lookup>> = None;
+        for place in places(&body.text, &|word| word == name) {
+            let first = matches!(&place.kind, PlaceKind::Path { qualifier: Some(qualifier), .. } if qualifier.is_empty());
+            if place.opaque || !first {
+                continue;
+            }
+            let here = self.at_place(name, place.start);
+            match &found {
+                None => found = Some(here),
+                Some(other) if *other == here => {}
+                Some(_) => return Some(Lookup::Mixed),
+            }
+        }
+        found.flatten()
+    }
+
+    /// The thing that the `use` lines of the blocks give for a name at the offset `at` of the
+    /// body. An inner block comes before an outer block. In one block, a line with the name
+    /// comes before a glob import.
+    fn at_place(&self, name: &str, at: usize) -> Option<Lookup> {
+        let (module, blocks) = (self.module?, self.blocks.as_ref()?);
+        let mut opens: Vec<usize> = blocks.iter().filter(|line| line.open < at && at < line.close).map(|line| line.open).collect();
+        opens.sort_unstable_by(|a, b| b.cmp(a));
+        opens.dedup();
+        for open in opens {
+            let lines = || blocks.iter().filter(move |line| line.open == open);
+            let mut named = lines().flat_map(|line| &line.names).filter(|(local, _)| local == name);
+            if let Some((_, path)) = named.next() {
+                // Two lines with the name (two name spaces, or a `cfg`): no clear target.
+                return Some(if named.next().is_some() { Lookup::Unknown } else { self.use_path(module, path) });
+            }
+            if lines().any(|line| !line.clear) {
+                return Some(Lookup::Unknown);
+            }
+            let mut found = BTreeSet::new();
+            for prefix in lines().flat_map(|line| &line.globs) {
+                // A source that the tool cannot list (an external crate, a path that is not
+                // sure): each bare name of the block is by name.
+                let Lookup::Item(source) = self.use_path(module, prefix) else { return Some(Lookup::Unknown) };
+                match self.from_glob(module, &source, name, 4) {
+                    Some(Lookup::Item(target)) => {
+                        found.insert(target);
+                    }
+                    Some(other) => return Some(other),
+                    None => {}
+                }
+            }
+            match found.len() {
+                0 => {}
+                1 => return found.pop_first().map(Lookup::Item),
+                _ => return Some(Lookup::Unknown),
+            }
+        }
+        None
+    }
+
+    /// The item of the path of a `use` line of a block. A first segment that is a name comes
+    /// from the module. It is not sure if a `use` line of a block can give this name.
+    fn use_path(&self, module: &str, path: &[String]) -> Lookup {
+        let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+        let Some(first) = segments.first().copied() else { return Lookup::Unknown };
+        if !matches!(first, "crate" | "self" | "super") && first != ROOT {
+            let blocks = self.blocks.as_deref().unwrap_or_default();
+            let named = blocks.iter().flat_map(|line| &line.names).any(|(local, _)| local == first);
+            let glob = blocks.iter().flat_map(|line| &line.globs).any(|prefix| prefix != path);
+            if named || glob || blocks.iter().any(|line| !line.clear) {
+                return Lookup::Unknown;
+            }
+        }
+        self.resolve_from(module, &segments, 4)
+    }
+
+    /// The thing that a glob import of `source` gives to the module `module` for a name
+    /// (design 52.3). `None`: `source` is a module or an enum of the workspace, and the list of
+    /// its names does not have the name. `Unknown`: the tool cannot list the names of
+    /// `source` (a macro call can make an item, a glob import of an external crate).
+    fn from_glob(&self, module: &str, source: &str, name: &str, depth: usize) -> Option<Lookup> {
+        let workspace = self.workspace;
+        let direct = format!("{source}::{name}");
+        if workspace.items.get(source).is_some_and(|item| item.kind == ItemKind::Enum) {
+            return workspace.items.get(&direct).is_some_and(|item| item.kind == ItemKind::Variant).then_some(Lookup::Item(direct));
+        }
+        if !self.is_module(source) || depth == 0 {
+            return Some(Lookup::Unknown);
+        }
+        // A glob import gives a private item only to the module and its children.
+        let inside = module == source || module.starts_with(&format!("{source}::"));
+        if let Some(item) = workspace.items.get(&direct).filter(|item| !matches!(item.kind, ItemKind::Use | ItemKind::Impl)) {
+            return (inside || item.vis.starts_with("pub")).then_some(Lookup::Item(direct));
+        }
+        // Twins of the name (two `cfg` forms) give no single item.
+        let twin = format!("{direct}#");
+        if workspace.items.range(twin.clone()..).next().is_some_and(|(path, _)| path.starts_with(&twin)) {
+            return Some(Lookup::Unknown);
+        }
+        let mut found = BTreeSet::new();
+        for item in workspace.items.values().filter(|item| owner(&item.path) == source) {
+            // A macro call in the module can make an item with the name.
+            if name_of_call(item).is_some() {
+                return Some(Lookup::Unknown);
+            }
+            if item.kind != ItemKind::Use || !(inside || item.vis.starts_with("pub")) {
+                continue;
+            }
+            let Some(parsed) = semilla_syntax::rs::parse_use(&item.source) else { return Some(Lookup::Unknown) };
+            let mut names = Vec::new();
+            use_names(&parsed.tree, &[], &mut names);
+            if names.iter().any(|(local, _)| local == name) {
+                return Some(target_in(source, name, workspace, 8).map_or(Lookup::Unknown, Lookup::Item));
+            }
+            let mut globs = Vec::new();
+            glob_prefixes(&parsed.tree, &mut Vec::new(), &mut globs);
+            for prefix in globs {
+                let segments: Vec<&str> = prefix.iter().map(String::as_str).collect();
+                let next = if parsed.leading_colon { Lookup::Unknown } else { self.resolve_from(source, &segments, depth - 1) };
+                let Lookup::Item(next) = next else { return Some(Lookup::Unknown) };
+                match self.from_glob(module, &next, name, depth - 1) {
+                    Some(Lookup::Item(target)) => {
+                        found.insert(target);
+                    }
+                    Some(other) => return Some(other),
+                    None => {}
+                }
+            }
+        }
+        match found.len() {
+            0 => None,
+            1 => found.pop_first().map(Lookup::Item),
+            _ => Some(Lookup::Unknown),
+        }
+    }
+
+    /// The item of a path from the place of the path in the item: the `use` lines of the
+    /// blocks of the body, then the module of the item.
     fn resolve(&mut self, segments: &[&str]) -> Lookup {
         let Some(module) = self.module else { return Lookup::Unknown };
         let Some(first) = segments.first().copied() else { return Lookup::Unknown };
@@ -269,8 +453,23 @@ impl<'a> Scope<'a> {
             return Lookup::Item(current);
         }
         // A local or a generic parameter (`T::name`): the tree does not give its type.
-        if !matches!(first, "crate" | "self" | "super") && first != ROOT && self.bound().names.contains(first) {
-            return Lookup::Unknown;
+        if !matches!(first, "crate" | "self" | "super") && first != ROOT {
+            if self.bound().names.contains(first) {
+                return Lookup::Unknown;
+            }
+            match self.in_blocks(first) {
+                Some(Lookup::Item(mut current)) => {
+                    for segment in &segments[1..] {
+                        match self.step(&current, segment, 4) {
+                            Lookup::Item(next) => current = next,
+                            other => return other,
+                        }
+                    }
+                    return Lookup::Item(current);
+                }
+                Some(other) => return other,
+                None => {}
+            }
         }
         self.resolve_from(module, segments, 4)
     }
@@ -385,7 +584,7 @@ impl<'a> Scope<'a> {
                 match self.resolve(&segments) {
                     Lookup::Item(path) if self.workspace.items.get(&path).is_some_and(|item| item.kind == ItemKind::Type) => Class::ByName(NameKind::Field),
                     Lookup::Item(path) => sure(&format!("{path}.{name}")),
-                    Lookup::External => Class::Other,
+                    Lookup::External | Lookup::Mixed => Class::Other,
                     Lookup::Unknown => Class::ByName(NameKind::Field),
                 }
             }
@@ -408,17 +607,17 @@ impl<'a> Scope<'a> {
                             None => Class::Never,
                         };
                     }
-                    // A pattern with the name of a constant or of a variant is a use of it. A
-                    // pattern with each other name binds a local.
-                    let constant = rules.iter().all(|rule| matches!(rule.kind, ItemKind::Const | ItemKind::Static | ItemKind::Variant));
+                    // A pattern with the name of an item that a pattern can name is a use of
+                    // it (design 52.2). A pattern with each other name binds a local.
+                    let constant = rules.iter().all(|rule| self.workspace.items.get(&rule.old_path).is_some_and(pattern_item));
                     let bound = self.bound();
                     if bound.names.contains(name) && !(constant && bound.patterns.contains(name)) {
                         return Class::Never;
                     }
                     let Some(module) = self.module else { return Class::ByName(NameKind::Path) };
-                    return match self.in_module(module, name, 4) {
+                    return match self.in_blocks(name).unwrap_or_else(|| self.in_module(module, name, 4)) {
                         Lookup::Item(path) => sure(&path),
-                        Lookup::External => Class::Other,
+                        Lookup::External | Lookup::Mixed => Class::Other,
                         Lookup::Unknown => Class::ByName(NameKind::Path),
                     };
                 }
@@ -426,7 +625,7 @@ impl<'a> Scope<'a> {
                 segments.push(name);
                 match self.resolve(&segments) {
                     Lookup::Item(path) => sure(&path),
-                    Lookup::External => Class::Other,
+                    Lookup::External | Lookup::Mixed => Class::Other,
                     Lookup::Unknown => Class::ByName(NameKind::Path),
                 }
             }
@@ -443,11 +642,69 @@ pub(crate) fn bare_name(workspace: &Workspace, item: &str, name: &str, target: &
     if scope.bound().names.contains(name) {
         return Some(false);
     }
-    match scope.in_module(scope.module?, name, 4) {
+    let module = scope.module?;
+    match scope.in_blocks(name).unwrap_or_else(|| scope.in_module(module, name, 4)) {
         Lookup::Item(path) => Some(path == target),
-        Lookup::External => Some(false),
+        Lookup::External | Lookup::Mixed => Some(false),
         Lookup::Unknown => None,
     }
+}
+
+/// True for an item that an identifier pattern can name: a constant, a static, a variant, a
+/// unit struct, or a tuple struct (design 52.2).
+fn pattern_item(item: &Item) -> bool {
+    match item.kind {
+        ItemKind::Const | ItemKind::Static | ItemKind::Variant => true,
+        // A struct with named fields ends with `}`.
+        ItemKind::Struct => item.source.trim_end().ends_with(';'),
+        _ => false,
+    }
+}
+
+/// True if an identifier pattern with the name `name` in the item is a sure binding (design
+/// 52.2). Condition 1: the pattern has `ref`, `mut`, or `@`. Condition 2: the name is not the
+/// name of an item that a pattern can name, and its first letter is not an upper-case letter.
+/// An identifier pattern that is not a sure binding is a path: a use of an item.
+pub(crate) fn sure_binding(workspace: &Workspace, item: &Item, name: &str) -> bool {
+    let mut scope = Scope::new(item, workspace);
+    let bound = scope.bound();
+    if bound.marked.contains(name) {
+        return true;
+    }
+    // An item in the body with the name comes before the module.
+    if name.chars().next().is_some_and(char::is_uppercase) || (bound.names.contains(name) && !bound.patterns.contains(name)) {
+        return false;
+    }
+    let lookup = match scope.module {
+        Some(module) => scope.in_blocks(name).unwrap_or_else(|| scope.in_module(module, name, 4)),
+        None => Lookup::Unknown,
+    };
+    match lookup {
+        Lookup::Item(path) => !workspace.items.get(&path).is_some_and(pattern_item),
+        // An item of a different crate with a lower-case first letter: not a constant by the
+        // name rule.
+        Lookup::External => true,
+        Lookup::Mixed => false,
+        // The resolution is not sure: no item of these kinds in the workspace has the name.
+        Lookup::Unknown => !workspace.items.values().any(|other| pattern_item(other) && name_of(&other.path) == name),
+    }
+}
+
+/// The item of a path whose first name comes from a `use` line in a block of the body of an
+/// item (design 52.3). `None`: no such line gives the first name at a place of the body.
+/// `Some(None)`: a line gives the name, and the syntax tree cannot resolve the path.
+pub(crate) fn block_path(workspace: &Workspace, item: &str, segments: &[&str]) -> Option<Option<String>> {
+    let item = workspace.items.get(item)?;
+    let mut scope = Scope::new(item, workspace);
+    let first = segments.first().copied()?;
+    if matches!(first, "crate" | "self" | "super") || scope.bound().names.contains(first) {
+        return None;
+    }
+    scope.in_blocks(first)?;
+    Some(match scope.resolve(segments) {
+        Lookup::Item(path) => Some(path),
+        _ => None,
+    })
 }
 
 /// The item that a path gives in an item of a tree. `None` if the syntax tree cannot resolve
@@ -464,10 +721,15 @@ pub(crate) fn path_item(workspace: &Workspace, item: &str, segments: &[&str]) ->
 /// The call can make an item with the name, and the syntax phase cannot list this item.
 pub(crate) fn macro_call_with<'a>(workspace: &'a Workspace, name: &str) -> Option<&'a str> {
     workspace.items.values().find_map(|item| {
-        let (call, _) = item.path.rsplit("::").next()?.split_once('!')?;
-        let has = !crate::owners::is_macro_definition(item) && places(&item.source, &|word| word == name).iter().any(|place| place.name == name);
-        has.then_some(call.trim())
+        let call = name_of_call(item)?;
+        places(&item.source, &|word| word == name).iter().any(|place| place.name == name).then_some(call)
     })
+}
+
+/// The name of the macro of a macro call in a module. `None` for each other item.
+fn name_of_call(item: &Item) -> Option<&str> {
+    let (call, _) = item.path.rsplit("::").next()?.split_once('!')?;
+    (!crate::owners::is_macro_definition(item)).then_some(call.trim())
 }
 
 /// Rule R2 for a name in a path: true if no other declaration of a value or a type has the

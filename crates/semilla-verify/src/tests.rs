@@ -29,11 +29,19 @@ impl ExprOracle for FakeExprs {
 }
 
 fn load(src: &str) -> (tempfile::TempDir, Workspace) {
+    load_with(MANIFEST, src)
+}
+
+fn load_with(manifest: &str, src: &str) -> (tempfile::TempDir, Workspace) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
-    std::fs::write(dir.path().join("Cargo.toml"), MANIFEST).unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), manifest).unwrap();
     std::fs::write(dir.path().join("src/lib.rs"), src).unwrap();
     let ws = Workspace::load(dir.path()).unwrap();
+    // Design 52.1: each source text of the tests has the parts of each node.
+    for item in ws.items.values() {
+        assert_eq!(item.body.as_ref().and_then(|body| body.parts_fault(&mut 0)), None, "{}", item.path);
+    }
     (dir, ws)
 }
 
@@ -8304,4 +8312,341 @@ fn the_pure_renames_of_batch_9a_keep_their_facts() {
     assert_eq!(plain_texts(&run_tree(local, &local.replace("sum", "total"))), ["`demo::f`: renamed local `sum` → `total`, 4 edit(s)"]);
     let param = "pub fn f(count: u32, b: u32) -> u32 {\n    let twice = count * 2;\n    let more = count + twice;\n    more + count + b\n}\n";
     assert_eq!(plain_texts(&run_tree(param, &param.replace("count", "n"))), ["parameter `count` of `demo::f` renamed to `n`: `u32`", "`demo::f`: renamed local `count` → `n`, 3 edit(s)"]);
+}
+
+// ---- Batch 9a3 (design 52): the own tokens of a node, a sure binding, a `use` line in a block ----
+
+/// The example crate of design 52.
+const YARD: &str = r#"pub mod gauge {
+    pub const LOW: u32 = 1;
+    pub const HIGH: u32 = 9;
+    #[derive(Clone, Copy)]
+    pub enum Mode { Idle, Busy, Halt }
+    pub struct Meter { pub level: u32 }
+    pub fn read(m: &Meter) -> u32 { m.level }
+}
+pub mod spare {
+    pub fn read(k: u32) -> u32 { k + 50 }
+    pub fn probe(k: u32) -> u32 { k + 70 }
+}
+pub mod work {
+    use crate::gauge::{read, Meter, Mode, Mode::*, HIGH, LOW};
+    pub fn n1a(n: u32) -> u32 { 'p: loop { let _k: u32 = 'q: loop { if n > 1 { break 'p 1; } else { break 'q 5; } }; } }
+    pub fn n1b(n: u32) -> u32 { let s = (0..n).map(u64::from).sum::<u64>(); s as u32 }
+    pub fn n1c(n: u32) -> u32 { let v = vec![n]; let f = move || v.len() as u32 + 1; f() }
+    pub fn n1d(n: u32) -> u32 { let f = |k: u32| -> u64 { (k + 1).into() }; f(n) as u32 }
+    pub fn n1e(n: u32) -> u32 { let t = async move { n + 1 }; drop(t); n }
+    pub fn n2a(m: Mode) -> u32 { match m { Idle => 0, Busy => 1, _ => 2 } }
+    pub fn n2b(k: u32) -> u32 { match k { LOW => 0, _ => 1 } }
+    pub fn n2d(o: Option<u32>) -> u32 { match o { None => 0, Some(k) => k } }
+    pub fn n2e(n: u32) -> u32 { let total = n + 1; total * 2 }
+    pub fn n2f(o: Option<u32>) -> u32 { match o { Some(k) => k, _ => HIGH } }
+    pub fn w1(m: &Meter) -> u32 { read(m) }
+    pub fn w2() -> u32 { use crate::spare::read; read(4) }
+    pub fn w3() -> u32 { use crate::spare::*; read(5) }
+}
+"#;
+
+/// The fact lines of a step in the default mode: the text and the category of each fact. A
+/// fact of the public API does not count.
+fn tree_lines(before: &str, after: &str) -> Vec<String> {
+    report_lines(&run_tree(before, after))
+}
+
+fn report_lines(report: &StepReport) -> Vec<String> {
+    let lines = report.facts.iter().zip(plain_texts(report)).filter(|(_, text)| !text.starts_with("public API: "));
+    lines.map(|(fact, text)| format!("{text} [{}]", format!("{:?}", fact.category).to_lowercase())).collect()
+}
+
+/// The report of the example crate with each pair replaced. The crate has the edition 2021
+/// (an `async` block).
+fn yard_report(pairs: &[(&str, &str)]) -> StepReport {
+    let manifest = format!("{MANIFEST}edition = \"2021\"\n");
+    let (_d1, old) = load_with(&manifest, YARD);
+    let (_d2, new) = load_with(&manifest, &swap(YARD, pairs));
+    let mut step = step(Vec::new());
+    step.compiled = false;
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
+}
+
+/// The fact lines of the example crate with each pair replaced.
+fn yard_lines(pairs: &[(&str, &str)]) -> Vec<String> {
+    report_lines(&yard_report(pairs))
+}
+
+/// Design 52.1, the cases of defect N1: an own token and a child of a node change in one step.
+/// Before: the fact had only the child, and the own token was in no fact.
+#[test]
+fn a_changed_own_token_with_a_changed_child_is_in_a_fact() {
+    // A node with no block: one fact with the full old node and the full new node.
+    assert_eq!(yard_lines(&[("break 'p 1;", "break 'q 2;")]), ["changed break: `break 'p 1` → `break 'q 2` at `demo::work::n1a/S0/body/S0/init/body/S0/then/S0` [semantics]"]);
+    assert_eq!(yard_lines(&[("(0..n).map(u64::from).sum::<u64>()", "(1..n).map(u64::from).sum::<u128>()")]), ["changed expression `(0..n).map(u64::from).sum::<u64>()` → `(1..n).map(u64::from).sum::<u128>()` at `demo::work::n1b/S0/init` [semantics]"]);
+    assert_eq!(yard_lines(&[("move || v.len() as u32 + 1", "|| v.len() as u32 + 2")]), ["changed expression `move || v.len() as u32 + 1` → `|| v.len() as u32 + 2` at `demo::work::n1c/S1/init` [semantics]"]);
+    // A node with a block: the child keeps its fact, and the node has one more fact with its
+    // own tokens.
+    assert_eq!(
+        yard_lines(&[("|k: u32| -> u64 { (k + 1).into() }", "|k: u32| -> u128 { (k + 2).into() }")]),
+        ["changed literal `1` → `2` at `demo::work::n1d/S0/init/body/tail/recv/rhs` [semantics]", "changed closure_block: `|k: u32| -> u64 {…}` → `|k: u32| -> u128 {…}` at `demo::work::n1d/S0/init` [semantics]"]
+    );
+    assert_eq!(
+        yard_lines(&[("async move { n + 1 }", "async { n + 2 }")]),
+        ["changed literal `1` → `2` at `demo::work::n1e/S0/init/body/tail/rhs` [semantics]", "changed async: `async move {…}` → `async {…}` at `demo::work::n1e/S0/init` [semantics]"]
+    );
+}
+
+/// Design 52.1: the rule of the own tokens holds for each kind of node. Four more forms: a
+/// label of a loop, a label of a `for` loop, an attribute of a `match` arm, and an attribute
+/// of a statement.
+#[test]
+fn the_rule_of_the_own_tokens_holds_for_each_kind_of_node() {
+    let lines = |before: &str, after: &str| tree_lines(before, after);
+    assert_eq!(
+        lines("pub fn f(a: u32) -> u32 { let mut k = a; 'p: loop { k += 1; if k > 9 { break; } } k }\n", "pub fn f(a: u32) -> u32 { let mut k = a; 'q: loop { k += 2; if k > 9 { break; } } k }\n"),
+        ["changed literal `1` → `2` at `demo::f/S1/body/S0/rhs` [semantics]", "changed loop: `'p: loop {…}` → `'q: loop {…}` at `demo::f/S1` [semantics]"]
+    );
+    assert_eq!(
+        lines("pub fn f(v: &[u32]) -> u32 { let mut s = 0; 'a: for x in v { s += x + 1; } s }\n", "pub fn f(v: &[u32]) -> u32 { let mut s = 0; for x in v { s += x + 2; } s }\n"),
+        ["changed literal `1` → `2` at `demo::f/S1/body/S0/rhs/rhs` [semantics]", "changed for: `'a: for … in … {…}` → `for … in … {…}` at `demo::f/S1` [semantics]"]
+    );
+    assert_eq!(
+        lines("pub fn f(a: u32) -> u32 { match a { #[cfg(all())] 1 => 2, _ => 3 } }\n", "pub fn f(a: u32) -> u32 { match a { #[cfg(any())] 1 => 4, _ => 3 } }\n"),
+        ["changed literal `2` → `4` at `demo::f/S0/arm[0].body` [semantics]", "changed match: `match … { #[cfg(all())] … => …, … => … }` → `match … { #[cfg(any())] … => …, … => … }` at `demo::f/S0` [semantics]"]
+    );
+    assert_eq!(
+        lines("pub fn f(a: u32) -> u32 { #[allow(unused)] let b = a + 1; b }\n", "pub fn f(a: u32) -> u32 { #[allow(dead_code)] let b = a + 2; b }\n"),
+        ["changed let: `#[allow(unused)] let b = a + 1;` → `#[allow(dead_code)] let b = a + 2;` at `demo::f/S0` [semantics]"]
+    );
+}
+
+/// Design 52.1, the negative tests: an edit of one own token has the fact of batch 9a2, and
+/// an edit of one child with equal own tokens has the narrow fact.
+#[test]
+fn one_changed_own_token_or_one_changed_child_keeps_its_fact() {
+    assert_eq!(yard_lines(&[("break 'p 1;", "break 'q 1;")]), ["changed break: `break 'p 1` → `break 'q 1` at `demo::work::n1a/S0/body/S0/init/body/S0/then/S0` [semantics]"]);
+    assert_eq!(tree_lines("pub fn f(a: u32) -> u32 { a + 1 }\n", "pub fn f(a: u32) -> u32 { a + 2 }\n"), ["changed literal `1` → `2` at `demo::f/tail/rhs` [semantics]"]);
+    // One changed own token of a node with a block: the full text of the node.
+    assert_eq!(
+        tree_lines("pub fn f(a: u32) -> u32 { let v = vec![a]; let f = move || { v.len() as u32 + 1 }; f() }\n", "pub fn f(a: u32) -> u32 { let v = vec![a]; let f = || { v.len() as u32 + 1 }; f() }\n"),
+        ["changed closure_block: `move || { v.len() as u32 + 1 }` → `|| { v.len() as u32 + 1 }` at `demo::f/S1/init` [semantics]"]
+    );
+    // An inner attribute of the body of an item is in the fact of the attributes of the item.
+    assert_eq!(
+        tree_lines("pub fn f(a: u32) -> u32 { #![allow(unused)] let b = a + 1; b }\n", "pub fn f(a: u32) -> u32 { #![allow(dead_code)] let b = a + 2; b }\n"),
+        ["attributes of `demo::f`: changed `#![allow(unused)]` → `#![allow(dead_code)]` [attribute]", "changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]"]
+    );
+}
+
+/// Design 52.1: the `;` of a statement is an own token. A fact with a second difference shows
+/// the `;` that only one side has. Before: the fact had only the child.
+#[test]
+fn the_semicolon_of_a_statement_shows_in_a_fact_with_a_second_difference() {
+    let g = "pub fn g(k: u32) -> u32 { k }\n";
+    let lines = |before: &str, after: &str| tree_lines(&format!("{g}{before}\n"), &format!("{g}{after}\n"));
+    assert_eq!(lines("pub fn f() { let a = 1; g(a) }", "pub fn f() { let a = 1; g(a + 1); }"), ["changed call: `g(a)` → `g(a + 1);` at `demo::f/tail` [semantics]"]);
+    assert_eq!(lines("pub fn f() -> u32 { let a = 1; g(a); }", "pub fn f() -> u32 { let a = 1; g(a + 1) }"), ["changed call: `g(a);` → `g(a + 1)` at `demo::f/S1` [semantics]"]);
+    // A node with a block: the child keeps its fact.
+    assert_eq!(
+        lines("pub fn f(c: bool) { let a = 1; if c { g(a); } }", "pub fn f(c: bool) { let a = 1; if c { g(a + 1); }; }"),
+        ["changed expression `a` → `a + 1` at `demo::f/S1/then/S0/args[0]` [semantics]", "changed if: `if … {…}` → `if … {…};` at `demo::f/S1` [semantics]"]
+    );
+    // Negative: the `;` on the two sides does not show, and the `;` alone has the fact of
+    // batch 9a2.
+    assert_eq!(lines("pub fn f() { let a = 1; g(a); }", "pub fn f() { let a = 1; g(a + 1); }"), ["changed expression `a` → `a + 1` at `demo::f/S1/args[0]` [semantics]"]);
+    assert_eq!(lines("pub fn f() { let a = 1; g(a) }", "pub fn f() { let a = 1; g(a); }"), ["moved call: `g(a)` from `tail` to `S1` in `demo::f` [semantics]"]);
+}
+
+/// Design 52.2: a token difference with no meaning in the grammar gives no fact. Before: each
+/// of these steps gave a fact.
+#[test]
+fn a_token_with_no_meaning_in_the_grammar_gives_no_fact() {
+    let cases = [
+        // E1: the comma before the closing delimiter of a list.
+        ("pub fn g(a: u32, b: u32) -> u32 { a + b }\npub fn f(a: u32) -> u32 { g(a, 1) }\n", "pub fn g(a: u32, b: u32,) -> u32 { a + b }\npub fn f(a: u32) -> u32 { g(a, 1,) }\n"),
+        ("pub struct S { pub a: u32, pub b: u32 }\npub enum E { A, B }\npub fn f() -> S { S { a: 1, b: 2 } }\n", "pub struct S { pub a: u32, pub b: u32, }\npub enum E { A, B, }\npub fn f() -> S { S { a: 1, b: 2, } }\n"),
+        ("pub fn f<T, U>(a: T, _b: U) -> T { a }\npub fn g() -> Vec<u8> { Vec::<u8>::new() }\n", "pub fn f<T, U,>(a: T, _b: U,) -> T { a }\npub fn g() -> Vec<u8,> { Vec::<u8,>::new() }\n"),
+        // E1 for the last arm, and E2: the comma after an arm with a block.
+        ("pub fn f(a: u32) -> u32 { match a { 1 => { 2 } 2 => unsafe { 3 }, _ => 3 } }\n", "pub fn f(a: u32) -> u32 { match a { 1 => { 2 }, 2 => unsafe { 3 } _ => 3, } }\n"),
+        // E3: an empty statement.
+        ("pub fn f(a: u32) -> u32 { let b = a + 1; b }\n", "pub fn f(a: u32) -> u32 { let b = a + 1;; b }\n"),
+        // E4: the comma after the last predicate of a `where` clause.
+        ("pub fn f<T>(a: T) -> T where T: Clone { a }\n", "pub fn f<T>(a: T) -> T where T: Clone, { a }\n"),
+    ];
+    for (before, after) in cases {
+        assert_eq!(tree_lines(before, after), Vec::<String>::new(), "{after}");
+        assert_eq!(tree_lines(after, before), Vec::<String>::new(), "{after}");
+    }
+    // The comma after an arm is in the part of the body of the arm. A body gets a block and
+    // its comma goes: the `match` has no fact of its own tokens.
+    assert_eq!(
+        tree_lines("pub fn f(a: u32) -> u32 { match a { 1 => a + 2, _ => 3 } }\n", "pub fn f(a: u32) -> u32 { match a { 1 => { a + 2 } _ => 3 } }\n"),
+        ["changed block: `a + 2` → `{ a + 2 }` at `demo::f/S0/arm[0].body` [semantics]"]
+    );
+    assert_eq!(tree_lines("pub fn f(a: u32) -> (u32,) { (a,) }\n", "pub fn f(a: u32) -> (u32,) { ((a),) }\n").len(), 1);
+    assert_eq!(
+        tree_lines("pub fn f(a: u32) -> String { format!(\"{} {}\", a, a) }\n", "pub fn f(a: u32) -> String { format!(\"{} {}\", a, a,) }\n"),
+        ["replace macro input `format!(\"{} {}\", a, a)` → `format!(\"{} {}\", a, a,)` at `demo::f/tail` [macro]"]
+    );
+}
+
+/// The rename of the example crate of design 52: `gauge::read` is now `gauge::take`.
+const YARD_RENAME: [(&str, &str); 3] = [("pub fn read(m: &Meter) -> u32 { m.level }", "pub fn take(m: &Meter) -> u32 { m.level }"), ("use crate::gauge::{read, Meter,", "use crate::gauge::{take, Meter,"), ("{ read(m) }", "{ take(m) }")];
+const YARD_FACT: &str = "renamed `demo::gauge::read` → `demo::gauge::take` [rename]";
+
+/// The fact lines of the rename of the example crate, with more pairs before the rename
+/// (`both`: in the two trees) and after it (`only_after`: only in the tree after the step).
+fn yard_rename_lines(both: &[(&str, &str)], only_after: &[(&str, &str)]) -> Vec<String> {
+    let manifest = format!("{MANIFEST}edition = \"2021\"\n");
+    let before = swap(YARD, both);
+    let (_d1, old) = load_with(&manifest, &before);
+    let (_d2, new) = load_with(&manifest, &swap(&swap(&before, &YARD_RENAME), only_after));
+    let mut run = step(Vec::new());
+    run.compiled = false;
+    report_lines(&verify_step_with(&StepInput { step: &run, before: &old, after: &new }, &NoOracle, &NoOracle, true).report)
+}
+
+/// Design 52.3, the cases of defect N3: a name from a `use` line in a block of a body is not
+/// the item with the same name of the module. Before: the pure rename gave two false facts
+/// (`read` still names the old item), and the two edits were under the rename fact.
+#[test]
+fn a_name_from_a_use_line_in_a_block_is_not_a_site_of_a_rename_of_a_module_item() {
+    assert_eq!(yard_rename_lines(&[], &[]), [YARD_FACT]);
+    assert_eq!(
+        yard_rename_lines(&[], &[("use crate::spare::read; read(4)", "use crate::spare::{read, probe as take}; take(4)")]),
+        [YARD_FACT, "changed path `read` → `take` at `demo::work::w2/tail/callee` [semantics]", "changed item: `use crate::spare::read;` → `use crate::spare::{read, probe as take};` at `demo::work::w2/S0` [semantics]"]
+    );
+    // A glob import of a module of the workspace: the tool lists the names of the module.
+    assert_eq!(yard_rename_lines(&[], &[("use crate::spare::*; read(5)", "use crate::spare::*; take(5)")]), [YARD_FACT, "changed path `read` → `take` at `demo::work::w3/tail/callee` [semantics]"]);
+}
+
+/// Design 52.3: an alias and a list in a `use` line of a block, a `use` line in an outer
+/// block of the place, and a path through a module that a `use` line of a block gives.
+#[test]
+fn each_form_of_a_use_line_in_a_block_gives_the_scope_of_its_names() {
+    // An alias with the old name for a different item.
+    let alias = [("use crate::spare::read; read(4)", "use crate::spare::{probe as read, read as other}; read(4) + other(1)")];
+    assert_eq!(yard_rename_lines(&alias, &[]), [YARD_FACT]);
+    assert_eq!(yard_rename_lines(&alias, &[("read(4) + other(1)", "take(4) + other(1)")]), [YARD_FACT, "changed path `read` → `take` at `demo::work::w2/tail/lhs/callee` [semantics]"]);
+    // The `use` line is in an outer block of the place.
+    let outer = [("use crate::spare::read; read(4)", "use crate::spare::read; if true { let k = { read(4) }; k } else { 0 }")];
+    assert_eq!(yard_rename_lines(&outer, &[]), [YARD_FACT]);
+    assert_eq!(yard_rename_lines(&outer, &[("{ read(4) }", "{ take(4) }")]), [YARD_FACT, "changed path `read` → `take` at `demo::work::w2/S1/then/S0/init/body/tail/callee` [semantics]"]);
+    // An inner block with its own `use` line comes before the outer block.
+    let inner = [("use crate::spare::read; read(4)", "use crate::spare::read; { use crate::gauge::Meter; let m = Meter { level: 1 }; { use crate::gauge::read; read(&m) } }")];
+    assert_eq!(yard_rename_lines(&inner, &[("use crate::gauge::read; read(&m)", "use crate::gauge::take; take(&m)")]), [YARD_FACT]);
+    // Two places of the name with different scopes in one item: the site table has no place
+    // of a token, so the place of the renamed item has its own fact (a limit, design 52.3).
+    let mixed = [("use crate::spare::read; read(4)", "use crate::spare::read; read(4) + { use crate::gauge::{read, Meter}; read(&Meter { level: 1 }) }")];
+    assert_eq!(
+        yard_rename_lines(&mixed, &[("use crate::gauge::{read, Meter}; read(&Meter", "use crate::gauge::{take, Meter}; take(&Meter")]),
+        [YARD_FACT, "changed path `read` → `take` at `demo::work::w2/tail/rhs/body/tail/callee` [semantics]"]
+    );
+    // A module with the name of the owner of the renamed item, through a `use` line of a block.
+    let module = [("use crate::spare::read; read(4)", "use crate::spare as gauge; gauge::read(4)")];
+    assert_eq!(yard_rename_lines(&module, &[]), [YARD_FACT]);
+    assert_eq!(yard_rename_lines(&module, &[("gauge::read(4)", "gauge::take(4)")]), [YARD_FACT, "changed path `gauge::read` → `gauge::take` at `demo::work::w2/tail/callee` [semantics]"]);
+}
+
+/// Design 52.3: a glob import of an external crate in a block. The tool cannot list its
+/// names, so a bare name of the block is a site by name (class 4): it follows the rename only
+/// if the name is free.
+#[test]
+fn a_glob_import_of_an_external_crate_in_a_block_makes_a_bare_name_a_site_by_name() {
+    let before = "pub mod gauge {\n    pub fn read(k: u32) -> u32 { k }\n}\npub mod work {\n    use crate::gauge::read;\n    pub fn w() -> u32 { use std::cmp::*; read(5) }\n}\n";
+    let report = run_tree(before, &before.replace("read", "take"));
+    assert_eq!(report_lines(&report), ["renamed `demo::gauge::read` → `demo::gauge::take` [rename]"]);
+    assert_eq!(note_of(&report, "renamed `demo::gauge::read`"), Some("1 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)"));
+    // A second declaration has the name: the name is not free, and the place has its own fact.
+    let taken = format!("{before}pub mod spare {{\n    pub fn read(k: u32) -> u32 {{ k + 1 }}\n}}\n");
+    let after = taken.replacen("pub fn read(k: u32) -> u32 { k }", "pub fn take(k: u32) -> u32 { k }", 1).replace("use crate::gauge::read;", "use crate::gauge::take;").replace("read(5)", "take(5)");
+    assert_eq!(tree_lines(&taken, &after), ["renamed `demo::gauge::read` → `demo::gauge::take` [rename]", "changed path `read` → `take` at `demo::work::w/tail/callee` [semantics]"]);
+}
+
+/// Design 52.3, the negative test: a `use` line of the renamed item in a block is a sure site,
+/// and the name that it gives is a sure site. The rename has no site by name.
+#[test]
+fn a_use_line_of_the_renamed_item_in_a_block_is_a_sure_site() {
+    let before = "pub mod gauge {\n    pub fn read(k: u32) -> u32 { k }\n    pub fn other(k: u32) -> u32 { k }\n}\npub mod spare {\n    pub fn read(k: u32) -> u32 { k + 1 }\n}\npub mod work {\n    pub fn a() -> u32 { use crate::gauge::read; read(5) }\n    pub fn b() -> u32 { use crate::gauge::{other, read as get}; get(5) + other(1) }\n    pub fn c() -> u32 { use crate::gauge::*; if true { read(5) } else { 0 } }\n}\n";
+    let after = before.replacen("pub fn read(k: u32) -> u32 { k }", "pub fn take(k: u32) -> u32 { k }", 1).replace("use crate::gauge::read; read(5)", "use crate::gauge::take; take(5)").replace("read as get", "take as get").replace("{ read(5) } else", "{ take(5) } else");
+    let report = run_tree(before, &after);
+    assert_eq!(report_lines(&report), ["renamed `demo::gauge::read` → `demo::gauge::take` [rename]"]);
+    assert_eq!(note_of(&report, "renamed `demo::gauge::read`"), None);
+}
+
+/// Design 52.2, the cases of defect N2: an identifier pattern that names a variant or a
+/// constant is a path. Its change is a fact of the code, not a rename of a local. Before:
+/// each of the four edits was "renamed local … [rename]".
+#[test]
+fn an_identifier_pattern_that_is_not_a_sure_binding_is_not_a_renamed_local() {
+    assert_eq!(yard_lines(&[("Idle => 0, Busy => 1", "Halt => 0, Busy => 1")]), ["changed pattern `Idle` → `Halt` at `demo::work::n2a/S0/arm[0].pat` [semantics]"]);
+    assert_eq!(yard_lines(&[("LOW => 0, _ => 1", "HIGH => 0, _ => 1")]), ["changed pattern `LOW` → `HIGH` at `demo::work::n2b/S0/arm[0].pat` [semantics]"]);
+    // A constant becomes a binding that matches each value.
+    assert_eq!(yard_lines(&[("LOW => 0, _ => 1", "low => 0, _ => 1")]), ["changed pattern `LOW` → `low` at `demo::work::n2b/S0/arm[0].pat` [semantics]"]);
+    assert_eq!(yard_lines(&[("None => 0, Some(k) => k", "Nil => 0, Some(k) => k")]), ["changed pattern `None` → `Nil` at `demo::work::n2d/S0/arm[0].pat` [semantics]"]);
+    // The controls: a rename of a local stays one fact.
+    assert_eq!(yard_lines(&[("let total = n + 1; total * 2", "let sum = n + 1; sum * 2")]), ["`demo::work::n2e`: renamed local `total` → `sum`, 2 edit(s) [rename]"]);
+    assert_eq!(yard_lines(&[("Some(k) => k, _ => HIGH", "Some(j) => j, _ => HIGH")]), ["`demo::work::n2f`: renamed local `k` → `j`, 2 edit(s) [rename]"]);
+    // A second edit in the body does not make the pattern a local.
+    assert_eq!(
+        yard_lines(&[("LOW => 0, _ => 1", "HIGH => 0, _ => 2")]),
+        ["changed pattern `LOW` → `HIGH` at `demo::work::n2b/S0/arm[0].pat` [semantics]", "changed literal `1` → `2` at `demo::work::n2b/S0/arm[1].body` [semantics]"]
+    );
+}
+
+/// Design 52.2, each condition of a sure binding.
+#[test]
+fn each_condition_of_a_sure_binding_decides_the_fact_of_a_local() {
+    let lines = |before: &str, after: &str| tree_lines(before, after);
+    // Condition 1: `ref`, `mut`, or `@` with the identifier. The name can start with an
+    // upper-case letter.
+    let with_ref = "pub fn f(o: Option<u32>) -> u32 { match o { Some(ref V) => *V, _ => 0 } }\n";
+    assert_eq!(lines(with_ref, &with_ref.replace('V', "W")), ["`demo::f`: renamed local `V` → `W`, 2 edit(s) [rename]"]);
+    let with_mut = "pub fn f(o: Option<u32>) -> u32 { match o { Some(mut V) => { V += 1; V } _ => 0 } }\n";
+    assert_eq!(lines(with_mut, &with_mut.replace('V', "W")), ["`demo::f`: renamed local `V` → `W`, 3 edit(s) [rename]"]);
+    let with_at = "pub fn f(k: u32) -> u32 { match k { V @ 1..=9 => V, _ => 0 } }\n";
+    assert_eq!(lines(with_at, &with_at.replace('V', "W")), ["`demo::f`: renamed local `V` → `W`, 2 edit(s) [rename]"]);
+    // Condition 2: an upper-case name with no known item is not a sure binding.
+    let plain = "pub fn f(k: u32) -> u32 { match k { 0 => 1, V => V } }\n";
+    assert_eq!(lines(plain, &plain.replace('V', "W")), ["changed pattern `V` → `W` at `demo::f/S0/arm[1].pat` [semantics]", "changed path `V` → `W` at `demo::f/S0/arm[1].body` [semantics]"]);
+    let local = "pub fn f(n: u32) -> u32 { let total = n + 1; total * 2 }\n";
+    assert_eq!(lines(local, &local.replace("total", "Total")), ["changed pattern `total` → `Total` at `demo::f/S0/pat` [semantics]", "changed path `total` → `Total` at `demo::f/tail/lhs` [semantics]"]);
+    // Condition 2: a constant of the module has the new name. The new pattern is a use of it.
+    let scope = "#[allow(non_upper_case_globals)]\npub const low: u32 = 3;\npub fn f(k: u32) -> u32 { match k { other => other + 1 } }\n";
+    assert_eq!(
+        lines(scope, &scope.replace("other", "low")),
+        ["changed pattern `other` → `low` at `demo::f/S0/arm[0].pat` [semantics]", "changed path `other` → `low` at `demo::f/S0/arm[0].body/lhs` [semantics]"]
+    );
+    // Condition 2: the resolution is not sure, and a constant of the workspace has the new name.
+    let far = format!("pub mod far {{\n    #[allow(non_upper_case_globals)]\n    pub const sum: u32 = 3;\n}}\n{local}");
+    assert_eq!(lines(&far, &far.replace("total", "sum")), ["changed pattern `total` → `sum` at `demo::f/S0/pat` [semantics]", "changed path `total` → `sum` at `demo::f/tail/lhs` [semantics]"]);
+    // A constant in the body has the new name.
+    let inner = "pub fn f(k: u32) -> u32 { const low: u32 = 3; match k { other => other + 1 } }\n";
+    assert_eq!(lines(inner, &inner.replace("other", "low")).len(), 2);
+    // A function is not an item that a pattern can name: the local hides it.
+    let function = format!("pub fn read() -> u32 {{ 1 }}\n{local}");
+    assert_eq!(lines(&function, &function.replace("total", "read")), ["`demo::f`: renamed local `total` → `read`, 2 edit(s) [rename]"]);
+}
+
+/// Design 52.2: an identifier pattern that is a sure site of a rename of an item is under the
+/// rename fact, as each other path. A unit struct is an item that a pattern can name.
+#[test]
+fn a_pattern_with_the_name_of_a_renamed_item_is_under_the_rename_fact() {
+    let constant = "pub const LOW: u32 = 0;\npub fn f(k: u32) -> u32 { match k { LOW => 0, _ => 1 } }\n";
+    assert_eq!(tree_lines(constant, &constant.replace("LOW", "FLOOR")), ["renamed `demo::LOW` → `demo::FLOOR` [rename]"]);
+    let variant = "pub enum Mode { Idle, Busy }\nuse Mode::*;\npub fn f(m: Mode) -> u32 { match m { Idle => 0, Busy => 1 } }\n";
+    assert_eq!(tree_lines(variant, &variant.replace("Idle", "Halt")), ["renamed `demo::Mode::Idle` → `demo::Mode::Halt` [rename]"]);
+    let unit = "pub struct Unit;\npub fn f(u: Unit) -> u32 { let k = Unit; match k { Unit => 1 } }\n";
+    assert_eq!(tree_lines(unit, &unit.replace("Unit", "Solo")), ["renamed `demo::Unit` → `demo::Solo` [rename]"]);
+}
+
+/// Design 52.2: a `rename-local` claim needs a sure binding on the two sides.
+#[test]
+fn a_rename_local_claim_needs_a_sure_binding() {
+    let before = "pub const LOW: u32 = 0;\npub const HIGH: u32 = 9;\npub fn f(k: u32) -> u32 { let LOW = k else { return 1 }; 0 }\n";
+    let after = before.replace("let LOW", "let HIGH");
+    let report = run(before, &after, vec![claim("c1", "rename-local", Some("demo::f"), serde_json::json!({"from": "LOW", "to": "HIGH"}))], &[("demo::f", equal("n0"))], None);
+    assert!(matches!(status_of(&report, "c1"), ClaimStatus::Malformed { reason } if reason.contains("`LOW` is not a sure binding")), "{:?}", status_of(&report, "c1"));
+    // The control: a local with a sure binding.
+    let before = "pub fn f(k: u32) -> u32 { let total = k + 1; total * 2 }\n";
+    let report = run(before, &before.replace("total", "sum"), vec![claim("c1", "rename-local", Some("demo::f"), serde_json::json!({"from": "total", "to": "sum"}))], &[("demo::f", equal("n0"))], None);
+    assert!(status_of(&report, "c1").is_verified(), "{:?}", status_of(&report, "c1"));
 }

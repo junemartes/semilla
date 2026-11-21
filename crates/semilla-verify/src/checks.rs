@@ -538,7 +538,9 @@ pub fn renames(step: &Step, before: &Workspace) -> Renames {
             }
             "rename-local" => {
                 let Some(to) = claim.arg_str("to") else { continue };
-                if let Some(old) = rename_local_from(before, claim, at) {
+                // Design 52.2: the map of a local needs a sure binding.
+                let sure = |old: &String| before.items.get(&at.item).is_some_and(|item| crate::sites::sure_binding(before, item, old));
+                if let Some(old) = rename_local_from(before, claim, at).filter(sure) {
                     renames.idents.push((Some(at.item.clone()), old, to.to_string()));
                 }
             }
@@ -1028,6 +1030,10 @@ impl PathSide<'_> {
                 None => (self.free)(),
             };
         }
+        // A first name from a `use` line in a block of the body (design 52.3).
+        if let Some(found) = self.item.and_then(|item| crate::sites::block_path(self.workspace, item, qualifier)) {
+            return found.as_deref() == Some(self.owner);
+        }
         let owner: Vec<&str> = self.owner.split("::").collect();
         let resolved = self.module.as_deref().and_then(|module| {
             let (first, mut rest) = qualifier.split_first()?;
@@ -1203,6 +1209,12 @@ fn check_rename_local(context: &Context, claim: &Claim) -> Outcome {
         return Outcome::malformed("the anchor is not a `let` statement (use `from` with the function as the anchor for a parameter)");
     };
     let to = claim.arg_str("to").unwrap();
+    // Design 52.2: a rename of a local needs a sure binding on the two sides.
+    let new_item = context.renames.items.get(&at.item).unwrap_or(&at.item);
+    let sure = |workspace: &Workspace, item: &str, name: &str| workspace.items.get(item).is_none_or(|item| crate::sites::sure_binding(workspace, item, name));
+    if let Some(name) = [(context.before, &at.item, old.as_str()), (context.after, new_item, to)].into_iter().find(|(workspace, item, name)| !sure(workspace, item, name)).map(|found| found.2) {
+        return Outcome::malformed(format!("`{name}` is not a sure binding in `{}`: the name can be a use of a constant, a static, a variant, or a struct", at.item));
+    }
     let before = context.before.items.get(&at.item).map(|item| item.text.clone()).unwrap_or_default();
     if context.renames.apply(&at.item, &before) == before {
         return Outcome::new(ClaimStatus::Empty);

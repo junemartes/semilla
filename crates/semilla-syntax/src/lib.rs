@@ -181,6 +181,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_files(dir.path(), files);
         let ws = Workspace::load(dir.path()).unwrap();
+        // Design 52.1: each source text of the tests has the parts of each node.
+        for item in ws.items.values() {
+            assert_eq!(item.body.as_ref().and_then(|body| body.parts_fault(&mut 0)), None, "{}", item.path);
+        }
         (dir, ws)
     }
 

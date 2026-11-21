@@ -31,7 +31,18 @@ pub struct Node {
     pub start: Pos,
     pub end: Pos,
     pub children: Vec<Node>,
+    /// The byte range of the tokens of the node in its file.
+    #[serde(skip)]
+    pub span: (usize, usize),
+    /// For each child: the byte range of its tokens in `text` (design 52.1). The text outside
+    /// these ranges is the own tokens of the node. Empty for a node that is not made from the
+    /// tokens of one syntax node (a part of a signature).
+    #[serde(skip)]
+    pub parts: Vec<(usize, usize)>,
 }
+
+/// The mark of a child in the own text of a node. It is not a token of Rust.
+pub const CHILD_MARK: &str = "…";
 
 /// The node kinds that contain statements. A free edit must not contain them (design 5.6).
 pub const BLOCK_LIKE: &[&str] = &["block", "if", "match", "for", "while", "loop", "block_expr", "unsafe", "async", "closure_block", "const_block"];
@@ -44,6 +55,73 @@ impl Node {
     /// True if the node or a descendant contains statements.
     pub fn has_block(&self) -> bool {
         BLOCK_LIKE.contains(&self.kind) || self.children.iter().any(Node::has_block)
+    }
+
+    /// The own text of a node (design 52.1): its compare text with [`CHILD_MARK`] in place of
+    /// each child. `changes` are parts of the text with a new text (the map of a rename), in
+    /// order. A change inside a child is not in the own text.
+    pub fn own_text(&self, changes: &[(usize, usize, String)]) -> String {
+        let mut out = String::with_capacity(self.text.len());
+        let mut change = changes.iter().peekable();
+        // Copies the text from `from` to `to`, with the changes of this range.
+        let mut copy = |out: &mut String, mut from: usize, to: usize| {
+            while let Some((start, end, new)) = change.peek() {
+                if *start >= to {
+                    break;
+                }
+                if *start >= from && *end <= to {
+                    out.push_str(&self.text[from..*start]);
+                    out.push_str(new);
+                    from = *end;
+                }
+                change.next();
+            }
+            out.push_str(&self.text[from.min(to)..to]);
+        };
+        let mut at = 0;
+        if self.parts.len() == self.children.len() {
+            for (start, end) in &self.parts {
+                let (start, end) = ((*start).clamp(at, self.text.len()), (*end).clamp(at, self.text.len()));
+                copy(&mut out, at, start);
+                // A change inside the child: skip it.
+                copy(&mut String::new(), start, end);
+                out.push_str(CHILD_MARK);
+                at = end;
+            }
+        }
+        copy(&mut out, at, self.text.len());
+        out
+    }
+
+    /// The first fault of the parts of a tree, if one exists (design 52.1). With no fault, the
+    /// own tokens plus the tokens of the children are the tokens of each node: each part is in
+    /// the text of its node, the parts are in the order of the children with no common byte,
+    /// and each part has the text of its child. The second value counts the children with an
+    /// empty part (their tokens are in the own text) into `empty`.
+    pub fn parts_fault(&self, empty: &mut usize) -> Option<String> {
+        // A macro input is a token tree. Its text and the text of its parse can have different
+        // spaces (`>>` and `> >`), and the parse has no optional comma and no empty statement.
+        let bare = |text: &str| text.chars().filter(|c| !matches!(c, ' ' | ',' | ';')).collect::<String>();
+        // The part of the body of a `match` arm has the comma of the arm.
+        let arm = |part: &str, child: &str| self.kind == "match" && part.strip_suffix(',').is_some_and(|rest| rest.trim_end() == child);
+        let same = |part: &str, child: &str| part == child || arm(part, child) || (self.kind == "macro" && bare(part) == bare(child));
+        if self.parts.len() == self.children.len() {
+            let mut at = 0;
+            for (child, &(start, end)) in self.children.iter().zip(&self.parts) {
+                if start < at || end < start || end > self.text.len() || !self.text.is_char_boundary(start) || !self.text.is_char_boundary(end) {
+                    return Some(format!("{} `{}`: the part {start}..{end} of `{}` is not in order", self.kind, self.text, child.role));
+                }
+                if start == end {
+                    *empty += 1;
+                } else if !same(&self.text[start..end], &child.text) {
+                    return Some(format!("{} `{}`: the part `{}` is not the text `{}` of `{}`", self.kind, self.text, &self.text[start..end], child.text, child.role));
+                }
+                at = end;
+            }
+        } else if !self.parts.is_empty() {
+            return Some(format!("{} `{}`: {} parts, {} children", self.kind, self.text, self.parts.len(), self.children.len()));
+        }
+        self.children.iter().find_map(|child| child.parts_fault(empty))
     }
 
     /// True if the position is inside the node.
@@ -205,7 +283,59 @@ impl<'a> Builder<'a> {
 
     fn node(&self, kind: &'static str, role: impl Into<String>, value: &SyntaxNode, children: Vec<Node>) -> Node {
         let (start, end) = self.range(value);
-        Node { kind, role: role.into(), text: self.text(value), attr: None, stmt: false, start, end, children }
+        let mut node = Node { kind, role: role.into(), text: String::new(), attr: None, stmt: false, start, end, children, span: (0, 0), parts: Vec::new() };
+        self.fill(&mut node, value);
+        node
+    }
+
+    /// Sets the text of a node from the tokens of `value`, with the place of each child in the
+    /// text (design 52.1). A child whose tokens are not in the text, in order, gets an empty
+    /// part: then the own text of the node has the tokens of the child too.
+    fn fill(&self, node: &mut Node, value: &SyntaxNode) {
+        let owned;
+        let tokens: &[Flat] = match tokens_in(self.tokens, value) {
+            Some(slice) if self.shift == 0 => slice,
+            _ => {
+                owned = flat_tokens(value);
+                &owned
+            }
+        };
+        let place = |offset: usize| (offset as isize + self.shift).max(0) as usize;
+        let range = value.text_range();
+        node.span = match (tokens.first(), tokens.last()) {
+            (Some(first), Some(last)) => (place(first.start), place(last.end)),
+            _ => (place(range.start().into()), place(range.end().into())),
+        };
+        if node.children.is_empty() {
+            node.text = flat_text(tokens);
+            node.parts.clear();
+            return;
+        }
+        let mut ranges = Vec::with_capacity(tokens.len());
+        node.text = crate::tt::flat_layout(tokens, Some(&mut ranges));
+        node.parts.clear();
+        // The comma after a `match` arm is a token of the arm. It is in the part of the body
+        // of the arm: the grammar needs it after a body with no block only, so it is not an
+        // own token of the `match` (design 52.1).
+        let arms = match ast::Expr::cast(value.clone()).or_else(|| ast::ExprStmt::cast(value.clone())?.expr()) {
+            Some(ast::Expr::MatchExpr(found)) => found.match_arm_list(),
+            _ => None,
+        };
+        let commas: Vec<usize> = arms.iter().flat_map(|list| list.arms()).filter_map(|arm| arm.comma_token()).map(|comma| comma.text_range().start().into()).collect();
+        let mut at = 0;
+        for child in &node.children {
+            let first = at + tokens[at..].partition_point(|token| place(token.start) < child.span.0);
+            let mut last = first + tokens[first..].partition_point(|token| place(token.end) <= child.span.1);
+            let inside = last > first && place(tokens[first].start) >= child.span.0;
+            if inside && tokens.get(last).is_some_and(|token| !token.void && commas.contains(&token.start)) {
+                last += 1;
+            }
+            let end = at.checked_sub(1).map_or(0, |index| ranges[index].1);
+            node.parts.push(if inside { (ranges[first].0, ranges[last - 1].1) } else { (end, end) });
+            if inside {
+                at = last;
+            }
+        }
     }
 
     /// The signature of a function as a node (design 22.3, A5). The children are its parts:
@@ -220,7 +350,7 @@ impl<'a> Builder<'a> {
         };
         let part = |kind: &'static str, role: String, text: String, node: Option<&SyntaxNode>| {
             let (start, end) = place(node);
-            Node { kind, role, text, attr: None, stmt: false, start, end, children: Vec::new() }
+            Node { kind, role, text, attr: None, stmt: false, start, end, children: Vec::new(), span: (0, 0), parts: Vec::new() }
         };
         let word = |token: Option<SyntaxToken>| token.map(|token| token.text().to_string()).unwrap_or_default();
         let qualifiers = [word(function.const_token()), word(function.async_token()), word(function.unsafe_token()), compare_opt(function.abi().as_ref())].into_iter().filter(|q| !q.is_empty()).collect::<Vec<_>>().join(" ");
@@ -257,7 +387,7 @@ impl<'a> Builder<'a> {
             (Some(first), Some(last)) => (self.pos(first.start), self.pos(last.end)),
             _ => self.range(function.syntax()),
         };
-        Node { kind: "signature", role: "sig".into(), text: flat_text(&tokens), attr: None, stmt: false, start, end, children }
+        Node { kind: "signature", role: "sig".into(), text: flat_text(&tokens), attr: None, stmt: false, start, end, children, span: (0, 0), parts: Vec::new() }
     }
 
     /// Builds the node of a block. Statements get the roles `S0`, `S1`, …; a final expression
@@ -305,7 +435,8 @@ impl<'a> Builder<'a> {
                     let start = pat.syntax().text_range().start();
                     let tokens: Vec<Flat> = flat_tokens(local.syntax()).into_iter().filter(|token| token.start >= usize::from(start) && token.end <= usize::from(end)).collect();
                     let (from, to) = (tokens.first().map_or(usize::from(start), |t| t.start), tokens.last().map_or(usize::from(end), |t| t.end));
-                    children.push(Node { kind: "pattern", role: "pat".into(), text: flat_text(&tokens), attr: None, stmt: false, start: self.pos(from), end: self.pos(to), children: Vec::new() });
+                    let span = ((from as isize + self.shift).max(0) as usize, (to as isize + self.shift).max(0) as usize);
+                    children.push(Node { kind: "pattern", role: "pat".into(), text: flat_text(&tokens), attr: None, stmt: false, start: self.pos(from), end: self.pos(to), children: Vec::new(), span, parts: Vec::new() });
                 }
                 if let Some(init) = local.initializer() {
                     children.push(self.expr_node("init", &init));
@@ -331,7 +462,8 @@ impl<'a> Builder<'a> {
                 }
                 let mut result = self.expr_node(role, &expr);
                 // The statement text includes the semicolon, so that `x` and `x;` are different.
-                result.text = self.text(expr_stmt.syntax());
+                // The semicolon is an own token of the node.
+                self.fill(&mut result, expr_stmt.syntax());
                 result
             }
         };
@@ -362,7 +494,8 @@ impl<'a> Builder<'a> {
             Expr::ParenExpr(inner) => match inner.expr() {
                 Some(value) => {
                     let mut result = self.expr_node(role, &value);
-                    result.text = self.text(syntax);
+                    // The parentheses are own tokens of the node.
+                    self.fill(&mut result, syntax);
                     result
                 }
                 None => self.node("other", role, syntax, Vec::new()),
@@ -596,6 +729,40 @@ pub(crate) const EXPRESSION_MACROS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Design 52.1, by construction: for each node of each body of the source files of this
+    /// repository (the tool, its tests, and the cases of the spikes), the own tokens plus the
+    /// tokens of the children are the tokens of the node.
+    #[test]
+    fn the_own_tokens_and_the_children_are_the_tokens_of_each_node() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut workspaces = vec![crate::Workspace::load(&root).unwrap()];
+        let mut holders = Vec::new();
+        let cases = root.join("spikes/s1/cases");
+        for case in std::fs::read_dir(&cases).unwrap() {
+            for name in ["before.rs", "after.rs"] {
+                let Ok(text) = std::fs::read_to_string(case.as_ref().unwrap().path().join(name)) else { continue };
+                let (dir, workspace) = crate::tests::workspace(&[("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"), ("src/lib.rs", &text)]);
+                holders.push(dir);
+                workspaces.push(workspace);
+            }
+        }
+        let (mut bodies, mut nodes, mut empty) = (0, 0, 0);
+        for workspace in &workspaces {
+            for item in workspace.items.values() {
+                let Some(body) = &item.body else { continue };
+                bodies += 1;
+                assert_eq!(body.parts_fault(&mut empty), None, "{}", item.path);
+                body.walk(&mut Vec::new(), &mut |_, node| {
+                    nodes += 1;
+                    assert_eq!(node.parts.len(), node.children.len(), "{}: {} `{}`", item.path, node.kind, node.text);
+                });
+            }
+        }
+        // Each child of each node has its part: no node uses the full text as its own text.
+        assert_eq!(empty, 0);
+        assert!(bodies > 1000 && nodes > 100_000, "{bodies} bodies, {nodes} nodes");
+    }
 
     fn body_of(code: &str) -> Node {
         let file = crate::rs::parse_file(code, Edition::Edition2021).unwrap();

@@ -356,6 +356,9 @@ pub(crate) struct Flat {
     pub end: usize,
     /// True for a token of a token tree of the source (a macro input, an attribute input).
     pub in_tree: bool,
+    /// True for a token with no meaning in the grammar (design 52.2): an optional comma, an
+    /// empty statement. The compare text does not have it. The display text has it.
+    pub void: bool,
 }
 
 /// The tokens of a node in source order, without spaces and plain comments.
@@ -385,7 +388,63 @@ fn flat(token: &SyntaxToken, in_tree: bool) -> Option<Flat> {
     // `rustc` changes each CRLF to LF before it lexes a file (design 39.4): a literal or a doc
     // comment has the text that `rustc` reads.
     let text = if token.text().contains('\r') { token.text().replace("\r\n", "\n") } else { token.text().to_string() };
-    Some(Flat { kind: token.kind(), text, start: range.start().into(), end: range.end().into(), in_tree })
+    Some(Flat { kind: token.kind(), text, start: range.start().into(), end: range.end().into(), in_tree, void: !in_tree && no_meaning(token) })
+}
+
+/// True for a token that the grammar of Rust permits and that has no meaning (design 52.2):
+/// - E1: the comma before the closing delimiter of its list (`f(a, b,)`, `[a, b,]`, `S { a, }`,
+///   `<T, U,>`, `|a, b,|`, the comma after the last arm of a `match`). The comma of a tuple
+///   with one element is not optional: `(a,)` is a tuple and `(a)` is not.
+/// - E2: the comma after a `match` arm whose body is an expression with a block.
+/// - E3: an empty statement: a `;` in a block that is not a part of a statement.
+/// - E4: the comma after the last predicate of a `where` clause.
+///
+/// A token in a token tree (a macro input, an attribute input) is not in this rule: the macro
+/// can read it.
+fn no_meaning(token: &SyntaxToken) -> bool {
+    use SyntaxKind::*;
+    if token.kind() == SEMICOLON {
+        // The `;` of a statement is in the node of the statement. A `;` that the block has
+        // comes after a full statement, after an item, or at the start of the block.
+        let before = token.siblings_with_tokens(ra_ap_syntax::Direction::Prev).skip(1).find(|element| !element.kind().is_trivia());
+        return token.parent().is_some_and(|list| list.kind() == STMT_LIST)
+            && before.is_some_and(|element| match element {
+                NodeOrToken::Token(token) => matches!(token.kind(), L_CURLY | SEMICOLON),
+                NodeOrToken::Node(node) => match node.kind() {
+                    MACRO_CALL | MACRO_EXPR => false,
+                    EXPR_STMT => node.last_token().is_some_and(|last| last.kind() == SEMICOLON),
+                    _ => true,
+                },
+            });
+    }
+    if token.kind() != COMMA {
+        return false;
+    }
+    let Some(list) = token.parent() else { return false };
+    if list.kind() == WHERE_CLAUSE {
+        return token.siblings_with_tokens(ra_ap_syntax::Direction::Next).skip(1).all(|element| element.kind() != WHERE_PRED);
+    }
+    let next = std::iter::successors(token.next_token(), |next| next.next_token()).find(|next| !next.kind().is_trivia());
+    let Some(next) = next else { return false };
+    if list.kind() == MATCH_ARM {
+        // The comma is the last token of its arm.
+        let with_block = match ast::MatchArm::cast(list.clone()).and_then(|arm| arm.expr()) {
+            Some(ast::Expr::BlockExpr(block)) => matches!(block.modifier(), None | Some(ast::BlockModifier::Label(_)) | Some(ast::BlockModifier::Unsafe(_)) | Some(ast::BlockModifier::Const(_))),
+            Some(ast::Expr::IfExpr(_) | ast::Expr::MatchExpr(_) | ast::Expr::LoopExpr(_) | ast::Expr::WhileExpr(_) | ast::Expr::ForExpr(_)) => true,
+            _ => false,
+        };
+        return with_block || (next.kind() == R_CURLY && next.parent() == list.parent());
+    }
+    let close = match next.kind() {
+        R_PAREN | R_BRACK | R_CURLY | R_ANGLE => true,
+        PIPE => list.kind() == PARAM_LIST,
+        _ => false,
+    };
+    if !close || next.parent().as_ref() != Some(&list) {
+        return false;
+    }
+    let commas = list.children_with_tokens().filter(|element| element.kind() == COMMA).count();
+    !(matches!(list.kind(), TUPLE_EXPR | TUPLE_TYPE | TUPLE_PAT) && commas == 1)
 }
 
 /// The operators of more than one character of the lexer of `rustc`.
@@ -487,6 +546,9 @@ fn build(tokens: &[Flat], lines: Option<&Lines>, base: usize) -> TokenStream {
     let mut parts: Vec<Part> = Vec::with_capacity(tokens.len() + 4);
     for (index, token) in tokens.iter().enumerate() {
         let text = token.text.as_str();
+        if token.void {
+            continue;
+        }
         if let Some((inner, value)) = doc_comment(token.kind, text) {
             let at = span(token.start, token.end);
             parts.push(Part::Tree(TokenTree::Punct(Punct { ch: '#', spacing: Spacing::Alone, span: at })));
@@ -598,6 +660,12 @@ pub fn display_without(node: &SyntaxNode, skip: &[ra_ap_syntax::TextRange]) -> S
 /// and `]`. This is the text of the groups of [`TokenStream`] (a list of tokens of a tree with
 /// no error has its delimiters in pairs).
 pub(crate) fn flat_text(tokens: &[Flat]) -> String {
+    flat_layout(tokens, None)
+}
+
+/// The compare text of a list of tokens. `ranges` gets the byte range of each token in the
+/// text (an empty range for a token that the text does not have).
+pub(crate) fn flat_layout(tokens: &[Flat], mut ranges: Option<&mut Vec<(usize, usize)>>) -> String {
     let joined = joins(tokens);
     let mut out = String::with_capacity(tokens.iter().map(|token| token.text.len() + 1).sum());
     // True if the last character of `out` is a joint mark or an open delimiter.
@@ -611,6 +679,14 @@ pub(crate) fn flat_text(tokens: &[Flat]) -> String {
     };
     for (index, token) in tokens.iter().enumerate() {
         let text = token.text.as_str();
+        if token.void {
+            if let Some(ranges) = ranges.as_deref_mut() {
+                ranges.push((out.len(), out.len()));
+            }
+            continue;
+        }
+        // The token starts after the space that comes before it.
+        let from = if glue || matches!(text, ")" | "]") && !is_literal(token.kind) { out.len() } else { out.len() + 1 };
         if let Some((inner, value)) = doc_comment(token.kind, text) {
             push(&mut out, "#", false, false, &mut glue);
             if inner {
@@ -635,6 +711,9 @@ pub(crate) fn flat_text(tokens: &[Flat]) -> String {
             let next_joins = joined[index];
             push(&mut out, text, false, next_joins, &mut glue);
         }
+        if let Some(ranges) = ranges.as_deref_mut() {
+            ranges.push((from, out.len()));
+        }
     }
     out
 }
@@ -642,6 +721,44 @@ pub(crate) fn flat_text(tokens: &[Flat]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Design 52.2: a token that the grammar permits and that has no meaning is not in the
+    /// compare text. A token that looks the same and has a meaning stays.
+    #[test]
+    fn a_token_with_no_meaning_is_not_in_the_compare_text() {
+        let text = |source: &str| compare_text(crate::rs::parse_file(source, Edition::Edition2021).unwrap().syntax());
+        let same = [
+            // E1: the comma before the closing delimiter of a list.
+            ("fn f(a: u32, b: u32,) -> (u32, u32,) { g::<u8,>(a, b,); [a, b,]; S { a, b, }; let (x, y,) = (a, b,); let P(z,) = p; |p, q,| p }", "fn f(a: u32, b: u32) -> (u32, u32) { g::<u8>(a, b); [a, b]; S { a, b }; let (x, y) = (a, b); let P(z) = p; |p, q| p }"),
+            ("struct S<T, U,> { a: T, b: U, } enum E { A, B, } struct P(u32,); use m::{a, b,};", "struct S<T, U> { a: T, b: U } enum E { A, B } struct P(u32); use m::{a, b};"),
+            // E1 for the last arm, and E2: the comma after an arm with a block.
+            ("fn f() { match a { 1 => { 2 }, 2 => if c { 3 } else { 4 }, 3 => unsafe { 5 }, _ => 6, } }", "fn f() { match a { 1 => { 2 } 2 => if c { 3 } else { 4 } 3 => unsafe { 5 } _ => 6 } }"),
+            // E3: an empty statement.
+            ("fn f() { ; let a = 1;; g();; fn h() {}; }", "fn f() { let a = 1; g(); fn h() {} }"),
+            // E4: the comma after the last predicate of a `where` clause.
+            ("fn f<T, U>() where T: Clone, U: Copy, {}", "fn f<T, U>() where T: Clone, U: Copy {}"),
+        ];
+        for (with, without) in same {
+            assert_eq!(text(with), text(without), "{with}");
+        }
+        let different = [
+            // A tuple with one element.
+            ("fn f() { (a,) }", "fn f() { (a) }"),
+            ("fn f() -> (u8,) {}", "fn f() -> (u8) {}"),
+            ("fn f() { let (a,) = b; }", "fn f() { let (a) = b; }"),
+            // A token tree: the macro can read each token.
+            ("fn f() { m!(a, b,); }", "fn f() { m!(a, b); }"),
+            ("#[derive(A, B,)] struct S;", "#[derive(A, B)] struct S;"),
+            ("fn f() { m! { fn g() {}; } }", "fn f() { m! { fn g() {} } }"),
+            // The `;` of a statement.
+            ("fn f() { if c { 1 } else { 2 }; }", "fn f() { if c { 1 } else { 2 } }"),
+            ("fn f() { m! {}; a }", "fn f() { m! {} a }"),
+            ("fn f() { g(); }", "fn f() { g() }"),
+        ];
+        for (with, without) in different {
+            assert_ne!(text(with), text(without), "{with}");
+        }
+    }
 
     fn text(source: &str) -> String {
         source.parse::<TokenStream>().unwrap().to_string()

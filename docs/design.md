@@ -4341,7 +4341,7 @@ The map of batch 9a was a map of words. `Renames::apply` changed each word that 
 1. **Never a site.** A token in a string, a character, or a byte string literal. A comment or a doc text. A lifetime or a label. A token that declares a different thing (a different item, a local, a parameter, a generic parameter).
 2. **A sure site.** The declaration of the item. A path that the syntax tree resolves to the item: through the module scope, a `use` line, `crate`, `self`, `super`, `Self`, and a glob import of a module or an enum of the workspace.
 3. **A sure other thing.** A path that resolves to a different item, to a local of the body, or to an external crate.
-4. **Not sure (by name).** A member after `.`. A path that the tree cannot resolve (an external glob import, a `use` line in a block, a path with a generic parameter). A token in the input of a macro that the syntax phase cannot read.
+4. **Not sure (by name).** A member after `.`. A path that the tree cannot resolve (an external glob import, a path with a generic parameter). Batch 9a3 resolves a name from a `use` line in a block (52.4): only a block with a glob import whose names the tool cannot list makes its bare names by name. A token in the input of a macro that the syntax phase cannot read.
 
 A path with no sure resolution is in class 4. No token is in class 2 on a guess.
 
@@ -4450,7 +4450,7 @@ In each row the rename fact stays.
 - A by-name site with a free name is under the rename fact. An external type can have the two member names. The note of R3 gives the count of these sites.
 - A member after `.` is always by name, also when the type of the receiver is clear to a reader. Only `self.name` in an `impl` is a sure site.
 - A place in the input of a macro that the syntax phase cannot read (for example `matches!`) is by name.
-- A `use` line in a block of a body is not read. The intent is: a path through it is by name. The code does not do this (see 51.7, defect N3). An item that a macro makes can shadow a glob import: the tree does not show it.
+- In batch 9a2, a `use` line in a block of a body is not read, and a name that it gives resolves through the module scope (defect N3 of 51.7). Batch 9a3 reads it: the scope of a name is the chain of blocks, then the module (52.4). An item that a macro makes can shadow a glob import: the tree does not show it.
 - The declaration of a variant `Load(Load)` or of a field `load: load::Cfg` can change at two words when one item with this name has a rename.
 - A short label with `ref` or `mut` (`S { ref a }`) is a bare path, not a field label: its edit is its own fact. A short label is never a site of a renamed constant.
 - A closure with a return type and a block (`|x| -> Type { … }`) can look like a struct literal to the place reader.
@@ -4460,8 +4460,159 @@ In each row the rename fact stays.
 
 ### 51.7 Known defects after the batch
 
-Decided by Claude: the commit of batch 9a and batch 9a2 has these three defects. Probes after the batch found them. Fix round 9a3 gets a general rule for each one. N1 and N2 are older than batch 9a (batch 8i has them); the compiled compare showed their effect in the old default mode.
+Decided by Claude: the commit of batch 9a and batch 9a2 has these three defects. Probes after the batch found them. Batch 9a3 fixes the three defects with one general rule for each one (section 52: N1 in 52.1 and 52.2, N2 in 52.3, N3 in 52.4). N1 and N2 are older than batch 9a (batch 8i has them); the compiled compare showed their effect in the old default mode.
 
 - **N1, a lost token of a node.** When a node has a difference in its own tokens and a difference in one child, the compare goes down to the child and drops the difference of the node. Examples: the label of a `break` with a value (`break 'p 1` → `break 'q 2` shows only `1` → `2`), the type list of a method call (`.sum::<u64>()` → `.sum::<u128>()`), the `move` of a closure or of an `async` block, the return type of a closure. Each such token difference alone has a fact.
 - **N2, an identifier pattern that is not a binding.** An identifier in a pattern that names a variant, a constant, or a unit struct gets the fact "renamed local … [rename]" (`Idle => …` → `Halt => …` with `use Mode::*`; `LOW => …` → `HIGH => …`). The edit changes which values the arm matches.
 - **N3, a `use` line in a block.** A bare name that a `use` line of a block gives resolves through the module scope and becomes a sure site. A pure rename gives the false fact "still names the old item" for a body with a block `use` of a different item with the old name. An edit of such a call from the old name to the new name is hidden under the rename fact.
+
+## 52. Batch 9a3: the own tokens of a node, a sure binding, a `use` line in a block
+
+Date: 2026-11-21. Batch 9a3 fixes the three defects of 51.7. The brief of the batch gives one general rule for each defect. Each other decision has the mark "Decided by Claude". No rule of phase 2 (`--compiled`) changes.
+
+### 52.1 The own tokens of a node (defect N1)
+
+**The rule.** The own tokens of a node are the tokens of the node that are in no child node. The compare of two paired nodes goes down to the children only if the own tokens are equal after the exact map of the step. If the own tokens are different, the node gets a fact.
+
+**By construction.** The rule does not depend on the kind of the node. The tree builder writes the text of a node from its tokens and records the part of the text that each child has (`Node.parts`). The own text is the text with a mark (`…`) in place of each part (`Node::own_text`). No list of forms exists: the compare of an `attr` for each kind of node (`Renames::apply_attr`) is gone. `Node::parts_fault` proves the construction: each part is in the text of its node, the parts are in the order of the children, and each part has the text of its child. One test walks each body of the source of Semilla and of the cases of `spikes/s1/cases` with this check. A child whose tokens are not in the text in order gets an empty part: then its tokens are own tokens of the node (sound, not narrow).
+
+**The facts.**
+
+| The own tokens | A child | The fact |
+|---|---|---|
+| equal | changed | the narrow fact of the child (no change) |
+| changed | equal | the fact of the node with its full text (no change): "changed break: `break 'p 1` → `break 'q 1`" |
+| changed | changed, the node has no block | one fact with the full old text and the full new text: "changed break: `break 'p 1` → `break 'q 2`" |
+| changed | changed, the node has a block | the facts of the children stay; one more fact has the own tokens: "changed async: `async move {…}` → `async {…}`" |
+
+**Decided by Claude:**
+
+1. **The shell text.** The fact of the own tokens of a node with a block shows `…` for a child and `{…}` for a block. Only a node with a block that also has an edit in a child has this text. Each other fact keeps its full text.
+2. **A node with no block gets one fact, not two.** This is the rule of 36 for an expression (trial 4, D7). The fact has the full node, so it has each token difference.
+3. **The body block of an item has no own compare.** Its inner attributes are in the fact of the attributes of the item. The own tokens of each other block (its delimiters and its inner attributes) have the compare.
+4. **A label has two places.** A new label of a loop and of its `break` gives one fact for the loop (the own tokens) and one fact for the `break`.
+5. **The `;` of a statement is an own token.** The source text of an expression statement stops before the `;`. When only one side has the `;` and the fact has a second difference, the text shows the `;`: "changed call: `g(a)` → `g(a + 1);`", "changed if: `if … {…}` → `if … {…};`". Before the batch, this `;` was a lost token. The `;` alone keeps the fact of batch 9a2 ("moved call: `g(a)` from `tail` to `S1`").
+6. **The parentheses around a child are own tokens** of the parent.
+7. **The comma after a `match` arm is in the part of the body of its arm.** The comma is a token of the arm, and the tree has no node for an arm. The grammar needs the comma only after a body with no block. So a body that gets a block (`1 => a,` → `1 => { a }`) has the fact of the body only, and the `match` has no fact for the comma.
+8. **The signature node has no parts.** The signature compare of 22.3 has each token of a signature: the probes of the batch (`const`, `unsafe`, `extern "C"`, `mut a`, `&mut self`) each give a fact.
+
+### 52.2 A token difference with no meaning (defect N1)
+
+A token difference with no meaning in the grammar of Rust gives no fact. This is the full list. Each item is a rule of the grammar.
+
+Rules that exist before the batch:
+
+- White space between two tokens, and the form of a line end (CRLF is LF).
+- A comment is not a token of a node. A changed comment in a body has its own fact (`docs`). A doc comment is the attribute `#[doc = "…"]`.
+
+New rules (`tt.rs`, `no_meaning`; the token has the mark `Flat.void` and is not in the compare text):
+
+- **E1.** The comma before the closing delimiter of its list: `f(a, b,)`, `[a, b,]`, `S { a, }`, `<T, U,>`, `|a, b,|`, a `use` list, the last arm of a `match`. Not E1: the comma of a tuple with one element (`(a,)` is a tuple, `(a)` is not).
+- **E2.** The comma after a `match` arm whose body is an expression with a block.
+- **E3.** An empty statement: a `;` in a block that is in no statement. **Decided by Claude.**
+- **E4.** The comma after the last predicate of a `where` clause. **Decided by Claude.** Before the batch, this comma gave "bounds of …: order only".
+
+A token in a token tree (the input of a macro, the input of an attribute) is not in these rules: the macro can read each token.
+
+### 52.3 A sure binding (defect N2)
+
+**The rule.** A local rename fact needs a sure binding on the two sides. An identifier in a pattern is a sure binding only in one of these conditions:
+
+1. The pattern has `ref`, `mut`, or `@` with the identifier.
+2. All of these are true for the old name and for the new name: the name does not resolve to a constant, a static, a variant, a unit struct, or a tuple struct of the workspace (the resolution of `Scope`, with the rule of 52.4); no item of these kinds in the workspace has the name, when the resolution is not sure; the name does not start with an upper-case letter.
+
+An identifier pattern that is not a sure binding is a path: a use of an item. Its change is a normal fact of a changed pattern (`semantics`) with the old text and the new text. If an item rename of the step covers it as a sure site, it is under that rename fact.
+
+**The code.** `sites::sure_binding` (verify) has the rule. Each producer of the fact uses it: `hints::likely_local_renames` (the fact and the hints of the plan), rule 7 of `edits.rs`, and the map of the `rename-local` claim.
+
+**Decided by Claude:**
+
+1. **Condition 1 is a fact of the item.** A pattern with `ref`, `mut`, or `@` and the name, at one place of the item, makes the name a sure binding in the item. Rust does not let a binding hide a constant, a static, a variant, or a unit struct.
+2. **The workspace check is strict.** `Scope` does not tell "not found" from "not sure". So a name with no resolution is a sure binding only if no constant, static, variant, unit struct, or tuple struct of the workspace has the name.
+3. **An external item with a lower-case name** is a sure binding. A name of a function is a sure binding: a local can hide a function.
+4. **A name of an inner item or of a generic parameter of the item** is not a sure binding.
+5. **The `rename-local` claim** needs a sure binding on the two sides. Else the claim is malformed: "`LOW` is not a sure binding in `demo::f`: the name can be a use of a constant, a static, a variant, or a struct".
+6. **A rename of a unit struct or of a tuple struct covers an identifier pattern** with its name, as a rename of a constant or of a variant does. Before the batch, the pattern gave a false "renamed local" fact.
+
+### 52.4 The scope of a block (defect N3)
+
+**The rule.** The scope of a name in a body is the chain of blocks from the place to the body, then the module. An item or a `use` line of a block comes before the module scope.
+
+- A name from a `use` line of a block (plain, with an alias, in a list) resolves through that line. The functions that resolve a `use` line of a module do this.
+- A glob `use` in a block, of a module or an enum of the workspace whose names the tool can list: a listed name resolves to that item. A name that is not in the list goes to the next scope.
+- A glob `use` in a block whose names the tool cannot list (an external crate): each bare name of that block is by name (class 4 of 51.2).
+- The rule applies to the tree before the step and to the tree after it.
+
+**The code.** `semilla_syntax::sites::block_uses` gives each `use` line of a body with the range of its block. `Scope::in_blocks` (verify) resolves a bare name through the chain of blocks. `resolve`, `classify`, `bare_name`, and the owner check of a path (`checks.rs`) ask the blocks first.
+
+**Decided by Claude:**
+
+1. **Two places of one name with two scopes in one item.** The site table has no position in its key. If the places of a name in one item do not all resolve to the same thing, no place of the name is a site: each changed place has its own fact (sound, not minimal).
+2. **A path of a block `use` line that starts with a name** is not sure when a line of the blocks gives that name, when a second glob line exists, or when a line does not parse. Then the name is by name.
+3. **Two imports of one name in one block:** by name.
+4. **A glob source with a macro call item:** the macro can make an item, so a name that is not in the list is by name.
+
+### 52.5 The results
+
+The measure uses the binaries of batch 9a2 (`b9a2/bin`) and the binaries of this batch (`b9a3/bin`), in the default mode. The folder `b9a3/` has the cases, the tools, and each output.
+
+**The cases of the brief** (`cases.py`). Each fact has the category `semantics` if the table gives no other one.
+
+| Case | Batch 9a2 | Batch 9a3 |
+|---|---|---|
+| `n1a_break` | "changed literal `1` → `2`" | "changed break: `break 'p 1` → `break 'q 2`" |
+| `n1a_solo` (control) | "changed break: `break 'p 1` → `break 'q 1`" | the same |
+| `n1b_turbofish` | "changed literal `0` → `1`" | "changed expression `(0..n).map(u64::from).sum::<u64>()` → `(1..n).map(u64::from).sum::<u128>()`" |
+| `n1c_move` | "changed literal `1` → `2`" | "changed expression `move \|\| v.len() as u32 + 1` → `\|\| v.len() as u32 + 2`" |
+| `n1d_ret` | "changed literal `1` → `2`" | the same fact, and "changed closure_block: `\|k: u32\| -> u64 {…}` → `\|k: u32\| -> u128 {…}`" |
+| `n1e_async` | "changed literal `1` → `2`" | the same fact, and "changed async: `async move {…}` → `async {…}`" |
+| `n2a_variant` | "renamed local `Idle` → `Halt`, 1 edit(s) [rename]" | "changed pattern `Idle` → `Halt`" |
+| `n2b_const` | "renamed local `LOW` → `HIGH`, 1 edit(s) [rename]" | "changed pattern `LOW` → `HIGH`" |
+| `n2c_const_to_binding` | "renamed local `LOW` → `low`, 1 edit(s) [rename]" | "changed pattern `LOW` → `low`" |
+| `n2d_none` | "renamed local `None` → `Nil`, 1 edit(s) [rename]" | "changed pattern `None` → `Nil`" |
+| `n2e_local`, `n2f_local` (controls) | "renamed local `total` → `sum`, 2 edit(s) [rename]", "renamed local `k` → `j`, 2 edit(s) [rename]" | the same |
+| `n3a_pure` | the rename fact, and a false fact for `w2` and `w3`: "`read` still names the old item `read` …" | the rename fact and its public API fact only |
+| `n3b_use_edit` | the rename fact, the `use` fact, the false fact for `w3` | the rename fact, "changed path `read` → `take` at `yard::work::w2/tail/callee`", and the `use` fact "changed item: `use crate::spare::read;` → `use crate::spare::{read, probe as take};`" |
+| `n3c_glob_edit` | the rename fact, the false fact for `w2` | the rename fact, and "changed path `read` → `take` at `yard::work::w3/tail/callee`" |
+
+**More cases** (`cases_own.py`, 18 cases, decided by Claude). A label of a `loop` and of a `for` loop, an attribute of an arm and of a statement, and the `;` of a statement each get their fact. A step with only tokens of E1 to E4 has no fact (batch 9a2: 4 facts). `ref V`, `mut Y`, and `Z @ …` stay "renamed local". `X => X` → `W => W` and `other` → `floor` (a constant of a different module) are now "changed pattern" plus "changed path". An alias in a block `use`, a `use` line in an outer block, and a block `use` of the renamed item give no false fact. A bare name in a block with `use std::cmp::*;` is by name: its change has its own fact, because a second function has the name (R2).
+
+**The 59 cases of `b9a2/cases/` and the 60 cases of `b9a/cases/`.** No case has a different fact line.
+
+**The ten fixtures of `b7cfix/`.**
+
+| Fixture | Facts, 9a2 | Facts, 9a3 | Categories with a new count | Reasons, 9a2 and 9a3 | Time of a step, 9a2 (s) | Time of a step, 9a3 (s) |
+|---|---|---|---|---|---|---|
+| `bytes` | 173 | 173 |  | 13 | 0.87 | 0.97 |
+| `cpufeatures` | 72 | 72 |  | 13 | 0.07 | 0.10 |
+| `nu-ansi-term` | 247 | 247 |  | 49 | 0.30 | 0.35 |
+| `quickcheck` | 131 | 106 | declaration 19 → 11, semantics 37 → 20 | 5 | 0.44 | 0.27 |
+| `quickcheck-2` | 290 | 291 | semantics 83 → 84 | 21 | 0.60 | 0.39 |
+| `rand_chacha-2` | 87 | 85 | declaration 9 → 7 | 14 | 0.20 | 0.15 |
+| `rand_core-4` | 197 | 195 | semantics 44 → 42 | 9 | 0.45 | 0.29 |
+| `rand_xoshiro` | 119 | 111 | semantics 9 → 1 | 7 | 0.22 | 0.22 |
+| `socket2` | 123 | 123 |  | 3 | 0.72 | 0.69 |
+| `utf8_iter` | 131 | 131 |  | 8 | 0.21 | 0.21 |
+| Total | 1570 | 1534 | | 142 | 4.08 | 3.64 |
+
+The time is the smallest time of four step runs.
+
+- The count of reasons is the same for each fixture. No fact has a new category.
+- 37 facts are gone. Each one had only a token difference of 52.2. E1 (28 facts, a comma before a closing delimiter): `quickcheck` 18, `rand_xoshiro` 8, `rand_core-4` 2. E4 (9 facts "bounds of …: order only"): `quickcheck` 7, `rand_chacha-2` 2.
+- One fact has a new form. `quickcheck-2`: the tail `QuickCheck::new().gen(…).quickcheck(…)` becomes a statement with `;` and a new receiver. Batch 9a2: one fact for the receiver at 2 sites, and the `;` in no fact. Batch 9a3: one fact for each full statement, "changed method_call: `QuickCheck::new() .gen(StdGen::new(rand::thread_rng(), 1024)) .quickcheck…fn(u8) -> bool)` → `QuickCheck::new().rng(Gen::new(1024)).quickcheck…fn(u8) -> bool);`". The two facts do not fold: the texts are different (`u8`, `i8`). This is the only new fact, and it is a real token difference.
+- One pair warning of `rand_core-4` has a new number (77% → 78% similar): the compare text has no optional comma.
+- A different job used the machine during the measure. A difference of some tenths of a second is noise.
+
+**The compiled check.** `utf8_iter` with `--compiled`: 131 facts, the same count in each category as in the default mode. 130 fact lines have the same text plus the compare result (`code different` 59, `code equal` 54, `no code` 15, `no compare` 3). One fact has a different text, as in batch 9a and batch 9a2: "added macro call …" lists the items that the call makes (50.6). Each fact line is equal to the line of batch 9a2 with `--compiled`.
+
+**The tests.** `cargo test --workspace`: 779 tests pass (763 before).
+
+### 52.6 The limits and the open questions
+
+- **Two scopes of one name in one item** (52.4, decision 1): a changed place has its own fact, also when it is a reference to the renamed item.
+- A `use` line in the input of a macro that the syntax phase cannot read is not in the scope of a block. A `mod` in a body has no scope of its own. An item of a block counts for the full body (class 1).
+- Condition 1 of 52.3 is a fact of the item, not of a block. A block that declares a constant with the name of a `ref` binding of a different block is not seen.
+- A `match` in parentheses that is a statement: the comma after an arm is an own token of the node (sound: one more fact when a body gets or loses its block).
+- A fact with a cut text can hide the `;` of 52.1, decision 5, when the cut rule hides the end of the text.
+- **Open question: the fact of a renamed parameter.** A parameter with an upper-case name (`N: u32` → `M: u32`) keeps the signature fact "parameter `N` of `f` renamed to `M` [rename]". The body uses are now "changed path `N` → `M` [semantics]", because the name is not a sure binding (52.3). The rule of the brief is for an identifier in a pattern of a body. A decision is necessary: does the sure-binding rule apply to the parameter fact of a signature?
+- **Open question: the `;` alone.** A tail expression that becomes a statement with no other change has the text of batch 9a2 ("moved call: `g(a)` from `tail` to `S1`", "moved if: `if c { g(a) }`"). The fact is correct, but the text does not show the `;`.

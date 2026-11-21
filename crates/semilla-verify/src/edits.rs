@@ -600,6 +600,9 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 .collect();
             let is_pattern = |edit: &Edit| edit.anchor().is_some_and(|anchor| anchor.path.last().is_some_and(|last| last.to_string() == "pat" || last.to_string().ends_with(".pat")));
             places.extend(body.iter().filter(|&&i| is_pattern(&edits[i])).filter_map(|&i| crate::hints::pattern_name_change(edits[i].text_before.as_deref()?, edits[i].text_after.as_deref()?)));
+            // Design 52.2: an identifier pattern that is not a sure binding is a path. Its
+            // edit keeps its own fact.
+            places.retain(|(old, new)| crate::sites::sure_binding(context.before, old_item, old) && crate::sites::sure_binding(context.after, new_item, new));
             let renamed = crate::hints::local_renames_with_edits(old_item, new_item, &places);
             // An edit also folds if the renames of the step and the names of the locals give its
             // new text (design 51): `S { old: old }` with a renamed field and a renamed local.
