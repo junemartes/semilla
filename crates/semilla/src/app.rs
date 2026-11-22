@@ -231,7 +231,7 @@ fn mark_not_checked(step: &mut semilla_core::report::StepReport, reason: &str) {
 
 /// True if a step has a problem that is not a missing check: an error, a change with no fact, a
 /// spotlight with no reason, or a claim that is wrong.
-fn hard_problem(step: &semilla_core::report::StepReport) -> bool {
+pub(crate) fn hard_problem(step: &semilla_core::report::StepReport) -> bool {
     !step.errors.is_empty()
         || !step.uncovered.is_empty()
         || step.facts.iter().any(|fact| fact.spotlight && fact.reason.is_none())

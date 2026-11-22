@@ -1385,14 +1385,14 @@ fn the_guide_examples_of_calls_only_and_rewrite_pattern() {
     assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(text.contains("the claim `rewrite-pattern` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'`"), "{text}");
     let out = run(repo, &["step", "cap each total", "--same", "rewrite $c.total($m) => $c.total($m).min(9)"], 0);
-    assert!(out.contains("  ✓ a1 same: rewrite `$c.total($m)` => `$c.total($m).min(9)` (holds: 2 site(s))\n      places: shop_core::cart::show/tail/lhs, shop_core::cart::show/tail/rhs\n    ◆ f1 stated: changed expression `cart.total(10)` → `cart.total(10).min(9)` at "), "{out}");
-    assert!(out.contains(" stated: ") && !out.contains("not stated"), "{out}");
+    assert!(out.contains("  ✓ a1 same: rewrite `$c.total($m)` => `$c.total($m).min(9)` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::cart::show/tail/lhs, shop_core::cart::show/tail/rhs\n    ◆ f1 stated: changed expression `cart.total(10)` → `cart.total(10).min(9)` at "), "{out}");
+    assert!(out.contains(" stated: ") && out.contains("  not stated: 0 item(s)\n"), "{out}");
     // The claim does not say that each place of the old form changed: it holds for one site.
     run(repo, &["undo"], 0);
     let missed = show.replace("cart.total(10) + cart.total(20)", "cart.total(10).min(9) + cart.total(20)");
     write(repo, "crates/shop-core/src/cart.rs", &format!("{CART_V0}{missed}{wide}"));
     let out = run(repo, &["step", "cap each total", "--same", "rewrite $c.total($m) => $c.total($m).min(9)"], 0);
-    assert!(out.contains("(holds: 1 site(s))"), "{out}");
+    assert!(out.contains("(the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)"), "{out}");
     run(repo, &["undo"], 0);
     // A pattern with no site is false: the step is rejected, and the message shows the nearest edit.
     let out = semilla(repo, &["step", "cap each total", "--same", "rewrite $c.total($m) => $c.total($m).min(8)"]);
@@ -7815,7 +7815,7 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     let output = semilla_env(repo, &["step", "use the method", "--same", "rewrite $a.total => $a.total()"], &checked);
     let out = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(output.status.success() && out.contains("build check: passes ("), "{out}{}", String::from_utf8_lossy(&output.stderr));
-    assert!(out.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 3 site(s))\n      places: shop_core::facts::a/tail/lhs, shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]\n"), "{out}");
+    assert!(out.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n      places: shop_core::facts::a/tail/lhs, shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]\n"), "{out}");
     // A partial fact set: the other items are in the gap list.
     assert!(out.contains(&format!("  not stated: 3 item(s) with 4 place(s) {GAP_HEAD}\n")), "{out}");
     let build = session_steps(repo)[0]["build_check"].clone();
@@ -7847,14 +7847,15 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     let (code, out) = tree_mode(repo, &["fact", "--change", "shop_core::facts::tail=the tail is a statement"]);
     assert!(code == Some(0) && out.contains("  not stated: 0 item(s)\n"), "{out}");
 
-    // The record. `status` has the agent facts with their check results and no gap line.
+    // The record. `status` has the agent facts with their check results and the count line
+    // of the gaps, with the count 0 (design 54.14).
     let (_, status) = tree_mode(repo, &["status"]);
-    assert!(status.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 3 site(s))\n  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: ") && !status.contains("not stated"), "{status}");
+    assert!(status.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: ") && status.contains("\n  not stated: 0 item(s)\n") && !status.contains("  ? "), "{status}");
     // `status --verbose` has the order of design 48.3: the agent facts with the facts below
     // them (origin `stated`), then the facts that Semilla filled in (origin `derived`).
     let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
     let at = |text: &str| verbose.find(text).unwrap_or_else(|| panic!("no `{text}` in:\n{verbose}"));
-    assert!(at("  facts of the agent (Semilla checks the tag of each fact, not its sentence):") < at("  ✓ a1 same: ") && at("  ✓ a1 same: ") < at("    ◆ f1 stated: ") && at("    ◆ f1 stated: ") < at("  ✓ a2 change: "), "{verbose}");
+    assert!(at("  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):") < at("  ✓ a1 same: ") && at("  ✓ a1 same: ") < at("    ◆ f1 stated: ") && at("    ◆ f1 stated: ") < at("  ✓ a2 change: "), "{verbose}");
     assert!(at("    ◆ f6 stated: moved call: `drop(x)` → `drop(x);`") < at("  tests and benches, filled in by Semilla:\n  ◆ f7 derived: "), "{verbose}");
     assert!(verbose.contains(&format!("    ◆ f3 stated: added `let` [1] at `shop_core::facts::idle/S0` [semantics]\n          [1] {LONG_LET}\n")), "{verbose}");
     // The review has the same order, with the origin of each fact.
@@ -7862,13 +7863,13 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     tree_mode(repo, &["review", "--md", md.to_str().unwrap()]);
     let report = std::fs::read_to_string(&md).unwrap();
     let at = |text: &str| report.find(text).unwrap_or_else(|| panic!("no `{text}` in:\n{report}"));
-    assert!(report.contains("facts of the agent: 4, each one checked against the edit") && !report.contains("not stated"), "{report}");
-    assert!(at("#### Facts of the agent (4)") < at("✓ a1 same: rewrite `$a.total` =&gt; `$a.total()` (holds: 3 site(s))") && at("f1 stated: ") < at("f7 derived: "), "{report}");
+    assert!(report.contains("facts of the agent: 4, each one checked against the edit") && report.contains("\nnot stated: 0 item(s)\n") && !report.contains("to state it"), "{report}");
+    assert!(at("#### Facts of the agent (4)") < at("✓ a1 same: rewrite `$a.total` =&gt; `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)") && at("f1 stated: ") < at("f7 derived: "), "{report}");
     // `tag` has the agent facts.
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "use the method"]);
     let (code, tag) = tree_mode(repo, &["tag"]);
     assert_eq!(code, Some(0), "{tag}");
-    assert!(tag.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 3 site(s))\n") && tag.contains("  ✓ a4 change: `shop_core::facts::tail` \"the tail is a statement\" (holds: ") && !tag.contains("not stated"), "{tag}");
+    assert!(tag.contains("  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n") && tag.contains("  ✓ a4 change: `shop_core::facts::tail` \"the tail is a statement\" (holds: ") && tag.contains("\nnot stated: 0 item(s)\n") && !tag.contains("to state it"), "{tag}");
     // The result of the tagged commit comes from the stored record.
     let (_, status) = tree_mode(repo, &["status", "HEAD"]);
     assert!(status.contains("  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: "), "{status}");
@@ -7932,7 +7933,7 @@ fn an_old_session_file_and_a_stored_rewrite_pattern_claim_still_read() {
     assert!(status.contains("  ✓ c1 verified (pattern (1 sites)) [semantics]\n") && status.contains(&format!("  not stated: 5 item(s) with 6 place(s) {GAP_HEAD}\n")), "{status}");
     // The agent adds a fact to the old record.
     let (code, out) = tree_mode(repo, &["fact", "--same", "rewrite $a.total => $a.total()"]);
-    assert!(code == Some(0) && out.contains("(holds: 3 site(s))\n") && out.contains("1 of the site(s) are below a claim of the step: the claim shows them\n"), "{out}");
+    assert!(code == Some(0) && out.contains("(the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)\n") && out.contains("1 of the site(s) are below a claim of the step: the claim shows them\n"), "{out}");
     assert!(out.contains("      places: shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n"), "{out}");
 }
 
@@ -7953,7 +7954,7 @@ fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
         &env,
     );
     assert!(calls[0].1 && calls[0].0.contains("rejected: step 0") && calls[0].0.contains("fact a2 of the agent is false"), "{}", calls[0].0);
-    assert!(!calls[1].1 && calls[1].0.contains("accepted: step 0") && calls[1].0.contains("✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 3 site(s))"), "{}", calls[1].0);
+    assert!(!calls[1].1 && calls[1].0.contains("accepted: step 0") && calls[1].0.contains("✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)"), "{}", calls[1].0);
     assert!(!calls[2].1 && calls[2].0.contains("stored: 1 new fact(s) of the agent in step 0") && calls[2].0.contains("✓ a2 change: "), "{}", calls[2].0);
     assert!(calls[3].1 && calls[3].0.contains("rejected: no fact is added to step 0"), "{}", calls[3].0);
     assert!(calls[4].0.contains("✓ a2 change: `shop_core::facts::idle`") && calls[4].0.contains(&format!("not stated: 2 item(s) with 2 place(s) {GAP_HEAD}")), "{}", calls[4].0);
@@ -7971,9 +7972,27 @@ fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
     // The check of the change set checks each fact: a false fact stops the plan.
     let (code, out) = tree_mode(repo, &["replay", "apply"]);
     assert!(out.contains("  ✗ a1 same: rewrite `$a.count` => `$a.count()` (false: ") && out.contains("result: rejected") && !out.contains("the plan is accepted"), "{code:?} {out}");
+    // Design 54.13: the mark of the plan line agrees with the result of the step, with and
+    // without `--full`. The exit code is 1.
+    let false_fact = "✗ plan step 0: \"use the method\"\n    ✗ fact a1 of the agent is false: `--same 'rewrite $a.count => $a.count()'`\n";
+    assert!(code == Some(1) && out.starts_with(false_fact) && !out.contains("✓ plan step") && !out.contains("phase 1 passed"), "{code:?} {out}");
+    let (code, out) = tree_mode(repo, &["replay", "apply", "--full"]);
+    assert!(code == Some(1) && out.starts_with(false_fact) && out.contains("result: rejected") && !out.contains("✓ plan step"), "{code:?} {out}");
+    // A refuted claim of a plan step has the same mark and the same exit code.
+    let with_claim = |claims: serde_json::Value| {
+        let mut plan: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/plan.json")).unwrap()).unwrap();
+        plan["steps"][0]["same"] = serde_json::json!(["rewrite $a.total => $a.total()"]);
+        plan["steps"][0]["claims"] = claims;
+        std::fs::write(repo.join(".semilla/plan.json"), serde_json::to_string_pretty(&plan).unwrap()).unwrap();
+    };
+    with_claim(serde_json::json!([{"op": "no-panic", "at": "shop_core::facts::idle"}]));
+    let output = semilla(repo, &["replay", "apply", "--full"]);
+    let out = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.code() == Some(1) && out.starts_with("✗ plan step 0: \"use the method\"\n    ✗ claim c1 is refuted: ") && out.contains("  ✓ a1 same: ") && out.contains("\n  ✗ c1 refuted: ") && out.contains("result: rejected"), "{out}");
+    // Negative: a plan with true facts and no claim has the mark `✓` and the exit code 0.
     plan("rewrite $a.total => $a.total()");
     let (code, out) = tree_mode(repo, &["replay", "apply"]);
     assert_eq!(code, Some(0), "{out}");
-    assert!(out.contains("✓ plan step 0"), "{out}");
+    assert!(out.starts_with("✓ plan step 0: \"use the method\"\n") && !out.contains("✗ plan step") && !out.contains("is false"), "{out}");
     assert_eq!(session_steps(repo)[0]["agent"], serde_json::json!({"same": ["rewrite $a.total => $a.total()"], "change": ["shop_core::facts::idle=idle scales the value"]}));
 }

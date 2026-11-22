@@ -443,11 +443,16 @@ fn main() -> ExitCode {
     }
 }
 
-/// True if a phase 1 report has no problem except the pending body proofs.
+/// True if a phase 1 report has no problem except the pending body proofs. A false fact of the
+/// agent is a problem, as for `semilla step` (design 54.13).
 fn phase1_ok(report: &semilla_core::Report) -> bool {
     report.organization.is_empty()
         && report.steps.iter().all(|step| {
-            step.errors.is_empty() && step.uncovered.is_empty() && step.facts.iter().all(|f| !f.spotlight || f.reason.is_some()) && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
+            step.errors.is_empty()
+                && step.uncovered.is_empty()
+                && step.facts.iter().all(|f| !f.spotlight || f.reason.is_some())
+                && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
+                && step.agent_facts.iter().all(|fact| fact.holds)
         })
 }
 

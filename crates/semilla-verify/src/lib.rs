@@ -22,6 +22,7 @@ pub mod identity;
 mod inner;
 pub mod organize;
 pub mod owners;
+mod paths;
 pub mod scope;
 mod bounds;
 mod joint;
@@ -540,6 +541,9 @@ pub struct StepOutcome {
     /// For a derived identity: the derived bodies of other traits than `Debug` (serde and others).
     /// They put the identity fact in the spotlight.
     pub identity_reason: Option<String>,
+    /// The cause for each stated rename or move that is no fact (design 54.11), by the index
+    /// of its `same` option.
+    pub stated_causes: BTreeMap<usize, String>,
     /// The feature selections that the check added for a proof (batch 5u, part C).
     pub selections: Vec<Selection>,
 }
@@ -1644,7 +1648,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, selections }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -2822,7 +2826,13 @@ fn identity_api_facts(input: &StepInput, outcome: &mut StepOutcome) {
             part: "public api".into(),
             description,
             status: "derived".into(),
-            category: if old.rsplit_once("::").map(|(parent, _)| parent) == new.rsplit_once("::").map(|(parent, _)| parent) { Category::Rename } else { Category::Move },
+            // The category of the identity fact of the item, if one exists (batch 9b2, F2: a
+            // renamed variant of a renamed enum has a new parent, and it is a rename).
+            category: match report.facts.iter().find(|fact| fact.part == "identity" && fact.at.as_ref().is_some_and(|at| at.item == old)) {
+                Some(fact) => fact.category,
+                None if old.rsplit_once("::").map(|(parent, _)| parent) == new.rsplit_once("::").map(|(parent, _)| parent) => Category::Rename,
+                None => Category::Move,
+            },
             compare: Compare::NoCode,
             ..Default::default()
         });
@@ -3167,7 +3177,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new() });
             }
         }
     }

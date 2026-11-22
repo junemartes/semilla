@@ -8825,7 +8825,7 @@ fn a_rename_claim_and_a_move_claim_hold_only_if_semilla_derives_the_fact() {
     let body = AGENT_BASE.replace("c.total + 1", "c.total + 3");
     let report = run_agent(AGENT_BASE, &body, &["rename demo::b demo::bee"], &[]);
     let fact = agent_fact(&report, "a1");
-    assert!(!report.accepted() && fact.result == "false: Semilla derives no rename `demo::b` → `demo::bee` from the syntax tree" && fact.notes[0].contains("the new tree has no item `demo::bee`"), "{fact:#?}");
+    assert!(!report.accepted() && fact.result == "false: Semilla derives no rename `demo::b` → `demo::bee` from the syntax tree" && fact.notes[0] == "`demo::bee` names no item of the new tree" && fact.notes[1].contains("the new tree has no item `demo::bee`"), "{fact:#?}");
     // A move is not a rename: the wrong kind is false, and the note shows the fact of Semilla.
     let report = run_agent(AGENT_BASE, &moved, &["rename demo::idle demo::inner::idle"], &[]);
     let fact = agent_fact(&report, "a1");
@@ -8841,8 +8841,8 @@ fn a_rewrite_claim_covers_each_site_whose_full_difference_is_the_pattern() {
     let calls = AGENT_BASE.replace("c.total + 1", "c.total() + 1").replace("c.total + 2", "c.total() + 2").replace("e.total", "e.total()");
     let report = run_agent(AGENT_BASE, &calls, &["rewrite $c.total => $c.total()"], &[]);
     let fact = agent_fact(&report, "a1");
-    assert!(report.accepted() && fact.holds && fact.result == "holds: 3 site(s)" && fact.places == ["demo::a/tail/lhs", "demo::b/tail/lhs", "demo::d/tail/rhs"], "{fact:#?}");
-    assert_eq!(agent_text(&report)[1], "  ✓ a1 same: rewrite `$c.total` => `$c.total()` (holds: 3 site(s))");
+    assert!(report.accepted() && fact.holds && fact.result == "the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same" && fact.places == ["demo::a/tail/lhs", "demo::b/tail/lhs", "demo::d/tail/rhs"], "{fact:#?}");
+    assert_eq!(agent_text(&report)[1], "  ✓ a1 same: rewrite `$c.total` => `$c.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)");
     // All sites are below the one fact of the agent. Each fact of Semilla stays.
     assert_eq!(origins(&report), ["f1 stated", "f2 stated"]);
     assert_eq!(fact_lines(&report), fact_lines(&run_agent(AGENT_BASE, &calls, &[], &[])));
@@ -8851,7 +8851,7 @@ fn a_rewrite_claim_covers_each_site_whose_full_difference_is_the_pattern() {
     let more = calls.replace("e.total()", "e.total() + 1");
     let report = run_agent(AGENT_BASE, &more, &["rewrite $c.total => $c.total()"], &[]);
     let fact = agent_fact(&report, "a1");
-    assert!(report.accepted() && fact.result == "holds: 2 site(s)" && fact.places == ["demo::a/tail/lhs", "demo::b/tail/lhs"], "{fact:#?}");
+    assert!(report.accepted() && fact.result == "the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same" && fact.places == ["demo::a/tail/lhs", "demo::b/tail/lhs"], "{fact:#?}");
     let other = report.facts.iter().find(|f| f.description == "changed expression `b(c) + e.total` → `b(c) + e.total() + 1` at `demo::d/tail`").expect("the fact of the site with one more edit");
     assert_eq!(other.status, "derived");
     assert_eq!(report.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::d"]);
@@ -8902,7 +8902,7 @@ fn a_statement_with_a_new_position_is_not_a_rewrite_site() {
     // Negative: the same edit in place is a site.
     let in_place = base.replace("note(x)", "note(x + 1)");
     let report = run_agent(base, &in_place, &["rewrite note($a) => note($a + 1)"], &[]);
-    assert!(report.accepted() && agent_fact(&report, "a1").result == "holds: 1 site(s)" && origins(&report) == ["f1 stated"], "{:#?}", report.agent_facts);
+    assert!(report.accepted() && agent_fact(&report, "a1").result == "the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same" && origins(&report) == ["f1 stated"], "{:#?}", report.agent_facts);
     // A pattern with two equal sides states no change: the form check stops it. The gap list
     // does not propose it for a statement that only moves.
     let only = moved.replace("note(x + 1)", "note(x)");
@@ -8957,9 +8957,13 @@ fn the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them() {
     // A partial fact set: the other items stay in the list.
     assert_eq!(stated.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::idle", "demo::inner::a"]);
     assert_eq!(stated.gap_line().as_deref(), Some("not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states"));
-    // Each item is stated: no list.
+    // Each item is stated: no list. The count line stays, with the count 0 (design 54.14).
     let full = run_agent(AGENT_BASE, &mixed, &["rewrite $a.total => $a.total()"], &["demo::idle,demo::inner::a=the fees change"]);
-    assert!(full.accepted() && full.gaps.is_empty() && full.gap_line().is_none(), "{:#?}", full.gaps);
+    assert!(full.accepted() && full.gaps.is_empty() && full.gap_line().as_deref() == Some("not stated: 0 item(s)"), "{:#?}", full.gaps);
+    assert_eq!(full.gap_lines(None), ["  not stated: 0 item(s)"]);
+    // Negative: a step with no fact of the agent and with no gap has no count line.
+    let plain = run_agent(AGENT_BASE, AGENT_BASE, &[], &[]);
+    assert!(plain.gap_line().is_none() && plain.gap_lines(None).is_empty());
     // Negative: one place is no group. The line gives a `change` option, not a pattern.
     let one = run_agent(AGENT_BASE, &AGENT_BASE.replace("c.total + 1", "c.total() + 1"), &[], &[]);
     assert_eq!(one.gaps.iter().map(|gap| gap.option.clone()).collect::<Vec<_>>(), ["--change 'demo::a=TEXT'"]);
@@ -8981,4 +8985,276 @@ fn a_long_gap_list_shows_its_first_lines_and_a_count() {
     assert_eq!(views::agent_lines(&report, None, &|_| Vec::new()).iter().filter(|line| line.starts_with("  ? ")).count(), 9);
     // The list is never a reject.
     assert!(report.accepted());
+}
+
+const SHOP: [(&str, &str); 4] = [
+    ("Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    ("src/lib.rs", "pub mod money;\npub mod cart;\n"),
+    ("src/money.rs", "use core::fmt;\n\npub struct Price(pub u64);\n\npub trait Scale<T> {\n    fn scale(&self, by: T) -> u64;\n}\n\nimpl fmt::Display for Price {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        write!(f, \"{}\", self.0)\n    }\n}\n\nimpl Scale<u64> for Price {\n    fn scale(&self, by: u64) -> u64 {\n        self.0 * by\n    }\n}\n\nimpl Scale<u32> for Price {\n    fn scale(&self, by: u32) -> u64 {\n        self.0 * by as u64\n    }\n}\n\nimpl<T: Copy, const N: usize> Scale<u8> for [T; N] {\n    fn scale(&self, by: u8) -> u64 {\n        N as u64 * by as u64\n    }\n}\n\nmacro_rules! unit {\n    ($t:ident) => {\n        impl Scale<()> for $t {\n            fn scale(&self, _by: ()) -> u64 {\n                1\n            }\n        }\n    };\n}\npub struct Coin(pub u64);\nunit!(Coin);\n"),
+    ("src/cart.rs", "pub struct Price(pub u32);\nimpl Price {\n    pub fn fmt(&self) -> u32 {\n        self.0\n    }\n}\n"),
+];
+
+/// A step of the syntax tree model with the facts of the agent, for a crate with many files.
+fn run_agent_files(before: &[(&str, &str)], after: &[(&str, &str)], same: &[&str], change: &[&str]) -> StepReport {
+    let (_d1, old) = load_files(before);
+    let (_d2, new) = load_files(after);
+    let mut step = step(Vec::new());
+    step.compiled = false;
+    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect() };
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
+}
+
+/// Design 54.10: a path of the agent agrees with the path of an item part by part. The
+/// negative tests: a path with different generic arguments, a different trait, a different
+/// module of the type, and a type that only a macro call makes name no item.
+#[test]
+fn a_path_agrees_part_by_part_with_the_path_of_an_item() {
+    let (_dir, ws) = load_files(&SHOP);
+    let index = crate::paths::Index::new(&ws);
+    let fmt = "shop::money::<Price as fmt::Display>::fmt";
+    for query in [
+        "<shop::money::Price as core::fmt::Display>::fmt",
+        "shop::money::<impl Display for Price>::fmt",
+        "shop::money::<impl fmt::Display for Price>::fmt",
+        "<Price as Display>::fmt",
+        "<Price as std::fmt::Display>::fmt",
+        "< Price  as  Display >::fmt",
+        "money::<Price as Display>::fmt",
+    ] {
+        assert_eq!(index.find(query), [fmt], "{query}");
+    }
+    // Generic arguments are optional. Two impls of one trait: the arguments select one.
+    let (first, second) = ("shop::money::<Price as Scale>::scale#0", "shop::money::<Price as Scale>::scale#1");
+    for query in ["shop::money::<impl Scale<u64> for Price>::scale", "<Price as Scale<u64>>::scale", "<Price as Scale< u64 >>::scale", "shop::money::<Price as Scale<u64>>::scale#0"] {
+        assert_eq!(index.find(query), [first], "{query}");
+    }
+    assert_eq!(index.find("<Price as Scale<u32>>::scale"), [second]);
+    assert_eq!(index.find("<Price as Scale>::scale"), [first, second]);
+    // The candidates of a message have the generic arguments.
+    assert_eq!(index.label(first), "shop::money::<Price as Scale<u64>>::scale#0");
+    assert_eq!(index.label(second), "shop::money::<Price as Scale<u32>>::scale#1");
+    // One impl: a path with no arguments names it. White space is not important.
+    for query in ["<[T; N] as Scale>::scale", "<[T;N] as Scale<u8>>::scale", "shop::money::<impl Scale<u8> for [T; N]>::scale"] {
+        assert_eq!(index.find(query), ["shop::money::<[T;N] as Scale>::scale"], "{query}");
+    }
+    // The `impl` block and its two forms.
+    assert_eq!(index.find("shop::money::impl Display for Price"), ["shop::money::impl <Price as fmt::Display>"]);
+    // A field and a method with one name: the mark selects.
+    assert_eq!(index.find("cart::Price::fmt"), ["shop::cart::Price::fmt"]);
+    assert_eq!(index.find("money::Price.0"), ["shop::money::Price.0"]);
+    // Negative.
+    for query in ["<Price as Scale<u16>>::scale", "<Price as fmt::Debug>::fmt", "<Price as other::Display>::fmt", "<shop::cart::Price as Display>::fmt", "<Coin as Scale>::scale", "<Price as Display>::scale"] {
+        assert!(index.find(query).is_empty(), "{query}: {:?}", index.find(query));
+    }
+    // The macro call that can make the item of a path with no item.
+    assert_eq!(index.makers("<Coin as Scale>::scale"), [("shop::money::unit!#0", "Coin".to_string())]);
+    assert!(index.makers("<Dime as Scale>::scale").is_empty());
+}
+
+/// Design 54.10: a fact of the agent takes each form of a path. The negative tests: a path
+/// that names two items gives the candidates with their generic arguments, and a path of an
+/// item that a macro call makes gives the macro call.
+#[test]
+fn a_fact_of_the_agent_takes_each_form_of_a_path() {
+    let mut after = SHOP;
+    let money = SHOP[2].1.replace("self.0 * by\n", "self.0 * by + 1\n").replace("write!(f, \"{}\", self.0)", "write!(f, \"{}!\", self.0)");
+    after[2].1 = &money;
+    let report = run_agent_files(&SHOP, &after, &[], &["<shop::money::Price as core::fmt::Display>::fmt=the text has a mark", "shop::money::<impl Scale<u64> for Price>::scale=the scale is larger"]);
+    assert!(report.accepted() && report.gaps.is_empty(), "{:#?}", report.agent_facts);
+    assert!(agent_fact(&report, "a1").places.iter().all(|place| place.starts_with("shop::money::<Price as fmt::Display>::fmt")), "{:#?}", report.agent_facts);
+    assert_eq!(agent_fact(&report, "a2").places, ["shop::money::<Price as Scale>::scale#0/tail"]);
+    // Negative: two items. The candidates have the generic arguments, the best first.
+    let report = run_agent_files(&SHOP, &after, &[], &["<Price as Scale>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds, "{fact:#?}");
+    assert_eq!(fact.notes[..2], ["`<Price as Scale>::scale` names 2 items: give more of the path", "candidates: `shop::money::<Price as Scale<u64>>::scale#0`, `shop::money::<Price as Scale<u32>>::scale#1`"], "{fact:#?}");
+    // Negative: the item of a macro call has no path. The message names the macro call.
+    let report = run_agent_files(&SHOP, &after, &[], &["<Coin as Scale>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note == "an item that a macro call makes has no path in the syntax tree. The input of the macro call `shop::money::unit!#0` has `Coin`: give the macro call `shop::money::unit!#0` or its module `shop::money`"), "{fact:#?}");
+    // Negative: a path with a name that no item has gives no macro call.
+    let report = run_agent_files(&SHOP, &after, &[], &["<Dime as Scale>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes[0].starts_with("`<Dime as Scale>::scale` names no item") && !fact.notes.iter().any(|note| note.contains("macro call")), "{fact:#?}");
+}
+
+const MODES: &str = "pub enum Mode {\n    Idle,\n    Busy,\n}\n\npub fn start() -> Mode {\n    Mode::Idle\n}\n\npub fn is_idle(m: &Mode) -> bool {\n    matches!(m, Mode::Idle)\n}\n\npub fn load(m: &Mode) -> u32 {\n    match m {\n        Mode::Idle => 0,\n        Mode::Busy => 10,\n    }\n}\n";
+
+/// Design 54.11, the search: the owner of an item is its owner after the map. A step with no
+/// fact of the agent derives the rename of an enum and of its variant. The negative test: an
+/// edit at a site that is not the rename keeps its fact.
+#[test]
+fn the_rename_of_an_item_and_of_its_child_in_one_step() {
+    let after = MODES.replace("Mode::Idle", "State::Rest").replace("Mode", "State").replace("    Idle,", "    Rest,");
+    let report = run_agent(MODES, &after, &[], &[]);
+    let lines = fact_lines(&report);
+    assert!(lines.contains(&"renamed `demo::Mode` → `demo::State` [rename]".to_string()) && lines.contains(&"renamed `demo::Mode::Idle` → `demo::State::Rest` [rename]".to_string()), "{lines:#?}");
+    assert!(report.accepted() && report.facts.iter().all(|fact| fact.category == Category::Rename && fact.status != "stated"), "{lines:#?}");
+    // The two facts of the agent hold, in each order of the options.
+    for same in [["rename Mode State", "rename Mode::Idle State::Rest"], ["rename Mode::Idle State::Rest", "rename Mode State"]] {
+        let stated = run_agent(MODES, &after, &same, &[]);
+        assert!(stated.accepted() && stated.agent_facts.iter().all(|fact| fact.holds) && stated.facts.iter().all(|fact| fact.status == "stated"), "{:#?}", stated.agent_facts);
+        assert_eq!(fact_lines(&stated), lines);
+    }
+    // Negative: an edit that is not the rename keeps its fact.
+    let edited = after.replace("State::Busy => 10", "State::Busy => 11");
+    let report = run_agent(MODES, &edited, &["rename Mode State", "rename Mode::Idle State::Rest"], &[]);
+    assert!(fact_lines(&report).contains(&"changed literal `10` → `11` at `demo::load/S0/arm[1].body` [semantics]".to_string()), "{:#?}", fact_lines(&report));
+    assert_eq!(report.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::load"]);
+}
+
+const MANY: &str = "pub mod tools {\n    pub fn one(k: u32) -> u32 { k + 1 }\n    pub fn two(k: u32) -> u32 { k + 1 }\n    pub fn three(k: u32) -> u32 { k + 1 }\n    pub fn four(k: u32) -> u32 { k + 1 }\n    pub fn five(k: u32) -> u32 { k + 1 }\n}\npub fn sum(k: u32) -> u32 {\n    tools::one(k) + tools::two(k) + tools::three(k) + tools::four(k) + tools::five(k)\n}\npub fn keep(k: u32) -> u32 {\n    k * 2\n}\n";
+
+/// Design 54.11: a stated pair that Semilla does not find alone is a candidate of the rename
+/// rule. The same check runs. The negative tests: a pair that does not pass is false with
+/// its cause, a stated pair does not replace a pair that Semilla derives, and an edit that
+/// is not the rename keeps its fact.
+#[test]
+fn a_stated_rename_is_a_candidate_of_the_rename_rule() {
+    let names = [("one", "uno"), ("two", "dos"), ("three", "tres"), ("four", "cuatro"), ("five", "cinco")];
+    let after = names.iter().fold(MANY.to_string(), |text, (old, new)| text.replace(&format!("{old}("), &format!("{new}("))).replace("k * 2", "k * 3");
+    // Five items of one kind in one owner are above the limit of the search: no rename.
+    let plain = run_agent(MANY, &after, &[], &[]);
+    assert!(plain.facts.iter().all(|fact| fact.category != Category::Rename), "{:#?}", fact_lines(&plain));
+    // The five stated pairs pass the check. Each rename fact has the origin `stated`.
+    let same: Vec<String> = names.iter().map(|(old, new)| format!("rename tools::{old} tools::{new}")).collect();
+    let same: Vec<&str> = same.iter().map(String::as_str).collect();
+    let report = run_agent(MANY, &after, &same, &[]);
+    assert!(report.accepted() && report.agent_facts.iter().all(|fact| fact.holds && fact.result == "holds: Semilla derives the rename from the syntax tree"), "{:#?}", report.agent_facts);
+    let lines = fact_lines(&report);
+    for (old, new) in names {
+        assert!(lines.contains(&format!("renamed `demo::tools::{old}` → `demo::tools::{new}` [rename]")), "{lines:#?}");
+    }
+    assert!(report.facts.iter().filter(|fact| fact.category == Category::Rename).all(|fact| fact.status == "stated"));
+    // The edit that is not a rename keeps its fact, and it is in the gap list.
+    assert!(lines.contains(&"changed literal `2` → `3` at `demo::keep/tail/rhs` [semantics]".to_string()), "{lines:#?}");
+    assert_eq!(report.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::keep"]);
+    // The order of the options is not important.
+    let mut reverse = same.clone();
+    reverse.reverse();
+    assert_eq!(fact_lines(&run_agent(MANY, &after, &reverse, &[])), lines);
+    // One stated pair: the search of Semilla finds the four pairs that are left.
+    let one = run_agent(MANY, &after, &same[..1], &[]);
+    let sorted = |report: &StepReport| {
+        let mut lines = fact_lines(report);
+        lines.sort();
+        lines
+    };
+    assert!(one.accepted() && sorted(&one) == sorted(&report), "{:#?}", fact_lines(&one));
+    assert_eq!(one.facts.iter().filter(|fact| fact.category == Category::Rename && fact.status == "stated").count(), 2, "{:#?}", origins(&one));
+    // Negative: a stated pair never makes the check weaker. A site that does not follow the
+    // stated pairs keeps its own fact, and it is in the gap list.
+    let fields = "pub struct Cart { pub total: u64, pub count: u64, pub a: u64, pub b: u64, pub c: u64 }\npub fn f(c: &Cart) -> u64 { c.total + c.count + c.a + c.b + c.c }\n";
+    let crossed = "pub struct Cart { pub sum: u64, pub size: u64, pub x: u64, pub y: u64, pub z: u64 }\npub fn f(c: &Cart) -> u64 { c.sum + c.size + c.x + c.z + c.y }\n";
+    let report = run_agent(fields, crossed, &["rename Cart.total Cart.sum", "rename Cart.count Cart.size", "rename Cart.a Cart.x", "rename Cart.b Cart.y", "rename Cart.c Cart.z"], &[]);
+    let lines = fact_lines(&report);
+    assert!(report.agent_facts.iter().all(|fact| fact.holds), "{:#?}", report.agent_facts);
+    assert!(lines.contains(&"changed expression `c.b` → `c.z` at `demo::f/tail/lhs/rhs` [semantics]".to_string()) && lines.contains(&"changed expression `c.c` → `c.y` at `demo::f/tail/rhs` [semantics]".to_string()), "{lines:#?}");
+    assert!(report.facts.iter().filter(|fact| fact.category == Category::Semantics).all(|fact| fact.status == "derived"));
+    assert_eq!(report.gaps.iter().flat_map(|gap| gap.places.clone()).collect::<Vec<_>>().len(), 2, "{:#?}", report.gaps);
+    // Negative: the new item is not in the new tree.
+    let report = run_agent(MANY, &after, &["rename tools::one tools::eins"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds && fact.notes[0] == "`tools::eins` names no item of the new tree", "{fact:#?}");
+    // Negative: the old item stays in the new tree.
+    let report = run_agent(MANY, &after, &["rename keep tools::uno"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note.starts_with("the stated pair is no fact: ")), "{fact:#?}");
+    assert!(report.facts.iter().all(|fact| fact.category != Category::Rename), "{:#?}", fact_lines(&report));
+    // Negative: a stated pair does not replace a pair that Semilla derives alone.
+    let after = MODES.replace("Mode::Idle", "State::Rest").replace("Mode", "State").replace("    Idle,", "    Rest,");
+    let report = run_agent(MODES, &after, &["rename Mode::Idle State::Busy"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note == "the stated pair is no fact: Semilla derives `demo::Mode::Idle` → `demo::State::Rest` from the syntax tree, and an item is in one pair only"), "{fact:#?}");
+    assert!(fact_lines(&report).contains(&"renamed `demo::Mode::Idle` → `demo::State::Rest` [rename]".to_string()));
+    // Design 54.16: the fact that holds is a complete option.
+    assert!(fact.notes.iter().any(|note| note == "a fact that holds: `--same 'rename demo::Mode::Idle demo::State::Rest'`"), "{fact:#?}");
+}
+
+/// Design 54.11: a stated move and a stated rename with large edits in the bodies. The pair
+/// passes the check of the rename rule, and each edit of the body keeps its fact. The
+/// negative tests: the wrong kind is false and names the correct option, and with no fact
+/// of the agent Semilla shows a removed item and an added item.
+#[test]
+fn a_stated_move_keeps_each_edit_of_the_body() {
+    let before = "pub mod a {\n    pub fn total(k: u32) -> u32 {\n        k + 1\n    }\n    pub fn price(k: u32) -> u32 {\n        k * 3\n    }\n}\npub mod b {\n    pub fn other() -> u32 {\n        7\n    }\n}\npub fn sum(k: u32) -> u32 {\n    a::total(k) + a::price(k)\n}\n";
+    let after = "pub mod a {\n    pub fn cost(k: u32, tax: u32) -> u32 {\n        let base = k * 3;\n        let extra = base / 10 + tax;\n        base + extra + 4\n    }\n}\npub mod b {\n    pub fn other() -> u32 {\n        7\n    }\n    pub fn total(k: u32) -> u32 {\n        let mut out = 0;\n        for i in 0..k {\n            out += i;\n        }\n        out + k + 1\n    }\n}\npub fn sum(k: u32) -> u32 {\n    b::total(k) + a::cost(k, 0)\n}\n";
+    let plain = run_agent(before, after, &[], &[]);
+    assert!(plain.facts.iter().all(|fact| !matches!(fact.category, Category::Rename | Category::Move)), "{:#?}", fact_lines(&plain));
+    for same in [["move a::total b", "rename a::price a::cost"], ["rename a::price a::cost", "move a::total b::total"]] {
+        let report = run_agent(before, after, &same, &[]);
+        assert!(report.agent_facts.iter().all(|fact| fact.holds), "{:#?}", report.agent_facts);
+        let lines = fact_lines(&report);
+        assert!(lines.iter().any(|line| line.starts_with("moved `demo::a::total` → `demo::b::total`")) && lines.iter().any(|line| line.starts_with("renamed `demo::a::price` → `demo::a::cost`")), "{lines:#?}");
+        // The edits of the two bodies and the new parameter are facts. The gap list has the items.
+        assert!(lines.iter().filter(|line| line.ends_with("[semantics]")).count() >= 4, "{lines:#?}");
+        let items: Vec<String> = report.gaps.iter().flat_map(|gap| gap.items.clone()).collect();
+        assert!(items.iter().any(|item| item.ends_with("::total")) && items.iter().any(|item| item.ends_with("::cost") || item.ends_with("::price")), "{items:#?}");
+    }
+    // Negative: the wrong kind. The cause gives the correct option.
+    let report = run_agent(before, after, &["rename a::total b::total"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note.ends_with("For a new module, write `--same 'move a::total b::total'`")), "{fact:#?}");
+}
+
+/// Design 54.16: a pattern with a form error gets the correct form, and a false pattern gets
+/// the near pattern that holds as a complete option. The negative tests: no repair and no
+/// near pattern give no option.
+#[test]
+fn a_false_pattern_gets_the_near_pattern_that_holds() {
+    let facts = |same: &str| semilla_core::AgentFacts { same: vec![same.to_string()], change: Vec::new() };
+    let error = agent::check_form(&facts("rewrite .total => .sum()")).unwrap_err();
+    assert!(error.ends_with("A side that starts with `.` has no receiver: write a variable (`$a`) for the receiver. The correct form: `--same 'rewrite $a.total => $a.sum()'`"), "{error}");
+    let error = agent::check_form(&facts("rewrite $a.total; => $a.sum();")).unwrap_err();
+    assert!(error.ends_with("A pattern has no `;` at the end. The correct form: `--same 'rewrite $a.total => $a.sum()'`"), "{error}");
+    assert!(agent::check_form(&facts("rewrite $a.total => $a.sum()")).is_ok());
+    // Negative: no repair gives a pattern.
+    let error = agent::check_form(&facts("rewrite + => -")).unwrap_err();
+    assert!(error.ends_with("a `rewrite` pattern is an expression on each side of `=>`"), "{error}");
+
+    let before = "pub struct Cart {\n    pub total: u64,\n}\nimpl Cart {\n    pub fn of(total: u64) -> Cart {\n        Cart { total }\n    }\n    pub fn sum(&self) -> u64 {\n        self.total\n    }\n}\npub fn empty() -> u64 {\n    let zero = 0;\n    show(&Cart { total: zero })\n}\npub fn single(price: u64) -> u64 {\n    show(&Cart { total: price })\n}\npub fn show(cart: &Cart) -> u64 {\n    cart.total\n}\npub fn both(a: &Cart) -> u64 {\n    a.total + 1\n}\n";
+    let after = before.replace("Cart { total: zero }", "Cart::of(zero)").replace("Cart { total: price }", "Cart::of(price)").replace("cart.total", "cart.sum()").replace("a.total + 1", "a.sum() + 1");
+    // A plain name matches only that name. The pattern with the variable holds.
+    let report = run_agent(before, &after, &["rewrite Cart { total: raw } => Cart::of(raw)"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds, "{fact:#?}");
+    assert_eq!(fact.notes[..2], ["a name in a pattern matches only that name (`raw`). For a variable, write `$raw`", "a fact that holds: `--same 'rewrite Cart { total: $raw } => Cart::of($raw)'` (2 site(s))"], "{fact:#?}");
+    // The option that Semilla prints holds.
+    let report = run_agent(before, &after, &["rewrite Cart { total: $raw } => Cart::of($raw)"], &[]);
+    assert!(report.accepted() && agent_fact(&report, "a1").places.len() == 2, "{:#?}", report.agent_facts);
+    // The pattern of the nearest edit, if it holds.
+    let report = run_agent(before, &after, &["rewrite cart.total => cart.sum"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note == "    a fact that holds: `--same 'rewrite $a.total => $a.sum()'` (2 site(s))"), "{fact:#?}");
+    // Negative: the pattern with the variable does not hold. No option.
+    let report = run_agent(before, &after, &["rewrite Cart { total: raw } => Cart::new(raw)"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && !fact.notes.iter().any(|note| note.contains("a fact that holds")), "{fact:#?}");
+    // Negative: a pattern with no name and no near edit gets no option.
+    let report = run_agent(before, &after, &["rewrite 7 => 8"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && !fact.notes.iter().any(|note| note.contains("a fact that holds") || note.contains("For a variable")), "{fact:#?}");
+}
+
+/// Design 54.15: the gap line of a long text is short. It has the kind of the edit and the
+/// reference of the fact with the full text. The negative test: a short text stays.
+#[test]
+fn the_gap_line_of_a_long_text_is_short() {
+    let fields: String = (1..=12).map(|n| format!("        field_number_{n}: u32,\n")).collect();
+    let before = format!("pub fn pick(k: u32) -> u32 {{\n    struct Row {{\n{fields}    }}\n    let row = Row {{ field_number_1: k, ..todo() }};\n    row.field_number_1\n}}\npub fn one(k: u32) -> u32 {{\n    k + 1\n}}\n");
+    let after = before.replace("        field_number_7: u32,\n", "        field_number_7: u32,\n        extra: u8,\n").replace("k + 1", "k + 2");
+    let report = run_agent(&before, &after, &[], &[]);
+    let gap = report.gaps.iter().find(|gap| gap.text.starts_with("changed item")).unwrap_or_else(|| panic!("{:#?}", report.gaps));
+    let fact = report.facts.iter().find(|fact| fact.description.starts_with("changed item: ")).expect("the fact of the item");
+    assert_eq!(gap.text, format!("changed item, see {}", fact.id));
+    assert!(fact.description.contains("extra: u8,") && fact.description.contains("field_number_12: u32,"), "{}", fact.description);
+    // The fact has one block, a line diff. Each line of the two texts is in it.
+    let (line, blocks) = semilla_core::text::fact_layout(&fact.description);
+    assert_eq!(line, "changed item: [1] (line diff: `-` old, `+` new) at `demo::pick/S0`");
+    assert_eq!(blocks.len(), 15, "{blocks:#?}");
+    assert_eq!(blocks.iter().filter(|line| line.trim_start().starts_with('+')).map(|line| line.trim()).collect::<Vec<_>>(), ["+     extra: u8,"]);
+    assert!(!blocks.iter().any(|line| line.trim_start().starts_with('-')), "{blocks:#?}");
+    // Negative: a short text stays in the gap line.
+    let short = report.gaps.iter().find(|gap| !gap.text.starts_with("changed item")).expect("the gap of the literal");
+    assert!(short.text.contains("`1` → `2`"), "{short:#?}");
 }

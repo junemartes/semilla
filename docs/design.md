@@ -4948,7 +4948,7 @@ Decided by Claude:
 
 A `same` fact has a form check only. It does not predict `code equal` (48.4).
 
-**`rename OLD NEW` and `move FROM TO`.** The fact holds only if Semilla derives a `rename` fact (or a `move` fact) that names the pair, from the syntax tree (50 to 52). The derived fact then has the origin `stated` and shows below the agent fact. If not, the step is rejected: "false: Semilla derives no rename `OLD` → `NEW` from the syntax tree", then each fact that Semilla has for one of the two names ("Semilla sees: f2 …"), or the state of the two names in the two trees.
+**`rename OLD NEW` and `move FROM TO`.** The fact holds only if Semilla derives a `rename` fact (or a `move` fact) that names the pair, from the syntax tree (50 to 52). Since batch 9b2, a stated pair is also a candidate of the rename rule (54.11). The derived fact then has the origin `stated` and shows below the agent fact. If not, the step is rejected: "false: Semilla derives no rename `OLD` → `NEW` from the syntax tree", then each fact that Semilla has for one of the two names ("Semilla sees: f2 …"), or the state of the two names in the two trees.
 
 - A rename site with one more edit: the rename fact covers only the exact sites (52). The other edit has its own fact, and it is a gap if no fact of the agent states it.
 - Decided by Claude: `move FROM TO` accepts the new path of the item or the module that gets the item as `TO`. The API fact of the same pair (a removed and an added public path) is also `stated`.
@@ -4959,7 +4959,7 @@ A `same` fact has a form check only. It does not predict `code equal` (48.4).
 - One variable has one value at one site. The value on the old side and the value on the new side are equal, or the pattern covers their difference (a site in a site: `f($a.x)` with the pattern `$a.x => $a.x()`).
 - **A site is covered only if the full difference of the site is the pattern.** The site is the edit, or each changed child of the edit is a site. An edit with one more difference is not a site: it keeps its own fact with the origin `derived`.
 - The unit of the cover is one edit of a fact. A fact with many places is `stated` only if the agent facts cover each place. If not, the fact stays `derived`, and the agent fact names it as "a part of f3 (2 of 5 places)".
-- All sites of one claim make one agent fact: "✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 2 site(s))", then the list of the places.
+- All sites of one claim make one agent fact: "✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)", then the list of the places (54.12).
 - **A claim with no site is false** (reject): "false: no changed place has the old form `FROM` and the new form `TO`", then at most 3 nearest edits with the cause ("the old code has the form …, but the edit changes more than the pattern", or the side that does not match) and the two source lines (`-`, `+`).
 - Form errors (exit code 2, nothing runs): a side that is not an expression; two equal sides; an old side that is only a variable; a variable that is only on the new side.
 
@@ -5011,10 +5011,10 @@ Thus the option that explains the largest set of edits comes first, and an optio
 - **The record.** The stored step keeps the option texts of the agent (`Step.agent: AgentFacts { same, change }`). The report of a step has each agent fact with its kind, its text, its sentences, its check result, its places, and its notes (`StepReport.agent_facts`), and the gap list (`StepReport.gaps`). Decided by Claude: as for each other result (rule T6), `status`, `tag`, and `review` compute the results again from the stored trees and the stored options. An old session file has no `agent` key and reads as a step with no agent fact.
 - **The origin.** Each fact of Semilla has `derived` (Semilla filled it in) or `stated` (a fact of the agent covers each edit of it, and the check holds). The word is in the fact line: "◆ f1 stated: …".
 - **The order** (48.3) of the step output, `status --verbose`, and the Markdown review:
-  1. the intent, the build check, the build code notes, the claims, then "facts of the agent (Semilla checks the tag of each fact, not its sentence):" with each agent fact (`✓ a1 …` or `✗ a2 …`), its places, and the `stated` facts below it;
+  1. the intent, the build check, the build code notes, the claims, then "facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):" (54.12) with each agent fact (`✓ a1 …` or `✗ a2 …`), its places, and the `stated` facts below it;
   2. "not stated: …" (54.4);
   3. the facts that Semilla filled in (54.6).
-- **The count line.** `status` (each form), `tag`, and the review show one line if the change set has a gap: "not stated: N item(s) with M place(s) that can change the behavior of existing code and that no fact of the agent states". `status` has the line for each step, and `tag` and the review for the change set. With no gap, there is no line (the output has no count of zero, as in the result line). Only the output of `semilla fact` says "not stated: 0 item(s)", because the agent asked for the new count. `status` and `tag` also list each agent fact with its result, and `tag` and the review give the count of the agent facts.
+- **The count line.** `status` (each form), `tag`, and the review show one line if the change set has a gap: "not stated: N item(s) with M place(s) that can change the behavior of existing code and that no fact of the agent states". `status` has the line for each step, and `tag` and the review for the change set. With no gap, a step with one agent fact or more has the line "not stated: 0 item(s)" (54.14). A step with no agent fact and no gap has no line. `status` and `tag` also list each agent fact with its result, and `tag` and the review give the count of the agent facts.
 - **A false fact** (Decided by Claude): the first lines name each false fact ("✗ fact a2 of the agent is false: `--same 'rename limit cap'`"). The list of the agent facts shows the cause and what Semilla sees. The last line is the command to run again with no false fact. The gap list then names the edits of that fact.
 - **The local UI** (the smallest change): the fact line shows the origin word; the group view has the list of the agent facts and the gap list of each step; the summary has the count line. The HTML export has the same parts as the Markdown review.
 
@@ -5103,9 +5103,138 @@ The count of the facts and the category of each fact are equal in each case and 
 - **A source text with the character `⏎`** can get a wrong block border in the layout. Each character still shows.
 - **The line diff of a file that is not Rust** shows 40 changed lines, then a count line ("60 more changed line(s) of the file: `git diff` shows them"). This is a count, not a cut of a line, but the fact does not show each line. Open question: show each line, or keep the limit?
 - **Lists of places** keep the form "and N more" in the short output; `status --verbose` shows the full list. The labels of the tree view and of the flow view, and the new code of the review (40 lines for each new item) keep their limits: they are not fact texts.
-- **A plan step with a false agent fact** has the mark `✓` on the line of the plan step, and the cause is in the result of the change set (as for a refuted claim). `replay apply` has the exit code 0.
+- **A plan step with a false agent fact** had the mark `✓` on the line of the plan step. Batch 9b2 corrects the mark (54.13).
 - **`tag`** lists the agent facts and the count line, but not the `stated` facts below each agent fact.
-- **An output with no gap has no count line** (54.5). A reviewer who wants the line "not stated: 0 item(s)" in `status` and in the review must ask for it: it is one line of code.
+- **An output with no gap had no count line.** Batch 9b2 adds the line for a step with an agent fact (54.14).
 - **Open question: the table of 54.2.** Column 2 follows 48.2 (no fact of the agent for a declaration, an attribute, or a build input). The user can move a category between the columns: one line of code for each.
 - **Open question: the effort of the agent** with the new options is not measured with blind trials (48.8).
 - **An observation with no known cause:** one time in the full test runs, the test `a_review_after_a_step_uses_the_stored_result_of_the_step` failed with "the background check of session is not ready (Stale)". It passed in each later run. This batch does not change that path.
+
+### 54.10 Batch 9b2: the path of an item
+
+Agents wrote facts for six real change sets before the options existed. 9 of 26 facts hold as written. The largest cause is the path of a trait impl method. The rule of this section replaces the loose path compare of 54.2 for `ITEM`, `OLD`, `NEW`, `FROM`, and `TO` (`crates/semilla-verify/src/paths.rs`).
+
+**The rule.** Semilla compares a path of the agent with the path of each item in a normal form, part by part, from the last part.
+
+- A part is a name (`money`, `fmt`, `Price.0`) or an impl part. `<impl TRAIT for TYPE>` and `<TYPE as TRAIT>` are the same impl part. `<impl TYPE>` and the type name are the same part.
+- A path in an impl part (`TYPE`, `TRAIT`) agrees if its last segments agree: `core::fmt::Display`, `fmt::Display`, and `Display` agree. The module path of the type can be before the `<…>` or in it (`<shop::money::Price as Display>::fmt` and `shop::money::<Price as Display>::fmt`).
+- Generic arguments are optional. `Scale` agrees with `Scale<u64>`. `Scale<u32>` does not agree with `Scale<u64>`.
+- White space is not important (`[T; N]` and `[T;N]`).
+- The path of the agent can start at each part (`fmt` is a path, and so is `money::<Price as Display>::fmt`). The twin number of Semilla (`#0`) is optional.
+- The result is a set of items. One item: the path is resolved. No item, or two items or more: the fact is false, as in batch 9b, with the candidates.
+
+**The candidates.** Semilla orders them by the count of the parts that agree (best first). It prints at most 8, then a count. Each candidate has the generic arguments of its trait and its type, because the path of Semilla for two impls of one generic trait differs only in the twin number:
+
+```text
+  ✗ a1 change: `<Price as Scale>::scale` "…" (false: …)
+      `<Price as Scale>::scale` names 2 items: give more of the path
+      candidates: `shop::money::<Price as Scale<u64>>::scale#0`, `shop::money::<Price as Scale<u32>>::scale#1`
+```
+
+**An item that a macro call makes** has no path in the syntax tree. If the input of a macro call has the name of the type or of the trait, the message names the macro call and its module: "an item that a macro call makes has no path in the syntax tree. The input of the macro call `shop::money::unit!#0` has `Coin`: give the macro call `shop::money::unit!#0` or its module `shop::money`".
+
+Decided by Claude:
+
+1. **A field and a method with one name.** `Cart.total` is the field and `Cart::total` is the method. If the mark of the last part selects one item, that item is the result. If not, the two marks agree (`Cart::total` finds the field of a type with no such method).
+2. **A trait path agrees by its last segments only.** `<Price as other::Display>::fmt` does not agree with `fmt::Display`. But `Display` agrees with each trait that has this last name. Semilla does not resolve the imports for a path of the agent.
+3. **Soundness.** The rule selects the items of a fact of the agent. It hides no edit: a wider match can only give more candidates (a reject), and the check of the fact (54.2, 54.3) does not change.
+
+Limits: a type with a `+` (`dyn A + 'a`) and a turbofish in a path of the agent (`Name::<T>`) get a simple normal form. A candidate shows the generic arguments only if Semilla can align its parts with the `impl` header.
+
+### 54.11 Batch 9b2: a stated pair is a candidate of the rename rule
+
+**The search (a correction for each step, also with no fact of the agent).** The cause of the missed pair `Mode::Idle` → `State::Rest` was the search, not the check. The search compared the owner of the old item (`Mode`) with the owner of the new item (`State`) as texts. The general rule: **the owner of an item is its owner after the map.** Semilla first derives the map of the owners. Then it searches the pairs of the children of each mapped owner, and it checks the larger map with the same check (50.2). A step that renames an enum and its variant, or a type and its field, now gives the two rename facts with no fact of the agent.
+
+**A stated pair.** `--same 'rename OLD NEW'` and `--same 'move FROM TO'` give a candidate pair if each path names one item and the pair has a form that the rename rule has.
+
+- Semilla first runs its own search with no stated pair. Then it adds each stated pair that is not in the map, the outer items first, and it runs **the same check** (`verify_core` with the claims of the map: each reference maps, each site is exact). The limits of the search (`MAX_GROUP`, `MAX_MAPS`, the name threshold) do not apply to a stated pair, because the agent gives the pair. This is the reduced search space.
+- If the check passes, the rename fact (or the move fact) exists with the origin `stated`.
+- If the pair is no candidate or the check does not pass, the fact is false, as in batch 9b, and the first note gives the cause: "the stated pair is no fact: …" (for the check: "the check of the pair does not pass: …" with the cause of the rename rule).
+- **A site that is not exact does not reject the pair** (50.2, as for a pair that Semilla finds alone). A site that did not follow the rename, or a site with one more edit, keeps its own `[semantics]` fact with the origin `derived`, and the gap list names it. Thus the first place that is not exact is a fact line and a gap line, not a cause in the reject.
+- **A stated pair never makes the check weaker.** The check of 50.2 keeps each difference that the map does not explain as its own fact. A body edit of a renamed function, a new parameter, and an edit at a call site are facts with the category of the edit, and they are in the gap list.
+- Two stated pairs can depend on each other (the enum and its variant). Semilla orders the pairs by their paths and by the depth of the owner, so the order of the options is not important.
+- A form with no pair gives its cause: an item is in one pair only; the old item stays in the new tree; the two kinds differ; a rename with an equal name ("For a new module, write `--same 'move a::total b::total'`"); a move with a new name; an `impl` block, a method of a trait impl, a macro, or a `use` line.
+
+Decided by Claude:
+
+1. **A stated pair does not replace a pair that Semilla derives alone.** If Semilla derives `Mode::Idle` → `State::Rest`, the fact `rename Mode::Idle State::Busy` is false: "Semilla derives `demo::Mode::Idle` → `demo::State::Rest` from the syntax tree, and an item is in one pair only".
+2. **The result text of the fact stays** "holds: Semilla derives the rename from the syntax tree". The rename fact is the result of the rename rule in the two cases.
+3. **The rename rule itself did not change.** The change is in the search (the owner rule) and in one more source of candidates.
+
+Limits:
+
+- **Items with equal bodies.** If two old functions have equal bodies, a stated pair that is not the pair of the author passes the check. The call sites that do not agree show as `[semantics]` facts ("changed path"). No edit is hidden, but the rename fact is not the intent of the author.
+- A rename with a new name and a new owner in one step is a candidate only if a pair of the map gives the new owner.
+
+### 54.12 Batch 9b2: the words of a `rewrite` fact
+
+A reader of "(holds: 1 site(s))" understands that Semilla checked the behavior. Semilla checks only the form. The new result text: "the form holds: N site(s) have exactly this edit. Semilla does not check that the behavior is the same". `rename` and `move` keep "holds": Semilla proves them from the syntax tree.
+
+```text
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `10` => `20` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
+```
+
+The heading is now true for each kind. The words are the same in the step output, `semilla fact`, `status`, `tag`, the Markdown review, the HTML export, and the local UI (the result text is a field of the record).
+
+### 54.13 Batch 9b2: the mark of a plan step
+
+`semilla replay apply` printed "✓ plan step 0: …" for a step with a false agent fact or a refuted claim. The result of the change set was "rejected" and the exit code was 1 with `--full`. Now **the mark of the plan line agrees with the result of the step**:
+
+```text
+✗ plan step 0: "raise the fee"
+    ✗ fact a1 of the agent is false: `--same 'rewrite 10 => 30'`
+```
+
+```text
+✗ plan step 1: "panic"
+    ✗ claim c1 is refuted: explicit panic sites: lit::keep/S0/then/tail
+```
+
+A false fact and a refuted claim are consistent: the mark `✗`, one line with the cause below the plan line, the full cause in the report of the step, "result: rejected", and the exit code 1.
+
+Decided by Claude: **a false agent fact is a problem of phase 1.** Before, `replay apply` without `--full` printed "phase 1 passed" and had the exit code 0 for a false fact, but the exit code 1 for a refuted claim. Now `phase1_ok` needs each agent fact to hold, as `semilla step` does.
+
+### 54.14 Batch 9b2: the count line of the gaps
+
+A step with one agent fact or more always has the count line. With no gap, the line is "not stated: 0 item(s)". The line is in the step output, `semilla fact`, `status`, `tag`, and the review. A step with no agent fact keeps the output of batch 9b (the line only if a gap exists).
+
+The test `a_review_after_a_step_uses_the_stored_result_of_the_step` passed in 30 runs alone and in 5 runs of the full suite. This batch did not find the cause of the one failure of batch 9b, and it does not change that path.
+
+### 54.15 Batch 9b2: the line diff of two block texts
+
+A fact "changed item: [1] → [2]" printed two blocks that differ in one token. Now, if the old text and the new text are block texts with more than one line each, the layout prints **one block as a line diff**:
+
+```text
+  ◆ f2 derived: changed item: [1] (line diff: `-` old, `+` new) at `long::pick/S0` [semantics]
+        [1]   struct Row {
+                  field_number_6: u32,
+            -     field_number_7: u32,
+            +     field_number_7: u64,
+                  field_number_8: u32,
+              }
+```
+
+- Each line of the old text and of the new text is in the block, with the mark ` `, `-`, or `+`. No line is cut and no equal line is left out. The lines with ` ` and `-` are the old text. The lines with ` ` and `+` are the new text.
+- The compare is by full lines, with the indent. Above 1 000 000 cells of the compare table, the block has each old line (`-`), then each new line (`+`).
+- One side with one line, short texts, and two blocks with no arrow between them keep the form of batch 9b (54.7).
+- The description of the fact in the record does not change. The line diff is a layout (`semilla_core::text::fact_layout`, `line_diff`).
+
+**The gap line.** If the text of a gap group is longer than 80 characters, the line has the kind of the edit and the reference of the fact: "? 1 place: changed item, see f1 (f1)". The full text is at the fact.
+
+Limits: the local UI shows a block text on one line, with no line diff. The text of a macro definition or of the input of a macro call is a token text on one line, and it keeps the form of batch 9b.
+
+### 54.16 Batch 9b2: help with a near claim that holds
+
+**The general rule.** When a fact is false or has a form error, and a fact that holds is near it, Semilla prints that fact as a complete option that the agent can copy.
+
+- **A form error with a repair.** A side that starts with `.` gets a variable for the receiver. A side that ends with `;` loses it. Semilla prints the repair only if the two repaired sides parse: "… A side that starts with `.` has no receiver: write a variable (`$a`) for the receiver. The correct form: `--same 'rewrite $a.total => $a.sum()'`". A text with no repair (`+ => -`) gets no form.
+- **A plain name in a pattern.** A name in a pattern matches only that name. If a pattern with no site has plain names with a small first letter, Semilla tries each name as a variable (at most 4 names): "a name in a pattern matches only that name (`raw`). For a variable, write `$raw`", then "a fact that holds: `--same 'rewrite Cart { total: $raw } => Cart::of($raw)'` (3 site(s))" if that pattern has sites.
+- **The nearest edit.** Below each nearest edit of a false pattern (54.3), Semilla prints the pattern of that edit if it holds: "a fact that holds: `--same 'rewrite $a.total => $a.sum()'` (2 site(s))".
+- **A false rename or move.** If Semilla derives a rename or a move with the old item or the new item of the fact, it prints it: "a fact that holds: `--same 'rename depot::Mode::Idle depot::State::Rest'`" (at most 3).
+
+Soundness: Semilla prints an option only after the check of that option passes on this step. The option is help text. It is no fact until the agent states it.
+
+Decided by Claude: the rule covers `rewrite`, `rename`, and `move`. A false `change` fact already shows what Semilla sees in the item (54.2), and the gap list gives the `change` option that holds. A printed pattern is 200 characters or less.
+
+Limit: a statement that a statement of a different kind replaces (a tail expression that becomes a `let`) is a removed statement and an added statement. It is no site of a pattern, as in batch 9b.

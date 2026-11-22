@@ -445,7 +445,7 @@
     const agent = (state.changeset.agent || []).filter((view) => group.steps.includes(view.step));
     const agentFacts = agent.flatMap((view) => view.facts.map((fact) => ({ step: view.step, fact })));
     if (agentFacts.length) {
-      body.appendChild(h('h4', {}, 'Facts of the agent (' + agentFacts.length + '): Semilla checks the tag, not the sentence'));
+      body.appendChild(h('h4', {}, 'Facts of the agent (' + agentFacts.length + '): Semilla checks each fact against the edit, not the sentence of a `change`, not the behavior after a `rewrite`'));
       body.appendChild(h('ul', { class: 'messages facts' }, agentFacts.map(({ step, fact }) => {
         const lines = [].concat(fact.places && fact.places.length ? ['places: ' + fact.places.join(', ')] : [], fact.facts && fact.facts.length ? ['states: ' + fact.facts.join(', ')] : [], fact.partial && fact.partial.length ? ['a part of: ' + fact.partial.join(', ')] : [], fact.notes || []);
         const sentences = (fact.sentences || []).map((text) => ' ' + quoted(text)).join('');
@@ -457,6 +457,9 @@
       body.appendChild(h('h4', {}, 'Not stated (' + gaps.length + '): can change the behavior of existing code, and no fact of the agent states it'));
       body.appendChild(h('ul', { class: 'messages facts' }, gaps.map(({ step, gap }) =>
         h('li', { class: 'fact' }, '? step ' + step + ': ' + gap.places.length + (gap.places.length === 1 ? ' place: ' : ' places: ') + gap.text + ' (' + gap.facts.join(', ') + ')', h('div', { class: 'why' }, 'in: ' + gap.items.join(', '))))));
+    } else if (agentFacts.length) {
+      // Design 54.14: a group with a fact of the agent always has the count line.
+      body.appendChild(h('p', { class: 'facts' }, 'not stated: 0 item(s)'));
     }
     factList('Derived facts', allFacts.filter((fact) => !fact.build_code_change));
     if (group.uncovered.length) {

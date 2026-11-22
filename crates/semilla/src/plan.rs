@@ -718,7 +718,11 @@ impl App {
         let mut problems = 0;
         // The steps that do not build, and the steps with a build check that cannot run.
         let mut build_stops = (0, 0);
-        for (index, step) in plan.steps.iter().enumerate() {
+        // The lines of each plan step: the problems, the text of the build check, the notes.
+        // The line with the mark comes after the check of the change set (design 54.13).
+        let mut plan_lines: Vec<(Vec<String>, String, Vec<String>)> = Vec::new();
+        let mut group_lines = String::new();
+        for step in &plan.steps {
             let mut lines: Vec<String> = Vec::new();
             self.step_begin(&step.intent)?;
             let before = self.repo.write_tree()?;
@@ -788,23 +792,12 @@ impl App {
             }
             self.step_end_with(false)?;
             problems += lines.len();
-            let mark = if lines.is_empty() { "✓" } else { "✗" };
-            put_line(&mut text, &format!("{mark} plan step {index}: {}", semilla_core::text::quoted(&step.intent)));
-            for line in lines {
-                put_line(&mut text, &format!("    {line}"));
-            }
-            // The result line of the build check and the errors of the compiler: a block.
-            for line in build_text.lines() {
-                put_line(&mut text, &format!("    {line}"));
-            }
-            for note in notes {
-                put_line(&mut text, &format!("    {}", note.trim_start()));
-            }
+            plan_lines.push((lines, build_text, notes));
         }
         let mut session = self.load_session()?;
         for group in &plan.groups {
             if let Err(error) = self.group_set(&group.id, group.kind, &group.title, &group.why, group.steps.clone()) {
-                put_line(&mut text, &format!("✗ group {}: {error:#}", group.id));
+                put_line(&mut group_lines, &format!("✗ group {}: {error:#}", group.id));
                 problems += 1;
             }
         }
@@ -837,6 +830,32 @@ impl App {
         if !full {
             self.queue_session(&set)?;
         }
+        // Design 54.13: the mark of a plan step agrees with the result of the step. A step with
+        // a false fact of the agent, a claim that is not correct, or an error has the mark `✗`
+        // and one line for each problem.
+        for (index, (step, (mut lines, build_text, notes))) in plan.steps.iter().zip(plan_lines).enumerate() {
+            if let Some(report) = result.report.steps.iter().find(|report| report.step == index).filter(|report| crate::app::hard_problem(report)) {
+                let wrong = |status: &semilla_core::ClaimStatus| !(status.is_verified() || status.is_pending() || matches!(status, semilla_core::ClaimStatus::NotChecked { .. }));
+                lines.extend(report.agent_facts.iter().filter(|fact| !fact.holds).map(|fact| format!("✗ fact {} of the agent is false: `--{} '{}'`", fact.id, fact.kind, fact.options.join("', '"))));
+                lines.extend(report.claims.iter().filter(|claim| wrong(&claim.status)).map(|claim| format!("✗ claim {} is {}", claim.claim, claim.status.text())));
+                if lines.is_empty() {
+                    lines.push("✗ the step is rejected: see the result below".to_string());
+                }
+            }
+            let mark = if lines.is_empty() { "✓" } else { "✗" };
+            put_line(&mut text, &format!("{mark} plan step {index}: {}", semilla_core::text::quoted(&step.intent)));
+            for line in lines {
+                put_line(&mut text, &format!("    {line}"));
+            }
+            // The result line of the build check and the errors of the compiler: a block.
+            for line in build_text.lines() {
+                put_line(&mut text, &format!("    {line}"));
+            }
+            for note in notes {
+                put_line(&mut text, &format!("    {}", note.trim_start()));
+            }
+        }
+        text.push_str(&group_lines);
         text.push('\n');
         text.push_str(&result.text);
         put_line(&mut text, &format!("replay: {remaining}"));

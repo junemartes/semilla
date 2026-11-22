@@ -911,9 +911,6 @@ impl App {
         for line in &lines {
             put_line(&mut text, line);
         }
-        if report.gaps.is_empty() {
-            put_line(&mut text, "  not stated: 0 item(s)");
-        }
         put_line(&mut text, "For each fact of the step, run `semilla status --verbose`.");
         Ok((text, true))
     }

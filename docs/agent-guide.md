@@ -94,9 +94,9 @@ You know the intent of the step. Semilla knows the edits. A fact of yours connec
 | You write | When | Semilla checks |
 |---|---|---|
 | `--change 'ITEM[,ITEM]=TEXT'` | The behavior of existing code changes on purpose. `ITEM` is a function, a type, an `impl`, a module, or a file. `TEXT` is one sentence: how the behavior changes. | Each item has an edit that can change the behavior (a body edit, a macro call, a signature, an attribute). |
-| `--same 'rename OLD NEW'` | You renamed an item. | Semilla derives the same rename from the syntax tree. |
-| `--same 'move FROM TO'` | You moved an item to a different module. | Semilla derives the same move. |
-| `--same 'rewrite FROM => TO'` | One mechanical rewrite at many places. Each side is a Rust expression. A variable (`$a`, `$b`) is in place of one expression. | Each site: the full difference of the edit is the pattern. |
+| `--same 'rename OLD NEW'` | You renamed an item. | Semilla derives the same rename from the syntax tree. Your pair is a candidate: the check is the same. |
+| `--same 'move FROM TO'` | You moved an item to a different module. | Semilla derives the same move. Your pair is a candidate. |
+| `--same 'rewrite FROM => TO'` | One mechanical rewrite at many places. Each side is a Rust expression. A variable (`$a`, `$b`) is in place of one expression. | Each site: the full difference of the edit is the pattern. Semilla checks the form, not the behavior. |
 
 ```sh
 semilla step "use the method for the total" \
@@ -105,8 +105,8 @@ semilla step "use the method for the total" \
 ```
 
 ```text
-  facts of the agent (Semilla checks the tag of each fact, not its sentence):
-  ✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 2 site(s))
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
       places: shop::a/tail/lhs, shop::b/tail/lhs
     ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
         in: shop::a, shop::b
@@ -119,8 +119,13 @@ semilla step "use the method for the total" \
 
 **The rules of a fact.**
 
-- Semilla checks the tag, not the sentence. A `same` fact is a check of the form: it does not say that the compiled code is equal.
-- `ITEM` is a loose path: `limit`, `cart::limit`, `Cart::total`, or `src/cart.rs`. The old path and the new path are valid. If the path names two items, the message gives the candidates: write more of the path.
+- Semilla checks each fact against the edit. It does not check the sentence of a `change`. A `rewrite` fact is a check of the form: "the form holds" does not say that the behavior is the same. `rename` and `move` say "holds": Semilla proves them from the syntax tree.
+- `ITEM`, `OLD`, `NEW`, `FROM`, and `TO` are loose paths: `limit`, `cart::limit`, `Cart::total` (a method), `Cart.total` (a field), or `src/cart.rs`. The old path and the new path are valid.
+- Each form of the path of a trait impl method is valid: `<shop::money::Price as core::fmt::Display>::fmt` (the form of the compiler), `shop::money::<impl Display for Price>::fmt`, `<Price as Display>::fmt`. Generic arguments are optional (`<Price as Scale>::scale`). White space is not important.
+- If the path names two items, the message gives the candidates with their generic arguments, the best first: copy one. An item that a macro call makes has no path: the message names the macro call and its module.
+- A stated rename or move is a candidate of the rename rule, also when Semilla does not find the pair alone (many renames in one module, or a rename with a large edit of the body). The check does not get weaker: each edit that is not the rename keeps its own fact, and it is in the gap list. The order of the options is not important.
+- When a fact is false or has a form error, look for the line "a fact that holds: `--same '…'`" or "The correct form: …". It is a complete option that passes the check. Use it only if it says what you did.
+- A name in a pattern matches only that name. For a variable, write `$raw`, not `raw`.
 - A `change` fact on an item with no edit, or with only a rename site, a move, or docs, is false. The message shows what Semilla sees in the item.
 - A `change` fact on a new or a removed item is not false, but it does nothing: "note: Semilla shows `ITEM` as added: the fact covers no existing code".
 - A `rewrite` site with one more edit is not a site. That edit keeps its own fact. A pattern with no site is false: the message shows the nearest edits and the cause.
@@ -148,7 +153,11 @@ semilla step "use the method for the total" \
 
 **How to add a fact.** `semilla fact [--step N] --same '…' --change '…'` adds facts to a stored step (default: the last step). No build check runs again, because the code of the step is the same. The output shows each fact with its result and the new count of the gaps. A false fact stores nothing.
 
-If a step has a gap, `semilla status`, `semilla tag`, and the review show one line with the count: "not stated: 2 item(s) with 5 place(s) …". With no gap, there is no line.
+If a step has a gap, `semilla status`, `semilla tag`, and the review show one line with the count: "not stated: 2 item(s) with 5 place(s) …". A step with one fact of yours or more and no gap shows "not stated: 0 item(s)". A gap line with a long text is short: "changed item, see f1". The full text is at the fact `f1`.
+
+**A changed text with two long sides** shows as one block, a line diff: "changed item: [1] (line diff: `-` old, `+` new)". Each line of the old text and of the new text is in the block.
+
+**A replay plan.** A plan step with a false fact or a refuted claim has the mark `✗` on its plan line, with the cause below it. `semilla replay apply` then has the exit code 1, with and without `--full`.
 
 ## The optional claims
 

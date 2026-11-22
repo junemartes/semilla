@@ -1078,7 +1078,7 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<(Result<usize, usiz
 pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize) -> Vec<String>) -> Vec<String> {
     let mut lines = Vec::new();
     if !step.agent_facts.is_empty() {
-        lines.push("  facts of the agent (Semilla checks the tag of each fact, not its sentence):".to_string());
+        lines.push(format!("  facts of the agent ({}):", semilla_core::report::AGENT_FACTS_NOTE));
     }
     for (index, fact) in step.agent_facts.iter().enumerate() {
         lines.push(format!("  {} {}", if fact.holds { "✓" } else { "✗" }, fact.line()));

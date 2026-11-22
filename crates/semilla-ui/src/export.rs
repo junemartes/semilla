@@ -1475,7 +1475,7 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
     let count: usize = reports.iter().map(|step| step.agent_facts.len()).sum();
     if count > 0 {
         let _ = writeln!(out, "#### Facts of the agent ({count})\n");
-        let _ = writeln!(out, "Semilla checks the tag of each fact against the edit. It does not check the sentence.\n");
+        let _ = writeln!(out, "{}.\n", md(semilla_core::report::AGENT_FACTS_NOTE));
         for step in &reports {
             for (index, agent) in step.agent_facts.iter().enumerate() {
                 let _ = writeln!(out, "- step {}: {} {}", step.step, if agent.holds { "✓" } else { "✗" }, md_with_code(&agent.line()));
@@ -1500,6 +1500,9 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
             }
         }
         out.push('\n');
+    } else if count > 0 {
+        // Design 54.14: a change set with a fact of the agent always has the count line.
+        let _ = writeln!(out, "{}\n", md(semilla_core::report::NO_GAP_LINE));
     }
     let total = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view).is_err()).len();
     if total > 0 {
@@ -1524,7 +1527,7 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
     let reports: Vec<&semilla_core::report::StepReport> = model.report().steps.iter().filter(|step| steps.contains(&step.step)).collect();
     let count: usize = reports.iter().map(|step| step.agent_facts.len()).sum();
     if count > 0 {
-        let _ = writeln!(out, "<h4>Facts of the agent ({count})</h4>\n<p class=\"muted\">Semilla checks the tag of each fact against the edit. It does not check the sentence.</p>\n<ul class=\"agent-facts\">");
+        let _ = writeln!(out, "<h4>Facts of the agent ({count})</h4>\n<p class=\"muted\">{}.</p>\n<ul class=\"agent-facts\">", esc(semilla_core::report::AGENT_FACTS_NOTE));
         for step in &reports {
             for (index, agent) in step.agent_facts.iter().enumerate() {
                 let _ = write!(out, "<li>step {}: {} {}", step.step, if agent.holds { "✓" } else { "✗" }, esc(&agent.line()));
@@ -1551,6 +1554,8 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
             }
         }
         out.push_str("</ul>\n");
+    } else if count > 0 {
+        let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(semilla_core::report::NO_GAP_LINE));
     }
     let total = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view).is_err()).len();
     if total == 0 {

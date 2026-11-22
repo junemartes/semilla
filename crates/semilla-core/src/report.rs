@@ -780,9 +780,10 @@ impl StepReport {
         items
     }
 
-    /// The line with the count of the items that are not stated, or `None` for no gap.
+    /// The line with the count of the items that are not stated. A step with a fact of the
+    /// agent always has the line (design 54.14). `None`: no gap and no fact of the agent.
     pub fn gap_line(&self) -> Option<String> {
-        gap_count_line(self.gap_items().len(), self.gaps.iter().map(|gap| gap.places.len()).sum())
+        gap_count_line(self.gap_items().len(), self.gaps.iter().map(|gap| gap.places.len()).sum()).or_else(|| (!self.agent_facts.is_empty()).then(|| NO_GAP_LINE.to_string()))
     }
 
     /// The lines of the gap list (design 54.4), largest group first. With `limit`, the first
@@ -820,8 +821,17 @@ impl Report {
     /// set together (design 54.4), or `None` for no gap.
     pub fn gap_line(&self) -> Option<String> {
         gap_count_line(self.steps.iter().map(|step| step.gap_items().len()).sum(), self.steps.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum())
+            .or_else(|| self.steps.iter().any(|step| !step.agent_facts.is_empty()).then(|| NO_GAP_LINE.to_string()))
     }
 }
+
+/// The count line of a step or a change set with a fact of the agent and with no gap
+/// (design 54.14).
+pub const NO_GAP_LINE: &str = "not stated: 0 item(s)";
+
+/// What Semilla checks for the facts of the agent (design 54.12). The text is true for each
+/// kind of fact: a `change`, a `rename`, a `move`, and a `rewrite`.
+pub const AGENT_FACTS_NOTE: &str = "Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`";
 
 /// The line with the count of the items that are not stated (design 54.4).
 pub fn gap_count_line(items: usize, places: usize) -> Option<String> {

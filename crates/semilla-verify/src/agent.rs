@@ -11,6 +11,8 @@ use semilla_core::report::{AgentFact, Gap};
 use semilla_core::{Anchor, Category, Fact};
 use semilla_syntax::{Edit, ItemKind, Node, Workspace};
 
+use crate::identity::Candidate;
+use crate::paths::Index;
 use crate::{StepInput, StepOutcome};
 
 /// The message for a kind of `same` claim that has no check yet.
@@ -45,13 +47,81 @@ fn parse_same(text: &str) -> Result<Same, String> {
         "move" => sides(false).map(|(old, new)| Same::Move(old, new)).ok_or_else(|| format!("`--same '{text}'`: write `move FROM TO` (for a path with a space: `move FROM => TO`)")),
         "rewrite" => {
             let (from, to) = sides(true).ok_or_else(|| format!("`--same '{text}'`: write `rewrite FROM => TO`, with a space on each side of `=>`"))?;
-            let pattern = Pattern::parse(&from, &to)?;
-            drop(pattern);
+            // Design 54.16: a form error gives the correct form, if a repair of the text has one.
+            if let Err(error) = Pattern::parse(&from, &to) {
+                return Err(match repair(&from, &to) {
+                    Some((from, to, cause)) => format!("{error}. {cause}. The correct form: `--same {}`", shell_quote(&format!("rewrite {from} => {to}"))),
+                    None => error,
+                });
+            }
             Ok(Same::Rewrite(from, to))
         }
         "extract" | "inline" => Err(format!("`--same '{text}'`: the kind `{kind}` {LATER}")),
         _ => Err(format!("`--same '{text}'`: `{kind}` is not a kind of a `same` fact; {SAME_FORMS}")),
     }
+}
+
+/// The text of an option value for a shell: in single quote marks.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// The repair of a pattern with a form error (design 54.16): the two sides that parse, and
+/// the cause. The repairs are general: a side that starts with `.` gets a variable for the
+/// receiver, and a side that ends with `;` loses it (a pattern is an expression). `None` if
+/// the repaired text is not a pattern.
+fn repair(from: &str, to: &str) -> Option<(String, String, String)> {
+    // A variable name that the pattern does not have.
+    let name = ('a'..='z').map(|c| format!("${c}")).find(|name| !from.contains(name.as_str()) && !to.contains(name.as_str()))?;
+    let mut causes: Vec<String> = Vec::new();
+    let mut side = |text: &str| {
+        let mut text = text.trim().to_string();
+        if text.ends_with(';') {
+            text = text.trim_end_matches(';').trim_end().to_string();
+            causes.push("A pattern has no `;` at the end".to_string());
+        }
+        if text.starts_with('.') && !text.starts_with("..") {
+            text = format!("{name}{text}");
+            causes.push(format!("A side that starts with `.` has no receiver: write a variable (`{name}`) for the receiver"));
+        }
+        text
+    };
+    let (new_from, new_to) = (side(from), side(to));
+    causes.dedup();
+    (!causes.is_empty() && Pattern::parse(&new_from, &new_to).is_ok()).then(|| (new_from, new_to, causes.join(". ")))
+}
+
+/// The text of a pattern side with the variable `$name` in place of the name `name`
+/// (design 54.16). A name after `.`, `::`, or `$`, and a name before `::`, `(`, `!`, or `:`
+/// stays: it is a field, a path part, a function, a macro, or a field name.
+fn with_variable(text: &str, name: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let (mut out, mut at) = (String::new(), 0);
+    while let Some(found) = text[at..].find(name) {
+        let (start, end) = (at + found, at + found + name.len());
+        let before = text[..start].trim_end();
+        let after = text[end..].trim_start();
+        let inside = text[..start].chars().next_back().is_some_and(word) || text[end..].chars().next().is_some_and(word);
+        let fixed = before.ends_with('.') || before.ends_with("::") || before.ends_with('$') || after.starts_with("::") || after.starts_with('(') || after.starts_with('!') || (after.starts_with(':') && !after.starts_with("::"));
+        out.push_str(&text[at..start]);
+        if !inside && !fixed {
+            out.push('$');
+        }
+        out.push_str(name);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// The plain names of a pattern side that can be a variable: a path of one part that starts
+/// with a small letter.
+fn plain_names(node: &Node, out: &mut Vec<String>) {
+    let name = node.text.as_str();
+    if node.kind == "path" && name.chars().next().is_some_and(|c| c.is_lowercase() || c == '_') && name.chars().all(|c| c.is_alphanumeric() || c == '_') && !matches!(name, "self" | "true" | "false" | "_") && !out.iter().any(|other| other == name) {
+        out.push(name.to_string());
+    }
+    node.children.iter().for_each(|child| plain_names(child, out));
 }
 
 /// Parses the text of a `--change` option: the items and the sentence.
@@ -320,9 +390,54 @@ struct Check<'a> {
     facts: &'a [Fact],
     renames: &'a semilla_syntax::Renames,
     units: Vec<Unit>,
+    /// The parts of each item path of the old tree and of the new tree (design 54.10).
+    old_paths: std::cell::OnceCell<Index<'a>>,
+    new_paths: std::cell::OnceCell<Index<'a>>,
+    /// The cause for each stated rename or move that is no fact (design 54.11).
+    stated_causes: &'a BTreeMap<usize, String>,
 }
 
-impl Check<'_> {
+/// The lines for a path that does not name one item of a tree: the candidates in the order of
+/// the parts that agree, and the macro calls that can make the item.
+fn candidate_lines(query: &str, trees: &[&Index]) -> Vec<String> {
+    let mut near: Vec<(usize, String)> = Vec::new();
+    for tree in trees {
+        for path in tree.near(query) {
+            let label = tree.label(path);
+            if !near.iter().any(|(_, other)| *other == label) {
+                near.push((tree.rank(query, path), label));
+            }
+        }
+    }
+    near.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut lines = Vec::new();
+    if !near.is_empty() {
+        lines.push(format!("candidates: {}", crate::paths::list(&near.into_iter().map(|(_, label)| label).collect::<Vec<_>>())));
+    }
+    let mut makers: Vec<(&str, String)> = Vec::new();
+    for tree in trees {
+        for maker in tree.makers(query) {
+            if !makers.contains(&maker) {
+                makers.push(maker);
+            }
+        }
+    }
+    for (call, name) in makers.iter().take(3) {
+        let module = call.rsplit_once("::").map(|(module, _)| module).unwrap_or(call);
+        lines.push(format!("an item that a macro call makes has no path in the syntax tree. The input of the macro call `{call}` has `{name}`: give the macro call `{call}` or its module `{module}`"));
+    }
+    lines
+}
+
+impl<'a> Check<'a> {
+    fn old_paths(&self) -> &Index<'a> {
+        self.old_paths.get_or_init(|| Index::new(self.before))
+    }
+
+    fn new_paths(&self) -> &Index<'a> {
+        self.new_paths.get_or_init(|| Index::new(self.after))
+    }
+
     fn item<'b>(&'b self, path: &str) -> Option<&'b semilla_syntax::Item> {
         self.after.items.get(path).or_else(|| self.before.items.get(path))
     }
@@ -383,44 +498,34 @@ impl Check<'_> {
                 found.push(pair);
             }
         }
-        let usable = |item: &semilla_syntax::Item| item.kind != ItemKind::Use;
-        let matches = |exact: bool, path: &str| if exact { path == name } else { loose(path, &name) };
-        for exact in [true, false] {
-            for item in self.before.items.values().filter(|item| usable(item) && matches(exact, &item.path)) {
-                let new = new_of(&item.path).or_else(|| self.after.items.contains_key(&item.path).then(|| item.path.clone()));
-                add(&mut found, (Some(item.path.clone()), new));
-            }
-            for item in self.after.items.values().filter(|item| usable(item) && matches(exact, &item.path)) {
-                let old = self.renames.items.iter().find(|(_, new)| **new == item.path).map(|(old, _)| old.clone()).or_else(|| self.before.items.contains_key(&item.path).then(|| item.path.clone()));
-                add(&mut found, (old, Some(item.path.clone())));
-            }
-            if !found.is_empty() {
-                break;
-            }
+        // The exact path in one of the two trees, else each item that agrees part by part
+        // (design 54.10).
+        let exact = |ws: &Workspace| ws.items.get(&name).is_some_and(|item| item.kind != ItemKind::Use);
+        let (old_found, new_found): (Vec<&str>, Vec<&str>) = if exact(self.before) || exact(self.after) {
+            (self.before.items.get_key_value(&name).map(|(path, _)| path.as_str()).into_iter().collect(), self.after.items.get_key_value(&name).map(|(path, _)| path.as_str()).into_iter().collect())
+        } else {
+            (self.old_paths().find(&name), self.new_paths().find(&name))
+        };
+        for path in old_found {
+            let new = new_of(path).or_else(|| self.after.items.contains_key(path).then(|| path.to_string()));
+            add(&mut found, (Some(path.to_string()), new));
         }
+        for path in new_found {
+            let old = self.renames.items.iter().find(|(_, new)| new.as_str() == path).map(|(old, _)| old.clone()).or_else(|| self.before.items.contains_key(path).then(|| path.to_string()));
+            add(&mut found, (old, Some(path.to_string())));
+        }
+        // A candidate shows the generic arguments of its `impl` block: a twin number alone
+        // (`#0`, `#1`) does not tell which block it is.
         let label = |(old, new): &(Option<String>, Option<String>)| match (old, new) {
-            (Some(old), Some(new)) if old != new => format!("`{new}` (before the step: `{old}`)"),
-            (_, Some(new)) => format!("`{new}`"),
-            (Some(old), None) => format!("`{old}` (removed)"),
+            (Some(old), Some(new)) if old != new => format!("`{}` (before the step: `{}`)", self.new_paths().label(new), self.old_paths().label(old)),
+            (_, Some(new)) => format!("`{}`", self.new_paths().label(new)),
+            (Some(old), None) => format!("`{}` (removed)", self.old_paths().label(old)),
             (None, None) => String::new(),
         };
         match found.len() {
             0 => {
-                // The candidates: each item with the same last name.
-                let last = name.rsplit("::").next().unwrap_or(&name).to_string();
-                let mut near: Vec<String> = Vec::new();
-                for ws in [self.after, self.before] {
-                    for item in ws.items.values().filter(|item| usable(item)) {
-                        let own = item.path.rsplit("::").next().unwrap_or(&item.path);
-                        if (own == last || own.rsplit('.').next() == Some(&last)) && !near.contains(&item.path) {
-                            near.push(item.path.clone());
-                        }
-                    }
-                }
                 let mut lines = vec![format!("`{query}` names no item, no module, and no file of the old tree or the new tree")];
-                if !near.is_empty() {
-                    lines.push(format!("candidates: {}", near.iter().take(8).map(|path| format!("`{path}`")).collect::<Vec<_>>().join(", ")));
-                }
+                lines.extend(candidate_lines(&name, &[self.new_paths(), self.old_paths()]));
                 Err(lines)
             }
             1 => {
@@ -444,7 +549,16 @@ impl Check<'_> {
                 };
                 Ok(Target { name: new.clone().or(old.clone()).unwrap_or_default(), scope, file: None, one_side, old })
             }
-            _ => Err(vec![format!("`{query}` names {} items: give more of the path", found.len()), format!("candidates: {}", found.iter().map(label).collect::<Vec<_>>().join(", "))]),
+            count => {
+                // The best candidate first: the item with the most parts that agree.
+                let rank = |(old, new): &(Option<String>, Option<String>)| new.as_ref().map(|path| self.new_paths().rank(&name, path)).or_else(|| old.as_ref().map(|path| self.old_paths().rank(&name, path))).unwrap_or(0);
+                found.sort_by_key(|pair| std::cmp::Reverse(rank(pair)));
+                let mut list = found.iter().take(8).map(label).collect::<Vec<_>>().join(", ");
+                if count > 8 {
+                    list.push_str(&format!(", and {} more", count - 8));
+                }
+                Err(vec![format!("`{query}` names {count} items: give more of the path"), format!("candidates: {list}")])
+            }
         }
     }
 
@@ -464,16 +578,58 @@ impl Check<'_> {
         format!("{} {} [{}]", fact.id, fact.description, fact.category.name())
     }
 
-    /// The check of a `rename` or a `move` claim: Semilla must derive the same fact.
-    fn identity(&self, category: Category, old: &str, new: &str, result: &mut AgentFact) -> Vec<usize> {
+    /// The lines for a path of a `rename` or a `move` that does not name one item of a tree.
+    fn path_lines(&self, query: &str, found: &[&str], tree: &Index, side: &str) -> Vec<String> {
+        match found.len() {
+            1 => Vec::new(),
+            0 => {
+                let mut lines = vec![format!("`{query}` names no item of the {side} tree")];
+                lines.extend(candidate_lines(query, &[tree]));
+                lines
+            }
+            count => {
+                let labels: Vec<String> = found.iter().map(|path| tree.label(path)).collect();
+                vec![format!("`{query}` names {count} items of the {side} tree: give more of the path"), format!("candidates: {}", crate::paths::list(&labels))]
+            }
+        }
+    }
+
+    /// The check of a `rename` or a `move` claim: the fact must exist. Semilla derives it
+    /// alone, or it is a stated pair that passes the check of the rename rule (design 54.11).
+    fn identity(&self, option: usize, category: Category, old: &str, new: &str, result: &mut AgentFact) -> Vec<usize> {
         let word = if category == Category::Rename { "rename" } else { "move" };
         let parent = |path: &str| path.rsplit_once("::").map(|(module, _)| module.to_string()).unwrap_or_default();
-        let holds = |fact: &Fact| fact.category == category && pairs(&fact.description).iter().any(|(a, b)| loose(a, old) && (loose(b, new) || (category == Category::Move && loose(&parent(b), new))));
+        // The items that the two paths name, part by part (design 54.10).
+        let (olds, news) = (self.old_paths().find(old), self.new_paths().find(new));
+        let old_is = |path: &str| olds.contains(&path) || loose(path, old);
+        let new_is = |path: &str| news.contains(&path) || loose(path, new);
+        let holds = |fact: &Fact| fact.category == category && pairs(&fact.description).iter().any(|(a, b)| old_is(a) && (new_is(b) || (category == Category::Move && new_is(&parent(b)))));
         let found: Vec<usize> = (0..self.facts.len()).filter(|&index| holds(&self.facts[index])).collect();
         if found.is_empty() {
             result.result = format!("false: Semilla derives no {word} `{old}` → `{new}` from the syntax tree");
+            result.notes.extend(self.path_lines(old, &olds, self.old_paths(), "old"));
+            // The new path of a move can be the new module.
+            if !(category == Category::Move && self.after.crates.iter().any(|krate| krate.name == plain(new))) {
+                result.notes.extend(self.path_lines(new, &news, self.new_paths(), "new"));
+            }
+            if let Some(cause) = self.stated_causes.get(&option) {
+                result.notes.push(format!("the stated pair is no fact: {cause}"));
+            }
+            // Design 54.16: an identity fact of one of the two items is a fact that holds.
+            let mut near: Vec<String> = Vec::new();
+            for fact in self.facts.iter().filter(|fact| matches!(fact.category, Category::Rename | Category::Move)) {
+                for (a, b) in pairs(&fact.description).into_iter().filter(|(a, b)| old_is(a) || new_is(b)) {
+                    let kind = if fact.category == Category::Rename { "rename" } else { "move" };
+                    let sides = if a.contains(' ') || b.contains(' ') { format!("{a} => {b}") } else { format!("{a} {b}") };
+                    let line = format!("a fact that holds: `--same {}`", shell_quote(&format!("{kind} {sides}")));
+                    if !near.contains(&line) {
+                        near.push(line);
+                    }
+                }
+            }
+            result.notes.extend(near.into_iter().take(3));
             // The cause: the facts that Semilla derives for the two names.
-            let names = |fact: &Fact| quoted(&fact.description).iter().any(|text| loose(text, old) || loose(text, new)) || fact.at.as_ref().is_some_and(|at| loose(&at.item, old) || loose(&at.item, new));
+            let names = |fact: &Fact| quoted(&fact.description).iter().any(|text| old_is(text) || new_is(text)) || fact.at.as_ref().is_some_and(|at| old_is(&at.item) || new_is(&at.item));
             let seen: Vec<usize> = (0..self.facts.len()).filter(|&index| names(&self.facts[index])).collect();
             for &fact in seen.iter().take(6) {
                 result.notes.push(format!("Semilla sees: {}", self.fact_text(fact)));
@@ -482,9 +638,8 @@ impl Check<'_> {
                 result.notes.push(format!("and {} more fact(s) with one of the two names", seen.len() - 6));
             }
             if seen.is_empty() {
-                let has = |ws: &Workspace, query: &str| ws.items.keys().any(|path| loose(path, query));
-                let side = |ws: &Workspace, query: &str, tree: &str| if has(ws, query) { format!("the {tree} tree has `{query}`") } else { format!("the {tree} tree has no item `{query}`") };
-                result.notes.push(format!("Semilla sees no fact with one of the two names: {}, {}, {}, {}", side(self.before, old, "old"), side(self.after, old, "new"), side(self.before, new, "old"), side(self.after, new, "new")));
+                let side = |tree: &Index, query: &str, word: &str| if !tree.find(query).is_empty() { format!("the {word} tree has `{query}`") } else { format!("the {word} tree has no item `{query}`") };
+                result.notes.push(format!("Semilla sees no fact with one of the two names: {}, {}, {}, {}", side(self.old_paths(), old, "old"), side(self.new_paths(), old, "new"), side(self.old_paths(), new, "old"), side(self.new_paths(), new, "new")));
             }
             return Vec::new();
         }
@@ -517,16 +672,9 @@ impl Check<'_> {
         Some((old, new, a, b))
     }
 
-    /// The check of a `rewrite` claim (design 54.3).
-    fn rewrite(&self, from: &str, to: &str, result: &mut AgentFact) -> Vec<usize> {
-        let pattern = match Pattern::parse(from, to) {
-            Ok(pattern) => pattern,
-            Err(error) => {
-                result.result = format!("false: {error}");
-                return Vec::new();
-            }
-        };
-        // The sites: for each edit, the lowest node at the edit or above it that the pattern covers.
+    /// The sites of a pattern: for each edit, the lowest node at the edit or above it that the
+    /// pattern covers, with the count of the sites in it.
+    fn sites(&self, pattern: &Pattern) -> Vec<(Anchor, Anchor, usize)> {
         let mut sites: Vec<(Anchor, Anchor, usize)> = Vec::new();
         // A site is an edit in place. A statement with a new position has a difference that the
         // pattern does not state (the position), so a node with a moved statement is not a site.
@@ -547,6 +695,31 @@ impl Check<'_> {
                 }
             }
         }
+        sites
+    }
+
+    /// The line of a pattern that holds near a false pattern (design 54.16): a complete
+    /// option, with the count of its sites. `None` if the pattern does not hold, if it is the
+    /// false pattern, or if its text is long.
+    fn near_option(&self, from: &str, to: &str, stated: (&str, &str)) -> Option<String> {
+        if (from, to) == stated || from.len() + to.len() > 200 {
+            return None;
+        }
+        let pattern = Pattern::parse(from, to).ok()?;
+        let count: usize = self.sites(&pattern).iter().map(|(_, _, count)| count).sum();
+        (count > 0).then(|| format!("a fact that holds: `--same {}` ({count} site(s))", shell_quote(&format!("rewrite {from} => {to}"))))
+    }
+
+    /// The check of a `rewrite` claim (design 54.3).
+    fn rewrite(&self, from: &str, to: &str, result: &mut AgentFact) -> Vec<usize> {
+        let pattern = match Pattern::parse(from, to) {
+            Ok(pattern) => pattern,
+            Err(error) => {
+                result.result = format!("false: {error}");
+                return Vec::new();
+            }
+        };
+        let sites = self.sites(&pattern);
         let count: usize = sites.iter().map(|(_, _, count)| count).sum();
         if count == 0 {
             result.result = format!("false: no changed place has the old form `{from}` and the new form `{to}`");
@@ -554,7 +727,8 @@ impl Check<'_> {
             return Vec::new();
         }
         result.holds = true;
-        result.result = format!("holds: {count} site(s)");
+        // The words say what Semilla checks (design 54.12): the form of the edit only.
+        result.result = format!("the form holds: {count} site(s) have exactly this edit. Semilla does not check that the behavior is the same");
         // Each edit in a site: the pattern is the full difference of the site.
         let inside = |edit: &Edit| sites.iter().any(|(old, new, _)| edit.before.as_ref().is_some_and(|at| old.contains(at)) || edit.after.as_ref().is_some_and(|at| new.contains(at)));
         let covered: Vec<usize> = (0..self.units.len()).filter(|&index| self.units[index].edit.is_some_and(|edit| inside(&self.edits[edit]))).collect();
@@ -573,9 +747,38 @@ impl Check<'_> {
             root.walk(&mut Vec::new(), &mut |_, node| found |= bind(side, node, &mut BTreeMap::new()));
             found
         };
+        // Design 54.16: a plain name of the pattern matches only that name. If the pattern with
+        // a variable in place of the name holds, the line gives it as a complete option.
+        let mut options: Vec<String> = Vec::new();
+        let mut plain = Vec::new();
+        plain_names(&pattern.from, &mut plain);
+        plain.truncate(4);
+        let mut sets: Vec<Vec<&String>> = if plain.len() > 1 { vec![plain.iter().collect()] } else { Vec::new() };
+        sets.extend(plain.iter().map(|name| vec![name]));
+        for set in sets {
+            let side = |text: &str| set.iter().fold(text.to_string(), |text, name| with_variable(&text, name));
+            let (new_from, new_to) = (side(from), side(to));
+            let Ok(variant) = Pattern::parse(&new_from, &new_to) else { continue };
+            let list = set.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+            let variables = set.iter().map(|name| format!("`${name}`")).collect::<Vec<_>>().join(", ");
+            let hint = format!("a name in a pattern matches only that name ({list}). For a variable, write {variables}");
+            if let Some(option) = self.near_option(&new_from, &new_to, (from, to)) {
+                result.notes.push(hint);
+                result.notes.push(option.clone());
+                options.push(option);
+                break;
+            }
+            // The pattern with the variable has the old form at an edit, and the stated pattern
+            // does not: the name is the cause.
+            let at_edit = |side: &Node| self.edits.iter().any(|edit| self.nodes(edit, 0).is_some_and(|(_, _, a, _)| has(side, a)));
+            if set.len() == 1 && at_edit(&variant.from) && !at_edit(&pattern.from) {
+                result.notes.push(hint);
+                break;
+            }
+        }
         let mut near = 0;
         for (index, edit) in self.edits.iter().enumerate() {
-            let Some((_, new_at, a, b)) = self.nodes(edit, 0) else { continue };
+            let Some((old_at, new_at, a, b)) = self.nodes(edit, 0) else { continue };
             let cause = match (has(&pattern.from, a), has(&pattern.to, b)) {
                 (true, true) => format!("the old code has the form `{from}` and the new code has the form `{to}`, but the edit changes more than the pattern"),
                 (true, false) => format!("the old code has the form `{from}`, but the new code does not have the form `{to}`"),
@@ -588,6 +791,16 @@ impl Check<'_> {
                 result.notes.push(format!("nearest edit at `{new_at}`{fact}: {cause}"));
                 result.notes.push(format!("    - {}", semilla_syntax::tree::one_line(edit.source_before.as_deref().unwrap_or(&a.text))));
                 result.notes.push(format!("    + {}", semilla_syntax::tree::one_line(edit.source_after.as_deref().unwrap_or(&b.text))));
+                // The pattern of the near edit, if it holds (design 54.16).
+                let file = |ws: &'_ Workspace, at: &Anchor| ws.items.get(&at.item).and_then(|item| ws.rust_files.get(&item.file)).cloned();
+                let option = file(self.before, &old_at)
+                    .zip(file(self.after, &new_at))
+                    .and_then(|(old_file, new_file)| generalize(a, b, &old_file, &new_file))
+                    .and_then(|(near_from, near_to)| self.near_option(&near_from, &near_to, (from, to)));
+                if let Some(option) = option.filter(|option| !options.contains(option)) {
+                    result.notes.push(format!("    {option}"));
+                    options.push(option);
+                }
             }
         }
         if near > 3 {
@@ -663,8 +876,71 @@ impl Check<'_> {
     }
 }
 
+/// The renames and the moves that the agent states, as candidate pairs of the rename rule
+/// (design 54.11). Each pair has the index of its `same` option. A pair with a form that the
+/// rename rule does not have is no candidate: the map has its cause. A path that does not
+/// name one item gives no pair and no cause here: the check of the fact gives the candidates.
+pub(crate) fn stated_pairs(input: &StepInput) -> (Vec<(usize, Candidate)>, BTreeMap<usize, String>) {
+    use crate::identity::{kind_name, name, owner, pair_kind};
+    let mut pairs: Vec<(usize, Candidate)> = Vec::new();
+    let mut causes = BTreeMap::new();
+    let mut trees: Option<(Index, Index)> = None;
+    for (option, text) in input.step.agent.same.iter().enumerate() {
+        let (op, old, new) = match parse_same(text) {
+            Ok(Same::Rename(old, new)) => ("rename", old, new),
+            Ok(Same::Move(old, new)) => ("move-item", old, new),
+            _ => continue,
+        };
+        let (old_tree, new_tree) = trees.get_or_insert_with(|| (Index::new(input.before), Index::new(input.after)));
+        let &[old_path] = &old_tree.find(&old)[..] else { continue };
+        // The new path of a move can be the new module.
+        let module = |path: &str| input.after.items.get(path).is_some_and(|item| item.kind == ItemKind::Mod);
+        let new_path = match &new_tree.find(&new)[..] {
+            &[path] if op == "move-item" && module(path) && name(path) != name(old_path) => format!("{path}::{}", name(old_path)),
+            &[path] => path.to_string(),
+            [] if op == "move-item" && input.after.crates.iter().any(|krate| krate.name == plain(&new)) => format!("{}::{}", plain(&new), name(old_path)),
+            _ => continue,
+        };
+        let Some(old_item) = input.before.items.get(old_path) else { continue };
+        let Some(new_item) = input.after.items.get(&new_path) else {
+            causes.insert(option, format!("the new tree has no item `{new_path}`"));
+            continue;
+        };
+        let cause = if let Some((_, other)) = pairs.iter().find(|(_, other)| (other.old == old_path) != (other.new == new_path)) {
+            Some(format!("a different fact states `{}` → `{}`, and an item is in one pair only", other.old, other.new))
+        } else if input.after.items.contains_key(old_path) {
+            Some(format!("the new tree has the item `{old_path}` too"))
+        } else if input.before.items.contains_key(&new_path) {
+            Some(format!("the old tree has the item `{new_path}` too"))
+        } else if old_item.kind != new_item.kind {
+            Some(format!("`{old_path}` is a {} and `{new_path}` is a {}", kind_name(old_item.kind), kind_name(new_item.kind)))
+        } else if !pair_kind(old_item.kind) || old_path.contains('<') || new_path.contains('<') {
+            Some(format!("the rename rule has no pair for an `impl` block, a method of a trait impl, a macro, or a `use` line (`{old_path}`): state the rename or the move of the type, the trait, or the trait method"))
+        } else if op == "rename" && name(old_path) == name(&new_path) {
+            Some(format!("the two items have the name `{}`: a rename gives a new name. For a new module, write `--same 'move {old} {new}'`", name(old_path)))
+        } else if op == "move-item" && name(old_path) != name(&new_path) {
+            Some(format!("a move keeps the name (`{}` is not `{}`). For a new name in the same owner, write `--same 'rename {old} {new}'`", name(old_path), name(&new_path)))
+        } else if op == "move-item" && (owner(old_path) == owner(&new_path) || matches!(old_item.kind, ItemKind::Field | ItemKind::Variant)) {
+            Some("a move gives a new module, and a field or a variant has no move".to_string())
+        } else {
+            None
+        };
+        match cause {
+            Some(cause) => {
+                causes.insert(option, cause);
+            }
+            None if pairs.iter().any(|(_, other)| other.old == old_path) => {}
+            None => pairs.push((option, Candidate { old: old_path.to_string(), new: new_path, op })),
+        }
+    }
+    (pairs, causes)
+}
+
 /// The text of a gap line with the edits of one item that are not equal.
 const DIFFERENT: &str = "different edits";
+
+/// The largest count of characters of the text of a gap line (design 54.15).
+const GAP_TEXT_MAX: usize = 80;
 
 /// True for a file of a bench.
 fn bench_file(file: &str) -> bool {
@@ -674,7 +950,7 @@ fn bench_file(file: &str) -> bool {
 /// Checks the facts of the agent of a step, sets the origin of each fact, and makes the gap
 /// list (design 54). The pass is the last pass of a step check.
 pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
-    let StepOutcome { report, edits, fact_of, renames, .. } = outcome;
+    let StepOutcome { report, edits, fact_of, renames, stated_causes, .. } = outcome;
     // The units: each edit of a fact, and the place of each fact with no edit.
     let mut units: Vec<Unit> = Vec::new();
     for (index, edit) in edits.iter().enumerate() {
@@ -692,15 +968,15 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
         units.push(Unit { fact: index, items: fact.at.iter().map(|at| at.item.clone()).collect(), file: fact.file.clone(), place, edit: None });
     }
     let facts = std::mem::take(&mut report.facts);
-    let check = Check { before: input.before, after: input.after, edits, facts: &facts, renames, units };
+    let check = Check { before: input.before, after: input.after, edits, facts: &facts, renames, units, old_paths: Default::default(), new_paths: Default::default(), stated_causes };
 
     // The agent facts. Two `change` facts with one item set are one fact with two sentences.
     let mut results: Vec<(AgentFact, Vec<usize>)> = Vec::new();
-    for text in &input.step.agent.same {
+    for (option, text) in input.step.agent.same.iter().enumerate() {
         let mut result = AgentFact { kind: "same".into(), text: text.trim().to_string(), options: vec![text.clone()], ..Default::default() };
         let covered = match parse_same(text) {
-            Ok(Same::Rename(old, new)) => check.identity(Category::Rename, &old, &new, &mut result),
-            Ok(Same::Move(old, new)) => check.identity(Category::Move, &old, &new, &mut result),
+            Ok(Same::Rename(old, new)) => check.identity(option, Category::Rename, &old, &new, &mut result),
+            Ok(Same::Move(old, new)) => check.identity(option, Category::Move, &old, &new, &mut result),
             Ok(Same::Rewrite(from, to)) => {
                 result.text = format!("rewrite `{from}` => `{to}`");
                 check.rewrite(&from, &to, &mut result)
@@ -830,7 +1106,7 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
                 gap.facts.push(facts[unit.fact].id.clone());
             }
         }
-        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let quote = shell_quote;
         match line.pattern.filter(|_| line.units.len() > 1) {
             // One pattern covers each place of the group: the option that explains the most.
             Some((from, to)) => {
@@ -844,6 +1120,12 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
         }
         // The gap line is one line: the fact below it shows the lines of a long text.
         gap.text = semilla_core::text::flat_text(&gap.text);
+        // Design 54.15: a gap line stays short. A long text gives its kind (the words before
+        // the code) and the reference of the fact with the full text.
+        if gap.text.chars().count() > GAP_TEXT_MAX {
+            let kind = gap.text.split('`').next().unwrap_or_default().trim().trim_end_matches(':').trim();
+            gap.text = format!("{}, see {}", if kind.is_empty() { "edit" } else { kind }, gap.facts[0]);
+        }
         // The edits of one item that are in no group of equal edits make one line: one
         // `change` fact of the item states them all.
         let single = |gap: &Gap| gap.places.len() == 1 && gap.option.starts_with("--change ");
