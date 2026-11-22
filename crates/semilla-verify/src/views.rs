@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use semilla_core::view::{FlowGraph, Status, TreeNode, WorkspaceGraph};
+use semilla_core::report::TagGroup;
 use semilla_core::{text, Category, ClaimStatus, Compare, StepReport};
 
 /// The category and the compare result of an edit or of a tree node (design 35).
@@ -995,7 +996,7 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<Block>) {
     let mut first = String::new();
     let mut rest: Vec<Block> = Vec::new();
     // Design 55.3: the group of a fact in a step with tags is its first tag.
-    let tag_of = |fact: &semilla_core::report::Fact| step.tags.iter().position(|tag| tag.facts.contains(&fact.id));
+    let tag_of = |fact: &semilla_core::report::Fact| step.tag_group(fact);
     let out = &mut first;
     // The place of a fact: below the fact of the agent that states it, or in a group.
     let place_of = |fact: &semilla_core::report::Fact| match step.agent_facts.iter().position(|agent| agent.facts.contains(&fact.id)) {
@@ -1037,7 +1038,7 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<Block>) {
         agent: Option<usize>,
         place: Result<usize, usize>,
         /// The first tag of the facts (design 55.3). Facts of different tags stay apart.
-        tag: Option<usize>,
+        tag: TagGroup,
         /// The positions of the facts (design 55.2).
         positions: Vec<semilla_core::Position>,
     }
@@ -1101,14 +1102,14 @@ struct Block {
     /// The fact of the agent that the facts are below, or the group of the filled facts.
     place: Result<usize, usize>,
     /// The first tag of the facts (design 55.3).
-    tag: Option<usize>,
+    tag: TagGroup,
     text: String,
 }
 
 /// The lines of the tags of one step (design 55.3): each tag with its facts, in the order of
-/// the agent, then the group of the facts in no tag. `blocks` gives the lines of the facts of
-/// one tag (`None`: no tag). A step with no tag gives no line.
-pub fn tag_lines(step: &StepReport, blocks: &dyn Fn(Option<usize>) -> Vec<String>) -> Vec<String> {
+/// the agent, then the group of the facts in no tag, then the facts with no position.
+/// `blocks` gives the lines of the facts of one group. A step with no tag gives no line.
+pub fn tag_lines(step: &StepReport, blocks: &dyn Fn(TagGroup) -> Vec<String>) -> Vec<String> {
     let mut lines = Vec::new();
     if step.tags.is_empty() {
         return lines;
@@ -1120,18 +1121,24 @@ pub fn tag_lines(step: &StepReport, blocks: &dyn Fn(Option<usize>) -> Vec<String
             continue;
         }
         lines.push(format!("  {}", step.tag_head(tag)));
-        lines.extend(blocks(Some(index)));
+        lines.extend(blocks(TagGroup::Tag(index)));
         // A fact of two tags shows in its first tag (design 55.3).
-        let earlier: Vec<String> = tag.facts.iter().filter(|id| step.tags[..index].iter().any(|other| other.facts.contains(id))).cloned().collect();
-        if !earlier.is_empty() {
-            lines.push(format!("      also in this tag, shown in a tag above: {}", earlier.join(", ")));
+        for (ids, place) in step.shown_in_other_tag(index).iter().zip(["above", "below"]).filter(|(ids, _)| !ids.is_empty()) {
+            lines.push(format!("      also in this tag, shown in a tag {place}: {}", ids.join(", ")));
         }
-        lines.extend(tag.notes.iter().map(|note| format!("      note: {note}")));
+        // Design 55.3, rule 5: a fact that is in the tag in part, with its other lines.
+        lines.extend(tag.notes.iter().map(|note| format!("      {note}")));
     }
     let outside = step.not_in_a_tag();
     if !outside.is_empty() {
         lines.push(format!("  not in a tag: {}; {} changed line(s)", step.count_text(&outside), step.line_count(&outside)));
-        lines.extend(blocks(None));
+        lines.extend(blocks(TagGroup::Outside));
+    }
+    // Design 55.3, rule 6: a fact with no position is not a part of the count above.
+    let unplaced = step.no_position();
+    if !unplaced.is_empty() {
+        lines.push(format!("  facts with no position (a tag selects changed lines; these facts have none): {}", step.count_text(&unplaced)));
+        lines.extend(blocks(TagGroup::NoPosition));
     }
     lines
 }
@@ -1228,13 +1235,23 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         }
         // Design 55.3: the facts in the groups of the tags. Each fact line is the line of a
         // step with no tag.
-        let of_tag = |tag: Option<usize>| -> Vec<String> { facts.iter().filter(|block| block.tag == tag).flat_map(|block| block.text.lines().map(str::to_string)).collect() };
+        let of_tag = |tag: TagGroup| -> Vec<String> { facts.iter().filter(|block| block.tag == tag).flat_map(|block| block.text.lines().map(str::to_string)).collect() };
         for line in tag_lines(step, &of_tag) {
             text::put_line(&mut out, &line);
         }
         // Design 55.4: the cover check of the step.
         // The list of the lines with no fact has no cut.
         for line in step.cover_lines() {
+            text::put_line(&mut out, &format!("  {line}"));
+        }
+        // Design 56.4: the cause of each line with no fact, in the full text only.
+        if names {
+            for line in step.cause_lines() {
+                text::put_line(&mut out, &format!("  {line}"));
+            }
+        }
+        // Design 55.1: the command that gives the hunks of the step.
+        for line in step.hunk_lines(names) {
             text::put_line(&mut out, &format!("  {line}"));
         }
         for uncovered in &step.uncovered {

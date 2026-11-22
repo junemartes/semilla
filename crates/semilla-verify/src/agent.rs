@@ -39,8 +39,31 @@ fn parse_same(text: &str) -> Result<Same, String> {
         if let Some((from, to)) = rest.split_once(" => ") {
             return (!from.trim().is_empty() && !to.trim().is_empty()).then(|| (from.trim().to_string(), to.trim().to_string()));
         }
-        let words: Vec<&str> = rest.split_whitespace().collect();
-        (!arrow && words.len() == 2).then(|| (words[0].to_string(), words[1].to_string()))
+        // The words. The target of a path (` (test "list")`, design 56.1) is a part of its word.
+        let mut words: Vec<String> = Vec::new();
+        let (mut at, mut open) = (0, false);
+        while at < rest.len() {
+            let next = rest[at..].chars().next().unwrap_or(' ');
+            match semilla_syntax::load::target_end(&rest[at..]).filter(|_| open) {
+                Some(end) => {
+                    words.last_mut().unwrap().push_str(&rest[at..at + end]);
+                    at += end;
+                }
+                None if next.is_whitespace() => {
+                    open = false;
+                    at += next.len_utf8();
+                }
+                None => {
+                    if !open {
+                        words.push(String::new());
+                        open = true;
+                    }
+                    words.last_mut().unwrap().push(next);
+                    at += next.len_utf8();
+                }
+            }
+        }
+        (!arrow && words.len() == 2).then(|| (words[0].clone(), words[1].clone()))
     };
     match kind {
         "rename" => sides(false).map(|(old, new)| Same::Rename(old, new)).ok_or_else(|| format!("`--same '{text}'`: write `rename OLD NEW` (for a path with a space: `rename OLD => NEW`)")),
@@ -1251,7 +1274,10 @@ mod tests {
         assert_eq!(parse_same("rename a::Old New"), Ok(Same::Rename("a::Old".into(), "New".into())));
         assert_eq!(parse_same("move <A as B>::f => m::<A as B>::f"), Ok(Same::Move("<A as B>::f".into(), "m::<A as B>::f".into())));
         assert_eq!(parse_same("rewrite $c.inner => $c.raw()"), Ok(Same::Rewrite("$c.inner".into(), "$c.raw()".into())));
+        // The target of a path is a part of its word (design 56.1).
+        assert_eq!(parse_same("rename depot (test \"list\")::old depot (test \"list\")::new"), Ok(Same::Rename("depot (test \"list\")::old".into(), "depot (test \"list\")::new".into())));
         // The negative cases: each one has a message for the agent.
+        assert!(parse_same("rename depot (lib \"list\")::old new").unwrap_err().contains("rename OLD NEW"));
         assert!(parse_same("rename a").unwrap_err().contains("rename OLD NEW"));
         assert!(parse_same("extract f g").unwrap_err().contains("has no check yet"));
         assert!(parse_same("inline f").unwrap_err().contains("has no check yet"));

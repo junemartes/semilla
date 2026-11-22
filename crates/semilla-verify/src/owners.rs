@@ -388,8 +388,10 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     let crates: BTreeSet<&str> = input.before.crates.iter().chain(&input.after.crates).map(|krate| krate.name.as_str()).collect();
     let mut rest = Vec::new();
     for (body, name) in pending {
-        // The crate of the body: the first path segment (after the `<` of a trait impl name).
-        let krate = name.trim_start_matches('<').split("::").next().filter(|first| crates.contains(first));
+        // The crate of the body: the package of the first path segment (after the `<` of a
+        // trait impl name). A body of a different target than the library has the package
+        // of its target (design 56.1).
+        let krate = Some(semilla_syntax::load::package_of(name.trim_start_matches('<'))).filter(|first| crates.contains(first));
         let causes: Vec<usize> = inputs.iter().filter(|(_, reach)| reach.as_ref().is_none_or(|reach| krate.is_some_and(|krate| reach.contains(krate)))).map(|(index, _)| *index).collect();
         if causes.is_empty() {
             rest.push((body, name));

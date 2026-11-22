@@ -292,6 +292,17 @@ pub(crate) fn parse(text: &str) -> Vec<Part> {
     parts
 }
 
+/// True if the name of a loose path names the target root `root` (design 56.1). The root has
+/// the form `PACKAGE(KIND"NAME")`, with no space. The name of the package names each target of
+/// the package. The crate name of the target (`list` for `depot (test "list")`) names the
+/// target. An exact path comes first, so `depot::first` is the item of the library if the
+/// library has one.
+fn names_target(name: &str, root: &str) -> bool {
+    let Some((package, target)) = root.split_once('(').filter(|(_, target)| target.ends_with("\")")) else { return false };
+    let Some((_, target_name)) = target[..target.len() - 2].split_once('"') else { return false };
+    name == package || name == target_name.replace('-', "_")
+}
+
 /// The name of a plain part with no field mark.
 fn bare(name: &str) -> &str {
     name.strip_prefix('.').unwrap_or(name)
@@ -492,7 +503,9 @@ impl<'a> Index<'a> {
     /// True if one part of the query agrees with one part of the item.
     fn part_agrees(&self, query: &Part, item: &Part, module: &[String], block: Option<&Item>) -> bool {
         match (query, item) {
-            (Part::Plain { name, arguments, twin }, Part::Plain { name: other, arguments: other_arguments, twin: other_twin }) => bare(name) == bare(other) && arguments_agree(arguments, other_arguments) && twin_agrees(twin, other_twin),
+            (Part::Plain { name, arguments, twin }, Part::Plain { name: other, arguments: other_arguments, twin: other_twin }) => {
+                (bare(name) == bare(other) || names_target(name, other)) && arguments_agree(arguments, other_arguments) && twin_agrees(twin, other_twin)
+            }
             // `Price::fmt` for `<Price as Display>::fmt`.
             (Part::Plain { name, arguments, twin }, Part::Impl { ty, block: false, twin: other_twin, .. }) => name == ty.last() && arguments_agree(arguments, &ty.arguments) && twin_agrees(twin, other_twin),
             (Part::Impl { ty, tr, block: block_only, twin }, Part::Impl { ty: other_ty, tr: other_tr, block: other_block, twin: other_twin }) => {

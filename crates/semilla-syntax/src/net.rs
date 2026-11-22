@@ -228,64 +228,6 @@ fn compact(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace() && *c != ',').collect()
 }
 
-/// The associated constants and types of an impl: the kind, the name, the visibility, and the
-/// attributes (no doc text). The member list of the impl has the other parts.
-/// Each part has its compare text and its display text (design 39.2).
-fn associated(item: &Item) -> Vec<(&'static str, String, (String, String), (String, String))> {
-    use crate::rs::{AstNode, ast};
-    use ast::{HasName, HasVisibility};
-    let Some(ast::Item::Impl(parsed)) = crate::rs::parse_item(&item.source) else { return Vec::new() };
-    let text = |node: &crate::rs::SyntaxNode, vis: Option<ast::Visibility>, default: bool| {
-        let attrs: Vec<(String, String)> = crate::load::attributes(node).iter().filter(|attr| !attr.doc_text()).map(|attr| (attr.text.clone(), attr.display.clone())).collect();
-        let default = if default { "default " } else { "" };
-        let vis_display = vis.as_ref().map(|vis| crate::tt::display_text(vis.syntax())).unwrap_or_default();
-        let vis = (format!("{default}{}", crate::rs::compare_opt(vis.as_ref())).trim().to_string(), format!("{default}{vis_display}").trim().to_string());
-        let shown = |pick: fn(&(String, String)) -> &String| attrs.iter().map(pick).cloned().collect::<Vec<_>>().join("\n");
-        (vis, (shown(|pair| &pair.0), shown(|pair| &pair.1)))
-    };
-    parsed
-        .assoc_item_list()
-        .into_iter()
-        .flat_map(|list| list.assoc_items())
-        .filter_map(|member| match &member {
-            ast::AssocItem::Const(constant) => {
-                let (vis, attrs) = text(constant.syntax(), constant.visibility(), constant.default_token().is_some());
-                Some(("constant", constant.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into()), vis, attrs))
-            }
-            ast::AssocItem::TypeAlias(ty) => {
-                let (vis, attrs) = text(ty.syntax(), ty.visibility(), ty.default_token().is_some());
-                Some(("type", ty.name().map(|name| name.text().to_string()).unwrap_or_default(), vis, attrs))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// The edits of the visibility and of the attributes of the associated constants and types of
-/// an impl pair. The label of an edit is in `attr_after`.
-fn associated_edits(before: &Item, after: &Item, renames: &Renames) -> Vec<Edit> {
-    if before.kind != ItemKind::Impl || before.source == after.source {
-        return Vec::new();
-    }
-    let (old, new) = (associated(before), associated(after));
-    let mut out = Vec::new();
-    for (kind, name, old_vis, old_attrs) in &old {
-        let name_after = renames.apply(&before.path, name);
-        type Part = (&'static str, String, (String, String), (String, String));
-        let same = |list: &[Part], name: &str| list.iter().filter(|(k, n, _, _)| k == kind && n == name).count() == 1;
-        let Some((_, _, new_vis, new_attrs)) = new.iter().find(|(k, n, _, _)| k == kind && *n == name_after).filter(|_| same(&old, name) && same(&new, &name_after)) else { continue };
-        for (part, a, b) in [("visibility", old_vis, new_vis), ("attributes", old_attrs, new_attrs)] {
-            if renames.apply(&before.path, &a.0) != b.0 {
-                let mut edit = text_edit(before, after, a.0.clone(), b.0.clone(), after.line_start);
-                (edit.source_before, edit.source_after) = (Some(a.1.clone()), Some(b.1.clone()));
-                edit.attr_after = Some(format!("{part} of the associated {kind} `{name_after}`"));
-                out.push(edit);
-            }
-        }
-    }
-    out
-}
-
 fn text_edit(before: &Item, after: &Item, old: String, new: String, line: usize) -> Edit {
     Edit {
         kind: EditKind::Signature,
@@ -310,10 +252,7 @@ fn text_edit(before: &Item, after: &Item, old: String, new: String, line: usize)
 
 /// The edits for the changed tokens of an item pair that no edit of the pair has in its text.
 pub(crate) fn uncovered(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspace, before: &Item, after: &Item, renames: &Renames, pair_edits: &[Edit]) -> Vec<Edit> {
-    let mut out = associated_edits(before, after, renames);
-    let known: Vec<Edit> = pair_edits.iter().chain(&out).cloned().collect();
-    out.extend(general(files, before_ws, after_ws, before, after, renames, &known));
-    out
+    general(files, before_ws, after_ws, before, after, renames, pair_edits).into_iter().collect()
 }
 
 fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspace, before: &Item, after: &Item, renames: &Renames, pair_edits: &[Edit]) -> Option<Edit> {
@@ -331,6 +270,14 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
         let no_body = if before.body.is_some() { &mut new } else { &mut old };
         if no_body.last().is_some_and(|last| last.text == ";") {
             popped = no_body.pop().map(|token| (before.body.is_some(), token));
+        }
+    }
+    // A module with a block on one side and a file on the other side (design 56.3): the fact
+    // of the source place of the module has this change. The `;` is the place of the block.
+    if before.kind == ItemKind::Mod && before.source.trim_end().ends_with('}') != after.source.trim_end().ends_with('}') {
+        let no_block = if before.source.trim_end().ends_with('}') { &mut new } else { &mut old };
+        if no_block.last().is_some_and(|last| last.text == ";") {
+            no_block.pop();
         }
     }
     if old.is_empty() || new.is_empty() {

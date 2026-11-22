@@ -4,11 +4,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use semilla_core::{Category, Compare, Fact, Position};
+use semilla_core::{Anchor, Category, Compare, Fact, Position};
 use semilla_syntax::cover::{self, LineToken, ModuleItem, Shape, TokenClass};
 use semilla_syntax::tree::Pos;
 use semilla_syntax::{Edit, EditKind, Item, ItemKind, Node, Refactor, Workspace};
 
+use crate::linediff::{self, GitHunk, Texts};
 use crate::{StepInput, StepOutcome};
 
 /// The tokens that only close, open, or divide a part of the tree.
@@ -97,6 +98,45 @@ fn middle(n: usize, m: usize, eq: &dyn Fn(usize, usize) -> bool) -> Vec<(usize, 
     Vec::new()
 }
 
+/// The macros whose result depends on the path of the file of the call (design 56.3).
+const PATH_MACROS: &[&str] = &["include", "include_str", "include_bytes", "file"];
+
+/// The source place of a module on one side (design 56.3).
+struct ModulePlace {
+    /// The file of the module, or the file of its block.
+    file: String,
+    /// True for a module with a block.
+    inline: bool,
+    /// The first and the last line of the place. A file has each of its lines.
+    lines: (usize, usize),
+    /// For a module with a file: the file and the lines of its `mod` line. A crate root has
+    /// none.
+    header: Option<(String, usize, usize)>,
+    /// The name of the module.
+    name: String,
+}
+
+impl ModulePlace {
+    fn of(workspace: &Workspace, path: &str) -> Option<ModulePlace> {
+        let item = workspace.items.get(path).filter(|item| item.kind == ItemKind::Mod);
+        let name = path.rsplit("::").next().unwrap_or("").split('#').next().unwrap_or("").to_string();
+        match workspace.module_files.get(path) {
+            Some(file) => Some(ModulePlace { file: file.clone(), inline: false, lines: (1, usize::MAX), header: item.map(|item| (item.file.clone(), item.line_start, item.line_end)), name }),
+            None => item.map(|item| ModulePlace { file: item.file.clone(), inline: true, lines: (item.line_start, item.line_end), header: None, name }),
+        }
+    }
+}
+
+/// The fact of a module with a new source place: the file of the fact, and its lines by file.
+struct PlaceFact {
+    file: String,
+    category: Category,
+    description: String,
+    lines: BTreeMap<String, [BTreeSet<usize>; 2]>,
+    /// The path of the module item in the old tree. A crate root has no item.
+    item: Option<String>,
+}
+
 /// One side of a changed file.
 #[derive(Default)]
 struct Side {
@@ -163,13 +203,76 @@ impl Side {
     }
 }
 
-/// The line diff of one file of the step.
+/// The line diff of one file of the step (design 55.8). The diff starts as the diff of the
+/// line diff command. [`FileDiff::slide`] moves a block to the place that agrees with the
+/// tree: the result is a diff with the same count of changed lines. Each changed line of the
+/// result is a changed line of the command, or it has the same text as one changed line of
+/// the command that is an equal line of the result (`alias`).
 struct FileDiff {
     sides: [Side; 2],
-    /// The pairs of equal lines (from 0), in order.
+    /// The pairs of equal lines (from 0), in order. A pair with two different line endings is
+    /// a pair of changed lines of the command.
     pairs: Vec<(usize, usize)>,
     /// True for a Rust file that Semilla parses on each side that has it.
     parsed: bool,
+    /// The hunks of the line diff command.
+    git: Vec<GitHunk>,
+    /// For each side: a changed line of this diff (from 1) that is an equal line of the
+    /// command, to its changed line of the command. The two lines have the same text.
+    alias: [BTreeMap<usize, usize>; 2],
+}
+
+/// Writes that the line `gained` (from 0) is now a changed line and the line `lost` is now an
+/// equal line. The two lines have the same text: `gained` gets the line of the command of
+/// `lost`.
+fn swap(alias: &mut BTreeMap<usize, usize>, gained: usize, lost: usize) {
+    let git = alias.remove(&(lost + 1)).unwrap_or(lost + 1);
+    if git != gained + 1 {
+        alias.insert(gained + 1, git);
+    }
+}
+
+/// The start of one side of a hunk of the command, from 0. A side with the count 0 has the
+/// number of the line before the hunk.
+fn hunk_start(side: (usize, usize)) -> usize {
+    if side.1 == 0 { side.0 } else { side.0.saturating_sub(1) }
+}
+
+/// The pairs of the equal lines of a diff with the hunks `hunks`. In a hunk, a pair of lines
+/// with the same text and different line endings is a pair too: the two lines are changed
+/// lines, and the line-ending fact has them.
+fn pairs_of(sides: &[Side; 2], hunks: &[GitHunk]) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    let (mut a, mut b) = (0, 0);
+    for hunk in hunks {
+        let (next_a, next_b) = (hunk_start(hunk.old), hunk_start(hunk.new));
+        pairs.extend((a..next_a).zip(b..next_b));
+        let (n, m) = (hunk.old.1, hunk.new.1);
+        if n > 0 && m > 0 {
+            let same = |i: usize, j: usize| sides[OLD].lines[next_a + i] == sides[NEW].lines[next_b + j] && sides[OLD].endings[next_a + i] != sides[NEW].endings[next_b + j];
+            pairs.extend(matches(n, m, &same).into_iter().map(|(i, j)| (next_a + i, next_b + j)));
+        }
+        (a, b) = (next_a + n, next_b + m);
+    }
+    pairs.extend((a..sides[OLD].lines.len()).zip(b..sides[NEW].lines.len()));
+    pairs
+}
+
+/// The hunks of the diff of Semilla, in the form of the command: the result if git gives no
+/// line diff. A line is equal only with an equal line ending, as in git.
+fn own_hunks(texts: &Texts) -> Vec<GitHunk> {
+    let (old, new) = (linediff::full_lines(texts.old), linediff::full_lines(texts.new));
+    let mut out = Vec::new();
+    let (mut a, mut b) = (0, 0);
+    let end = (old.len(), new.len());
+    for (i, j) in matches(old.len(), new.len(), &|i, j| old[i] == new[j]).into_iter().chain(std::iter::once(end)) {
+        if i > a || j > b {
+            let side = |from: usize, to: usize| if to > from { (from + 1, to - from) } else { (from, 0) };
+            out.push(GitHunk { old: side(a, i), new: side(b, j) });
+        }
+        (a, b) = (i + 1, j + 1);
+    }
+    out
 }
 
 /// One hunk of a line diff: the changed lines (from 1, the end is not in the range) of each
@@ -180,6 +283,16 @@ struct Hunk {
 }
 
 impl FileDiff {
+    /// The line of the command (from 1) for a changed line of this diff.
+    fn git_line(&self, side: usize, line: usize) -> usize {
+        self.alias[side].get(&line).copied().unwrap_or(line)
+    }
+
+    /// True for a pair of equal lines of the command: the two line endings are equal.
+    fn exact(&self, pair: (usize, usize)) -> bool {
+        self.sides[OLD].endings[pair.0] == self.sides[NEW].endings[pair.1]
+    }
+
     fn hunks(&self) -> Vec<Hunk> {
         let mut out = Vec::new();
         let (mut old, mut new) = (0, 0);
@@ -198,22 +311,24 @@ impl FileDiff {
     fn pair_again(&mut self, gap: usize, start: (usize, usize), after: (usize, usize), good: &[BTreeSet<usize>; 2]) -> bool {
         for side in [NEW, OLD] {
             let pick = |pair: (usize, usize)| if side == OLD { pair.0 } else { pair.1 };
-            let lines = &self.sides[side].lines;
+            let (lines, ends) = (&self.sides[side].lines, &self.sides[side].endings);
             let is_good = |line: usize| good[side].contains(&(line + 1)) || self.sides[side].tokens_at.get(line).is_some_and(|tokens| tokens.is_empty());
-            let free = |line: usize, pair: usize| lines[line] == lines[pair] && !is_good(line) && is_good(pair);
+            let free = |line: usize, pair: usize| lines[line] == lines[pair] && ends[line] == ends[pair] && !is_good(line) && is_good(pair);
             // The equal line after the hunk: the last line of the hunk that can replace it.
-            if gap < self.pairs.len() {
+            if gap < self.pairs.len() && self.exact(self.pairs[gap]) {
                 let pair = pick(self.pairs[gap]);
                 if let Some(line) = (pick(start)..pick(after)).rev().find(|line| free(*line, pair)) {
                     if side == OLD { self.pairs[gap].0 = line } else { self.pairs[gap].1 = line }
+                    swap(&mut self.alias[side], pair, line);
                     return true;
                 }
             }
             // The equal line before the hunk: the first line of the hunk that can replace it.
-            if gap > 0 {
+            if gap > 0 && self.exact(self.pairs[gap - 1]) {
                 let pair = pick(self.pairs[gap - 1]);
                 if let Some(line) = (pick(start)..pick(after)).find(|line| free(*line, pair)) {
                     if side == OLD { self.pairs[gap - 1].0 = line } else { self.pairs[gap - 1].1 = line }
+                    swap(&mut self.alias[side], pair, line);
                     return true;
                 }
             }
@@ -255,15 +370,17 @@ impl FileDiff {
             let pick = |pair: (usize, usize)| if side == OLD { pair.0 } else { pair.1 };
             let other = |pair: (usize, usize)| if side == OLD { pair.1 } else { pair.0 };
             let (first, count) = (pick(start), counts[side]);
-            let lines = &self.sides[side].lines;
+            let (lines, ends) = (&self.sides[side].lines, &self.sides[side].endings);
+            let twin = |a: usize, b: usize| lines[a] == lines[b] && ends[a] == ends[b];
             let is_good = |line: usize| good[side].contains(&(line + 1)) || self.sides[side].tokens_at.get(line).is_some_and(|tokens| tokens.is_empty());
-            // The count of the lines that the block can go up, and that it can go down.
+            // The count of the lines that the block can go up, and that it can go down. The
+            // block goes only past a pair of equal lines of the command.
             let mut up = 0;
-            while gap > up && pick(self.pairs[gap - 1 - up]) + up + 1 == first && other(self.pairs[gap - 1 - up]) + up + 1 == other(start) && lines[first - 1 - up] == lines[first + count - 1 - up] {
+            while gap > up && self.exact(self.pairs[gap - 1 - up]) && pick(self.pairs[gap - 1 - up]) + up + 1 == first && other(self.pairs[gap - 1 - up]) + up + 1 == other(start) && twin(first - 1 - up, first + count - 1 - up) {
                 up += 1;
             }
             let mut down = 0;
-            while gap + down < self.pairs.len() && pick(self.pairs[gap + down]) == first + count + down && other(self.pairs[gap + down]) == other(start) + down && lines[first + down] == lines[first + count + down] {
+            while gap + down < self.pairs.len() && self.exact(self.pairs[gap + down]) && pick(self.pairs[gap + down]) == first + count + down && other(self.pairs[gap + down]) == other(start) + down && twin(first + down, first + count + down) {
                 down += 1;
             }
             let score = |shift: isize| (0..count).filter(|index| is_good((first as isize + shift) as usize + index)).count();
@@ -283,11 +400,19 @@ impl FileDiff {
                     let value = first + count - steps + index;
                     set(&mut self.pairs[gap - steps + index], value);
                 }
+                // One line at a time: the line above the block joins it, and its last line
+                // leaves it. The two lines have the same text.
+                for step in 1..=steps {
+                    swap(&mut self.alias[side], first - step, first + count - step);
+                }
                 gap -= steps;
             } else if shift > 0 {
                 let steps = shift as usize;
                 for index in 0..steps {
                     set(&mut self.pairs[gap + index], first + index);
+                }
+                for step in 1..=steps {
+                    swap(&mut self.alias[side], first + count + step - 1, first + step - 1);
                 }
                 gap += steps;
             }
@@ -461,32 +586,36 @@ fn edit_scopes(edit: &Edit, input: &StepInput, diffs: &BTreeMap<String, FileDiff
     out
 }
 
-/// The line diff of each file with a different text in the two trees.
-fn file_diffs(input: &StepInput) -> BTreeMap<String, FileDiff> {
-    let text = |workspace: &'_ Workspace, file: &str| -> Option<String> { workspace.rust_files.get(file).or_else(|| workspace.other_files.get(file)).cloned() };
+/// The line diff of each file with a different text in the two trees (design 55.8): the
+/// hunks of the line diff command. The second result is true if git gave no line diff: then
+/// the hunks are the hunks of the diff of Semilla.
+fn file_diffs(input: &StepInput) -> (BTreeMap<String, FileDiff>, bool) {
+    fn text<'w>(workspace: &'w Workspace, file: &str) -> Option<&'w String> {
+        workspace.rust_files.get(file).or_else(|| workspace.other_files.get(file))
+    }
     let mut files: BTreeSet<&String> = BTreeSet::new();
     for workspace in [input.before, input.after] {
         files.extend(workspace.rust_files.keys());
         files.extend(workspace.other_files.keys());
     }
-    let mut out = BTreeMap::new();
-    for file in files {
-        let (old, new) = (text(input.before, file), text(input.after, file));
-        if old == new {
-            continue;
+    let changed: Vec<(&String, Option<&String>, Option<&String>)> = files.into_iter().map(|file| (file, text(input.before, file), text(input.after, file))).filter(|(_, old, new)| old != new).collect();
+    let texts: Vec<Texts> = changed.iter().map(|(_, old, new)| Texts { old: old.map(String::as_str), new: new.map(String::as_str) }).collect();
+    let (hunks, own) = if texts.is_empty() {
+        (Vec::new(), false)
+    } else {
+        match linediff::git_hunks(&texts) {
+            Some(hunks) => (hunks, false),
+            None => (texts.iter().map(own_hunks).collect(), true),
         }
-        let parsed = [(&old, input.before), (&new, input.after)].iter().all(|(text, workspace)| text.is_none() || workspace.parsed_files.contains(file));
-        let sides = [
-            Side::new(old.as_ref(), parsed, input.before.editions.get(file).copied()),
-            Side::new(new.as_ref(), parsed, input.after.editions.get(file).copied()),
-        ];
-        let pairs = {
-            let (a, b) = (&sides[OLD].lines, &sides[NEW].lines);
-            matches(a.len(), b.len(), &|i, j| a[i] == b[j])
-        };
-        out.insert(file.clone(), FileDiff { sides, pairs, parsed });
+    };
+    let mut out = BTreeMap::new();
+    for ((file, old, new), git) in changed.into_iter().zip(hunks) {
+        let parsed = [(old, input.before), (new, input.after)].iter().all(|(text, workspace)| text.is_none() || workspace.parsed_files.contains(file));
+        let sides = [Side::new(old, parsed, input.before.editions.get(file).copied()), Side::new(new, parsed, input.after.editions.get(file).copied())];
+        let pairs = pairs_of(&sides, &git);
+        out.insert(file.clone(), FileDiff { sides, pairs, parsed, git, alias: Default::default() });
     }
-    out
+    (out, own)
 }
 
 /// What the cover check knows about a changed line with no fact.
@@ -525,12 +654,79 @@ fn claim(claims: &mut Claims, file: &str, side: usize, line: usize, fact: usize)
     }
 }
 
-fn position_list(file: &str, lines: &[BTreeSet<usize>; 2]) -> Vec<Position> {
+/// The positions of the changed lines `lines` of a file, as lines of the line diff command
+/// (design 55.8).
+fn position_list(diffs: &BTreeMap<String, FileDiff>, file: &str, lines: &[BTreeSet<usize>; 2]) -> Vec<Position> {
+    let diff = diffs.get(file);
     let mut out = Vec::new();
     for side in [NEW, OLD] {
-        out.extend(lines[side].iter().map(|line| Position { file: file.to_string(), old: side == OLD, start: *line, end: *line }));
+        out.extend(lines[side].iter().map(|line| {
+            let line = diff.map_or(*line, |diff| diff.git_line(side, *line));
+            Position { file: file.to_string(), old: side == OLD, start: line, end: line }
+        }));
     }
     Position::normal(out)
+}
+
+/// True if a `use` item can name a macro in textual scope: a path of the item has one
+/// segment (`use two;`, `pub(crate) use two as three;`, `use {two, a::b};`). `key`: the tokens
+/// of the item with one space between them. A key that the function cannot read gives true.
+pub(crate) fn one_segment_use(key: &str) -> bool {
+    let tokens: Vec<&str> = key.split(' ').collect();
+    let Some(start) = tokens.iter().position(|token| *token == "use") else { return true };
+    // For each open group: true if a path is before the group.
+    let mut rooted = vec![false];
+    for index in start + 1..tokens.len() {
+        let (before, after) = (tokens[index - 1], tokens.get(index + 1).copied());
+        match tokens[index] {
+            "{" => rooted.push(rooted.last().copied().unwrap_or(false) || before == "::"),
+            "}" => {
+                rooted.pop();
+            }
+            "::" | "," | ";" | "as" | "*" | "self" | "super" | "crate" => {}
+            _ => {
+                if before != "::" && before != "as" && after != Some("::") && !rooted.last().copied().unwrap_or(false) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The ranges of lines of the nodes around an edit on one side, from the smallest one: each
+/// node above the node of the edit, the item, each item around it, and the file.
+fn wider_ranges(edit: &Edit, side: usize, input: &StepInput, diffs: &BTreeMap<String, FileDiff>, indexes: &[ItemIndex; 2]) -> Vec<(String, (usize, usize))> {
+    let (anchor, workspace) = if side == OLD { (&edit.before, input.before) } else { (&edit.after, input.after) };
+    let mut out: Vec<(String, (usize, usize))> = Vec::new();
+    // An edit with a node on the other side only has no node on this side.
+    if anchor.is_none() && (edit.before.is_some() || edit.after.is_some()) {
+        return out;
+    }
+    let mut file = edit.file.clone();
+    if let Some(item) = anchor.as_ref().and_then(|anchor| workspace.items.get(&anchor.item)) {
+        let anchor = anchor.as_ref().unwrap();
+        for depth in (1..anchor.path.len()).rev() {
+            let above = semilla_core::Anchor { item: anchor.item.clone(), path: anchor.path[..depth].to_vec() };
+            if let Some(semilla_syntax::Resolved::Node(_, node)) = semilla_syntax::resolve(workspace, &above) {
+                if node.start.0 > 0 {
+                    out.push((item.file.clone(), (node.start.0, node.end.0)));
+                }
+            }
+        }
+        out.push((item.file.clone(), (item.line_start, item.line_end)));
+        let mut around: Vec<(usize, usize)> = indexes[side].by_file.get(item.file.as_str()).into_iter().flatten().filter(|other| other.line_start <= item.line_start && item.line_end <= other.line_end).map(|other| (other.line_start, other.line_end)).collect();
+        around.sort_by_key(|(start, end)| end - start);
+        out.extend(around.into_iter().map(|lines| (item.file.clone(), lines)));
+        file = Some(item.file.clone());
+    }
+    if let Some(file) = file {
+        if let Some(diff) = diffs.get(&file) {
+            out.push((file, (1, diff.sides[side].lines.len())));
+        }
+    }
+    out.dedup();
+    out
 }
 
 fn count(value: usize, noun: &str) -> String {
@@ -541,18 +737,30 @@ fn count(value: usize, noun: &str) -> String {
 /// comment that is in no item), and writes the changed lines with no fact into the report.
 pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
     let StepOutcome { report, edits, fact_of, renames, .. } = outcome;
-    let mut diffs = file_diffs(input);
+    let (mut diffs, own) = file_diffs(input);
     if diffs.is_empty() {
         return;
     }
+    // Design 55.8: the hunks of the line diff command are a part of the report. A tag place
+    // selects these hunks.
+    report.own_diff = own;
+    if !input.step.tree_before.is_empty() && !input.step.tree_after.is_empty() {
+        report.diff_trees = vec![input.step.tree_before.clone(), input.step.tree_after.clone()];
+    }
+    report.hunks = diffs
+        .iter()
+        .flat_map(|(file, diff)| diff.git.iter().map(move |hunk| semilla_core::report::DiffHunk { file: file.clone(), old_start: hunk.old.0, old_count: hunk.old.1, new_start: hunk.new.0, new_count: hunk.new.1 }))
+        .collect();
     let indexes = [ItemIndex::new(input.before), ItemIndex::new(input.after)];
     let fact_count = report.facts.len();
 
     // 1. The lines of each edit that has a fact.
     let mut scopes: Vec<(usize, Vec<Scope>)> = Vec::new();
+    let mut edits_of: Vec<Vec<usize>> = vec![Vec::new(); fact_count];
     for (index, edit) in edits.iter().enumerate() {
         let Some(fact) = fact_of.get(index).copied().flatten().filter(|fact| *fact < fact_count) else { continue };
         scopes.push((fact, edit_scopes(edit, input, &diffs, &indexes)));
+        edits_of[fact].push(index);
     }
 
     // 2. A block of added or removed lines goes to the place that agrees with the tree.
@@ -588,8 +796,9 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         }
     }
 
-    // 3. The changed lines of each file. A pair of equal lines with different line endings is
-    // a pair of line-ending lines.
+    // 3. The changed lines of each file. A pair of lines with the same text and different line
+    // endings is a pair of line-ending lines: the two lines are changed lines of the command.
+    // The count is the count of the lines of the hunks of the command.
     let mut changed: BTreeMap<&str, [BTreeSet<usize>; 2]> = BTreeMap::new();
     let mut endings: BTreeMap<&str, Vec<(usize, usize)>> = BTreeMap::new();
     for (file, diff) in &diffs {
@@ -610,7 +819,6 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
     // 4. The position of an edit: the changed lines in its lines.
     let mut claims: Claims = BTreeMap::new();
     let mut lines_of: Vec<BTreeMap<String, [BTreeSet<usize>; 2]>> = vec![BTreeMap::new(); fact_count];
-    let mut spare: Vec<Vec<&Scope>> = vec![Vec::new(); fact_count];
     for (fact, list) in &scopes {
         let pick = |wide: bool| -> Vec<(&Scope, Vec<usize>)> {
             list.iter()
@@ -625,7 +833,6 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         if found.iter().all(|(_, lines)| lines.is_empty()) {
             found = pick(true);
         }
-        spare[*fact].extend(list.iter());
         for (scope, lines) in found {
             for line in lines {
                 lines_of[*fact].entry(scope.file.clone()).or_default()[scope.side].insert(line);
@@ -634,15 +841,17 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         }
     }
     // A fact with no changed line in its edits (a statement at a new place between equal
-    // lines): the lines of the edits.
-    for (fact, list) in spare.iter().enumerate() {
-        if !lines_of[fact].is_empty() {
+    // lines): the own lines of the edits are equal lines of the command. They are not a part
+    // of the position (design 55.2, rule 5). They stay as the place of the fact for the rule
+    // of the item pair (step 9a): a changed line of the item with equal tokens joins the
+    // nearest fact of the item.
+    for (fact, list) in &scopes {
+        if !lines_of[*fact].is_empty() {
             continue;
         }
         for scope in list {
             for line in &scope.lines {
-                lines_of[fact].entry(scope.file.clone()).or_default()[scope.side].insert(*line);
-                claim(&mut claims, &scope.file, scope.side, *line, fact);
+                claim(&mut claims, &scope.file, scope.side, *line, *fact);
             }
         }
     }
@@ -717,6 +926,234 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         }
     }
 
+    let back: BTreeMap<&String, &String> = renames.items.iter().map(|(old, new)| (new, old)).collect();
+    let innermost = |side: usize, file: &str, line: usize| -> Option<&Item> {
+        let items = indexes[side].by_file.get(file)?;
+        items.iter().filter(|item| item.line_start <= line && line <= item.line_end && !matches!(item.kind, ItemKind::Use | ItemKind::Mod)).min_by_key(|item| item.line_end - item.line_start).copied()
+    };
+    let partner = |side: usize, item: &Item| -> Option<&Item> {
+        if side == OLD {
+            return input.after.items.get(renames.items.get(&item.path).unwrap_or(&item.path));
+        }
+        match back.get(&item.path) {
+            Some(old) => input.before.items.get(*old),
+            None => input.before.items.get(&item.path).filter(|_| !renames.items.contains_key(&item.path)),
+        }
+    };
+
+    // 6a. A module whose source place changes (design 56.3): a new file, a block that is now
+    // a file, or a file that is now a block. The identity of the module and of its items is
+    // the path in the item tree. The tokens of each item pair of the tree compare, and the
+    // tokens of the module that are in no item compare. A line whose tokens are all in a
+    // pair with equal tokens keeps its tokens: it is a line of the fact of the source place.
+    // A line with an edit stays in the fact of the edit. The step is before step 7: a line
+    // of the place is not a line of the nearest edit of its hunk.
+    let mut place_facts: Vec<PlaceFact> = Vec::new();
+    let mut placed: BTreeSet<(String, usize, usize)> = BTreeSet::new();
+    let module_paths: BTreeSet<&String> = input.before.module_files.keys().chain(input.before.items.iter().filter(|(_, item)| item.kind == ItemKind::Mod).map(|(path, _)| path)).collect();
+    for old_path in module_paths {
+        let new_path = renames.items.get(old_path).unwrap_or(old_path);
+        let (Some(old_place), Some(new_place)) = (ModulePlace::of(input.before, old_path), ModulePlace::of(input.after, new_path)) else { continue };
+        if old_place.inline == new_place.inline && (old_place.inline || old_place.file == new_place.file) {
+            continue;
+        }
+        let (Some(old_diff), Some(new_diff)) = (diffs.get(&old_place.file), diffs.get(&new_place.file)) else { continue };
+        let sides = [&old_diff.sides[OLD], &new_diff.sides[NEW]];
+        if sides.iter().any(|side| side.shape.is_none()) {
+            continue;
+        }
+        let places = [&old_place, &new_place];
+        let range = [OLD, NEW].map(|side| (places[side].lines.0, places[side].lines.1.min(sides[side].lines.len())));
+        let in_place = |side: usize, item: &Item| item.file == places[side].file && range[side].0 <= item.line_start && item.line_end <= range[side].1;
+        // The `mod` line of the side with a file, if the other side has a block: its tokens
+        // pair with the tokens of the start of the block.
+        let file_side = if old_place.inline != new_place.inline { Some(if old_place.inline { NEW } else { OLD }) } else { None };
+        let header: Option<(usize, &String, &Side, usize, usize)> = file_side.and_then(|side| {
+            let (file, first, last) = places[side].header.as_ref()?;
+            Some((side, file, &diffs.get(file)?.sides[side], *first, *last))
+        });
+        // A token: 0 and its index in the file of the place, or 1 and its index in the file
+        // of the `mod` line.
+        type Ref = (usize, usize);
+        let token = |side: usize, at: Ref| -> &LineToken {
+            match (at.0, header) {
+                (1, Some((_, _, source, _, _))) => &source.tokens()[at.1],
+                _ => &sides[side].tokens()[at.1],
+            }
+        };
+        // The tokens of each pair of the tree: the key is the path of the old item. The
+        // tokens that are in no item have the empty key.
+        let mut groups: BTreeMap<String, [Vec<Ref>; 2]> = BTreeMap::new();
+        if let Some((side, _, source, first, last)) = header {
+            let list = &mut groups.entry(String::new()).or_default()[side];
+            for line in first..=last {
+                list.extend(source.tokens_at.get(line - 1).into_iter().flatten().filter(|index| source.tokens()[**index].start.0 == line).map(|index| (1, *index)));
+            }
+        }
+        for side in [OLD, NEW] {
+            for line in range[side].0..=range[side].1 {
+                let key = match innermost(side, &places[side].file, line) {
+                    None => Some(String::new()),
+                    Some(item) => partner(side, item).filter(|other| other.kind == item.kind && in_place(1 - side, other)).map(|other| if side == OLD { item.path.clone() } else { other.path.clone() }),
+                };
+                let Some(key) = key else { continue };
+                let here = sides[side].tokens_at[line - 1].iter().filter(|index| sides[side].tokens()[**index].start.0 == line).map(|index| (0, *index));
+                groups.entry(key).or_default()[side].extend(here);
+            }
+        }
+        let same = |a: &LineToken, b: &LineToken| (a.class == TokenClass::Comment) == (b.class == TokenClass::Comment) && (a.text == b.text || (a.class != TokenClass::Comment && words.contains_key(&(a.text.clone(), b.text.clone()))));
+        let mut state: [BTreeMap<Ref, Option<usize>>; 2] = Default::default();
+        for lists in groups.values() {
+            for (i, j) in matches(lists[OLD].len(), lists[NEW].len(), &|i, j| same(token(OLD, lists[OLD][i]), token(NEW, lists[NEW][j]))) {
+                let (a, b) = (token(OLD, lists[OLD][i]), token(NEW, lists[NEW][j]));
+                let fact = if a.text == b.text { None } else { words.get(&(a.text.clone(), b.text.clone())).copied() };
+                state[OLD].insert(lists[OLD][i], fact);
+                state[NEW].insert(lists[NEW][j], fact);
+            }
+        }
+        // The tokens that are the change of the place: the `{` and the `}` of the block, and
+        // the `;` of the `mod` line.
+        let mut frame: [BTreeSet<Ref>; 2] = Default::default();
+        if let (Some(file_side), Some(lists)) = (file_side, groups.get("")) {
+            let block_side = 1 - file_side;
+            let list = &lists[block_side];
+            let name = places[block_side].name.as_str();
+            let open_at = (2..list.len()).find(|&at| token(block_side, list[at]).text == "{" && token(block_side, list[at - 1]).text == name && token(block_side, list[at - 2]).text == "mod");
+            if let (Some(open_at), Some(last)) = (open_at, list.last().filter(|last| token(block_side, **last).text == "}")) {
+                frame[block_side].extend([list[open_at], *last].into_iter().filter(|at| !state[block_side].contains_key(at)));
+            }
+            if let Some(last) = lists[file_side].iter().rfind(|at| at.0 == 1).filter(|last| token(file_side, **last).text == ";" && !state[file_side].contains_key(*last)) {
+                frame[file_side].insert(*last);
+            }
+        }
+        // The nodes whose meaning depends on the path of the file (rule 5). The fact names
+        // each one. Such a node is not in the count of the lines that keep their tokens.
+        let mut dependent: Vec<String> = Vec::new();
+        let mut dependent_lines: [BTreeSet<usize>; 2] = Default::default();
+        for side in [OLD, NEW] {
+            let tokens: Vec<&LineToken> = sides[side].tokens().iter().filter(|token| !token.void && token.class != TokenClass::Comment && range[side].0 <= token.start.0 && token.start.0 <= range[side].1).collect();
+            for (at, here) in tokens.iter().enumerate() {
+                let text = |offset: usize| tokens.get(at + offset).map_or("", |token| token.text.as_str());
+                let before = if at > 0 { tokens[at - 1].text.as_str() } else { "" };
+                let end = if PATH_MACROS.contains(&here.text.as_str()) && text(1) == "!" {
+                    // The macro call, to the end of its input.
+                    let mut depth = 0usize;
+                    let mut end = at + 1;
+                    for (offset, other) in tokens[at + 2..].iter().enumerate() {
+                        match other.text.as_str() {
+                            "(" | "[" | "{" => depth += 1,
+                            ")" | "]" | "}" => depth = depth.saturating_sub(1),
+                            _ => {}
+                        }
+                        end = at + 2 + offset;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    end
+                } else if here.text == "path" && text(1) == "=" && matches!(before, "[" | "(" | ",") {
+                    at + 2
+                } else {
+                    continue;
+                };
+                let end = end.min(tokens.len() - 1);
+                dependent_lines[side].extend(here.start.0..=tokens[end].end_line);
+                if side == NEW {
+                    let mut label: String = tokens[at..=end].iter().map(|token| token.text.as_str()).collect::<Vec<_>>().join(if here.text == "path" { " " } else { "" });
+                    if label.chars().count() > 60 {
+                        label = format!("{}…", label.chars().take(60).collect::<String>());
+                    }
+                    dependent.push(format!("`{label}` (`{}:{}`)", places[NEW].file, here.start.0));
+                }
+            }
+        }
+        // The lines. A line with a name of a rename is a line of the fact of the rename.
+        let mut lines: BTreeMap<String, [BTreeSet<usize>; 2]> = BTreeMap::new();
+        let mut kept = [0usize; 2];
+        let mut targets: Vec<(usize, &String, &Side, usize, usize, usize)> = [OLD, NEW].into_iter().map(|side| (side, &places[side].file, sides[side], range[side].0, range[side].1, 0)).collect();
+        if let Some((side, file, source, first, last)) = header {
+            targets.push((side, file, source, first, last, 1));
+        }
+        for (side, file, source, first, last, origin) in targets {
+            // Each changed line of the place that no fact of an edit has.
+            let keys: Vec<(String, usize, usize)> = diffs[file]
+                .hunks()
+                .iter()
+                .flat_map(|hunk| hunk.range[side].0.max(first)..hunk.range[side].1.min(last.saturating_add(1)))
+                .map(|line| (file.clone(), side, line))
+                .filter(|key| !claims.contains_key(key) && !placed.contains(key))
+                .collect();
+            for key in keys {
+                let here: Vec<Ref> = source.tokens_at[key.2 - 1].iter().map(|index| (origin, *index)).collect();
+                if !here.iter().all(|at| state[side].contains_key(at) || frame[side].contains(at)) {
+                    continue;
+                }
+                placed.insert(key.clone());
+                match here.iter().find_map(|at| state[side].get(at).copied().flatten()) {
+                    Some(fact) if fact < fact_count => {
+                        lines_of[fact].entry(key.0.clone()).or_default()[side].insert(key.2);
+                        claim(&mut claims, &key.0, side, key.2, fact);
+                    }
+                    _ => {
+                        lines.entry(key.0.clone()).or_default()[side].insert(key.2);
+                        if origin == 0 && !dependent_lines[side].contains(&key.2) {
+                            kept[side] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // An inner doc line or an inner attribute of a file, with a change: the edit is an
+        // edit of the module item if the other side has a block. The line is a line of the
+        // fact of that edit.
+        if let Some(side) = file_side {
+            let source = sides[side];
+            let file = &places[side].file;
+            let edit_fact = |category: Category| (0..fact_count).find(|&fact| report.facts[fact].category == category && report.facts[fact].at.as_ref().is_some_and(|at| at.path.is_empty() && (&at.item == old_path || &at.item == new_path)));
+            for line in diffs[file].hunks().iter().flat_map(|hunk| hunk.range[side].0..hunk.range[side].1) {
+                let key = (file.clone(), side, line);
+                let here = &source.tokens_at[line - 1];
+                if here.is_empty() || claims.contains_key(&key) || placed.contains(&key) || !here.iter().all(|index| source.tokens()[*index].top) {
+                    continue;
+                }
+                let docs = here.iter().all(|index| source.tokens()[*index].text.starts_with("//!") || source.tokens()[*index].text.starts_with("/*!"));
+                let order = if docs { [Category::Docs, Category::Attribute] } else { [Category::Attribute, Category::Docs] };
+                if let Some(fact) = order.into_iter().find_map(edit_fact) {
+                    lines_of[fact].entry(file.clone()).or_default()[side].insert(line);
+                    claim(&mut claims, file, side, line, fact);
+                }
+            }
+        }
+        if lines.is_empty() {
+            continue;
+        }
+        // The items of the old place that are in no other item, and the ones that keep each
+        // token. A module and a `use` line are not in the count.
+        let all: Vec<&Item> = indexes[OLD].by_file.get(places[OLD].file.as_str()).into_iter().flatten().copied().filter(|item| in_place(OLD, item) && !matches!(item.kind, ItemKind::Use | ItemKind::Mod)).collect();
+        let outer: Vec<&Item> = all.iter().copied().filter(|item| !all.iter().any(|other| other.path != item.path && other.line_start <= item.line_start && item.line_end <= other.line_end && (other.line_start, other.line_end) != (item.line_start, item.line_end))).filter(|item| !item.path.contains('.')).collect();
+        let keeps = |item: &Item| -> bool {
+            let Some(other) = partner(OLD, item).filter(|other| other.kind == item.kind && in_place(NEW, other)) else { return false };
+            [(OLD, item), (NEW, other)].into_iter().all(|(side, item)| {
+                (item.line_start..=item.line_end).all(|line| !dependent_lines[side].contains(&line) && sides[side].tokens_at[line - 1].iter().all(|index| state[side].get(&(0, *index)) == Some(&None)))
+            })
+        };
+        let kept_items = outer.iter().filter(|item| keeps(item)).count();
+        let place_text = |place: &ModulePlace| if place.inline { format!("a block in `{}`", place.file) } else { format!("file `{}`", place.file) };
+        let name = if old_path == new_path { format!("`{old_path}`") } else { format!("`{old_path}` (now `{new_path}`)") };
+        let line_text = if kept[OLD] == kept[NEW] { count(kept[OLD], "line") } else { format!("{} and {}", count(kept[OLD], "old line"), count(kept[NEW], "new line")) };
+        let mut description = format!("source place of {name}: {} → {}; {kept_items} of {} and {line_text} keep their tokens", place_text(&old_place), place_text(&new_place), count(outer.len(), "item"));
+        // The category (design 54.2): `move` is a new place with the same tokens. A node that
+        // depends on the path of the file can change the behavior: a macro call gives
+        // `macro`, a `path` attribute gives `attribute`.
+        let mut category = Category::Move;
+        if !dependent.is_empty() {
+            category = if dependent.iter().any(|label| !label.starts_with("`path ")) { Category::Macro } else { Category::Attribute };
+            description.push_str(&format!("; the meaning of {} depends on the path of the file: {}", count(dependent.len(), "node"), dependent.join(", ")));
+        }
+        let item = input.before.items.contains_key(old_path).then(|| old_path.clone());
+        place_facts.push(PlaceFact { file: new_place.file.clone(), category, description, lines, item });
+    }
+
     // 7. Each changed line with no fact: the tokens of its hunk on the two sides.
     let mut open: BTreeMap<(String, usize, usize), Open> = BTreeMap::new();
     let mut layout: BTreeMap<String, [BTreeSet<usize>; 2]> = BTreeMap::new();
@@ -737,7 +1174,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
             continue;
         }
         for hunk in &hunks {
-            let free_lines: BTreeSet<(usize, usize)> = [OLD, NEW].into_iter().flat_map(|side| (hunk.range[side].0..hunk.range[side].1).map(move |line| (side, line))).filter(|(side, line)| !claims.contains_key(&(file.clone(), *side, *line))).collect();
+            let free_lines: BTreeSet<(usize, usize)> = [OLD, NEW].into_iter().flat_map(|side| (hunk.range[side].0..hunk.range[side].1).map(move |line| (side, line))).filter(|(side, line)| !claims.contains_key(&(file.clone(), *side, *line)) && !placed.contains(&(file.clone(), *side, *line))).collect();
             if free_lines.is_empty() {
                 continue;
             }
@@ -861,25 +1298,134 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
     // tokens and equal comments. The order of the items has no meaning if the file has no
     // macro in textual scope; the order of `use` items never has a meaning.
     let mut reordered: BTreeMap<String, usize> = BTreeMap::new();
+    let mut scope_facts: Vec<(String, Option<String>, String, [BTreeSet<usize>; 2])> = Vec::new();
+    // The module items with one identity on the two sides (file, side, first line): the order
+    // check of design 56.5 has each of them.
+    let mut checked: BTreeSet<(String, usize, usize)> = BTreeSet::new();
     let mut order: BTreeMap<String, [BTreeSet<usize>; 2]> = BTreeMap::new();
     for (file, diff) in &diffs {
         let (Some(old_shape), Some(new_shape)) = (&diff.sides[OLD].shape, &diff.sides[NEW].shape) else { continue };
         let has_open = |side: usize, lines: (usize, usize)| open.range((file.clone(), side, lines.0)..=(file.clone(), side, lines.1)).next().is_some();
         let mut used = vec![false; new_shape.items.len()];
         let mut pairs = Vec::new();
-        for old_item in old_shape.items.iter().filter(|item| has_open(OLD, item.lines)) {
-            // A macro has a textual scope: an item that can give a macro does not move, and
-            // an other item moves only between the same items that can give a macro.
-            if !old_item.is_use && old_item.source {
-                continue;
+        // The identity of a module item: the path of its item in the old tree. A `use` item
+        // has an identity only if it can name a macro in textual scope: then it has its text.
+        let tree_item = |side: usize, lines: (usize, usize)| -> Option<&Item> {
+            let items = indexes[side].by_file.get(file.as_str())?;
+            items.iter().copied().filter(|item| lines.0 <= item.line_start && item.line_end <= lines.1).max_by_key(|item| (item.line_end - item.line_start, std::cmp::Reverse(item.path.len())))
+        };
+        let identity = |side: usize, item: &ModuleItem| -> Option<String> {
+            if item.is_use {
+                return one_segment_use(&item.key).then(|| item.key.replace(" :: ", "::").replace(" ;", ";").replace(" ( ", "(").replace(" ) ", ") "));
             }
-            let found = new_shape.items.iter().enumerate().find(|(index, item)| {
-                !used[*index] && item.container == old_item.container && item.key == old_item.key && item.is_use == old_item.is_use && (item.is_use || item.barrier == old_item.barrier) && has_open(NEW, item.lines)
-            });
+            let path = &tree_item(side, item.lines)?.path;
+            if side == OLD {
+                return Some(path.clone());
+            }
+            match back.get(path) {
+                Some(old) => Some((*old).clone()),
+                None => (!renames.items.contains_key(path)).then(|| path.clone()),
+            }
+        };
+        let ids: [Vec<Option<String>>; 2] = [OLD, NEW].map(|side| [old_shape, new_shape][side].items.iter().map(|item| identity(side, item)).collect());
+        let mut new_at: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for (index, item) in new_shape.items.iter().enumerate().rev() {
+            if let Some(id) = &ids[NEW][index] {
+                new_at.insert((item.container.as_str(), id.as_str()), index);
+            }
+        }
+        // The items with one identity on the two sides, in the old order: the index on each
+        // side, and true if the item can give a macro on one side.
+        let mut common: Vec<(usize, usize, bool)> = Vec::new();
+        let mut partner_of: BTreeMap<usize, usize> = BTreeMap::new();
+        for (index, item) in old_shape.items.iter().enumerate() {
+            let Some(id) = &ids[OLD][index] else { continue };
+            let Some(&other) = new_at.get(&(item.container.as_str(), id.as_str())) else { continue };
+            if partner_of.values().all(|used| *used != other) {
+                partner_of.insert(index, other);
+                common.push((index, other, item.source || new_shape.items[other].source));
+                checked.insert((file.clone(), OLD, item.lines.0));
+                checked.insert((file.clone(), NEW, new_shape.items[other].lines.0));
+            }
+        }
+        // Design 56.5: a macro has a textual scope. The order of an item and of an item that
+        // can give a macro is a part of the meaning. For each pair with a different order on
+        // the two sides, the item with no pair of equal lines is the item at a new place.
+        let fixed = |entry: &(usize, usize, bool)| {
+            let (old, new) = (old_shape.items[entry.0].lines, new_shape.items[entry.1].lines);
+            diff.pairs.iter().any(|(a, b)| old.0 <= a + 1 && a + 1 <= old.1 && new.0 <= b + 1 && b + 1 <= new.1)
+        };
+        let mut moves: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (x, first) in common.iter().enumerate() {
+            for (y, second) in common.iter().enumerate().skip(x + 1) {
+                if !(first.2 || second.2) || first.1 < second.1 || old_shape.items[first.0].container != old_shape.items[second.0].container {
+                    continue;
+                }
+                let (own, other) = match (fixed(first), fixed(second)) {
+                    (true, true) => continue,
+                    (true, false) => (y, x),
+                    (false, true) => (x, y),
+                    (false, false) => if first.2 && !second.2 { (y, x) } else { (x, y) },
+                };
+                moves.entry(own).or_default().push(other);
+            }
+        }
+        let mut scoped: Vec<(Option<String>, String, (usize, usize), (usize, usize))> = Vec::new();
+        let mut moved: BTreeSet<usize> = BTreeSet::new();
+        for (own, others) in &moves {
+            let (old_index, new_index, gives) = common[*own];
+            let name = |entry: usize| format!("`{}`", ids[OLD][common[entry].0].as_deref().unwrap_or_default());
+            let mut names: Vec<String> = others.iter().take(6).map(|other| name(*other)).collect();
+            if others.len() > names.len() {
+                names.push(format!("{} more", others.len() - names.len()));
+            }
+            let own_name = name(*own);
+            let description = if gives {
+                format!("moved {own_name} (it can give a macro) past {}: {}; a macro has a textual scope: a macro call in these items can have a new meaning", count(others.len(), "item"), names.join(", "))
+            } else {
+                format!("moved {own_name} past {} that can give a macro: {}; a macro has a textual scope: a macro call in {own_name} can have a new meaning", count(others.len(), "item"), names.join(", "))
+            };
+            used[new_index] = true;
+            moved.insert(old_index);
+            // The item of the fact: the item at a new place. For a `use` item: the first item
+            // of the list that has a path.
+            let anchor = std::iter::once(own).chain(others).map(|entry| common[*entry].0).find(|index| !old_shape.items[*index].is_use).and_then(|index| ids[OLD][index].clone());
+            scoped.push((anchor, description, old_shape.items[old_index].lines, new_shape.items[new_index].lines));
+        }
+        for (old_index, old_item) in old_shape.items.iter().enumerate().filter(|(index, item)| !moved.contains(index) && has_open(OLD, item.lines)) {
+            let same = |item: &ModuleItem| item.container == old_item.container && item.key == old_item.key && item.is_use == old_item.is_use;
+            let found = match &ids[OLD][old_index] {
+                // The order of the item to each item that can give a macro is the same.
+                Some(_) => partner_of.get(&old_index).map(|index| (*index, &new_shape.items[*index])).filter(|(index, item)| !used[*index] && same(item) && has_open(NEW, item.lines)),
+                // The order of `use` items with a path of two segments or more never has a
+                // meaning. An item with no identity moves only between the same items that
+                // can give a macro, and only if it cannot give a macro.
+                None if !old_item.is_use && old_item.source => None,
+                None => new_shape.items.iter().enumerate().find(|(index, item)| !used[*index] && ids[NEW][*index].is_none() && same(item) && (item.is_use || item.barrier == old_item.barrier) && has_open(NEW, item.lines)),
+            };
             if let Some((index, new_item)) = found {
                 used[index] = true;
                 pairs.push((old_item.lines, new_item.lines));
             }
+        }
+        // The lines of a fact of the textual scope: the open lines of the item. An item with
+        // no open line has a fact for each of its changed lines: the fact gets these lines.
+        for (own, description, old_lines, new_lines) in scoped {
+            let mut lines: [BTreeSet<usize>; 2] = Default::default();
+            for (side, range) in [(OLD, old_lines), (NEW, new_lines)] {
+                let keys: Vec<(String, usize, usize)> = open.range((file.clone(), side, range.0)..=(file.clone(), side, range.1)).map(|(key, _)| key.clone()).collect();
+                for key in keys {
+                    open.remove(&key);
+                    lines[side].insert(key.2);
+                }
+            }
+            if lines[OLD].is_empty() && lines[NEW].is_empty() {
+                let equal: [BTreeSet<usize>; 2] = [diff.pairs.iter().map(|pair| pair.0 + 1).collect(), diff.pairs.iter().map(|pair| pair.1 + 1).collect()];
+                for (side, range) in [(OLD, old_lines), (NEW, new_lines)] {
+                    lines[side] = (range.0..=range.1).filter(|line| !equal[side].contains(line)).collect();
+                }
+            }
+            scope_facts.push((file.clone(), own, description, lines));
         }
         for (old_lines, new_lines) in pairs {
             *reordered.entry(file.clone()).or_default() += 1;
@@ -900,20 +1446,6 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
     // part of the nearest fact of the item. An item with no fact, whose open lines have no
     // changed token, has a new layout only. A macro has a textual scope: the rule does not
     // apply to an item that can give a macro, or that moved across such an item.
-    let back: BTreeMap<&String, &String> = renames.items.iter().map(|(old, new)| (new, old)).collect();
-    let innermost = |side: usize, file: &str, line: usize| -> Option<&Item> {
-        let items = indexes[side].by_file.get(file)?;
-        items.iter().filter(|item| item.line_start <= line && line <= item.line_end && !matches!(item.kind, ItemKind::Use | ItemKind::Mod)).min_by_key(|item| item.line_end - item.line_start).copied()
-    };
-    let partner = |side: usize, item: &Item| -> Option<&Item> {
-        if side == OLD {
-            return input.after.items.get(renames.items.get(&item.path).unwrap_or(&item.path));
-        }
-        match back.get(&item.path) {
-            Some(old) => input.before.items.get(*old),
-            None => input.before.items.get(&item.path).filter(|_| !renames.items.contains_key(&item.path)),
-        }
-    };
     let mut groups: BTreeMap<&str, (&Item, &Item, Vec<(String, usize, usize)>)> = BTreeMap::new();
     for (key, state) in &open {
         if !matches!(state, Open::Token | Open::Pending) {
@@ -938,7 +1470,12 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
             Some(sides[side].shape.as_ref()?.items.iter().filter(|item| item.lines.0 <= line && line <= item.lines.1).collect())
         };
         let (Some(old_chain), Some(new_chain)) = (chain(OLD), chain(NEW)) else { continue };
-        if old_chain.len() != new_chain.len() || old_chain.iter().zip(&new_chain).any(|(a, b)| a.source || b.source || a.container != b.container || a.barrier != b.barrier) {
+        // The order check of step 9 (design 56.5) gives a fact to each item of the chain that
+        // has a new order to an item that can give a macro. An item that the check does not
+        // have keeps the strict rule: it cannot give a macro, and the same items that can
+        // give a macro are before it.
+        let in_check = |a: &ModuleItem, b: &ModuleItem| checked.contains(&(old_item.file.clone(), OLD, a.lines.0)) && checked.contains(&(new_item.file.clone(), NEW, b.lines.0));
+        if old_chain.len() != new_chain.len() || old_chain.iter().zip(&new_chain).any(|(a, b)| a.container != b.container || (!in_check(a, b) && (a.source || b.source || a.barrier != b.barrier))) {
             continue;
         }
         let lists: [Vec<usize>; 2] = [OLD, NEW].map(|side| {
@@ -1015,15 +1552,67 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         }
     }
 
+    // 9c. A fact whose own lines are all equal lines of the command (design 55.2, rule 5; a
+    // statement at a new place between equal lines). The fact gets the changed lines of the
+    // smallest wider node that has a changed line: the node above the node of the edit, then
+    // the item, then each item around it, then the file. The rule gives a position only. It
+    // gives no line to the cover check: steps 7 to 9b already examined each of these lines.
+    for (fact, list) in edits_of.iter().enumerate() {
+        if list.is_empty() || !lines_of[fact].is_empty() {
+            continue;
+        }
+        let ranges: Vec<[Vec<(String, (usize, usize))>; 2]> = list.iter().map(|index| [OLD, NEW].map(|side| wider_ranges(&edits[*index], side, input, &diffs, &indexes))).collect();
+        let levels = ranges.iter().flat_map(|sides| sides.iter().map(Vec::len)).max().unwrap_or(0);
+        for level in 0..levels {
+            let mut found: BTreeMap<String, [BTreeSet<usize>; 2]> = BTreeMap::new();
+            for sides in &ranges {
+                for side in [OLD, NEW] {
+                    let Some((file, (start, end))) = sides[side].get(level).or_else(|| sides[side].last()) else { continue };
+                    // The file is the last range of a side. It waits for the last level.
+                    if level + 1 < levels && sides[side].len() <= level {
+                        continue;
+                    }
+                    let Some(lines) = changed.get(file.as_str()) else { continue };
+                    let hit: Vec<usize> = lines[side].range(*start..=*end).copied().collect();
+                    if !hit.is_empty() {
+                        found.entry(file.clone()).or_default()[side].extend(hit);
+                    }
+                }
+            }
+            if !found.is_empty() {
+                lines_of[fact] = found;
+                report.wider_facts += 1;
+                break;
+            }
+        }
+    }
+
     // 10. The positions of the facts of the edits.
     for (index, files) in lines_of.iter().enumerate() {
-        report.facts[index].positions = files.iter().flat_map(|(file, lines)| position_list(file, lines)).collect();
+        report.facts[index].positions = files.iter().flat_map(|(file, lines)| position_list(&diffs, file, lines)).collect();
     }
     let compare = if input.step.compiled { Compare::NoCode } else { Compare::Off };
     let add = |facts: &mut Vec<Fact>, file: &str, part: &str, category: Category, description: String, positions: Vec<Position>| {
         let id = format!("f{}", facts.len() + 1);
         facts.push(Fact { id, file: Some(file.to_string()), part: part.to_string(), description, status: "derived".into(), category, compare, positions, ..Default::default() });
     };
+
+    // 10a. The fact of each module with a new source place (step 6a). The fact of each item
+    // with a new order to an item that can give a macro (step 9): the category is `macro`,
+    // because a macro call can get a different definition (design 54.2).
+    for place in place_facts {
+        let positions = place.lines.iter().flat_map(|(file, lines)| position_list(&diffs, file, lines)).collect();
+        add(&mut report.facts, &place.file, "place", place.category, place.description, positions);
+        if let (Some(item), Some(fact)) = (place.item, report.facts.last_mut()) {
+            fact.at = Some(Anchor::item(&item));
+        }
+    }
+    for (file, item, description, lines) in scope_facts {
+        add(&mut report.facts, &file, "macro scope", Category::Macro, description, position_list(&diffs, &file, &lines));
+        if let (Some(item), Some(fact)) = (item, report.facts.last_mut()) {
+            fact.at = Some(Anchor::item(&item));
+        }
+    }
 
     // 11. The layout fact of each file: what Semilla proved for the lines.
     let files: BTreeSet<&String> = layout.keys().chain(order.keys()).collect();
@@ -1043,7 +1632,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
                 lines[side].extend(&moved[side]);
             }
         }
-        add(&mut report.facts, file, "layout", Category::Layout, format!("layout of `{file}`: {}", proved.join("; ")), position_list(file, &lines));
+        add(&mut report.facts, file, "layout", Category::Layout, format!("layout of `{file}`: {}", proved.join("; ")), position_list(&diffs, file, &lines));
     }
 
     // 12. The line-ending fact of each file.
@@ -1058,7 +1647,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
             lines[NEW].insert(new + 1);
         }
         let text: Vec<String> = kinds.iter().map(|((old, new), lines)| format!("{} → {} in {}", name(*old), name(*new), count(*lines, "line"))).collect();
-        add(&mut report.facts, file, "line endings", Category::Layout, format!("line endings of `{file}`: {}; the text of each line is equal", text.join(", ")), position_list(file, &lines));
+        add(&mut report.facts, file, "line endings", Category::Layout, format!("line endings of `{file}`: {}; the text of each line is equal", text.join(", ")), position_list(&diffs, file, &lines));
     }
 
     // 13. A comment that is in no item: one fact for each block of comment lines of a hunk.
@@ -1104,7 +1693,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
                 open.remove(&(file.clone(), side, *line));
             }
         }
-        add(&mut report.facts, &file, "comment", Category::Docs, description, position_list(&file, &lines));
+        add(&mut report.facts, &file, "comment", Category::Docs, description, position_list(&diffs, &file, &lines));
     }
 
     // 14. Each other open line is a changed line with no fact: a defect of Semilla.
@@ -1112,7 +1701,42 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
     for (file, side, line) in open.keys() {
         no_fact.entry(file.clone()).or_default()[*side].insert(*line);
     }
-    report.no_fact = no_fact.iter().flat_map(|(file, lines)| position_list(file, lines)).collect();
+    report.no_fact = no_fact.iter().flat_map(|(file, lines)| position_list(&diffs, file, lines)).collect();
+
+    // 14a. The cause of each open line (design 56.4): the smallest item of the tree that has
+    // the line, and the state of its tokens.
+    let texts = |side: usize, item: &Item| -> Vec<&str> {
+        let Some(diff) = diffs.get(&item.file) else { return Vec::new() };
+        diff.sides[side].tokens().iter().filter(|token| item.line_start <= token.start.0 && token.start.0 <= item.line_end && !token.void && token.class != TokenClass::Comment).map(|token| token.text.as_str()).collect()
+    };
+    let mut causes: BTreeMap<(String, String), [BTreeSet<usize>; 2]> = BTreeMap::new();
+    for ((file, side, line), state) in &open {
+        let items = indexes[*side].by_file.get(file.as_str()).filter(|items| !items.is_empty());
+        let cause = match (diffs.get(file).is_some_and(|diff| diff.parsed), items) {
+            (false, _) => "a file that Semilla does not parse".to_string(),
+            (true, None) => "a file with no item in the tree (for example a file behind a `mod` line in a macro input)".to_string(),
+            (true, Some(items)) => {
+                let line_state = match state {
+                    Open::Equal | Open::Pending => "the tokens of the line are equal in the line diff",
+                    Open::Comment => "the changed tokens of the line are comments",
+                    Open::Token => "a token of the line changes",
+                };
+                match items.iter().filter(|item| item.line_start <= *line && *line <= item.line_end).min_by_key(|item| item.line_end - item.line_start) {
+                    None => format!("a line in no item of the tree; {line_state}"),
+                    Some(item) => {
+                        let pair = match partner(*side, item) {
+                            None => "its tokens are in no pair of the tree compare",
+                            Some(other) if texts(*side, item) == texts(1 - *side, other) => "its tokens are in a pair with equal tokens",
+                            Some(_) => "its tokens are in a pair with a difference",
+                        };
+                        format!("in `{}`: {pair}; {line_state}", item.path)
+                    }
+                }
+            }
+        };
+        causes.entry((file.clone(), cause)).or_default()[*side].insert(*line);
+    }
+    report.no_fact_causes = causes.iter().map(|((file, cause), lines)| semilla_core::report::NoFactCause { cause: cause.clone(), positions: position_list(&diffs, file, lines) }).collect();
 }
 
 #[cfg(test)]

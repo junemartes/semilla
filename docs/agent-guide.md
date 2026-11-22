@@ -125,6 +125,8 @@ semilla step "use the method for the total" \
 - The path of a type or of a trait can be each path that names the item: `shop::money::Price`, the re-export `shop::Price`, or `crate::Price` as in the `impl` header. Two types with one name are different: give the module to select one.
 - If the path names two items, the message gives the candidates with their generic arguments, the best first: copy one. An item that a macro call makes has no path: the message names the macro call and its module.
 - Two items with the same path (two `impl` blocks with different `#[cfg]` conditions) are one target: the result says "2 items with this path". Add the mark of Semilla (`scale#0`) to select one.
+- An item of a target that is not the library has the target in its path, in the form of cargo: `depot (test "list")::first`, `depot (bin "depot")::helper`, `depot (example "demo")::main`, `depot (bench "speed")::run`. An item of the library has the package name only: `depot::list::first`. Semilla prints this form in each fact. Write it in quotes: `--change 'depot (test "list")::first=TEXT'`. A loose path still works if it has one match: `first`, or `list::first` (the crate name of the target names the target). An exact path comes first: `depot::first` is the item of the library if the library has one.
+- A member of a block has its own path and its own fact: `depot::Shape::SIDES` (a const of an impl), `depot::<Shape as Named>::Name` (a type of a trait impl), `depot::Named::SIZE` (a member of a trait), `depot::extern C::LEVEL` (a member of an `extern` block).
 - A path into a target that Semilla does not parse (`speed::run` for a bench of a package that is not a workspace member) names the file. The result says that the fact covers the full file.
 - A stated rename or move is a candidate of the rename rule, also when Semilla does not find the pair alone (many renames in one module, or a rename with a large edit of the body). It needs evidence: one reference that follows the rename, or similar declarations. If you replaced an item with a different item, state `--change`, not `rename`. The check does not get weaker: each edit that is not the rename keeps its own fact, and it is in the gap list. The order of the options is not important.
 - When a fact is false or has a form error, look for the line "a fact that holds: `--same '…'`" or "The correct form: …". It is a complete option that passes the check. Use it only if it says what you did.
@@ -164,7 +166,7 @@ If a step has a gap, `semilla status`, `semilla tag`, and the review show one li
 
 ## The tags of a step
 
-A tag is a name for a part of a step. Use tags to put the facts of a large step in groups that a reviewer can read one at a time. You give the part by positions in the line diff.
+A tag is a name for a part of a step. Use tags to put the facts of a large step in groups that a reviewer can read one at a time. You give the part by the hunks of the line diff of the step.
 
 ```
 semilla step "add the retry option" \
@@ -183,18 +185,31 @@ semilla step "add the retry option" \
 | `FILE:-LINE`, `FILE:-START-END` | Lines of the old tree. A deleted text has only such lines. |
 | `FILE:+START,COUNT`, `FILE:-START,COUNT` | One side of a hunk header, as `git diff` prints it. |
 
-Read the positions from the hunk headers of `git diff`. The header `@@ -120,12 +40,49 @@` of `src/net.rs` gives two places:
+**The command that gives the hunks.** The changed lines of a step are the lines of one `git diff` command. The step output prints it with the two trees of the step (the line `hunks:`):
+
+```
+git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color OLD_TREE NEW_TREE
+```
+
+Run the step first. Then run the printed command in the repository: the two trees are objects of the repository. Add the tags to the stored step with `semilla fact --tag` (see below). Each position of a fact, each line of the cover check, and each hunk of a tag is a line of this command. Do not use a plain `git diff`: your configuration can give different hunks. If the output says "git gave no line diff of this step", `semilla status --verbose` prints the hunk headers that Semilla uses.
+
+Read the positions from the hunk headers of the command. The header `@@ -120,12 +40,49 @@` of `src/net.rs` gives two places:
 
 - `src/net.rs:+40,49` (or `src/net.rs:40-88`): the 49 lines of the new tree.
 - `src/net.rs:-120,12` (or `src/net.rs:-120-131`): the 12 lines of the old tree.
 
-A side with the count 0 has no line (`@@ -23,0 +29,2 @@` has only new lines): use the other side. Write the two sides of a hunk if the hunk deletes a statement and adds a different statement.
+**How a place selects a hunk.** The unit of a tag is the hunk.
 
-**The rule.** A tag has each fact whose edit is fully in its places.
+- A place that has the full new side of a hunk, or the full old side, selects the two sides of that hunk. One of the two places above is sufficient for the hunk `@@ -120,12 +40,49 @@`.
+- A place `FILE` selects each hunk of the file.
+- A side with the count 0 has no line (`@@ -23,0 +29,2 @@` has only new lines). Use the side that has lines (`src/net.rs:+29,2`). The form with the count 0 is also valid (`src/net.rs:-23,0`): it names its hunk.
+- A place that has only a part of a side selects only the changed lines in its range. It does not select the other side: a range of the new tree then has no deleted text.
+- The simple way for a full step: one place for each hunk header of the command. Then the tag has each fact that has a position.
 
-- A fact that changes a text has old lines and new lines. It is in the tag if all its new lines are in the places, or all its old lines are.
-- A range of the new tree does not have a deleted text. Give the old-tree place (`FILE:-LINE`) for it.
-- A fact with only a part of its lines in the tag is not in the tag. The output has a note with the full position of the fact. Make the range wider, or let the fact be in the group "not in a tag".
+**The rule.** A tag has each fact whose lines are all selected lines of the tag.
+
+- A fact with lines in the tag and lines out of it shows with the tag and the mark "in part", with the lines that are not in the tag: "in part: f6 has lines that are not in the tag: src/net.rs:3-4". The head line of the tag counts these facts apart ("0 fact(s); 1 fact(s) in part; 2 changed line(s)"). Add the hunk of these lines to the tag if the fact belongs to it.
+- A fact with no position (an `indirect` fact, a fact of the public API with no edit of its own) is in no tag and not in the group "not in a tag". These facts show in their own line: "facts with no position (a tag selects changed lines; these facts have none): …".
 - `semilla status --verbose` prints the position of each fact (the line `lines:`). The gap list of the step output prints the positions of each gap.
 
 **The errors.**
@@ -202,7 +217,7 @@ A side with the count 0 has no line (`@@ -23,0 +29,2 @@` has only new lines): us
 - A text that is not `PLACE[,PLACE]=NAME`, or a line number after the last line of the file: exit code 2. No step is stored.
 - A place with no edit in its lines: the step is not stored (exit code 1). The message names the nearest positions with an edit: "the step has no edit in `src/net.rs:1-3`; the nearest positions with an edit: src/net.rs:11". Correct the position and run the step again.
 
-**The output with tags.** The facts show in the groups of the tags, in your order. The last group is "not in a tag". A fact of two tags shows in the first tag.
+**The output with tags.** The facts show in the groups of the tags, in your order. The head line of a tag has the count of its facts by category and the count of the changed lines that its places select. The group "not in a tag" shows only if a fact with a position is in no tag. A fact of two tags shows in the first tag that has the full fact.
 
 ```
   tag `method calls` (crates/shop-core/src/facts.rs:11-17): 2 fact(s): 2 semantics; 6 changed line(s)

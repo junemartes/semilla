@@ -174,7 +174,8 @@ fn with_complete_calls(written: &str, complete: &[String]) -> (String, Vec<Strin
     let old: Vec<&str> = old.iter().map(|entry| entry.strip_suffix("::").unwrap_or(entry)).collect();
     let added = complete.iter().filter(|entry| !old.contains(&entry.as_str())).cloned().collect();
     let list = serde_json::to_string(complete).unwrap_or_default();
-    let words: Vec<String> = words.into_iter().map(|word| if word.contains(char::is_whitespace) { format!("\"{word}\"") } else { word }).collect();
+    // A word with the target of a path has its own quotes (design 56.1).
+    let words: Vec<String> = words.into_iter().map(|word| if word.contains(char::is_whitespace) && !word.contains('"') { format!("\"{word}\"") } else { word }).collect();
     (format!("{} calls={list}", words.join(" ")), added)
 }
 
@@ -196,7 +197,20 @@ fn split_words_with(text: &str, angles: bool) -> Option<Vec<String>> {
     let mut quoted = false;
     let mut depth = 0usize;
     let mut angle = 0usize;
-    for c in text.chars() {
+    let mut skip = 0usize;
+    for (at, c) in text.char_indices() {
+        if at < skip {
+            continue;
+        }
+        // The target of a path (design 56.1): ` (test "list")` after a name is a part of the
+        // word, with its quotes.
+        if c == ' ' && !quoted && !current.is_empty() {
+            if let Some(end) = semilla_syntax::load::target_end(&text[at..]) {
+                current.push_str(&text[at..at + end]);
+                skip = at + end;
+                continue;
+            }
+        }
         match c {
             '[' | '{' if !quoted => {
                 depth += 1;
@@ -1016,6 +1030,12 @@ mod tests {
         assert_eq!(split_words("tested-by a::f test=<T as Checks>::t_f"), ["tested-by", "a::f", "test=<T as Checks>::t_f"]);
         // The quotes work as before.
         assert_eq!(split_words("no-panic \"a::<T as B>::f\""), ["no-panic", "a::<T as B>::f"]);
+        // The target of a path is a part of the word (design 56.1).
+        assert_eq!(split_words("pure depot (test \"list\")::first note=x"), ["pure", "depot (test \"list\")::first", "note=x"]);
+        assert_eq!(split_words("move-item a::f to=depot (bin \"depot\")::f"), ["move-item", "a::f", "to=depot (bin \"depot\")::f"]);
+        // A text in parentheses that is not a target ends the word.
+        assert_eq!(split_words("pure depot (test list)::first"), ["pure", "depot", "(test", "list)::first"]);
+        assert_eq!(split_words("pure depot (lib \"x\")::f"), ["pure", "depot", "(lib", "x)::f"]);
         // A `<` with no `>` does not join the words.
         assert_eq!(split_words("pure a::<T as B key=1"), ["pure", "a::<T", "as", "B", "key=1"]);
         // A `<` in the middle of a word is not the start of an impl anchor.

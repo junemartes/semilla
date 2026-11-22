@@ -96,9 +96,15 @@ enum Command {
         /// A tag of the agent: a name for a part of the step. `PLACE[,PLACE]=NAME`. A place is
         /// `FILE:LINE` or `FILE:START-END` (lines of the new tree), `FILE:-START-END` (lines of
         /// the old tree, for a deleted text), or `FILE` (the full file). The two sides of a
-        /// hunk header of `git diff` also work: `FILE:+START,COUNT` and `FILE:-START,COUNT`.
-        /// A tag has each fact whose edit is fully in its lines. A tag is not a fact: it
-        /// changes no fact, no gap, and no result. Semilla does not check the name.
+        /// hunk header also work: `FILE:+START,COUNT` and `FILE:-START,COUNT` (a count of 0
+        /// is valid). The hunks are the hunks of this command, which the step output prints
+        /// with the two trees of the step:
+        /// `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color OLD_TREE NEW_TREE`.
+        /// A place selects the changed lines in its lines. A place with one full side of a
+        /// hunk selects the two sides of the hunk. A tag has each fact whose lines are
+        /// selected lines. A fact with only a part of its lines in the tag shows with the
+        /// mark "in part". A tag is not a fact: it changes no fact, no gap, and no result.
+        /// Semilla does not check the name.
         #[arg(long = "tag")]
         tag: Vec<String>,
         /// The reason for a fact in the spotlight: `ANCHOR=TEXT`. One reason can cover each open

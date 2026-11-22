@@ -137,6 +137,10 @@ pub struct Workspace {
     /// The display texts of the inner attributes, in the same order (design 39.2).
     #[serde(skip)]
     pub inner_attrs_display: BTreeMap<String, Vec<String>>,
+    /// The file of each crate root and of each module with a file, by module path (design
+    /// 56.3). An inline module is not in the map: its place is its item.
+    #[serde(default)]
+    pub module_files: BTreeMap<String, String>,
     /// The files of the parsed targets that the loader cannot parse, with the reason (design
     /// 37.5). The file is not in `parsed_files`.
     pub parse_errors: BTreeMap<String, String>,
@@ -352,12 +356,13 @@ impl Workspace {
                 if !parsed_kind(kind) || workspace.parsed_files.contains(&relative(root, file)) || !file.exists() {
                     continue;
                 }
-                // The module path of the root. The library and `src/main.rs` are the crate. Each
-                // other target is a module of the package with its name. A target can have the
-                // name of the package (`benches/hex.rs` of the package `hex`).
-                let main = *file == package.dir.join("src/main.rs");
-                let module = if kind == "lib" || main { package.name.clone() } else { format!("{}::{}", package.name, name.replace('-', "_")) };
-                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition };
+                // The module path of the root (design 56.1). Each target is the root of its own
+                // item tree. The root of the library is the package name. The root of each
+                // other target names the target in the form of cargo: `depot (test "list")`.
+                // The rule does not look at the other targets of the package: `src/main.rs`
+                // of a package with no library has the form `depot (bin "depot")` too.
+                let module = target_root(&package.name, kind, name);
+                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, module_files: &mut workspace.module_files, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition };
                 loader.load_file(file, &module, matches!(kind.as_str(), "test" | "bench"))?;
             }
         }
@@ -607,6 +612,61 @@ fn doc_lines(marker: &str, text: &str) -> String {
     }
     text.lines().map(|line| format!("{marker}{line}")).collect::<Vec<_>>().join("\n")
 }
+/// The root of the item tree of a target (design 56.1). The library is the package name. Each
+/// other target has the form of cargo: `depot (test "list")`, `depot (bin "depot")`.
+pub fn target_root(package: &str, kind: &str, name: &str) -> String {
+    if kind == "lib" { package.to_string() } else { format!("{package} ({kind} \"{name}\")") }
+}
+
+/// The root of the item tree of a path: the text before the first `::` that is not in the
+/// name of a target.
+pub fn path_root(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    let (mut index, mut quoted) = (0, false);
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => quoted = !quoted,
+            b':' if !quoted && bytes.get(index + 1) == Some(&b':') => return &path[..index],
+            b'<' if !quoted => break,
+            _ => {}
+        }
+        index += 1;
+    }
+    path
+}
+
+/// The package of a path: the root of its item tree with no target (design 56.1).
+/// `depot (test "list")::first` and `depot::first` are in the package `depot`.
+pub fn package_of(path: &str) -> &str {
+    let root = path_root(path);
+    match root.split_once(" (") {
+        Some((package, target)) if target.ends_with("\")") => package,
+        _ => root,
+    }
+}
+
+/// The name that the compiler gives to the item of a path (design 56.1). The compiler names a
+/// body by the crate name of its target: `depot (test "list")::first` has the body
+/// `list::first`. A path of the library stays as it is.
+pub fn compiled_path(path: &str) -> String {
+    let root = path_root(path);
+    let name = root.strip_suffix("\")").and_then(|rest| rest.split_once(" (")).and_then(|(_, target)| target.split_once(" \"")).map(|(_, name)| name.replace('-', "_"));
+    match name {
+        Some(name) => format!("{name}{}", &path[root.len()..]),
+        None => path.to_string(),
+    }
+}
+
+/// The length of the target of a path at the start of the text: ` (KIND "NAME")`, with a
+/// target kind of cargo (design 56.1). `None` if the text does not start with a target.
+pub fn target_end(text: &str) -> Option<usize> {
+    let rest = text.strip_prefix(" (")?;
+    let kind = ["bin \"", "test \"", "example \"", "bench \""].into_iter().find(|kind| rest.starts_with(kind))?;
+    let name = &rest[kind.len()..];
+    let close = name.find('"')?;
+    name[close..].starts_with("\")").then_some(2 + kind.len() + close + 2)
+}
+
 fn relative(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
     if rel.is_empty() { ".".to_string() } else { rel }
@@ -708,6 +768,9 @@ fn sibling_names(item: &ast::Item) -> Vec<String> {
             let owner = impl_owner(value);
             let mut names = vec![format!("impl {owner}")];
             names.extend(impl_methods(value).map(|method| format!("{owner}::{}", name_of(&method))));
+            // Each other member with a name is an item (design 56.2).
+            let members = value.assoc_item_list().into_iter().flat_map(|list| list.assoc_items());
+            names.extend(members.filter(|member| !matches!(member, ast::AssocItem::Fn(method) if method.body().is_some())).filter_map(|member| member_name(member.syntax())).map(|name| format!("{owner}::{name}")));
             names
         }
         ast::Item::Struct(value) => vec![name_of(value)],
@@ -720,6 +783,18 @@ fn sibling_names(item: &ast::Item) -> Vec<String> {
         // (batch 6b, part 2): the loader gives each call its own number.
         ast::Item::MacroRules(value) => vec![format!("{}!", name_of(value))],
         other => other_name(other).into_iter().collect(),
+    }
+}
+
+/// The name of a member of a block that is not a macro call (design 56.2): a constant, a
+/// type, a function, or a static.
+fn member_name(node: &SyntaxNode) -> Option<String> {
+    match node.kind() {
+        SyntaxKind::CONST => ast::Const::cast(node.clone()).map(|value| const_name(&value)),
+        SyntaxKind::TYPE_ALIAS => ast::TypeAlias::cast(node.clone()).map(|value| name_of(&value)),
+        SyntaxKind::STATIC => ast::Static::cast(node.clone()).map(|value| name_of(&value)),
+        SyntaxKind::FN => ast::Fn::cast(node.clone()).map(|value| name_of(&value)),
+        _ => None,
     }
 }
 
@@ -983,6 +1058,7 @@ struct Loader<'a> {
     parsed: &'a mut BTreeSet<String>,
     inner_attrs: &'a mut BTreeMap<String, (String, Vec<String>)>,
     inner_attrs_display: &'a mut BTreeMap<String, Vec<String>>,
+    module_files: &'a mut BTreeMap<String, String>,
     parse_errors: &'a mut BTreeMap<String, String>,
     editions: &'a mut BTreeMap<String, Edition>,
     crate_name: &'a str,
@@ -1076,8 +1152,26 @@ impl Loader<'_> {
                         self.add_parts(path, ItemKind::Fn, method.syntax(), &vis_text(&method), &method_attrs, body, Vec::new(), source, is_test, signature);
                         self.set_signature(source, &method);
                     }
+                    // Each other member is an item with the path form of a method (design
+                    // 56.2): a constant, a type, a macro call.
+                    let mut members = Vec::new();
+                    for member in item_impl.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()) {
+                        match &member {
+                            ast::AssocItem::Fn(method) if method.body().is_some() => members.push(both(vec![format!("fn {}", name_of(method))]).remove(0)),
+                            other => {
+                                let mut path_of = |call: bool, name: &str| match call {
+                                    true => {
+                                        let index = call_index.entry(format!("{owner}::{name}")).or_insert(0);
+                                        *index += 1;
+                                        format!("{module}::{owner}::{name}#{}", *index - 1)
+                                    }
+                                    false => format!("{module}::{}", twins.name(&format!("{owner}::{name}"))),
+                                };
+                                members.push(self.add_member(other.syntax(), &mut path_of, source, test));
+                            }
+                        }
+                    }
                     let path = format!("{module}::{}", twins.name(&format!("impl {owner}")));
-                    let members = item_impl.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).map(|member| impl_member(&member)).collect();
                     self.add(path, ItemKind::Impl, item, &Text::default(), &attrs, None, members, source, test);
                 }
                 ast::Item::Struct(item_struct) => {
@@ -1108,10 +1202,8 @@ impl Loader<'_> {
                     // statement edits, and its MIR name is the same path. The member list keeps the
                     // order of the methods and the other trait items as text.
                     let trait_items: Vec<ast::AssocItem> = item_trait.assoc_item_list().into_iter().flat_map(|list| list.assoc_items()).collect();
-                    let mut method_twins = Twins::from_names(trait_items.iter().filter_map(|it| match it {
-                        ast::AssocItem::Fn(method) => Some(name_of(method)),
-                        _ => None,
-                    }));
+                    let mut method_twins = Twins::from_names(trait_items.iter().filter_map(|it| member_name(it.syntax())));
+                    let mut calls: BTreeMap<String, usize> = BTreeMap::new();
                     let mut members = Vec::new();
                     for trait_item in &trait_items {
                         match trait_item {
@@ -1126,7 +1218,19 @@ impl Loader<'_> {
                                 let name = format!("fn {}", name_of(method));
                                 members.push((name.clone(), name));
                             }
-                            other => members.push(node_texts(other.syntax())),
+                            // A constant, a type, and a macro call of a trait are items
+                            // (design 56.2).
+                            other => {
+                                let mut path_of = |call: bool, name: &str| match call {
+                                    true => {
+                                        let index = calls.entry(name.to_string()).or_insert(0);
+                                        *index += 1;
+                                        format!("{path}::{name}#{}", *index - 1)
+                                    }
+                                    false => format!("{path}::{}", method_twins.name(name)),
+                                };
+                                members.push(self.add_member(other.syntax(), &mut path_of, source, test));
+                            }
                         }
                     }
                     self.add(path, ItemKind::Trait, item, &vis_text(item_trait), &attrs, None, members, source, test);
@@ -1167,6 +1271,29 @@ impl Loader<'_> {
                     };
                     self.add(path, ItemKind::Macro, item, &Text::default(), &attrs, None, Vec::new(), source, test);
                 }
+                ast::Item::ExternBlock(block) => {
+                    // A block of foreign items (design 56.2): each member is an item with a
+                    // path in the block. The signature of the block is its header.
+                    let path = format!("{module}::{}", twins.name(&other_name(item).unwrap_or_default()));
+                    let list = block.extern_item_list();
+                    let foreign: Vec<ast::ExternItem> = list.iter().flat_map(|list| list.extern_items()).collect();
+                    let mut member_twins = Twins::from_names(foreign.iter().filter_map(|member| member_name(member.syntax())));
+                    let mut calls: BTreeMap<String, usize> = BTreeMap::new();
+                    let mut members = Vec::new();
+                    for member in &foreign {
+                        let mut path_of = |call: bool, name: &str| match call {
+                            true => {
+                                let index = calls.entry(name.to_string()).or_insert(0);
+                                *index += 1;
+                                format!("{path}::{name}#{}", *index - 1)
+                            }
+                            false => format!("{path}::{}", member_twins.name(name)),
+                        };
+                        members.push(self.add_member(member.syntax(), &mut path_of, source, test));
+                    }
+                    let header = without_parts(block.syntax(), plain_start(block.syntax()), &list.map(|list| list.syntax().clone()).into_iter().collect::<Vec<_>>());
+                    self.add_parts(path, ItemKind::Other, item.syntax(), &Text::default(), &attrs, None, members, source, test, header);
+                }
                 other => {
                     // The name does not have a line number (batch 5n, A3): a new line above the
                     // item must not change its name.
@@ -1177,7 +1304,10 @@ impl Loader<'_> {
                             format!("item#{}", other_index - 1)
                         }
                     };
-                    self.add(format!("{module}::{name}"), ItemKind::Other, item, &Text::default(), &[], None, Vec::new(), source, test);
+                    // The docs and the attributes are parts of their own (design 56.2, rule
+                    // 2): the signature is the text after them.
+                    let signature = without_parts(other.syntax(), plain_start(other.syntax()), &[]);
+                    self.add_parts(format!("{module}::{name}"), ItemKind::Other, item.syntax(), &Text::default(), &attrs, None, Vec::new(), source, test, signature);
                 }
             }
         }
@@ -1194,6 +1324,7 @@ impl Loader<'_> {
     /// Records the inner attributes of a file (`#![…]`). An inner doc comment is stored as a
     /// `//!` line, as in the source. Each other attribute is stored in its token form.
     fn record_inner_attrs(&mut self, module: &str, file: &str, root: &SyntaxNode) {
+        self.module_files.insert(module.to_string(), file.to_string());
         let attrs = attributes(root);
         if !attrs.is_empty() {
             let text = |attr: &Attr| match attr.doc_value() {
@@ -1224,6 +1355,50 @@ impl Loader<'_> {
             names.push(name);
         }
         names
+    }
+
+    /// Adds one member of a block as an item (design 56.2): a constant or a type of an impl
+    /// or of a trait, a function with no body, a static, or a macro call. `path_of` gives the
+    /// path for a name; its first argument is true for a macro call. The result is the entry
+    /// of the member list of the block: the kind and the name.
+    fn add_member(&mut self, node: &SyntaxNode, path_of: &mut dyn FnMut(bool, &str) -> String, source: &Source, test: bool) -> Text {
+        let attrs = attributes(node);
+        let one = |text: String| (text.clone(), text);
+        // The signature of a constant, a type, and a static: the text after the docs, the
+        // attributes, and the visibility.
+        let plain = |node: &SyntaxNode| {
+            let skip: Vec<TextRange> = node.children().filter(|child| matches!(child.kind(), SyntaxKind::VISIBILITY | SyntaxKind::DOC_COMMENT | SyntaxKind::ATTR)).map(|child| child.text_range()).collect();
+            let tokens: Vec<Flat> = flat_tokens(node).into_iter().filter(|token| !skip.iter().any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))).collect();
+            texts(&tokens)
+        };
+        if let Some(value) = ast::Const::cast(node.clone()) {
+            let name = const_name(&value);
+            self.add_parts(path_of(false, &name), ItemKind::Const, node, &vis_text(&value), &attrs, None, Vec::new(), source, test, plain(node));
+            one(format!("const {name}"))
+        } else if let Some(value) = ast::TypeAlias::cast(node.clone()) {
+            let name = name_of(&value);
+            self.add_parts(path_of(false, &name), ItemKind::Type, node, &vis_text(&value), &attrs, None, Vec::new(), source, test, plain(node));
+            one(format!("type {name}"))
+        } else if let Some(value) = ast::Static::cast(node.clone()) {
+            let name = name_of(&value);
+            self.add_parts(path_of(false, &name), ItemKind::Static, node, &vis_text(&value), &attrs, None, Vec::new(), source, test, plain(node));
+            one(format!("static {name}"))
+        } else if let Some(value) = ast::Fn::cast(node.clone()) {
+            let name = name_of(&value);
+            let body = value.body().map(|body| source.builder().block("body", &body));
+            let is_test = test || has_attr(&attrs, "test");
+            self.add_parts(path_of(false, &name), ItemKind::Fn, node, &vis_text(&value), &attrs, body, Vec::new(), source, is_test, texts(&tree::signature_tokens(&value)));
+            self.set_signature(source, &value);
+            one(format!("fn {name}"))
+        } else if let Some(call) = ast::MacroCall::cast(node.clone()) {
+            let name = format!("{}!", compare_opt(call.path().as_ref()));
+            let path = path_of(true, &name);
+            let entry = path.rsplit("::").next().unwrap_or(&name).to_string();
+            self.add_parts(path, ItemKind::Macro, node, &Text::default(), &attrs, None, Vec::new(), source, test, node_texts(node));
+            one(entry)
+        } else {
+            node_texts(node)
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1373,6 +1548,12 @@ fn node_texts(node: &SyntaxNode) -> Text {
     (compare_text(node), display_text(node))
 }
 
+/// The offset of the first token of a node that is not in a doc comment or in an attribute.
+fn plain_start(node: &SyntaxNode) -> usize {
+    let first = node.children_with_tokens().find(|child| !matches!(child.kind(), SyntaxKind::ATTR | SyntaxKind::DOC_COMMENT | SyntaxKind::WHITESPACE | SyntaxKind::COMMENT));
+    first.map_or(usize::from(node.text_range().start()), |child| usize::from(child.text_range().start()))
+}
+
 /// The compare text of a node from a start offset, with each part of `parts` replaced by its
 /// delimiters: a header with its field list `{ }` or `()`.
 fn without_parts(node: &SyntaxNode, start: usize, parts: &[SyntaxNode]) -> Text {
@@ -1397,26 +1578,6 @@ fn without_parts(node: &SyntaxNode, start: usize, parts: &[SyntaxNode]) -> Text 
 /// The offset of the first of the tokens.
 fn first_offset(tokens: impl IntoIterator<Item = Option<SyntaxToken>>) -> usize {
     tokens.into_iter().flatten().map(|token| usize::from(token.text_range().start())).min().unwrap_or(0)
-}
-
-pub(crate) fn impl_member_name(item: &ast::AssocItem) -> String {
-    impl_member(item).0
-}
-
-/// The compare text and the display text of a member of an impl.
-fn impl_member(item: &ast::AssocItem) -> Text {
-    match item {
-        ast::AssocItem::Fn(method) if method.body().is_some() => {
-            let name = format!("fn {}", name_of(method));
-            (name.clone(), name)
-        }
-        // The full text of an associated constant or type, with no attributes and no visibility
-        // (batch 5n, A2): a change of its type or of its value is an edit of the member list. The
-        // text starts with the kind and the name (`const NAME`, `type NAME`).
-        ast::AssocItem::Const(constant) => without_parts(constant.syntax(), first_offset([constant.const_token()]), &[]),
-        ast::AssocItem::TypeAlias(ty) => without_parts(ty.syntax(), first_offset([ty.type_token()]), &[]),
-        other => node_texts(other.syntax()),
-    }
 }
 
 /// The signature text of an item: everything except the body, the docs, and the visibility.
@@ -1576,8 +1737,8 @@ mod tests {
         assert_eq!(total.file, "crates/core-a/src/cart.rs");
         assert!(total.docs.iter().any(|doc| doc.contains("Sum")));
         assert!(total.docs.iter().any(|doc| doc == "// add"));
-        assert!(ws.items["app::tests::t"].test);
-        assert!(!ws.items["app::main"].test);
+        assert!(ws.items["app (bin \"app\")::tests::t"].test);
+        assert!(!ws.items["app (bin \"app\")::main"].test);
         assert_eq!(ws.items["core_a::cart::Cart"].members, ["items"]);
         let field = &ws.items["core_a::cart::Cart.items"];
         assert_eq!((field.kind, field.vis.as_str(), field.signature.as_str()), (ItemKind::Field, "pub", "Vec < u32 >"));
@@ -1629,17 +1790,18 @@ mod tests {
         // The library and the binary are parsed, with their module files.
         assert_eq!(ws.items["tool::top"].file, "code/main.txt");
         assert_eq!(ws.items["tool::part::one"].file, "code/part.rs");
-        assert_eq!(ws.items["tool::license::helper"].file, "LICENSE.txt");
+        assert_eq!(ws.items["tool (bin \"license\")::helper"].file, "LICENSE.txt");
         assert!(ws.parsed_files.contains("LICENSE.txt") && ws.parsed_files.contains("code/main.txt"));
         // The build script, its module, and its include are code that the loader does not parse.
         for file in ["NOTES.md", "gen_code.rs", "table.inc"] {
             assert!(ws.code_files[file].is_build_script(), "{file}");
         }
-        // Batch 5n, A4: an example and a bench are parsed as a binary and a test. A target with
-        // the name of the package is a module of the package.
-        assert_eq!(ws.items["tool::demo::main"].file, "examples/demo.rs");
-        assert_eq!(ws.items["tool::tool::DATA"].file, "benches/tool.rs");
-        assert!(ws.items["tool::tool::main"].test && !ws.items["tool::demo::main"].test);
+        // Batch 5n, A4: an example and a bench are parsed as a binary and a test. Each target
+        // is the root of its own item tree (design 56.1), also a target with the name of the
+        // package.
+        assert_eq!(ws.items["tool (example \"demo\")::main"].file, "examples/demo.rs");
+        assert_eq!(ws.items["tool (bench \"tool\")::DATA"].file, "benches/tool.rs");
+        assert!(ws.items["tool (bench \"tool\")::main"].test && !ws.items["tool (example \"demo\")::main"].test);
         assert!(ws.parsed_files.contains("examples/demo.rs") && !ws.code_files.contains_key("examples/demo.rs"));
         assert!(ws.code_files["vendor/dep/lib.txt"].outside);
         // Each of these files is a Rust file. The plain doc file is not.
@@ -1676,8 +1838,8 @@ mod tests {
         }] });
         let ws = Workspace::load_with_metadata(root, &metadata).unwrap();
         assert_eq!(ws.crates.len(), 1);
-        assert_eq!(ws.items["a::the_tool::main"].file, "crates/a/LICENSE.txt");
-        assert!(ws.items["a::it::works"].test);
+        assert_eq!(ws.items["a (bin \"the-tool\")::main"].file, "crates/a/LICENSE.txt");
+        assert!(ws.items["a (test \"it\")::works"].test);
         assert!(ws.items.contains_key("a::lib_fn"));
         assert!(ws.code_files["crates/a/NOTES.md"].is_build_script());
         assert_eq!(ws.code_files["crates/a/NOTES.md"].role(), "the build script of `a`");

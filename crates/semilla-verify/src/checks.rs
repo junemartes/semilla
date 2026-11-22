@@ -625,8 +625,11 @@ pub fn body_renames(renames: &BTreeMap<String, String>, before: &Workspace, afte
 /// name of a twin (`sys#1::f` in `sys/windows.rs` does not take `sys::f` from `sys#0::f`).
 /// `None`: the files are not known, so each item can give a body.
 pub fn body_renames_read(renames: &BTreeMap<String, String>, before: &Workspace, after: &Workspace, read: [Option<&BTreeSet<String>>; 2]) -> BTreeMap<String, String> {
+    // The name of a compiled body has the crate name of its target, not the target form of
+    // the item path (design 56.1).
+    let compiled_names = |map: BTreeMap<String, String>| -> BTreeMap<String, String> { map.into_iter().map(|(old, new)| (semilla_syntax::load::compiled_path(&old), semilla_syntax::load::compiled_path(&new))).collect() };
     if !renames.iter().any(|(old, new)| old.contains('#') || new.contains('#')) {
-        return renames.clone();
+        return compiled_names(renames.clone());
     }
     // True if only the item `path` of the tree can give a body with the name `plain`.
     let unique = |workspace: &Workspace, path: &str, plain: &str| -> bool {
@@ -673,7 +676,7 @@ pub fn body_renames_read(renames: &BTreeMap<String, String>, before: &Workspace,
             out.insert(old.clone(), new.clone());
         }
     }
-    out
+    compiled_names(out)
 }
 
 /// True if `path` is a child of `parent`: a method or a variant (`parent::x`) or a field

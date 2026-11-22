@@ -247,7 +247,7 @@ fn mcp_flow(repo: &Path) {
     let undone = ask(serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "undo", "arguments": {}}}));
     assert!(undone["result"]["content"][0]["text"].as_str().unwrap().contains("is removed"), "{undone}");
     // A rejected step is a tool error with the cause.
-    let retired = ask(serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "step", "arguments": {"intent": "x", "claims": ["change-literal shop_app::main"]}}}));
+    let retired = ask(serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "step", "arguments": {"intent": "x", "claims": ["change-literal shop_app (bin \"shop-app\")::main"]}}}));
     assert_eq!(retired["result"]["isError"], true, "{retired}");
     assert!(retired["result"]["content"][0]["text"].as_str().unwrap().contains("is retired"), "{retired}");
     drop(stdin);
@@ -677,22 +677,22 @@ fn a_function_moves_to_another_crate() {
     write(repo, "crates/shop-core/src/lib.rs", &core_after);
     write(repo, "crates/shop-app/src/main.rs", &app_after(">"));
     // Design 35.3: Semilla derives each move. The claim `move-item` is gone.
-    let gone = semilla(repo, &["claim", "move-item", "--at", "shop_core::over", "to=shop_app::over"]);
+    let gone = semilla(repo, &["claim", "move-item", "--at", "shop_core::over", "to=shop_app (bin \"shop-app\")::over"]);
     assert_eq!(gone.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&gone.stderr).contains("the claim `move-item` is gone: Semilla derives each rename and each move"), "{}", String::from_utf8_lossy(&gone.stderr));
     let check = run(repo, &["check", "--full"], 0);
     // Design 50: the `use` line gets the new name `LIMIT` because the moved item uses it, and
     // the name gave the same item in the old module. The move fact covers the line.
-    assert!(check.contains("moved `shop_core::over` → `shop_app::over`, with 1 `use` line(s) [move · code equal]"), "{check}");
+    assert!(check.contains("moved `shop_core::over` → `shop_app (bin \"shop-app\")::over`, with 1 `use` line(s) [move · code equal]"), "{check}");
     assert!(!check.contains("uncovered"), "{check}");
 
     // A move with a changed body (batch 7b, part 1): the move fact, and the edit fact has the
     // body.
     write(repo, "crates/shop-app/src/main.rs", &app_after(">="));
     let check = run(repo, &["check", "--full"], 0);
-    assert!(fact_line(&check, "moved `shop_core::over` → `shop_app::over`").ends_with("[move · code equal]"), "{check}");
-    assert!(fact_line(&check, "changed operator `account.balance > LIMIT` → `account.balance >= LIMIT` at `shop_app::over/tail`").ends_with("[semantics · code different]"), "{check}");
-    assert!(check.contains("affected bodies: shop_app::over") && !check.contains("in a step with no other change") && !check.contains("looks like a move"), "{check}");
+    assert!(fact_line(&check, "moved `shop_core::over` → `shop_app (bin \"shop-app\")::over`").ends_with("[move · code equal]"), "{check}");
+    assert!(fact_line(&check, "changed operator `account.balance > LIMIT` → `account.balance >= LIMIT` at `shop_app (bin \"shop-app\")::over/tail`").ends_with("[semantics · code different]"), "{check}");
+    assert!(check.contains("affected bodies: shop_app (bin \"shop-app\")::over") && !check.contains("in a step with no other change") && !check.contains("looks like a move"), "{check}");
     assert!(!check.contains("inactive code"), "{check}");
 }
 
@@ -705,7 +705,7 @@ fn a_note_belongs_to_its_commit_and_tag_needs_an_accepted_set() {
     run(repo, &["old-step", "begin", "raise the max"], 0);
     write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
     // A false claim: `main` prints a line.
-    run(repo, &["claim", "no-io", "--at", "shop_app::main"], 0);
+    run(repo, &["claim", "no-io", "--at", "shop_app (bin \"shop-app\")::main"], 0);
     run(repo, &["old-step", "end"], 0);
     run(repo, &["group", "G1", "--kind", "fix", "--title", "Raise the max", "--steps", "0"], 0);
     commit("raise the max");
@@ -1084,11 +1084,11 @@ fn a_profile_change_shows_its_affected_bodies() {
     write(repo, "Cargo.toml", &format!("{manifest}\n[profile.dev]\noverflow-checks = false\n"));
     let check = run(repo, &["check", "--full"], 1);
     assert!(check.contains("profile.dev.overflow-checks added (false)"), "{check}");
-    // Only the body with the addition changes. Before batch 5g, `shop_app::main` was in the list
+    // Only the body with the addition changes. Before batch 5g, `shop_app (bin "shop-app")::main` was in the list
     // with no change of its MIR: the test build had two bodies with this name (the `main` of the
     // user and the `main` of the test harness), and the profile changes the key of each target.
     assert!(check.contains("affected bodies: shop_core::cart::add\n"), "{check}");
-    assert!(!check.contains("shop_app::main") && !check.contains("test-harness-main"), "{check}");
+    assert!(!check.contains("shop_app (bin \"shop-app\")::main") && !check.contains("test-harness-main"), "{check}");
 }
 
 #[test]
@@ -1098,7 +1098,7 @@ fn status_checks_again_and_tag_closes_the_change_set() {
     run(repo, &["old-step", "begin", "raise the max"], 0);
     write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
     // T2 and T3: the `affects` argument is retired.
-    let retired = semilla(repo, &["claim", "no-panic", "--at", "shop_app::main", "affects=shop_app::main"]);
+    let retired = semilla(repo, &["claim", "no-panic", "--at", "shop_app (bin \"shop-app\")::main", "affects=shop_app (bin \"shop-app\")::main"]);
     assert!(String::from_utf8_lossy(&retired.stderr).contains("`affects` is retired"), "{}", String::from_utf8_lossy(&retired.stderr));
     run(repo, &["old-step", "end"], 0);
     run(repo, &["group", "G1", "--kind", "fix", "--title", "Raise the max", "--steps", "0"], 0);
@@ -1161,7 +1161,7 @@ fn one_command_for_each_step() {
     run(repo, &["step", "no overflow checks", "--group", "Build", "--reason", "Cargo.toml:profile.dev.overflow-checks=the benchmark needs it"], 0);
     // A rename with a position anchor runs phase 2 in the command; the old claims are retired.
     write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
-    let retired = semilla(repo, &["step", "raise the max", "--claim", "change-literal shop_app::main/S1/args[1]/args[0]"]);
+    let retired = semilla(repo, &["step", "raise the max", "--claim", "change-literal shop_app (bin \"shop-app\")::main/S1/args[1]/args[0]"]);
     assert!(String::from_utf8_lossy(&retired.stderr).contains("is retired"));
     run(repo, &["step", "raise the max", "--group", "Build"], 0);
     // No `group` command: `verify --final` and `tag` work with the derived groups.
@@ -1222,7 +1222,7 @@ fn the_first_argument_of_step_is_always_the_intent() {
         assert!(run(repo, &[hidden, "--help"], 0).contains("old protocol"), "{hidden}");
     }
     // A command of the old protocol with no open step names the usual flow.
-    for (args, flag) in [(&["claim", "no-panic", "--at", "shop_core::cart::Cart::total"][..], "--claim"), (&["reason", "--at", "shop_app::main", "why"], "--reason"), (&["unclaim", "c1"], "semilla undo")] {
+    for (args, flag) in [(&["claim", "no-panic", "--at", "shop_core::cart::Cart::total"][..], "--claim"), (&["reason", "--at", "shop_app (bin \"shop-app\")::main", "why"], "--reason"), (&["unclaim", "c1"], "semilla undo")] {
         let output = semilla(repo, args);
         let error = String::from_utf8_lossy(&output.stderr).into_owned();
         assert_eq!(output.status.code(), Some(2), "{error}");
@@ -1263,7 +1263,7 @@ fn the_test_harness_main_is_not_a_body_of_the_user() {
     write(repo, "crates/shop-app/src/main.rs", MAIN_V0);
     let removed = run(repo, &["step", "remove the tests of the binary crate"], 0);
     clean(&removed);
-    assert!(removed.contains("removed `shop_app::tests`") && removed.contains("shop_app::tests::one"), "the test facts own the change: {removed}");
+    assert!(removed.contains("removed `shop_app (bin \"shop-app\")::tests`") && removed.contains("shop_app (bin \"shop-app\")::tests::one"), "the test facts own the change: {removed}");
     // A library crate: the first test, and then the last test goes away.
     write(repo, "crates/shop-core/src/lib.rs", &format!("pub mod cart;\n{one}"));
     clean(&run(repo, &["step", "the first test of the library crate"], 0));
@@ -1276,16 +1276,16 @@ fn the_test_harness_main_is_not_a_body_of_the_user() {
     write(repo, "crates/shop-app/src/main.rs", &format!("{MAIN_V0}{hidden}{one}"));
     let output = semilla(repo, &["step", "the first test again"]);
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(text.lines().any(|line| line.contains("affected bodies:") && line.contains("shop_app::main")), "the changed `main` of the user shows: {text}");
+    assert!(text.lines().any(|line| line.contains("affected bodies:") && line.contains("shop_app (bin \"shop-app\")::main")), "the changed `main` of the user shows: {text}");
     // The same check with the last test removed, and with an edit of the text of `main`.
     if output.status.code() != Some(0) {
-        run(repo, &["step", "the first test again", "--reason", "shop_app::main=the new trait method wins"], 0);
+        run(repo, &["step", "the first test again", "--reason", "shop_app (bin \"shop-app\")::main=the new trait method wins"], 0);
     }
     write(repo, "crates/shop-app/src/main.rs", &format!("{MAIN_V1}{hidden}"));
     let output = semilla(repo, &["step", "remove the test and raise the max"]);
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(text.contains("shop_app::main"), "the edit of `main` shows: {text}");
-    assert!(text.contains("removed `shop_app::tests`"), "{text}");
+    assert!(text.contains("shop_app (bin \"shop-app\")::main"), "the edit of `main` shows: {text}");
+    assert!(text.contains("removed `shop_app (bin \"shop-app\")::tests`"), "{text}");
 }
 
 #[test]
@@ -1318,13 +1318,13 @@ fn a_rename_and_a_move_need_no_claim() {
     write(repo, "crates/shop-core/src/lib.rs", &core_after);
     write(repo, "crates/shop-app/src/main.rs", &app_after(">="));
     let hidden = run(repo, &["step", "move over to the app"], 0);
-    assert!(fact_line(&hidden, "moved `shop_core::over` → `shop_app::over`").ends_with("[move · code equal]"), "{hidden}");
-    assert!(fact_line(&hidden, "changed operator `account.cents > LIMIT` → `account.cents >= LIMIT` at `shop_app::over/tail`").ends_with("[semantics · code different]"), "{hidden}");
+    assert!(fact_line(&hidden, "moved `shop_core::over` → `shop_app (bin \"shop-app\")::over`").ends_with("[move · code equal]"), "{hidden}");
+    assert!(fact_line(&hidden, "changed operator `account.cents > LIMIT` → `account.cents >= LIMIT` at `shop_app (bin \"shop-app\")::over/tail`").ends_with("[semantics · code different]"), "{hidden}");
     assert!(!hidden.contains("removed `shop_core::over`") && !hidden.contains("in a step with no other change") && !hidden.contains("looks like a move"), "{hidden}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-app/src/main.rs", &app_after(">"));
     let moved = run(repo, &["step", "move over to the app"], 0);
-    assert!(moved.contains("moved `shop_core::over` → `shop_app::over`") && moved.contains("[move · code equal]"), "{moved}");
+    assert!(moved.contains("moved `shop_core::over` → `shop_app (bin \"shop-app\")::over`") && moved.contains("[move · code equal]"), "{moved}");
     assert!(moved.contains("public API: a different crate can no longer use `shop_core::over` [move · no code]"), "{moved}");
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "work"]);
     let tagged = run(repo, &["tag"], 0);
@@ -1431,9 +1431,9 @@ fn the_guide_examples_of_calls_only_and_rewrite_pattern() {
     run(repo, &["step", "add over"], 0);
     write(repo, "crates/shop-core/src/lib.rs", "pub mod cart;\n");
     write(repo, "crates/shop-app/src/main.rs", &format!("{}\npub fn over(total: u32) -> bool {{\n    total > 9\n}}\n", MAIN_V0.replace("println!(\"{}\", cart.total(10));", "println!(\"{} {}\", cart.total(10), over(3));")));
-    run(repo, &["step", "move over to the app", "--claim", "move-item shop_core::over to=shop_app::over"], 2);
+    run(repo, &["step", "move over to the app", "--claim", "move-item shop_core::over to=shop_app (bin \"shop-app\")::over"], 2);
     let out = run(repo, &["step", "move over to the app"], 0);
-    assert!(out.contains("moved `shop_core::over` → `shop_app::over`") && out.contains("[move · code equal]"), "{out}");
+    assert!(out.contains("moved `shop_core::over` → `shop_app (bin \"shop-app\")::over`") && out.contains("[move · code equal]"), "{out}");
 }
 
 /// Functions and tests for `tested-by` (batch 5f, A2).
@@ -1766,7 +1766,7 @@ fn tested_by_needs_a_call_in_code_that_can_run() {
     // The closure runs in `Iterator::sum`: Semilla does not prove that the call runs.
     assert!(result(7).contains("partial") && result(7).contains("has a reachable call to `shop_core::cart::seven`, but not on each path"), "c7: {text}");
     // Trial 4, D10: a test name with no path resolves in the workspace. The test is in another crate.
-    assert!(result(8).contains("verified (mir)") && result(8).contains("the test `shop_app::tests::the_app_uses_one` calls `shop_core::cart::one` on each path"), "{text}");
+    assert!(result(8).contains("verified (mir)") && result(8).contains("the test `shop_app (bin \"shop-app\")::tests::the_app_uses_one` calls `shop_core::cart::one` on each path"), "{text}");
     assert!(result(9).contains("refuted") && result(9).contains("does not call `shop_core::cart::two`"), "{text}");
 }
 
@@ -1994,7 +1994,7 @@ fn the_messages_name_the_cause_and_a_command_that_can_succeed() {
     assert!(!help.contains("\n  claim ") && !help.contains("\n  anchor "), "{help}");
     // M4 and M3: a claim that is gone names the cause and the claims that stay.
     write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
-    let out = semilla(repo, &["step", "raise the max", "--claim", "rename shop_app::MAX to=LIMIT"]);
+    let out = semilla(repo, &["step", "raise the max", "--claim", "rename shop_app (bin \"shop-app\")::MAX to=LIMIT"]);
     let text = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(text.contains("the claim `rename` is gone: Semilla derives each rename and each move as a fact") && text.contains("or state the fact with `--same 'rename OLD NEW'`") && text.contains("the claims that stay: no-panic, no-unsafe, no-io, calls-only, tested-by"), "{text}");
@@ -2430,7 +2430,7 @@ fn a_target_file_is_rust_code_whatever_its_name() {
     let out = run(repo, &["step", "reword the license"], 1);
     assert!(out.contains("no checked unit reads the file `crates/shop-app/LICENSE.txt`") && out.contains("--reason 'crates/shop-app/LICENSE.txt=…'"), "{out}");
     let out = run(repo, &["step", "reword the license", "--reason", "crates/shop-app/LICENSE.txt=the limit is in the range"], 0);
-    assert!(out.contains("shop_app::license::limit") && out.contains("[semantics · no compare]") && out.contains("note: no compare: no checked configuration compiles `shop_app::license::limit`"), "{out}");
+    assert!(out.contains("shop_app (bin \"license\")::limit") && out.contains("[semantics · no compare]") && out.contains("note: no compare: no checked configuration compiles `shop_app (bin \"license\")::limit`"), "{out}");
     assert!(!out.contains("LICENSE.txt: changed"), "{out}");
 }
 
@@ -3564,7 +3564,7 @@ fn a_target_with_no_test_harness_has_a_record() {
     commit_all(repo, "add a bench target");
     write(repo, "crates/shop-core/benches/speed.rs", &bench("total"));
     let out = run(repo, &["step", "rename a local"], 0);
-    assert!(out.contains("`shop_core::speed::sum`: renamed local `t` → `total`, 2 edit(s) [rename · code equal]"), "{out}");
+    assert!(out.contains("`shop_core (bench \"speed\")::sum`: renamed local `t` → `total`, 2 edit(s) [rename · code equal]"), "{out}");
     assert!(!out.contains("the build left"), "{out}");
 }
 
@@ -4146,11 +4146,12 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     commit_all(repo, "the base again");
 
     // Batch 5l, B3: the body of an associated constant of a trait impl has a MIR name. The note
-    // names this body. No message asks for a reason.
+    // names this body. No message asks for a reason. The constant is an item (design 56.2),
+    // thus the note has the path of the item.
     let with_const = format!("{}\npub trait K {{\n    const Q: bool;\n}}\nimpl K for u64 {{\n    const Q: bool = cfg!(unix);\n}}\n", base.replace(percent, &format!("{percent}    if !<u64 as K>::Q {{ return 0; }}\n")));
     write(repo, "crates/shop-core/src/lib.rs", &with_const);
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`<u64 as shop_core::K>::Q`)"), "{out}");
+    assert!(out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::<u64 as K>::Q`)"), "{out}");
     assert!(!out.contains("spotlight") && !out.contains("run again"), "{out}");
 }
 
@@ -4476,8 +4477,8 @@ fn a_name_of_the_repository_shows_each_hidden_character() {
     // Batch 5w, part B: a new character outside ASCII in a changed literal needs a reason. A
     // hidden character shows as its escape one time (no second form).
     let out = run(repo, &["step", "odd names"], 1);
-    assert!(out.contains("✗ spotlight: a changed literal has a new character outside ASCII: `\\u{202e}` in `\"\\u{202e}{}\"`; it needs a reason: --reason 'shop_app::main/S1/args[0]=…'"), "{out}");
-    let out = run(repo, &["step", "odd names", "--reason", "shop_app::main/S1/args[0]=a test of the hidden characters"], 0);
+    assert!(out.contains("✗ spotlight: a changed literal has a new character outside ASCII: `\\u{202e}` in `\"\\u{202e}{}\"`; it needs a reason: --reason 'shop_app (bin \"shop-app\")::main/S1/args[0]=…'"), "{out}");
+    let out = run(repo, &["step", "odd names", "--reason", "shop_app (bin \"shop-app\")::main/S1/args[0]=a test of the hidden characters"], 0);
     no_forged_line("step", &out, 0);
     assert!(fact_line(&out, "docs/a").contains("docs/a\\nresult: accepted\\u{1b}[8m.md: added [file · no code]"), "{out}");
     assert!(fact_line(&out, "changed literal").contains("`\"{}\"` → `\"\\u{202e}{}\"`"), "{out}");
@@ -4829,7 +4830,7 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     write(repo, "crates/shop-core/src/lib.rs", &base);
     write(repo, "crates/shop-core/tests/it.rs", &test_base.replace("{ a / m::lim() }", "{ a / lim() }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(test))]`), which Semilla did not check (`shop_core::it::via`)"), "{out}");
+    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(test))]`), which Semilla did not check (`shop_core (test \"it\")::via`)"), "{out}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-core/tests/it.rs", &test_base);
 
@@ -6296,21 +6297,21 @@ fn a_new_test_above_other_tests_in_a_test_file_gives_one_fact() {
     let helper = "#[track_caller]\nfn check(n: u32) {\n    assert!(n > 0);\n}\n";
     let old_tests = "\n#[test]\nfn test_one() {\n    check(1);\n}\n\n#[test]\nfn test_two() {\n    check(2);\n}\n";
     write(repo, file, &format!("{helper}{old_tests}"));
-    run(repo, &["step", "a test file", "--reason", "shop_core::req::check=the panic location of the caller"], 0);
+    run(repo, &["step", "a test file", "--reason", "shop_core (test \"req\")::check=the panic location of the caller"], 0);
     let new_test = "\n#[test]\nfn test_new() {\n    check(3);\n}\n";
     write(repo, file, &format!("{helper}{new_test}{old_tests}"));
     let out = run(repo, &["step", "a new test above"], 0);
-    assert!(out.contains("derived: added `shop_core::req::test_new` [added · code different]"), "{out}");
+    assert!(out.contains("derived: added `shop_core (test \"req\")::test_new` [added · code different]"), "{out}");
     assert_eq!(out.matches("derived:").count(), 1, "one fact\n{out}");
     assert!(!out.contains("indirect change") && !out.contains("needs a reason"), "{out}");
     // A real change of a test below the new lines stays a fact of that test.
     write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)")));
     let out = run(repo, &["step", "a changed test"], 0);
-    assert!(out.contains("shop_core::req::test_two") && out.matches("derived:").count() == 1, "{out}");
+    assert!(out.contains("shop_core (test \"req\")::test_two") && out.matches("derived:").count() == 1, "{out}");
     // A changed attribute of a test is a part of the descriptor: the fact stays.
     write(repo, file, &format!("{helper}{new_test}{}", old_tests.replace("check(2)", "check(4)").replace("#[test]\nfn test_one", "#[test]\n#[should_panic]\nfn test_one")));
     let out = run(repo, &["step", "a test that must panic"], 1);
-    assert!(out.contains("a changed attribute that can change the behavior: `should_panic`") && out.contains("[attribute · code different]") && out.contains("! the compiled code changes: shop_core::req::test_one"), "{out}");
+    assert!(out.contains("a changed attribute that can change the behavior: `should_panic`") && out.contains("[attribute · code different]") && out.contains("! the compiled code changes: shop_core (test \"req\")::test_one"), "{out}");
 }
 
 /// Runs a command line of Semilla through the shell, as an agent does.
@@ -6797,7 +6798,7 @@ fn the_symbol_links_give_each_changed_body_to_the_edit_of_its_symbol() {
         lines[start..end].join("\n")
     };
     let value = block("value of `shop_core::links::LIMIT` changed");
-    assert!(value.contains("code different]") && value.contains("shop_core::links::over") && value.contains("shop_core::links::both") && value.contains("shop_app::main"), "{value}\n{out}");
+    assert!(value.contains("code different]") && value.contains("shop_core::links::over") && value.contains("shop_core::links::both") && value.contains("shop_app (bin \"shop-app\")::main"), "{value}\n{out}");
     assert!(value.contains("through: `shop_core::links::LIMIT`"), "{value}");
     assert!(block("type of `shop_core::links::Num`").contains("shop_core::links::inc"), "{out}");
     assert!(block("type of `shop_core::links::P.x`").contains("shop_core::links::big"), "{out}");
@@ -8089,7 +8090,8 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let report = std::fs::read_to_string(&md).unwrap();
     assert!(report.contains("#### Tags of the agent (3)\n") && report.contains(&format!("Step 0, tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s):\n\n- step 0: f1 derived: ")), "{report}");
     assert!(report.contains("- also in this tag, shown in a tag above: f6\n") && report.contains("Step 0, not in a tag: 2 fact(s): 2 semantics; 4 changed line(s):\n"), "{report}");
-    assert!(report.contains("in: `shop_core::facts::inner::a`; not in a tag\n") && report.contains("; tag: `method calls`\n"), "{report}");
+    // The gap line has the lines of its edits (a short list), then the tag.
+    assert!(report.contains(&format!("in: `shop_core::facts::inner::a`; lines: {file}:33, {file}:-27; not in a tag\n")) && report.contains(&format!("{file}:-17; tag: `method calls`\n")), "{report}");
     assert!(!report.contains("#### Derived facts") && report.contains("  - facts, in the groups of the tags below: f3, f4\n"), "{report}");
     for id in ["f1", "f2", "f3", "f4", "f5", "f6", "f7"] {
         assert_eq!(report.matches(&format!("- step 0: {id} ")).count(), 1, "{id}\n{report}");
@@ -8152,4 +8154,60 @@ fn the_mcp_tools_and_a_plan_step_take_tags() {
     assert_eq!(session_steps(repo)[0]["tags"], serde_json::json!([format!("{file}:11-17=method calls")]));
     let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
     assert!(verbose.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n")), "{verbose}");
+}
+
+/// Design 55.1 and 55.3 (batch 9b4b, P1 and P2.1): the step output names the line diff command
+/// with the two trees of the step. The hunks of the command are the hunks of Semilla: one tag
+/// with each hunk header has each changed line and each fact, and no fact is "not in a tag".
+#[test]
+fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
+    let dir = facts_setup();
+    let repo = &dir.path().join("repo");
+    let (code, out) = tree_mode(repo, &["step", "use the method"]);
+    assert_eq!(code, Some(0), "{out}");
+    let line = out.lines().find(|line| line.starts_with("  hunks: `git diff -U0 ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(line.starts_with("  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color "), "{line}");
+    let command: Vec<&str> = line.trim_start_matches("  hunks: `").trim_end_matches('`').split(' ').collect();
+    assert_eq!(command.len(), 14, "{command:?}");
+    // The agent runs the command, and makes one place from each hunk header.
+    let diff = git(repo, &command[1..]);
+    let mut places = Vec::new();
+    let mut lines = 0;
+    let mut file = String::new();
+    for line in diff.lines() {
+        if let Some(name) = line.strip_prefix("+++ b/") {
+            file = name.to_string();
+        } else if let Some(header) = line.strip_prefix("@@ -") {
+            let (old, rest) = header.split_once(" +").unwrap();
+            let new = rest.split_once(" @@").unwrap().0;
+            let count = |side: &str| side.split_once(',').map_or(1, |(_, count)| count.parse::<usize>().unwrap());
+            lines += count(old) + count(new);
+            let side = |side: &str| if side.contains(',') { side.to_string() } else { format!("{side},1") };
+            places.push(if count(new) == 0 { format!("{file}:-{}", side(old)) } else { format!("{file}:+{}", side(new)) });
+        }
+    }
+    assert!(places.len() >= 5 && lines == 18, "{places:?} {lines}\n{diff}");
+    assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
+    let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{}=each hunk", places.join(","))]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("): 7 fact(s): 7 semantics; 18 changed line(s)\n"), "{out}");
+    assert!(!out.contains("not in a tag") && !out.contains("in part") && !out.contains("facts with no position"), "{out}");
+    // The help of the option names the command.
+    let (_, help) = tree_mode(repo, &["step", "--help"]);
+    assert!(help.contains("git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color"), "{help}");
+
+    // Negative test: with no line diff of git, the output does not name the git command. It
+    // names the command that prints the hunks of Semilla, and that command prints them.
+    let dir = facts_setup();
+    let repo = &dir.path().join("repo");
+    let own = |args: &[&str]| {
+        let output = semilla_env(repo, args, &[("SEMILLA_COMPILED", "0"), ("SEMILLA_OWN_LINE_DIFF", "1")]);
+        format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
+    };
+    let out = own(&["step", "use the method"]);
+    assert!(!out.contains("git diff -U0") && out.contains("\n  hunks: git gave no line diff of this step; the "), "{out}");
+    assert!(out.contains(" hunk(s) are the hunks of the line diff of Semilla (`semilla status --verbose` prints them)\n"), "{out}");
+    assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
+    let verbose = own(&["status", "--verbose"]);
+    assert!(verbose.contains(" hunk(s) are the hunks of the line diff of Semilla:\n    crates/shop-core/src/facts.rs @@ -"), "{verbose}");
 }

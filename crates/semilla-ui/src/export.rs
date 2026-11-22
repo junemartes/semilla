@@ -1341,6 +1341,10 @@ fn in_tagged_step(model: &Model, view: &crate::summary::FactView) -> bool {
     model.report().steps.iter().any(|step| step.step == view.step && !step.tags.is_empty())
 }
 
+/// The largest count of positions that a gap line of the Markdown review shows. A gap with
+/// more positions has them in `semilla status --verbose`.
+const GAP_POSITIONS_MAX: usize = 6;
+
 /// The lines of the cover check of the steps that need the reader (design 55.4): the changed
 /// lines with no fact.
 fn no_fact_lines(reports: &[&semilla_core::report::StepReport]) -> Vec<String> {
@@ -1515,7 +1519,10 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         for step in &reports {
             for gap in &step.gaps {
                 let tags = step.tags_of(&gap.facts).map(|tags| format!("; {}", md_with_code(&tags))).unwrap_or_default();
-                let _ = writeln!(out, "- step {}: {}; in: {}{tags}", step.step, md_with_code(&gap.line()), gap.items.iter().map(|item| code(item)).collect::<Vec<_>>().join(", "));
+                // The lines of the edits (design 55.2), if the list is short.
+                let positions = step.positions_of(&gap.facts);
+                let lines = if positions.is_empty() || positions.len() > GAP_POSITIONS_MAX { String::new() } else { format!("; lines: {}", md(&semilla_core::Position::list(&positions))) };
+                let _ = writeln!(out, "- step {}: {}; in: {}{lines}{tags}", step.step, md_with_code(&gap.line()), gap.items.iter().map(|item| code(item)).collect::<Vec<_>>().join(", "));
             }
         }
         out.push('\n');
@@ -1532,15 +1539,15 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         for step in reports.iter().filter(|step| !step.tags.is_empty()) {
             for (index, tag) in step.tags.iter().enumerate() {
                 let _ = writeln!(out, "Step {}, {}:\n", step.step, md_with_code(&step.tag_head(tag)));
-                let first = |id: &str| step.tags.iter().position(|other| other.facts.iter().any(|fact| fact == id)) == Some(index);
-                let facts = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| first(&view.fact.id));
+                let group = semilla_core::report::TagGroup::Tag(index);
+                let facts = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| step.tag_group(&view.fact) == group);
                 md_fact_items(out, &facts, "");
-                let earlier: Vec<&str> = tag.facts.iter().filter(|id| !first(id)).map(String::as_str).collect();
-                if !earlier.is_empty() {
-                    let _ = writeln!(out, "- also in this tag, shown in a tag above: {}", earlier.join(", "));
+                for (ids, place) in step.shown_in_other_tag(index).iter().zip(["above", "below"]).filter(|(ids, _)| !ids.is_empty()) {
+                    let _ = writeln!(out, "- also in this tag, shown in a tag {place}: {}", ids.join(", "));
                 }
+                // Design 55.3, rule 5: a fact that is in the tag in part, with its other lines.
                 for note in &tag.notes {
-                    let _ = writeln!(out, "- note: {}", md_with_code(note));
+                    let _ = writeln!(out, "- {}", md_with_code(note));
                 }
                 out.push('\n');
             }
@@ -1548,6 +1555,13 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
             if !outside.is_empty() {
                 let _ = writeln!(out, "Step {}, not in a tag: {}; {} changed line(s):\n", step.step, step.count_text(&outside), step.line_count(&outside));
                 let facts = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| outside.contains(&view.fact.id));
+                md_fact_list(out, &facts);
+            }
+            // Design 55.3, rule 6: a fact with no position is not a part of the count above.
+            let unplaced = step.no_position();
+            if !unplaced.is_empty() {
+                let _ = writeln!(out, "Step {}, facts with no position (a tag selects changed lines; these facts have none): {}:\n", step.step, step.count_text(&unplaced));
+                let facts = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| unplaced.contains(&view.fact.id));
                 md_fact_list(out, &facts);
             }
         }
@@ -1616,7 +1630,7 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
         let _ = writeln!(out, "<h4>Tags of the agent ({tags})</h4>\n<p class=\"muted\">A tag is a name of the agent for a part of a step. It is not a fact.</p>\n<ul class=\"tags\">");
         for step in &reports {
             for tag in &step.tags {
-                let _ = writeln!(out, "<li>step {}: {}; facts: {}</li>", step.step, esc(&step.tag_head(tag)), esc(&tag.facts.join(", ")));
+                let _ = writeln!(out, "<li>step {}: {}; facts: {}</li>", step.step, esc(&step.tag_head(tag)), esc(&tag.facts.iter().chain(&tag.partial).cloned().collect::<Vec<_>>().join(", ")));
             }
         }
         out.push_str("</ul>\n");

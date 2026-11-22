@@ -175,6 +175,9 @@ impl App {
         } else {
             // The parser of a position is the parser of a place of a tag (design 55.3).
             let place = semilla_core::Place::parse(spec).map_err(|error| anyhow::anyhow!("{error}"))?;
+            if place.empty {
+                bail!("`{spec}` has no line: a hunk side with the count 0 has no line in this tree; use the other side of the hunk");
+            }
             match place.lines {
                 Some((true, ..)) => bail!("`{spec}` gives lines of the old tree; `semilla replay take` copies lines of the target: write FILE:LINE or FILE:START-END"),
                 Some((false, start, end)) => (place.file, Box::new(move |h: &Hunk| overlaps(h.new_range(), (start, end)))),

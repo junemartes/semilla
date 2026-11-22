@@ -35,6 +35,7 @@ pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
 mod uncompiled;
 pub mod pattern;
+mod linediff;
 mod positions;
 mod tags;
 pub mod views;
@@ -2895,44 +2896,11 @@ pub fn api_level(edits: &[Edit], before: &Workspace, after: &Workspace) -> (&'st
                 }
                 continue;
             }
-            // A new or removed inherent impl (design 36.2): each `pub` constant and type. A
-            // method is an item with its own edit.
-            let item = anchor.as_ref().and_then(|a| ws.items.get(&a.item)).filter(|item| item.kind == semilla_syntax::ItemKind::Impl && !item.path.contains(" as "));
-            if let Some(item) = item {
-                for member in item.members.iter().filter(|member| member.starts_with("const ") || member.starts_with("type ")) {
-                    let name = member.split_whitespace().nth(1).unwrap_or("");
-                    if assoc_reach(ws, &item.path, name) != Reach::No {
-                        let path = facts::assoc_path(&item.path, name);
-                        match edit.kind {
-                            EditKind::ItemAdded => minor.push(format!("added `{path}`")),
-                            _ => major.push(format!("removed `{path}`")),
-                        }
-                    }
-                }
+            // A new or removed inherent impl: each member is an item with its own edit
+            // (design 56.2). The impl has no line of its own.
+            if anchor.as_ref().and_then(|a| ws.items.get(&a.item)).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Impl && !item.path.contains(" as ")) {
                 continue;
             }
-        }
-        // An associated constant or type of an impl (design 36.2). If Semilla cannot decide
-        // if a different crate can use the item, the level is the higher level.
-        if let Some((_, name)) = facts::impl_member(edit) {
-            let impl_path = edit.anchor().map(|a| a.item.clone()).unwrap_or_default();
-            let path = facts::assoc_path(&impl_path, name);
-            let (was, now) = (assoc_reach(before, &impl_path, name) != Reach::No, assoc_reach(after, &impl_path, name) != Reach::No);
-            match (edit.source_before.is_some(), edit.source_after.is_some()) {
-                (false, true) if now => minor.push(format!("added `{path}`")),
-                (true, false) if was => major.push(format!("removed `{path}`")),
-                (true, true) if was || now => major.push(format!("changed `{path}` (the type or the value)")),
-                _ => {}
-            }
-            continue;
-        }
-        if let Some((part, name)) = facts::assoc_label(edit) {
-            let impl_path = edit.anchor().map(|a| a.item.clone()).unwrap_or_default();
-            if assoc_reach(before, &impl_path, name) != Reach::No || assoc_reach(after, &impl_path, name) != Reach::No {
-                let part = if part == "attribute" { "attributes" } else { part };
-                major.push(format!("{part} of `{}`", facts::assoc_path(&impl_path, name)));
-            }
-            continue;
         }
         // The bounds of a declaration with an equal set of predicates (batch 6b, part 3): the
         // order of the bounds and the place of a bound are not a part of the public API.

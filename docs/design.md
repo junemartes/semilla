@@ -5356,6 +5356,8 @@ The rules of this section:
 - The facts of Semilla cover the full diff. The cover check finds each changed line that is in no fact.
 - **Soundness.** No rule of this section hides an edit. A tag changes no fact, no line of the gap list, and no result of a step. A changed line with no fact is printed with the mark `!`.
 
+Batch 9b4b corrects this section: the line diff of a step is the diff of one `git diff` command (55.8), a tag selects hunks (55.3), and the classes of 55.5 have more general rules (section 56).
+
 ### 55.1 The text of an attribute fact (D1)
 
 **The defect.** An attribute fact showed only the short form of a derive list. A second change of the attributes of the same item was not in the text. The category of the fact came from a text search in the text of the fact.
@@ -5394,11 +5396,11 @@ Decided by Claude: the list is a record for a later batch. Each entry needs a fi
 
 **The rules** (each one is "Decided by Claude"):
 
-1. *Changed lines only.* The position of an edit is each changed line of the line diff in the lines of its node. If the lines of the node have no changed line, Semilla uses the wider node of the edit. If that node also has no changed line, the position is the lines of the edit (a statement at a new place between equal lines).
+1. *Changed lines only.* Each line of a position is a changed line of the line diff of the step (55.8). The position of an edit is each changed line in the lines of its node.
 2. *Two sides.* An edit that changes a text has lines of the old tree and lines of the new tree. An added text has lines of the new tree. A deleted text has lines of the old tree.
-3. *The line diff agrees with the tree.* A line diff can put a block of added or removed lines at more than one place (a closing brace between two blocks). For each hunk, Semilla takes the equal diff whose changed lines agree best with the lines of the edits. The count of the changed lines does not change.
-4. *A rename.* Each changed line whose tokens are equal after the map of the names of a rename fact is a line of that fact. The lines with no fact pair their tokens first. Then a `use` line of the rename does not lose its pair to an added `use` line with the same words.
-5. *An item that goes with a move or a rename.* The map of the paths gives each item that goes with a `move` fact or a `rename` fact (an `impl` of a moved type, each item of a module with a new name). Each changed line of such an item that no other fact has is a line of that fact. The soundness rule of 49.3 holds: a difference after the map is an edit with its own fact. The lines of these items also guide rule 3.
+3. *The lines of git.* A line diff can put a block of added or removed lines at more than one place (a closing brace between two blocks). Semilla moves such a block to the place that agrees with the edits of the tree, only to find the fact of each line. The position that it prints is the line of the command: the two lines have the same text. Thus a block at a slid place has the lines that git shows.
+4. *A rename, and an item that goes with a move or a rename.* Each changed line whose tokens are equal after the map of the names of a rename fact is a line of that fact. The lines with no fact pair their tokens first. Then a `use` line of the rename does not lose its pair to an added `use` line with the same words. The map of the paths gives each item that goes with a `move` fact or a `rename` fact (an `impl` of a moved type, each item of a module with a new name). Each changed line of such an item that no other fact has is a line of that fact. The soundness rule of 49.3 holds: a difference after the map is an edit with its own fact. The lines of these items also guide rule 3.
+5. *A fact whose own lines are all equal lines.* A statement can go to a new place between lines that the command shows as equal lines. The fact gets the changed lines of the smallest wider node that has a changed line: the node above the node of the edit, then the item, then each item around it, then the file. The rule gives a position only: it gives no line to the cover check. The stored step has the count of these facts (`wider_facts`).
 6. *A fact with no position.* An `indirect` fact has no edit in the step, thus it has no position. A fact of the public API with no edit of its own ("a `pub use` line names …") also has none.
 7. *A file that Semilla does not parse.* The fact of the file has each changed line of the file.
 8. *A doc test.* The fact of a doc test has the changed lines of the code block in the docs.
@@ -5417,17 +5419,24 @@ Decided by Claude: the list is a record for a later batch. Each entry needs a fi
 
 **A place.** `FILE` (the full file, the two trees), `FILE:LINE`, `FILE:START-END`, `FILE:-LINE`, `FILE:-START-END`. Semilla also reads the two sides of a hunk header: `FILE:+START,COUNT` and `FILE:-START,COUNT`. The name is the text after the first `=`.
 
-**The rule of a tag.** A tag has each fact whose edit is fully in its places. The places of one tag can share the lines of a fact between them.
+**The rule of a tag** (the brief of batch 9b4b, P2.1):
+
+1. The unit of a tag is the hunk of the line diff of 55.8.
+2. A place selects changed lines. A place that has the full new side of a hunk, or the full old side, selects the two sides of that hunk. A place `FILE` selects each hunk of the file. A place that has a part of a side selects only the changed lines in its range.
+3. A hunk with no line on one side needs a place of the side that has lines. The forms `FILE:+START,COUNT` and `FILE:-START,COUNT` take the numbers of the hunk header as git prints them. A side with the count 0 is a full side: it names its hunk.
+4. A fact is in a tag if each line of its position is a selected line of the tag. The places of one tag can share the lines of a fact between them.
+5. A fact with lines in the tag and lines out of it shows with the tag and the mark "in part", with the lines that are not in the tag. It is not in the group "not in a tag". A fact that is fully in a different tag shows there.
+6. A fact with no position (55.2, rule 6) is not a part of the count "not in a tag". These facts have their own line: "facts with no position (a tag selects changed lines; these facts have none): …".
 
 Decided by Claude:
 
-- *The two sides.* The two sides of a fact are the two sides of one change. A fact is in the tag if each of its new-tree lines is in the places, or each of its old-tree lines is. A range of the new tree does not have a deleted text: a deleted text needs a place of the old tree.
-- *A part of a fact.* A fact with only a part of its lines in the tag is not in the tag. The output has a note with the full position of the fact.
+- *The two sides.* The rule of batch 9b4 stays for a place that has a part of a hunk: a fact is also in the tag if each of its new-tree lines is a selected line, or each of its old-tree lines is. A range of the new tree that is not a full side of a hunk does not select a deleted text.
+- *A part of a fact.* Batch 9b4 put such a fact in the group "not in a tag", with a note. Now rule 5 applies: the fact shows with the first tag that has a part of it.
 - *A tag is a field of the step.* The step stores the text of each tag. Semilla finds the facts of a tag again in each check. A tag is not in the list of the agent facts.
 - *Errors.* A text that is not a tag, or a line number after the last line of the file, is a form error (exit code 2); no step is stored. A place with no edit in its lines makes the step not accepted (exit code 1). The message names the nearest positions with an edit, or the changed files. It is a hard problem of a plan step. The command to run again omits the tag with the error.
 - *`semilla fact --tag`* adds a tag to a stored step. It can add a tag with no fact of the agent. A tag with an error adds nothing.
 - *A fact of two tags* shows in its first tag. Each later tag names it ("also in this tag, shown in a tag above").
-- *The count of a tag* is the count of the changed lines of its facts, on the two sides.
+- *The head line of a tag* has the count of the facts by rule 4, the count of the facts in part by rule 5 (only if it is not zero), and the count of the changed lines that the places select, on the two sides: "tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)". Equal facts stay one line with the count (`× N`), as in the output with no tag.
 
 **A tag does not replace a fact.** A tag makes no claim about the behavior. A step with a tag has the same facts, the same gap list, and the same result as the step with no tag. A test compares the two outputs line by line, and it compares the stored facts.
 
@@ -5454,9 +5463,9 @@ A changed line with no fact is a defect of Semilla. It is not an error of the ag
 
 Decided by Claude:
 
-- The count of the changed lines is the count of Semilla (rule 3 of 55.2), on the two sides. A file at a new path counts as a removed file and an added file.
+- The count of the changed lines is the count of the lines of the command of 55.8, on the two sides. A file at a new path counts as a removed file and an added file.
 - The short `status`, the Markdown review, and the local UI print only the `!` lines.
-- A line that no rule of 55.5 explains stays in the marked line. No rule puts a line in a fact only to make the count zero.
+- A line that no rule of 55.5 explains stays in the marked line. No rule puts a line in a fact only to make the count zero. The full text gives the cause of each such line (56.4).
 
 ### 55.5 The classes of a changed line with no edit
 
@@ -5471,14 +5480,14 @@ A changed line can have no difference of the syntax tree, or a difference that t
 
 **The classes that the fixtures gave.**
 
-- *The inner lines of a module file.* An inner attribute or an inner doc line of the file of `mod a;` belongs to the item `a`, and the item is in a different file. The position is in the file of the module.
+- *The inner lines of a module file.* An inner attribute or an inner doc line of the file of `mod a;` belongs to the item `a`, and the item is in a different file. The position is in the file of the module. A module whose file changes pairs its inner lines across the two files (56.3).
 - *The inner lines of a removed file.* They are lines of the fact of the removed module. A plain comment of the file keeps its own comment fact.
 - *A doc comment in a token tree.* A doc comment in a macro body is a token of the macro. It is code: the fact of the macro has the line. A doc comment of an item stays a line of the docs.
 - *A doc attribute with a text.* `#[doc = "…"]` and `#![doc = include_str!(…)]` are docs. `#[doc(hidden)]` is an attribute.
 - *A delimiter line.* A line whose tokens with no pair are only delimiters (`{ } ( ) [ ] , ;`) has no meaning alone. It joins the nearest fact of its hunk on its side. With no fact in the hunk, the line stays open.
 - *A line that waits.* A line with equal tokens in a hunk that has a changed token with no fact waits for the later rules. If each such token gets a fact, the line joins the nearest fact, or it is a layout line. If a token stays with no fact, the line stays with it in the marked line.
-- *The same items in a new order.* A module item with equal tokens at a new place in its container is a layout line ("N changed lines of M items with equal tokens at a new place"). A macro has a textual scope. Thus an item that can give a macro does not go to a new place: a `macro_rules!` definition, an item with a definition in it, an item with `#[macro_use]`, a macro call. Each other item goes to a new place only between the same such items. A `use` line has no such limit.
-- *The item pair.* The line diff can pair the lines of an old item with the lines of a different new item. The tree pairs the old item with its new item. A changed line whose tokens all have a pair in the item pair is not a difference of the item. It joins the rename fact of a word on the line, else the nearest fact of the item, else the layout fact. The rule needs the two items in one file, between the same items that can give a macro. It does not apply to a `use` line or a module.
+- *The same items in a new order.* A module item with equal tokens at a new place in its container is a layout line ("N changed lines of M items with equal tokens at a new place"). A macro has a textual scope. Thus a new order across an item that can give a macro is not a layout change: it gets a fact of the category `macro` (56.5). A `use` line with two segments or more has no order meaning. The same members of an impl, a trait, or an `extern` block in a new order are a layout change (56.2).
+- *The item pair.* The line diff can pair the lines of an old item with the lines of a different new item. The tree pairs the old item with its new item. A changed line whose tokens all have a pair in the item pair is not a difference of the item. It joins the rename fact of a word on the line, else the nearest fact of the item, else the layout fact. The rule needs the two items in one container. A new item that can give a macro between the two places does not stop the rule, if the order check of 56.5 examined the pair (56.4).
 
 **Soundness of the classes.** Each rule needs equal tokens (after the map of a rename or a move), or a line with only delimiters next to an edit with a fact. A token that differs and has no fact keeps its line in the marked line. Each rule has a test with a negative test.
 
@@ -5503,11 +5512,215 @@ The fact lines of the default step output (the binary of batch 9b3 against this 
 
 The time of a step on the ten fixtures: 2.80 s before and 3.25 s after, as a sum (the smallest of three runs for each fixture).
 
+Batch 9b4b has its own measure in 56.6. The counts above use the line diff of Semilla of batch 9b4.
+
 ### 55.7 The limits and the open questions
 
-- A fact can have a position on a line that `git diff` shows as an equal line. Semilla uses its own line pairs (rule 3 of 55.2). On the fixtures, 39 lines of the positions are not changed lines (rule 1 of 55.2, the last case).
+- (Removed by batch 9b4b.) A fact had a position on a line that `git diff` shows as an equal line. Now each line of a position is a changed line of the command of 55.8.
 - The closing brace of a moved item can be a line of the visibility fact of the item: the delimiter rule runs before the move rule.
-- The item pair rule and the rule of the item order do not apply to an item that can give a macro. Its lines stay in the marked line.
+- (Removed by batch 9b4b.) The item pair rule and the rule of the item order did not apply to an item that can give a macro. Now 56.4 and 56.5 apply.
 - A gap with many places has a long `lines:` line.
-- The short `status` does not list the tags. The gap lines of the Markdown review have no positions.
-- A range of the new tree does not have a deleted text. The message of a place with no edit names the nearest positions with an edit, in the two trees.
+- The short `status` does not list the tags. A gap line of the Markdown review has its positions ("; lines: …") only if the gap has 6 positions or less (Decided by Claude: a larger list makes the line too long; `semilla status --verbose` has each position).
+- A range of the new tree that is not the full new side of a hunk does not select a deleted text. The message of a place with no edit names the nearest positions with an edit, in the two trees.
+
+### 55.8 The line diff of a step (batch 9b4b, P1)
+
+Batch 9b4 used the line diff of Semilla. Its changed lines were not always the changed lines that `git diff` shows, and an agent reads the hunk positions from `git diff`. The rule of the user for batch 9b4b: a step has one line diff.
+
+**The command.** The changed lines of a step are the lines that this command shows between the old tree and the new tree of the step:
+
+    git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color OLD_TREE NEW_TREE
+
+Each option is explicit, so the configuration of the user does not change the hunks. Decided by Claude: the algorithm (`myers`) and the indent heuristic are the defaults of git.
+
+**The rules.**
+
+1. Each line of a fact position is a changed line of this diff (55.2).
+2. The cover check counts these lines (55.4).
+3. A tag place selects these lines, and the unit of a tag is a hunk of this diff (55.3).
+4. The step output prints the command with the two tree identifiers of the step (a line `hunks: …`). The agent guide and the help of `--tag` name the command.
+
+**How Semilla runs it.** Decided by Claude: Semilla has the two trees as texts in memory, for each route (a step, a replay, a plan step, the MCP tools). It writes the changed text files of the two trees to a temporary folder and runs the command there with `--no-index`. A file has its index as its name: a name has no effect on the lines of a diff, and no file of the trees can be a configuration file or an attribute file of the command. The command gets no user configuration, no system configuration, and no attribute file. Semilla checks the result: each line that is in no hunk is equal in the two texts. A test compares the hunks with the hunks of the command on the two trees of a repository.
+
+**If git gives no line diff** (git does not start, or the check of the result fails), Semilla uses its own line diff for the step. The stored step has the mark `own_diff`. The step output says "hunks: git gave no line diff of this step; the N hunk(s) are the hunks of the line diff of Semilla", and `semilla status --verbose` prints each hunk header. The variable `SEMILLA_OWN_LINE_DIFF` selects this route for a test. No route of the product needs it in normal use.
+
+**The record.** The stored step has the hunks (`hunks`), the two trees (`diff_trees`), the mark `own_diff`, and the count `wider_facts`. A record of an earlier version has none of them: Semilla prints no hunk line for it.
+
+**Limits.**
+
+- A changed file that is not UTF-8 text is not a text of the two trees. Its fact (`FILE: changed (binary file changed)`, the category `file`) has no position, and the cover check counts no line of it. The command has `--text`, thus it shows hunks for such a file. A tag place in the file is a place with no edit. Open question: give such a fact the lines of the command, or remove `--text` from the command (then git decides by its own rule what a binary file is).
+- Semilla starts one `git` process for each step. The time is in 56.6.
+
+## 56. Batch 9b4b: one identity for each item, and a fact for each changed line
+
+The brief of batch 9b4b has seven parts. P1 and P2 are in 55.8, 55.2, and 55.3. This section has P3 to P7. Each rule is general: it names a node kind or a relation of the tree, not one case.
+
+**Soundness.** No rule of this section hides an edit of the author. A rule that puts a line in a fact needs equal tokens in a pair of the tree compare, or a fact that shows the edit of the line.
+
+### 56.1 The identity of an item has its target (P3)
+
+**The defect.** A target file with the name of a library module (`tests/list.rs` next to `mod list;`) shared an identity with the module. An edit of the inner docs of `src/list.rs` had no fact. Two functions with one name in the two files were twins (`first#0`, `first#1`), and a step that removed one of them gave two false facts.
+
+**The rule.** An item belongs to one target. The root file of a target is the root of its own item tree. Two items of two different targets never share an identity, a path, or a pair in the tree compare.
+
+**The path form.** Decided by Claude: the root of the library is the package name, as before. The root of each other target is the form that cargo prints for a target: `PACKAGE (KIND "NAME")`.
+
+| Target | File (example) | Path of an item |
+|---|---|---|
+| library | `src/lib.rs` | `depot::first` |
+| binary | `src/main.rs` | `depot (bin "depot")::first` |
+| binary | `src/bin/list.rs` | `depot (bin "list")::first` |
+| integration test | `tests/list.rs` | `depot (test "list")::first` |
+| example | `examples/list.rs` | `depot (example "list")::first` |
+| bench | `benches/list.rs` | `depot (bench "list")::first` |
+
+- The target list is the list that Semilla has (the manifest and the auto-discovery rules of cargo). The rule does not look at the other targets: `src/main.rs` of a package with no library also has the form `depot (bin "depot")`.
+- A build script is not a parsed target. It keeps its `file` fact and its spotlight.
+- The compiled compare names a body by the crate name of its target (`list::first`). Semilla maps the path form to that name.
+
+**The facts of the agent.** `--same` and `--change` resolve an item by the new path form: `--change 'depot (test "list")::first=…'`. The target is a part of the word, with its quotes. A loose path with one match still resolves. The package name names each target of the package, and the crate name of a target (`list`) names the target. An exact path comes first: `depot::first` is the item of the library if the library has one.
+
+**A move across two targets.** The move rule of today pairs an item with equal tokens that goes from the library to a different target. It stays, as an explicit move fact that names the two targets: "moved `depot::helper` → `depot (bin "depot")::helper`". The tests of a module that move to a test target do not pair (example 3 of the brief): the step has "removed `depot::checks::tests`", "added `depot (test "checks")::one`", and the two `use` facts. The note "! pair: … are 100% similar" names each such pair, as for each other removed and added pair with no name map.
+
+**Result.** On the fixtures, 113 fact texts change only by the path form of an item of a target. Two false facts go away (bytes): the bench file `benches/buf.rs` shared an identity with the module `bytes::buf`, and its removed inner attributes gave "attributes of `bytes::buf`: removed `#![feature(test)]`, …" and "added docs" with the docs of the module. Now these lines are lines of the removed items of `bytes (bench "buf")`.
+
+### 56.2 Each node with docs or attributes, and each member of a block, has a fact (P4)
+
+**The rules.**
+
+1. The outer attributes and the doc comments of a node are a part of the node. The position of a fact that adds or removes the node has these lines. The rule applies to each node kind: an item, a member of an impl or a trait, a foreign item, a variant, a field, a macro call, a statement, a match arm. The rule makes a position wider only for a fact that adds or removes the node.
+2. Each node that can have docs gets the docs fact for an edit of its docs (also a `use` line, an associated const, an associated type). Each node that can have attributes gets the attribute fact of 55.1. A changed doc line of a node that stays is in a docs fact, never only in a fact of a different kind.
+3. Each member of a block is an item with a path (Decided by Claude: a member is an item of the tree, as a function of an impl was before). The members: a function, a const, and a type of an impl and of a trait; a function and a static of an `extern` block; a macro call in each of these blocks. An added, a removed, or a changed member gets its own fact. The block gets no fact with its full text for an edit of one member.
+4. The same members in a new order in an impl, a trait, or an `extern` block are a layout change. Decided by Claude: the category is `layout` (table 54: no effect on the behavior), because the order of the members of a block has no meaning for the compiler. A member at a new place with an edit keeps the fact of the edit. The order of the fields of a type and of the variants of an enum stays in its rule of the earlier version (it can change the layout in memory and the values).
+5. The fallback fact "changed source text with no other fact" and the fact "changed code: (a list of names)" stay only for an edit that no rule above covers.
+
+**The paths** (Decided by Claude):
+
+| Member | Path |
+|---|---|
+| a member of an inherent impl | `depot::Shape::SIDES` |
+| a member of a trait impl | `depot::<Shape as Named>::Name` |
+| a member of a trait | `depot::Named::SIZE` |
+| a member of an `extern` block | `depot::extern C::LEVEL` |
+| a macro call in a block | `depot::Shape::make!#0` (the index of the call in the block) |
+
+**Result.** On the fixtures, the two fact kinds of rule 5 together: 4 before, 1 after. Before: 3 facts "changed code: (a list of names)" (rand_core-4) and 1 fact "changed source text with no other fact" (cpufeatures, a `macro_rules!` definition). After: the fact of cpufeatures stays. 22 fact texts come from rule 3: 16 new facts "added `…::Output#N`" (nu-ansi-term, an associated type of each new impl), 3 member facts in rand_core-4 (two "type of" facts and one doc test fact; they replace the 3 "changed code" facts and 1 layout fact), 2 attribute facts of an associated const in socket2 (`socket2::Type::RAW`), and 1 "type of" fact of an associated type in utf8_iter.
+
+**Limits.**
+
+- An attribute macro on the block can change each member. The fact of the attribute shows it; the members keep their own facts.
+- Two calls of one macro in a block pair by their index.
+- A const of a module with a changed attribute also gets a "type of" fact with the full text of the item.
+- A new ABI of an `extern` block changes the path of the block: its members are removed and added.
+- The note of the public API of a member is the note of a function of the same impl. For a twin impl (`<&Rgb as std::ops::Add>::Output#0`) and for an impl whose header changes in the step, the note is "Semilla did not find the impl block of the method". Before, the fact of the block had the more exact note ("a `pub use` line names …") in one fact of the fixtures (utf8_iter). The category and the edit text are the same.
+
+### 56.3 A module that keeps its path when its source place changes (P5)
+
+**The rule.** The identity of a module, of its inner docs, of its comments, and of its items is the path in the item tree of the target, not the file. The tree compare pairs them across files, as it does in one file.
+
+1. A module whose source place changes gets one fact that names the two places: a new file path, a block that is now a file, or a file that is now a block. The fact tells the count of the items and of the lines that keep their tokens. Its position has these lines on the two sides.
+
+       source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 4 of 4 items and 38 lines keep their tokens [move]
+       source place of `depot::list`: a block in `src/lib.rs` → file `src/list.rs`; 4 of 4 items and 40 old lines and 38 new lines keep their tokens [move]
+
+2. An item of the module with an edit keeps its own facts. A line with an edit stays in the fact of the edit.
+3. The inner docs and the comments pair across the two places. Equal docs give no "removed" fact and no "added" fact. A changed doc text gives the "changed docs" fact.
+4. A renamed module keeps its rename fact, and rule 1 applies to the file: "source place of `depot::list` (now `depot::items`): file `src/list.rs` → file `src/items.rs`; …".
+5. *Soundness.* A line is in the "keeps its tokens" set only if each of its tokens is in a pair of the tree compare with equal tokens. A node whose meaning depends on the path of the file is named in the fact: a call of `include!`, `include_str!`, `include_bytes!`, or `file!`, and a `#[path]` attribute.
+
+       …; 4 of 5 items and 42 lines keep their tokens; the meaning of 2 nodes depends on the path of the file: `include_str!("notes.txt")` (`src/list/mod.rs:41`), `path = "extra.rs"` (`src/list/mod.rs:43`) [macro]
+
+**The category** (Decided by Claude, by table 54):
+
+- `move`, if no node depends on the file path. The items keep their paths and their tokens; only the place of the source changes.
+- `macro`, if a file-relative macro call is in the module. The call can read a different file, thus the behavior can change.
+- `attribute`, if only a `#[path]` attribute depends on the file path. The attribute can name a different file. The module of the attribute has its own fact of a source place.
+
+Decided by Claude: `file!` is in the list of the macros, because its value is the path of the file. A macro with a different name that expands to one of these macros is not in the list (a limit: Semilla does not expand a macro).
+
+**Result.** No fixture has a module with a new source place. The case `mv_whole_file` of `b9a/` gets one new fact of a source place. The six cases of the brief (the three examples, the example with an edit, the renamed module, the `include_str!` case) have a fact for each changed line.
+
+### 56.4 A changed line with only paired tokens (P6)
+
+**The rules of the brief.** (1) A changed line whose tokens are all in a pair of the tree compare with equal tokens is a layout line. (2) A token in no pair, or in a pair with a difference, is in a node with a fact; its line joins that fact. (3) The verbose output gives the cause of each line that stays in the `!` line.
+
+**What the batch found.** The example of the brief (an impl with an edit, and a new impl with an equal method tail after it) has a fact for each line after P1: the lines of git are lines of the facts of the edits. One real class remains. The line diff pairs the body lines of an old item `f` with the lines of a new item `e`, and the step adds a `macro_rules!` definition between the two places. The item pair rule of 55.5 did not apply (the items that can give a macro differ around the pair): 5 lines stayed open. Now the rule applies if the order check of 56.5 examined the pair: the tokens of the lines have a pair in the item pair, and the lines join the facts of `f`. The added definition has its own `added` fact.
+
+**Rule 2.** No token with no pair and no fact was found, on the fixtures and on the cases. No hole of 49.3 is known.
+
+**Rule 3: the cause lines.** The full text of a step (`semilla status --verbose`) prints one line for each cause, below the `!` lines of the cover check:
+
+    ! cause: in `depot::f`: its tokens are in a pair with a difference; a token of the line changes: src/lib.rs:10-12, src/lib.rs:-1, src/lib.rs:-3
+
+The cause has the smallest item of the tree that has the line, the state of its tokens, and the state of the line:
+
+- "a file that Semilla does not parse"
+- "a file with no item in the tree (for example a file behind a `mod` line in a macro input)"
+- "a line in no item of the tree; …"
+- "in `PATH`: its tokens are in no pair of the tree compare; …", "… in a pair with equal tokens; …", "… in a pair with a difference; …"
+- The state of the line: "the tokens of the line are equal in the line diff", "the changed tokens of the line are comments", "a token of the line changes".
+
+The short text does not print the cause lines. The stored step has them (`no_fact_causes`).
+
+**Result and limit.** After P1 to P7, no fixture and no case has a changed line with no fact. Thus the test of the cause lines uses a made report, and the cause lines have no use on the fixtures. Decided by Claude: no new layout rule for "each node kind" was added beyond the item pair rule, because no example of an open line remained to test it against. A rule with no example and no negative test is a risk for the soundness rule.
+
+### 56.5 A macro definition and an item at a new place across it (P7)
+
+**The rule.** The order of the items of a container matters only for the textual scope of a macro. Thus a new order of two items, where one of them can give a macro, gets a fact. The fact is not `layout`.
+
+**The order check.** Each module item has an identity: the path of its tree item in the old tree (the new side maps back by the rename map). A `use` item has an identity only if it has one segment (`use two;`, `pub(crate) use two;`): such a line can name a macro in textual scope. For each pair of items that the two sides of one container have in a different order, where one of the two can give a macro:
+
+- The item with no pair of equal lines in the line diff is the item at a new place. If the two have none, the item that cannot give a macro is the item at a new place.
+- A definition at a new place gets a fact that names the definition and the items between the two places:
+
+      moved `depot::two!` (it can give a macro) past 2 items: `depot::a`, `depot::b`; a macro has a textual scope: a macro call in these items can have a new meaning [macro]
+
+- An item at a new place across a definition gets a fact that names the item and the definition:
+
+      moved `depot::c` past 1 item that can give a macro: `depot::two!`; a macro has a textual scope: a macro call in `depot::c` can have a new meaning [macro]
+
+- The fact names 6 items at most, then "N more". Its position has the open lines of the item. If the item also has an edit, the edit keeps its fact, and the position has the changed lines of the item. The fact has the item as its anchor, thus the gap list has it: the agent can state its effect.
+- A new order of two items that cannot give a macro is a layout change, as before.
+
+**Decided by Claude.**
+
+- *The category is `macro`* (table 54). The other candidates are `semantics` (an edit of a body) and `declaration` (an edit of a signature or a type). The step edits no body and no declaration: it changes which macro definition a call names. Table 54 puts each change of a macro definition or of its scope in `macro`, and the category can change the behavior of existing code.
+- *"Can give a macro"* is the flag that the item order rule of 55.5 already has: a `macro_rules!` definition, an item with a definition in it, an item with `#[macro_use]` (also `extern crate`), and a macro call item (its expansion can have a definition).
+- *An added or a removed definition* before an item that stays gives no fact of this rule. The `added` fact or the `removed` fact of the definition shows the place.
+- *The choice of the item at a new place* uses the line diff, so that the fact has the lines that git shows as changed.
+
+**Limits.**
+
+- A module with a new name is a different container: its items get no order check. The strict rule of 55.5 stays for them (an item goes to a new place only between the same items that can give a macro).
+- The name of a `use` line is read from its tokens. A text that the rule cannot read counts as a line with one segment.
+- The rule does not look for a macro call in the item. It tells that the meaning can change, not that it changes.
+
+### 56.6 The measure
+
+The ten fixtures of `b7cfix/`, each as one step with `SEMILLA_NO_CHECK=1` and no fact of the agent:
+
+| | Batch 9b4 | Batch 9b4b |
+|---|---|---|
+| Changed lines (the two sides) | 10906 (the diff of Semilla) | 10922 (the diff of git, 1404 hunks) |
+| In the fact of an edit | 9047 | 9028 |
+| In a doc fact | 625 | 624 |
+| In a comment fact | 106 | 106 |
+| In a layout fact | 1167 | 1164 |
+| No fact | 0 | 0 |
+| Facts | 1597 | 1610 |
+| Fallback facts (56.2, rule 5) | 4 | 1 |
+| Facts with a wider node position (55.2, rule 5) | – | 22 (nu-ansi-term 21, rand_core-4 1) |
+
+- The fact texts: 1470 are equal, 124 go away, and 137 are new. The 137 new texts by cause: 113 the path form of 56.1; 22 the member facts of 56.2; 2 comment facts where only the number of the twin fact changes. 212 facts with an equal text have new positions (P1). The category counts change in three fixtures: nu-ansi-term (16 more `added`, 56.2), rand_core-4 (3 `semantics` and 1 `layout` become 2 `declaration` and 1 `docs`, 56.2), bytes (1 `docs` and 1 `attribute` less: the two false facts of 56.1).
+- The acceptance test of 55.3 on each fixture (one tag with a place for each hunk header of the command): the tag has each fact with a position, on each fixture. The line "not in a tag" does not show. Two facts of one fixture (utf8_iter: 1 rename, 1 move) have no position; they show in their own line.
+- The old cases: `b9a/` (60 cases) 122 equal fact lines and 1 new fact (56.3); `b9a2/` (59) 166 equal; the 15 cases of batch 9a3: 23 equal; the 17 cases of batches 9b to 9b4: each fact text equal, 2 facts with new positions (P1). No fact line goes away.
+- The time of a step on the ten fixtures: 13.98 s before and 14.34 s after, as a sum of one run of the full command for each fixture. The step part: 3.39 s before, 3.47 s after.
+
+### 56.7 The limits and the open questions
+
+- A changed file that is not UTF-8 text has no position, and the command of 55.8 shows hunks for it (55.8).
+- A file behind a `mod` line in a macro input has only a `file` fact (not in this batch).
+- The rule of 56.4 for "each node kind" is not done as a new layout rule: no open line remained as an example (56.4).
+- The order check of 56.5 does not apply to the items of a module with a new name.
+- Extract and inline (9c) and the forced inliner (9d) are not in this batch.
+

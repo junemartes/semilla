@@ -133,6 +133,14 @@ pub struct Uncovered {
     pub hint: Option<String>,
 }
 
+/// The cause of a group of changed lines with no fact (design 56.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoFactCause {
+    /// The smallest item of the tree with the lines, and the state of its tokens.
+    pub cause: String,
+    pub positions: Vec<Position>,
+}
+
 /// The result of one step.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StepReport {
@@ -190,10 +198,69 @@ pub struct StepReport {
     /// defect of Semilla. The list never rejects a step.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_fact: Vec<Position>,
+    /// The cause of each changed line with no fact (design 56.4), for the verbose output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_fact_causes: Vec<NoFactCause>,
     /// The tags of the agent (design 55.3), in the order of the command. A tag is a name for
     /// a part of the step. It is not a fact.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<Tag>,
+    /// The hunks of the line diff of the step (design 55.8): the hunks that the command
+    /// [`LINE_DIFF_COMMAND`] shows between the old tree and the new tree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hunks: Vec<DiffHunk>,
+    /// True if git did not give the line diff: the hunks are the hunks of the diff of Semilla.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_diff: bool,
+    /// The count of the facts whose own lines are equal lines in the line diff (design 55.2,
+    /// rule 5): each one has the changed lines of the smallest wider node with a changed line.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wider_facts: usize,
+    /// The old tree and the new tree of the step, for the line diff command (design 55.8).
+    /// Empty: the step has no tree identifier.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff_trees: Vec<String>,
+}
+
+/// The line diff command of a step (design 55.8). The two last arguments are the old tree and
+/// the new tree. The options make the result independent of the configuration of the user.
+/// Decided by Claude: the algorithm and the indent heuristic are the defaults of git.
+pub const LINE_DIFF_COMMAND: &str = "git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color";
+
+/// One hunk of the line diff of a step (design 55.8), with the numbers of the hunk header of
+/// git: `@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffHunk {
+    pub file: String,
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+}
+
+impl DiffHunk {
+    /// The start and the count of one side.
+    pub fn side(&self, old: bool) -> (usize, usize) {
+        if old { (self.old_start, self.old_count) } else { (self.new_start, self.new_count) }
+    }
+
+    /// The lines of one side: the first line and the line after the last line.
+    pub fn range(&self, old: bool) -> (usize, usize) {
+        let (start, count) = self.side(old);
+        if count == 0 { (start + 1, start + 1) } else { (start, start + count) }
+    }
+
+    /// The header as git prints it. Git does not print a count of 1.
+    pub fn header(&self) -> String {
+        let part = |start: usize, count: usize| if count == 1 { start.to_string() } else { format!("{start},{count}") };
+        format!("@@ -{} +{} @@", part(self.old_start, self.old_count), part(self.new_start, self.new_count))
+    }
+
+    /// The place of the tag that selects the hunk (design 55.3): the new side, or the old
+    /// side for a hunk with no line in the new tree.
+    pub fn place(&self) -> String {
+        if self.new_count > 0 { format!("{}:+{},{}", self.file, self.new_start, self.new_count) } else { format!("{}:-{},{}", self.file, self.old_start, self.old_count) }
+    }
 }
 
 /// A range of lines of one file (design 55.2): the place of an edit in the line diff.
@@ -261,6 +328,10 @@ pub struct Place {
     pub file: String,
     /// `None`: the full file, the two trees. Else: (old tree, first line, last line).
     pub lines: Option<(bool, usize, usize)>,
+    /// True for the side of a hunk header with the count 0 (`FILE:-START,0` or
+    /// `FILE:+START,0`): the place has no line. It names the hunk with this header side.
+    /// `lines` has the side and the start number of the header.
+    pub empty: bool,
 }
 
 impl Place {
@@ -274,7 +345,7 @@ impl Place {
         // The lines come after the last `:`, if the text after it starts like a line range.
         let split = text.rsplit_once(':').filter(|(file, lines)| !file.is_empty() && lines.starts_with(|first: char| first.is_ascii_digit() || first == '-' || first == '+'));
         let Some((file, lines)) = split else {
-            return Ok(Place { file: text.to_string(), lines: None });
+            return Ok(Place { file: text.to_string(), lines: None, empty: false });
         };
         let error = || format!("`{text}` is not a position: write FILE, FILE:LINE, FILE:START-END, or FILE:-START-END for lines of the old tree");
         let (old, rest) = match lines.strip_prefix('-') {
@@ -286,7 +357,9 @@ impl Place {
             // The form of a hunk header: the first line and the count of the lines.
             let (start, count) = (number(start).ok_or_else(error)?, number(count).ok_or_else(error)?);
             if count == 0 {
-                return Err(format!("`{text}` has no line: a hunk side with the count 0 has no line in this tree; use the other side of the hunk"));
+                // Design 55.3: the side of a hunk with no line in this tree, as git prints
+                // it. The number is the line before the hunk: 0 is a valid number.
+                return Ok(Place { file: file.to_string(), lines: Some((old, start, start)), empty: true });
             }
             (start, start + count - 1)
         } else if let Some((start, end)) = rest.split_once('-') {
@@ -298,25 +371,52 @@ impl Place {
         if start == 0 || end < start {
             return Err(format!("`{text}` is not a line range: the first line is 1 or more, and the last line is not before the first line"));
         }
-        Ok(Place { file: file.to_string(), lines: Some((old, start, end)) })
+        Ok(Place { file: file.to_string(), lines: Some((old, start, end)), empty: false })
     }
 
     /// The text of the place, in the form of [`Position::text`].
     pub fn text(&self) -> String {
         match self.lines {
             None => self.file.clone(),
+            Some((old, start, _)) if self.empty => format!("{}:{}{start},0", self.file, if old { '-' } else { '+' }),
             Some((old, start, end)) => Position { file: self.file.clone(), old, start, end }.text(),
         }
     }
 
     /// True if each line of the position is in the place.
     pub fn contains(&self, position: &Position) -> bool {
-        self.file == position.file && self.lines.is_none_or(|(old, start, end)| old == position.old && start <= position.start && position.end <= end)
+        !self.empty && self.file == position.file && self.lines.is_none_or(|(old, start, end)| old == position.old && start <= position.start && position.end <= end)
     }
 
     /// True if a line of the position is in the place.
     pub fn meets(&self, position: &Position) -> bool {
-        self.file == position.file && self.lines.is_none_or(|(old, start, end)| old == position.old && start <= position.end && position.start <= end)
+        !self.empty && self.file == position.file && self.lines.is_none_or(|(old, start, end)| old == position.old && start <= position.end && position.start <= end)
+    }
+
+    /// The lines that the place selects in a hunk of the line diff (design 55.3, rule 2):
+    /// (old tree, first line, the line after the last line) for each side with a line.
+    /// - A place `FILE` selects the two sides of each hunk of the file.
+    /// - A place that has the full new side of a hunk, or the full old side, selects the two
+    ///   sides of that hunk. A side with the count 0 is a full side: it names the hunk.
+    /// - Each other place selects the changed lines of the hunk that are in its lines.
+    pub fn selects(&self, hunk: &DiffHunk) -> Vec<(bool, usize, usize)> {
+        if self.file != hunk.file {
+            return Vec::new();
+        }
+        let both = || [false, true].into_iter().map(|old| (old, hunk.range(old).0, hunk.range(old).1)).filter(|(_, start, end)| start < end).collect();
+        let Some((old, start, end)) = self.lines else { return both() };
+        let (first, after) = hunk.range(old);
+        if self.empty {
+            return if hunk.side(old) == (start, 0) { both() } else { Vec::new() };
+        }
+        if first == after {
+            return Vec::new();
+        }
+        if start <= first && after <= end + 1 {
+            return both();
+        }
+        let (from, to) = (start.max(first), (end + 1).min(after));
+        if from < to { vec![(old, from, to)] } else { Vec::new() }
     }
 }
 
@@ -330,10 +430,14 @@ pub struct Tag {
     /// The numbers of the facts of Semilla whose edit is fully in the lines of the tag.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facts: Vec<String>,
-    /// A note for each fact with only a part of its edit in the lines of the tag.
+    /// The numbers of the facts that are in the tag in part (design 55.3, rule 5): the tag
+    /// selects a line of the fact, and it does not select each line of one side.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partial: Vec<String>,
+    /// A line for each fact of `partial`: the lines of the fact that are not in the tag.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
-    /// The count of the changed lines of the facts of the tag, in the two trees.
+    /// The count of the changed lines that the places of the tag select, in the two trees.
     #[serde(default)]
     pub lines: usize,
     /// The error of the tag: a place with no edit in its lines. A step with such a tag is not
@@ -344,6 +448,17 @@ pub struct Tag {
     /// number is after the last line of the file.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub form: bool,
+}
+
+/// The group of a fact in the output of a step with tags (design 55.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagGroup {
+    /// The index of the tag of the fact.
+    Tag(usize),
+    /// A fact with a position that is in no tag, or a fact of a step with no tag.
+    Outside,
+    /// A fact with no position, in a step with tags.
+    NoPosition,
 }
 
 /// Reads the text of a `--tag` option: `PLACE[,PLACE]=NAME` (design 55.3). The name is the
@@ -985,6 +1100,35 @@ impl StepReport {
         vec![format!("! cover: {missing} of the {} changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)", self.changed_lines), format!("! changed lines with no fact: {}", Position::list(&self.no_fact))]
     }
 
+    /// The lines that tell how to get the hunks of the step (design 55.8): the line diff
+    /// command with the two trees of the step. An agent that runs the command gets the hunks
+    /// that a place of a tag selects. If git gave no line diff, the hunks are the hunks of
+    /// the diff of Semilla: `full` gives one line for each hunk.
+    pub fn hunk_lines(&self, full: bool) -> Vec<String> {
+        if self.hunks.is_empty() {
+            return Vec::new();
+        }
+        if !self.own_diff {
+            let trees = match &self.diff_trees[..] {
+                [old, new] => format!("{old} {new}"),
+                _ => "OLD_TREE NEW_TREE".to_string(),
+            };
+            return vec![format!("hunks: `{LINE_DIFF_COMMAND} {trees}`")];
+        }
+        let mut lines = vec![format!("hunks: git gave no line diff of this step; the {} hunk(s) are the hunks of the line diff of Semilla{}", self.hunks.len(), if full { ":" } else { " (`semilla status --verbose` prints them)" })];
+        if full {
+            lines.extend(self.hunks.iter().map(|hunk| format!("  {} {}", hunk.file, hunk.header())));
+        }
+        lines
+    }
+
+    /// The cause lines of the changed lines with no fact (design 56.4), without the indent.
+    /// Each line has the smallest item of the tree with the lines, the state of its tokens,
+    /// and the lines.
+    pub fn cause_lines(&self) -> Vec<String> {
+        self.no_fact_causes.iter().map(|cause| format!("! cause: {}: {}", cause.cause, Position::list(&cause.positions))).collect()
+    }
+
     /// The lines of the cover check that need the reader: the lines with the mark `!`.
     pub fn no_fact_lines(&self) -> Vec<String> {
         self.cover_lines().into_iter().filter(|line| line.starts_with('!')).collect()
@@ -1019,14 +1163,57 @@ impl StepReport {
         }
     }
 
-    /// The head line of a tag in an output (design 55.3), without the indent.
+    /// The head line of a tag in an output (design 55.3), without the indent: the facts
+    /// that are fully in the tag, the facts that are in the tag in part, and the changed
+    /// lines that the places select.
     pub fn tag_head(&self, tag: &Tag) -> String {
-        format!("tag `{}` ({}): {}; {} changed line(s)", tag.name, tag.places.join(", "), self.count_text(&tag.facts), tag.lines)
+        let part = if tag.partial.is_empty() { String::new() } else { format!("; {} fact(s) in part", tag.partial.len()) };
+        format!("tag `{}` ({}): {}{part}; {} changed line(s)", tag.name, tag.places.join(", "), self.count_text(&tag.facts), tag.lines)
     }
 
-    /// The numbers of the facts that are in no tag, in the order of the facts.
+    /// The group of a fact in the output of a step with tags (design 55.3): the first tag
+    /// that has the full fact, else the first tag that has the fact in part. A fact with no
+    /// position is in no tag and in its own group. A step with no tag has one group.
+    pub fn tag_group(&self, fact: &Fact) -> TagGroup {
+        if self.tags.is_empty() {
+            return TagGroup::Outside;
+        }
+        if fact.positions.is_empty() {
+            return TagGroup::NoPosition;
+        }
+        let full = self.tags.iter().position(|tag| tag.facts.contains(&fact.id));
+        match full.or_else(|| self.tags.iter().position(|tag| tag.partial.contains(&fact.id))) {
+            Some(tag) => TagGroup::Tag(tag),
+            None => TagGroup::Outside,
+        }
+    }
+
+    /// The numbers of the facts of the tag that show in a different tag (design 55.3): the
+    /// facts that show in a tag above it, and the facts that show in a tag below it. A fact
+    /// of two tags shows in the first tag that has the full fact.
+    pub fn shown_in_other_tag(&self, index: usize) -> [Vec<String>; 2] {
+        let tag = &self.tags[index];
+        let mut out = [Vec::new(), Vec::new()];
+        for id in tag.facts.iter().chain(&tag.partial) {
+            match self.fact(id).map(|fact| self.tag_group(fact)) {
+                Some(TagGroup::Tag(other)) if other < index => out[0].push(id.clone()),
+                Some(TagGroup::Tag(other)) if other > index => out[1].push(id.clone()),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The numbers of the facts with a position that are in no tag, in the order of the
+    /// facts. A fact that is in a tag in part shows with that tag: it is not in this list.
     pub fn not_in_a_tag(&self) -> Vec<String> {
-        self.facts.iter().filter(|fact| !self.tags.iter().any(|tag| tag.facts.contains(&fact.id))).map(|fact| fact.id.clone()).collect()
+        self.facts.iter().filter(|fact| self.tag_group(fact) == TagGroup::Outside).map(|fact| fact.id.clone()).collect()
+    }
+
+    /// The numbers of the facts with no position (design 55.2, rule 6) of a step with tags.
+    /// A tag selects changed lines: such a fact cannot be in a tag.
+    pub fn no_position(&self) -> Vec<String> {
+        self.facts.iter().filter(|fact| self.tag_group(fact) == TagGroup::NoPosition).map(|fact| fact.id.clone()).collect()
     }
 
     /// The count of the changed lines of the positions of the facts `ids`: each line one time.
@@ -1042,14 +1229,14 @@ impl StepReport {
         }
         let mut parts: Vec<String> = Vec::new();
         for tag in &self.tags {
-            let inside: Vec<&str> = ids.iter().filter(|id| tag.facts.contains(id)).map(String::as_str).collect();
+            let inside: Vec<&str> = ids.iter().filter(|id| tag.facts.contains(id) || tag.partial.contains(id)).map(String::as_str).collect();
             if inside.len() == ids.len() {
                 parts.push(format!("`{}`", tag.name));
             } else if !inside.is_empty() {
                 parts.push(format!("`{}` ({})", tag.name, inside.join(", ")));
             }
         }
-        let outside: Vec<&str> = ids.iter().filter(|id| !self.tags.iter().any(|tag| tag.facts.contains(id))).map(String::as_str).collect();
+        let outside: Vec<&str> = ids.iter().filter(|id| !self.tags.iter().any(|tag| tag.facts.contains(id) || tag.partial.contains(id))).map(String::as_str).collect();
         if outside.len() == ids.len() {
             return Some("not in a tag".to_string());
         }

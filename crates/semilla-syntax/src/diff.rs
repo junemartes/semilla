@@ -386,7 +386,13 @@ pub fn diff_maps(before: &Workspace, after: &Workspace, renames: &Renames) -> (V
             Some(other) if other.kind == item.kind && in_trait(before, path) == in_trait(after, &target) => {
                 matched_after.insert(target.clone());
                 let start = edits.len();
-                diff_item(item, other, renames, &mut edits, &mut maps);
+                // A module with a block on one side and a file on the other side (design
+                // 56.3): the two sides compare in one form.
+                if item.kind == ItemKind::Mod && before.module_files.contains_key(path) != after.module_files.contains_key(&target) {
+                    diff_item(&module_form(before, item), &module_form(after, other), renames, &mut edits, &mut maps);
+                } else {
+                    diff_item(item, other, renames, &mut edits, &mut maps);
+                }
                 // The net: a changed token that no edit of the pair has (batch 6a, A6).
                 let open = crate::net::uncovered(&mut net_files, before, after, item, other, renames, &edits[start..]);
                 edits.extend(open);
@@ -401,10 +407,13 @@ pub fn diff_maps(before: &Workspace, after: &Workspace, renames: &Renames) -> (V
     }
 
     // `use` items have no stable position, so they are compared as a set in each module.
-    let modules: BTreeSet<&String> = before_uses.keys().chain(after_uses.keys()).collect();
+    // A renamed module is one module (design 56.3): its `use` lines pair by the rename.
+    let module_pair = |old: &String| renames.items.get(old).filter(|new| before.items.get(old).is_some_and(|item| item.kind == ItemKind::Mod) && after.items.get(*new).is_some_and(|item| item.kind == ItemKind::Mod));
+    let renamed_modules: BTreeSet<&String> = before_uses.keys().filter_map(|module| module_pair(module)).collect();
+    let modules: BTreeSet<&String> = before_uses.keys().chain(after_uses.keys().filter(|module| !renamed_modules.contains(module))).collect();
     for module in modules {
         let old: Vec<&Item> = before_uses.get(module).into_iter().flatten().copied().filter(|item| !skip.contains(&item.file)).collect();
-        let new: Vec<&Item> = after_uses.get(module).into_iter().flatten().copied().filter(|item| !skip.contains(&item.file)).collect();
+        let new: Vec<&Item> = after_uses.get(module_pair(module).unwrap_or(module)).into_iter().flatten().copied().filter(|item| !skip.contains(&item.file)).collect();
         // The visibility and the attributes are parts of a `use` line (batch 6a, A6): `pub use`
         // that changes to `use` removes a public name.
         let head = |item: &Item| (item.vis.replace(' ', ""), item.attrs.clone());
@@ -414,13 +423,32 @@ pub fn diff_maps(before: &Workspace, after: &Workspace, renames: &Renames) -> (V
         for item in new.iter().filter(|item| !old.iter().any(|other| head(other) == head(item) && renames.apply(&other.path, &other.signature) == item.signature)) {
             edits.push(item_edit(EditKind::ItemAdded, None, Some(item)));
         }
+        // The docs and the comments of a `use` line that stays (design 56.2, rule 2): the
+        // lines pair in their order. A pair with different docs gets the docs edit.
+        let mut taken = BTreeSet::new();
+        for item in &old {
+            let same = |other: &&Item| head(other) == head(item) && other.signature == renames.apply(&item.path, &item.signature);
+            let free = |other: &&&Item| same(other) && !taken.contains(&other.path);
+            let Some(other) = new.iter().find(|other| free(other) && other.docs == item.docs).or_else(|| new.iter().find(free)) else { continue };
+            taken.insert(other.path.clone());
+            docs_edits(item, other, &mut edits);
+        }
     }
 
     // The inner attributes of a crate root or a module file (`#![…]`): an attribute edit of the
     // module. A crate root has no item, so the anchor is the crate name.
-    let modules: BTreeSet<&String> = before.inner_attrs.keys().chain(after.inner_attrs.keys()).collect();
+    // The identity of a module is its path in the item tree, not its file (design 56.3): a
+    // renamed module pairs by the rename. A module with a block on one side has its inner
+    // attributes in its item on that side: the item pair has the compare.
+    let renamed_to: BTreeSet<&String> = renames.items.iter().filter(|(old, new)| before.module_files.contains_key(*old) && after.module_files.contains_key(*new)).map(|(_, new)| new).collect();
+    let modules: BTreeSet<&String> = before.inner_attrs.keys().chain(after.inner_attrs.keys().filter(|module| !renamed_to.contains(module))).collect();
     for module in modules {
-        let (old, new) = (before.inner_attrs.get(module), after.inner_attrs.get(module));
+        let target = renames.items.get(module).filter(|new| renamed_to.contains(new)).unwrap_or(module);
+        let (old, new) = (before.inner_attrs.get(module), after.inner_attrs.get(target));
+        let inline = |side: &Workspace, path: &String| !side.module_files.contains_key(path) && side.items.get(path).is_some_and(|item| item.kind == ItemKind::Mod);
+        if inline(before, module) || inline(after, target) {
+            continue;
+        }
         if [old, new].iter().flatten().any(|(file, _)| skip.contains(file)) {
             continue;
         }
@@ -444,13 +472,13 @@ pub fn diff_maps(before: &Workspace, after: &Workspace, renames: &Renames) -> (V
             let mut edit = Edit::file_edit(if docs { EditKind::Docs } else { EditKind::Attrs }, file);
             edit.view = View::Syntax;
             edit.before = Some(Anchor::item(module.as_str()));
-            edit.after = Some(Anchor::item(module.as_str()));
+            edit.after = Some(Anchor::item(target.as_str()));
             edit.text_before = Some(texts(old));
             edit.text_after = Some(texts(new));
             // The display texts (design 39.2), in the order of the compare texts.
             let shown = |side: &Workspace, entry: Option<&(String, Vec<String>)>| -> Option<String> {
                 let (_, attrs) = entry?;
-                let display = side.inner_attrs_display.get(module).filter(|display| display.len() == attrs.len())?;
+                let display = side.inner_attrs_display.get(if std::ptr::eq(side, before) { module } else { target }).filter(|display| display.len() == attrs.len())?;
                 Some(attrs.iter().zip(display).filter(|(attr, _)| is_doc(attr) == docs).map(|(_, shown)| shown.clone()).collect::<Vec<_>>().join("\n"))
             };
             edit.source_before = shown(before, old).or_else(|| edit.text_before.clone());
@@ -590,8 +618,9 @@ pub fn kind_name(kind: ItemKind) -> &'static str {
     }
 }
 
-fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edit>, maps: &mut BodyMaps) {
-    let attribute_edit = |kind: EditKind, view: View, old: String, new: String| Edit {
+/// An edit of one part of an item pair: the two texts of the part.
+fn part_edit(before: &Item, after: &Item, kind: EditKind, view: View, old: String, new: String) -> Edit {
+    Edit {
         kind,
         view,
         before: Some(Anchor::item(&before.path)),
@@ -609,7 +638,47 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         line: after.line_start,
         note: None,
         refactor: None,
-    };
+    }
+}
+
+/// The edits of the doc lines and of the comments of an item pair. A doc line (`///`, `//!`,
+/// `#[doc]`) and a plain comment are two different changes: a doc is text of the API, a
+/// comment is not. They get a fact each.
+fn docs_edits(before: &Item, after: &Item, edits: &mut Vec<Edit>) {
+    let split = |lines: &[String]| -> (Vec<String>, Vec<String>) { lines.iter().cloned().partition(|line| is_doc_line(line)) };
+    let (before_docs, before_comments) = split(&before.docs);
+    let (after_docs, after_comments) = split(&after.docs);
+    if before_docs != after_docs {
+        edits.push(part_edit(before, after, EditKind::Docs, View::Syntax, before_docs.join("\n"), after_docs.join("\n")));
+    }
+    if before_comments != after_comments {
+        edits.push(part_edit(before, after, EditKind::Comment, View::Syntax, before_comments.join("\n"), after_comments.join("\n")));
+    }
+}
+
+/// The form of a module item that does not depend on the place of its content (design 56.3).
+/// A module with a block has its inner doc lines and its inner attributes in its item. A
+/// module with a file gets the ones of its file. The plain comments are not a part of the
+/// form: a comment of the content is a token of the content.
+fn module_form(side: &Workspace, item: &Item) -> Item {
+    let mut item = item.clone();
+    item.docs.retain(|line| is_doc_line(line));
+    if let Some((_, inner)) = side.inner_attrs.get(&item.path) {
+        let display = side.inner_attrs_display.get(&item.path).filter(|display| display.len() == inner.len());
+        for (index, attr) in inner.iter().enumerate() {
+            if attr.starts_with("//!") {
+                item.docs.push(attr.lines().map(|line| line.replacen("//!", "///", 1)).collect::<Vec<_>>().join("\n"));
+            } else {
+                item.attrs.push(attr.clone());
+                item.display.attrs.push(display.map_or(attr, |display| &display[index]).clone());
+            }
+        }
+    }
+    item
+}
+
+fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edit>, maps: &mut BodyMaps) {
+    let attribute_edit = |kind: EditKind, view: View, old: String, new: String| part_edit(before, after, kind, view, old, new);
     let apply = |text: &str| renames.apply(&before.path, text);
 
     // The display text of a part is the source text (design 39.2): an edit of a part has it in
@@ -638,17 +707,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         }
         edits.extend(parts);
     }
-    // A doc line (`///`, `//!`, `#[doc]`) and a plain comment are two different changes: a doc
-    // is text of the API, a comment is not. They get a fact each.
-    let split = |lines: &[String]| -> (Vec<String>, Vec<String>) { lines.iter().cloned().partition(|line| is_doc_line(line)) };
-    let (before_docs, before_comments) = split(&before.docs);
-    let (after_docs, after_comments) = split(&after.docs);
-    if before_docs != after_docs {
-        edits.push(attribute_edit(EditKind::Docs, View::Syntax, before_docs.join("\n"), after_docs.join("\n")));
-    }
-    if before_comments != after_comments {
-        edits.push(attribute_edit(EditKind::Comment, View::Syntax, before_comments.join("\n"), after_comments.join("\n")));
-    }
+    docs_edits(before, after, edits);
     if before.attrs != after.attrs {
         edits.push(shown(attribute_edit(EditKind::Attrs, View::Syntax, before.attrs.join("\n"), after.attrs.join("\n")), &before.display.attrs.join("\n"), &after.display.attrs.join("\n")));
     }
@@ -663,7 +722,11 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
     // only with its item. A member of an impl or a trait is a declaration (`fn name`).
     let bare = renames.exact() && matches!(before.kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Variant);
     let old_members: Vec<String> = before.members.iter().map(|member| renamed_member(member).unwrap_or_else(|| if bare { member.clone() } else { apply(member) })).collect();
-    if old_members != after.members {
+    // Each member of an impl, a trait, and a block of foreign items is an item with its own
+    // edits (design 56.2). The order of these members has no edit: the rule of the item order
+    // has the lines of a member with equal tokens at a new place (design 55.5).
+    let block = matches!(before.kind, ItemKind::Impl | ItemKind::Trait) || (before.kind == ItemKind::Other && (before.signature.starts_with("extern") || before.signature.starts_with("unsafe extern")));
+    if old_members != after.members && !block {
         // The kind of the owner, for the hints (a struct, a variant, an enum, a trait, an impl).
         let list_edit = |old: String, new: String| {
             let mut edit = attribute_edit(EditKind::Members, View::Signature, old, new);
@@ -671,23 +734,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
             edit.attr_after = Some(kind_name(after.kind).to_string());
             edit
         };
-        match impl_member_edits(before, after, renames) {
-            // An impl pair (design 36.2): one edit for each associated constant or type.
-            Some(parts) => {
-                for (old, new, old_list, new_list) in parts.members {
-                    let mut edit = list_edit(old.clone().unwrap_or_default(), new.clone().unwrap_or_default());
-                    (edit.text_before, edit.text_after) = (old, new);
-                    edit.node_before = old_list.as_ref().map(|_| "member");
-                    edit.node_after = new_list.as_ref().map(|_| "member");
-                    (edit.source_before, edit.source_after) = (old_list, new_list);
-                    edits.push(edit);
-                }
-                if let Some((old, new)) = parts.order {
-                    edits.push(list_edit(old, new));
-                }
-            }
-            None => edits.push(shown(list_edit(before.members.join("\n"), after.members.join("\n")), &before.display.members.join("\n"), &after.display.members.join("\n"))),
-        }
+        edits.push(shown(list_edit(before.members.join("\n"), after.members.join("\n")), &before.display.members.join("\n"), &after.display.members.join("\n")));
     }
     // A function with a body on one side only (design 37.1): a trait method gets a default
     // body, or its default body goes away. The edit has the full text of the body.
@@ -742,95 +789,6 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
         edits.extend(body_edits);
         maps.maps.extend(body_maps);
     }
-}
-
-/// The parts of a changed member list of an impl pair.
-struct ImplMembers {
-    /// One entry for each added, removed, or changed member that is not a method: the text
-    /// before and after for the net (an added or removed member has its attributes and its
-    /// visibility), and the list text before and after (`const NAME : T = V ;`).
-    members: Vec<(Option<String>, Option<String>, Option<String>, Option<String>)>,
-    /// The names of the members before and after, if the order of the kept members changed.
-    order: Option<(String, String)>,
-}
-
-/// Splits the changed member list of an impl pair (design 36.2). An added or removed method
-/// has no entry: the method is an item with its own edit. `None` if a side does not parse or
-/// has two members with one name: the caller keeps the edit of the full list.
-fn impl_member_edits(before: &Item, after: &Item, renames: &Renames) -> Option<ImplMembers> {
-    if before.kind != ItemKind::Impl || after.kind != ItemKind::Impl {
-        return None;
-    }
-    // The key (`const NAME`, `type NAME`, `fn NAME`, or the full text), the list text, and
-    // the text with the attributes (no doc text) and the visibility.
-    let side = |item: &Item, old: bool| -> Option<Vec<(String, String, String, String)>> {
-        let Some(crate::rs::ast::Item::Impl(parsed)) = crate::rs::parse_item(&item.source) else { return None };
-        let apply = |text: String| if old { renames.apply(&before.path, &text) } else { text };
-        let full = |node: &crate::rs::SyntaxNode, vis: String, default: bool, list: &str| {
-            let mut parts: Vec<String> = crate::load::attributes(node).iter().filter(|attr| !attr.doc_text()).map(|attr| attr.text.clone()).collect();
-            parts.extend([vis, if default { "default".to_string() } else { String::new() }, list.to_string()]);
-            parts.retain(|part| !part.is_empty());
-            parts.join(" ")
-        };
-        use crate::rs::{AstNode, ast};
-        use ast::{HasName, HasVisibility};
-        let vis = |node: Option<ast::Visibility>| crate::rs::compare_opt(node.as_ref());
-        let members: Vec<(String, String, String)> = parsed
-            .assoc_item_list()
-            .into_iter()
-            .flat_map(|list| list.assoc_items())
-            .map(|member| {
-                let list = apply(crate::load::impl_member_name(&member));
-                match &member {
-                    ast::AssocItem::Const(constant) => {
-                        let name = constant.name().map(|name| name.text().to_string()).unwrap_or_else(|| "_".into());
-                        (apply(format!("const {name}")), list.clone(), full(constant.syntax(), vis(constant.visibility()), constant.default_token().is_some(), &list))
-                    }
-                    ast::AssocItem::TypeAlias(ty) => {
-                        let name = ty.name().map(|name| name.text().to_string()).unwrap_or_default();
-                        (apply(format!("type {name}")), list.clone(), full(ty.syntax(), vis(ty.visibility()), ty.default_token().is_some(), &list))
-                    }
-                    _ => (list.clone(), list.clone(), list),
-                }
-            })
-            .collect();
-        // The display text of each member: the member list of the item has it in the same order.
-        let shown: Vec<String> = if item.display.members.len() == members.len() { item.display.members.clone() } else { members.iter().map(|(_, list, _)| list.clone()).collect() };
-        let mut members: Vec<(String, String, String, String)> = members.into_iter().zip(shown).map(|((key, list, full), shown)| (key, list, full, shown)).collect();
-        // Two methods with one name are twins under `cfg` (design 38.3). Each twin is an item
-        // with its own edit, so the second key gets a number.
-        let mut seen: BTreeSet<String> = BTreeSet::new();
-        for (key, _, _, _) in members.iter_mut().filter(|(key, _, _, _)| key.starts_with("fn ")) {
-            let mut number = 0;
-            let plain = key.clone();
-            while !seen.insert(key.clone()) {
-                number += 1;
-                *key = format!("{plain}#{number}");
-            }
-        }
-        let keys: BTreeSet<&String> = members.iter().map(|(key, _, _, _)| key).collect();
-        (keys.len() == members.len()).then_some(members)
-    };
-    let (old, new) = (side(before, true)?, side(after, false)?);
-    let is_method = |key: &str| key.starts_with("fn ");
-    let mut members = Vec::new();
-    for (key, list, full, shown) in &old {
-        match new.iter().find(|(other, _, _, _)| other == key) {
-            None if !is_method(key) => members.push((Some(full.clone()), None, Some(shown.clone()), None)),
-            Some((_, new_list, _, new_shown)) if new_list != list => members.push((Some(list.clone()), Some(new_list.clone()), Some(shown.clone()), Some(new_shown.clone()))),
-            _ => {}
-        }
-    }
-    for (key, _, full, shown) in &new {
-        if !is_method(key) && !old.iter().any(|(other, _, _, _)| other == key) {
-            members.push((None, Some(full.clone()), None, Some(shown.clone())));
-        }
-    }
-    type Member = (String, String, String, String);
-    let kept = |list: &[Member], other: &[Member]| -> Vec<String> { list.iter().filter(|(key, _, _, _)| other.iter().any(|(k, _, _, _)| k == key)).map(|(key, _, _, _)| key.clone()).collect() };
-    let names = |list: &[Member]| list.iter().map(|(key, _, _, _)| key.clone()).collect::<Vec<_>>().join("\n");
-    let order = (kept(&old, &new) != kept(&new, &old)).then(|| (names(&old), names(&new)));
-    Some(ImplMembers { members, order })
 }
 
 /// The edits of the changed parts of a function signature: the qualifiers, the generics, the

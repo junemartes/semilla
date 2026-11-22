@@ -1084,8 +1084,10 @@ fn member_entities_have_exact_claims() {
 
     // The hint of a new trait method names `add-item`, not `add-struct-field`.
     let report = run(TYPES, &TYPES.replace("    fn price(&self) -> u32;\n", "    fn price(&self) -> u32;\n    fn name(&self) -> String;\n"), vec![], &[], None);
-    let members = report.uncovered.iter().find(|u| u.at.as_ref().is_some_and(|a| a.item == "demo::Price")).unwrap();
+    // Design 56.2: the new method is an item, and the trait has no edit of its member list.
+    let members = report.uncovered.iter().find(|u| u.at.as_ref().is_some_and(|a| a.item == "demo::Price::name")).unwrap();
     assert!(members.hint.as_deref().is_some_and(|h| h.starts_with("add-item")), "{:?}", members.hint);
+    assert!(!report.uncovered.iter().any(|u| u.at.as_ref().is_some_and(|a| a.item == "demo::Price")), "{:#?}", report.uncovered);
     // A claim with a retired op is malformed.
     let report = run(TYPES, &TYPES.replace("    pub balance: u32,\n", "    pub balance: u32,\n    pub created: u64,\n"), vec![claim("c1", "add-struct-field", Some("demo::Account"), serde_json::json!({"field": "created"}))], &[], None);
     assert!(matches!(status_of(&report, "c1"), ClaimStatus::Malformed { reason } if reason.contains("retired")));
@@ -2794,7 +2796,7 @@ fn a_removed_test_target_has_no_attribute_fact() {
     let target = "#![allow(dead_code)]\n#[test]\nfn first() {\n    assert_eq!(demo::one(), 1);\n}\n";
     let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("tests/extra.rs", target)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", lib)], &[("demo::one", equal("n0"))]);
     let texts = descriptions(&report);
-    assert!(texts.iter().any(|text| text.starts_with("removed `demo::extra::first`")) && !texts.iter().any(|text| text.starts_with("attributes of")), "{texts:#?}");
+    assert!(texts.iter().any(|text| text.starts_with("removed `demo (test \"extra\")::first`")) && !texts.iter().any(|text| text.starts_with("attributes of")), "{texts:#?}");
     // A target with no item: the attribute fact is the only fact of the removal, and it stays.
     let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", lib), ("tests/extra.rs", "#![allow(dead_code)]\n")], &[("Cargo.toml", MANIFEST), ("src/lib.rs", lib)], &[("demo::one", equal("n0"))]);
     assert!(!report.facts.is_empty(), "{report:#?}");
@@ -4134,8 +4136,10 @@ fn an_edit_of_a_trait_constant_owns_its_body() {
     let facts = vec![BodyFacts { name: "demo::Size::BYTES".into(), span: Some(("src/lib.rs".into(), 2)), ..Default::default() }];
     let report = run_derived_with(src, &changed, &StatusFacts(vec![("demo::Size::BYTES", different(false)), ("demo::Size::size", different(false))], facts));
     assert!(unknown_causes(&report).is_empty(), "{:#?}", report.facts);
-    let fact = report.facts.iter().find(|f| f.description.contains("const BYTES")).unwrap_or_else(|| panic!("{report:#?}"));
+    // Design 56.2: the constant is an item, and the fact is the fact of its value.
+    let fact = report.facts.iter().find(|f| f.description.starts_with("value of `demo::Size::BYTES` changed: 4 → 8")).unwrap_or_else(|| panic!("{report:#?}"));
     assert_eq!(fact.affected, ["demo::Size::BYTES", "demo::Size::size"], "{fact:#?}");
+    assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
 }
 
 /// Batch 5n, A4: a bench target with the name of the package. Its bodies have source items, and
@@ -4165,7 +4169,7 @@ fn a_bench_target_with_the_name_of_the_package_has_source_items() {
     let report = crate::verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &StatusFacts(bodies, facts), &NoOracle, true).report;
     assert!(report.facts.iter().all(|f| !f.spotlight), "{:#?}", report.facts);
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
-    assert_eq!(report.facts[0].affected, ["demo::demo::DATA", "demo::demo::main", "demo::f"], "{:#?}", report.facts);
+    assert_eq!(report.facts[0].affected, ["demo (bench \"demo\")::DATA", "demo (bench \"demo\")::main", "demo::f"], "{:#?}", report.facts);
     // A rewrite of the library function with equal compiled code: the bodies of the bench
     // still change (they read the text of the file). Each edit fact lists them.
     let (_d3, new) = tree(&lib.replace("x + 1", "1 + x"));
@@ -4175,7 +4179,7 @@ fn a_bench_target_with_the_name_of_the_package_has_source_items() {
     assert_eq!(descriptions(&report), ["changed expression `x` → `1` at `demo::f/tail/lhs`", "changed expression `1` → `x` at `demo::f/tail/rhs`"], "{:#?}", report.facts);
     // The first fact of the file has the bodies of the bench.
     assert!(report.facts.iter().all(|fact| !fact.spotlight), "{:#?}", report.facts);
-    assert_eq!((report.facts[0].compare, &report.facts[0].affected[..]), (Compare::CodeDifferent, &["demo::demo::DATA".to_string(), "demo::demo::main".to_string()][..]), "{:#?}", report.facts);
+    assert_eq!((report.facts[0].compare, &report.facts[0].affected[..]), (Compare::CodeDifferent, &["demo (bench \"demo\")::DATA".to_string(), "demo (bench \"demo\")::main".to_string()][..]), "{:#?}", report.facts);
     assert_eq!((report.facts[1].compare, report.facts[1].affected.len()), (Compare::CodeEqual, 0), "{:#?}", report.facts);
 }
 
@@ -4966,7 +4970,7 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
     const LIB: &str = "pub mod calendar;\nmod date;\n";
     const NOW: &str = " (the public API changes: a different crate can now use the item)";
     const GONE: &str = " (the public API changes: a different crate can no longer use the item)";
-    let bodies = [("demo::date::parse", equal("n0")), ("demo::date::is_leap", equal("n0")), ("demo::calendar::leap", equal("n0")), ("demo::calendar::days", equal("n0")), ("demo::calendar::is_leap", equal("n0")), ("demo::time::parse", equal("n0")), ("demo::time::is_leap", equal("n0")), ("demo::date::Year::leap", equal("n0"))];
+    let bodies = [("demo::date::parse", equal("n0")), ("demo::date::is_leap", equal("n0")), ("demo::calendar::leap", equal("n0")), ("demo::calendar::days", equal("n0")), ("demo::calendar::is_leap", equal("n0")), ("demo::time::parse", equal("n0")), ("demo::time::is_leap", equal("n0")), ("demo::date::Year::leap", equal("n0")), ("demo (bin \"demo\")::calendar::leap", equal("n0"))];
     // The visibility fact of a step: its text and its class.
     let visibility = |before: &[(&str, &str)], after: &[(&str, &str)]| -> (String, Compare) {
         let report = run_derived_files(before, after, &bodies);
@@ -5052,7 +5056,7 @@ fn a_visibility_change_of_the_public_api_is_a_fact_to_read() {
     let main = "pub mod calendar;\nfn main() {\n    let _ = calendar::days(4);\n}\n";
     let binary = |calendar: &'static str| vec![("Cargo.toml", MANIFEST), ("src/main.rs", main), ("src/calendar.rs", calendar)];
     let (text, class) = visibility(&binary(CALENDAR), &binary(leaked));
-    assert_eq!((text, class), ("visibility of `demo::calendar::leap`: `private` → `pub`".to_string(), Compare::CodeEqual));
+    assert_eq!((text, class), ("visibility of `demo (bin \"demo\")::calendar::leap`: `private` → `pub`".to_string(), Compare::CodeEqual));
 }
 
 /// Batch 5x, round 3: a proved rename or move that changes the set of the paths that a
@@ -5739,7 +5743,7 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
         assert!(report.accepted() || new.contains("#[cfg("), "{old}: {:#?}", report.facts);
         // The category of a part of an associated item is the category of its change (36.2).
         for fact in &report.facts {
-            let category = if fact.description.starts_with("visibility of the associated") { Some(Category::Visibility) } else if fact.description.starts_with("attributes of the associated") { Some(Category::Attribute) } else { None };
+            let category = if fact.description.starts_with("visibility of `demo::Table::FIRST`") { Some(Category::Visibility) } else if fact.description.starts_with("attribute") { Some(Category::Attribute) } else { None };
             assert!(category.is_none_or(|category| fact.category == category), "{fact:#?}");
         }
         report.facts.iter().map(|fact| (fact.description.clone(), fact.compare, fact.spotlight)).collect::<Vec<_>>()
@@ -5753,14 +5757,15 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
 
     // The visibility of an associated constant.
     let (text, class, spotlight) = one("pub const FIRST", "pub(crate) const FIRST");
-    assert_eq!(text, format!("visibility of the associated constant `FIRST` in `demo::impl Table`: `pub` → `pub(crate)` {api}"));
+    // Design 56.2: an associated constant is an item, and its facts have the item form.
+    assert_eq!(text, "visibility of `demo::Table::FIRST`: `pub` → `pub(crate)` (the public API changes: a different crate can no longer use the item)");
     assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // An attribute of an associated constant, and of an associated type.
     let (text, class, _) = one("    pub const FIRST", "    #[deprecated]\n    pub const FIRST");
-    assert_eq!(text, format!("attributes of the associated constant `FIRST` in `demo::impl Table`: added `#[deprecated]` {api}"));
+    assert_eq!(text, "attributes of `demo::Table::FIRST`: added `#[deprecated]` (a different crate that uses the item can get a different warning)");
     assert_eq!(class, Compare::CodeEqual);
     let (text, class, _) = one("    type Item = u8;", "    #[cfg(all())]\n    type Item = u8;");
-    assert!(text.starts_with("attributes of the associated type `Item` in `demo::impl <Table as Set>`: added `#[cfg(all())]`"), "{text}");
+    assert!(text.starts_with("attributes of `demo::<Table as Set>::Item`: added `#[cfg(all())]`"), "{text}");
     assert_eq!(class, Compare::CodeEqual);
     // The visibility of a `use` line: one changed line, and the public name goes.
     for new in ["use inner::helper;", "pub(crate) use inner::helper;"] {
@@ -6324,14 +6329,14 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     // Rule 1 and rule 3: a new constant with an attribute and a visibility is one fact. No
     // general fact shows its tokens.
     let (text, category, level, api) = one("    const HIDDEN", "    #[doc(hidden)]\n    pub const ANY: Op = Op(0);\n    const HIDDEN");
-    assert_eq!((text, category), (format!("added `demo::Op::ANY` {API}"), Category::Added));
+    assert_eq!((text, category), ("added `demo::Op::ANY` (the public API changes: a different crate can now use the item)".to_string(), Category::Added));
     assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Op::ANY`".to_string()]));
     // A changed value, a removed constant: the level is `major`.
     let (text, category, level, api) = one("DEFAULT: Op = Op(1)", "DEFAULT: Op = Op(2)");
     assert_eq!((text, category), (format!("value of `demo::Op::DEFAULT` changed: Op(1) → Op(2) {API}"), Category::Semantics));
-    assert_eq!((level.as_str(), api), ("major", vec!["changed `demo::Op::DEFAULT` (the type or the value)".to_string()]));
+    assert_eq!((level.as_str(), api), ("major", vec!["signature of `demo::Op::DEFAULT`".to_string()]));
     let (text, category, level, api) = one("    pub const DEFAULT: Op = Op(1);\n", "");
-    assert_eq!((text, category), (format!("removed `demo::Op::DEFAULT` {API}"), Category::Removed));
+    assert_eq!((text, category), ("removed `demo::Op::DEFAULT` (the public API changes: a different crate can no longer use the item)".to_string(), Category::Removed));
     assert_eq!((level.as_str(), api), ("major", vec!["removed `demo::Op::DEFAULT`".to_string()]));
     // A private constant of an inherent impl is not a part of the public API.
     let (text, category, level, api) = one("HIDDEN: u8 = 1", "HIDDEN: u8 = 2");
@@ -6341,15 +6346,16 @@ fn an_associated_item_has_its_own_fact_and_its_api_line() {
     let (text, category, level, _) = one("= \"op\"", "= \"operator\"");
     assert_eq!((text, category, level.as_str()), (format!("value of `demo::<Op as Named>::NAME` changed: \"op\" → \"operator\" {API}"), Category::Semantics, "major"));
     let (text, category, level, _) = one("type Out = u8", "type Out = u16");
-    assert_eq!((text, category, level.as_str()), (format!("associated type `demo::<Op as Named>::Out`: `type Out = u8;` → `type Out = u16;` {API}"), Category::Declaration, "major"));
+    assert_eq!((text, category, level.as_str()), (format!("type of `demo::<Op as Named>::Out`: `type Out = u8;` → `type Out = u16;` {API}"), Category::Declaration, "major"));
     // New methods: one fact for each method, and no fact for the member list.
     let report = run("    pub fn get", "    pub fn a(&self) -> u8 {\n        1\n    }\n    pub fn b(&self) -> u8 {\n        2\n    }\n    pub fn get");
     assert_eq!(descriptions(&report), ["added `demo::Op::a` (the public API changes: a different crate can now use the item)", "added `demo::Op::b` (the public API changes: a different crate can now use the item)"]);
     assert_eq!((report.api_level.as_deref(), report.api_changes.len()), (Some("minor"), 2), "{report:#?}");
     // The fact of a new impl block lists its members.
-    let (text, category, level, api) = one("pub struct Op(pub u8);", "impl Kind {\n    /// Each kind.\n    pub const ALL: [u8; 1] = [1];\n}\npub struct Op(pub u8);");
-    assert_eq!((text.as_str(), category), ("added `demo::impl Kind` with: `const ALL` (the public API changes: a different crate can now use the item)", Category::Added));
-    assert_eq!((level.as_str(), api), ("minor", vec!["added `demo::Kind::ALL`".to_string()]));
+    // Design 56.2: the constant is an item, as a method, and it has its own fact.
+    let report = run("pub struct Op(pub u8);", "impl Kind {\n    /// Each kind.\n    pub const ALL: [u8; 1] = [1];\n}\npub struct Op(pub u8);");
+    assert_eq!(descriptions(&report), ["added `demo::Kind::ALL` (the public API changes: a different crate can now use the item)", "added `demo::impl Kind` with: `const ALL` (the public API changes: a different crate can now use the item)"]);
+    assert_eq!((report.api_level.as_deref(), report.api_changes.clone()), (Some("minor"), vec!["added `demo::Kind::ALL`".to_string()]));
     // Rule 2: a constant in a function body follows the rule of a constant of a module.
     let (text, category, level, _) = one("MAX: usize = 32", "MAX: usize = 64");
     assert_eq!((text.as_str(), category, level.as_str()), ("value of `MAX` (in `demo::limit`) changed: 32 → 64", Category::Semantics, "patch"));
@@ -9481,7 +9487,7 @@ fn a_path_that_starts_with_a_target_name_names_the_file_that_semilla_does_not_pa
     let report = run_agent_files(&TARGET_FILES, &after, &[], &["load::run=the value is larger"]);
     let fact = agent_fact(&report, "a1");
     assert!(fact.holds && fact.facts.len() == 1 && fact.result == "holds: the behavior of existing code can change in each item", "{:#?}", report.agent_facts);
-    assert!(fact.places.iter().all(|place| place.starts_with("shop::load::run")), "{fact:#?}");
+    assert!(fact.places.iter().all(|place| place.starts_with("shop (bench \"load\")::run")), "{fact:#?}");
     // Negative: the fact for the other item of the parsed target is false.
     let report = run_agent_files(&TARGET_FILES, &after, &[], &["load::main=the value is larger"]);
     assert!(!agent_fact(&report, "a1").holds && agent_fact(&report, "a1").facts.is_empty(), "{:#?}", report.agent_facts);
@@ -9640,7 +9646,7 @@ fn each_fact_has_a_position_from_the_syntax_tree() {
             "semantics | deleted statement `log(c)` at `demo::f/S2` | src/lib.rs:-5",
             "semantics | changed expression `a` → `a + 1` at `demo::g/tail` | src/lib.rs:11, src/lib.rs:-12",
             "semantics | changed literal `3` → `5` at `demo::net::retry/tail` | src/net.rs:2, src/net.rs:-2",
-            "added | added `demo::net::wait` (the public API changes: a different crate can now use the item) | src/net.rs:4-7",
+            "added | added `demo::net::wait` (the public API changes: a different crate can now use the item) | src/net.rs:3-6",
         ]
     );
     // The default output of a step stays short: it has the position of each gap, and the
@@ -9649,7 +9655,7 @@ fn each_fact_has_a_position_from_the_syntax_tree() {
     assert!(short.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n"), "{short}");
     assert!(!short.contains("[added]\n      lines:"), "{short}");
     let verbose = views::text_report(std::slice::from_ref(&report));
-    assert!(verbose.contains("      lines: src/net.rs:4-7\n"), "{verbose}");
+    assert!(verbose.contains("      lines: src/net.rs:3-6\n"), "{verbose}");
     assert!(verbose.contains("      lines: src/lib.rs:-5\n"), "{verbose}");
     // Negative test: a step with no agent fact and no tag has no line of a tag.
     assert!(!short.contains("tag"), "{short}");
@@ -9820,7 +9826,7 @@ fn an_old_record_with_no_position_and_no_tag_reads() {
     let report = tag_step(&[], &[], &[]);
     let mut value = serde_json::to_value(&report).unwrap();
     let object = value.as_object_mut().unwrap();
-    for key in ["changed_lines", "no_fact", "tags"] {
+    for key in ["changed_lines", "no_fact", "tags", "hunks", "diff_trees", "own_diff", "wider_facts"] {
         object.remove(key);
     }
     for fact in object.get_mut("facts").unwrap().as_array_mut().unwrap() {
@@ -9829,6 +9835,7 @@ fn an_old_record_with_no_position_and_no_tag_reads() {
     let old: StepReport = serde_json::from_value(value).unwrap();
     assert!(old.facts.iter().all(|fact| fact.positions.is_empty()));
     assert!(old.tags.is_empty() && old.no_fact.is_empty() && old.changed_lines == 0);
+    assert!(old.hunks.is_empty() && old.diff_trees.is_empty() && !old.own_diff && old.wider_facts == 0);
     assert_eq!(descriptions(&old), descriptions(&report));
     let text = views::text_report(std::slice::from_ref(&old));
     assert!(!text.contains("lines:") && !text.contains("cover:") && !text.contains("tag"), "{text}");
@@ -9837,7 +9844,10 @@ fn an_old_record_with_no_position_and_no_tag_reads() {
     assert!(step.tags.is_empty());
 }
 
-/// Design 55.3 (batch 9b4, T2): a tag has each fact whose edit is fully in its lines.
+/// Design 55.3 (batch 9b4, T2; batch 9b4b, P2): a tag has each fact whose edit is fully in its
+/// lines. The hunks of the step: `@@ -3,3 +3,2 @@` and `@@ -12 +11 @@` in `src/lib.rs`, and
+/// `@@ -2 +2,5 @@` in `src/net.rs`. The count of a tag is the count of the changed lines that
+/// its places select.
 #[test]
 fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
     // One of the two literal edits of one function.
@@ -9845,23 +9855,33 @@ fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
     assert_eq!(tag_facts(&report), [("first edit".to_string(), vec!["f1".to_string()])]);
     assert!(report.accepted());
     let text = text_of(&report);
-    assert!(text.contains("  tag `first edit` (src/lib.rs:3): 1 fact(s): 1 semantics; 2 changed line(s)\n  ◆ f1 derived: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n  not in a tag: 5 fact(s): 4 semantics, 1 added; 11 changed line(s)\n"), "{text}");
+    assert!(text.contains("  tag `first edit` (src/lib.rs:3): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f1 derived: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n  not in a tag: 5 fact(s): 4 semantics, 1 added; 11 changed line(s)\n"), "{text}");
     // The line of a gap names the tag of its facts.
     assert!(text.contains("      in: demo::f\n      lines: src/lib.rs:3-4, src/lib.rs:-3-5\n      tags: `first edit` (f1), not in a tag (f2, f3)\n"), "{text}");
     assert!(text.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n      not in a tag\n"), "{text}");
-    // Two positions in two files, and a full file. The two tags have the fact f5: it shows
-    // in the first tag, and the second tag names it. Each total counts it one time.
+    // Two positions in two files, and a full file. The place `src/lib.rs:3-4` has the full
+    // new side of the hunk `@@ -3,3 +3,2 @@`: it selects the two sides of the hunk, and the
+    // tag has the deleted statement (f3). The two tags have the fact f5: it shows in the
+    // first tag, and the second tag names it. Each total counts it one time.
     let report = tag_step(&[], &[], &["src/lib.rs:3-4,src/net.rs:2=retry option", "src/net.rs=net"]);
-    assert_eq!(tag_facts(&report), [("retry option".to_string(), vec!["f1".to_string(), "f2".to_string(), "f5".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
+    assert_eq!(tag_facts(&report), [("retry option".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string(), "f5".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
     let text = text_of(&report);
-    assert!(text.contains("  tag `retry option` (src/lib.rs:3-4, src/net.rs:2): 3 fact(s): 3 semantics; 6 changed line(s)\n"), "{text}");
-    assert!(text.contains("  tag `net` (src/net.rs): 2 fact(s): 1 added, 1 semantics; 6 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      also in this tag, shown in a tag above: f5\n  not in a tag: 2 fact(s): 2 semantics; 3 changed line(s)\n"), "{text}");
+    assert!(text.contains("  tag `retry option` (src/lib.rs:3-4, src/net.rs:2): 4 fact(s): 4 semantics; 6 changed line(s)\n"), "{text}");
+    assert!(text.contains("  tag `net` (src/net.rs): 2 fact(s): 1 added, 1 semantics; 6 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      also in this tag, shown in a tag above: f5\n  not in a tag: 1 fact(s): 1 semantics; 2 changed line(s)\n"), "{text}");
     assert_eq!(text.matches("◆ f5 ").count(), 1, "{text}");
     assert!(text.contains("      tags: `retry option`, `net`\n"), "{text}");
-    // The hunk header `@@ -3,2 +3,2 @@` names the same lines on each side.
-    for place in ["src/lib.rs:+3,2", "src/lib.rs:-3,2", "src/lib.rs:-3-4"] {
+    // Each side of the hunk header `@@ -3,3 +3,2 @@` selects the two sides of the hunk.
+    for place in ["src/lib.rs:+3,2", "src/lib.rs:-3,3", "src/lib.rs:-3-5", "src/lib.rs:2-6", "src/lib.rs"] {
         let report = tag_step(&[], &[], &[&format!("{place}=hunk")]);
-        assert_eq!(tag_facts(&report), [("hunk".to_string(), vec!["f1".to_string(), "f2".to_string()])], "{place}");
+        assert_eq!(report.tags[0].facts[..3], ["f1".to_string(), "f2".to_string(), "f3".to_string()], "{place}");
+        assert!(report.tags[0].partial.is_empty(), "{place}");
+    }
+    // Negative test: a place with a part of the old side selects only its own lines.
+    for place in ["src/lib.rs:-3,2", "src/lib.rs:-3-4"] {
+        let report = tag_step(&[], &[], &[&format!("{place}=part")]);
+        assert_eq!(tag_facts(&report), [("part".to_string(), vec!["f1".to_string(), "f2".to_string()])], "{place}");
+        assert_eq!(report.tags[0].lines, 2, "{place}");
+        assert!(report.not_in_a_tag().contains(&"f3".to_string()), "{place}");
     }
     // Negative test: a tag in the lines of `demo::g` does not have a fact of `demo::f`.
     let report = tag_step(&[], &[], &["src/lib.rs:10-12=g"]);
@@ -9872,30 +9892,45 @@ fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
 /// them, as the old side of a hunk header.
 #[test]
 fn a_tag_on_a_deleted_statement_uses_the_lines_of_the_old_tree() {
-    // The hunk header of the deleted line is `@@ -5 +4,0 @@`.
+    // The deleted line is the last line of the old side of the hunk `@@ -3,3 +3,2 @@`.
     let report = tag_step(&[], &[], &["src/lib.rs:-5=no log"]);
     assert_eq!(tag_facts(&report), [("no log".to_string(), vec!["f3".to_string()])]);
     assert!(text_of(&report).contains("  tag `no log` (src/lib.rs:-5): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f3 derived: deleted statement `log(c)` at `demo::f/S2` [semantics]\n"));
-    // Negative test: the new-tree lines around the deleted statement do not have the fact.
+    // The full new side of the hunk selects the old side also (batch 9b4b, P2.1, rule 2).
     let report = tag_step(&[], &[], &["src/lib.rs:2-6=f"]);
-    assert_eq!(tag_facts(&report), [("f".to_string(), vec!["f1".to_string(), "f2".to_string()])]);
+    assert_eq!(tag_facts(&report), [("f".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string()])]);
+    assert!(text_of(&report).contains("  tag `f` (src/lib.rs:2-6): 3 fact(s): 3 semantics; 5 changed line(s)\n"));
+    // Negative test: a part of the new side of the hunk does not have the deleted statement.
+    let report = tag_step(&[], &[], &["src/lib.rs:4=second"]);
+    assert_eq!(tag_facts(&report), [("second".to_string(), vec!["f2".to_string()])]);
     assert!(report.not_in_a_tag().contains(&"f3".to_string()));
 }
 
-/// Design 55.3: a fact that is only in part in the lines of a tag is not in the tag. The
-/// output has a note with the position of the full fact.
+/// Design 55.3, rule 5 (batch 9b4b, P2.1): a fact with lines in the tag and lines out of it
+/// shows with the tag and the mark "in part", with the lines that are not in the tag. The
+/// head line has two counts: the full facts, and the facts in part.
 #[test]
-fn a_position_that_cuts_a_fact_in_two_does_not_have_the_fact() {
+fn a_fact_with_lines_in_a_tag_and_lines_out_of_it_is_in_the_tag_in_part() {
     let report = tag_step(&[], &[], &["src/net.rs:5-6=half"]);
     assert_eq!(tag_facts(&report), [("half".to_string(), Vec::new())]);
+    assert_eq!(report.tags[0].partial, ["f6"]);
     assert!(report.accepted());
-    assert_eq!(report.tags[0].notes, ["f6 is not in the tag: only a part of its lines is in the positions of the tag; the full fact: src/net.rs:4-7"]);
+    assert_eq!(report.tags[0].notes, ["in part: f6 has lines that are not in the tag: src/net.rs:3-4"]);
     let text = text_of(&report);
-    assert!(text.contains("  tag `half` (src/net.rs:5-6): 0 fact(s); 0 changed line(s)\n      note: f6 is not in the tag: only a part of its lines is in the positions of the tag; the full fact: src/net.rs:4-7\n  not in a tag: 6 fact(s): 5 semantics, 1 added; 13 changed line(s)\n"), "{text}");
-    // Negative test: the full lines of the fact give no note.
-    let report = tag_step(&[], &[], &["src/net.rs:4-7=full"]);
+    assert!(text.contains("  tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      in part: f6 has lines that are not in the tag: src/net.rs:3-4\n  not in a tag: 5 fact(s): 5 semantics; 9 changed line(s)\n"), "{text}");
+    // The fact shows one time, and it is not a part of the line "not in a tag".
+    assert_eq!(text.matches("◆ f6 ").count(), 1, "{text}");
+    assert!(!report.not_in_a_tag().contains(&"f6".to_string()));
+    // A fact that is fully in one tag and in part in a tag before it shows in the full tag.
+    let report = tag_step(&[], &[], &["src/net.rs:5-6=half", "src/net.rs:3-6=wait"]);
+    assert_eq!((report.tags[0].partial.clone(), report.tags[1].facts.clone()), (vec!["f6".to_string()], vec!["f6".to_string()]));
+    let text = text_of(&report);
+    assert!(text.contains("  tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)\n      also in this tag, shown in a tag below: f6\n      in part: f6 has lines that are not in the tag: src/net.rs:3-4\n  tag `wait` (src/net.rs:3-6): 1 fact(s): 1 added; 4 changed line(s)\n  ◆ f6 "), "{text}");
+    // Negative test: the full lines of the fact give no mark.
+    let report = tag_step(&[], &[], &["src/net.rs:3-6=full"]);
     assert_eq!(tag_facts(&report), [("full".to_string(), vec!["f6".to_string()])]);
-    assert!(report.tags[0].notes.is_empty());
+    assert!(report.tags[0].notes.is_empty() && report.tags[0].partial.is_empty());
+    assert!(!text_of(&report).contains("in part"));
 }
 
 /// Design 55.3: the check of a tag is a check of the form. A position with no edit in its
@@ -10059,14 +10094,19 @@ fn a_doc_comment_in_a_macro_body_is_a_line_of_the_macro_fact() {
     assert!(facts.iter().any(|fact| fact.starts_with("docs | ") && fact.ends_with("| src/lib.rs:1, src/lib.rs:-1")), "{facts:#?}");
 }
 
-/// Design 55.2: the line diff puts the closing brace of `a` between two blocks of added lines.
-/// Semilla takes the equal diff that agrees with the tree: the brace is not a changed line.
+/// Design 55.1 and 55.2: the line diff command shows one block of added lines, 3 to 7: the
+/// brace of `a` (line 4) is a changed line, and the brace of `b` (line 8) is an equal line.
+/// The tree shows `b` at the lines 5 to 8. The fact gets the lines of the block as git shows
+/// it: each line of a position is a changed line of the command.
 #[test]
-fn a_closing_brace_between_two_added_blocks_is_not_a_changed_line() {
+fn a_block_at_a_slid_place_has_the_lines_that_git_shows() {
     let report = run_derived("pub fn a() {\n    x();\n}\npub fn x() {}\n", "pub fn a() {\n    x();\n    x();\n}\n\npub fn b() {\n    x();\n}\npub fn x() {}\n", &[]);
-    assert_eq!(placed(&report), ["semantics | added statement `x()` at `demo::a/S1` | src/lib.rs:3", "added | added `demo::b` (the public API changes: a different crate can now use the item) | src/lib.rs:5-8"]);
-    // Negative test: line 4 (the brace of `a`) is in no position, and it is not a changed line.
+    assert_eq!(placed(&report), ["semantics | added statement `x()` at `demo::a/S1` | src/lib.rs:3", "added | added `demo::b` (the public API changes: a different crate can now use the item) | src/lib.rs:4-7"]);
+    assert_eq!(report.hunks.iter().map(|hunk| hunk.header()).collect::<Vec<_>>(), ["@@ -2,0 +3,5 @@"]);
+    // Negative test: line 8 (the brace of `b`) is an equal line of the command. It is in no
+    // position.
     assert_eq!((report.changed_lines, open_lines(&report).as_str()), (5, ""));
+    assert!(report.facts.iter().flat_map(|fact| &fact.positions).all(|position| position.end < 8), "{:?}", placed(&report));
 }
 
 /// Design 55.5: a line with equal tokens waits if its hunk has a changed token with no fact.
@@ -10092,14 +10132,53 @@ fn a_line_with_only_a_delimiter_joins_the_edit_next_to_it() {
     // Line 3 is the new closing brace of `f`.
     assert!(facts.contains(&"semantics | added statement `a + 5` at `demo::f/tail` | src/lib.rs:2-3".to_string()), "{facts:#?}");
     assert_eq!((report.changed_lines, open_lines(&report).as_str()), (4, ""));
-    // Negative test: with no fact in the hunk, the line stays open (a module order across an
-    // item that can give a macro has no fact).
+    // Negative test: a module order across an item that can give a macro is not a layout
+    // (design 56.5). Each line is in a `macro` fact.
     let m = ("Cargo.toml", MANIFEST);
     let files = |lib: &'static str| vec![m, ("src/lib.rs", lib), ("src/m.rs", "macro_rules! k { () => { 1 } }\n"), ("src/a.rs", "pub fn a() {}\n"), ("src/b.rs", "pub fn b() {}\n")];
     let report = run_derived_files(&files("mod a;\n#[macro_use]\nmod m;\nmod b;\n"), &files("mod b;\n#[macro_use]\nmod m;\nmod a;\n"), &[]);
-    assert!(placed(&report).is_empty());
-    assert_eq!(open_lines(&report), "src/lib.rs:1, src/lib.rs:4, src/lib.rs:-1, src/lib.rs:-4");
-    assert_eq!(report.cover_lines()[0], "! cover: 4 of the 4 changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)");
+    assert!(placed(&report).iter().all(|fact| fact.starts_with("macro | moved ")), "{:#?}", placed(&report));
+    assert_eq!(open_lines(&report), "");
+    assert_eq!(report.cover_lines()[0], "cover: each of the 4 changed line(s) is in a fact");
+}
+
+/// Design 56.4: the line diff pairs the body lines of the old `f` with the lines of the new
+/// `e`. The step adds a macro definition before the two items. The order check of design
+/// 56.5 has `f`: its lines with equal tokens in the item pair join the facts of `f`.
+#[test]
+fn a_line_of_an_item_pair_after_a_new_macro_definition_joins_a_fact_of_the_item() {
+    let old = "#[allow(unused)]\n#[inline]\nfn f(a: u32) -> u32 {\n    let b = a + 1;\n    let c = b * 2;\n    let d = c - 3;\n    d\n}\n";
+    let new = "#[inline]\nfn e(a: u32) -> u32 {\n    let b = a + 1;\n    let c = b * 2;\n    let d = c - 3;\n    d\n}\n\n#[allow(unused)]\n#[inline]\nfn f(a: u32) -> u32 {\n    e(a)\n}\n";
+    let report = run_derived(old, &format!("macro_rules! k {{ () => {{ 1 }} }}\n{new}"), &[]);
+    let facts = placed(&report);
+    assert_eq!(open_lines(&report), "", "{facts:#?}");
+    assert!(facts.contains(&"added | added macro `k` | src/lib.rs:1".to_string()), "{facts:#?}");
+    assert!(facts.contains(&"semantics | added statement `e(a)` at `demo::f/tail` | src/lib.rs:10-13".to_string()), "{facts:#?}");
+    assert!(report.no_fact_causes.is_empty());
+    // Negative test: `f` is also at a new place across a definition that the two trees have.
+    // The step has a `macro` fact for the new order, and no line is open.
+    let report = run_derived(&format!("{old}\n{SCOPE_MACRO}"), &format!("{SCOPE_MACRO}\n{new}"), &[]);
+    let facts = placed(&report);
+    assert_eq!(open_lines(&report), "", "{facts:#?}");
+    assert_eq!(facts.iter().filter(|fact| fact.starts_with("macro | moved ")).count(), 1, "{facts:#?}");
+}
+
+/// Design 56.4, rule 3: the full text gives the cause of each line with no fact. The short
+/// text does not have the cause lines.
+#[test]
+fn the_full_text_gives_the_cause_of_a_line_with_no_fact() {
+    let mut report = tag_step(&[], &[], &[]);
+    let lost: Vec<semilla_core::Position> = report.facts[3].positions.clone();
+    report.facts.remove(3);
+    report.no_fact = lost.clone();
+    report.no_fact_causes = vec![semilla_core::report::NoFactCause { cause: "in `demo::g`: its tokens are in a pair with a difference; a token of the line changes".to_string(), positions: lost }];
+    assert_eq!(report.cause_lines(), ["! cause: in `demo::g`: its tokens are in a pair with a difference; a token of the line changes: src/lib.rs:11, src/lib.rs:-12"]);
+    assert!(crate::views::text_report(std::slice::from_ref(&report)).contains("  ! cause: in `demo::g`"));
+    // Negative test: the short text has the `!` lines of the cover check only.
+    let short = crate::views::text_report_with(std::slice::from_ref(&report), false);
+    assert!(short.contains("! changed lines with no fact") && !short.contains("! cause"), "{short}");
+    // Negative test: a step with full cover has no cause line.
+    assert!(tag_step(&[], &[], &[]).cause_lines().is_empty());
 }
 
 /// Design 55.5: the lines with no fact pair their tokens first. The `use` line of a renamed
@@ -10127,8 +10206,69 @@ fn the_item_order_rule_keeps_the_textual_scope_of_a_macro() {
     assert_eq!(placed(&report), ["layout | layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place | src/lib.rs:4, src/lib.rs:-3"]);
     assert_eq!(open_lines(&report), "");
     // Negative test: an item that goes across `#[macro_use] mod m;` can get a different macro.
+    // Design 56.5: the move has a `macro` fact.
     let report = run_derived_files(&files("mod a;\n#[macro_use]\nmod m;\nmod b;\n"), &files("mod b;\n#[macro_use]\nmod m;\nmod a;\n"), &[]);
-    assert!(!only_layout(&report) && !report.no_fact.is_empty());
+    assert!(!only_layout(&report));
+    assert_eq!(placed(&report), ["macro | moved `demo::a` past 1 item that can give a macro: `demo::m`; a macro has a textual scope: a macro call in `demo::a` can have a new meaning | src/lib.rs:4, src/lib.rs:-1", "macro | moved `demo::b` past 1 item that can give a macro: `demo::m`; a macro has a textual scope: a macro call in `demo::b` can have a new meaning | src/lib.rs:1, src/lib.rs:-4"]);
+    assert_eq!(open_lines(&report), "");
+}
+
+const SCOPE_MACRO: &str = "macro_rules! two {\n    () => {\n        2\n    };\n}\n";
+const SCOPE_A: &str = "/// Gives one.\npub fn a() -> u32 {\n    1\n}\n";
+const SCOPE_B: &str = "/// Gives two.\npub fn b() -> u32 {\n    two!()\n}\n";
+const SCOPE_C: &str = "/// Gives three.\npub fn c() -> u32 {\n    3\n}\n";
+
+fn scope_facts(old: &[&str], new: &[&str]) -> Vec<String> {
+    let report = run_derived(&old.join("\n"), &new.join("\n"), &[]);
+    assert_eq!(open_lines(&report), "", "{:#?}", placed(&report));
+    // The gap list has each `macro` fact (design 54.4).
+    let gaps: Vec<&String> = report.gaps.iter().flat_map(|gap| &gap.facts).collect();
+    for fact in report.facts.iter().filter(|fact| fact.category == Category::Macro) {
+        assert!(gaps.contains(&&fact.id), "{:#?}", report.gaps);
+    }
+    placed(&report)
+}
+
+/// Design 56.5: a macro has a textual scope. A `macro_rules!` definition at a new place gets
+/// a fact that names the definition and the items between the two places. An item that goes
+/// across a definition gets a fact that names the item and the definition.
+#[test]
+fn a_move_across_an_item_that_can_give_a_macro_gets_a_macro_fact() {
+    let (m, a, b, c) = (SCOPE_MACRO, SCOPE_A, SCOPE_B, SCOPE_C);
+    // The definition goes down, across two items.
+    assert_eq!(scope_facts(&[m, a, b, c], &[a, b, m, c]), ["macro | moved `demo::two!` (it can give a macro) past 2 items: `demo::a`, `demo::b`; a macro has a textual scope: a macro call in these items can have a new meaning | src/lib.rs:11-15, src/lib.rs:-1-5", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:16, src/lib.rs:-6"]);
+    // The definition goes up, across two items.
+    assert_eq!(scope_facts(&[a, b, m, c], &[m, a, b, c]), ["macro | moved `demo::two!` (it can give a macro) past 2 items: `demo::a`, `demo::b`; a macro has a textual scope: a macro call in these items can have a new meaning | src/lib.rs:1-5, src/lib.rs:-11-15", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:6, src/lib.rs:-16"]);
+    // An item goes across the definition: down, then up.
+    assert_eq!(scope_facts(&[c, m, a, b], &[m, a, b, c]), ["macro | moved `demo::c` past 1 item that can give a macro: `demo::two!`; a macro has a textual scope: a macro call in `demo::c` can have a new meaning | src/lib.rs:17-20, src/lib.rs:-1-4", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:16, src/lib.rs:-5"]);
+    assert_eq!(scope_facts(&[m, a, b, c], &[c, m, a, b]), ["macro | moved `demo::c` past 1 item that can give a macro: `demo::two!`; a macro has a textual scope: a macro call in `demo::c` can have a new meaning | src/lib.rs:1-4, src/lib.rs:-17-20", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:5, src/lib.rs:-16"]);
+    // An item goes across a macro call: its expansion can have a definition.
+    let call = "two!();\n";
+    assert_eq!(scope_facts(&[m, call, a, b, c], &[m, c, call, a, b]), ["macro | moved `demo::c` past 1 item that can give a macro: `demo::two!#0`; a macro has a textual scope: a macro call in `demo::c` can have a new meaning | src/lib.rs:7-10, src/lib.rs:-19-22", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:11, src/lib.rs:-18"]);
+    // A definition in a module: the names have the module.
+    let block = |parts: &[&str]| format!("pub mod inner {{\n{}}}\n", parts.join("\n"));
+    let report = run_derived(&block(&[m, a, b, c]), &block(&[a, b, m, c]), &[]);
+    assert_eq!(placed(&report), ["macro | moved `demo::inner::two!` (it can give a macro) past 2 items: `demo::inner::a`, `demo::inner::b`; a macro has a textual scope: a macro call in these items can have a new meaning | src/lib.rs:12-16, src/lib.rs:-2-6", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:17, src/lib.rs:-7"]);
+    assert_eq!(open_lines(&report), "");
+    // Negative test: an item that does not go across a definition has a new layout only.
+    assert_eq!(scope_facts(&[m, a, b, c], &[m, a, c, b]), ["layout | layout of `src/lib.rs`: 2 changed lines with equal tokens; 8 changed lines of 1 item with equal tokens at a new place | src/lib.rs:16-20, src/lib.rs:-12-16"]);
+    // Negative test: a definition that goes across a `use` item only. A `use` item has no
+    // macro call.
+    let uses = "use core::mem;\nuse core::fmt;\nuse core::cmp;\nuse core::ops;\nuse core::str;\nuse core::num;\n";
+    assert_eq!(scope_facts(&[m, uses, a], &[uses, m, a]), ["layout | layout of `src/lib.rs`: 2 changed lines with equal tokens; 10 changed lines of 1 item with equal tokens at a new place | src/lib.rs:8-13, src/lib.rs:-1-6"]);
+    // Negative test: the definition has an edit at its new place. The fact of the edit
+    // stays, and the move has its fact.
+    let edit = m.replace("2\n", "4\n");
+    assert_eq!(scope_facts(&[m, a, b, c], &[a, b, &edit, c]), ["declaration | changed macro `two`: `macro_rules! two { () => { 2 }; }` → `macro_rules! two { () => { 4 }; }` | src/lib.rs:11-16, src/lib.rs:-1-6", "macro | moved `demo::two!` (it can give a macro) past 2 items: `demo::a`, `demo::b`; a macro has a textual scope: a macro call in these items can have a new meaning | src/lib.rs:11-15, src/lib.rs:-1-5"]);
+    // A `use` item with a path of one segment can name a macro in textual scope.
+    let export = "pub(crate) use two;\n";
+    assert_eq!(scope_facts(&[m, export, a, c], &[export, m, a, c]), ["macro | moved `pub(crate) use two;` past 1 item that can give a macro: `demo::two!`; a macro has a textual scope: a macro call in `pub(crate) use two;` can have a new meaning | src/lib.rs:1, src/lib.rs:-7", "layout | layout of `src/lib.rs`: 2 changed lines with equal tokens | src/lib.rs:2, src/lib.rs:-8"]);
+    // Negative test: an item with an edit that stays at its place, and no item goes across
+    // a definition.
+    assert_eq!(scope_facts(&[m, a, b, c], &[m, a, &b.replace("two!()", "two!() + 1"), c]), ["semantics | deleted statement `two!()` at `demo::b/tail` | src/lib.rs:-14", "semantics | added statement `two!() + 1` at `demo::b/tail` | src/lib.rs:14"]);
+    for (key, expected) in [("use two ;", true), ("pub ( crate ) use two as three ;", true), ("use { two , a :: b } ;", true), ("use a :: b ;", false), ("use a :: { b , c :: d } ;", false), ("use :: a ;", false), ("use crate :: a ;", false), ("use self :: two ;", false), ("use a :: * ;", false)] {
+        assert_eq!(crate::positions::one_segment_use(key), expected, "{key}");
+    }
 }
 
 /// Design 55.5: the item pair. The line diff pairs the body lines of the old `f` with the
@@ -10140,14 +10280,18 @@ fn a_line_with_equal_tokens_in_its_item_pair_joins_a_fact_of_the_item() {
     let new = "#[inline]\nfn e(a: u32) -> u32 {\n    let b = a + 1;\n    let c = b * 2;\n    let d = c - 3;\n    d\n}\n\n#[allow(unused)]\n#[inline]\nfn f(a: u32) -> u32 {\n    e(a)\n}\n";
     let report = run_derived(old, new, &[]);
     let facts = placed(&report);
-    assert!(facts.contains(&"semantics | deleted statement `let b = a + 1;` at `demo::f/S0` | src/lib.rs:-1, src/lib.rs:-3-4".to_string()), "{facts:#?}");
+    assert!(facts.contains(&"semantics | deleted statement `let b = a + 1;` at `demo::f/S0` | src/lib.rs:-1, src/lib.rs:-3".to_string()), "{facts:#?}");
+    // Negative test (design 55.2, rule 5): the old line 4 has the deleted statement. It is an
+    // equal line of the line diff command: it is in no position.
+    assert!(!report.facts.iter().flat_map(|fact| &fact.positions).any(|position| position.old && position.start <= 4 && 4 <= position.end), "{facts:#?}");
     assert!(facts.contains(&"semantics | added statement `e(a)` at `demo::f/tail` | src/lib.rs:9-12".to_string()), "{facts:#?}");
     assert_eq!((report.changed_lines, open_lines(&report).as_str()), (9, ""));
     assert!(!facts.iter().any(|fact| fact.starts_with("layout")), "{facts:#?}");
-    // Negative test: `f` goes across a macro definition. The rule does not apply: the lines
-    // stay in the marked line.
+    // Negative test: `f` goes across a macro definition. The new order has a `macro` fact
+    // (design 56.5), and the lines with equal tokens join the facts of `f`.
     let report = run_derived(&format!("{old}macro_rules! k {{ () => {{ 1 }} }}\n"), &new.replace("\n\n#[allow", "\nmacro_rules! k { () => { 1 } }\n#[allow"), &[]);
-    assert_eq!(open_lines(&report), "src/lib.rs:9-11, src/lib.rs:-1, src/lib.rs:-3");
+    assert_eq!(open_lines(&report), "");
+    assert_eq!(placed(&report).into_iter().filter(|fact| fact.starts_with("macro | ")).collect::<Vec<_>>(), ["macro | moved `demo::f` past 1 item that can give a macro: `demo::k!`; a macro has a textual scope: a macro call in `demo::f` can have a new meaning | src/lib.rs:9-11, src/lib.rs:-1, src/lib.rs:-3"]);
 }
 
 /// Design 55.2: an `impl` that moves with its type is a part of the move: its lines are lines
@@ -10170,8 +10314,9 @@ fn the_lines_of_an_impl_that_moves_with_its_type_are_lines_of_the_move() {
     assert_eq!(open_lines(&report), "");
 }
 
-/// Design 55.2: a module with a new name has a file with a new name. Each item of the file
-/// goes with the rename: its lines are lines of the rename fact.
+/// Design 55.2 and 56.3: a module with a new name has a file with a new name. The lines with
+/// the old name or the new name are lines of the rename fact. The lines of the file with equal
+/// tokens are lines of the fact of the source place.
 #[test]
 fn the_lines_of_the_file_of_a_renamed_module_are_lines_of_the_rename() {
     let m = ("Cargo.toml", MANIFEST);
@@ -10179,7 +10324,13 @@ fn the_lines_of_the_file_of_a_renamed_module_are_lines_of_the_rename() {
     let old = [m, ("src/lib.rs", "mod cart;\npub fn a(x: u32) -> u32 { cart::over(x, 3) }\n"), ("src/cart.rs", over)];
     let lib = "mod basket;\npub fn a(x: u32) -> u32 { basket::over(x, 3) }\n";
     let report = run_derived_files(&old, &[m, ("src/lib.rs", lib), ("src/basket.rs", over)], &[("demo::a", equal("n0")), ("demo::basket::over", equal("n1"))]);
-    assert_eq!(placed(&report), ["rename | renamed `demo::cart` → `demo::basket` | src/basket.rs:1-3, src/cart.rs:-1-3, src/lib.rs:1-2, src/lib.rs:-1-2"]);
+    assert_eq!(
+        placed(&report),
+        [
+            "rename | renamed `demo::cart` → `demo::basket` | src/lib.rs:1-2, src/lib.rs:-1-2",
+            "move | source place of `demo::cart` (now `demo::basket`): file `src/cart.rs` → file `src/basket.rs`; 1 of 1 item and 3 lines keep their tokens | src/basket.rs:1-3, src/cart.rs:-1-3",
+        ]
+    );
     assert_eq!((report.changed_lines, open_lines(&report).as_str()), (10, ""));
     // Negative test: an edit in the file and an added item keep their own lines.
     let more = format!("{}\npub fn extra() -> u32 {{\n    2\n}}\n", over.replace("{ 0 }", "{ 1 }"));
@@ -10187,10 +10338,512 @@ fn the_lines_of_the_file_of_a_renamed_module_are_lines_of_the_rename() {
     assert_eq!(
         placed(&report),
         [
-            "rename | renamed `demo::cart` → `demo::basket` | src/basket.rs:1, src/cart.rs:-1, src/lib.rs:1-2, src/lib.rs:-1-2",
-            "semantics | changed literal `0` → `1` at `demo::basket::over/S0/else/tail` | src/basket.rs:2-3, src/cart.rs:-2-3",
-            "added | added `demo::basket::extra` | src/basket.rs:4-7",
+            "rename | renamed `demo::cart` → `demo::basket` | src/lib.rs:1-2, src/lib.rs:-1-2",
+            "semantics | changed literal `0` → `1` at `demo::basket::over/S0/else/tail` | src/basket.rs:2, src/cart.rs:-2",
+            "added | added `demo::basket::extra` | src/basket.rs:5-7",
+            "move | source place of `demo::cart` (now `demo::basket`): file `src/cart.rs` → file `src/basket.rs`; 0 of 1 item and 2 old lines and 3 new lines keep their tokens | src/basket.rs:1, src/basket.rs:3-4, src/cart.rs:-1, src/cart.rs:-3",
         ]
     );
     assert_eq!(open_lines(&report), "");
+}
+
+// Batch 9b4b, part P3 (design 56.1): the identity of an item has its target.
+
+const DEPOT_TOML: (&str, &str) = ("Cargo.toml", "[package]\nname = \"depot\"\nversion = \"0.1.0\"\n");
+
+/// The facts of a step from the syntax tree only (no compiled compare).
+fn run_tree_files(before: &[(&str, &str)], after: &[(&str, &str)]) -> StepReport {
+    run_agent_files(before, after, &[], &[])
+}
+
+/// Example 1: a target file with the name of a module of the library. The inner docs of the
+/// module file get their docs fact for each target kind.
+#[test]
+fn a_target_file_with_the_name_of_a_module_does_not_hide_the_docs_of_the_module() {
+    let lib = ("src/lib.rs", "pub mod list;\n");
+    let old_module = ("src/list.rs", "//! Tools for lists.\n\npub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n");
+    let new_module = ("src/list.rs", "//! Tools for lists of numbers.\n\npub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n");
+    let target_text = "//! A target with the name of the module.\n\nfn main() {}\n";
+    for target in ["tests/list.rs", "examples/list.rs", "benches/list.rs", "src/bin/list.rs"] {
+        let report = run_tree_files(&[DEPOT_TOML, lib, old_module, (target, target_text)], &[DEPOT_TOML, lib, new_module, (target, target_text)]);
+        assert_eq!(fact_lines(&report), ["changed docs `//! Tools for lists.` → `//! Tools for lists of numbers.` [docs]"], "{target}");
+        assert_eq!(open_lines(&report), "", "{target}");
+    }
+    // A build script is not a target with items: the module `depot::build` keeps its facts.
+    let lib = ("src/lib.rs", "pub mod build;\n");
+    let script = ("build.rs", "//! The build script.\n\nfn main() {}\n");
+    let report = run_tree_files(&[DEPOT_TOML, lib, ("src/build.rs", "//! Old docs.\n"), script], &[DEPOT_TOML, lib, ("src/build.rs", "//! New docs.\n"), script]);
+    assert_eq!(fact_lines(&report), ["changed docs `//! Old docs.` → `//! New docs.` [docs]"]);
+    // Negative: an edit of the inner docs of the target file is a fact of the target. The
+    // module of the library gets no fact.
+    let report = run_tree_files(&[DEPOT_TOML, ("src/lib.rs", "pub mod list;\n"), old_module, ("tests/list.rs", target_text)], &[DEPOT_TOML, ("src/lib.rs", "pub mod list;\n"), old_module, ("tests/list.rs", "//! New docs of the target.\n\nfn main() {}\n")]);
+    assert_eq!(fact_lines(&report), ["changed docs `//! A target with the name of the module.` → `//! New docs of the target.` [docs]"]);
+    assert_eq!(report.facts[0].at.as_ref().map(|at| at.item.as_str()), Some("depot (test \"list\")"));
+}
+
+/// Example 2: two items with one name in a module of the library and in a target with the
+/// name of the module are not twins. Each one has its own path.
+#[test]
+fn an_item_of_a_target_is_not_a_twin_of_an_item_of_the_library() {
+    let lib = ("src/lib.rs", "pub mod list;\n");
+    let module = ("src/list.rs", "pub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n\npub fn last(v: &[u32]) -> u32 {\n    v[v.len() - 1]\n}\n");
+    let removed = ("src/list.rs", "pub fn last(v: &[u32]) -> u32 {\n    v[v.len() - 1]\n}\n");
+    for (target, path) in [
+        ("tests/list.rs", "depot (test \"list\")::first"),
+        ("examples/list.rs", "depot (example \"list\")::first"),
+        ("benches/list.rs", "depot (bench \"list\")::first"),
+        ("src/bin/list.rs", "depot (bin \"list\")::first"),
+        ("src/main.rs", "depot (bin \"depot\")::first"),
+    ] {
+        let file = (target, "fn first() {}\n\nfn main() {}\n");
+        let (_dir, tree) = load_files(&[DEPOT_TOML, lib, module, file]);
+        assert!(tree.items.contains_key(path) && tree.items.contains_key("depot::list::first"), "{target}: {:?}", tree.items.keys().collect::<Vec<_>>());
+        assert!(!tree.items.keys().any(|path| path.contains('#')), "{target}");
+        // The step removes the function of the library: one fact, and it is true.
+        let report = run_tree_files(&[DEPOT_TOML, lib, module, file], &[DEPOT_TOML, lib, removed, file]);
+        let lines = fact_lines(&report);
+        assert_eq!(lines.len(), 1, "{target}: {lines:#?}");
+        assert!(lines[0].starts_with("removed `depot::list::first`"), "{target}: {lines:#?}");
+        // The step removes the function of the target: the fact names the target.
+        let report = run_tree_files(&[DEPOT_TOML, lib, module, file], &[DEPOT_TOML, lib, module, (target, "fn main() {}\n")]);
+        let lines = fact_lines(&report);
+        assert_eq!(lines.len(), 1, "{target}: {lines:#?}");
+        assert!(lines[0].starts_with(&format!("removed `{path}`")), "{target}: {lines:#?}");
+    }
+    // Negative: two functions with one name in one module of one target are twins, as before.
+    let (_dir, tree) = load_files(&[DEPOT_TOML, ("src/lib.rs", "#[cfg(unix)]\npub fn first() {}\n#[cfg(not(unix))]\npub fn first() {}\n")]);
+    assert!(tree.items.contains_key("depot::first#0") && tree.items.contains_key("depot::first#1"), "{:?}", tree.items.keys().collect::<Vec<_>>());
+    // Negative: the path of an item of the library has no target.
+    assert!(tree.items.keys().all(|path| !path.contains('(')));
+}
+
+/// Example 3: the tests of a module move to an integration test. The result is the removed
+/// module with its items and the added items of the target. No item pairs across the targets.
+#[test]
+fn the_tests_of_a_module_that_move_to_a_test_target_do_not_pair() {
+    let lib = ("src/lib.rs", "pub mod checks;\n");
+    let old = ("src/checks.rs", "pub fn ok(v: u32) -> bool {\n    v > 0\n}\n\n#[cfg(test)]\nmod tests {\n    use super::ok;\n\n    #[test]\n    fn zero() {\n        assert!(!ok(0));\n    }\n\n    #[test]\n    fn one() {\n        assert!(ok(1));\n    }\n}\n");
+    let new = ("src/checks.rs", "pub fn ok(v: u32) -> bool {\n    v > 0\n}\n");
+    let target = ("tests/checks.rs", "use depot::checks::ok;\n\n#[test]\nfn zero() {\n    assert!(!ok(0));\n}\n\n#[test]\nfn one() {\n    assert!(ok(1));\n}\n");
+    let report = run_tree_files(&[DEPOT_TOML, lib, old], &[DEPOT_TOML, lib, new, target]);
+    let mut lines = fact_lines(&report);
+    lines.sort();
+    assert_eq!(
+        lines,
+        [
+            "added `depot (test \"checks\")::one` [added]",
+            "added `depot (test \"checks\")::zero` [added]",
+            "added `use` line: `use depot::checks::ok;` in `depot (test \"checks\")` [import]",
+            "removed `depot::checks::tests` [removed]",
+            "removed `use` line: `use super::ok;` in `depot::checks::tests` [import]",
+        ]
+    );
+    assert_eq!(open_lines(&report), "");
+    // Negative: a function with a body that moves between two modules of the library is one
+    // moved item, as before.
+    let old = [DEPOT_TOML, ("src/lib.rs", "pub mod a;\npub mod b;\n"), ("src/a.rs", "pub fn keep() {}\n\npub fn helper(a: u32, b: u32) -> u32 {\n    let sum = a + b;\n    sum * 2\n}\n"), ("src/b.rs", "pub fn other() {}\n")];
+    let new = [DEPOT_TOML, ("src/lib.rs", "pub mod a;\npub mod b;\n"), ("src/a.rs", "pub fn keep() {}\n"), ("src/b.rs", "pub fn other() {}\n\npub fn helper(a: u32, b: u32) -> u32 {\n    let sum = a + b;\n    sum * 2\n}\n")];
+    let report = run_tree_files(&old, &new);
+    assert!(fact_lines(&report).iter().any(|line| line.starts_with("moved `depot::a::helper` → `depot::b::helper`")), "{:#?}", fact_lines(&report));
+}
+
+/// The move rule of an item with equal tokens pairs an item across two targets. The fact is an
+/// explicit move fact, and its two paths name the two targets.
+#[test]
+fn a_move_of_an_item_to_a_different_target_names_the_two_targets() {
+    let helper = "fn helper(a: u32, b: u32) -> u32 {\n    let sum = a + b;\n    sum * 2\n}\n";
+    let main = "fn main() {\n    println!(\"{}\", depot::keep());\n}\n";
+    let old = [DEPOT_TOML, ("src/lib.rs", &*format!("pub fn keep() -> u32 {{\n    1\n}}\n\n{helper}")), ("src/main.rs", main)];
+    let new_main = format!("{main}\n{helper}");
+    let new = [DEPOT_TOML, ("src/lib.rs", "pub fn keep() -> u32 {\n    1\n}\n"), ("src/main.rs", &*new_main)];
+    let report = run_tree_files(&old, &new);
+    assert_eq!(fact_lines(&report), ["moved `depot::helper` → `depot (bin \"depot\")::helper` [move]"]);
+    // Negative: the item that stays in the library, and an equal item that the binary gets,
+    // are two items. The new item is an added item of the binary.
+    let kept = [DEPOT_TOML, old[1], ("src/main.rs", &*new_main)];
+    let report = run_tree_files(&old, &kept);
+    assert_eq!(fact_lines(&report), ["added `depot (bin \"depot\")::helper` [added]"]);
+}
+
+/// The facts of the agent resolve an item of a target by the path with the target. A loose
+/// path with one match resolves too.
+#[test]
+fn an_agent_fact_resolves_the_path_of_an_item_of_a_target() {
+    let lib = ("src/lib.rs", "pub mod list;\n");
+    let module = ("src/list.rs", "pub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n");
+    let old = [DEPOT_TOML, lib, module, ("tests/list.rs", "fn first() -> u32 {\n    1\n}\n\nfn only_here() -> u32 {\n    3\n}\n")];
+    let new = [DEPOT_TOML, lib, module, ("tests/list.rs", "fn first() -> u32 {\n    2\n}\n\nfn only_here() -> u32 {\n    4\n}\n")];
+    // The full path with the target.
+    let report = run_agent_files(&old, &new, &[], &["depot (test \"list\")::first=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(fact.holds && fact.facts.len() == 1, "{:#?}", report.agent_facts);
+    // A loose path with one match: the last name, the crate name of the target, and the
+    // name of the package.
+    for path in ["only_here", "list::only_here", "depot::only_here"] {
+        let text = format!("{path}=the value is larger");
+        let report = run_agent_files(&old, &new, &[], &[&text]);
+        let fact = agent_fact(&report, "a1");
+        assert!(fact.holds && fact.facts.len() == 1, "{path}: {:#?}", report.agent_facts);
+    }
+    // Negative: the exact path of the item of the library names only that item. It has no
+    // edit, so the fact does not hold.
+    let report = run_agent_files(&old, &new, &[], &["depot::list::first=the value is larger"]);
+    assert!(!agent_fact(&report, "a1").holds, "{:#?}", report.agent_facts);
+    // Negative: a loose path with two matches in two targets does not resolve.
+    let report = run_agent_files(&old, &new, &[], &["first=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes.iter().any(|note| note.contains("depot (test \"list\")::first")) && fact.notes.iter().any(|note| note.contains("depot::list::first")), "{fact:#?}");
+    // A rename in a target: the two words of the form `rename OLD NEW` can have a target.
+    let renamed = [DEPOT_TOML, lib, module, ("tests/list.rs", "fn first() -> u32 {\n    1\n}\n\nfn only_there() -> u32 {\n    3\n}\n")];
+    let report = run_agent_files(&old, &renamed, &["rename depot (test \"list\")::only_here depot (test \"list\")::only_there"], &[]);
+    assert!(agent_fact(&report, "a1").holds, "{:#?}", report.agent_facts);
+}
+
+// Batch 9b4b, P1 and P2: the line diff of a step, and the membership rule of a tag.
+
+const HUNK_LIB_OLD: &str = "//! The depot.\npub mod list;\npub mod net;\n\n/// Gives the count.\npub fn count(v: &[u32]) -> usize {\n    v.len()\n}\n\npub struct Gone {\n    pub size: u64,\n}\n\npub fn keep() {}\n\npub fn old_name(a: u32) -> u32 {\n    a + 1\n}\n\npub fn user(a: u32) -> u32 {\n    old_name(a)\n}\n\npub fn stay() {}\n";
+const HUNK_LIB_NEW: &str = "//! The depot.\npub mod list;\npub mod net;\n\n/// Gives the count of the items.\npub fn count(v: &[u32]) -> usize {\n    v.len()\n}\n\npub fn keep() {}\n\npub fn new_name(a: u32) -> u32 {\n    a + 1\n}\n\npub fn user(a: u32) -> u32 {\n    new_name(a)\n}\n\npub fn stay() {}\n\npub fn fresh(a: u32) -> u32 {\n    a + 3\n}\n";
+const HUNK_LIST_OLD: &str = "pub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n\npub fn last(v: &[u32]) -> u32 {\n    v[v.len() - 1]\n}\n\npub fn sum(v: &[u32]) -> u32 {\n    v.iter().sum()\n}\n\npub fn mid() {}\n\npub fn pair(a: u32, b: u32) -> (u32, u32) { (a, b) }\n\npub fn top() -> u32 {\n    9\n}\n";
+const HUNK_LIST_NEW: &str = "pub fn last(v: &[u32]) -> u32 {\n    v[v.len() - 1]\n}\n\npub fn sum(v: &[u32]) -> u32 {\n    v.iter().sum()\n}\n\npub fn first(v: &[u32]) -> u32 {\n    v[0]\n}\n\npub fn mid() {}\n\npub fn pair(a: u32, b: u32) -> (u32, u32) {\n    (a, b)\n}\n\npub fn top() -> u32 {\n    10\n}\n";
+const HUNK_NET_OLD: &str = "pub fn retry() -> u32 {\n    3\n}\n\npub fn wait() -> u32 {\n    10\n}\n\npub const LIMIT: u32 = 4;\n\npub fn open(a: u32) -> u32 {\n    let b = a + 1;\n    log(b);\n    b\n}\n\npub fn log(_: u32) {}\n";
+const HUNK_NET_NEW: &str = "pub fn retry() -> u32 {\n    5\n}\n\npub fn wait() -> u32 {\n    20\n}\n\npub const LIMIT: u32 = 8;\n\npub fn open(a: u32) -> u32 {\n    let b = a + 1;\n    b\n}\n\npub fn log(_: u32) {}\n";
+
+/// The step of the acceptance test of batch 9b4b, P2.1: 13 hunks in 3 files, with a removed
+/// item, an added item, a moved item, a rename, a docs edit, and a layout edit.
+fn hunk_step(tags: &[&str]) -> StepReport {
+    let old = [("Cargo.toml", MANIFEST), ("src/lib.rs", HUNK_LIB_OLD), ("src/list.rs", HUNK_LIST_OLD), ("src/net.rs", HUNK_NET_OLD)];
+    let new = [("Cargo.toml", MANIFEST), ("src/lib.rs", HUNK_LIB_NEW), ("src/list.rs", HUNK_LIST_NEW), ("src/net.rs", HUNK_NET_NEW)];
+    run_tagged(&old, &new, &[], &[], tags)
+}
+
+/// Design 55.3 (batch 9b4b, P2.1), the acceptance test: one tag whose places are each hunk
+/// header of the line diff command has each fact that has a position. The line "not in a tag"
+/// does not show.
+#[test]
+fn a_tag_with_each_hunk_header_has_each_fact_with_a_position() {
+    let plain = hunk_step(&[]);
+    let files: BTreeSet<&str> = plain.hunks.iter().map(|hunk| hunk.file.as_str()).collect();
+    assert!(plain.hunks.len() >= 12 && files.len() == 3, "{:#?}", plain.hunks);
+    let headers: Vec<String> = plain.hunks.iter().map(|hunk| format!("{} {}", hunk.file, hunk.header())).collect();
+    assert_eq!(headers.len(), 13);
+    for header in ["src/lib.rs @@ -10,4 +9,0 @@", "src/lib.rs @@ -24,0 +21,4 @@", "src/list.rs @@ -1,4 +0,0 @@", "src/list.rs @@ -12,0 +9,4 @@", "src/net.rs @@ -13 +12,0 @@"] {
+        assert!(headers.iter().any(|found| found == header), "{header}\n{headers:#?}");
+    }
+    // The step has each class of the test.
+    let facts = descriptions(&plain).join("\n");
+    for part in ["removed `demo::Gone`", "added `demo::fresh`", "1 item with equal tokens at a new place", "renamed `demo::old_name` → `demo::new_name`", "changed docs", "layout of `src/list.rs`: 6 changed lines with equal tokens"] {
+        assert!(facts.contains(part), "{part}\n{facts}");
+    }
+    assert!(plain.no_fact.is_empty(), "{:?}", plain.no_fact);
+    // One tag with the new side of each hunk, or the old side for a hunk with no new line.
+    let places: Vec<String> = plain.hunks.iter().map(|hunk| hunk.place()).collect();
+    assert!(places.contains(&"src/lib.rs:-10,4".to_string()) && places.contains(&"src/lib.rs:+21,4".to_string()), "{places:#?}");
+    let report = hunk_step(&[&format!("{}=all", places.join(","))]);
+    let tag = &report.tags[0];
+    assert!(tag.error.is_none(), "{:?}", tag.error);
+    let placed: Vec<String> = report.facts.iter().filter(|fact| !fact.positions.is_empty()).map(|fact| fact.id.clone()).collect();
+    assert_eq!(tag.facts, placed);
+    assert!(tag.partial.is_empty() && tag.notes.is_empty());
+    // The facts with no position are the two facts of the public API of the rename.
+    assert_eq!(report.facts.len(), placed.len() + 1);
+    assert_eq!(tag.lines, report.changed_lines);
+    assert!(report.not_in_a_tag().is_empty());
+    let text = text_of(&report);
+    assert!(!text.contains("not in a tag") && !text.contains("in part"), "{text}");
+    assert!(text.contains(&format!("{} changed line(s)\n", report.changed_lines)), "{text}");
+    // The same with the side that has the count 0, as git prints it, and with each full file.
+    let zero: Vec<String> = plain.hunks.iter().map(|hunk| if hunk.old_count == 0 { format!("{}:-{},0", hunk.file, hunk.old_start) } else if hunk.new_count == 0 { format!("{}:+{},0", hunk.file, hunk.new_start) } else { format!("{}:-{},{}", hunk.file, hunk.old_start, hunk.old_count) }).collect();
+    assert!(zero.contains(&"src/lib.rs:+9,0".to_string()) && zero.contains(&"src/lib.rs:-24,0".to_string()) && zero.contains(&"src/list.rs:+0,0".to_string()), "{zero:#?}");
+    for tags in [format!("{}=all", zero.join(",")), "src/lib.rs,src/list.rs,src/net.rs=all".to_string()] {
+        let report = hunk_step(&[&tags]);
+        assert_eq!((report.tags[0].error.as_ref(), &report.tags[0].facts, report.tags[0].lines), (None, &placed, report.changed_lines), "{tags}");
+    }
+    // One tag for each hunk: the counts of the tags give the count of the changed lines.
+    let each: Vec<String> = places.iter().enumerate().map(|(index, place)| format!("{place}=hunk {index}")).collect();
+    let report = hunk_step(&each.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(report.tags.iter().map(|tag| tag.lines).sum::<usize>(), report.changed_lines);
+    assert!(report.tags.iter().all(|tag| tag.error.is_none() && tag.lines > 0 && !text_of(&report).contains("0 fact(s); 0 changed line(s)")));
+    // Negative test: a tag without one hunk does not have the fact of that hunk.
+    let fewer: Vec<String> = places.iter().filter(|place| *place != "src/lib.rs:-10,4").cloned().collect();
+    let report = hunk_step(&[&format!("{}=most", fewer.join(","))]);
+    let outside = report.not_in_a_tag();
+    assert_eq!(outside.len(), 1, "{outside:?}");
+    assert!(report.fact(&outside[0]).unwrap().description.starts_with("removed `demo::Gone`"));
+    assert!(text_of(&report).contains("  not in a tag: 1 fact(s): 1 removed; 4 changed line(s)\n"), "{}", text_of(&report));
+    assert_eq!(report.tags[0].lines + 4, report.changed_lines);
+}
+
+/// Design 55.3, rule 3 (batch 9b4b, P2.1): the side of a hunk header with the count 0 is a
+/// valid place. It selects the hunk that has this header side.
+#[test]
+fn a_hunk_side_with_the_count_0_names_its_hunk() {
+    // The hunk `@@ -13 +12,0 @@` of `src/net.rs` deletes the statement `log(b);`.
+    for place in ["src/net.rs:+12,0", "src/net.rs:-13,1", "src/net.rs:-13"] {
+        let report = hunk_step(&[&format!("{place}=no log")]);
+        let tag = &report.tags[0];
+        assert!(tag.error.is_none(), "{place}: {:?}", tag.error);
+        assert_eq!((tag.facts.len(), tag.lines), (1, 1), "{place}");
+        assert!(report.fact(&tag.facts[0]).unwrap().description.starts_with("deleted statement `log(b)`"), "{place}");
+    }
+    assert!(text_of(&hunk_step(&["src/net.rs:+12,0=no log"])).contains("  tag `no log` (src/net.rs:+12,0): 1 fact(s): 1 semantics; 1 changed line(s)\n"));
+    // Negative test: no hunk has this side. The error gives the hunks of the file.
+    let report = hunk_step(&["src/net.rs:+11,0=wrong"]);
+    assert_eq!(report.tags[0].error.as_deref(), Some("the tag `wrong` has a position with no edit: no hunk of `src/net.rs` has the side `+11,0`; the hunks of the file: @@ -2 +2 @@, @@ -6 +6 @@, @@ -9 +9 @@, @@ -13 +12,0 @@"));
+    assert!(!report.accepted());
+    // Negative test: the start number of a side with lines does not name a hunk with the count 0.
+    let report = hunk_step(&["src/lib.rs:-24,0=fresh", "src/lib.rs:-16,0=wrong"]);
+    assert!(report.tags[0].error.is_none() && report.tags[1].error.is_some());
+    // The place form reads and prints.
+    for text in ["src/a.rs:+0,0", "src/a.rs:-0,0", "src/a.rs:-7,0"] {
+        assert_eq!(semilla_core::Place::parse(text).unwrap().text(), text);
+    }
+}
+
+/// Design 55.3, rule 6 (batch 9b4b, P2.1): a fact with no position is not a part of the count
+/// "not in a tag". These facts show in their own line.
+#[test]
+fn a_fact_with_no_position_is_not_a_part_of_the_count_of_the_facts_in_no_tag() {
+    // The fact of the public API of the rename has no position (design 55.2, rule 6).
+    let report = hunk_step(&["src/lib.rs,src/list.rs,src/net.rs=all"]);
+    let unplaced = report.no_position();
+    assert_eq!(unplaced.len(), 1);
+    let fact = report.fact(&unplaced[0]).unwrap();
+    assert!(fact.positions.is_empty() && fact.description.starts_with("public API: `demo::old_name` is now `demo::new_name`"));
+    assert!(report.not_in_a_tag().is_empty());
+    let text = text_of(&report);
+    let id = &unplaced[0];
+    assert!(text.contains(&format!("  facts with no position (a tag selects changed lines; these facts have none): 1 fact(s): 1 rename\n  ◆ {id} derived: public API: ")), "{text}");
+    assert!(!text.contains("not in a tag"), "{text}");
+    assert_eq!(text.matches(&format!("◆ {id} ")).count(), 1, "{text}");
+    // With a fact in no tag, the two groups have their own lines and their own counts.
+    let report = hunk_step(&["src/net.rs=net"]);
+    let text = text_of(&report);
+    let outside = report.not_in_a_tag();
+    assert!(!outside.contains(id) && outside.len() + report.tags[0].facts.len() + 1 == report.facts.len());
+    assert!(text.contains(&format!("  not in a tag: {} fact(s): ", outside.len())) && text.contains("  facts with no position (a tag selects changed lines; these facts have none): 1 fact(s): 1 rename\n"), "{text}");
+    // Negative test: a step with no tag has no such line.
+    assert!(!text_of(&hunk_step(&[])).contains("facts with no position"));
+}
+
+/// Design 55.3 (batch 9b4b, P2.2): equal facts stay one line with `× N` in the group of a tag,
+/// as in the output with no tag.
+#[test]
+fn equal_facts_stay_one_line_in_the_group_of_a_tag() {
+    let file = |name: &str| format!("use std::fmt::Debug;\n\npub fn {name}() {{}}\n");
+    let old: Vec<(&str, String)> = vec![("Cargo.toml", MANIFEST.to_string()), ("src/lib.rs", "pub mod one;\npub mod two;\npub mod three;\n".to_string()), ("src/one.rs", file("a")), ("src/two.rs", file("b")), ("src/three.rs", file("c"))];
+    let new: Vec<(&str, String)> = old.iter().map(|(name, text)| (*name, text.replace("Debug", "Display"))).collect();
+    let files = |list: &[(&'static str, String)]| -> Vec<(&'static str, &'static str)> { list.iter().map(|(name, text)| (*name, &*Box::leak(text.clone().into_boxed_str()))).collect() };
+    let (old, new) = (files(&old), files(&new));
+    // The three facts get one text: the text output merges equal facts (design 37.16).
+    let equal = |mut report: StepReport| {
+        assert_eq!(report.facts.len(), 3);
+        report.facts.iter_mut().for_each(|fact| fact.description = "changed `use` line: `use std::fmt::Debug;` → `use std::fmt::Display;`".to_string());
+        report
+    };
+    let plain = equal(run_tagged(&old, &new, &[], &[], &[]));
+    let folded: Vec<String> = text_of(&plain).lines().filter(|line| line.contains("× 3")).map(str::to_string).collect();
+    assert_eq!(folded.len(), 1, "{}", text_of(&plain));
+    let report = equal(run_tagged(&old, &new, &[], &[], &["src/one.rs,src/two.rs,src/three.rs=all"]));
+    let text = text_of(&report);
+    assert!(text.contains(&format!("  tag `all` (src/one.rs, src/two.rs, src/three.rs): 3 fact(s): 3 import; 6 changed line(s)\n{}\n", folded[0])), "{text}");
+    // Negative test: facts of two tags do not fold to one line.
+    let report = equal(run_tagged(&old, &new, &[], &[], &["src/one.rs=first", "src/two.rs,src/three.rs=rest"]));
+    let text = text_of(&report);
+    assert!(text.contains("× 2") && !text.contains("× 3"), "{text}");
+}
+
+/// Design 55.2, rule 5 (batch 9b4b, P1): a fact whose own lines are all equal lines of the
+/// command gets the changed lines of the smallest wider node that has a changed line. The old
+/// body of `load` is the body of `try_load` now: the command shows its lines as equal lines.
+#[test]
+fn a_fact_with_only_equal_lines_gets_the_changed_lines_of_the_wider_node() {
+    let before = "pub fn parse(input: &str) -> Result<u32, String> {\n    input.parse().map_err(|_| String::new())\n}\n\npub fn load(input: &str) -> Result<u32, String> {\n    let size = parse(input)?;\n    Ok(size + 1)\n}\n";
+    let after = "pub fn parse(input: &str) -> Result<u32, String> {\n    input.parse().map_err(|_| String::new())\n}\n\npub fn load(input: &str) -> u32 {\n    let size = parse(input).unwrap_or(0);\n    size + 1\n}\n\npub fn try_load(input: &str) -> Result<u32, String> {\n    let size = parse(input)?;\n    Ok(size + 1)\n}\n";
+    let report = run_derived(before, after, &[]);
+    let facts = placed(&report);
+    assert_eq!(report.hunks.iter().map(|hunk| hunk.header()).collect::<Vec<_>>(), ["@@ -5 +5,6 @@"]);
+    // Line 7 of the old tree (`Ok(size + 1)`) is an equal line of the command. The smallest
+    // wider node with a changed line is the function `load`: its changed old line is line 5.
+    assert!(facts.contains(&"semantics | deleted statement `Ok(size + 1)` at `demo::load/tail` | src/lib.rs:-5".to_string()), "{facts:#?}");
+    assert_eq!(report.wider_facts, 1);
+    // Each line of each position is a changed line of the command, and the cover check is full.
+    assert!(report.facts.iter().flat_map(|fact| &fact.positions).all(|position| report.hunks.iter().any(|hunk| hunk.range(position.old).0 <= position.start && position.end < hunk.range(position.old).1)), "{facts:#?}");
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (7, ""));
+    // Negative test: with no function `try_load`, the old line 7 is a changed line of the
+    // command. The fact has its own line, and no fact uses the rule.
+    let after = "pub fn parse(input: &str) -> Result<u32, String> {\n    input.parse().map_err(|_| String::new())\n}\n\npub fn load(input: &str) -> u32 {\n    let size = parse(input).unwrap_or(0);\n    size + 1\n}\n";
+    let report = run_derived(before, after, &[]);
+    let facts = placed(&report);
+    assert!(facts.contains(&"semantics | deleted statement `Ok(size + 1)` at `demo::load/tail` | src/lib.rs:-7".to_string()), "{facts:#?}");
+    assert_eq!(report.wider_facts, 0);
+}
+
+// Batch 9b4b, P4 (design 56.2): each member of a block is an item.
+
+const MEMBERS: &str = "/// The format tools.\nuse std::fmt;\n\npub struct Shape;\n\nimpl Shape {\n    /// The count of sides.\n    pub const SIDES: u32 = 4;\n    /// The count of corners.\n    pub const CORNERS: u32 = 4;\n    pub fn area(&self) -> u32 {\n        1\n    }\n}\n\npub trait Named {\n    /// The kind of the name.\n    type Kind;\n    /// The size.\n    const SIZE: usize;\n    fn name(&self) -> fmt::Arguments<'_>;\n}\n\nimpl Named for Shape {\n    /// The name type.\n    type Kind = u8;\n    /// The size of a shape.\n    const SIZE: usize = 1;\n    fn name(&self) -> fmt::Arguments<'_> {\n        format_args!(\"shape\")\n    }\n}\n\nextern \"C\" {\n    /// The first function.\n    pub fn first(x: u32) -> u32;\n}\n";
+
+/// The facts of one edit of `MEMBERS`, with their positions. Each changed line is in a fact,
+/// and no fact is a fallback fact of a block (design 56.2, rule 5).
+fn member_facts(old: &str, new: &str) -> Vec<String> {
+    assert!(MEMBERS.contains(old), "{old}");
+    let report = run_derived(MEMBERS, &MEMBERS.replacen(old, new, 1), &[]);
+    let facts = placed(&report);
+    assert_eq!(open_lines(&report), "", "{old}: {facts:#?}");
+    for fallback in ["changed source text with no other fact", "changed code:", "changed macro or signature"] {
+        assert!(!facts.iter().any(|fact| fact.contains(fallback)), "{old}: {facts:#?}");
+    }
+    facts
+}
+
+#[test]
+fn the_docs_of_each_member_and_of_a_use_line_have_the_docs_fact() {
+    // A `use` line, a constant of an inherent impl, a type and a constant of a trait impl, a
+    // type and a constant of a trait, a function of a block of foreign items.
+    for (old, new, line) in [
+        ("/// The format tools.", "/// The format tools of the library.", 1),
+        ("/// The count of sides.", "/// The count of the sides.", 7),
+        ("/// The kind of the name.", "/// The kind of the name of the item.", 17),
+        ("/// The size.", "/// The size in bytes.", 19),
+        ("/// The name type.", "/// The type of the name.", 25),
+        ("/// The size of a shape.", "/// The size of one shape.", 27),
+        ("/// The first function.", "/// The first foreign function.", 35),
+    ] {
+        assert_eq!(member_facts(old, new), [format!("docs | changed docs `{old}` → `{new}` | src/lib.rs:{line}, src/lib.rs:-{line}")]);
+    }
+    // Negative test (soundness): a changed doc line and a changed value of one constant are
+    // two facts. The doc line is in the docs fact, not only in the fact of the value.
+    let facts = member_facts("/// The count of sides.\n    pub const SIDES: u32 = 4;", "/// The count of the sides.\n    pub const SIDES: u32 = 5;");
+    assert_eq!(facts, ["semantics | value of `demo::Shape::SIDES` changed: 4 → 5 (the public API can change: a different crate can use the item) | src/lib.rs:8, src/lib.rs:-8", "docs | changed docs `/// The count of sides.` → `/// The count of the sides.` | src/lib.rs:7, src/lib.rs:-7"]);
+}
+
+#[test]
+fn an_added_or_removed_member_has_one_fact_with_its_docs_and_attributes() {
+    let cases = [
+        ("    pub fn area", "    /// The count of faces.\n    #[allow(unused)]\n    pub const FACES: u32 = 1;\n    pub fn area", "added | added `demo::Shape::FACES` (the public API changes: a different crate can now use the item) | src/lib.rs:11-13"),
+        ("    pub fn area", "    /// Makes a function.\n    #[allow(unused)]\n    make!(extra);\n    pub fn area", "added | added macro call `make!(extra)` (makes items that Semilla cannot list) | src/lib.rs:11-13"),
+        ("    fn name(&self) -> fmt::Arguments<'_>;", "    /// The unit.\n    #[allow(unused)]\n    type Unit;\n    fn name(&self) -> fmt::Arguments<'_>;", "added | added `demo::Named::Unit` (the public API changes: a different crate can now use the item) | src/lib.rs:21-23"),
+        ("    fn name(&self) -> fmt::Arguments<'_>;", "    /// The limit.\n    #[allow(unused)]\n    const LIMIT: usize = 2;\n    fn name(&self) -> fmt::Arguments<'_>;", "added | added `demo::Named::LIMIT` (the public API changes: a different crate can now use the item) | src/lib.rs:21-23"),
+        ("    fn name(&self) -> fmt::Arguments<'_> {", "    /// The limit.\n    #[allow(unused)]\n    const LIMIT: usize = 3;\n    fn name(&self) -> fmt::Arguments<'_> {", "added | added `demo::<Shape as Named>::LIMIT` (the public API changes: a different crate can now use the item) | src/lib.rs:29-31"),
+        ("    pub fn first(x: u32) -> u32;\n", "    pub fn first(x: u32) -> u32;\n    /// The second function.\n    #[link_name = \"two\"]\n    pub fn second(x: u32) -> u32;\n", "added | added `demo::extern C::second` | src/lib.rs:37-39"),
+        ("    pub fn first(x: u32) -> u32;\n", "    pub fn first(x: u32) -> u32;\n    /// The level.\n    #[link_name = \"level\"]\n    pub static LEVEL: u32;\n", "added | added `demo::extern C::LEVEL` | src/lib.rs:37-39"),
+    ];
+    for (old, new, expected) in cases {
+        assert_eq!(member_facts(old, new), [expected.to_string()], "{new}");
+        // The reverse edit removes the member.
+        let (before, after) = (MEMBERS.replacen(old, new, 1), MEMBERS);
+        let report = run_derived(&before, after, &[]);
+        assert_eq!((placed(&report), open_lines(&report).as_str()), (vec![expected.replace("added", "removed").replace("can now use", "can no longer use").replace("(makes ", "(made ").replace("src/lib.rs:", "src/lib.rs:-")], ""), "{new}");
+    }
+    // Negative test: a new member next to an edit of a different member. Each one has its own
+    // fact, and the block has no fact with its full text.
+    let facts = member_facts("    pub const CORNERS: u32 = 4;\n", "    pub const CORNERS: u32 = 5;\n    pub const FACES: u32 = 1;\n");
+    assert_eq!(facts, ["semantics | value of `demo::Shape::CORNERS` changed: 4 → 5 (the public API can change: a different crate can use the item) | src/lib.rs:10, src/lib.rs:-10", "added | added `demo::Shape::FACES` (the public API changes: a different crate can now use the item) | src/lib.rs:11"]);
+}
+
+#[test]
+fn the_members_of_a_block_in_a_new_order_are_a_layout_change() {
+    let facts = member_facts("    /// The count of sides.\n    pub const SIDES: u32 = 4;\n    /// The count of corners.\n    pub const CORNERS: u32 = 4;\n", "    /// The count of corners.\n    pub const CORNERS: u32 = 4;\n    /// The count of sides.\n    pub const SIDES: u32 = 4;\n");
+    assert_eq!(facts, ["layout | layout of `src/lib.rs`: 4 changed lines with equal tokens | src/lib.rs:9-10, src/lib.rs:-7-8"]);
+    let facts = member_facts("    /// The kind of the name.\n    type Kind;\n    /// The size.\n    const SIZE: usize;\n", "    /// The size.\n    const SIZE: usize;\n    /// The kind of the name.\n    type Kind;\n");
+    assert_eq!(facts, ["layout | layout of `src/lib.rs`: 4 changed lines with equal tokens | src/lib.rs:19-20, src/lib.rs:-17-18"]);
+    // Negative test: a member at a new place with a different value. The fact of the value
+    // shows the edit.
+    let facts = member_facts("    /// The count of sides.\n    pub const SIDES: u32 = 4;\n    /// The count of corners.\n    pub const CORNERS: u32 = 4;\n", "    /// The count of corners.\n    pub const CORNERS: u32 = 4;\n    /// The count of sides.\n    pub const SIDES: u32 = 6;\n");
+    assert_eq!(facts, ["semantics | value of `demo::Shape::SIDES` changed: 4 → 6 (the public API can change: a different crate can use the item) | src/lib.rs:9-10, src/lib.rs:-7-8"]);
+}
+
+// Batch 9b4b, part P5 (design 56.3): a module with a new source place.
+
+const PLACE_ROOT: &str = "//! The depot.\n\npub mod list;\n\npub fn first() -> u32 {\n    list::max(1, 2)\n}\n";
+const PLACE_LIST: &str = "//! The list tools.\n\n// A plain comment.\n\nuse core::cmp::Ordering;\n\n/// Gives the larger value.\npub fn max(a: u32, b: u32) -> u32 {\n    // The larger one.\n    if a > b {\n        a\n    } else {\n        b\n    }\n}\n\n/// A pair.\npub struct Pair {\n    pub left: u32,\n}\n\nimpl Pair {\n    pub const COUNT: u32 = 2;\n    pub fn order(&self) -> Ordering {\n        self.left.cmp(&Pair::COUNT)\n    }\n}\n";
+
+/// The root file with the module `list` as a block.
+fn place_block(list: &str) -> String {
+    let body: String = list.lines().map(|line| if line.is_empty() { "\n".to_string() } else { format!("    {line}\n") }).collect();
+    PLACE_ROOT.replace("pub mod list;\n", &format!("pub mod list {{\n{body}}}\n"))
+}
+
+fn place_facts(before: &[(&str, &str)], after: &[(&str, &str)]) -> Vec<String> {
+    let mut old = vec![("Cargo.toml", MANIFEST)];
+    old.extend(before.iter().copied());
+    let mut new = vec![("Cargo.toml", MANIFEST)];
+    new.extend(after.iter().copied());
+    let report = run_derived_files(&old, &new, &[]);
+    assert_eq!(open_lines(&report), "", "{:#?}", placed(&report));
+    placed(&report)
+}
+
+#[test]
+fn a_module_with_a_new_source_place_gets_one_fact_with_the_two_places() {
+    let block = place_block(PLACE_LIST);
+    // A new file path.
+    assert_eq!(place_facts(&[("src/lib.rs", PLACE_ROOT), ("src/list.rs", PLACE_LIST)], &[("src/lib.rs", PLACE_ROOT), ("src/list/mod.rs", PLACE_LIST)]), ["move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 3 items and 27 lines keep their tokens | src/list.rs:-1-27, src/list/mod.rs:1-27"]);
+    // A block is now a file.
+    assert_eq!(place_facts(&[("src/lib.rs", &block)], &[("src/lib.rs", PLACE_ROOT), ("src/list.rs", PLACE_LIST)]), ["move | source place of `demo::list`: a block in `src/lib.rs` → file `src/list.rs`; 3 of 3 items and 29 old lines and 27 new lines keep their tokens | src/lib.rs:3, src/lib.rs:-3-31, src/list.rs:1-27"]);
+    // A file is now a block.
+    assert_eq!(place_facts(&[("src/lib.rs", PLACE_ROOT), ("src/list.rs", PLACE_LIST)], &[("src/lib.rs", &block)]), ["move | source place of `demo::list`: file `src/list.rs` → a block in `src/lib.rs`; 3 of 3 items and 27 old lines and 29 new lines keep their tokens | src/lib.rs:3-31, src/lib.rs:-3, src/list.rs:-1-27"]);
+    // A renamed module with a new file: the rename fact stays. The lines of the file with
+    // equal tokens are in the fact of the source place.
+    let root = PLACE_ROOT.replace("list", "items");
+    let bodies = [("demo::first", equal("n0")), ("demo::items::max", equal("n1")), ("demo::items::Pair::order", equal("n2"))];
+    let report = run_derived_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", PLACE_ROOT), ("src/list.rs", PLACE_LIST)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &root), ("src/items.rs", PLACE_LIST)], &bodies);
+    assert_eq!(open_lines(&report), "");
+    assert_eq!(placed(&report), ["rename | renamed `demo::list` → `demo::items` | src/lib.rs:3, src/lib.rs:6, src/lib.rs:-3, src/lib.rs:-6", "rename | public API: `demo::list` is now `demo::items` (a different crate can no longer use the old path) | ", "move | source place of `demo::list` (now `demo::items`): file `src/list.rs` → file `src/items.rs`; 3 of 3 items and 27 lines keep their tokens | src/items.rs:1-27, src/list.rs:-1-27"]);
+    // Negative test: a module that keeps its file has no fact of a source place.
+    let edit = PLACE_LIST.replace("a > b", "a >= b");
+    let facts = place_facts(&[("src/lib.rs", PLACE_ROOT), ("src/list.rs", PLACE_LIST)], &[("src/lib.rs", PLACE_ROOT), ("src/list.rs", &edit)]);
+    assert_eq!(facts, ["semantics | changed operator `a > b` → `a >= b` at `demo::list::max/S0/cond` | src/list.rs:10, src/list.rs:-10"]);
+    // Negative test: a block that stays a block in the same file has no such fact.
+    let facts = place_facts(&[("src/lib.rs", &block)], &[("src/lib.rs", &block.replace("a > b", "a >= b"))]);
+    assert_eq!(facts, ["semantics | changed operator `a > b` → `a >= b` at `demo::list::max/S0/cond` | src/lib.rs:13, src/lib.rs:-13"]);
+}
+
+#[test]
+fn an_edit_in_a_module_with_a_new_source_place_keeps_its_own_fact() {
+    // An edit of a statement, a changed inner doc line, a changed plain comment, and a changed
+    // visibility of the module. Each one has its own fact. No line of an edit is in the fact
+    // of the source place (soundness).
+    let old = [("src/lib.rs", PLACE_ROOT), ("src/list.rs", PLACE_LIST)];
+    let edit = PLACE_LIST.replace("    if a > b {\n        a\n    } else {\n        b\n    }\n", "    core::cmp::max(b, a)\n");
+    assert_eq!(place_facts(&old, &[("src/lib.rs", PLACE_ROOT), ("src/list/mod.rs", &edit)]), ["semantics | deleted statement `if a > b { a } else { b }` at `demo::list::max/S0` | src/list.rs:-10-14", "semantics | added statement `core::cmp::max(b, a)` at `demo::list::max/tail` | src/list/mod.rs:10", "move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 22 lines keep their tokens | src/list.rs:-1-9, src/list.rs:-15-27, src/list/mod.rs:1-9, src/list/mod.rs:11-23"]);
+    let docs = PLACE_LIST.replace("//! The list tools.", "//! The tools of the list.");
+    assert_eq!(place_facts(&old, &[("src/lib.rs", PLACE_ROOT), ("src/list/mod.rs", &docs)]), ["docs | changed docs `//! The list tools.` → `//! The tools of the list.` | src/list.rs:-1, src/list/mod.rs:1", "move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 3 items and 26 lines keep their tokens | src/list.rs:-2-27, src/list/mod.rs:2-27"]);
+    let comment = PLACE_LIST.replace("// A plain comment.", "// A different comment.");
+    assert_eq!(place_facts(&old, &[("src/lib.rs", PLACE_ROOT), ("src/list/mod.rs", &comment)]), ["move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 3 items and 26 lines keep their tokens | src/list.rs:-1-2, src/list.rs:-4-27, src/list/mod.rs:1-2, src/list/mod.rs:4-27", "docs | comment in `src/list.rs`: removed `// A plain comment.` | src/list.rs:-3", "docs | comment in `src/list/mod.rs`: added `// A different comment.` | src/list/mod.rs:3"]);
+    // The inner docs pair across a block and a file: equal docs give no fact, and a changed
+    // doc line gives one fact.
+    assert_eq!(place_facts(&[("src/lib.rs", &place_block(PLACE_LIST))], &[("src/lib.rs", PLACE_ROOT), ("src/list.rs", &docs)]), ["docs | changed docs `/// The list tools.` → `/// The tools of the list.` | src/lib.rs:-4, src/list.rs:1", "move | source place of `demo::list`: a block in `src/lib.rs` → file `src/list.rs`; 3 of 3 items and 28 old lines and 26 new lines keep their tokens | src/lib.rs:3, src/lib.rs:-3, src/lib.rs:-5-31, src/list.rs:2-27"]);
+    // The `mod` line with one more change: the change has its fact.
+    let private = PLACE_ROOT.replace("pub mod list;", "pub(crate) mod list;");
+    let facts = place_facts(&[("src/lib.rs", &place_block(PLACE_LIST))], &[("src/lib.rs", &private), ("src/list.rs", PLACE_LIST)]);
+    assert_eq!(facts, ["visibility | visibility of `demo::list`: `pub` → `pub(crate)` (the public API changes: a different crate can no longer use the item) | src/lib.rs:3, src/lib.rs:-3", "move | source place of `demo::list`: a block in `src/lib.rs` → file `src/list.rs`; 3 of 3 items and 28 old lines and 27 new lines keep their tokens | src/lib.rs:-4-31, src/list.rs:1-27"]);
+    // An item that moves to a different module at the same time is not in the count of the
+    // items that keep their tokens.
+    let moved_out = PLACE_LIST.replace("/// A pair.\npub struct Pair {\n    pub left: u32,\n}\n\n", "");
+    let facts = place_facts(&old, &[("src/lib.rs", PLACE_ROOT), ("src/list/mod.rs", &moved_out)]);
+    assert_eq!(facts, ["removed | removed `demo::list::Pair` (the public API changes: a different crate can no longer use the item) | src/list.rs:-17-20", "move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 23 old lines and 22 new lines keep their tokens | src/list.rs:-1-16, src/list.rs:-21-27, src/list/mod.rs:1-22"]);
+}
+
+#[test]
+fn a_node_that_depends_on_the_file_path_is_named_in_the_fact_of_the_source_place() {
+    let extra = "pub fn one() -> u32 {\n    1\n}\n";
+    let run = |tail: &str, files: &[(&str, &str, &str)]| {
+        let list = format!("{PLACE_LIST}{tail}");
+        let mut old = vec![("src/lib.rs", PLACE_ROOT), ("src/list.rs", list.as_str())];
+        let mut new = vec![("src/lib.rs", PLACE_ROOT), ("src/list/mod.rs", list.as_str())];
+        for (before, after, text) in files {
+            old.push((before, text));
+            new.push((after, text));
+        }
+        place_facts(&old, &new)
+    };
+    // `include_str!` reads a file next to the file of the call.
+    assert_eq!(run("\npub const NOTES: &str = include_str!(\"notes.txt\");\n", &[("src/notes.txt", "src/list/notes.txt", "notes\n")]), ["file | src/list/notes.txt: added | src/list/notes.txt:1", "file | src/notes.txt: removed | src/notes.txt:-1", "macro | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 4 items and 28 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_str!(\"notes.txt\")` (`src/list/mod.rs:29`) | src/list.rs:-1-29, src/list/mod.rs:1-29"]);
+    assert_eq!(run("\npub const DATA: &[u8] = include_bytes!(\"notes.txt\");\n", &[("src/notes.txt", "src/list/notes.txt", "notes\n")]), ["file | src/list/notes.txt: added | src/list/notes.txt:1", "file | src/notes.txt: removed | src/notes.txt:-1", "macro | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 4 items and 28 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!(\"notes.txt\")` (`src/list/mod.rs:29`) | src/list.rs:-1-29, src/list/mod.rs:1-29"]);
+    assert_eq!(run("\npub fn here() -> &'static str {\n    file!()\n}\n", &[]), ["macro | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 4 items and 30 lines keep their tokens; the meaning of 1 node depends on the path of the file: `file!()` (`src/list/mod.rs:30`) | src/list.rs:-1-31, src/list/mod.rs:1-31"]);
+    // A `path` attribute names a file next to the file of the `mod` line. The module of the
+    // attribute has its own fact of a source place.
+    assert_eq!(run("\n#[path = \"extra.rs\"]\npub mod extra;\n", &[("src/extra.rs", "src/list/extra.rs", extra)]), ["attribute | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 3 items and 29 lines keep their tokens; the meaning of 1 node depends on the path of the file: `path = \"extra.rs\"` (`src/list/mod.rs:29`) | src/list.rs:-1-30, src/list/mod.rs:1-30", "move | source place of `demo::list::extra`: file `src/extra.rs` → file `src/list/extra.rs`; 1 of 1 item and 3 lines keep their tokens | src/extra.rs:-1-3, src/list/extra.rs:1-3"]);
+    // Negative test: a name `path` that is no attribute, and a macro with a different name.
+    assert_eq!(run("\npub fn here(path: &str) -> String {\n    let path = path;\n    format!(\"{path}\")\n}\n", &[]), ["move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 4 of 4 items and 32 lines keep their tokens | src/list.rs:-1-32, src/list/mod.rs:1-32"]);
 }

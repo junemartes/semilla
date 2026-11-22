@@ -1,7 +1,8 @@
 //! The tags of the agent (design 55.3). A tag is a name for a part of the step. The agent
 //! gives the part by positions in the line diff. A tag is not a fact: it makes no claim about
 //! the behavior, and it changes no fact, no line of the gap list, and no result. A tag has each
-//! fact whose edit is fully in its lines.
+//! fact whose edit is fully in its lines. The unit of a tag is the hunk of the line diff of the
+//! step (design 55.8): a place selects changed lines of the hunks.
 
 use std::collections::BTreeSet;
 
@@ -21,34 +22,63 @@ fn line_count(workspace: &Workspace, file: &str) -> Option<usize> {
     file_text(workspace, file).map(|text| text.lines().count())
 }
 
-/// The lines of a fact on one side.
-fn side(fact: &Fact, old: bool) -> Vec<&Position> {
-    fact.positions.iter().filter(|position| position.old == old).collect()
+/// The changed lines that the places of a tag select (design 55.3, rule 2): (file, old tree,
+/// line).
+type Selected<'a> = BTreeSet<(&'a str, bool, usize)>;
+
+/// The lines that the places select in the hunks of the line diff of the step.
+fn selected<'a>(report: &'a StepReport, places: &[Place]) -> Selected<'a> {
+    let mut out = BTreeSet::new();
+    for hunk in &report.hunks {
+        for place in places {
+            for (old, start, end) in place.selects(hunk) {
+                out.extend((start..end).map(|line| (hunk.file.as_str(), old, line)));
+            }
+        }
+    }
+    out
 }
 
-/// True if each line of the position is in a place of the list. The places can share the
-/// lines of the position between them.
-fn inside(position: &Position, places: &[Place]) -> bool {
-    (position.start..=position.end).all(|line| {
-        let one = Position { file: position.file.clone(), old: position.old, start: line, end: line };
-        places.iter().any(|place| place.contains(&one))
-    })
+/// The lines of a fact that the tag does not select.
+fn outside(fact: &Fact, selected: &Selected) -> Vec<Position> {
+    let lines = fact.positions.iter().flat_map(|position| (position.start..=position.end).map(move |line| (position, line)));
+    Position::normal(lines.filter(|(position, line)| !selected.contains(&(position.file.as_str(), position.old, *line))).map(|(position, line)| Position { file: position.file.clone(), old: position.old, start: line, end: line }).collect())
 }
 
-/// The rule of a tag (design 55.3): the fact is in the tag if each line of its edit is in the
-/// places. The two sides of a fact are the two sides of one change, as the two sides of a hunk
-/// header. Thus the fact is in the tag if each of its new-tree lines is in the places, or each
-/// of its old-tree lines is. A deleted text has old-tree lines only.
-pub(crate) fn in_tag(fact: &Fact, places: &[Place]) -> bool {
-    [false, true].into_iter().any(|old| {
-        let lines = side(fact, old);
-        !lines.is_empty() && lines.iter().all(|position| inside(position, places))
-    })
+/// The place of a fact in a tag (design 55.3, rules 4 and 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InTag {
+    /// The tag selects each line of the fact, or each line of one side of the fact.
+    Full,
+    /// The tag selects a line of the fact, and not each line of one side.
+    Part,
+    /// The tag selects no line of the fact. A fact with no position is in no tag.
+    No,
 }
 
-/// True if a line of the fact is in a place.
-fn meets(fact: &Fact, places: &[Place]) -> bool {
-    fact.positions.iter().any(|position| places.iter().any(|place| place.meets(position)))
+/// The rule of a tag (design 55.3, rule 4): the fact is in the tag if each line of its
+/// position is a selected line of the tag. The two sides of a fact are the two sides of one
+/// change, as the two sides of a hunk: a full side stands for the two sides. Thus the fact is
+/// also in the tag if each of its new-tree lines is a selected line, or each of its old-tree
+/// lines is (Decided by Claude: the rule of batch 9b4 stays for a place that has a part of a
+/// hunk).
+pub(crate) fn in_tag(fact: &Fact, selected: &Selected) -> InTag {
+    let has = |position: &Position, line: usize| selected.contains(&(position.file.as_str(), position.old, line));
+    let mut counts = [(0, 0), (0, 0)];
+    for position in &fact.positions {
+        for line in position.start..=position.end {
+            let side = &mut counts[position.old as usize];
+            side.0 += 1;
+            side.1 += has(position, line) as usize;
+        }
+    }
+    if counts.iter().any(|(all, inside)| *all > 0 && all == inside) {
+        InTag::Full
+    } else if counts.iter().any(|(_, inside)| *inside > 0) {
+        InTag::Part
+    } else {
+        InTag::No
+    }
 }
 
 /// The positions with an edit that are nearest to a place with no edit: the last one before
@@ -77,10 +107,10 @@ fn one_tag(input: &StepInput, report: &StepReport, text: &str) -> Tag {
         Err(error) => return Tag { name: text.to_string(), error: Some(error), form: true, ..Default::default() },
     };
     let mut tag = Tag { name, places: places.iter().map(Place::text).collect(), ..Default::default() };
-    let changed: BTreeSet<&str> = report.facts.iter().flat_map(|fact| fact.positions.iter()).chain(&report.no_fact).map(|position| position.file.as_str()).collect();
+    let changed: BTreeSet<&str> = report.hunks.iter().map(|hunk| hunk.file.as_str()).collect();
     for place in &places {
         // The form: a line number after the last line of the file.
-        if let Some((old, _, end)) = place.lines {
+        if let Some((old, _, end)) = place.lines.filter(|_| !place.empty) {
             let tree = if old { input.before } else { input.after };
             if let Some(count) = line_count(tree, &place.file).filter(|count| end > *count) {
                 tag.error = Some(format!("the position `{}` of the tag `{}` is after the last line: `{}` has {count} line(s) in the {} tree", place.text(), tag.name, place.file, if old { "old" } else { "new" }));
@@ -88,9 +118,8 @@ fn one_tag(input: &StepInput, report: &StepReport, text: &str) -> Tag {
                 return tag;
             }
         }
-        // A place with no edit in its lines.
-        let single = std::slice::from_ref(place);
-        if report.facts.iter().any(|fact| meets(fact, single)) || report.no_fact.iter().any(|position| place.meets(position)) {
+        // A place that selects no changed line.
+        if report.hunks.iter().any(|hunk| !place.selects(hunk).is_empty()) {
             continue;
         }
         let cause = if !changed.contains(place.file.as_str()) {
@@ -98,6 +127,10 @@ fn one_tag(input: &StepInput, report: &StepReport, text: &str) -> Tag {
             let more = if files.len() > 6 { format!(", and {} more", files.len() - 6) } else { String::new() };
             files.truncate(6);
             format!("the step does not change the file `{}`; the changed files: {}{more}", place.file, files.join(", "))
+        } else if place.empty {
+            let headers: Vec<String> = report.hunks.iter().filter(|hunk| hunk.file == place.file).map(|hunk| hunk.header()).collect();
+            let more = if headers.len() > 6 { format!(", and {} more", headers.len() - 6) } else { String::new() };
+            format!("no hunk of `{}` has the side `{}`; the hunks of the file: {}{more}", place.file, place.text().rsplit(':').next().unwrap_or_default(), headers[..headers.len().min(6)].join(", "))
         } else {
             let near = nearest(report, place);
             format!("the step has no edit in `{}`; the nearest positions with an edit: {}", place.text(), near.join(", "))
@@ -105,16 +138,21 @@ fn one_tag(input: &StepInput, report: &StepReport, text: &str) -> Tag {
         tag.error = Some(format!("the tag `{}` has a position with no edit: {cause}", tag.name));
         return tag;
     }
+    let selected = selected(report, &places);
     for fact in &report.facts {
-        if in_tag(fact, &places) {
-            tag.facts.push(fact.id.clone());
-        } else if meets(fact, &places) {
-            tag.notes.push(format!("{} is not in the tag: only a part of its lines is in the positions of the tag; the full fact: {}", fact.id, Position::list(&fact.positions)));
+        match in_tag(fact, &selected) {
+            InTag::Full => tag.facts.push(fact.id.clone()),
+            InTag::Part => {
+                tag.partial.push(fact.id.clone());
+                tag.notes.push(format!("in part: {} has lines that are not in the tag: {}", fact.id, Position::list(&outside(fact, &selected))));
+            }
+            InTag::No => {}
         }
     }
-    // The count of a tag is the count of the changed lines of its facts, on the two sides: the
-    // counts of the groups of a step with no fact in two tags give the count of the cover line.
-    tag.lines = report.line_count(&tag.facts);
+    // The count of a tag is the count of the changed lines that its places select, on the two
+    // sides (design 55.3): the counts of tags with no line in common, and the count of the
+    // lines that no tag selects, give the count of the cover line.
+    tag.lines = selected.len();
     tag
 }
 
