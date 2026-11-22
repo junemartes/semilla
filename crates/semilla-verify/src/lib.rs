@@ -13,6 +13,7 @@
 
 pub mod agent;
 pub mod cfgcond;
+mod comments;
 pub mod checks;
 pub mod edits;
 pub mod facts;
@@ -582,6 +583,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         positions::assign(input, &mut plain);
         agent::apply(input, &mut plain);
         tags::apply(input, &mut plain);
+        comments::apply(input, &mut plain);
         return plain;
     }
     let mut outcome = identity::derive(input, bodies, exprs, plain);
@@ -595,6 +597,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     positions::assign(input, &mut outcome);
     agent::apply(input, &mut outcome);
     tags::apply(input, &mut outcome);
+    comments::apply(input, &mut outcome);
     outcome
 }
 

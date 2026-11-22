@@ -83,6 +83,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::show=TEXT'
   other facts, filled in by Semilla:
   ◆ f2 derived: changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]` [semantics]
+      comment above line 22, changed in this step: see f1
   ◆ f3 derived: changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics]
   ◆ f1 derived: changed comment `// the text of the cart` → `// the full text of the cart` [docs]
   cover: each of the 4 changed line(s) is in a fact

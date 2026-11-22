@@ -990,7 +990,7 @@ pub fn fit_line(line: &str) -> String {
 /// Returns the build code section (it comes before the claims) and the other facts. Each
 /// other entry has the place of its lines (design 54.5) and the lines: the index of the fact
 /// of the agent that the fact is below, or the group of a fact that Semilla filled in.
-fn fact_list(step: &StepReport, names: bool) -> (String, Vec<Block>) {
+fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<Block>) {
     use text::put_line as put;
     let facts = &step.facts;
     let mut first = String::new();
@@ -1073,7 +1073,40 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<Block>) {
     // Design 54.7: the cut applies only to a list of places. A fact line and the lines below
     // it show the full text.
     let fit = |line: String| if names { line } else { fit_line(&line) };
-    for line in shown {
+    // Design 58.6: a comment of a changed item shows one time, with the first fact in the
+    // order of the output that has it. The order of the output: the build code section, the
+    // facts below each fact of the agent, then the groups (in a step with tags: the tags).
+    // The lines of the comments are not a part of the compare of two fact lines above.
+    let tagged = !step.tags.is_empty();
+    let output_key = |line: &Line| match (line.rank, tagged, line.tag, line.place) {
+        (0, ..) => (0, 0),
+        (_, true, TagGroup::Tag(tag), _) => (1, tag),
+        (_, true, TagGroup::Outside, _) => (2, 0),
+        (_, true, TagGroup::NoPosition, _) => (3, 0),
+        (_, false, _, Ok(agent)) => (1, agent),
+        (_, false, _, Err(group)) => (2, group),
+    };
+    let mut output: Vec<usize> = (0..shown.len()).collect();
+    output.sort_by_key(|index| output_key(&shown[*index]));
+    let in_output: Vec<&semilla_core::report::Fact> = output.iter().flat_map(|index| shown[*index].ids.iter()).filter_map(|id| facts.iter().find(|fact| fact.id == *id)).collect();
+    let mut of_fact = semilla_core::report::comments_shown(&in_output).into_iter();
+    let mut comment_lines: Vec<Vec<String>> = vec![Vec::new(); shown.len()];
+    for index in &output {
+        let mut no_edit = false;
+        for _ in &shown[*index].ids {
+            for comment in of_fact.next().unwrap_or_default() {
+                comment_lines[*index].extend(comment.lines().into_iter().map(|line| format!("      {line}")));
+                no_edit |= comment.state == semilla_core::report::CommentState::NoEdit;
+            }
+        }
+        // Design 58.4: the note shows one time, below the comments of the first fact line
+        // that has a comment with no edit.
+        if no_edit && !*noted {
+            *noted = true;
+            comment_lines[*index].push(format!("      note: {}", semilla_core::report::COMMENT_NOTE));
+        }
+    }
+    for (line, comment_lines) in shown.into_iter().zip(comment_lines) {
         let mut block = String::new();
         let out = if line.rank == 0 { &mut first } else { &mut block };
         if line.ids.len() == 1 {
@@ -1083,6 +1116,9 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<Block>) {
             put(out, &fit(format!("      places: {}", line.places.join(", "))));
         }
         for text in &line.lines {
+            put(out, text);
+        }
+        for text in &comment_lines {
             put(out, text);
         }
         // Design 55.2: `status --verbose` shows the lines of each fact, in the form of a
@@ -1177,10 +1213,12 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
     // full line).
     let put = |out: &mut String, line: &str| text::put_line(out, &if names { line.to_string() } else { fit_line(line) });
     let mut out = String::new();
+    // Design 58.4: the note about the comments shows one time in a report.
+    let mut noted = false;
     for step in steps {
         let start = out.len();
         put(&mut out, &format!("step {}  {}", step.step, text::quoted(&step.intent)));
-        let (build_code, facts) = fact_list(step, names);
+        let (build_code, facts) = fact_list(step, names, &mut noted);
         out.push_str(&build_code);
         for claim in &step.claims {
             let mark = match &claim.status {
@@ -1252,6 +1290,10 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         }
         // Design 55.1: the command that gives the hunks of the step.
         for line in step.hunk_lines(names) {
+            text::put_line(&mut out, &format!("  {line}"));
+        }
+        // Design 58.8: the count of the comments of the changed items that have no edit.
+        if let Some(line) = step.comment_count_line() {
             text::put_line(&mut out, &format!("  {line}"));
         }
         for uncovered in &step.uncovered {

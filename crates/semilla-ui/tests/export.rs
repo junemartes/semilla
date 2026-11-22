@@ -702,3 +702,80 @@ fn a_folded_fact_shows_its_text_one_time() {
     let plain = line(&data);
     assert!(plain.contains("; 3 site(s): changed path `old` → `new` (`demo::a`, `demo::b`, `demo::c`)"), "{plain}");
 }
+
+/// The demo data with two facts of one item in the step 6. Each fact has the two comments of
+/// the item: the docs with no edit, and a comment with an edit.
+fn data_with_comments() -> (semilla_ui::UiData, usize, String) {
+    use semilla_core::report::Position;
+    use semilla_core::{CommentState, RelatedComment};
+    let mut data = demo_data();
+    let step = data.report.steps.iter_mut().find(|step| step.step == 6).expect("the demo data has the step 6");
+    let number = step.step;
+    for id in ["f1", "f2"] {
+        step.facts.push(semilla_core::Fact { id: id.into(), part: "edit".into(), description: format!("changed literal of {id}"), status: "derived".into(), category: semilla_core::Category::Semantics, ..Default::default() });
+    }
+    let fact = step.output_order()[0].id.clone();
+    let comments = vec![
+        RelatedComment { place: "docs of `shop::price`".into(), state: CommentState::NoEdit, text: "/// Gives the price with a tax of <10> percent.\n/// The tax is fixed.".into(), position: Position { file: "src/lib.rs".into(), old: false, start: 1, end: 2 }, facts: Vec::new() },
+        RelatedComment { place: "comment above line 5".into(), state: CommentState::Changed, text: "// The fee.".into(), position: Position { file: "src/lib.rs".into(), old: false, start: 4, end: 4 }, facts: vec!["f9".into()] },
+    ];
+    for item in step.facts.iter_mut() {
+        // Each fact of the item has the comments in the record. A reader shows them one time.
+        item.comments = comments.clone();
+    }
+    (data, number, fact)
+}
+
+/// Design 58.9: the Markdown review and the HTML review have one section with the comments of
+/// the changed items: the count line, the note, and each comment one time with the number of
+/// its first fact. A comment with no edit has its full text. Negative test: a review of a
+/// change set with no comment has no such section and no count line.
+// rule+ R58.9-2
+// rule- R58.9-2
+#[test]
+fn the_review_has_the_comments_of_the_changed_items() {
+    let (data, step, fact) = data_with_comments();
+    let note = semilla_core::report::COMMENT_NOTE;
+    let markdown = render_markdown(&data, true);
+    assert_eq!(markdown.matches("#### Comments of the changed items (2)").count(), 1, "{markdown}");
+    assert!(markdown.contains(&format!("- step {step}, with {fact}: docs of `shop::price`, no edit in this step (src/lib.rs:1-2)")), "{markdown}");
+    assert!(markdown.contains("  /// Gives the price with a tax of <10> percent.\n  /// The tax is fixed.\n"), "the full text is in a code block:\n{markdown}");
+    assert!(markdown.contains(&format!("- step {step}, with {fact}: comment above line 5, changed in this step: see f9")) && !markdown.contains("// The fee."), "{markdown}");
+    assert!(markdown.contains("comments: 1 comment(s) of the changed items have no edit in this step"), "{markdown}");
+    assert!(markdown.matches(&md_text(note)).count() >= 1, "{markdown}");
+    let html = without_vendor(&render_html(&data));
+    assert_eq!(html.matches("<h4>Comments of the changed items (2)</h4>").count(), 1);
+    assert!(html.contains(&format!("<li>step {step}, with {fact}: docs of `shop::price`, no edit in this step (src/lib.rs:1-2)<pre class=\"diff\">/// Gives the price with a tax of &lt;10&gt; percent.\n/// The tax is fixed.</pre></li>")), "the HTML review has the comment");
+    assert!(html.contains("changed in this step: see f9</li>"));
+
+    let plain = demo_data();
+    let (markdown, html) = (render_markdown(&plain, true), without_vendor(&render_html(&plain)));
+    for text in [&markdown, &html] {
+        assert!(!text.contains("Comments of the changed items") && !text.contains("no edit in this step") && !text.contains("Semilla does not check that a comment"), "a review with no comment has no line of design 58");
+    }
+}
+
+/// Design 58.9: the data of the local UI. The view of a fact has the lines of the comments
+/// that show with it, and the summary has the count line with the note. Negative test: a
+/// fact with no comment has no key `comment_lines`, and a summary with no comment has no key
+/// `comment_line`.
+// rule+ R58.9-3
+// rule- R58.9-3
+#[test]
+fn the_ui_data_has_the_comment_lines_of_a_fact() {
+    let (data, step, fact) = data_with_comments();
+    let report = data.report.steps.iter().find(|report| report.step == step).unwrap();
+    let views = semilla_ui::summary::FactView::of_step(report);
+    let with: Vec<&semilla_ui::summary::FactView> = views.iter().filter(|view| !view.comment_lines.is_empty()).collect();
+    assert_eq!(with.len(), 1, "the comments show with one fact");
+    assert_eq!(with[0].fact.id, fact);
+    assert_eq!(with[0].comment_lines, ["docs of `shop::price`, no edit in this step (src/lib.rs:1-2):", "    | /// Gives the price with a tax of <10> percent.", "    | /// The tax is fixed.", "comment above line 5, changed in this step: see f9"]);
+    let summary = serde_json::to_value(changeset(&Ctx::new(data), &ReviewFile::default())).unwrap();
+    let line = summary["comment_line"].as_str().expect("the summary has the count line");
+    assert!(line.starts_with("comments: 1 comment(s) of the changed items have no edit in this step. Semilla does not check"), "{line}");
+    assert!(summary.to_string().contains("\"comment_lines\":[\"docs of `shop::price`"));
+
+    let summary = serde_json::to_value(changeset(&Ctx::new(demo_data()), &ReviewFile::default())).unwrap();
+    assert!(summary.get("comment_line").is_none_or(serde_json::Value::is_null), "{}", summary["comment_line"]);
+    assert!(!summary.to_string().contains("comment_lines"));
+}

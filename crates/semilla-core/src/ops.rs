@@ -122,6 +122,18 @@ impl Category {
         }
     }
 
+    /// The table of design 58.2: true if a fact with this category makes its item a changed
+    /// item, so the output shows the comments of the item. A `rename` fact makes only the
+    /// item that declares the name a changed item. The fact of a new item and of a removed
+    /// item is the full item. A fact of the other categories with `false` has no edit in the
+    /// body or the declaration of an item.
+    pub fn changes_item(self) -> bool {
+        match self {
+            Category::Semantics | Category::Macro | Category::Text | Category::Declaration | Category::Attribute | Category::Visibility | Category::Import | Category::Rename => true,
+            Category::Docs | Category::Layout | Category::Added | Category::Removed | Category::Move | Category::Manifest | Category::File | Category::BuildCode | Category::Indirect => false,
+        }
+    }
+
     /// The table of design 54.2, column 2: true if an edit with this category is in the gap
     /// list when the agent states no fact for it. The agent writes no fact for a declaration,
     /// an attribute, or a build input (design 48.2): Semilla shows them alone.

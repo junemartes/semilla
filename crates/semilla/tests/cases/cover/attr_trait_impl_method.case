@@ -41,8 +41,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: attributes of `depot::<Sq as Sides>::m`: added `#[cfg(all())]` [attribute]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::<Sq as Sides>::m=…'
+      docs of `depot::<Sq as Sides>::m`, no edit in this step (src/lib.rs:8): `/// The old doc.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 1 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
   ! spotlight: cfg attribute: depot::<Sq as Sides>::m
 run again: semilla step 'the change' --reason 'depot::<Sq as Sides>::m=<why>'
 === positions

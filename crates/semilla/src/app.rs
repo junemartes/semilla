@@ -1968,6 +1968,10 @@ impl App {
         if let Some(line) = verdict.report.gap_line() {
             gaps.push_str(&format!("\n{line}"));
         }
+        // Design 58.8: the count of the comments of the changed items that have no edit.
+        if let Some(line) = verdict.report.comment_count_line() {
+            gaps.push_str(&format!("\n{line}"));
+        }
         Ok(format!("{line}\ntagged {commit} with {} steps; the change set is closed{notice}{marks}{gaps}", set.steps.len()))
     }
 
@@ -2280,6 +2284,10 @@ pub(crate) fn short_text(report: &Report) -> String {
         // Design 55.4: a changed line with no fact is a defect of Semilla. The line stays in
         // the short text.
         for line in step.no_fact_lines() {
+            put_line(&mut text, &format!("  {line}"));
+        }
+        // Design 58.8: the count of the comments of the changed items that have no edit.
+        if let Some(line) = step.comment_count_line() {
             put_line(&mut text, &format!("  {line}"));
         }
         for fact in step.facts.iter().filter(|fact| fact.spotlight && fact.reason.is_none()) {

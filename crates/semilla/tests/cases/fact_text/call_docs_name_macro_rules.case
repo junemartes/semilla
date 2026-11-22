@@ -36,8 +36,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro call `table!( A = 1, )` → `table!( A = 2, )` (makes items that Semilla cannot list) [declaration]
       ✗ spotlight: the macro call `table!( A = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#0=…'
+      docs of `depot::table!#0`, no edit in this step (src/lib.rs:5): `/// Like macro_rules! of the std.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   cover: each of the 2 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
 run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'

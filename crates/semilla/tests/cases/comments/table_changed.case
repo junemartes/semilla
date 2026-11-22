@@ -1,0 +1,85 @@
+note: a fact of each of these categories makes its item a changed item: attribute, visibility, import, text, macro
+rule+: R58.2-1
+exit: 0
+must_match: docs of `shop::a`, no edit in this step
+must_match: docs of `shop::b`, no edit in this step
+must_match: no edit in this step \(src/lib.rs:1\): `// The map of the sums\.`
+must_match: docs of `shop::d`, no edit in this step
+must_match: docs of `shop::e`, no edit in this step
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+// The map of the sums.
+use std::collections::BTreeMap;
+/// A: is not inline.
+pub fn a() -> BTreeMap<u32, u32> { BTreeMap::new() }
+/// B: is private.
+fn b() -> u32 { 2 }
+/// D: says "ten".
+pub fn d() -> &'static str { "ten" }
+/// E: prints one value.
+pub fn e(x: u32) { println!("{}", x); let _ = b(); }
+=== new src/lib.rs
+// The map of the sums.
+use std::collections::{BTreeMap, BTreeSet};
+/// A: is not inline.
+#[inline]
+pub fn a() -> BTreeMap<u32, u32> { let _: BTreeSet<u32> = BTreeSet::new(); BTreeMap::new() }
+/// B: is private.
+pub fn b() -> u32 { 2 }
+/// D: says "ten".
+pub fn d() -> &'static str { "five" }
+/// E: prints one value.
+pub fn e(x: u32) { println!("{} {}", x, x); let _ = b(); }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: added `let` `let _: BTreeSet<u32> = BTreeSet::new();` (f4)
+      in: shop::a
+      lines: src/lib.rs:5
+      to state it: --change 'shop::a=TEXT'
+  ? 1 place: changed literal `"ten"` → `"five"` (f5)
+      in: shop::d
+      lines: src/lib.rs:9, src/lib.rs:-8
+      to state it: --change 'shop::d=TEXT'
+  ? 1 place: replace macro input `println!("{}", x);` → `println!("{} {}", x, x);` (f6)
+      in: shop::e
+      lines: src/lib.rs:11, src/lib.rs:-10
+      to state it: --change 'shop::e=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::a=TEXT' --change 'shop::d=TEXT' --change 'shop::e=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `shop::a`: added `#[inline]` [attribute]
+      docs of `shop::a`, no edit in this step (src/lib.rs:3): `/// A: is not inline.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  ◆ f2 derived: visibility of `shop::b`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility]
+      docs of `shop::b`, no edit in this step (src/lib.rs:6): `/// B: is private.`
+  ◆ f3 derived: changed `use` line: `use std::collections::BTreeMap;` → `use std::collections::{BTreeMap, BTreeSet};` in `shop` [import]
+      comment above `shop::use#0`, no edit in this step (src/lib.rs:1): `// The map of the sums.`
+  ◆ f4 derived: added `let` `let _: BTreeSet<u32> = BTreeSet::new();` at `shop::a/S0` [semantics]
+  ◆ f5 derived: changed literal `"ten"` → `"five"` at `shop::d/tail` [semantics]
+      docs of `shop::d`, no edit in this step (src/lib.rs:8): `/// D: says "ten".`
+  ◆ f6 derived: replace macro input `println!("{}", x);` → `println!("{} {}", x, x);` at `shop::e/S0` [macro]
+      docs of `shop::e`, no edit in this step (src/lib.rs:10): `/// E: prints one value.`
+  cover: each of the 11 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 5 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: attributes of `shop::a`: added `#[inline]` [attribute]
+    lines: src/lib.rs:4, src/lib.rs:-4
+◆ f2 derived: visibility of `shop::b`: `private` → `pub` (the public API changes: a different crate can now use the item) [visibility]
+    lines: src/lib.rs:7, src/lib.rs:-6
+◆ f3 derived: changed `use` line: `use std::collections::BTreeMap;` → `use std::collections::{BTreeMap, BTreeSet};` in `shop` [import]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f4 derived: added `let` `let _: BTreeSet<u32> = BTreeSet::new();` at `shop::a/S0` [semantics]
+    lines: src/lib.rs:5
+◆ f5 derived: changed literal `"ten"` → `"five"` at `shop::d/tail` [semantics]
+    lines: src/lib.rs:9, src/lib.rs:-8
+◆ f6 derived: replace macro input `println!("{}", x);` → `println!("{} {}", x, x);` at `shop::e/S0` [macro]
+    lines: src/lib.rs:11, src/lib.rs:-10

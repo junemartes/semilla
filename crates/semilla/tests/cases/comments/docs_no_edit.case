@@ -1,0 +1,42 @@
+note: the docs of the changed item show with the mark, the note, and the count line
+rule+: R58.2-1 R58.4-1 R58.4-4 R58.8-1 R58.10-1 R58.1-1
+exit: 0
+must_match: docs of `shop::price`, no edit in this step \(src/lib.rs:1\): `/// Gives the price with a tax of 10 percent.`
+must_match: comments: 1 comment\(s\) of the changed items have no edit in this step
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// Gives the price with a tax of 10 percent.
+pub fn price(x: u32) -> u32 {
+    x + x / 10
+}
+=== new src/lib.rs
+/// Gives the price with a tax of 10 percent.
+pub fn price(x: u32) -> u32 {
+    x + x / 5
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `10` → `5` (f1)
+      in: shop::price
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: --change 'shop::price=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]
+      docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-3

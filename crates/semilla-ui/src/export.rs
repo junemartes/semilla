@@ -345,7 +345,7 @@ impl<'a> Model<'a> {
     fn agent_lines(&self) -> Vec<String> {
         let count: usize = self.report().steps.iter().map(|step| step.agent_facts.len()).sum();
         let facts = (count > 0).then(|| format!("facts of the agent: {count}, each one checked against the edit"));
-        facts.into_iter().chain(self.report().gap_line()).collect()
+        facts.into_iter().chain(self.report().gap_line()).chain(self.report().comment_count_line()).collect()
     }
 
     fn flow_index(&self, function: &str) -> Option<usize> {
@@ -1582,6 +1582,22 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         let _ = writeln!(out, "Filled in by Semilla, {name} ({}):\n", facts.len());
         md_fact_list(out, &facts);
     }
+    // Design 58.9: the comments of the changed items, each one with its first fact.
+    let comments: Vec<(usize, &semilla_core::Fact, &semilla_core::RelatedComment)> = reports.iter().flat_map(|step| step.comment_list().into_iter().map(|(fact, comment)| (step.step, fact, comment))).collect();
+    if !comments.is_empty() {
+        let _ = writeln!(out, "#### Comments of the changed items ({})\n", comments.len());
+        if let Some(line) = semilla_core::report::comment_count_line(reports.iter().map(|step| step.comments_no_edit()).sum()) {
+            let _ = writeln!(out, "{}. {}\n", md(&line), md(semilla_core::report::COMMENT_NOTE));
+        }
+        for (step, fact, comment) in comments {
+            let _ = writeln!(out, "- step {step}, with {}: {}", fact.id, md_with_code(&comment.head()));
+            if comment.shows_text() {
+                out.push('\n');
+                out.push_str(&fence("rust", &comment.text, "  "));
+            }
+        }
+        out.push('\n');
+    }
     // Design 54.7: the note of the child mark, one time in the report.
     if out.contains(text::CHILD_MARK) && !out.contains(text::CHILD_NOTE) {
         let _ = writeln!(out, "Note: {}\n", text::CHILD_NOTE);
@@ -1640,10 +1656,9 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
         let _ = writeln!(out, "<p class=\"warn\">{}</p>", esc(&line));
     }
     let total = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view).is_err()).len();
-    if total == 0 {
-        return;
+    if total > 0 {
+        let _ = writeln!(out, "<h4>Derived facts ({total})</h4>");
     }
-    let _ = writeln!(out, "<h4>Derived facts ({total})</h4>");
     for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
         let facts = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view) == Err(group));
         if facts.is_empty() {
@@ -1652,6 +1667,24 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
         let _ = writeln!(out, "<p class=\"muted\">Filled in by Semilla, {name} ({}):</p>", facts.len());
         html_fact_list(out, &facts);
     }
+    // Design 58.9: the comments of the changed items, each one with its first fact.
+    let comments: Vec<(usize, &semilla_core::Fact, &semilla_core::RelatedComment)> = reports.iter().flat_map(|step| step.comment_list().into_iter().map(|(fact, comment)| (step.step, fact, comment))).collect();
+    if comments.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "<h4>Comments of the changed items ({})</h4>", comments.len());
+    if let Some(line) = semilla_core::report::comment_count_line(reports.iter().map(|step| step.comments_no_edit()).sum()) {
+        let _ = writeln!(out, "<p class=\"muted\">{}. {}</p>", esc(&line), esc(semilla_core::report::COMMENT_NOTE));
+    }
+    out.push_str("<ul class=\"derived-facts\">\n");
+    for (step, fact, comment) in comments {
+        let _ = write!(out, "<li>step {step}, with {}: {}", fact.id, esc(&comment.head()));
+        if comment.shows_text() {
+            let _ = write!(out, "<pre class=\"diff\">{}</pre>", esc_block(&comment.text));
+        }
+        out.push_str("</li>\n");
+    }
+    out.push_str("</ul>\n");
 }
 
 /// The HTML list of fact items: each content change is a `pre` block in its list item.

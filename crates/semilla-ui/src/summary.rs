@@ -132,6 +132,10 @@ pub struct ChangeSetSummary {
     /// The line with the count of the items that are not stated (design 54.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap_line: Option<String>,
+    /// The line with the count of the comments of the changed items that have no edit, with
+    /// the note of design 58.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_line: Option<String>,
     pub groups: Vec<GroupSummary>,
 }
 
@@ -163,11 +167,31 @@ pub struct FactView {
     pub api_change: bool,
     /// The place of the fact in a list (design 35.7).
     pub order: u8,
+    /// The lines of the comments of the changed item that show with this fact (design 58.6):
+    /// each comment of a step is with one fact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_lines: Vec<String>,
 }
 
 impl FactView {
     pub fn new(step: usize, fact: &semilla_core::Fact) -> FactView {
-        FactView { step, fact: fact.clone(), mark: fact.mark(), part_mark: fact.part_mark(), label: fact.label(), mismatch: fact.mismatch(), api_change: fact.api_change(), order: fact.order() }
+        FactView { step, fact: fact.clone(), mark: fact.mark(), part_mark: fact.part_mark(), label: fact.label(), mismatch: fact.mismatch(), api_change: fact.api_change(), order: fact.order(), comment_lines: Vec::new() }
+    }
+
+    /// The fact views of one step: the build code changes come first (design 28.3). Each
+    /// comment of a changed item is with its first fact in the order of the text output.
+    pub fn of_step(step: &semilla_core::StepReport) -> Vec<FactView> {
+        let comments = step.comment_list();
+        step.facts
+            .iter()
+            .filter(|fact| fact.build_code_change)
+            .chain(step.facts.iter().filter(|fact| !fact.build_code_change))
+            .map(|fact| {
+                let mut view = FactView::new(step.step, fact);
+                view.comment_lines = comments.iter().filter(|(owner, _)| owner.id == fact.id).flat_map(|(_, comment)| comment.lines()).collect();
+                view
+            })
+            .collect()
     }
 }
 
@@ -320,9 +344,10 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         lines_text: report.lines_text().unwrap_or_default(),
         pairs: pair_views(report, review),
         // Design 28.3: the build code changes of a step come before its other facts.
-        facts: report.steps.iter().flat_map(|step| step.facts.iter().filter(|fact| fact.build_code_change).chain(step.facts.iter().filter(|fact| !fact.build_code_change)).map(|fact| FactView::new(step.step, fact))).collect(),
+        facts: report.steps.iter().flat_map(FactView::of_step).collect(),
         agent: report.steps.iter().filter(|step| !step.agent_facts.is_empty() || !step.gaps.is_empty()).map(|step| AgentView { step: step.step, facts: step.agent_facts.clone(), gaps: step.gaps.clone() }).collect(),
         gap_line: report.gap_line(),
+        comment_line: report.comment_count_line().map(|line| format!("{line}. {}", semilla_core::report::COMMENT_NOTE)),
         groups,
     }
 }

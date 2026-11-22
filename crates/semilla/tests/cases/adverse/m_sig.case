@@ -46,10 +46,13 @@ build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration]
+      docs of `depot::list::larger`, no edit in this step (src/list/mod.rs:10): `/// The larger one.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   other facts, filled in by Semilla:
   ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move]
   cover: each of the 28 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
 ◆ f1 derived: where clause of `depot::list::larger` added: `where u32: Copy,` (the public API can change: a different crate can use the item) [declaration]

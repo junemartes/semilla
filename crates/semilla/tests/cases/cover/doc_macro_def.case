@@ -30,6 +30,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: changed macro `twice`: `/// The old doc. macro_rules! twice { ($e:expr) => { $e * 2 }; }` → [1] [declaration]
         [1] /// The new doc. /// One more line. macro_rules! twice { ($e:expr) => { $e * 2 }; }
+      docs of `depot::twice!`, changed in this step: see f2
   other facts, filled in by Semilla:
   ◆ f2 derived: changed docs `/// The old doc.` → `/// The new doc. /// One more line.` [docs]
   cover: each of the 3 changed line(s) is in a fact

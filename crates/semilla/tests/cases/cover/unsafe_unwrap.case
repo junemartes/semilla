@@ -54,6 +54,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ! unsafe code: the changed body has an `unsafe` block
   ◆ f4 derived: added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics]
       ! unsafe code: the changed body has an `unsafe` block
+      comment above line 12, added in this step: see f2
   ◆ f2 derived: added comment `// SAFETY: the pointer is valid.` [docs]
   cover: each of the 9 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

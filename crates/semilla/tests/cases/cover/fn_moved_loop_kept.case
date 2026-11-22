@@ -62,13 +62,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::probe=TEXT'
   other facts, filled in by Semilla:
   ◆ f2 derived: added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics]
+      docs of `depot::probe`, no edit in this step (src/lib.rs:3): `/// Finds the things.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f3 derived: changed expression `[1, 2, 3]` → `[1, 2, 3, 4]` at `depot::probe/S1/body/S0/init` [semantics]
+      comment above old line 12, removed in this step: see f1
   ◆ f4 derived: added `if` `if names.contains(&dir) { result.file = Some(dir); }` (an inner statement of the deleted `for name in names.iter(▫)`, except: `if dir == *name { result.file = Some(dir); }` → `if names.contains(&dir) { result.file = Some(dir); }`) at `depot::probe/S2/body/S1` [semantics]
   ◆ f5 derived: deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` (inner statements: 1 with a change in an added statement) at `depot::probe/S1/body/S1` [semantics]
   ◆ f6 derived: layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout]
   ◆ f1 derived: removed comment `// an old comment` [docs]
   cover: each of the 22 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
   note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
 
 === positions

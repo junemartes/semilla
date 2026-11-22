@@ -1,0 +1,35 @@
+note: a docs fact does not make its item a changed item: no comment line and no mark for the plain comment of the item
+rule-: R58.2-1 R58.4-2
+exit: 0
+must_not_match: in this step
+must_not_match: (?m)^\s*comments: 
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+// The tax table is in the wiki.
+/// Gives the price with a tax of 10 percent.
+pub fn price(x: u32) -> u32 {
+    x + x / 10
+}
+=== new src/lib.rs
+// The tax table is in the wiki.
+/// Gives the price with a tax of 20 percent.
+pub fn price(x: u32) -> u32 {
+    x + x / 10
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs]
+    lines: src/lib.rs:2, src/lib.rs:-2

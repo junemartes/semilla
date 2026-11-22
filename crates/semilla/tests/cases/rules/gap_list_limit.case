@@ -82,11 +82,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: changed literal `2` → `5` at `depot::b/tail/rhs` [semantics]
   ◆ f3 derived: changed literal `4` → `6` at `depot::conf::depth/tail` [semantics]
   ◆ f4 derived: changed literal `3` → `4` at `depot::idle/tail` [semantics]
+      docs of `depot::idle`, no edit in this step (src/lib.rs:13): `/// Gives three.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f5 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics]
   ◆ f6 derived: changed expression `x` → `x + 7` at `depot::wrap/tail` [semantics]
   ◆ f7 derived: changed expression `x` → `x * 3` at `depot::wrap2/tail` [semantics]
   cover: each of the 14 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
 
 === positions
 ◆ f1 derived: changed literal `1` → `9` at `depot::a/tail/rhs` [semantics]

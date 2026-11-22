@@ -1,0 +1,50 @@
+note: a removed `use` line and a new `use` line are items of one tree: no comment line, also for the comment above that stays
+rule+: R58.2-3
+rule-: R58.2-1 R58.4-3
+exit: 0
+must_match: removed `use` line
+must_match: added `use` line
+must_not_match: in this step
+must_not_match: with no pair
+must_not_match: (?m)^\s*comments: 
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+// The header of the file.
+// It has two lines.
+use std::ops;
+/// A color.
+pub struct Rgb(pub u8);
+pub mod inner {
+    // The names of the module.
+    pub fn f() {}
+}
+=== new src/lib.rs
+// The header of the file.
+// It has two lines.
+/// A color.
+pub struct Rgb(pub u8);
+pub mod inner {
+    // The names of the module.
+    use std::fmt;
+    pub fn f() {}
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: removed `use` line: `use std::ops;` in `shop` [import]
+  ◆ f2 derived: added `use` line: `use std::fmt;` in `shop::inner` [import]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: removed `use` line: `use std::ops;` in `shop` [import]
+    lines: src/lib.rs:-3
+◆ f2 derived: added `use` line: `use std::fmt;` in `shop::inner` [import]
+    lines: src/lib.rs:7

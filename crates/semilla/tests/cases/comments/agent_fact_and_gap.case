@@ -1,0 +1,62 @@
+note: the comments show below the fact line under the fact of the agent, and below the fact line of the item of the gap list; the gap entry has no comment line
+option: --change
+option: shop::price=the tax is 20 percent
+same_facts_as_no_option: yes
+rule+: R58.6-2 R58.10-1
+rule-: R58.6-2
+must_match: stated: changed literal `10` → `5` .*\n\s+docs of `shop::price`, no edit in this step
+must_match: derived: changed literal `1` → `2` .*\n\s+docs of `shop::count`, no edit in this step
+must_not_match: (?m)^\s+\? .*\n(\s+(in|lines|to state it): .*\n)*\s+(docs|comment) 
+must_match: comments: 2 comment
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// Gives the price with a tax of 10 percent.
+pub fn price(x: u32) -> u32 {
+    x + x / 10
+}
+/// Gives the count plus 1.
+pub fn count(x: u32) -> u32 {
+    x + 1
+}
+=== new src/lib.rs
+/// Gives the price with a tax of 10 percent.
+pub fn price(x: u32) -> u32 {
+    x + x / 5
+}
+/// Gives the count plus 1.
+pub fn count(x: u32) -> u32 {
+    x + 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 change: `shop::price` "the tax is 20 percent" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
+      places: shop::price/tail/rhs/rhs
+    ◆ f2 stated: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]
+        docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
+        note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: shop::count
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::count=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::count=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `shop::count/tail/rhs` [semantics]
+      docs of `shop::count`, no edit in this step (src/lib.rs:5): `/// Gives the count plus 1.`
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 2 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f2 stated: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f1 derived: changed literal `1` → `2` at `shop::count/tail/rhs` [semantics]
+    lines: src/lib.rs:7, src/lib.rs:-7

@@ -11087,3 +11087,136 @@ fn an_inline_argument_of_a_format_string_is_not_a_site_of_a_renamed_local() {
     assert_eq!(texts, ["2 bodies: renamed local `total` → `sum`", r#"changed literal `"{total}"` → `"{sum}"` at `demo::f/tail/args[0]`"#]);
     assert!(!texts.iter().any(|text| text.contains("demo::g")), "{texts:#?}");
 }
+
+// ----- Design 58: the comments of a changed item -----
+
+const PRICE_DOCS: &str = "/// Gives the price with a tax of 10 percent.\npub fn price(x: u32) -> u32 {\n    x + x / 10\n}\n";
+
+/// Each comment of the step one time, with the number of the fact that shows it.
+fn comment_heads(report: &StepReport) -> Vec<String> {
+    report.comment_list().iter().map(|(fact, comment)| format!("{}: {}", fact.id, comment.head())).collect()
+}
+
+/// Design 58.4: the docs of an item with a changed body have the mark "no edit in this step"
+/// and their full text. Negative test: docs with an edit in the same step have no such mark.
+/// They name the fact of the edit.
+// rule+ R58.4-1
+// rule- R58.4-1
+// rule+ R58.4-2
+#[test]
+fn the_docs_of_a_changed_item_have_the_mark_or_the_number_of_their_fact() {
+    let report = run_tree(PRICE_DOCS, &PRICE_DOCS.replace("x / 10", "x / 5"));
+    assert_eq!(comment_heads(&report), ["f1: docs of `demo::price`, no edit in this step (src/lib.rs:1)"]);
+    let comment = &report.facts[0].comments[0];
+    assert_eq!((comment.state, comment.text.as_str()), (semilla_core::CommentState::NoEdit, "/// Gives the price with a tax of 10 percent."));
+    assert_eq!(report.comment_count_line().as_deref(), Some("comments: 1 comment(s) of the changed items have no edit in this step"));
+    let report = run_tree(PRICE_DOCS, &PRICE_DOCS.replace("x / 10", "x / 5").replace("10 percent", "20 percent"));
+    let docs = report.facts.iter().find(|fact| fact.category == Category::Docs).expect("the docs fact");
+    let body = report.facts.iter().find(|fact| fact.category == Category::Semantics).expect("the fact of the body");
+    assert_eq!(comment_heads(&report), [format!("{}: docs of `demo::price`, changed in this step: see {}", body.id, docs.id)]);
+    assert_eq!(report.comment_count_line(), None);
+    assert!(docs.comments.is_empty(), "a docs fact makes no item a changed item: {:#?}", docs.comments);
+}
+
+/// Design 58.4: the note about the limit of Semilla shows one time in a report, below the
+/// first comment with no edit. Negative test: a report with no such comment has no note.
+// rule+ R58.4-4
+// rule- R58.4-4
+#[test]
+fn the_note_about_the_comments_shows_one_time() {
+    let two = format!("{PRICE_DOCS}/// Gives the count plus 1.\npub fn count(x: u32) -> u32 {{\n    x + 1\n}}\n");
+    let report = run_tree(&two, &two.replace("x / 10", "x / 5").replace("x + 1", "x + 2"));
+    assert_eq!(report.comments_no_edit(), 2);
+    for text in [views::text_report(std::slice::from_ref(&report)), views::text_report_with(std::slice::from_ref(&report), true)] {
+        assert_eq!(text.matches(semilla_core::report::COMMENT_NOTE).count(), 1, "{text}");
+        let (note, first, second) = (text.find(semilla_core::report::COMMENT_NOTE).unwrap(), text.find("docs of `demo::").unwrap(), text.rfind("docs of `demo::").unwrap());
+        assert!(first < note && note < second, "the note is below the first comment with no edit:\n{text}");
+    }
+    let report = run_tree(&two, &two.replace("10 percent", "20 percent"));
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(!text.contains(semilla_core::report::COMMENT_NOTE) && !text.contains("comments: "), "{text}");
+}
+
+/// Design 58.6: the record of each fact of an item has the comments of the item, and an
+/// output shows a comment one time, with the first fact of the item in the order of the
+/// output. A tag changes the order, and the comment goes with it. Negative test: the comment
+/// of an inner node shows only with the fact of that node.
+// rule+ R58.6-1
+// rule- R58.6-1
+#[test]
+fn a_comment_shows_one_time_with_the_first_fact_in_the_order_of_the_output() {
+    let before = "/// Gives the price with the tax.\npub fn price(x: u32) -> u32 {\n    let tax = x / 10;\n    // The fee is fixed.\n    let fee = 2;\n    x + tax + fee\n}\n";
+    let after = before.replace("x / 10", "x / 5").replace("fee = 2", "fee = 3");
+    let files = |text: &str| vec![("Cargo.toml".to_string(), MANIFEST.to_string()), ("src/lib.rs".to_string(), text.to_string())];
+    let (old, new) = (files(before), files(&after));
+    let pairs = |list: &[(String, String)]| -> Vec<(String, String)> { list.to_vec() };
+    let run = |tags: &[&str]| {
+        let (old, new) = (pairs(&old), pairs(&new));
+        let old: Vec<(&str, &str)> = old.iter().map(|(path, text)| (path.as_str(), text.as_str())).collect();
+        let new: Vec<(&str, &str)> = new.iter().map(|(path, text)| (path.as_str(), text.as_str())).collect();
+        run_tagged(&old, &new, &[], &[], tags)
+    };
+    let report = run(&[]);
+    assert_eq!(report.facts.len(), 2, "{:#?}", plain_texts(&report));
+    // The record: the two facts have the docs of the item.
+    assert!(report.facts.iter().all(|fact| fact.comments.iter().any(|comment| comment.place == "docs of `demo::price`")), "{:#?}", report.facts);
+    assert_eq!(comment_heads(&report), ["f1: docs of `demo::price`, no edit in this step (src/lib.rs:1)", "f2: comment above line 5, no edit in this step (src/lib.rs:4)"]);
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert_eq!(text.matches("docs of `demo::price`").count(), 1, "{text}");
+    assert_eq!(report.comments_no_edit(), 2);
+    // A tag with the second edit: its fact is the first fact of the output.
+    let report = run(&["src/lib.rs:5=the fee"]);
+    assert_eq!(comment_heads(&report), ["f2: docs of `demo::price`, no edit in this step (src/lib.rs:1)", "f2: comment above line 5, no edit in this step (src/lib.rs:4)"]);
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert_eq!(text.matches("docs of `demo::price`").count(), 1, "{text}");
+    assert_eq!(text.matches("comment above line 5").count(), 1, "{text}");
+}
+
+/// Design 58.10: a comment with no edit is no fact. It needs no fact of the agent, it is not
+/// in the gap list, and the step with it is accepted.
+// rule+ R58.10-1
+#[test]
+fn a_comment_with_no_edit_never_rejects_a_step() {
+    let after = PRICE_DOCS.replace("x / 10", "x / 5");
+    let plain = run_tree(PRICE_DOCS, &after);
+    let stated = run_agent(PRICE_DOCS, &after, &[], &["demo::price=the tax is 20 percent"]);
+    for report in [&plain, &stated] {
+        assert!(report.accepted() && report.errors.is_empty(), "{:#?}", report.errors);
+        assert_eq!(report.comments_no_edit(), 1);
+        assert_eq!(report.facts.len(), 1, "the comment is no fact: {:#?}", plain_texts(report));
+    }
+    // The gap list has the item of the edit only when the agent does not state it. The
+    // comment adds no entry and no place.
+    assert_eq!(plain.gaps.len(), 1, "{:#?}", plain.gaps);
+    assert!(stated.gaps.is_empty() && agent_fact(&stated, "a1").holds, "{:#?}", stated.gaps);
+    let text = views::agent_lines(&plain, None, &|_| Vec::new()).join("\n");
+    assert!(!text.contains("docs of") && !text.contains("no edit in this step"), "{text}");
+}
+
+/// Design 58.5: a comment above a removed statement that stays in the new tree shows with the
+/// cause. Negative test: a comment that the step removed with its statement names the fact of
+/// its edit.
+// rule+ R58.5-1
+// rule- R58.5-1
+#[test]
+fn a_comment_of_a_removed_node_that_stays_names_the_cause() {
+    let before = "pub fn price(x: u32) -> u32 {\n    // Log the price for the audit.\n    log(x);\n    let tax = x / 10;\n    x + tax\n}\npub fn log(_: u32) {}\n";
+    let report = run_tree(before, &before.replace("    log(x);\n", ""));
+    assert_eq!(comment_heads(&report), ["f1: comment that was above the removed code at old line 3, no edit in this step (src/lib.rs:2)"]);
+    let report = run_tree(before, &before.replace("    // Log the price for the audit.\n    log(x);\n", ""));
+    let heads = comment_heads(&report);
+    assert_eq!(heads.len(), 1, "{heads:#?}");
+    assert!(heads[0].contains("comment above the removed code at old line 3, removed in this step: see f") && report.comments_no_edit() == 0, "{heads:#?}");
+}
+
+/// Design 58.2: a rename fact gives the comments of the renamed item. Negative test: the
+/// caller with the changed site is not a changed item, and its docs do not show.
+// rule+ R58.2-2
+// rule- R58.2-2
+#[test]
+fn a_rename_gives_the_comments_of_the_renamed_item_only() {
+    let before = "/// `price` gives the price.\npub fn price(x: u32) -> u32 {\n    x\n}\n/// Gives two times the price.\npub fn twice(x: u32) -> u32 {\n    price(x) * 2\n}\n";
+    let report = run_tree(before, &before.replace("fn price", "fn cost").replace("price(x)", "cost(x)"));
+    assert_eq!(comment_heads(&report), ["f1: docs of `demo::cost`, no edit in this step (src/lib.rs:1)"]);
+    assert_eq!(report.facts[0].category, Category::Rename);
+}

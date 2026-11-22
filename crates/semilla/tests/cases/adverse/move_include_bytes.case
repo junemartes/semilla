@@ -60,10 +60,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   to state them, add these options to the command of the step: --change 'depot::list=TEXT'
   other facts, filled in by Semilla:
   ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 2 of 3 items and 14 lines keep their tokens; the meaning of 1 node depends on the path of the file: `include_bytes!("raw.bin")` (`src/list/mod.rs:9`) [macro]
+      docs of `depot::list`, no edit in this step (src/list/mod.rs:1-2):
+          | //! Tools for lists.
+          | //! A second line.
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f1 derived: src/list/raw.bin: added [file]
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'src/list/raw.bin:=…'
   cover: each of the 31 changed line(s) is in a fact
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
 run again: semilla step 'the change' --reason 'src/list/raw.bin:=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/list/raw.bin:=the reason of the test' --change 'depot::list=the text of the test'

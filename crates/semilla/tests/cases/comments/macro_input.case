@@ -1,0 +1,57 @@
+note: the tokens of a macro input have no statement nodes: the line of the changed token is the place; the comment block above the line and the comment at the end of the line show
+rule+: R58.1-8
+rule-: R58.1-8
+exit: 0
+must_match: comment above line 7, no edit in this step \(src/lib.rs:6\): `// The tax is 10 percent\.`
+must_match: comment at the end of line 7, no edit in this step \(src/lib.rs:7\): `// ten`
+must_not_match: The base is first
+must_not_match: `// base`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// Gives the parts of the price.
+pub fn parts(x: u32) -> Vec<u32> {
+    vec![
+        // The base is first.
+        x, // base
+        // The tax is 10 percent.
+        x / 10, // ten
+    ]
+}
+=== new src/lib.rs
+/// Gives the parts of the price.
+pub fn parts(x: u32) -> Vec<u32> {
+    vec![
+        // The base is first.
+        x, // base
+        // The tax is 10 percent.
+        x / 5, // ten
+    ]
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `10` → `5` (f1)
+      in: shop::parts
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::parts=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::parts=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `10` → `5` at `shop::parts/tail/args[1]/rhs` [semantics]
+      docs of `shop::parts`, no edit in this step (src/lib.rs:1): `/// Gives the parts of the price.`
+      comment above line 7, no edit in this step (src/lib.rs:6): `// The tax is 10 percent.`
+      comment at the end of line 7, no edit in this step (src/lib.rs:7): `// ten`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 3 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: changed literal `10` → `5` at `shop::parts/tail/args[1]/rhs` [semantics]
+    lines: src/lib.rs:7, src/lib.rs:-7

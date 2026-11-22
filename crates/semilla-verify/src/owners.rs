@@ -491,7 +491,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -848,7 +848,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { comments: Vec::new(), positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),

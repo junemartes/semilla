@@ -17,4 +17,4 @@ pub mod view;
 pub use anchor::{Anchor, Segment};
 pub use claim::{AgentFacts, BuildCheck, ChangeSet, Claim, Group, GroupKind, PairRefusal, Role, Step, Subgroup};
 pub use ops::{Category, Compare, OpInfo, OpKind, OpLevel};
-pub use report::{AgentFact, ClaimResult, Gap, ClaimStatus, Fact, LineCounts, PairWarning, Place, Position, Report, SiteGroup, StepReport, Tag, Uncovered, View};
+pub use report::{AgentFact, ClaimResult, CommentState, RelatedComment, Gap, ClaimStatus, Fact, LineCounts, PairWarning, Place, Position, Report, SiteGroup, StepReport, Tag, Uncovered, View};

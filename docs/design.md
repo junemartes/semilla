@@ -5895,8 +5895,8 @@ The positive case: the condition of the rule holds, and the test sees the result
 2. [R57.6-2] The test fails for a rule with no test of the negative case, unless the identity gives the cause in the form `[R<section>-<number>; no negative case: CAUSE]`.
 3. [R57.6-3] The test fails for a marker with an identity that the design does not have.
 4. [R57.6-4] The test fails for an identity that is in the design two times, or that is not in the section of its number.
-5. [R57.6-5] The test fails for a subsection of the sections 48 to 57 that has no identity and no line that starts with "Rule index: no rule: CAUSE" or "Rule index: not indexed: CAUSE".
-6. [R57.6-6] The lock (batch 9t2, Decided by Claude). The test fails for a subsection of the sections 48 to 57 that has the line "Rule index: not indexed: CAUSE", unless the list `STAY_NOT_INDEXED` of `crates/semilla/tests/rules.rs` names the subsection. The list gives the cause of each entry. The test also fails for an entry of the list that has no such line in the design. The list of today has one entry: 48.1 (57.9).
+5. [R57.6-5] The test fails for a subsection of the sections 48 to 58 that has no identity and no line that starts with "Rule index: no rule: CAUSE" or "Rule index: not indexed: CAUSE".
+6. [R57.6-6] The lock (batch 9t2, Decided by Claude). The test fails for a subsection of the sections 48 to 58 that has the line "Rule index: not indexed: CAUSE", unless the list `STAY_NOT_INDEXED` of `crates/semilla/tests/rules.rs` names the subsection. The list gives the cause of each entry. The test also fails for an entry of the list that has no such line in the design. The list of today has one entry: 48.1 (57.9).
 
 The test also fails for a marker that is not above a `#[test]` line, for a cause of less than three words, and for a rule that has a negative test and the text "no negative case".
 
@@ -5909,7 +5909,7 @@ The test also fails for a marker that is not above a `#[test]` line, for a cause
 
 A change of a rule keeps the identity, and the tests and the expected texts change with it.
 
-**The scope.** The index has rules of the sections 44.1 (the six core rules) and 48 to 57. The six core rules are in the index because the rules of 48 to 56 depend on them. No other section before 48 is in the index. After batch 9t2, one subsection has the line "Rule index: not indexed" (48.1), and the lock (check 6) keeps this state. A subsection with an identity can have more rules with no identity (57.9).
+**The scope.** The index has rules of the sections 44.1 (the six core rules) and 48 to 58. The six core rules are in the index because the rules of 48 to 56 depend on them. No other section before 48 is in the index. After batch 9t2, one subsection has the line "Rule index: not indexed" (48.1), and the lock (check 6) keeps this state. A subsection with an identity can have more rules with no identity (57.9).
 
 ### 57.7 The decisions of Claude
 
@@ -5992,3 +5992,181 @@ Rule index: no rule: the subsection has limits and open questions.
 - Open question: the facts of a const, a static, a type alias, a `use` line, and a `macro_rules!` definition have the outer attributes and the docs of the item in their text (for example "changed `use` line: `/// The old doc. pub use std::fmt::Debug;` → …"). The text hides nothing, but the same edit also has its docs fact or its attribute fact.
 - Open question: the text of a docs fact with two doc lines reads as one line.
 - Open question: `agent3/x_field` is accepted with a gap in the gap list. This is the rule R48.2-1; the case records it.
+
+## 58. Batch 9m: the comments of a changed item
+
+The decision of the user (2026-11-22):
+
+> "We should include comments associated with a given item that changed. Usually if an item changed, the associated comment should change too"
+
+The user confirmed this reading. Each item with a changed body or a changed declaration shows its docs and its leading comment with the fact. This applies also when the comment has no edit in the step. A comment with no edit gets a mark. Thus a reviewer sees a comment that is possibly out of date.
+
+**The limit of the statement.** Semilla does not check that a comment agrees with the code. The mark "no edit in this step" says only that the text of the comment is equal in the old tree and in the new tree. The output says this one time (R58.4-4).
+
+**The soundness.** The batch adds lines. No fact changes its text, its category, its identity, its position, or its order. The cover count does not change. No rule of the batch removes a line or hides an edit: a comment with an edit keeps its fact of today.
+
+The pass is `semilla-verify/src/comments.rs`. It runs last in a step, after the positions, the facts of the agent, and the tags. The comments of a file come from `semilla-syntax/src/comments.rs`.
+
+### 58.1 The comments of a node
+
+A **unit** is one of these three things: the docs of one node, one block of plain comments, one plain comment at the end of a line. A block is a list of plain comments (`//`, `/* */`) where each comment starts its line and no empty line is between two comments.
+
+1. [R58.1-1] The docs of a node are a comment of the node: its outer doc comments and its `#[doc = "…"]` attributes, as one unit.
+2. [R58.1-2] A module with a file has also the inner docs of the file (R55.5-5). An inline module has the inner docs of its block. A crate root is a module with a file.
+3. [R58.1-3] A plain comment between the first attribute or doc line of a node and its first token that is not in an attribute is a comment of the node ("in the attributes").
+4. [R58.1-4] The leading comment: the block directly above the first line of a node is a comment of the node. No empty line and no other token is between the block and the node.
+5. [R58.1-5] A plain comment at the end of a line is a comment of a node in two cases: the line is the first line of the code of the node, or it is the last line of the node. The comment is after the last token of the node on that line. A node of one line has the two cases in one. A line in the middle of a node belongs to a smaller node.
+6. [R58.1-6] A block that is directly below one node and directly above the next node is a comment of the next node only. A comment below the last node of a list (before `}`) is a comment of no node.
+7. [R58.1-7] The text of a unit is the text of its tokens, as written, with LF for each line end. No part of the product filters source lines to get the text (57.2).
+8. [R58.1-8] The tokens of a macro input have no nodes. The place of a changed token is its line: the block above that line and the comment at the end of that line are its comments.
+
+### 58.2 The changed items
+
+1. [R58.2-1] An item is a changed item if a fact of the step has its place in the item, and the category of the fact has "yes" in this table. The method `Category::changes_item` is the table.
+
+| Category | Makes its item a changed item | Cause |
+|---|---|---|
+| `semantics` | yes | an edit in a body |
+| `macro` | yes | an edit in a macro input or in a macro definition |
+| `text` | yes | an edit in a body that Semilla shows as text |
+| `declaration` | yes | an edit in a signature, a field, a variant, or a type |
+| `attribute` | yes | an attribute can change the behavior that the docs tell |
+| `visibility` | yes | the docs can name the reach of the item |
+| `import` | yes, for a changed `use` line | the `use` line is in the two trees (rule 3 for a new line and a removed line) |
+| `rename` | yes, for the item that declares the name (rule 2) | the docs can name the old name |
+| `docs` | no | the fact is the edit of a comment |
+| `layout` | no | the tokens are equal |
+| `added` | no | the fact is the full new item |
+| `removed` | no | the fact is the full removed item |
+| `move` | no | the text of the item is equal (open question, 58.14) |
+| `manifest` | no | the place is not in an item |
+| `file` | no | the place is not in an item |
+| `build code` | no | the place is not in an item of the checked crate |
+| `indirect` | no | the item has no edit (open question, 58.14) |
+
+2. [R58.2-2] A `rename` fact makes only the item that declares the name a changed item. A site of the rename in a different item does not make that item a changed item.
+3. [R58.2-3] An item that is in one tree only gives no comment line: a new item, a removed item, a new `use` line, a removed `use` line. Its fact is the full item. A fact with a removed item and a new item at one place (a changed `use` line) is the fact of an item of the two trees.
+
+### 58.3 The path
+
+1. [R58.3-1] The related comments of a fact are the comments of each node on the path from the changed node up to the item of the fact, the item included. Example: a changed statement in a loop in a function gives the comments of the statement, of the loop, and of the function. A changed field type gives the comments of the field and of the struct.
+2. [R58.3-2] The path ends at the item of the place of the fact. A member is an item (56.2): a changed method body gives the comments of the method, not of the `impl`, and not of the module. An item in a body (a local `use` line, a local function) is a statement of that body. It is a node of the path, not its end.
+3. [R58.3-3] A fact with more than one place gives the comments of each place: the place of the fact, each place of a fold of equal facts, and each edit of the fact in the items of those places. An edit of the fact in a different item is a site, and it gives no comment.
+
+### 58.4 The state and the mark
+
+The pass pairs the parts of the comments of the old item and of the new item (one part for each doc line, each `#[doc]` attribute, and each plain comment token). The pairs are the equal parts in order (the diff of Myers). Docs pair only with docs.
+
+1. [R58.4-1] *No edit in this step*: each part of the comment has a pair with equal text in the other tree, in the paired item. The line has the place, the mark, the position in the new tree, and the full text. Form: ``docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price.` ``.
+2. [R58.4-2] *Changed, added, or removed in this step*: a part has no pair, and a fact of the step has a line of the comment. The line has the place, the state, and the identity of each such fact. It does not show the text a second time. Form: ``docs of `shop::price`, changed in this step: see f1``. If a `docs` fact has a line of the comment, the reference names only the `docs` facts.
+3. [R58.4-3] A comment with a part that has no pair, and with no fact on its lines, never gets the mark "no edit". The line says "with no pair in the old tree and no fact" (or "in the new tree"), and it shows the full text.
+4. [R58.4-4] The note shows one time for each report, below the comments of the first fact that has a comment with no edit: "note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date." A report with no such comment has no note.
+5. [R58.4-5] *Moved in this step* (Decided by Claude, in the check of the batch): each part of the comment has a pair with equal text, and a `docs` fact of the step has a line of the comment. The comment is at a different place of the item (for example, it goes from above the item into the body). The line has the place, the state, and the identity of each `docs` fact with a line of the comment or of its pair. Form: "comment above line 3, moved in this step: see f1, f3". Thus the mark "no edit" is never on a line that a `docs` fact has. A change of only the layout of a comment line (a `layout` fact) keeps the mark: the text of the tokens is equal.
+
+### 58.5 A removed node
+
+1. [R58.5-1] A comment of a node of the old tree that the step removed, and that is in the new tree with no edit, shows with the cause. Form: "comment that was above the removed code at old line 4, no edit in this step (src/lib.rs:3): …". The position is the position in the new tree. The item of the node is in the two trees. A comment that the step removed with its node shows as a reference (R58.4-2).
+
+### 58.6 One time for each item, and the form of the lines
+
+1. [R58.6-1] A comment shows one time in an output: with the first fact, in the order of the output, that has it. Thus the comments of an item show with the first fact of the item, and the comments of an inner node show with the first fact at that node. An option or a tag that changes the order of the facts can move a comment to a different fact line.
+2. [R58.6-2] The comment lines are sub lines of the fact line, after the other sub lines of the fact. The form is the same for a fact below a fact of the agent, a fact with an entry in the gap list, and a fact in each other group. An entry of the gap list has no comment line: the fact line that it names (`fN`) has them.
+
+### 58.7 The full text
+
+1. [R58.7-1] A comment text has no cut (54.7). A text of one line of 80 characters or less is on the head line, between backticks. Each other text is a block: the head line ends with `:`, and each line of the comment is one line `| LINE` below it. An empty line of the comment is the line `|`.
+
+### 58.8 The count
+
+1. [R58.8-1] The step output, `status`, `tag`, and the review show one count line: "comments: N comment(s) of the changed items have no edit in this step". N is the count of the comment lines of the output with the mark. No count line shows for N = 0. The count line of `status` and of the review is the sum of the steps.
+
+### 58.9 The record and the readers
+
+1. [R58.9-1] The step record keeps the related comments of each fact: the place, the state, the text, the position, and the identities of the facts of a reference (`Fact::comments`). `status --verbose` shows the same comment lines as the step output.
+2. [R58.9-2] The Markdown review has one part "Comments of the changed items (N)" for each step with such a comment, after the fact lists. Each comment has the identity of its first fact, the head line, and the full text.
+3. [R58.9-3] The local UI shows the comment lines of a fact in a text block below the fact, and the count line next to the gap line.
+4. [R58.9-4; no negative case: the rule has one input, a record with no key] A record of an earlier version has no key `comments`. It reads, and its facts have no comment.
+
+### 58.10 Never a reject
+
+1. [R58.10-1; no negative case: the rule forbids a result for each input] A comment with no edit never rejects a step. It needs no fact of the agent. It is not in the gap list, and it does not change the count of the gap list.
+
+### 58.11 The seventh property of the case runner
+
+1. [R58.11-1] For each case, the runner computes the comments of the old tree and of the new tree with its own code, from the tokens. Each text with the mark "no edit in this step" must be the text of comment tokens at its position in the new tree. The same tokens, in order, must be in one Rust file of the old tree. A comment must not show two times. The count line must agree with the count of the marks. In an output that shows the positions (`status --verbose`), no `docs` fact has a line of a comment with the mark (R58.4-5). The property applies to the step output, the output with a tag, and `status --verbose`.
+
+The runner compares the facts of two runs (the properties 2 to 4) without the comment sub lines, and it compares the comments of the two runs as a set (R58.6-1). The property 6 (the reader) checks that `status --verbose` and the review have each comment of the step output.
+
+### 58.12 The decisions of Claude
+
+Rule index: no rule: the subsection is a list of decisions.
+
+Each item is "Decided by Claude".
+
+- *The unit and the four ways to attach it* (58.1). A unit is the thing that a reader sees as one comment.
+- *The comment at the end of a line* (R58.1-5): the first line of the code and the last line of a node. For a function of more than one line, this gives the comment after `{` and the comment after `}`.
+- *A comment between two nodes* (R58.1-6) belongs to the next node only. A writer puts a comment above the thing it tells about. Thus one comment never shows two times for one item.
+- *The table* (R58.2-1): `attribute`, `visibility`, and `import` are "yes". `move` and `indirect` are "no" (open questions).
+- *A new `use` line and a removed `use` line* are items of one tree (R58.2-3), also when the comment above the line stays in the tree.
+- *The end of the path* (R58.3-2) is the item of the fact, and an item in a body is a node. The fact line names that item, and one term has one meaning.
+- *The places of a fact* (R58.3-3). For a node that is in one tree only, the item of the other tree gives the comments of the item.
+- *The pairs of the parts* (58.4): a comment with one changed line is "changed", and a block that the step moved in its item stays "no edit".
+- *The state with no pair and no fact* (R58.4-3): Semilla tells it, and never gives the mark. The measure has no such line.
+- *The form of the lines* (R58.6-2, R58.7-1): sub lines with an indent of 6, a block with `| `. A sub line keeps the fact line and the text of the fact as they are, and a reader of the fact list sees the comment at the fact. The mark `| ` shows the indent of the comment text.
+- *No comment line in the gap list*: an entry of the gap list is a pointer to a fact line. A comment in two lists is noise.
+- *The note* (R58.4-4) shows one time for each report, at the first comment with no edit.
+- *The count line* is the last line of a step, after the line of the hunks.
+- *The review* has one list of the comments for each step, not a block below each fact: the fact lists of the review are tables.
+- *The local UI* (R58.9-3): the smallest change. `FactView::comment_lines` has the lines, and `app.js` shows them in a `pre` element below the fact.
+- *A hidden character in a comment* shows as an escape, as in each other text of the output.
+- *The count* (R58.8-1) is the count of the lines with the mark, thus the count line and the lines always agree.
+- *The seventh property* uses the tokens of the two trees and no code of the product pass. The runner compares the comments of two runs as a set, because a tag can move a comment to a different fact (R58.6-1). The compare of the fact lines is not weaker for a line of an earlier batch.
+
+### 58.13 The results
+
+Rule index: no rule: the subsection has the results of a measure.
+
+- The rules: 30 identities, 2 of them with no negative case and a cause.
+- The tests: `cargo test --workspace` has 939 tests (919 before the batch). Each test passes.
+- The case set: 421 cases (36 new cases in the group `comments`), about 2430 starts of the binary, about 16 seconds on 12 processors.
+- The existing cases: 58 of 385 have a changed expected text. A script compares each old expected text with the new one: 182 new lines (55 comments with no edit, 7 references, 14 block lines, 53 notes, 53 count lines), 0 changed lines, 0 lines that went away.
+- The measure: the ten fixtures of batch 7c, each as one step with `SEMILLA_NO_CHECK=1`. The count of the changed items is a count from the fact lines (a script reads the item of each fact line with a category of the table).
+
+| Fixture | Changed items | Comments with no edit | Comments with a reference | Output lines before | Output lines after | Seconds before | Seconds after |
+|---|---|---|---|---|---|---|---|
+| bytes | 33 | 6 | 4 | 750 | 809 | 0.765 | 0.801 |
+| cpufeatures | 6 | 3 | 2 | 230 | 237 | 0.098 | 0.092 |
+| nu-ansi-term | 63 | 27 | 6 | 596 | 788 | 0.281 | 0.300 |
+| quickcheck | 34 | 6 | 0 | 241 | 284 | 0.262 | 0.285 |
+| quickcheck-2 | 110 | 18 | 8 | 750 | 826 | 0.366 | 0.389 |
+| rand_chacha-2 | 20 | 2 | 1 | 240 | 255 | 0.160 | 0.166 |
+| rand_core-4 | 41 | 1 | 13 | 755 | 771 | 0.312 | 0.309 |
+| rand_xoshiro | 69 | 34 | 2 | 349 | 521 | 0.242 | 0.265 |
+| socket2 | 96 | 58 | 0 | 431 | 767 | 0.624 | 0.679 |
+| utf8_iter | 20 | 3 | 4 | 209 | 238 | 0.224 | 0.233 |
+| Sum | 492 | 158 | 40 | 4551 | 5496 | 3.333 | 3.518 |
+
+- The time is the median of five runs of the release binary. The sum is 5.6 percent more.
+- The output has 945 more lines (21 percent). 727 of them are the lines of a text block: the docs of the crates are long.
+- In each of the ten outputs, each line of the output before the batch is in the output after it, in order. Each new line is a line of this section.
+- A second script reads the source of each fixture: each text with the mark is at its lines in the new file, and it is in the old tree (159 texts before R58.4-5).
+- The check of the batch (R58.4-5): on the fixtures, one of the 159 comments has a line in a `docs` fact, and it now shows as "moved". The table has the counts after this rule. No other line of the ten outputs changes.
+- No output of the measure has the state "with no pair" (R58.4-3). The first run had four such lines. Their causes were two defects, and the rules R58.2-3 and R58.3-2 now have the general form: a removed `use` line, and a changed node that is an item in a body.
+
+### 58.14 The limits and the open questions
+
+Rule index: no rule: the subsection has limits and open questions.
+
+- Semilla does not check that a comment agrees with the code. The mark is a statement about the text of the comment only.
+- A comment that the step removes at one place of an item, and adds with equal text at a different place of the same item, shows as "moved in this step" with the `docs` facts of its lines (R58.4-5). If the line diff of git keeps the comment line and moves the code around it, the comment has no changed line, and it shows as "no edit".
+- A comment below the last statement of a body (before `}`), and a comment after an empty line, are comments of no node. They show for no fact. An edit of such a comment has its fact of today.
+- A doc comment token in a macro input is not a unit: the tokens of a macro input have no nodes.
+- A changed token in a macro input gives the comments of its line (R58.1-8), not of a statement in the input.
+- A leading comment that stays when the step removes its item (R58.2-3) shows for no fact. R58.5-1 applies to a removed node in an item of the two trees.
+- A fact with no edit record and a path to a statement resolves in each tree by its path. If the step moved the statement, the node of the other tree can be a different statement. Its comment then shows with a true mark, at a node that is not the changed node.
+- The comments of an item show with the first fact of the item (R58.6-1). In a long list, the next facts of the item do not point back to that line.
+- Open question: the forced edit of a declaration fact at a site in a different item (a call with a new argument). The site does not make its item a changed item (R58.3-3). Is this correct for the user?
+- Open question: an `indirect` fact gives no comment. The item has no edit, but its behavior can change. Do its docs show?
+- Open question: a `move` fact gives no comment. The docs can name the old module.
+- Open question: the size. The docs of a public item can be long: the output of `socket2` has 78 percent more lines. An option that shows only the head lines is possible. It is not in this batch, because R58.7-1 gives the full text.
+- Open question: the local UI and the review show the comments as plain text. A link from the comment to the source lines is not in this batch.

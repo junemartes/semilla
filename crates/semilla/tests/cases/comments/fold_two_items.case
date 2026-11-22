@@ -1,0 +1,43 @@
+note: a fact with a place in two items shows the comments of each of the two items
+rule+: R58.3-3
+rule-: R58.3-3
+exit: 0
+must_match: docs of `shop::price`, no edit in this step
+must_match: docs of `shop::cost`, no edit in this step
+must_not_match: Gives the count
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// Gives the price of a count below 2^32.
+pub fn price(x: u32) -> u32 { x }
+/// Gives the cost of a count below 2^32.
+pub fn cost(x: u32) -> u32 { x }
+/// Gives the count.
+pub fn count(x: u32) -> u32 { x }
+=== new src/lib.rs
+/// Gives the price of a count below 2^32.
+pub fn price(x: u64) -> u64 { x }
+/// Gives the cost of a count below 2^32.
+pub fn cost(x: u64) -> u64 { x }
+/// Gives the count.
+pub fn count(x: u32) -> u32 { x }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration]
+      docs of `shop::cost`, no edit in this step (src/lib.rs:3): `/// Gives the cost of a count below 2^32.`
+      docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price of a count below 2^32.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 2 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: type `u32` → `u64` in 4 places: parameter `x` of `shop::cost`, return type of `shop::cost`, parameter `x` of `shop::price`, return type of `shop::price` (the public API can change: a different crate can use the item) [declaration]
+    lines: src/lib.rs:2, src/lib.rs:4, src/lib.rs:-2, src/lib.rs:-4

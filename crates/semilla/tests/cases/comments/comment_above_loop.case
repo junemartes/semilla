@@ -1,0 +1,58 @@
+note: the comments of the statement, of the loop, and of the function show: the path from the changed node up to the item
+rule+: R58.3-1
+exit: 0
+must_match: docs of `shop::total`, no edit in this step
+must_match: comment above line 5, no edit in this step \(src/lib.rs:4\): `// Add each price one time\.`
+must_match: comment above line 7, no edit in this step \(src/lib.rs:6\): `// The tax is 10 percent\.`
+must_not_match: Start at zero
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// Gives the sum of the prices with the tax.
+pub fn total(prices: &[u32]) -> u32 {
+    let mut sum = 0; // Start at zero.
+    // Add each price one time.
+    for price in prices {
+        // The tax is 10 percent.
+        sum += price + price / 10;
+    }
+    sum
+}
+=== new src/lib.rs
+/// Gives the sum of the prices with the tax.
+pub fn total(prices: &[u32]) -> u32 {
+    let mut sum = 0; // Start at zero.
+    // Add each price one time.
+    for price in prices {
+        // The tax is 10 percent.
+        sum += price + price / 5;
+    }
+    sum
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `10` → `5` (f1)
+      in: shop::total
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::total=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::total=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics]
+      docs of `shop::total`, no edit in this step (src/lib.rs:1): `/// Gives the sum of the prices with the tax.`
+      comment above line 5, no edit in this step (src/lib.rs:4): `// Add each price one time.`
+      comment above line 7, no edit in this step (src/lib.rs:6): `// The tax is 10 percent.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 3 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: changed literal `10` → `5` at `shop::total/S1/body/S0/rhs/rhs/rhs` [semantics]
+    lines: src/lib.rs:7, src/lib.rs:-7

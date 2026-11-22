@@ -1,0 +1,45 @@
+note: a changed field type shows the docs of the field and the docs of the struct; the docs of the other field do not show
+rule+: R58.3-1 R58.3-2
+rule-: R58.3-1
+exit: 0
+must_match: docs of `shop::Account`, no edit in this step
+must_match: no edit in this step \(src/lib.rs:3\): `/// The balance in cents, at most 2\^32\.`
+must_not_match: The name of the owner
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// An account of a customer.
+pub struct Account {
+    /// The balance in cents, at most 2^32.
+    pub balance: u32,
+    /// The name of the owner.
+    pub owner: String,
+}
+=== new src/lib.rs
+/// An account of a customer.
+pub struct Account {
+    /// The balance in cents, at most 2^32.
+    pub balance: u64,
+    /// The name of the owner.
+    pub owner: String,
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type of `shop::Account.balance`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration]
+      docs of `shop::Account`, no edit in this step (src/lib.rs:1): `/// An account of a customer.`
+      docs of `shop::Account.balance`, no edit in this step (src/lib.rs:3): `/// The balance in cents, at most 2^32.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 2 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: type of `shop::Account.balance`: `u32` → `u64` (the public API can change: a different crate can use the item) [declaration]
+    lines: src/lib.rs:4, src/lib.rs:-4

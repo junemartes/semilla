@@ -5,7 +5,7 @@
 //! expected text of the step. The runner makes the two trees, runs the step with
 //! `SEMILLA_NO_CHECK`, and compares the full result with the expected text. Then it checks the
 //! properties that hold for each change: the cover, no empty change, the same result each
-//! time, the tags, the facts of the agent, and the reader.
+//! time, the tags, the facts of the agent, the reader, and the comments with no edit.
 //!
 //! `SEMILLA_CASES_WRITE=1` writes the expected texts again. `SEMILLA_CASES=TEXT` runs only the
 //! cases whose name `GROUP/NAME` has the text.
@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments"];
 
 /// The line diff command of design 55.8. The test has its own copy of the options: it does not
 /// read them from the product.
@@ -527,6 +527,171 @@ fn no_tag_subs(block: &Block) -> Vec<String> {
     block.subs.iter().filter(|sub| !sub.starts_with("tags: ") && !sub.starts_with("tag: ") && sub.as_str() != "not in a tag").cloned().collect()
 }
 
+/// The note below the first comment with no edit of an output (design 58.4).
+const COMMENT_NOTE: &str = "note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.";
+
+/// The mark of a comment with no edit (design 58.4), up to the position.
+const NO_EDIT: &str = ", no edit in this step (";
+
+/// One comment of a changed item below a fact line (design 58.6).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Comment {
+    /// The first line, without the text.
+    head: String,
+    /// The lines of the text. `None` for a comment with an edit: its line names a fact.
+    text: Option<Vec<String>>,
+}
+
+/// Splits the sub lines of a fact (design 58.6): each sub line that is not a line of a comment,
+/// and the comments. The note of design 58.4 is in no list.
+fn comment_subs(subs: &[String]) -> (Vec<String>, Vec<Comment>) {
+    let is_head = |line: &str| (line.starts_with("docs ") || line.starts_with("comment ")) && (line.contains(NO_EDIT) || line.contains(" in this step: see f") || line.contains(", with no pair in the "));
+    let (mut other, mut comments) = (Vec::new(), Vec::new());
+    let mut index = 0;
+    while index < subs.len() {
+        let line = &subs[index];
+        index += 1;
+        if line == COMMENT_NOTE {
+            continue;
+        }
+        if !is_head(line) {
+            other.push(line.clone());
+        } else if let Some(head) = line.strip_suffix(':') {
+            // A block: each line of the text has the mark `| `.
+            let mut text = Vec::new();
+            while let Some(next) = subs.get(index).filter(|next| *next == "|" || next.starts_with("| ")) {
+                text.push(next.strip_prefix("| ").unwrap_or("").to_string());
+                index += 1;
+            }
+            comments.push(Comment { head: head.to_string(), text: Some(text) });
+        } else if let Some((head, text)) = line.split_once("): `").filter(|_| line.ends_with('`')) {
+            comments.push(Comment { head: format!("{head})"), text: Some(vec![text[..text.len() - 1].to_string()]) });
+        } else {
+            comments.push(Comment { head: line.clone(), text: None });
+        }
+    }
+    (other, comments)
+}
+
+/// The comments of an output in a fixed order. A comment with an edit names its facts by their
+/// texts, not by their numbers. The fact that a comment is below is not a part of the result:
+/// a comment shows with the first fact of its item in the order of the output (design 58.6),
+/// and a tag or a fact of the agent changes that order.
+fn comments_of(output: &str) -> Vec<Comment> {
+    let facts = facts(output);
+    let texts: BTreeMap<&str, String> = facts.iter().filter_map(|fact| Some((fact.head.strip_prefix("◆ ")?.split(' ').next()?, fact_text(&fact.head)))).collect();
+    let mut out = Vec::new();
+    for fact in &facts {
+        for mut comment in comment_subs(&fact.subs).1 {
+            const SEE: &str = " in this step: see ";
+            if let Some((start, ids)) = comment.head.clone().split_once(SEE) {
+                let names: Vec<String> = ids.split(", ").map(|id| texts.get(id).cloned().unwrap_or_else(|| id.to_string())).collect();
+                comment.head = format!("{start}{SEE}{}", names.join(" | "));
+            }
+            out.push(comment);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The comments of a Rust file from the tokens of its syntax tree: each comment token and each
+/// attribute `doc`, with its first line, its last line, and its text. The test reads the tree
+/// itself: it does not use the comment rules of the product.
+fn tree_comments(text: &str) -> Vec<(usize, usize, String)> {
+    use semilla_syntax::rs::{AstNode, Edition, NodeOrToken, SyntaxKind};
+    let (file, _) = semilla_syntax::rs::parse_checked(text, Edition::Edition2021);
+    let line = |offset: usize| text[..offset].matches('\n').count() + 1;
+    let mut out = Vec::new();
+    for element in file.syntax().descendants_with_tokens() {
+        let (range, part) = match &element {
+            NodeOrToken::Token(token) if matches!(token.kind(), SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT) => (token.text_range(), token.text().to_string()),
+            NodeOrToken::Node(node) if node.kind() == SyntaxKind::ATTR => {
+                let compact: String = node.text().to_string().chars().filter(|c| !c.is_whitespace()).collect();
+                if !compact.starts_with("#[doc=") && !compact.starts_with("#![doc=") {
+                    continue;
+                }
+                (node.text_range(), node.text().to_string())
+            }
+            _ => continue,
+        };
+        let (start, end) = (usize::from(range.start()), usize::from(range.end()));
+        // The line end is not a part of the text of a comment (design 58.1): the token of a
+        // line comment in a file with CR LF line ends has the CR.
+        out.push((line(start), line(end.saturating_sub(1).max(start)), part.replace("\r\n", "\n").trim_end_matches('\r').to_string()));
+    }
+    out
+}
+
+/// Property 7 (design 58.11). Each comment with the mark "no edit in this step" is in the new
+/// tree at its position: the comment tokens of those lines give the text. The same tokens are
+/// in one file of the old tree, in the same order. No `docs` fact has a line of the comment. A comment shows one time. The count line
+/// has the count of these comments, and an output with no such comment has no count line.
+fn comment_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut seen: BTreeSet<Comment> = BTreeSet::new();
+    // The lines of a text as an output shows them: a hidden character is an escape.
+    let shown = |text: &str| -> Vec<String> { text.split('\n').map(|line| semilla_core::text::inline(line).trim_end().to_string()).collect() };
+    // The lines of the `docs` facts, for an output that shows the positions (`status --verbose`).
+    let mut docs_lines: BTreeSet<Line> = BTreeSet::new();
+    for fact in facts(output).iter().filter(|fact| fact.head.ends_with("[docs]")) {
+        for list in fact.subs.iter().filter_map(|sub| sub.strip_prefix("lines: ")) {
+            docs_lines.extend(position_lines(list).unwrap_or_default());
+        }
+    }
+    for fact in facts(output) {
+        for comment in comment_subs(&fact.subs).1 {
+            let Some((_, rest)) = comment.head.split_once(NO_EDIT) else { continue };
+            if !seen.insert(comment.clone()) {
+                problems.push(format!("a comment shows two times: {}", comment.head));
+                continue;
+            }
+            let Some(text) = &comment.text else {
+                problems.push(format!("a comment with no edit has no text: {}", comment.head));
+                continue;
+            };
+            let lines = match position_lines(rest.strip_suffix(')').unwrap_or(rest)) {
+                Ok(lines) if !lines.is_empty() && lines.iter().all(|(file, old, _)| !old && *file == lines[0].0) => lines,
+                _ => {
+                    problems.push(format!("the position of a comment with no edit is not a range of lines of one file of the new tree: {}", comment.head));
+                    continue;
+                }
+            };
+            let (file, first, last) = (&lines[0].0, lines[0].2, lines[lines.len() - 1].2);
+            // Design 58.4, item 5: a comment with a line in a `docs` fact has an edit.
+            if lines.iter().any(|line| docs_lines.contains(line)) {
+                problems.push(format!("a `docs` fact has a line of a comment with no edit: {}", comment.head));
+                continue;
+            }
+            let parts: Vec<(usize, usize, String)> = new.get(file).map(|bytes| tree_comments(&String::from_utf8_lossy(bytes))).unwrap_or_default().into_iter().filter(|(start, end, _)| first <= *start && *end <= last).collect();
+            let in_tree: Vec<String> = parts.iter().flat_map(|(_, _, part)| shown(part)).collect();
+            let in_output: Vec<String> = text.iter().map(|line| line.trim_end().to_string()).collect();
+            if parts.is_empty() || in_tree != in_output {
+                problems.push(format!("the comment tokens of the new tree at the position do not give the text of a comment with no edit: {}\n      the tree: {in_tree:?}\n      the output: {in_output:?}", comment.head));
+                continue;
+            }
+            let in_old = old.iter().filter(|(path, _)| path.ends_with(".rs")).any(|(_, bytes)| {
+                let mut next = 0;
+                for (_, _, part) in tree_comments(&String::from_utf8_lossy(bytes)) {
+                    if parts.get(next).is_some_and(|(_, _, wanted)| *wanted == part) {
+                        next += 1;
+                    }
+                }
+                next == parts.len()
+            });
+            if !in_old {
+                problems.push(format!("no file of the old tree has the comment tokens of a comment with no edit: {}", comment.head));
+            }
+        }
+    }
+    let stated: Vec<&str> = output.lines().map(str::trim).filter_map(|line| line.strip_prefix("comments: ")).collect();
+    let count = stated.first().and_then(|line| line.split(' ').next()).and_then(|word| word.parse::<usize>().ok());
+    if stated.len() > 1 || count != (!seen.is_empty()).then_some(seen.len()) {
+        problems.push(format!("the output has {} comment(s) with no edit; the count line(s): {stated:?}", seen.len()));
+    }
+    problems
+}
+
 /// The two equal sides of a text "`OLD` → `NEW`", if a fact line has them.
 fn empty_change(line: &str) -> Option<String> {
     const ARROW: &str = "` → `";
@@ -748,7 +913,10 @@ fn check(case: &Case) -> Result<Outcome, String> {
         let folder = work.copy("d")?;
         Some(work.step(&folder, &[])?)
     };
-    let fact_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { facts(&run.all()).iter().map(|fact| (fact_text(&fact.head), fact.subs.clone())).collect() };
+    // A comment of a changed item is below the first fact of the item in the order of the
+    // output (design 58.6), and a fact of the agent changes that order. Thus the comments are
+    // not sub lines of the compare of the facts: they have their own compare.
+    let fact_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { facts(&run.all()).iter().map(|fact| (fact_text(&fact.head), comment_subs(&fact.subs).0)).collect() };
     if case.same_facts && let Some(plain) = &plain {
         let (with, without) = (fact_set(&step), fact_set(plain));
         if step.code == 2 {
@@ -759,7 +927,15 @@ fn check(case: &Case) -> Result<Outcome, String> {
         } else if with != without {
             let only = |a: &BTreeSet<(String, Vec<String>)>, b: &BTreeSet<(String, Vec<String>)>| a.difference(b).map(|(text, subs)| format!("\n      {text} {subs:?}")).collect::<String>();
             work.fail("same_facts", format!("the facts with the options are not the facts with no option;\n    only with the options:{}\n    only with no option:{}", only(&with, &without), only(&without, &with)));
+        } else if comments_of(&step.all()) != comments_of(&plain.all()) {
+            work.fail("same_facts", format!("the comments with the options are not the comments with no option:\n    with the options: {:?}\n    with no option: {:?}", comments_of(&step.all()), comments_of(&plain.all())));
         }
+    }
+
+    // Property 7: each comment with the mark "no edit in this step" is in the old tree and in
+    // the new tree (design 58.11).
+    for problem in comment_problems(&output, &case.old, &case.new) {
+        work.fail("comments", problem);
     }
 
     // Property 5: a rejected step is not stored, and a false fact of the agent removes no fact
@@ -808,7 +984,9 @@ fn check(case: &Case) -> Result<Outcome, String> {
         }
         let sorted = |mut list: Vec<Block>| {
             for block in &mut list {
-                block.subs = no_tag_subs(block);
+                // The comments have their own compare below: a tag changes the order of the
+                // output, and a comment is below the first fact of its item (design 58.6).
+                block.subs = comment_subs(&no_tag_subs(block)).0;
             }
             list.sort();
             list
@@ -818,6 +996,12 @@ fn check(case: &Case) -> Result<Outcome, String> {
                 let show = |list: &[Block]| list.iter().map(|block| format!("{}\n{}", block.head, block.subs.iter().map(|sub| format!("    {sub}\n")).collect::<String>())).collect::<String>();
                 work.fail("tags", format!("a tag changes a {name} line:\n{}", difference(&show(&without), &show(&with))));
             }
+        }
+        if comments_of(&tagged_output) != comments_of(&output) {
+            work.fail("tags", format!("a tag changes a comment of a changed item:\n    with the tag: {:?}\n    without it: {:?}", comments_of(&tagged_output), comments_of(&output)));
+        }
+        for problem in comment_problems(&tagged_output, &case.old, &case.new) {
+            work.fail("comments", format!("with a tag: {problem}"));
         }
         // A new line of the output with a tag is a line of the tag view (design 55.3), or the
         // command. Only a fact with no position is not in the tag: the tag has each hunk.
@@ -946,6 +1130,20 @@ fn check(case: &Case) -> Result<Outcome, String> {
         for fact in facts(&status.stdout) {
             if let Some(side) = empty_change(&fact.head) {
                 work.fail("empty_change", format!("the two sides of a fact of `status --verbose` are equal (`{side}`): {}", fact.head));
+            }
+        }
+        // The reader has each comment of the accepted step (design 58.9), and property 7 holds
+        // for the text of `status --verbose`.
+        if comments_of(&status.stdout) != comments_of(&run.all()) {
+            work.fail("reader", format!("the comments of `status --verbose` are not the comments of the step:\n    status: {:?}\n    the step: {:?}", comments_of(&status.stdout), comments_of(&run.all())));
+        }
+        for problem in comment_problems(&status.stdout, &case.old, &case.new) {
+            work.fail("comments", format!("`status --verbose`: {problem}"));
+        }
+        for comment in facts(&run.all()).iter().flat_map(|fact| comment_subs(&fact.subs).1) {
+            let lines = std::iter::once(&comment.head).chain(comment.text.iter().flatten());
+            for line in lines.filter(|line| !markdown.contains(no_escape(line).trim())) {
+                work.fail("reader", format!("the Markdown review does not have the line `{line}` of the comment: {}", comment.head));
             }
         }
     }
@@ -1094,4 +1292,55 @@ fn the_helpers_of_the_properties_read_the_output() {
     assert!(hunk_lines("@@ -1 +1 @@\n", &|_| true).is_err());
     let folder = Path::new("/tmp/x");
     assert_eq!(normal("base `1ea5d28`: /tmp/x/repo/a 62b58cee548ee0eeb2e6e08b7968d0dd20c28424 deadbeef", folder), "base `<COMMIT>`: <REPO>/a <TREE> deadbeef");
+}
+
+/// Design 58.11, property 7. The runner reads the comment tokens of the two trees itself. A
+/// true output gives no problem. Negative test: a text that is not in the new tree, a text
+/// that is not in the old tree, a position that is not the position of the comment, a comment
+/// that shows two times, and a count line that does not agree give a problem each.
+// rule+ R58.11-1
+// rule- R58.11-1
+#[test]
+fn the_seventh_property_finds_a_false_mark_no_edit() {
+    let tree = |text: &str| -> BTreeMap<String, Vec<u8>> { [("src/lib.rs".to_string(), text.as_bytes().to_vec())].into_iter().collect() };
+    let old = tree("/// Gives the price.\n#[doc = \"The tax is 10 percent.\"]\npub fn price(x: u32) -> u32 {\n    /* One.\r\n       Two. */\n    x + x / 10 // ten\n}\npub const TEXT: &str = \"// no comment\";\n");
+    let new = tree("\n/// Gives the price.\n#[doc = \"The tax is 10 percent.\"]\npub fn price(x: u32) -> u32 {\n    /* One.\n       Two. */\n    x + x / 5 // ten\n}\npub const TEXT: &str = \"// no comment\";\n");
+    let fact = "  ◆ f1 derived: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]\n";
+    let docs = "      docs of `shop::price`, no edit in this step (src/lib.rs:2-3):\n          | /// Gives the price.\n          | #[doc = \"The tax is 10 percent.\"]\n";
+    let block = "      comment above line 7, no edit in this step (src/lib.rs:5-6):\n          | /* One.\n          |        Two. */\n";
+    let end = "      comment at the end of line 7, no edit in this step (src/lib.rs:7): `// ten`\n";
+    let note = format!("      {COMMENT_NOTE}\n");
+    let count = |count: usize| format!("  comments: {count} comment(s) of the changed items have no edit in this step\n");
+    let good = format!("{fact}{docs}{block}{end}{note}{}", count(3));
+    assert_eq!(comment_problems(&good, &old, &new), Vec::<String>::new());
+    // The helpers: the note is in no list, and a comment with an edit has no text.
+    let subs: Vec<String> = format!("in: shop::price\n{docs}{note}docs of `shop::cost`, changed in this step: see f2\nlines: src/lib.rs:7").lines().map(|line| line.trim().to_string()).collect();
+    let (other, comments) = comment_subs(&subs);
+    assert_eq!(other, ["in: shop::price", "lines: src/lib.rs:7"]);
+    assert_eq!(comments, [Comment { head: "docs of `shop::price`, no edit in this step (src/lib.rs:2-3)".into(), text: Some(vec!["/// Gives the price.".into(), "#[doc = \"The tax is 10 percent.\"]".into()]) }, Comment { head: "docs of `shop::cost`, changed in this step: see f2".into(), text: None }]);
+
+    let problem = |output: String, words: &str| {
+        let problems = comment_problems(&output, &old, &new);
+        assert!(problems.iter().any(|problem| problem.contains(words)), "the output must give a problem with `{words}`:\n{output}\n{problems:#?}");
+    };
+    // A text that the new tree does not have at the position.
+    problem(format!("{fact}{}{}", end.replace("// ten", "// five"), count(1)), "do not give the text");
+    // A cut text.
+    problem(format!("{fact}{}{}", docs.replace("          | #[doc = \"The tax is 10 percent.\"]\n", ""), count(1)), "do not give the text");
+    // The position of a different line.
+    problem(format!("{fact}{}{}", end.replace("src/lib.rs:7)", "src/lib.rs:6)"), count(1)), "do not give the text");
+    // A text in a string literal is no comment token.
+    problem(format!("{fact}      comment above line 9, no edit in this step (src/lib.rs:9): `// no comment`\n{}", count(1)), "do not give the text");
+    // A `docs` fact has the line of the comment (an output with positions).
+    problem(format!("{fact}{end}  ◆ f2 derived: added comment `// ten` [docs]\n      lines: src/lib.rs:7\n{}", count(1)), "a `docs` fact has a line");
+    assert_eq!(comment_problems(&format!("{fact}{end}  ◆ f2 derived: added comment `// five` [docs]\n      lines: src/lib.rs:8\n{}", count(1)), &old, &new), Vec::<String>::new());
+    // The comment is in the new tree, and the old tree does not have it.
+    let other_old = tree("/// Gives the price.\npub fn price(x: u32) -> u32 {\n    x + x / 10 // 10\n}\n");
+    assert!(comment_problems(&format!("{fact}{end}{}", count(1)), &other_old, &new).iter().any(|problem| problem.contains("no file of the old tree")));
+    // A comment that shows two times.
+    problem(format!("{fact}{end}{fact}{end}{}", count(1)), "shows two times");
+    // The count line.
+    problem(format!("{fact}{docs}{end}{}", count(3)), "the count line(s)");
+    problem(format!("{fact}{docs}{end}"), "the count line(s)");
+    problem(format!("{fact}{}", count(1)), "the count line(s)");
 }

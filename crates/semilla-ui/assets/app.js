@@ -139,6 +139,9 @@
     return parts;
   }
 
+  // Design 58.9: the comments of the changed item that show with a fact, as a text block.
+  const commentLines = (fact) => (fact.comment_lines && fact.comment_lines.length ? h('pre', { class: 'comments' }, fact.comment_lines.join('\n')) : null);
+
   // The filter of the fact lists (design 35.7): a category, a compare result, or both.
   const shown = (fact) => (!state.factFilter.category || fact.category === state.factFilter.category) && (!state.factFilter.compare || fact.compare === state.factFilter.compare);
   // The order of the facts in a list (design 35.7). The sort is stable.
@@ -362,9 +365,11 @@
         const parts = factParts(fact);
         // A build code change says so (design 28.3). The server puts it first in its step.
         const first = fact.build_code_change ? h('b', null, BUILD_CODE_SECTION + ': ') : null;
-        return h('li', { class: fact.spotlight || fact.mismatch ? 'warning fact' : 'fact' }, '◆ ', first, parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
+        return h('li', { class: fact.spotlight || fact.mismatch ? 'warning fact' : 'fact' }, '◆ ', first, parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null, commentLines(fact));
       });
       if (cs.gap_line) root.appendChild(h('p', { class: 'facts' }, cs.gap_line));
+      // Design 58.8: the count of the comments of the changed items that have no edit.
+      if (cs.comment_line) root.appendChild(h('p', { class: 'facts' }, cs.comment_line));
       root.appendChild(h('h3', {}, 'Derived facts'));
       root.appendChild(h('ul', { class: 'messages facts' }, items));
     }
@@ -436,7 +441,7 @@
       body.appendChild(h('h4', {}, title + ' (' + facts.length + ')'));
       body.appendChild(h('ul', { class: 'messages facts' }, facts.map((fact) => {
         const parts = factParts(fact);
-        return h('li', { class: fact.spotlight || fact.mismatch ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
+        return h('li', { class: fact.spotlight || fact.mismatch ? 'warning fact' : 'fact' }, '◆ ', parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null, commentLines(fact));
       })));
     };
     factList('Build code changes: read these changes first', allFacts.filter((fact) => fact.build_code_change));

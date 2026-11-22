@@ -781,6 +781,98 @@ pub struct Fact {
     /// writes no fact for such a place, and the gap list does not have it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub test: bool,
+    /// The comments of the nodes of the fact (design 58): the comments of each node from the
+    /// changed node up to its item. Empty for a fact that does not make its item a changed
+    /// item, and in a record of an earlier version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<RelatedComment>,
+}
+
+/// The state of a comment of a changed item (design 58.4).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentState {
+    /// The text of the comment is equal in the old item and in the new item.
+    #[default]
+    NoEdit,
+    /// The step changed the text. A fact of the step has the lines of the comment.
+    Changed,
+    /// The comment is new in this step. A fact of the step has its lines.
+    Added,
+    /// The step removed the comment. A fact of the step has its lines.
+    Removed,
+    /// Semilla found no equal comment in the other tree and no fact with the lines.
+    NoPair,
+    /// The text of the comment is equal in the old item and in the new item, and a `docs`
+    /// fact of the step has a line of the comment: the comment is at a different place.
+    Moved,
+}
+
+/// One comment of a node of a fact (design 58).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelatedComment {
+    /// The place of the comment at its node: ``docs of `shop::price` ``, `comment above line 4`.
+    pub place: String,
+    pub state: CommentState,
+    /// The full text of the comment, from the tokens of the syntax tree. Each line of the
+    /// comment is one line of the text.
+    pub text: String,
+    /// The lines of the comment: in the new tree, or in the old tree for a removed comment.
+    pub position: Position,
+    /// The facts of the step that have the lines of a comment with an edit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<String>,
+}
+
+/// The mark of a comment with no edit (design 58.4).
+pub const COMMENT_NO_EDIT: &str = "no edit in this step";
+
+/// The note below the first comment with no edit of a step (design 58.4).
+pub const COMMENT_NOTE: &str = "Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.";
+
+/// The start of each line of a comment text in a block (design 58.7).
+pub const COMMENT_BLOCK: &str = "| ";
+
+impl RelatedComment {
+    /// The key of the comment in a step: two facts of one item have the same comment, and
+    /// each output shows it one time (design 58.6).
+    pub fn key(&self) -> (&Position, &str) {
+        (&self.position, &self.text)
+    }
+
+    /// True if the output shows the text of the comment (a comment with an edit shows the
+    /// number of its fact).
+    pub fn shows_text(&self) -> bool {
+        matches!(self.state, CommentState::NoEdit | CommentState::NoPair)
+    }
+
+    /// The first line of the comment in an output, without its text.
+    pub fn head(&self) -> String {
+        match self.state {
+            CommentState::NoEdit => format!("{}, {COMMENT_NO_EDIT} ({})", self.place, self.position.text()),
+            CommentState::NoPair => format!("{}, with no pair in the {} tree and no fact ({})", self.place, if self.position.old { "new" } else { "old" }, self.position.text()),
+            CommentState::Changed => format!("{}, changed in this step: see {}", self.place, self.facts.join(", ")),
+            CommentState::Added => format!("{}, added in this step: see {}", self.place, self.facts.join(", ")),
+            CommentState::Removed => format!("{}, removed in this step: see {}", self.place, self.facts.join(", ")),
+            CommentState::Moved => format!("{}, moved in this step: see {}", self.place, self.facts.join(", ")),
+        }
+    }
+
+    /// The lines of the comment below its fact, without the indent of the fact (design 58.7).
+    /// A text of one line that is not long is in the line. Each other text is a block: each
+    /// line of the comment is one line with the mark [`COMMENT_BLOCK`]. No text has a cut.
+    pub fn lines(&self) -> Vec<String> {
+        if !self.shows_text() {
+            return vec![self.head()];
+        }
+        if !self.text.contains('\n') && self.text.chars().count() <= crate::text::BLOCK_MIN {
+            return vec![format!("{}: `{}`", self.head(), self.text)];
+        }
+        let mut lines = vec![format!("{}:", self.head())];
+        // An empty line of the comment is the mark with no space after it.
+        lines.extend(self.text.split('\n').map(|line| if line.is_empty() { format!("    {}", COMMENT_BLOCK.trim_end()) } else { format!("    {COMMENT_BLOCK}{line}") }));
+        lines
+    }
 }
 
 /// The kinds of spotlight that one reason can cover (design 37.19): the name for a reason
@@ -1076,7 +1168,59 @@ impl PairWarning {
     }
 }
 
+/// The comments to show with each fact of a list (design 58.6): a comment shows one time, with
+/// the first fact of the list that has it.
+pub fn comments_shown<'a>(facts: &[&'a Fact]) -> Vec<Vec<&'a RelatedComment>> {
+    let mut known: std::collections::BTreeSet<(&Position, &str)> = std::collections::BTreeSet::new();
+    facts.iter().map(|fact| fact.comments.iter().filter(|comment| known.insert(comment.key())).collect()).collect()
+}
+
 impl StepReport {
+    /// The count of the comments of the changed items that have no edit in this step (design
+    /// 58.8): the count of the comment lines of the output with that mark. A comment of two
+    /// facts counts one time.
+    pub fn comments_no_edit(&self) -> usize {
+        self.comment_list().iter().filter(|(_, comment)| comment.state == CommentState::NoEdit).count()
+    }
+
+    /// The count line of the comments with no edit (design 58.8), without the indent. No line
+    /// for the count 0.
+    pub fn comment_count_line(&self) -> Option<String> {
+        comment_count_line(self.comments_no_edit())
+    }
+
+    /// The facts in the order of the output (design 54.5, 55.3): the build code changes, the
+    /// facts below each fact of the agent, then the groups of the facts that Semilla filled
+    /// in. In a step with tags: the facts of each tag, the facts in no tag, then the facts
+    /// with no position. The order in one group is the order of [`Fact::text_rank`].
+    pub fn output_order(&self) -> Vec<&Fact> {
+        let tagged = !self.tags.is_empty();
+        let key = |fact: &Fact| -> (usize, usize, u8) {
+            let rank = fact.text_rank();
+            if rank == 0 {
+                return (0, 0, 0);
+            }
+            let (part, group) = match (tagged, self.tag_group(fact), self.agent_facts.iter().position(|agent| agent.facts.contains(&fact.id))) {
+                (true, TagGroup::Tag(tag), _) => (1, tag),
+                (true, TagGroup::Outside, _) => (2, 0),
+                (true, TagGroup::NoPosition, _) => (3, 0),
+                (false, _, Some(agent)) => (1, agent),
+                (false, _, None) => (2, fact.filled_group()),
+            };
+            (part, group, rank)
+        };
+        let mut order: Vec<&Fact> = self.facts.iter().collect();
+        order.sort_by_key(|fact| key(fact));
+        order
+    }
+
+    /// Each comment of the changed items one time (design 58.6), with the first fact in the
+    /// order of the output that has it.
+    pub fn comment_list(&self) -> Vec<(&Fact, &RelatedComment)> {
+        let order = self.output_order();
+        order.iter().zip(comments_shown(&order)).flat_map(|(fact, comments)| comments.into_iter().map(|comment| (*fact, comment))).collect()
+    }
+
     pub fn accepted(&self) -> bool {
         self.errors.is_empty()
             && self.uncovered.is_empty()
@@ -1299,6 +1443,12 @@ impl StepReport {
 }
 
 impl Report {
+    /// The count line of the comments with no edit of each step of the change set together
+    /// (design 58.8), or `None` for the count 0.
+    pub fn comment_count_line(&self) -> Option<String> {
+        comment_count_line(self.steps.iter().map(StepReport::comments_no_edit).sum())
+    }
+
     /// The line with the count of the items that are not stated, for each step of the change
     /// set together (design 54.4), or `None` for no gap.
     pub fn gap_line(&self) -> Option<String> {
@@ -1314,6 +1464,11 @@ pub const NO_GAP_LINE: &str = "not stated: 0 item(s)";
 /// What Semilla checks for the facts of the agent (design 54.12). The text is true for each
 /// kind of fact: a `change`, a `rename`, a `move`, and a `rewrite`.
 pub const AGENT_FACTS_NOTE: &str = "Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`";
+
+/// The count line of the comments with no edit (design 58.8). No line for the count 0.
+pub fn comment_count_line(count: usize) -> Option<String> {
+    (count > 0).then(|| format!("comments: {count} comment(s) of the changed items have {COMMENT_NO_EDIT}"))
+}
 
 /// The line with the count of the items that are not stated (design 54.4).
 pub fn gap_count_line(items: usize, places: usize) -> Option<String> {
@@ -1941,6 +2096,104 @@ pub fn merge_kinds(old: crate::GroupKind, new: crate::GroupKind) -> crate::Group
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn comment(place: &str, state: CommentState, text: &str, line: usize, facts: &[&str]) -> RelatedComment {
+        let lines = text.matches('\n').count();
+        RelatedComment { place: place.into(), state, text: text.into(), position: Position { file: "src/lib.rs".into(), old: state == CommentState::Removed, start: line, end: line + lines }, facts: facts.iter().map(|fact| fact.to_string()).collect() }
+    }
+
+    fn fact_with(id: &str, comments: Vec<RelatedComment>) -> Fact {
+        Fact { id: id.into(), part: "edit".into(), description: format!("changed {id}"), status: "derived".into(), category: Category::Semantics, comments, ..Default::default() }
+    }
+
+    /// Design 58.4 and 58.7: the lines of a comment. A text of one line of 80 characters or
+    /// less is in the line. Each other text is a block with each line of the comment, and no
+    /// line has a cut. A comment with an edit shows the number of its fact, and no text.
+    // rule+ R58.7-1
+    // rule- R58.7-1
+    // rule- R58.4-2
+    #[test]
+    fn the_lines_of_a_comment_have_the_full_text_or_the_number_of_a_fact() {
+        let short = comment("docs of `shop::price`", CommentState::NoEdit, "/// Gives the price.", 1, &[]);
+        assert_eq!(short.lines(), ["docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price.`"]);
+        let long_line = format!("// {}", "word ".repeat(40));
+        let long = comment("comment above line 5", CommentState::NoEdit, &long_line, 4, &[]);
+        assert_eq!(long.lines(), ["comment above line 5, no edit in this step (src/lib.rs:4):".to_string(), format!("    | {long_line}")]);
+        let block = comment("comment above `shop::price`", CommentState::NoEdit, "/* One.\n\n   Two.  */", 1, &[]);
+        assert_eq!(block.lines(), ["comment above `shop::price`, no edit in this step (src/lib.rs:1-3):", "    | /* One.", "    |", "    |    Two.  */"]);
+        for (state, word) in [(CommentState::Changed, "changed"), (CommentState::Added, "added"), (CommentState::Removed, "removed"), (CommentState::Moved, "moved")] {
+            let edited = comment("docs of `shop::price`", state, "/// Gives the price.", 1, &["f2", "f3"]);
+            assert_eq!(edited.lines(), [format!("docs of `shop::price`, {word} in this step: see f2, f3")]);
+            assert!(!edited.shows_text());
+        }
+    }
+
+    /// Design 58.4: a comment with no pair in the other tree and no fact never gets the mark
+    /// "no edit in this step". Its line tells the state, and it shows the full text. Negative
+    /// test: a comment with a pair of equal text has the mark.
+    // rule+ R58.4-3
+    // rule- R58.4-3
+    #[test]
+    fn a_comment_with_no_pair_and_no_fact_tells_its_state() {
+        let open = comment("docs of `shop::price`", CommentState::NoPair, "/// Gives the price.", 1, &[]);
+        assert_eq!(open.lines(), ["docs of `shop::price`, with no pair in the old tree and no fact (src/lib.rs:1): `/// Gives the price.`"]);
+        assert!(!open.head().contains(COMMENT_NO_EDIT));
+        let paired = comment("docs of `shop::fee`", CommentState::NoEdit, "/// Gives the fee.", 5, &[]);
+        assert!(paired.head().contains(COMMENT_NO_EDIT) && !paired.head().contains("with no pair"));
+        // The count line has only the comments with no edit.
+        let step = StepReport { facts: vec![fact_with("f1", vec![open, paired])], ..Default::default() };
+        assert_eq!(step.comments_no_edit(), 1);
+    }
+
+    /// Design 58.8: the count line has each comment with no edit one time. Negative test: a
+    /// step with no such comment has no count line.
+    // rule+ R58.8-1
+    // rule- R58.8-1
+    #[test]
+    fn the_count_line_of_the_comments_with_no_edit() {
+        let docs = comment("docs of `shop::price`", CommentState::NoEdit, "/// Gives the price.", 1, &[]);
+        let above = comment("comment above line 5", CommentState::NoEdit, "// The fee.", 4, &[]);
+        let edited = comment("docs of `shop::count`", CommentState::Changed, "/// Gives the count.", 9, &["f3"]);
+        let step = StepReport { facts: vec![fact_with("f1", vec![docs.clone()]), fact_with("f2", vec![docs.clone(), above]), fact_with("f4", vec![edited.clone()])], ..Default::default() };
+        assert_eq!(step.comment_count_line().as_deref(), Some("comments: 2 comment(s) of the changed items have no edit in this step"));
+        let list: Vec<(&str, &str)> = step.comment_list().iter().map(|(fact, comment)| (fact.id.as_str(), comment.place.as_str())).collect();
+        assert_eq!(list, [("f1", "docs of `shop::price`"), ("f2", "comment above line 5"), ("f4", "docs of `shop::count`")]);
+        let report = Report { steps: vec![step.clone(), StepReport { step: 1, facts: vec![fact_with("f1", vec![docs])], ..Default::default() }], ..Default::default() };
+        assert_eq!(report.comment_count_line().as_deref(), Some("comments: 3 comment(s) of the changed items have no edit in this step"));
+        let none = StepReport { facts: vec![fact_with("f4", vec![edited]), fact_with("f5", Vec::new())], ..Default::default() };
+        assert_eq!(none.comment_count_line(), None);
+        assert_eq!(Report { steps: vec![none], ..Default::default() }.comment_count_line(), None);
+        assert_eq!(comment_count_line(0), None);
+    }
+
+    /// Design 58.9: the record of a fact keeps its comments (the place, the state, the text,
+    /// the position, the facts). Negative test: a fact with no comment has no key `comments`,
+    /// thus the record of a step with no comment is the record of the version before.
+    // rule+ R58.9-1
+    // rule- R58.9-1
+    #[test]
+    fn the_record_of_a_fact_keeps_its_comments() {
+        let fact = fact_with("f1", vec![comment("docs of `shop::price`", CommentState::NoEdit, "/// One.\n/// Two.", 1, &[]), comment("comment above line 5", CommentState::Removed, "// The fee.", 4, &["f2"])]);
+        let record = serde_json::to_string(&fact).unwrap();
+        assert!(record.contains("\"comments\"") && record.contains("/// One.\\n/// Two."), "{record}");
+        let read: Fact = serde_json::from_str(&record).unwrap();
+        assert_eq!(read, fact);
+        assert_eq!(read.comments[0].lines(), fact.comments[0].lines());
+        let record = serde_json::to_string(&fact_with("f1", Vec::new())).unwrap();
+        assert!(!record.contains("comments"), "{record}");
+    }
+
+    /// Design 58.9: a record of a version before batch 9m has no key `comments`. It reads,
+    /// and its fact has no comment and no count line.
+    // rule+ R58.9-4
+    #[test]
+    fn a_record_with_no_comments_key_reads() {
+        let record = r#"{"id":"f1","part":"edit","description":"changed literal `10` → `5` at `shop::price/tail/rhs/rhs`","status":"derived","category":"semantics","positions":[{"file":"src/lib.rs","start":3,"end":3}]}"#;
+        let fact: Fact = serde_json::from_str(record).unwrap();
+        assert!(fact.comments.is_empty() && fact.positions.len() == 1 && fact.category == Category::Semantics);
+        let step = StepReport { facts: vec![fact], ..Default::default() };
+        assert_eq!((step.comment_count_line(), step.comment_list().len()), (None, 0));
+    }
 
     fn change(step: usize, steps: &[usize], to_end: bool) -> BuildCodeChange {
         BuildCodeChange { step, parts: "crates/core/build.rs".into(), steps: steps.to_vec(), to_end }

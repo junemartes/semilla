@@ -243,6 +243,28 @@ Each changed line of the diff of a step is in the position of a fact of Semilla.
 - A changed line with no change of the code gets a fact too: a `layout` fact (equal tokens: white space, line breaks, the same items in a new order), a line-ending fact, or a comment fact (category `docs`).
 - A line with the mark `!` is a defect of Semilla, and not an error of yours: "! changed lines with no fact: src/a.rs:12-14". The step is stored. Read these lines in the diff, because no fact of Semilla describes them.
 
+## The comments of a changed item
+
+Semilla shows the comments of each item that your step changes: its docs, its leading comment, and the comments of the nodes on the path to the edit (a statement, a loop, a field). The lines are below the fact line:
+
+```
+  ◆ f1 derived: changed literal `10` → `5` at `shop::price/tail/rhs/rhs` [semantics]
+      docs of `shop::price`, no edit in this step (src/lib.rs:1): `/// Gives the price with a tax of 10 percent.`
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  comments: 1 comment(s) of the changed items have no edit in this step
+```
+
+- **"no edit in this step"**: the text of the comment is equal before and after your step. Read the comment. If it is not true for the new code, correct it in the next step. If it is still true, do nothing.
+- **"changed in this step: see f2"** (also "added", "removed"): your step has an edit in the comment. The fact `f2` shows it. The line does not show the text a second time.
+- **"moved in this step: see f1, f3"**: the text of the comment is equal, and your step put it at a different place of the item. The facts show the removed line and the added line.
+- **"comment that was above the removed code at old line N"**: your step removed the code below the comment, and the comment stays. Check that it is still at a correct place.
+- A long comment is a block: the head line ends with `:`, and each line of the comment follows with the mark `| `. The text has no cut.
+- A comment shows one time, with the first fact of its item in the output.
+- The line `comments: N comment(s) …` gives the count of the lines with the mark "no edit in this step". The step output, `status`, `tag`, and the review show it. No line shows for the count 0.
+- **A comment with no edit is never a reject.** It needs no fact, no reason, and no option. It is not in the list "not stated".
+- Semilla does not check that a comment agrees with the code. It compares only the text of the comment in the two trees.
+- A new item, a removed item, and a step with only a docs edit give no such line.
+
 ## The optional claims
 
 A claim says a property that the diff does not show. If it is false, the step is rejected. A property claim (each claim of the table) reads the compiled code. So it starts the compiled check for its step: "note: the claim `no-panic` is a property claim, so this step runs the compiled check (as with `--compiled`)". Each example below runs in the tests (`crates/semilla/tests/e2e.rs`).
@@ -316,6 +338,7 @@ A fact in the spotlight needs `--reason 'ANCHOR=TEXT'`. The reviewer reads the r
 | `malformed` | The anchor or an argument is wrong. The message names it. A `tested-by` test must have `#[test]` and no `#[ignore]`. |
 | `the claim … is gone` | Run the command again without the claim. |
 | `note: …` or `! the compiled code changes: …` (`--compiled`) | Nothing. The reviewer reads the line. |
+| `docs of …, no edit in this step …`, `comments: N comment(s) …` | The step is stored. Read each such comment. Correct a comment that is not true for the new code in the next step. |
 | `error: … no change since the last step` | Edit the code first. |
 | `! build code changed in step N: …` | Give the reason. With `--compiled`, each result `code equal` and each verified claim from step N on has the mark `(with the build code of step N)`. If possible, put the build code change in its own step. |
 | `! the build ran with no sandbox: …` (`--compiled`) | A limit of the build sandbox is missing on this machine. The result stays. Do nothing for it. |

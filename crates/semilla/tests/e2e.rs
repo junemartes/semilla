@@ -1129,6 +1129,36 @@ fn status_checks_again_and_tag_closes_the_change_set() {
     assert!(begin.contains("tagged and closed") && begin.contains("step 0 started"), "{begin}");
 }
 
+/// Design 58.8: the step output, `status`, and `tag` have the count line of the comments of
+/// the changed items that have no edit.
+// rule+ R58.8-1
+#[test]
+fn the_step_status_and_tag_show_the_count_of_the_comments_with_no_edit() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let docs = CART_V0.replace("    pub fn total(", "    /// Gives the sum of the items.\n    pub fn total(");
+    assert_ne!(docs, CART_V0);
+    write(repo, "crates/shop-core/src/cart.rs", &docs);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "docs"]);
+    const COUNT: &str = "comments: 1 comment(s) of the changed items have no edit in this step";
+    let default_mode = [("SEMILLA_COMPILED", "0")];
+    let text = |output: Output| -> String {
+        assert_eq!(output.status.code(), Some(0), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // No step: no count line.
+    let status = text(semilla_env(repo, &["status"], &default_mode));
+    assert!(!status.contains("comments: "), "{status}");
+    write(repo, "crates/shop-core/src/cart.rs", &docs.replace("let mut s = 0;", "let mut s = 1;"));
+    let step = text(semilla_env(repo, &["step", "start the sum at 1"], &default_mode));
+    assert!(step.contains("docs of `shop_core::cart::Cart::total`, no edit in this step") && step.contains(&format!("  {COUNT}\n")), "{step}");
+    let status = text(semilla_env(repo, &["status"], &default_mode));
+    assert!(status.contains(COUNT), "{status}");
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "start the sum at 1"]);
+    let tagged = text(semilla_env(repo, &["tag"], &default_mode));
+    assert!(tagged.contains(COUNT), "{tagged}");
+}
+
 #[test]
 fn one_command_for_each_step() {
     // Design 24.3: `semilla step "<intent>"` checks and stores a step; a rejected step stores
