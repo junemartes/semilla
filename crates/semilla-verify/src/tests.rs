@@ -51,7 +51,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: serde_json::Value) -> Claim
 
 fn step(claims: Vec<Claim>) -> Step {
     // The tests of the compare results need a step with the compiled check (design 50).
-    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: true, build_check: None }
+    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default() }
 }
 
 fn run(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)], effect: Option<Effect>) -> StepReport {
@@ -1711,7 +1711,7 @@ fn a_file_has_no_spotlight_only_on_the_allow_list() {
     assert_eq!(crate::files::content_change(None, None, None, Some(1234)), "binary, 1234 bytes");
     assert_eq!(crate::files::content_change(None, None, Some(10), Some(1234)), "binary, 10 bytes → binary, 1234 bytes");
     let long: String = (0..100).map(|i| format!("{i}\n")).collect();
-    assert!(crate::files::content_change(None, Some(&long), None, Some(1)).ends_with("… 60 more line(s)"));
+    assert!(crate::files::content_change(None, Some(&long), None, Some(1)).ends_with("(60 more changed line(s) of the file: `git diff` shows them)"));
 }
 
 #[test]
@@ -2332,7 +2332,9 @@ fn a_short_fact_text_shows_the_difference() {
     let fact = report.facts.iter().find(|f| f.part == "edit").unwrap_or_else(|| panic!("{:#?}", report.facts));
     let (old, new) = fact.description.split_once(" → ").unwrap();
     assert!(old.contains("withdrawal") && new.contains("deposit"), "{}", fact.description);
-    assert!(fact.content.as_deref().is_some_and(|c| c.contains("- 0 => \"there is not enough money in the account for this withdrawal\"") || c.contains("withdrawal\"")), "{:?}", fact.content);
+    // Design 54.7: each side is the full text, so no content repeats it.
+    assert!(old.contains("\"there is not enough money in the account for this withdrawal\"") && new.contains("\"there is not enough money in the account for this deposit\"") && !fact.description.contains('…'), "{}", fact.description);
+    assert_eq!(fact.content, None);
 }
 
 #[test]
@@ -2778,7 +2780,8 @@ fn the_tree_diff_of_a_long_line_shows_the_changed_part() {
     let oracle = FakeBodies([("demo::top".to_string(), equal("n0"))].into_iter().collect());
     let outcome = verify_step_with(&StepInput { step: &step(vec![]), before: &old, after: &new }, &oracle, &NoOracle, true);
     let tree = views::change_tree(&[outcome], &new, &old).render();
-    assert!(tree.contains("⟦…second_name, c as third_name};⟧→⟦…second_name, c as last_name};⟧"), "{tree}");
+    // Design 54.7: the two sides are the full texts.
+    assert!(tree.contains("⟦use crate::{a as first_name, b as second_name, c as third_name};⟧→⟦use crate::{a as first_name, b as second_name, c as last_name};⟧"), "{tree}");
 }
 
 #[test]
@@ -2901,7 +2904,7 @@ fn the_text_output_shows_a_manifest_diff_and_an_equal_spotlight_text_one_time() 
         assert_eq!(text.matches(&format!("  ◆ {id} derived: ")).count(), 1, "{text}");
     }
     // The build code line names the manifest facts. The facts are below the code fact.
-    assert!(text.contains(&format!("  ! {}\n      `Cargo.toml`: the manifest facts f2 to f4 below, with the diff of the file\n  ◆ f1 ", semilla_core::report::BUILD_CODE_SECTION)), "{text}");
+    assert!(text.contains(&format!("  ! {}\n      `Cargo.toml`: the manifest facts f2 to f4 below, with the diff of the file\n  other facts, filled in by Semilla:\n  ◆ f1 ", semilla_core::report::BUILD_CODE_SECTION)), "{text}");
     // A short text that is equal for two facts shows at each fact.
     let mut short = report.clone();
     for fact in &mut short.facts[1..] {
@@ -2953,7 +2956,10 @@ fn the_text_output_puts_the_body_edits_with_different_code_first() {
     let report = StepReport { facts, ..Default::default() };
     let text = crate::views::text_report_with(std::slice::from_ref(&report), false);
     let ids: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix("  ◆ ")).map(|line| line.split(' ').next().unwrap()).collect();
-    assert_eq!(ids, ["f6", "f8", "f4", "f3", "f7", "f1", "f2", "f5"], "{text}");
+    // Design 54.6: the groups of 48.3 come first (new and removed items, then the others). The
+    // order in one group does not change: the body edits with different code are first.
+    assert_eq!(ids, ["f4", "f6", "f8", "f3", "f7", "f1", "f2", "f5"], "{text}");
+    assert!(text.contains("  new and removed items, filled in by Semilla:\n  ◆ f4 ") && text.contains("  other facts, filled in by Semilla:\n  ◆ f6 "), "{text}");
 }
 
 #[test]
@@ -5225,13 +5231,19 @@ fn a_long_constant_value_shows_the_changed_part_and_the_index() {
     let report = run_calls(&before, &after, bodies);
     assert_eq!(report.facts.len(), 1, "{:#?}", report.facts);
     let text = &report.facts[0].description;
-    assert!(text.starts_with("value of `demo::TABLE` changed at the index 67 (of 120 elements): `"), "{text}");
-    assert!(text.contains("128") && text.contains("129") && text.contains('…') && text.chars().count() < 280, "{text}");
+    // Design 54.7: no cut mark. The changed element shows in full, with its index. An equal
+    // element is not a part of the difference.
+    assert!(text.starts_with("value of `demo::TABLE` changed at the index 67 (of 120 elements): `128` → `129`") && !text.contains('…'), "{text}");
     // A short value has the full text of the two sides, and an array with a new length has the counts.
     assert_eq!(crate::facts::long_value_description("demo::A", "[1, 2]", "[1, 3]"), None);
     let long = "[10000000, 20000000, 30000000, 40000000, 50000000, 60000000, 70000000]";
     let text = crate::facts::long_value_description("demo::A", long, &long.replace(", 70000000", "")).unwrap();
-    assert!(text.contains("(7 elements → 6 elements)"), "{text}");
+    assert!(text.contains("(7 elements → 6 elements)") && text.ends_with(&format!("`{long}` → `{}`", long.replace(", 70000000", ""))), "{text}");
+    // Many changed elements: the full text of the two sides.
+    let many: Vec<String> = (0..12u32).map(|index| format!("{}", 10_000_000 + index)).collect();
+    let (old, new) = (format!("[{}]", many.join(", ")), format!("[{}]", many.iter().map(|value| format!("{value}0")).collect::<Vec<_>>().join(", ")));
+    let text = crate::facts::long_value_description("demo::A", &old, &new).unwrap();
+    assert!(text.contains("at 12 indexes") && text.ends_with(&format!("`{old}` → `{new}`")) && !text.contains('…'), "{text}");
 }
 
 #[test]
@@ -5760,7 +5772,7 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
 
     // The net: a kind of text with no fact kind (`default` on a method of an impl).
     let (text, class, spotlight) = one("    pub fn new(x: u8)", "    pub default fn new(x: u8)");
-    assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new(x: u8) -> Table …` → `pub default fn new(x: u8) -> Table …` {api}"));
+    assert_eq!(text, format!("changed source text with no other fact, in `demo::Table::new`: `pub fn new(x: u8) -> Table ▫` → `pub default fn new(x: u8) -> Table ▫` {api}"));
     // Design 37.1, rule 3: the text has no body, thus each side has a cut mark.
     assert_eq!((class, spotlight), (Compare::CodeEqual, false));
     // The net fact of an item that no different crate can use has the class `other` too.
@@ -6388,12 +6400,12 @@ fn a_body_on_one_side_only_is_a_fact_with_the_body_text() {
     // A different body gives a different text.
     let other = after.replace("41 + 1", "41 + 2");
     assert_ne!(fact_lines(&run(before, &other, vec![], &[("demo::Price::label", BodyStatus::AfterOnly), ("demo::Price::rate", BodyStatus::BeforeOnly)], None)), lines);
-    // A long body has a cut mark, and the content has the full text.
+    // Design 54.7: a long body shows its full text. The text has no cut mark.
     let long = after.replace("41 + 1", &vec!["41 + 1"; 30].join(" + "));
     let report = run(before, &long, vec![], &[("demo::Price::label", BodyStatus::AfterOnly), ("demo::Price::rate", BodyStatus::BeforeOnly)], None);
     let fact = report.facts.iter().find(|fact| fact.description.starts_with("body added")).unwrap();
-    assert!(fact.description.contains('…'), "{}", fact.description);
-    assert_eq!(fact.content.as_deref().map(|content| content.matches("41 + 1").count()), Some(30));
+    assert!(!fact.description.contains('…'), "{}", fact.description);
+    assert_eq!(fact.description.matches("41 + 1").count(), 30);
 }
 
 // Batch 7c, part 1.2 (design 37.2).
@@ -6693,13 +6705,14 @@ fn a_change_after_the_cut_point_splits_the_fold() {
     let long = "if x == 1 { return x.wrapping_add(1).wrapping_add(2).wrapping_add(3).wrapping_add(4).wrapping_add(5); }";
     let after = before.replace("{\n    x\n}", &format!("{{\n    {long}\n    x\n}}"));
     let texts = descriptions(&run_derived(before, &after, &[]));
-    assert!(texts.iter().any(|t| t.starts_with("2 site(s): added early exit `if x == 1") && t.contains('…')), "{texts:?}");
-    // The needle is after the cut point of the text: the two facts stay apart.
+    assert!(texts.iter().any(|t| t.starts_with("2 site(s): added early exit `⏎if x == 1") && t.contains("wrapping_add(5); }⏎`") && !t.contains('…')), "{texts:?}");
+    // The needle is near the end of the long text: the two facts stay apart, and each text shows the needle.
     let needle = after.replacen("wrapping_add(5)", "wrapping_sub(5)", 1);
     let report = run_derived(before, &needle, &[]);
     let texts = descriptions(&report);
     assert!(texts.iter().all(|t| !t.contains("site(s)")), "{texts:?}");
-    assert_eq!(texts.iter().filter(|t| t.starts_with("added early exit `if x == 1")).count(), 2, "{texts:?}");
+    assert_eq!(texts.iter().filter(|t| t.starts_with("added early exit `⏎if x == 1")).count(), 2, "{texts:?}");
+    assert_eq!(texts.iter().filter(|t| t.contains("wrapping_sub(5)")).count(), 1, "{texts:?}");
     // The text output does not merge them either ("× 2").
     let text = views::text_report(std::slice::from_ref(&report));
     assert!(!text.contains("× 2"), "{text}");
@@ -6738,7 +6751,7 @@ fn a_restructured_body_gives_the_inner_compare() {
     let texts = descriptions(&run_derived(&before, &after, &[]));
     assert!(texts.contains(&"moved statement `let k = c.get();` from `demo::run/S0/args[1]/body/S0` to `demo::run/S0`".to_string()), "{texts:?}");
     assert!(texts.iter().any(|t| t.starts_with("moved statement `if k == 1") && t.ends_with("from `demo::run/S0/args[1]/body/S1` to `demo::run/S1`")), "{texts:?}");
-    assert!(texts.iter().any(|t| t.starts_with("deleted statement `with(c, |c|") && t.contains("(each inner statement is a moved statement of the body) at `demo::run/S0`")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("deleted statement `⏎with(c, |c|") && t.contains("(each inner statement is a moved statement of the body) at `demo::run/S0`")), "{texts:?}");
     assert_eq!(texts.len(), 3, "{texts:?}");
     // A needle in the moved statement keeps its own fact.
     let needle = after.replace("k & 3", "k | 3");
@@ -7776,17 +7789,19 @@ fn a_use_that_changes_to_a_different_variant_gets_its_own_fact() {
     assert!(report.facts[0].sites.is_empty(), "{report:#?}");
 }
 
-/// Design 50, part 4: the cut mark `…` of a one-side text is a label. The fact has the full text
-/// of the node in `content`.
+/// Design 54.7 (before: design 50, part 4): the text of a fact has no cut mark. A long text is
+/// in the fact text in full, and the layout puts it in a block below the fact line.
 #[test]
-fn a_fact_with_a_cut_text_has_the_full_text() {
+fn a_fact_with_a_long_text_has_the_full_text() {
     let before = "pub fn f(a: u32, b: u32) -> u32 {\n    let s = a + b;\n    s\n}\n";
     let after = before.replace("    s\n", "    let t = s.wrapping_mul(31).wrapping_add(a).wrapping_mul(17).wrapping_add(b).rotate_left(5) ^ 0x5bd1e995;\n    s + t\n");
     let report = run_tree(before, &after);
     let fact = report.facts.iter().find(|fact| fact.description.starts_with("added `let`")).expect("the fact of the added statement");
-    assert!(fact.description.contains('…'), "{fact:#?}");
-    assert!(fact.content.as_deref().is_some_and(|content| content.contains("rotate_left(5) ^ 0x5bd1e995")), "{fact:#?}");
-    // A pair of texts has a cut only in an equal part: each different part shows.
+    assert_eq!(fact.description, "added `let` `⏎let t = s.wrapping_mul(31).wrapping_add(a).wrapping_mul(17).wrapping_add(b).rotate_left(5) ^ 0x5bd1e995;⏎` at `demo::f/S1`", "{fact:#?}");
+    assert_eq!(fact.content, None);
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains(": added `let` [1] at `demo::f/S1` [semantics]\n        [1] let t = s.wrapping_mul(31).wrapping_add(a).wrapping_mul(17).wrapping_add(b).rotate_left(5) ^ 0x5bd1e995;\n"), "{text}");
+    // The negative test: a short text stays in the fact line.
     let pair = report.facts.iter().find(|fact| fact.description.starts_with("changed expression")).expect("the fact of the tail");
     assert_eq!(pair.description, "changed expression `s` → `s + t` at `demo::f/tail`");
 }
@@ -8386,11 +8401,11 @@ fn a_changed_own_token_with_a_changed_child_is_in_a_fact() {
     // own tokens.
     assert_eq!(
         yard_lines(&[("|k: u32| -> u64 { (k + 1).into() }", "|k: u32| -> u128 { (k + 2).into() }")]),
-        ["changed literal `1` → `2` at `demo::work::n1d/S0/init/body/tail/recv/rhs` [semantics]", "changed closure_block: `|k: u32| -> u64 {…}` → `|k: u32| -> u128 {…}` at `demo::work::n1d/S0/init` [semantics]"]
+        ["changed literal `1` → `2` at `demo::work::n1d/S0/init/body/tail/recv/rhs` [semantics]", "changed closure_block: `|k: u32| -> u64 {▫}` → `|k: u32| -> u128 {▫}` at `demo::work::n1d/S0/init` [semantics]"]
     );
     assert_eq!(
         yard_lines(&[("async move { n + 1 }", "async { n + 2 }")]),
-        ["changed literal `1` → `2` at `demo::work::n1e/S0/init/body/tail/rhs` [semantics]", "changed async: `async move {…}` → `async {…}` at `demo::work::n1e/S0/init` [semantics]"]
+        ["changed literal `1` → `2` at `demo::work::n1e/S0/init/body/tail/rhs` [semantics]", "changed async: `async move {▫}` → `async {▫}` at `demo::work::n1e/S0/init` [semantics]"]
     );
 }
 
@@ -8402,15 +8417,15 @@ fn the_rule_of_the_own_tokens_holds_for_each_kind_of_node() {
     let lines = |before: &str, after: &str| tree_lines(before, after);
     assert_eq!(
         lines("pub fn f(a: u32) -> u32 { let mut k = a; 'p: loop { k += 1; if k > 9 { break; } } k }\n", "pub fn f(a: u32) -> u32 { let mut k = a; 'q: loop { k += 2; if k > 9 { break; } } k }\n"),
-        ["changed literal `1` → `2` at `demo::f/S1/body/S0/rhs` [semantics]", "changed loop: `'p: loop {…}` → `'q: loop {…}` at `demo::f/S1` [semantics]"]
+        ["changed literal `1` → `2` at `demo::f/S1/body/S0/rhs` [semantics]", "changed loop: `'p: loop {▫}` → `'q: loop {▫}` at `demo::f/S1` [semantics]"]
     );
     assert_eq!(
         lines("pub fn f(v: &[u32]) -> u32 { let mut s = 0; 'a: for x in v { s += x + 1; } s }\n", "pub fn f(v: &[u32]) -> u32 { let mut s = 0; for x in v { s += x + 2; } s }\n"),
-        ["changed literal `1` → `2` at `demo::f/S1/body/S0/rhs/rhs` [semantics]", "changed for: `'a: for … in … {…}` → `for … in … {…}` at `demo::f/S1` [semantics]"]
+        ["changed literal `1` → `2` at `demo::f/S1/body/S0/rhs/rhs` [semantics]", "changed for: `'a: for ▫ in ▫ {▫}` → `for ▫ in ▫ {▫}` at `demo::f/S1` [semantics]"]
     );
     assert_eq!(
         lines("pub fn f(a: u32) -> u32 { match a { #[cfg(all())] 1 => 2, _ => 3 } }\n", "pub fn f(a: u32) -> u32 { match a { #[cfg(any())] 1 => 4, _ => 3 } }\n"),
-        ["changed literal `2` → `4` at `demo::f/S0/arm[0].body` [semantics]", "changed match: `match … { #[cfg(all())] … => …, … => … }` → `match … { #[cfg(any())] … => …, … => … }` at `demo::f/S0` [semantics]"]
+        ["changed literal `2` → `4` at `demo::f/S0/arm[0].body` [semantics]", "changed match: `match ▫ { #[cfg(all())] ▫ => ▫, ▫ => ▫ }` → `match ▫ { #[cfg(any())] ▫ => ▫, ▫ => ▫ }` at `demo::f/S0` [semantics]"]
     );
     assert_eq!(
         lines("pub fn f(a: u32) -> u32 { #[allow(unused)] let b = a + 1; b }\n", "pub fn f(a: u32) -> u32 { #[allow(dead_code)] let b = a + 2; b }\n"),
@@ -8447,12 +8462,14 @@ fn the_semicolon_of_a_statement_shows_in_a_fact_with_a_second_difference() {
     // A node with a block: the child keeps its fact.
     assert_eq!(
         lines("pub fn f(c: bool) { let a = 1; if c { g(a); } }", "pub fn f(c: bool) { let a = 1; if c { g(a + 1); }; }"),
-        ["changed expression `a` → `a + 1` at `demo::f/S1/then/S0/args[0]` [semantics]", "changed if: `if … {…}` → `if … {…};` at `demo::f/S1` [semantics]"]
+        ["changed expression `a` → `a + 1` at `demo::f/S1/then/S0/args[0]` [semantics]", "changed if: `if ▫ {▫}` → `if ▫ {▫};` at `demo::f/S1` [semantics]"]
     );
-    // Negative: the `;` on the two sides does not show, and the `;` alone has the fact of
-    // batch 9a2.
+    // Negative: the `;` on the two sides does not show. The `;` alone has the fact of batch 9a2,
+    // and the text of the fact shows the `;` (design 54.7).
     assert_eq!(lines("pub fn f() { let a = 1; g(a); }", "pub fn f() { let a = 1; g(a + 1); }"), ["changed expression `a` → `a + 1` at `demo::f/S1/args[0]` [semantics]"]);
-    assert_eq!(lines("pub fn f() { let a = 1; g(a) }", "pub fn f() { let a = 1; g(a); }"), ["moved call: `g(a)` from `tail` to `S1` in `demo::f` [semantics]"]);
+    assert_eq!(lines("pub fn f() { let a = 1; g(a) }", "pub fn f() { let a = 1; g(a); }"), ["moved call: `g(a)` → `g(a);` from `tail` to `S1` in `demo::f` [semantics]"]);
+    // The other direction, and a statement that moves with its `;` (no pair of texts).
+    assert_eq!(lines("pub fn f() { let a = 1; g(a); }", "pub fn f() { let a = 1; g(a) }"), ["moved call: `g(a);` → `g(a)` from `S1` to `tail` in `demo::f` [semantics]"]);
 }
 
 /// Design 52.2: a token difference with no meaning in the grammar gives no fact. Before: each
@@ -8649,4 +8666,319 @@ fn a_rename_local_claim_needs_a_sure_binding() {
     let before = "pub fn f(k: u32) -> u32 { let total = k + 1; total * 2 }\n";
     let report = run(before, &before.replace("total", "sum"), vec![claim("c1", "rename-local", Some("demo::f"), serde_json::json!({"from": "total", "to": "sum"}))], &[("demo::f", equal("n0"))], None);
     assert!(status_of(&report, "c1").is_verified(), "{:?}", status_of(&report, "c1"));
+}
+
+// Batch 9b (design 54): the facts of the agent, the gap list.
+
+const AGENT_BASE: &str = "pub struct Cart {\n    pub total: u32,\n    pub count: u32,\n}\nimpl Cart {\n    pub fn total(&self) -> u32 {\n        self.total\n    }\n}\npub fn a(c: &Cart) -> u32 {\n    c.total + 1\n}\npub fn b(c: &Cart) -> u32 {\n    c.total + 2\n}\npub fn d(c: &Cart, e: &Cart) -> u32 {\n    b(c) + e.total\n}\npub fn idle(x: u32) -> u32 {\n    x\n}\npub mod inner {\n    pub fn a(x: u32) -> u32 {\n        x + 1\n    }\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert_eq!(super::inner::a(1), 2);\n    }\n}\n";
+
+/// A step of the syntax tree model with the facts of the agent.
+fn run_agent(before: &str, after: &str, same: &[&str], change: &[&str]) -> StepReport {
+    let (_d1, old) = load(before);
+    let (_d2, new) = load(after);
+    let mut step = step(Vec::new());
+    step.compiled = false;
+    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect() };
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
+}
+
+/// The lines of the agent facts, the gap list, and each fact with its origin.
+fn agent_text(report: &StepReport) -> Vec<String> {
+    let mut lines = views::agent_lines(report, None, &|_| Vec::new());
+    lines.extend(report.facts.iter().map(|fact| format!("{} {}: {} [{}]", fact.id, fact.status, fact.description, fact.category.name())));
+    lines
+}
+
+/// The agent fact with the number `id`.
+fn agent_fact<'a>(report: &'a StepReport, id: &str) -> &'a semilla_core::report::AgentFact {
+    report.agent_facts.iter().find(|fact| fact.id == id).unwrap_or_else(|| panic!("no agent fact {id}: {:#?}", report.agent_facts))
+}
+
+/// The origin of each fact: `f1 stated`.
+fn origins(report: &StepReport) -> Vec<String> {
+    report.facts.iter().map(|fact| format!("{} {}", fact.id, fact.status)).collect()
+}
+
+const FALSE_CHANGE: &str = "false: the tag `change` does not agree with the edit that Semilla sees";
+
+// Design 54.2 (A1): the tag `change` must agree with the edit that Semilla sees.
+#[test]
+fn a_change_fact_holds_for_an_item_with_an_edit_that_can_change_the_behavior() {
+    let body = AGENT_BASE.replace("c.total + 1", "c.total + 3");
+    let report = run_agent(AGENT_BASE, &body, &[], &["demo::a=the fee is 3"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && fact.holds && fact.kind == "change" && fact.sentences == ["the fee is 3"], "{fact:#?}");
+    assert_eq!((fact.places.as_slice(), fact.facts.as_slice()), (&["demo::a/tail/rhs".to_string()][..], &["f1".to_string()][..]));
+    assert_eq!(agent_text(&report)[1], "  ✓ a1 change: `demo::a` \"the fee is 3\" (holds: the behavior of existing code can change in each item)");
+    // The fact of Semilla stays, with its text and its category. Only the origin changes.
+    assert_eq!(origins(&report), ["f1 stated"]);
+    assert_eq!(fact_lines(&report), fact_lines(&run_agent(AGENT_BASE, &body, &[], &[])));
+    assert!(report.gaps.is_empty(), "{:#?}", report.gaps);
+    // A loose path: the last segments of the path name the item.
+    let report = run_agent(AGENT_BASE, &AGENT_BASE.replace("self.total\n", "self.total + self.count\n"), &[], &["Cart::total=the total has the count"]);
+    assert!(report.accepted() && agent_fact(&report, "a1").places == ["demo::Cart::total/tail"], "{:#?}", report.agent_facts);
+    // A module and a file cover each item in them.
+    let two = body.replace("x + 1", "x + 5");
+    let report = run_agent(AGENT_BASE, &two, &[], &["src/lib.rs=two fees"]);
+    assert!(report.accepted() && agent_fact(&report, "a1").places == ["demo::a/tail/rhs", "demo::inner::a/tail/rhs"] && report.gaps.is_empty(), "{:#?}", report.agent_facts);
+    let report = run_agent(AGENT_BASE, &two, &[], &["demo::inner=the inner fee"]);
+    assert!(report.accepted() && agent_fact(&report, "a1").places == ["demo::inner::a/tail/rhs"], "{:#?}", report.agent_facts);
+    // Negative: the fact covers only its items. The other item is a gap.
+    assert_eq!(report.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::a"]);
+    assert_eq!(origins(&report), ["f1 derived", "f2 stated"]);
+}
+
+#[test]
+fn a_change_path_with_no_match_or_with_two_matches_is_a_reject_with_the_candidates() {
+    let body = AGENT_BASE.replace("c.total + 1", "c.total + 3");
+    let report = run_agent(AGENT_BASE, &body, &[], &["a=the fee is 3"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds && fact.result == FALSE_CHANGE, "{fact:#?}");
+    assert_eq!(fact.notes, ["`a` names 2 items: give more of the path", "candidates: `demo::a`, `demo::inner::a`"]);
+    let report = run_agent(AGENT_BASE, &body, &[], &["demo::zzz=the fee is 3"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && fact.notes == ["`demo::zzz` names no item, no module, and no file of the old tree or the new tree"], "{fact:#?}");
+    // A false fact hides nothing: the fact of Semilla stays, and the edit is in the gap list.
+    assert_eq!(origins(&report), ["f1 derived"]);
+    assert_eq!(report.gaps.len(), 1);
+    // Negative: the full path has one match.
+    assert!(run_agent(AGENT_BASE, &body, &[], &["demo::a=the fee is 3"]).accepted());
+}
+
+#[test]
+fn a_change_fact_on_a_new_item_gets_a_note_and_no_reject() {
+    let body = AGENT_BASE.replace("c.total + 1", "c.total + 3");
+    let report = run_agent(AGENT_BASE, &format!("{body}pub fn fresh() -> u32 {{\n    7\n}}\n"), &[], &["fresh=a new function"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && fact.holds && fact.result == "holds: no reject" && fact.places.is_empty(), "{fact:#?}");
+    assert_eq!(fact.notes, ["note: Semilla shows `demo::fresh` as added: the fact covers no existing code"]);
+    // The fact of the new item keeps the origin of Semilla. The edit of the other item is a gap.
+    assert!(report.facts.iter().any(|f| f.description.starts_with("added `demo::fresh`") && f.status == "derived"), "{:#?}", report.facts);
+    assert_eq!(report.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::a"]);
+    // A removed item: the same rule.
+    let report = run_agent(&format!("{AGENT_BASE}pub fn old() -> u32 {{\n    7\n}}\n"), AGENT_BASE, &[], &["demo::old=the function goes"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && fact.notes == ["note: Semilla shows `demo::old` as removed: the fact covers no existing code"], "{fact:#?}");
+}
+
+#[test]
+fn a_change_fact_on_an_item_with_no_edit_that_can_change_the_behavior_is_false() {
+    // Only a site of a rename: the name changes, the item that the name gives does not.
+    let renamed = AGENT_BASE.replace("pub fn b(", "pub fn bee(").replace("b(c) +", "bee(c) +");
+    let report = run_agent(AGENT_BASE, &renamed, &[], &["demo::d=d changes"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds && fact.result == FALSE_CHANGE, "{fact:#?}");
+    assert_eq!(fact.notes, ["Semilla sees only edits that keep the behavior in `demo::d`:", "    1 site(s) of a rename (the name changes, the item that the name gives does not)"]);
+    // Only a doc change.
+    let report = run_agent(AGENT_BASE, &AGENT_BASE.replace("pub fn idle", "/// Gives `x`.\npub fn idle"), &[], &["demo::idle=idle changes"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && fact.notes[0] == "Semilla sees only edits that keep the behavior in `demo::idle`:" && fact.notes[1].contains("[docs]"), "{fact:#?}");
+    // No edit. The other fact of the step holds.
+    let body = AGENT_BASE.replace("c.total + 1", "c.total + 3");
+    let report = run_agent(AGENT_BASE, &body, &[], &["demo::a=the fee is 3", "demo::idle=idle changes"]);
+    assert!(!report.accepted() && agent_fact(&report, "a1").holds, "{:#?}", report.agent_facts);
+    assert_eq!(agent_fact(&report, "a2").notes, ["Semilla sees no edit in `demo::idle`"]);
+    // Negative: the same step without the false fact is accepted.
+    assert!(run_agent(AGENT_BASE, &body, &[], &["demo::a=the fee is 3"]).accepted());
+}
+
+#[test]
+fn two_change_facts_with_one_item_set_are_one_fact_with_two_sentences() {
+    let body = AGENT_BASE.replace("c.total + 1", "c.total + 3").replace("c.total + 2", "c.total + 4");
+    let report = run_agent(AGENT_BASE, &body, &[], &["demo::a,demo::b=the fees are larger", "b, demo::a=the callers get more"]);
+    assert_eq!(report.agent_facts.len(), 1, "{:#?}", report.agent_facts);
+    let fact = agent_fact(&report, "a1");
+    assert!(fact.holds && fact.sentences == ["the fees are larger", "the callers get more"] && fact.places == ["demo::a/tail/rhs", "demo::b/tail/rhs"], "{fact:#?}");
+    // Negative: a different item set is a different fact.
+    let report = run_agent(AGENT_BASE, &body, &[], &["demo::a,demo::b=the fees are larger", "demo::a=the callers get more"]);
+    assert_eq!(report.agent_facts.len(), 2, "{:#?}", report.agent_facts);
+    // The place belongs to the first fact that covers it. The second fact holds with no place of its own.
+    assert!(report.accepted() && agent_fact(&report, "a2").holds, "{:#?}", report.agent_facts);
+}
+
+// Design 54.3 (A2): a `same` claim holds only if Semilla derives the same fact.
+#[test]
+fn a_rename_claim_and_a_move_claim_hold_only_if_semilla_derives_the_fact() {
+    let renamed = AGENT_BASE.replace("pub fn b(", "pub fn bee(").replace("b(c) +", "bee(c) +");
+    let report = run_agent(AGENT_BASE, &renamed, &["rename demo::b demo::bee"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && fact.holds && fact.result == "holds: Semilla derives the rename from the syntax tree" && fact.places == ["demo::b", "demo::bee"], "{fact:#?}");
+    assert_eq!(origins(&report), ["f1 stated", "f2 stated"]);
+    assert_eq!(fact_lines(&report), fact_lines(&run_agent(AGENT_BASE, &renamed, &[], &[])));
+    // A rename with one more edit at a site: the claim holds, and the other edit has its own
+    // fact and is a gap.
+    let more = renamed.replace("bee(c) + e.total", "bee(c) + e.total + 1");
+    let report = run_agent(AGENT_BASE, &more, &["rename b bee"], &[]);
+    assert!(report.accepted() && agent_fact(&report, "a1").holds, "{:#?}", report.agent_facts);
+    let other = report.facts.iter().find(|f| f.description == "added operand `+ 1` at `demo::d/tail`").expect("the fact of the other edit");
+    assert_eq!(other.status, "derived");
+    assert_eq!(report.gaps.iter().map(|gap| (gap.items.join(","), gap.facts.join(","))).collect::<Vec<_>>(), [("demo::d".to_string(), other.id.clone())]);
+    // A move, with the item path or the module as the target.
+    let moved = AGENT_BASE.replace("pub fn idle(x: u32) -> u32 {\n    x\n}\n", "").replace("pub mod inner {\n", "pub mod inner {\n    pub fn idle(x: u32) -> u32 {\n        x\n    }\n");
+    for claim in ["move demo::idle demo::inner::idle", "move demo::idle demo::inner"] {
+        let report = run_agent(AGENT_BASE, &moved, &[claim], &[]);
+        let fact = agent_fact(&report, "a1");
+        assert!(report.accepted() && fact.result == "holds: Semilla derives the move from the syntax tree" && fact.places == ["demo::idle", "demo::inner::idle"], "{claim}: {fact:#?}");
+        assert_eq!(origins(&report), ["f1 stated", "f2 stated"]);
+    }
+    // Negative: a claim that Semilla does not derive is false, with the cause.
+    let body = AGENT_BASE.replace("c.total + 1", "c.total + 3");
+    let report = run_agent(AGENT_BASE, &body, &["rename demo::b demo::bee"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && fact.result == "false: Semilla derives no rename `demo::b` → `demo::bee` from the syntax tree" && fact.notes[0].contains("the new tree has no item `demo::bee`"), "{fact:#?}");
+    // A move is not a rename: the wrong kind is false, and the note shows the fact of Semilla.
+    let report = run_agent(AGENT_BASE, &moved, &["rename demo::idle demo::inner::idle"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && fact.notes.iter().any(|note| note.contains("moved `demo::idle` → `demo::inner::idle`")), "{fact:#?}");
+    assert_eq!(origins(&report), ["f1 derived", "f2 derived"]);
+    let report = run_agent(AGENT_BASE, &body, &["move demo::idle demo::inner::idle"], &[]);
+    assert!(!report.accepted() && agent_fact(&report, "a1").result == "false: Semilla derives no move `demo::idle` → `demo::inner::idle` from the syntax tree", "{:#?}", report.agent_facts);
+}
+
+#[test]
+fn a_rewrite_claim_covers_each_site_whose_full_difference_is_the_pattern() {
+    // A field read to a call at three sites, with one variable.
+    let calls = AGENT_BASE.replace("c.total + 1", "c.total() + 1").replace("c.total + 2", "c.total() + 2").replace("e.total", "e.total()");
+    let report = run_agent(AGENT_BASE, &calls, &["rewrite $c.total => $c.total()"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && fact.holds && fact.result == "holds: 3 site(s)" && fact.places == ["demo::a/tail/lhs", "demo::b/tail/lhs", "demo::d/tail/rhs"], "{fact:#?}");
+    assert_eq!(agent_text(&report)[1], "  ✓ a1 same: rewrite `$c.total` => `$c.total()` (holds: 3 site(s))");
+    // All sites are below the one fact of the agent. Each fact of Semilla stays.
+    assert_eq!(origins(&report), ["f1 stated", "f2 stated"]);
+    assert_eq!(fact_lines(&report), fact_lines(&run_agent(AGENT_BASE, &calls, &[], &[])));
+    assert!(report.gaps.is_empty(), "{:#?}", report.gaps);
+    // A site with one more edit is not covered: its fact stays `derived`, and it is a gap.
+    let more = calls.replace("e.total()", "e.total() + 1");
+    let report = run_agent(AGENT_BASE, &more, &["rewrite $c.total => $c.total()"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && fact.result == "holds: 2 site(s)" && fact.places == ["demo::a/tail/lhs", "demo::b/tail/lhs"], "{fact:#?}");
+    let other = report.facts.iter().find(|f| f.description == "changed expression `b(c) + e.total` → `b(c) + e.total() + 1` at `demo::d/tail`").expect("the fact of the site with one more edit");
+    assert_eq!(other.status, "derived");
+    assert_eq!(report.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::d"]);
+    // One variable has one value at one site.
+    let swap = AGENT_BASE.replace("b(c) + e.total", "b(e) + c.total");
+    let report = run_agent(AGENT_BASE, &swap, &["rewrite b($x) + $x.total => b($x) + $x.total"], &[]);
+    assert!(!report.accepted(), "{:#?}", report.agent_facts);
+}
+
+#[test]
+fn a_rewrite_claim_with_no_site_is_false() {
+    let calls = AGENT_BASE.replace("c.total + 1", "c.total() + 1").replace("c.total + 2", "c.total() + 2").replace("e.total", "e.total()");
+    let report = run_agent(AGENT_BASE, &calls, &["rewrite $c.count => $c.count()"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds && fact.result == "false: no changed place has the old form `$c.count` and the new form `$c.count()`", "{fact:#?}");
+    // The claim hides nothing: each fact stays `derived`, and the gap list has the three places.
+    assert_eq!(origins(&report), ["f1 derived", "f2 derived"]);
+    assert_eq!(report.gaps.iter().map(|gap| gap.places.len()).collect::<Vec<_>>(), [3]);
+    // The old form matches, the new form does not: the note shows the nearest edit and the cause.
+    let report = run_agent(AGENT_BASE, &calls, &["rewrite $c.total => $c.sum()"], &[]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && fact.notes.iter().any(|note| note.contains("c.total()")), "{fact:#?}");
+    // The form check: a variable of TO that is not in FROM, and a bare variable as FROM.
+    for (claim, cause) in [("rewrite $c.total => $d.total()", "$d"), ("rewrite $c => $c.total()", "is only a variable")] {
+        let report = run_agent(AGENT_BASE, &calls, &[claim], &[]);
+        assert!(!report.accepted() && agent_fact(&report, "a1").result.contains(cause), "{claim}: {:#?}", report.agent_facts);
+    }
+    // The kinds of a later batch get a clear message.
+    for kind in ["extract", "inline"] {
+        let report = run_agent(AGENT_BASE, &calls, &[&format!("{kind} demo::a demo::helper")], &[]);
+        assert!(!report.accepted() && agent_fact(&report, "a1").result.contains(&format!("the kind `{kind}` has no check yet (a later batch adds it)")), "{:#?}", report.agent_facts);
+    }
+}
+
+#[test]
+fn a_statement_with_a_new_position_is_not_a_rewrite_site() {
+    let base = "pub fn note(_x: u32) {}\npub fn m(x: u32, flag: bool) -> u32 {\n    if flag {\n        note(x);\n    }\n    let y = x.wrapping_mul(3);\n    let z = y.wrapping_add(7);\n    z\n}\n";
+    // The `if` statement moves below the two `let` statements, and its call changes.
+    let moved = "pub fn note(_x: u32) {}\npub fn m(x: u32, flag: bool) -> u32 {\n    let y = x.wrapping_mul(3);\n    let z = y.wrapping_add(7);\n    if flag {\n        note(x + 1);\n    }\n    z\n}\n";
+    // A site is an edit in place. The position is a difference that the pattern does not
+    // state: Semilla shows a removed and an added statement, and no claim covers them.
+    for claim in ["rewrite if $f { note($a); } => if $f { note($a + 1); }", "rewrite note($a) => note($a + 1)"] {
+        let report = run_agent(base, moved, &[claim], &[]);
+        let fact = agent_fact(&report, "a1");
+        assert!(!report.accepted() && !fact.holds && fact.result.starts_with("false: no changed place has the old form"), "{claim}: {:#?}", fact);
+        assert!(report.facts.len() == 2 && report.facts.iter().all(|fact| fact.status == "derived"), "{claim}: {:#?}", origins(&report));
+    }
+    // Negative: the same edit in place is a site.
+    let in_place = base.replace("note(x)", "note(x + 1)");
+    let report = run_agent(base, &in_place, &["rewrite note($a) => note($a + 1)"], &[]);
+    assert!(report.accepted() && agent_fact(&report, "a1").result == "holds: 1 site(s)" && origins(&report) == ["f1 stated"], "{:#?}", report.agent_facts);
+    // A pattern with two equal sides states no change: the form check stops it. The gap list
+    // does not propose it for a statement that only moves.
+    let only = moved.replace("note(x + 1)", "note(x)");
+    let report = run_agent(base, &only, &["rewrite if $f { note($a); } => if $f { note($a); }"], &[]);
+    assert!(!report.accepted() && agent_fact(&report, "a1").result.contains("the two sides of the pattern are equal"), "{:#?}", report.agent_facts);
+    let report = run_agent(base, &only, &[], &[]);
+    assert!(report.accepted() && report.gaps.len() == 1 && report.gaps[0].option.starts_with("--change "), "{:#?}", report.gaps);
+}
+
+#[test]
+fn two_forms_of_one_change_need_two_rewrite_claims() {
+    let two = AGENT_BASE.replace("c.total + 1", "c.total() + 1").replace("c.total + 2", "Cart::total(c) + 2").replace("e.total", "e.total()");
+    let report = run_agent(AGENT_BASE, &two, &["rewrite $c.total => $c.total()"], &[]);
+    assert!(report.accepted() && agent_fact(&report, "a1").places == ["demo::a/tail/lhs", "demo::d/tail/rhs"], "{:#?}", report.agent_facts);
+    // The second form is not below the claim: it is a gap.
+    assert_eq!(report.gaps.iter().map(|gap| (gap.text.clone(), gap.items.join(","))).collect::<Vec<_>>(), [("changed expression `c.total` → `Cart::total(c)`".to_string(), "demo::b".to_string())]);
+    let report = run_agent(AGENT_BASE, &two, &["rewrite $c.total => $c.total()", "rewrite $c.total => Cart::total($c)"], &[]);
+    assert!(report.accepted() && agent_fact(&report, "a2").places == ["demo::b/tail/lhs"] && report.gaps.is_empty(), "{:#?}", report.agent_facts);
+    assert_eq!(origins(&report), ["f1 stated", "f2 stated", "f3 stated"]);
+}
+
+// Design 54.4 (B): the gap list.
+#[test]
+fn the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them() {
+    let calls = AGENT_BASE.replace("c.total + 1", "c.total() + 1").replace("c.total + 2", "c.total() + 2").replace("e.total", "e.total()");
+    let mixed = calls.replace("x + 1", "x + 5").replace("inner::a(1), 2", "inner::a(1), 6").replace("    x\n}", "    x + 0\n}");
+    // No agent fact: the step is valid, and each fact has the origin of Semilla.
+    let report = run_agent(AGENT_BASE, &mixed, &[], &[]);
+    assert!(report.accepted() && report.agent_facts.is_empty() && report.facts.iter().all(|fact| fact.status == "derived"), "{:#?}", report.facts);
+    assert_eq!(
+        views::agent_lines(&report, None, &|_| Vec::new()),
+        [
+            "  not stated: 5 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states",
+            "  ? 3 places: `$a.total` => `$a.total()` (f1, f2)",
+            "      in: demo::a, demo::b, demo::d",
+            "      to state it: --same 'rewrite $a.total => $a.total()'",
+            "  ? 1 place: changed expression `x` → `x + 0` (f3)",
+            "      in: demo::idle",
+            "      to state it: --change 'demo::idle=TEXT'",
+            "  ? 1 place: changed literal `1` → `5` (f4)",
+            "      in: demo::inner::a",
+            "      to state it: --change 'demo::inner::a=TEXT'",
+            "  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite $a.total => $a.total()' --change 'demo::idle=TEXT' --change 'demo::inner::a=TEXT'",
+        ]
+    );
+    // The edit of the test function has its fact, and it is not in the gap list.
+    let test = report.facts.iter().find(|fact| fact.description.contains("demo::tests::t")).expect("the fact of the test");
+    assert!(test.test && report.gaps.iter().all(|gap| !gap.facts.contains(&test.id)), "{:#?}", report.gaps);
+    // The option that Semilla prints covers the group: the check of the option gives the same places.
+    let stated = run_agent(AGENT_BASE, &mixed, &["rewrite $a.total => $a.total()"], &[]);
+    assert_eq!(agent_fact(&stated, "a1").places, report.gaps[0].places);
+    // A partial fact set: the other items stay in the list.
+    assert_eq!(stated.gaps.iter().map(|gap| gap.items.join(",")).collect::<Vec<_>>(), ["demo::idle", "demo::inner::a"]);
+    assert_eq!(stated.gap_line().as_deref(), Some("not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states"));
+    // Each item is stated: no list.
+    let full = run_agent(AGENT_BASE, &mixed, &["rewrite $a.total => $a.total()"], &["demo::idle,demo::inner::a=the fees change"]);
+    assert!(full.accepted() && full.gaps.is_empty() && full.gap_line().is_none(), "{:#?}", full.gaps);
+    // Negative: one place is no group. The line gives a `change` option, not a pattern.
+    let one = run_agent(AGENT_BASE, &AGENT_BASE.replace("c.total + 1", "c.total() + 1"), &[], &[]);
+    assert_eq!(one.gaps.iter().map(|gap| gap.option.clone()).collect::<Vec<_>>(), ["--change 'demo::a=TEXT'"]);
+    // A new item is not in the list.
+    let fresh = run_agent(AGENT_BASE, &format!("{AGENT_BASE}pub fn fresh() -> u32 {{\n    7\n}}\n"), &[], &[]);
+    assert!(fresh.gaps.is_empty() && fresh.facts.len() == 1, "{:#?}", fresh.gaps);
+}
+
+#[test]
+fn a_long_gap_list_shows_its_first_lines_and_a_count() {
+    let names: Vec<String> = (0..9).map(|index| format!("f{index}")).collect();
+    let source = |value: u32| names.iter().enumerate().map(|(index, name)| format!("pub fn {name}(x: u32) -> u32 {{\n    x * {}\n}}\n", value + 2 * index as u32)).collect::<String>();
+    let report = run_agent(&source(1), &source(2), &[], &[]);
+    assert_eq!(report.gaps.len(), 9, "{:#?}", report.gaps);
+    let short = views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
+    assert_eq!(short.iter().filter(|line| line.starts_with("  ? ")).count(), 5, "{short:#?}");
+    assert_eq!(short[short.len() - 2], "  and 4 more line(s) with 4 place(s): `semilla status --verbose` shows each line");
+    // The full list has each line.
+    assert_eq!(views::agent_lines(&report, None, &|_| Vec::new()).iter().filter(|line| line.starts_with("  ? ")).count(), 9);
+    // The list is never a reject.
+    assert!(report.accepted());
 }

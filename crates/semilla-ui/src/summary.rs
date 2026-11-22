@@ -126,7 +126,21 @@ pub struct ChangeSetSummary {
     pub pairs: Vec<PairView>,
     /// The derived facts of all steps (design 22.5), with their step.
     pub facts: Vec<FactView>,
+    /// The facts of the agent and the gap list of each step that has one of them (design 54.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent: Vec<AgentView>,
+    /// The line with the count of the items that are not stated (design 54.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap_line: Option<String>,
     pub groups: Vec<GroupSummary>,
+}
+
+/// The facts of the agent of one step, with the check results, and its gap list (design 54).
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentView {
+    pub step: usize,
+    pub facts: Vec<semilla_core::AgentFact>,
+    pub gaps: Vec<semilla_core::Gap>,
 }
 
 /// One derived fact for the review UI.
@@ -307,6 +321,8 @@ pub fn changeset(ctx: &Ctx, review: &ReviewFile) -> ChangeSetSummary {
         pairs: pair_views(report, review),
         // Design 28.3: the build code changes of a step come before its other facts.
         facts: report.steps.iter().flat_map(|step| step.facts.iter().filter(|fact| fact.build_code_change).chain(step.facts.iter().filter(|fact| !fact.build_code_change)).map(|fact| FactView::new(step.step, fact))).collect(),
+        agent: report.steps.iter().filter(|step| !step.agent_facts.is_empty() || !step.gaps.is_empty()).map(|step| AgentView { step: step.step, facts: step.agent_facts.clone(), gaps: step.gaps.clone() }).collect(),
+        gap_line: report.gap_line(),
         groups,
     }
 }

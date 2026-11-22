@@ -10,7 +10,7 @@ use crate::checks;
 
 /// A one-line description of an edit.
 pub fn describe(edit: &Edit) -> String {
-    let short = |text: &Option<String>| text.as_deref().map(|t| semilla_syntax::tree::short(t, 60)).unwrap_or_default();
+    let short = |text: &Option<String>| text.as_deref().map(semilla_syntax::tree::one_line).unwrap_or_default();
     // The two sides of a change: the one function of batch 6a, A2.
     let pair = || crate::edits::sides_text(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""));
     match edit.kind {

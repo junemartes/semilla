@@ -340,6 +340,14 @@ impl<'a> Model<'a> {
         facts
     }
 
+    /// Design 54.5: the count of the facts of the agent (if the change set has one), and the
+    /// count of the items that are not stated (if the change set has one).
+    fn agent_lines(&self) -> Vec<String> {
+        let count: usize = self.report().steps.iter().map(|step| step.agent_facts.len()).sum();
+        let facts = (count > 0).then(|| format!("facts of the agent: {count}, each one checked against the edit"));
+        facts.into_iter().chain(self.report().gap_line()).collect()
+    }
+
     fn flow_index(&self, function: &str) -> Option<usize> {
         self.flows.iter().position(|index| self.data.flows[*index].function == function)
     }
@@ -443,7 +451,7 @@ impl<'a> Model<'a> {
         let lines = |text: &Option<String>| text.as_deref().map_or(0, |text| text.lines().count());
         match (pair, &fact.content) {
             (Some(pair), content) if part || pair.before.is_none() || pair.after.is_none() => {
-                let short = lines(&pair.before) <= 1 && lines(&pair.after) <= 1 && content.is_none() && !fact.description.contains('…');
+                let short = lines(&pair.before) <= 1 && lines(&pair.after) <= 1 && content.is_none();
                 // A diff block is never empty (batch 6a, A2): the content of the fact is
                 // the block if the diff of the sources has no line.
                 (!short).then(|| diff_text(&dedent(pair.before.as_deref().unwrap_or("")), &dedent(pair.after.as_deref().unwrap_or("")))).filter(|diff| !diff.trim().is_empty()).or_else(|| content.clone())
@@ -923,6 +931,9 @@ fn html_summary(out: &mut String, model: &Model) {
     };
     let line = result_line(model);
     let _ = writeln!(out, "<p class=\"verdict\">result: <span class=\"chip {class}\">{verdict}</span>{}</p>", esc(line.trim_start_matches(&format!("result: {verdict}"))));
+    for line in model.agent_lines() {
+        let _ = writeln!(out, "<p class=\"note\">{}</p>", esc(&line));
+    }
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(notice));
     }
@@ -1008,10 +1019,10 @@ fn html_groups(out: &mut String, model: &Model) {
             html_fact_list(out, &code);
         }
         html_steps(out, model, group);
-        let facts = fact_items(model, Some(&group.steps), true, Some(false));
-        if !facts.is_empty() {
-            let _ = writeln!(out, "<h4>Derived facts ({})</h4>", facts.len());
-            html_fact_list(out, &facts);
+        html_facts(out, model, &group.steps);
+        // Design 54.7: the note of the child mark, one time in the report.
+        if out.contains(text::CHILD_MARK) && !out.contains(text::CHILD_NOTE) {
+            let _ = writeln!(out, "<p class=\"muted\">Note: {}</p>", esc(text::CHILD_NOTE));
         }
         if let Some(hint) = &group.split_hint {
             let _ = writeln!(out, "<p class=\"notice\">{}</p>", esc(hint));
@@ -1315,12 +1326,25 @@ fn build_code_title(count: usize) -> String {
 /// (`Some(true)`), the other facts (`Some(false)`), or each fact (`None`). A build code change
 /// has its diff in each report (design 28.3).
 fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<bool>) -> Vec<(String, Option<String>)> {
+    fact_items_where(model, steps, full, code, &|_| true)
+}
+
+/// The place of a fact in the order of design 54.5: below the fact of the agent that states
+/// it (`Ok`: the index in the step), or in a group of the facts that Semilla filled in (`Err`).
+fn fact_place(model: &Model, view: &crate::summary::FactView) -> Result<usize, usize> {
+    let agent = model.report().steps.iter().find(|step| step.step == view.step).and_then(|step| step.agent_facts.iter().position(|agent| agent.facts.contains(&view.fact.id)));
+    agent.ok_or(view.fact.filled_group())
+}
+
+/// The fact items of [`fact_items`] that `keep` selects.
+fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<bool>, keep: &dyn Fn(&crate::summary::FactView) -> bool) -> Vec<(String, Option<String>)> {
     let mut views: Vec<&crate::summary::FactView> = model
         .summary
         .facts
         .iter()
         .filter(|view| steps.is_none_or(|steps| steps.contains(&view.step)))
         .filter(|view| code.is_none_or(|code| code == view.fact.build_code_change))
+        .filter(|view| keep(view))
         .collect();
     // Design 38.9: the order of the text output (a stable sort: the order of the numbers stays
     // inside one place).
@@ -1329,7 +1353,12 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
         .into_iter()
         .map(|view| {
             let fact = &view.fact;
-            let mut text = format!("step {}: {} derived: {} [{}]{}", view.step, fact.id, fact.description, fact.label(), fact.mark());
+            // The origin of the fact (design 54.5): `derived` or `stated`.
+            let origin = if fact.status.is_empty() { "derived" } else { fact.status.as_str() };
+            // Design 54.7: a long text and a text with more than one line are in a block
+            // below the fact line.
+            let (line, blocks) = text::fact_layout(&fact.description);
+            let mut text = format!("step {}: {} {origin}: {line} [{}]{}", view.step, fact.id, fact.label(), fact.mark());
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
                 let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
                 // A folded fact has the count and the text in its description: only the anchors
@@ -1337,7 +1366,7 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
                 if fact.folds(group) {
                     text.push_str(&format!(" (at {anchors})"));
                 } else {
-                    text.push_str(&format!("; {} site(s): {} ({anchors})", group.sites.len(), group.edit));
+                    text.push_str(&format!("; {} site(s): {} ({anchors})", group.sites.len(), text::flat_text(&group.edit)));
                 }
             }
             // The short report shows the count and the scope of a long list (batch 5x, part E).
@@ -1384,7 +1413,9 @@ fn fact_items(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<b
             if let Some(why) = &fact.spotlight_why {
                 text.push_str(&format!("; spotlight: {why}; {}: {}", fact.reason_label(), fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
             }
-            (view.step, fact.id.as_str(), text, if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) })
+            let diff = if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) };
+            // The blocks of the fact text have the full text of each side: no second diff.
+            (view.step, fact.id.as_str(), text, if blocks.is_empty() { diff } else { Some(blocks.join("\n")) })
         })
         .collect();
     without_equal_diffs(items)
@@ -1421,14 +1452,119 @@ fn without_equal_diffs(items: Vec<(usize, &str, String, Option<String>)>) -> Vec
 
 /// The Markdown list of fact items: each content change is a fenced block in its list item.
 fn md_fact_list(out: &mut String, items: &[(String, Option<String>)]) {
+    md_fact_items(out, items, "");
+    out.push('\n');
+}
+
+/// The list items of [`md_fact_list`] at an indent.
+fn md_fact_items(out: &mut String, items: &[(String, Option<String>)], indent: &str) {
     for (text, content) in items {
-        let _ = writeln!(out, "- {}", md_with_code(text));
+        let _ = writeln!(out, "{indent}- {}", md_with_code(text));
         if let Some(content) = content {
             out.push('\n');
-            out.push_str(&fence("diff", content, "  "));
+            out.push_str(&fence("diff", content, &format!("{indent}  ")));
         }
     }
-    out.push('\n');
+}
+
+/// The facts of the steps in the order of design 54.5 (48.3): the facts of the agent with
+/// the check results, the places, and the facts that each one states; the items that are not
+/// stated; then the facts that Semilla filled in, in groups. The text is Markdown.
+fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
+    let reports: Vec<&semilla_core::report::StepReport> = model.report().steps.iter().filter(|step| steps.contains(&step.step)).collect();
+    let count: usize = reports.iter().map(|step| step.agent_facts.len()).sum();
+    if count > 0 {
+        let _ = writeln!(out, "#### Facts of the agent ({count})\n");
+        let _ = writeln!(out, "Semilla checks the tag of each fact against the edit. It does not check the sentence.\n");
+        for step in &reports {
+            for (index, agent) in step.agent_facts.iter().enumerate() {
+                let _ = writeln!(out, "- step {}: {} {}", step.step, if agent.holds { "✓" } else { "✗" }, md_with_code(&agent.line()));
+                for line in agent.lines() {
+                    let _ = writeln!(out, "  - {}", md_with_code(&line));
+                }
+                let below = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| fact_place(model, view) == Ok(index));
+                md_fact_items(out, &below, "  ");
+            }
+        }
+        out.push('\n');
+    }
+    let gaps: usize = reports.iter().map(|step| step.gaps.len()).sum();
+    if gaps > 0 {
+        let items: usize = reports.iter().map(|step| step.gap_items().len()).sum();
+        let places: usize = reports.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum();
+        let _ = writeln!(out, "#### Not stated ({items})\n");
+        let _ = writeln!(out, "{}\n", md(&semilla_core::report::gap_count_line(items, places).unwrap_or_default()));
+        for step in &reports {
+            for gap in &step.gaps {
+                let _ = writeln!(out, "- step {}: {}; in: {}", step.step, md_with_code(&gap.line()), gap.items.iter().map(|item| code(item)).collect::<Vec<_>>().join(", "));
+            }
+        }
+        out.push('\n');
+    }
+    let total = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view).is_err()).len();
+    if total > 0 {
+        let _ = writeln!(out, "#### Derived facts ({total})\n");
+    }
+    for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
+        let facts = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view) == Err(group));
+        if facts.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "Filled in by Semilla, {name} ({}):\n", facts.len());
+        md_fact_list(out, &facts);
+    }
+    // Design 54.7: the note of the child mark, one time in the report.
+    if out.contains(text::CHILD_MARK) && !out.contains(text::CHILD_NOTE) {
+        let _ = writeln!(out, "Note: {}\n", text::CHILD_NOTE);
+    }
+}
+
+/// The facts of the steps in the order of design 54.5, as HTML (see [`md_facts`]).
+fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
+    let reports: Vec<&semilla_core::report::StepReport> = model.report().steps.iter().filter(|step| steps.contains(&step.step)).collect();
+    let count: usize = reports.iter().map(|step| step.agent_facts.len()).sum();
+    if count > 0 {
+        let _ = writeln!(out, "<h4>Facts of the agent ({count})</h4>\n<p class=\"muted\">Semilla checks the tag of each fact against the edit. It does not check the sentence.</p>\n<ul class=\"agent-facts\">");
+        for step in &reports {
+            for (index, agent) in step.agent_facts.iter().enumerate() {
+                let _ = write!(out, "<li>step {}: {} {}", step.step, if agent.holds { "✓" } else { "✗" }, esc(&agent.line()));
+                for line in agent.lines() {
+                    let _ = write!(out, "<br>{}", esc(&line));
+                }
+                let below = fact_items_where(model, Some(&[step.step]), true, Some(false), &|view| fact_place(model, view) == Ok(index));
+                if !below.is_empty() {
+                    html_fact_list(out, &below);
+                }
+                out.push_str("</li>\n");
+            }
+        }
+        out.push_str("</ul>\n");
+    }
+    let gaps: usize = reports.iter().map(|step| step.gaps.len()).sum();
+    if gaps > 0 {
+        let items: usize = reports.iter().map(|step| step.gap_items().len()).sum();
+        let places: usize = reports.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum();
+        let _ = writeln!(out, "<h4>Not stated ({items})</h4>\n<p class=\"muted\">{}</p>\n<ul class=\"gaps\">", esc(&semilla_core::report::gap_count_line(items, places).unwrap_or_default()));
+        for step in &reports {
+            for gap in &step.gaps {
+                let _ = writeln!(out, "<li>step {}: {}; in: {}</li>", step.step, esc(&gap.line()), esc(&gap.items.join(", ")));
+            }
+        }
+        out.push_str("</ul>\n");
+    }
+    let total = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view).is_err()).len();
+    if total == 0 {
+        return;
+    }
+    let _ = writeln!(out, "<h4>Derived facts ({total})</h4>");
+    for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
+        let facts = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view) == Err(group));
+        if facts.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "<p class=\"muted\">Filled in by Semilla, {name} ({}):</p>", facts.len());
+        html_fact_list(out, &facts);
+    }
 }
 
 /// The HTML list of fact items: each content change is a `pre` block in its list item.
@@ -1454,6 +1590,9 @@ fn md_summary(out: &mut String, model: &Model, full: bool) {
     out.push_str("## Summary\n\n");
     let verdict = result_word(summary);
     let _ = writeln!(out, "{}\n", md(&result_line(model)).replacen(&format!("result: {verdict}"), &format!("result: **{verdict}**"), 1));
+    for line in model.agent_lines() {
+        let _ = writeln!(out, "{}\n", md(&line));
+    }
     if let Some(notice) = model.phase_notice() {
         let _ = writeln!(out, "> **{}**\n", md(notice));
     }
@@ -1519,12 +1658,8 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
         if full || !repeat {
             md_steps(out, model, group);
         }
-        // The facts of the steps of the group, as visible as its claims.
-        let facts = fact_items(model, Some(&group.steps), full, Some(false));
-        if !facts.is_empty() {
-            let _ = writeln!(out, "#### Derived facts ({})\n", facts.len());
-            md_fact_list(out, &facts);
-        }
+        // The facts of the steps of the group, as visible as its claims (design 54.5).
+        md_facts(out, model, &group.steps, full);
         if let Some(hint) = &group.split_hint {
             let _ = writeln!(out, "> {}\n", md(hint));
         }
@@ -1543,17 +1678,14 @@ fn md_groups(out: &mut String, model: &Model, full: bool) {
     let grouped: BTreeSet<usize> = model.summary.groups.iter().flat_map(|group| group.steps.iter().copied()).collect();
     let free: Vec<usize> = model.report().steps.iter().map(|step| step.step).filter(|step| !grouped.contains(step)).collect();
     let (code, facts) = (fact_items(model, Some(&free), full, Some(true)), fact_items(model, Some(&free), full, Some(false)));
-    if !code.is_empty() || !facts.is_empty() {
+    if !code.is_empty() || !facts.is_empty() || model.report().steps.iter().any(|step| free.contains(&step.step) && !step.agent_facts.is_empty()) {
         out.push_str("### Steps with no group\n\n");
     }
     if !code.is_empty() {
         let _ = writeln!(out, "#### {}\n", build_code_title(code.len()));
         md_fact_list(out, &code);
     }
-    if !facts.is_empty() {
-        let _ = writeln!(out, "#### Derived facts ({})\n", facts.len());
-        md_fact_list(out, &facts);
-    }
+    md_facts(out, model, &free, full);
 }
 
 fn md_steps(out: &mut String, model: &Model, group: &GroupSummary) {

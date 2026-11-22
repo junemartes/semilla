@@ -172,11 +172,11 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                             None => format!("changed source text with no other fact, in `{}`: {}", anchor.item, old_new()),
                         }
                     } else if part == "body" {
-                        // A body on one side only (design 37.1). The text has the body. A long
-                        // body has a cut with the mark, and the report has the full text.
+                        // A body on one side only (design 37.1). The text has the full body
+                        // (design 54.7).
                         let body = edit.text_after.as_deref().or(edit.text_before.as_deref()).unwrap_or("");
                         let verb = if name == BODY_ADDED { "body added to" } else { "body removed from" };
-                        format!("{verb} `{}`: `{}`", anchor.item, semilla_syntax::tree::short(&semilla_syntax::tree::one_line(body), 100))
+                        format!("{verb} `{}`: `{}`", anchor.item, semilla_syntax::tree::full(body))
                     } else { parameter_description(&anchor, name, edit) };
                     // A part of an associated constant or type has the category of its
                     // change (design 36.2): the key is the member and the part.
@@ -336,7 +336,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
             && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
@@ -361,9 +361,8 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             spotlight_why,
             reason: step.reasons.get(&place).cloned(),
             sites: groups,
-            // The full sides of a text with a cut, for the diff block of the report (batch
-            // 6a, A2). A doc test fact has its own content.
-            content: descriptions.iter().any(|text| text.contains('…')).then(|| edit_indexes.iter().filter_map(|&i| crate::edits::pair_content(edits[i].text_before.as_deref().unwrap_or(""), edits[i].text_after.as_deref().unwrap_or(""))).collect::<Vec<_>>().join("\n")).filter(|content| !content.is_empty()),
+            // Design 54.7: the fact text has the full sides, so no content repeats them.
+            content: None,
             equal_sites,
             note: None,
         });
@@ -729,7 +728,7 @@ fn pattern_site(old: &str, new: &str, keys: &[Key]) -> Option<(Key, String)> {
 }
 
 fn short(text: &Option<String>) -> String {
-    text.as_deref().map(|t| semilla_syntax::tree::short(t, 60)).unwrap_or_default()
+    text.as_deref().map(semilla_syntax::tree::full).unwrap_or_default()
 }
 
 /// The owner of a member: `shop::Account` for `shop::Account.balance`, `shop::Event` for
@@ -925,21 +924,25 @@ pub(crate) fn long_value_description(item: &str, old: &str, new: &str) -> Option
     if old.chars().count() <= 60 && new.chars().count() <= 60 {
         return None;
     }
-    let (short_old, short_new) = crate::edits::short_texts(old.to_string(), new.to_string());
+    // Design 54.7: no cut. An array with a small count of changed elements shows each changed
+    // element in full, with its index: an equal element is not a part of the difference. Each
+    // other value shows the full text of its two sides.
     let place = match (array_elements(old), array_elements(new)) {
         (Some(a), Some(b)) if a.len() == b.len() => {
-            let changed: Vec<String> = (0..a.len()).filter(|index| a[*index] != b[*index]).map(|index| index.to_string()).collect();
+            let changed: Vec<usize> = (0..a.len()).filter(|index| a[*index] != b[*index]).collect();
+            let indexes: Vec<String> = changed.iter().map(|index| index.to_string()).collect();
+            let pairs: Vec<String> = changed.iter().map(|index| format!("`{}` → `{}`", a[*index], b[*index])).collect();
             match changed.len() {
                 0 => String::new(),
-                1 => format!(" at the index {} (of {} elements)", changed[0], a.len()),
-                count if count <= 8 => format!(" at the indexes {} (of {} elements)", changed.join(", "), a.len()),
-                count => format!(" at {count} indexes, the first is {} (of {} elements)", changed[0], a.len()),
+                1 => return Some(format!("value of `{item}` changed at the index {} (of {} elements): {}", indexes[0], a.len(), pairs[0])),
+                count if count <= 8 => return Some(format!("value of `{item}` changed at the indexes {} (of {} elements): {}", indexes.join(", "), a.len(), pairs.join(", "))),
+                count => format!(" at {count} indexes, the first is {} (of {} elements)", indexes[0], a.len()),
             }
         }
         (Some(a), Some(b)) => format!(" ({} elements → {} elements)", a.len(), b.len()),
         _ => String::new(),
     };
-    Some(format!("value of `{item}` changed{place}: `{short_old}` → `{short_new}`"))
+    Some(format!("value of `{item}` changed{place}: `{old}` → `{new}`"))
 }
 
 /// The elements of an array value (`[a, b]` or `&[a, b]`), as texts with no spaces. `None` if
@@ -1093,17 +1096,9 @@ fn list_change(old: &[String], new: &[String]) -> Option<String> {
             parts.push(format!("changed {}", crate::edits::sides_text(old, new)));
         }
     } else {
-        // A cut entry must not look the same as an entry of the other side. The display texts of
-        // the two sides can have a different format (design 39.2), so the test ignores the
-        // spaces: the shown part of the entry must not be the start of an entry of the other side.
-        let bare = |text: &str| text.chars().filter(|c| !c.is_whitespace()).collect::<String>();
-        let cut = |entry: &String, others: &[String]| {
-            let short = semilla_syntax::tree::short(entry, 60);
-            let shown = bare(short.trim_end_matches('…'));
-            if short != semilla_syntax::tree::one_line(entry) && others.iter().any(|other| bare(other).starts_with(&shown)) { semilla_syntax::tree::one_line(entry) } else { short }
-        };
-        parts.extend(added.iter().map(|entry| format!("added `{}`", cut(entry, &removed))));
-        parts.extend(removed.iter().map(|entry| format!("removed `{}`", cut(entry, &added))));
+        // Design 54.7: each entry shows its full text.
+        parts.extend(added.iter().map(|entry| format!("added `{}`", semilla_syntax::tree::one_line(entry))));
+        parts.extend(removed.iter().map(|entry| format!("removed `{}`", semilla_syntax::tree::one_line(entry))));
     }
     Some(parts.join(", "))
 }
@@ -1179,8 +1174,8 @@ fn attribute_description(item: &str, edit: &Edit) -> String {
         // The attributes that changed, not the full list (batch 6a, A2).
         let (old, new) = (text_before.as_deref().unwrap_or(""), text_after.as_deref().unwrap_or(""));
         let change = match (attribute_texts(old), attribute_texts(new)) {
-            (old, new) if old.is_empty() && !new.is_empty() => Some(new.iter().map(|entry| format!("added `{}`", semilla_syntax::tree::short(entry, 60))).collect::<Vec<_>>().join(", ")),
-            (old, new) if new.is_empty() && !old.is_empty() => Some(old.iter().map(|entry| format!("removed `{}`", semilla_syntax::tree::short(entry, 60))).collect::<Vec<_>>().join(", ")),
+            (old, new) if old.is_empty() && !new.is_empty() => Some(new.iter().map(|entry| format!("added `{}`", semilla_syntax::tree::one_line(entry))).collect::<Vec<_>>().join(", ")),
+            (old, new) if new.is_empty() && !old.is_empty() => Some(old.iter().map(|entry| format!("removed `{}`", semilla_syntax::tree::one_line(entry))).collect::<Vec<_>>().join(", ")),
             (old, new) => list_change(&old, &new),
         };
         format!("attributes of `{item}`: {}", change.unwrap_or_else(|| crate::edits::sides_text(old, new)))

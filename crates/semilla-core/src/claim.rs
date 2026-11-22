@@ -62,6 +62,34 @@ pub struct Step {
     /// result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_check: Option<BuildCheck>,
+    /// The facts of the agent (design 54), as the agent gave them. Each check of the step
+    /// checks them again. A stored step with no field is a step with no agent fact.
+    #[serde(default, skip_serializing_if = "AgentFacts::is_empty")]
+    pub agent: AgentFacts,
+}
+
+/// The facts of the agent for one step (design 54): the texts of the options `--same` and
+/// `--change`, in the order of the command.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFacts {
+    /// Each `--same` text: `rename OLD NEW`, `move FROM TO`, or `rewrite FROM => TO`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub same: Vec<String>,
+    /// Each `--change` text: `ITEM[,ITEM]=TEXT`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub change: Vec<String>,
+}
+
+impl AgentFacts {
+    pub fn is_empty(&self) -> bool {
+        self.same.is_empty() && self.change.is_empty()
+    }
+
+    /// The options of a command that gives these facts: `--same 'TEXT'` and `--change 'TEXT'`.
+    pub fn options(&self) -> Vec<String> {
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        self.same.iter().map(|text| format!("--same {}", quote(text))).chain(self.change.iter().map(|text| format!("--change {}", quote(text)))).collect()
+    }
 }
 
 /// The result of the build check of a stored step (design 53). A step that does not build is
@@ -361,6 +389,7 @@ mod tests {
             reasons: Default::default(),
             compiled: false,
             build_check: None,
+            agent: Default::default(),
         };
         let set = ChangeSet { steps: vec![step], ..Default::default() };
         assert_eq!(set.next_claim_id(), "c3");

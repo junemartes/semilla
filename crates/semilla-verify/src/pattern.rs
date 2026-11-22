@@ -12,10 +12,10 @@ use semilla_syntax::Node;
 
 use crate::checks::{Context, Outcome};
 
-const META: &str = "__semilla_meta_";
+pub(crate) const META: &str = "__semilla_meta_";
 
 /// Parses a pattern into a node tree. `$name` becomes a special identifier.
-fn parse_pattern(text: &str) -> Option<Node> {
+pub(crate) fn parse_pattern(text: &str) -> Option<Node> {
     let mut source = String::new();
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {

@@ -59,6 +59,7 @@ fn step(index: usize, intent: &str, claims: Vec<Claim>) -> Step {
         reasons: Default::default(),
         compiled: true,
         build_check: None,
+        agent: Default::default(),
     }
 }
 

@@ -137,9 +137,9 @@ fn own_tokens(files: &mut Files, workspace: &Workspace, item: &Item) -> Vec<Toke
     out
 }
 
-/// The text of the own tokens of an item, with a cut mark (`…`) at each place where the item
-/// has text that the own tokens do not have: a nested item, a function body (design 37.1,
-/// rule 3). Thus a side of the net fact is the full text of the entity or has a cut mark.
+/// The text of the own tokens of an item, with the child mark (`▫`) at each place where the
+/// item has text that the own tokens do not have: a nested item, a function body (design 37.1,
+/// rule 3). Thus a side of the net fact is the full text of the entity or has a child mark.
 fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -> String {
     let (start, end) = span(item);
     let mut out: Vec<Token> = Vec::new();
@@ -151,7 +151,7 @@ fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -
             next += 1;
             cut = false;
         } else if !cut {
-            out.push(Token { text: "…".to_string(), at: token.at, end: token.at });
+            out.push(Token { text: crate::tree::CHILD_MARK.to_string(), at: token.at, end: token.at });
             cut = true;
         }
     }
@@ -163,7 +163,7 @@ fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -
 fn join(tokens: &[Token]) -> String {
     let mut out = String::new();
     for (index, token) in tokens.iter().enumerate() {
-        if index > 0 && (tokens[index - 1].end != token.at || token.text == "…" || tokens[index - 1].text == "…") {
+        if index > 0 && (tokens[index - 1].end != token.at || token.text == crate::tree::CHILD_MARK || tokens[index - 1].text == crate::tree::CHILD_MARK) {
             out.push(' ');
         }
         out.push_str(&token.text);

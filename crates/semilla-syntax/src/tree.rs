@@ -41,8 +41,10 @@ pub struct Node {
     pub parts: Vec<(usize, usize)>,
 }
 
-/// The mark of a child in the own text of a node. It is not a token of Rust.
-pub const CHILD_MARK: &str = "…";
+/// The mark of a child in the own text of a node. It is not a token of Rust. Each edit in the
+/// child has its own fact, so the mark hides no difference. It is different from a cut mark
+/// (design 54.7): a fact text has no cut.
+pub const CHILD_MARK: &str = semilla_core::text::CHILD_MARK;
 
 /// The node kinds that contain statements. A free edit must not contain them (design 5.6).
 pub const BLOCK_LIKE: &[&str] = &["block", "if", "match", "for", "while", "loop", "block_expr", "unsafe", "async", "closure_block", "const_block"];
@@ -230,7 +232,40 @@ pub fn one_line(text: &str) -> String {
     line
 }
 
-/// Shortens a text to `max` characters on one line.
+/// The full text of code for a fact (design 54.7): no cut. A text that goes in the fact line
+/// (at most [`semilla_core::text::BLOCK_MIN`] characters) is on one line. A longer text is a
+/// block text: it starts and ends with the mark [`semilla_core::text::LINE_MARK`], and the view
+/// shows it in a block. A block text with more than one line in the source keeps its lines:
+/// each line end is the mark, and the spaces after the mark are the indent of the line. A
+/// token with more than one line (a string, a block comment) gives the form with one line.
+pub fn full(text: &str) -> String {
+    let mark = semilla_core::text::LINE_MARK;
+    let line = one_line(text);
+    let source = text.trim();
+    if line.chars().count() <= semilla_core::text::BLOCK_MIN {
+        return line;
+    }
+    let rows: Vec<&str> = source.lines().filter(|row| !one_line(row).is_empty()).collect();
+    let flat: Vec<String> = rows.iter().map(|row| one_line(row)).collect();
+    if rows.len() < 2 || one_line(&flat.join(" ")) != line {
+        return format!("{mark}{line}{mark}");
+    }
+    // The first row starts at the node, so its indent is not in the text. The last row (the
+    // closing bracket) usually has the indent of the first row.
+    let indent = |row: &str| row.chars().take_while(|c| *c == ' ').count() + 4 * row.chars().take_while(|c| c.is_whitespace()).filter(|c| *c == '\t').count();
+    let base = rows[1..].iter().map(|row| indent(row)).min().unwrap_or(0).min(indent(rows[rows.len() - 1]));
+    let mut out = format!("{mark}{}", flat[0]);
+    for (row, text) in rows.iter().zip(&flat).skip(1) {
+        out.push(mark);
+        out.push_str(&" ".repeat(indent(row) - base));
+        out.push_str(text);
+    }
+    out.push(mark);
+    out
+}
+
+/// Shortens a label of a view to `max` characters on one line. A fact text does not use this
+/// function (design 54.7): see [`full`].
 pub fn short(text: &str, max: usize) -> String {
     let line = one_line(text);
     if line.chars().count() <= max {

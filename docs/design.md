@@ -3195,7 +3195,7 @@ The reverse step (statements go into a closure) uses the words "the added". An a
 
 ### 38.5 The length of a line
 
-**The rule.** No line of the text output has more than 500 characters (`views::LINE_MAX`). A long list (items with ", " between them) shows its first items and its last items: "…, … (25 items more; `semilla status --verbose` shows the full line) …, …". Each other long line shows its start and its end with the count of the characters that it does not show. `semilla status --verbose`, the JSON output, and the reports keep the full text. The merge of 38.1 compares the full lines, so a cut never makes two different facts look equal.
+**The rule.** No list line of the text output has more than 500 characters (`views::LINE_MAX`). Since 54.7, the rule does not apply to the line of a fact or to a block of a fact: they show the full text. A long list (items with ", " between them) shows its first items and its last items: "…, … (25 items more; `semilla status --verbose` shows the full line) …, …". Each other long line shows its start and its end with the count of the characters that it does not show. `semilla status --verbose`, the JSON output, and the reports keep the full text. The merge of 38.1 compares the full lines, so a cut never makes two different facts look equal.
 
 **The limit.** The command to run again and a compiler error keep their full lines.
 
@@ -3980,7 +3980,7 @@ The values are before → after (the binaries of 8h → the binaries of 8i).
 
 (Since 49: the step result and each check of this section use the syntax tree. The compiled compare is an optional check.)
 
-Status: a design, with no code change yet. The user decided each rule that has no mark. A rule with the mark "Decided by Claude" is a default that the user can change.
+Status: batch 9b (section 54) is the code of this section. The kinds `extract` and `inline` have no check yet. Where this section said "compiled difference", the code uses the facts of the syntax tree (49); the text below has the correct form. The user decided each rule that has no mark. A rule with the mark "Decided by Claude" is a default that the user can change.
 
 ### 48.1 The step is the smallest unit
 
@@ -3999,8 +3999,8 @@ Each step comes with an intent line and a short list of facts. The facts are ver
 
 | Kind | Meaning | The agent gives | The check of Semilla |
 |---|---|---|---|
-| `same` | an exact claim that keeps the behavior | `rename`, `move`, `extract`, `inline`, or `rewrite`, with `from` and `to` | the shape: the code maps exactly under the claim at each place |
-| `change` | the behavior of existing code changes on purpose | the items, and one sentence | the effect: the compiled code of each item differs |
+| `same` | an exact claim that keeps the form | `rename`, `move`, `extract`, `inline`, or `rewrite`, with `from` and `to` | the shape: the code maps exactly under the claim at each place (54.3; `extract` and `inline` have no check yet) |
+| `change` | the behavior of existing code changes on purpose | the items, and one sentence | the edit: each item has a fact of the syntax tree that can change the behavior of existing code (the table of 54.2). Before 49, the check was the compiled code of each item. |
 
 Rules:
 
@@ -4013,8 +4013,8 @@ Rules:
 ### 48.3 The result that the reviewer reads
 
 1. The intent of the step, and the facts of the agent, each with its check result.
-2. **Not stated:** each existing body with a compiled difference that no `change` item and no `same` claim explains. This is the gap list.
-3. The facts that Semilla filled in, in groups: new and removed items, the bodies that follow a declaration, the tests and the benches.
+2. **Not stated:** each existing item with a fact that can change the behavior (54.2) that no `change` item covers and no `same` claim explains. This is the gap list (54.4). Before 49, the unit was a body with a compiled difference.
+3. The facts that Semilla filled in, in groups: new and removed items, declarations, tests and benches, and the other facts (54.6). Before 49, the second group was "the bodies that follow a declaration". The syntax tree has no fact for a derived body, so the group is the declaration facts.
 
 A `same` claim makes one review unit of all its places.
 
@@ -4022,9 +4022,9 @@ A `same` claim makes one review unit of all its places.
 
 - **One `change` fact for each item set.** Two facts with the same items become one fact with two sentences. Semilla cannot check them separately.
 - **A `change` item can be an old path or a new path.** Code that moves and changes has no stable path.
-- **A `same` claim has a shape check only.** The compiled code at its places can differ (a call replaces a field read). The step result shows this. The claim does not predict `code equal`.
+- **A `same` claim has a shape check only.** The compiled code at its places can differ (a call replaces a field read). The claim does not predict `code equal`. With `--compiled`, the compare result shows the difference.
 - **Semilla resolves a loose item path.** Each agent of the trial guessed the path form of a trait impl function. If a path does not resolve, Semilla prints the candidates. A path that resolves to one item is not a reject.
-- **Derived code follows its declaration.** A new field changes the derived `PartialEq`, `Debug`, and serde code. Semilla shows these bodies with the field edit, not in the gap list.
+- **Derived code follows its declaration.** A new field changes the derived `PartialEq`, `Debug`, and serde code. Semilla shows these bodies with the field edit, not in the gap list. Since 49, the rule needs no code: the syntax tree has the field edit as one `declaration` fact and has no fact for a derived body.
 - **A `rewrite` claim is a pattern of the syntax tree, with variables.** A text pattern is too narrow (48.6, socket2).
 - **A body on one side only is a new or a removed item.** It is not an `indirect` fact.
 
@@ -4035,11 +4035,12 @@ One command for each step. The new options stay next to `--claim` and `--reason`
 ```
 semilla step "<intent>" \
   --same 'rename OLD NEW' \
+  --same 'move FROM TO' \
   --same 'rewrite FROM => TO' \
   --change 'ITEM[,ITEM]=TEXT'
 ```
 
-The present claim `rewrite-pattern` becomes `--same 'rewrite …'`. The replay plan gets the same two keys for each step.
+`--same 'rewrite FROM => TO'` replaces the claim `rewrite-pattern`: a new step cannot give that claim, and a stored record that has it still reads (54.3). The MCP tool `step` and each step of a replay plan have the same two keys (`same`, `change`). The command `semilla fact` adds facts to a stored step (54.4).
 
 ### 48.6 Data
 
@@ -4488,7 +4489,7 @@ Date: 2026-11-21. Batch 9a3 fixes the three defects of 51.7. The brief of the ba
 
 **Decided by Claude:**
 
-1. **The shell text.** The fact of the own tokens of a node with a block shows `…` for a child and `{…}` for a block. Only a node with a block that also has an edit in a child has this text. Each other fact keeps its full text.
+1. **The shell text.** The fact of the own tokens of a node with a block shows `…` for a child and `{…}` for a block. Only a node with a block that also has an edit in a child has this text. Each other fact keeps its full text. Since 54.7, the mark of a child is `▫` (`if ▫ {▫}`), not `…`, and the output has one note line that tells what the mark means.
 2. **A node with no block gets one fact, not two.** This is the rule of 36 for an expression (trial 4, D7). The fact has the full node, so it has each token difference.
 3. **The body block of an item has no own compare.** Its inner attributes are in the fact of the attributes of the item. The own tokens of each other block (its delimiters and its inner attributes) have the compare.
 4. **A label has two places.** A new label of a loop and of its `break` gives one fact for the loop (the own tokens) and one fact for the `break`.
@@ -4614,9 +4615,9 @@ The time is the smallest time of four step runs.
 - A `use` line in the input of a macro that the syntax phase cannot read is not in the scope of a block. A `mod` in a body has no scope of its own. An item of a block counts for the full body (class 1).
 - Condition 1 of 52.3 is a fact of the item, not of a block. A block that declares a constant with the name of a `ref` binding of a different block is not seen.
 - A `match` in parentheses that is a statement: the comma after an arm is an own token of the node (sound: one more fact when a body gets or loses its block).
-- A fact with a cut text can hide the `;` of 52.1, decision 5, when the cut rule hides the end of the text.
+- A fact with a cut text can hide the `;` of 52.1, decision 5, when the cut rule hides the end of the text. Closed by 54.7: no fact has a cut text.
 - **Open question: the fact of a renamed parameter.** A parameter with an upper-case name (`N: u32` → `M: u32`) keeps the signature fact "parameter `N` of `f` renamed to `M` [rename]". The body uses are now "changed path `N` → `M` [semantics]", because the name is not a sure binding (52.3). The rule of the brief is for an identifier in a pattern of a body. A decision is necessary: does the sure-binding rule apply to the parameter fact of a signature?
-- **Open question: the `;` alone.** A tail expression that becomes a statement with no other change has the text of batch 9a2 ("moved call: `g(a)` from `tail` to `S1`", "moved if: `if c { g(a) }`"). The fact is correct, but the text does not show the `;`.
+- **Open question: the `;` alone.** A tail expression that becomes a statement with no other change has the text of batch 9a2 ("moved call: `g(a)` from `tail` to `S1`", "moved if: `if c { g(a) }`"). The fact is correct, but the text does not show the `;`. Closed by 54.7: the text is "moved call: `g(a)` → `g(a);` from `tail` to `S1`".
 
 ## 53. Batch 9a4: the build check of a step
 
@@ -4880,3 +4881,231 @@ Date: 2026-11-21. The coordinator verified batch 9a4 and found five defects of t
 - **The 134 cases** with the check and `stable`: 122 `passes`, 4 `no new failure found`, 8 `fails`, 0 cannot run. These are the counts and the cases of 53.8. With `SEMILLA_NO_CHECK=1`, each case gives the output of the binary of batch 9a3, plus the line "build check: not run". No fact line changes.
 - **The held-out measure of the coordinator.** 27 real crates with 1,109 steps (changes of 300 to 7,000 lines), with the check on and the default tool chain `stable`: 1,108 steps get `passes`. One step gets `no new failure found`: a bench of its crate needs a nightly feature, so it does not build before the step and after it. No step is rejected, and no fact line changes. The longest check takes 3.4 s. With the check off, each held-out set gives the results of batch 9a3.
 - **The tests.** `cargo test --workspace`: 806 tests pass (793 before, 13 new: 7 in `tests/e2e.rs`, 4 in `semilla-normal`, 2 in `buildcheck.rs`). Two tests of batch 9a4 have new expected words (the base note, the text of a missing tool chain). No test changed its expected facts. The time of the full run: 154 s.
+
+## 54. Batch 9b: the facts of the agent, the gap list, and the full text
+
+Date: 2026-11-22. This batch is the code of section 48, with the facts of the syntax tree (49) in place of the compiled difference. The compiled check (`--compiled`) is an option and has no change. No rule of sections 50 to 53 and no rule of phase 2 has a change.
+
+### 54.1 The decisions of the user
+
+> "each step should come with a list of facts from the agent. We should only ensure that the tags the agent uses are correct, ie they map to the right logical/semantic change. Semilla can't verify the intent easily, they can just verify the fact changes. Semilla should try to fill in the facts that were not provided"
+
+> "The agent groups the logical units together in a step which is the hardest part, then semilla finds facts for all the changes and asks the agent to fill in the gaps and check its own facts. Semilla should optimize for facts that can explain the largest set of changes"
+
+> "Let's make agents produce very simple high level facts to begin with."
+
+The user also decided: each check uses the syntax tree (49), and a fact shows the full text, not a cut mark `…`.
+
+**The general rule of the batch: the tag of the agent must agree with the edit that Semilla sees.** Semilla does not check the sentence of a fact or the intent.
+
+**The soundness rule (49.3) holds.** The check of the agent facts is the last pass of a step (`agent::apply`). It makes no fact and removes no fact. It only sets the origin of a fact and puts the fact below a fact of the agent. A false fact of the agent rejects the step; it never changes a fact of Semilla.
+
+### 54.2 The `change` fact (A1)
+
+`--change 'ITEM[,ITEM]=TEXT'`: the behavior of existing code changes on purpose in each item. `TEXT` is one sentence.
+
+**The check.** For each item, Semilla looks at the facts of the syntax tree that have a place in the item:
+
+| The item has | The result |
+|---|---|
+| a fact that can change the behavior of existing code (column 1 of the table below) | `holds`; each such edit in the item is below the agent fact |
+| only `added` or `removed` facts, or the item is in one tree only | no reject; the note "Semilla shows `ITEM` as added" (or "removed") "the fact covers no existing code" |
+| no edit | `false`; the step is rejected; "Semilla sees no edit in `ITEM`" |
+| only edits that keep the behavior | `false`; the step is rejected; "Semilla sees only edits that keep the behavior in `ITEM`:", then the facts, or the count of the rename sites |
+
+**The table of the categories** (`Category::can_change_behavior`, `Category::agent_states`). Column 1: an edit with this category can change the behavior of existing code, so a `change` fact holds for its item. Column 2: an edit with this category is in the gap list when no fact of the agent states it.
+
+| Category | 1. Can change the behavior of existing code | 2. In the gap list | Cause |
+|---|---|---|---|
+| `semantics` | yes | yes | an edit of a body: logic, control flow, a value |
+| `macro` | yes | yes | the input of a macro call changes; Semilla does not read the expansion |
+| `text` | yes | yes | Semilla cannot read the code as a syntax tree, so it does not know the kind of the edit |
+| `declaration` | yes | no | a signature, a field, a bound, a type: callers and derived code can change. The agent writes no fact for it (48.2) |
+| `attribute` | yes | no | `#[inline]`, `#[cfg]`, `#[derive]`, `#[repr]` can change the code that the compiler makes |
+| `manifest` | yes | no | a feature, an edition, a dependency: a build input (48.1) |
+| `file` | yes | no | a file that is not Rust can be an input of the build or of the program |
+| `build code` | yes | no | `build.rs` controls the build |
+| `indirect` | yes | no | only with `--compiled`: the compiled code of an item with no edit differs |
+| `rename` | no | no | the name changes; the item that the name gives does not |
+| `move` | no | no | the code has a new place and the same tokens |
+| `visibility` | no | no | the code of the crate is the same; only the access changes |
+| `import` | no | no | a `use` line; an edit of a name at a use site has its own fact |
+| `docs` | no | no | a comment or a doc text |
+| `added` | no (note) | no | new code: there is no existing code that changes |
+| `removed` | no (note) | no | the code is gone: there is no existing code that changes |
+
+A layout change gives no fact (the syntax tree is equal), so an item with only a layout change has "no edit".
+
+Decided by Claude:
+
+1. **Column 1 is wider than column 2.** A `change` fact on an item with only a signature edit holds, because the signature can change the behavior of the callers. But the gap list does not ask for a fact for it: 48.2 says that the agent writes no fact for a signature, a bound, or a build input.
+2. **`visibility` and `import` are "no".** They can change what a path resolves to in a different crate, but the code of the item is the same. An agent that states `change` for them gets the reject with the facts that Semilla sees.
+3. **The path resolution.** `ITEM` is, in this order: a file path (the full path or its last segments), the exact path of an item (the old tree or the new tree), the last `::` segments of a path, or `Type::name` for `<Type as Trait>::name`. A `crate::` start and the twin number `#N` are optional. A `use` item is not a candidate. A module, an `impl`, a trait, or a file covers each item in it. No match: "`X` names no item, no module, and no file of the old tree or the new tree", with at most 8 near candidates. More than one match: "`X` names 2 items: give more of the path", with each candidate. Each is a false fact (reject).
+4. **A test item can have a `change` fact.** The agent does not need one (the gap list has no test item), but the fact is not false.
+5. **One fact for each item set (48.4).** Two `--change` options with the same items (in any order) become one fact with two sentences.
+
+### 54.3 The `same` fact (A2)
+
+A `same` fact has a form check only. It does not predict `code equal` (48.4).
+
+**`rename OLD NEW` and `move FROM TO`.** The fact holds only if Semilla derives a `rename` fact (or a `move` fact) that names the pair, from the syntax tree (50 to 52). The derived fact then has the origin `stated` and shows below the agent fact. If not, the step is rejected: "false: Semilla derives no rename `OLD` → `NEW` from the syntax tree", then each fact that Semilla has for one of the two names ("Semilla sees: f2 …"), or the state of the two names in the two trees.
+
+- A rename site with one more edit: the rename fact covers only the exact sites (52). The other edit has its own fact, and it is a gap if no fact of the agent states it.
+- Decided by Claude: `move FROM TO` accepts the new path of the item or the module that gets the item as `TO`. The API fact of the same pair (a removed and an added public path) is also `stated`.
+
+**`rewrite FROM => TO`.** A pattern of the syntax tree with variables (`$name`). It replaces the claim `rewrite-pattern`.
+
+- Each side is one Rust expression. A variable matches **one expression node**. Decided by Claude: a variable does not match a pattern, a type, the input of a macro, or the name of a method or a field. The cause is the simple rule "one variable is one expression"; the fixtures needed no other kind.
+- One variable has one value at one site. The value on the old side and the value on the new side are equal, or the pattern covers their difference (a site in a site: `f($a.x)` with the pattern `$a.x => $a.x()`).
+- **A site is covered only if the full difference of the site is the pattern.** The site is the edit, or each changed child of the edit is a site. An edit with one more difference is not a site: it keeps its own fact with the origin `derived`.
+- The unit of the cover is one edit of a fact. A fact with many places is `stated` only if the agent facts cover each place. If not, the fact stays `derived`, and the agent fact names it as "a part of f3 (2 of 5 places)".
+- All sites of one claim make one agent fact: "✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 2 site(s))", then the list of the places.
+- **A claim with no site is false** (reject): "false: no changed place has the old form `FROM` and the new form `TO`", then at most 3 nearest edits with the cause ("the old code has the form …, but the edit changes more than the pattern", or the side that does not match) and the two source lines (`-`, `+`).
+- Form errors (exit code 2, nothing runs): a side that is not an expression; two equal sides; an old side that is only a variable; a variable that is only on the new side.
+
+Decided by Claude:
+
+1. **A site is an edit in place.** A statement that moves and changes is not a `rewrite` site. Its fact has the two differences, and the pattern is not the full difference.
+2. **The claim does not say that each place of the old form changed.** A place that keeps the old form has no edit, so Semilla has no fact for it. If no edit matches, the message tells the count of the places with the old form.
+3. **The order.** Semilla checks the `same` facts first, then the `change` facts, each in the order of the command. An edit belongs to the first agent fact that covers it. A second fact that covers only this edit still holds, and its places say "below a different fact of the agent".
+4. **The claim `rewrite-pattern` is gone for a new step** (exit code 2: "the claim `rewrite-pattern` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'`"). A stored session or a stored plan that has the claim still reads and keeps the old check (`STORED_CLAIMS`). A site of a `rewrite` fact below such a claim gets a note.
+5. **`extract` and `inline`** give the message "the kind `extract` has no check yet (a later batch adds it). Give no fact for it: Semilla shows each edit of it as a fact, and the gap list names the items" (exit code 2). 48.8 has the open design question.
+
+### 54.4 The gap list (B)
+
+**The rule.** The gap list has each edit of an existing item that can be a gap (column 2 of 54.2) and that no fact of the agent covers. An item of a new or a removed item, and an item of a test or a bench (a `#[test]` or `#[bench]` function, an item below `#[cfg(test)]`, a file below `tests/` or `benches/`) are not in the list. The gap list is never a reject. A step with no agent fact is valid.
+
+**Equal edits make one line.** Semilla makes the general pattern of each edit: the old text and the new text, with a variable (`$a`, `$b`) in place of each part of the old node that the new node keeps. Edits with the same pattern are one line with the count of the places. The order is the count of the places, largest first.
+
+**The proposed option** of a line:
+
+- two places or more, and the pattern as a `rewrite` claim covers each place (Semilla runs the real check of 54.3): `--same 'rewrite FROM => TO'`;
+- else: `--change 'ITEM=TEXT'` with the items of the line. The other edits of one item make one line ("3 different edits").
+
+Thus the option that explains the largest set of edits comes first, and an option that Semilla prints is never a false fact of form. The agent decides if the option is true for the intent, and it writes the sentence (`TEXT`).
+
+**The output.** The step output has the count line, at most 5 lines of the list (`GAP_LIMIT`), "and N more line(s)", and one complete command:
+
+```text
+  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: changed expression `c.total` → `c.total()` (f1)
+      in: shop::a, shop::b
+      to state it: --same 'rewrite $a.total => $a.total()'
+  ? 1 place: changed literal `10` → `20` (f2)
+      in: shop::limit
+      to state it: --change 'shop::limit=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite $a.total => $a.total()' --change 'shop::limit=TEXT'
+```
+
+`semilla status --verbose` and the review show each line.
+
+**The command that adds facts** (Decided by Claude): `semilla fact [--step N] --same '…' --change '…'`, and the MCP tool `fact`. The default step is the last step.
+
+- Cause of the form: the stored step has the two trees, and they do not change. So the stored result of the build check stays valid, and Semilla only runs the syntax phase and the check of the facts again (0.05 to 0.85 s for the fixtures). A second `semilla step` cannot do this: the working tree has no new edit.
+- The new facts go after the stored facts of the agent. The output shows each agent fact with its result and the new count of the gaps.
+- A false fact stores nothing (exit code 1). A form error, a step that does not exist, or a call with no option has the exit code 2.
+- In a rejected step, the last line of the gap list says "add these options to the command of the step", because no step is stored.
+
+### 54.5 The record, the origin, and the order of the result (C)
+
+- **The record.** The stored step keeps the option texts of the agent (`Step.agent: AgentFacts { same, change }`). The report of a step has each agent fact with its kind, its text, its sentences, its check result, its places, and its notes (`StepReport.agent_facts`), and the gap list (`StepReport.gaps`). Decided by Claude: as for each other result (rule T6), `status`, `tag`, and `review` compute the results again from the stored trees and the stored options. An old session file has no `agent` key and reads as a step with no agent fact.
+- **The origin.** Each fact of Semilla has `derived` (Semilla filled it in) or `stated` (a fact of the agent covers each edit of it, and the check holds). The word is in the fact line: "◆ f1 stated: …".
+- **The order** (48.3) of the step output, `status --verbose`, and the Markdown review:
+  1. the intent, the build check, the build code notes, the claims, then "facts of the agent (Semilla checks the tag of each fact, not its sentence):" with each agent fact (`✓ a1 …` or `✗ a2 …`), its places, and the `stated` facts below it;
+  2. "not stated: …" (54.4);
+  3. the facts that Semilla filled in (54.6).
+- **The count line.** `status` (each form), `tag`, and the review show one line if the change set has a gap: "not stated: N item(s) with M place(s) that can change the behavior of existing code and that no fact of the agent states". `status` has the line for each step, and `tag` and the review for the change set. With no gap, there is no line (the output has no count of zero, as in the result line). Only the output of `semilla fact` says "not stated: 0 item(s)", because the agent asked for the new count. `status` and `tag` also list each agent fact with its result, and `tag` and the review give the count of the agent facts.
+- **A false fact** (Decided by Claude): the first lines name each false fact ("✗ fact a2 of the agent is false: `--same 'rename limit cap'`"). The list of the agent facts shows the cause and what Semilla sees. The last line is the command to run again with no false fact. The gap list then names the edits of that fact.
+- **The local UI** (the smallest change): the fact line shows the origin word; the group view has the list of the agent facts and the gap list of each step; the summary has the count line. The HTML export has the same parts as the Markdown review.
+
+### 54.6 The groups of the facts that Semilla filled in
+
+The `derived` facts show in four groups, each with the heading "NAME, filled in by Semilla:" (`report::FILLED_GROUPS`, `Fact::filled_group`):
+
+1. **new and removed items** (the categories `added` and `removed`);
+2. **declarations** (the category `declaration`);
+3. **tests and benches** (each place of the fact is in a test or a bench);
+4. **other facts.**
+
+The test group wins over the first two groups. In a group, the order is the order of before (37). A step with no agent fact has the same facts with the same texts and the same categories; only the group headings and the order of the groups are new.
+
+### 54.7 The full text (D)
+
+**The rule.** No fact hides a part of a changed text. The description of a fact is the full text. The cut functions of batch 9a2 (`short pair`, the changed-part view, the token cut) are gone.
+
+**The model.** `semilla_syntax::tree::full` gives the text of a node:
+
+- 80 characters or less, on one line: the text.
+- else a **block text**: the mark `⏎` is at the start, at each line end, and at the end. The spaces after a mark are the indent of the line.
+
+The views make the layout (`semilla_core::text::fact_layout`): a block text becomes a reference `[1]` in the fact line, and the lines of the text go in a block below the line. The review uses a code fence. `flat_text` gives one line with each character for a list.
+
+```text
+  ◆ f1 derived: added `let` [1] at `demo::f/S1` [semantics]
+        [1] let t = s.wrapping_mul(31).wrapping_add(a).wrapping_mul(17).wrapping_add(b).rotate_left(5) ^ 0x5bd1e995;
+```
+
+Decided by Claude:
+
+1. **The description has the full text, and the view makes the block.** One model serves the text output, the review, the JSON of the MCP tools, and the UI. A fact line has no length limit (38.5 applies to a list line only).
+2. **The border.** A block text in a description is between quote marks, so its borders are "`⏎" and "⏎`". A line of Rust code does not start or end a quoted text in this way, so a quote mark in the code (a doc comment) is not a border.
+3. **The child mark is `▫`** (52.1): "changed async: `async move {▫}` → `async {▫}`". The output has one note line: "`▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact."
+4. **The `;` case** (52.6, open question 2): "moved call: `g(a)` → `g(a);` from `tail` to `S1`".
+5. **A changed array value** (the value fact of a constant) shows each changed element with its index for 8 changed elements or less, else the two full sides.
+6. **Two facts merge in the text output only if their full texts are equal.** Before, two cut texts could be equal when the full texts were not.
+7. The field `content` of a fact does not repeat the text of the description.
+
+### 54.8 The results
+
+**The ten fixtures of batch 7c**, each as one step with `SEMILLA_NO_CHECK=1`. "After" is the step with each proposed `same` option and a `change` fact for the three items with the most places.
+
+| Fixture | Facts | Gap: items / places / lines | Proposed `same` options | After: stated facts | After: gap items / places / lines | Step time before → after |
+|---|---|---|---|---|---|---|
+| bytes | 176 | 25 / 51 / 19 | 3 | 18 | 14 / 26 / 13 | 0.91 → 0.93 s |
+| cpufeatures | 72 | 2 / 3 / 2 | 0 | 5 | 0 / 0 / 0 | 0.10 → 0.09 s |
+| nu-ansi-term | 248 | 8 / 42 / 6 | 1 | 38 | 1 / 1 / 1 | 0.30 → 0.31 s |
+| quickcheck | 106 | 14 / 16 / 13 | 1 | 6 | 9 / 9 / 9 | 0.27 → 0.28 s |
+| quickcheck-2 | 291 | 39 / 90 / 32 | 4 | 30 | 24 / 41 / 24 | 0.39 → 0.39 s |
+| rand_chacha-2 | 85 | 2 / 33 / 8 | 0 | 23 | 0 / 0 / 0 | 0.14 → 0.14 s |
+| rand_core-4 | 195 | 12 / 27 / 13 | 5 | 20 | 5 / 5 / 5 | 0.30 → 0.32 s |
+| rand_xoshiro | 111 | 8 / 8 / 2 | 0 | 2 | 0 / 0 / 0 | 0.24 → 0.24 s |
+| socket2 | 123 | 7 / 9 / 6 | 1 | 7 | 2 / 2 / 2 | 0.73 → 0.71 s |
+| utf8_iter | 131 | 1 / 1 / 1 | 0 | 2 | 0 / 0 / 0 | 0.22 → 0.22 s |
+| **Total** | **1538** | **118 / 280 / 102** | **15** | **151** | **55 / 84 / 54** | **3.60 → 3.63 s** |
+
+- Each step and each `semilla fact` call has the exit code 0: each proposed option holds.
+- Examples of proposed options: `rewrite $a.write_str($b.string.as_ref()) => $b.write_inner($a)` (nu-ansi-term, 34 places), `rewrite $a.gen() => $a.random()` and `rewrite $a.gen_range(0, $b) => $a.random_range(0..$b)` (quickcheck-2), `rewrite false as Bool => 0` (socket2).
+- Before the agent writes a fact, the gap lists have 118 items with 280 places on 102 lines (the steps have 1538 facts). With the 15 proposed options and at most 3 `change` facts for each fixture, 55 items with 84 places stay.
+
+**The cases of before** (each fact line of the old binary against the new output):
+
+| Set | Cases | Fact lines | Lines that differ | Cause |
+|---|---|---|---|---|
+| `b9a/cases` | 60 | 122 | 2 | part D: a full text in place of a cut `…` |
+| `b9a2/cases` | 59 | 163 | 0 | |
+| `b9a3/cases.py` | 15 | 23 | 2 | part D: the child mark `{▫}` |
+| the ten fixtures | 10 | 1537 | 353 | part D: 324 lines had a cut mark; 21 long texts are now a block; 7 lines show the `;`; 1 line was a merge of two facts with equal cut texts and different full texts |
+
+The count of the facts and the category of each fact are equal in each case and each fixture.
+
+**The tests.** 20 tests have a changed expectation, and 4 unit tests of the cut functions are gone with the functions (2 new tests replace them):
+
+- part D (14 tests): the full text, the child mark `▫`, the `;`, and the count line of a file diff;
+- the groups of 54.6 (3 tests): the headings and the order of the groups;
+- the claim `rewrite-pattern` and the help text (3 tests).
+
+### 54.9 The limits and the open questions
+
+- **`extract` and `inline` have no check** (batch 9c; 48.8).
+- **A variable of a `rewrite` pattern is an expression only.** A change of a type, of a pattern, or of the input of a macro needs a `change` fact.
+- **A proposed pattern can drop a variable** (`$a as usize => self.index`). The option holds, but it says little. The agent can write a `change` fact in its place.
+- **A statement that moves and changes is never a `rewrite` site** (54.3, decision 1).
+- **A source text with the character `⏎`** can get a wrong block border in the layout. Each character still shows.
+- **The line diff of a file that is not Rust** shows 40 changed lines, then a count line ("60 more changed line(s) of the file: `git diff` shows them"). This is a count, not a cut of a line, but the fact does not show each line. Open question: show each line, or keep the limit?
+- **Lists of places** keep the form "and N more" in the short output; `status --verbose` shows the full list. The labels of the tree view and of the flow view, and the new code of the review (40 lines for each new item) keep their limits: they are not fact texts.
+- **A plan step with a false agent fact** has the mark `✓` on the line of the plan step, and the cause is in the result of the change set (as for a refuted claim). `replay apply` has the exit code 0.
+- **`tag`** lists the agent facts and the count line, but not the `stated` facts below each agent fact.
+- **An output with no gap has no count line** (54.5). A reviewer who wants the line "not stated: 0 item(s)" in `status` and in the review must ask for it: it is one line of code.
+- **Open question: the table of 54.2.** Column 2 follows 48.2 (no fact of the agent for a declaration, an attribute, or a build input). The user can move a category between the columns: one line of code for each.
+- **Open question: the effort of the agent** with the new options is not measured with blind trials (48.8).
+- **An observation with no known cause:** one time in the full test runs, the test `a_review_after_a_step_uses_the_stored_result_of_the_step` failed with "the background check of session is not ready (Stale)". It passed in each later run. This batch does not change that path.

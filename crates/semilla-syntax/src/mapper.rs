@@ -262,7 +262,7 @@ fn inner_blocks<'a>(node: &'a Node, path: &[String], rel: &mut Vec<String>, owne
 /// around them, so a token replacement works on the header too.
 fn header(node: &Node, text: &dyn Fn(&str) -> String) -> String {
     if node.kind == "block" {
-        return "{…}".into();
+        return "{▫}".into();
     }
     if !node.has_block() {
         return text(&node.text);
@@ -271,11 +271,11 @@ fn header(node: &Node, text: &dyn Fn(&str) -> String) -> String {
     format!("{} < {} > ( {} )", node.kind, node.attr.as_deref().map(text).unwrap_or_default(), parts.join(" ; "))
 }
 
-/// The text of a node with the text of each block replaced by `{…}`: the part of a composite
+/// The text of a node with the text of each block replaced by `{▫}`: the part of a composite
 /// that the statements of its blocks do not have.
 pub(crate) fn shell(node: &Node) -> String {
     if node.kind == "block" {
-        return "{…}".into();
+        return "{▫}".into();
     }
     let mut text = node.text.clone();
     let mut from = 0;

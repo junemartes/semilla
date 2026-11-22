@@ -11,6 +11,7 @@
 //!
 //! The change set check adds the group and subgroup rules, and the score.
 
+pub mod agent;
 pub mod cfgcond;
 pub mod checks;
 pub mod edits;
@@ -571,6 +572,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         item_reasons(input, &mut plain.report);
         kind_reasons(input, &mut plain.report);
         no_compare_result(input.step, &mut plain.report);
+        agent::apply(input, &mut plain);
         return plain;
     }
     let mut outcome = identity::derive(input, bodies, exprs, plain);
@@ -581,6 +583,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     item_reasons(input, &mut outcome.report);
     kind_reasons(input, &mut outcome.report);
     no_compare_result(input.step, &mut outcome.report);
+    agent::apply(input, &mut outcome);
     outcome
 }
 
@@ -1454,8 +1457,8 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         // Each output shows a hidden character as its escape, so such a character gets no second form.
         let plain = |text: &str| text.chars().all(|c| c.is_ascii() || semilla_core::text::is_hidden(c));
         let form = |text: &str| match plain(text) {
-            true => format!("`{}`", semilla_syntax::tree::short(text, 60)),
-            false => format!("`{}` (`{}`)", semilla_syntax::tree::short(text, 60), semilla_syntax::tree::short(&semilla_core::text::ascii_form(text).unwrap_or_default(), 120)),
+            true => format!("`{}`", semilla_syntax::tree::one_line(text)),
+            false => format!("`{}` (`{}`)", semilla_syntax::tree::one_line(text), semilla_syntax::tree::one_line(&semilla_core::text::ascii_form(text).unwrap_or_default())),
         };
         let quiet: Vec<String> = literals.iter().filter(|literal| literal.chars.is_empty() && !shown(fact, &literal.text)).map(|literal| form(&literal.text)).collect();
         if !quiet.is_empty() {

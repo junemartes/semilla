@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semilla_core::{Anchor, Category, Claim, Compare, Fact};
-use semilla_syntax::tree::{display_tokens, one_line};
+use semilla_syntax::tree::one_line;
 use semilla_syntax::{Edit, EditKind, Refactor, Workspace};
 
 use crate::checks::{self, Context};
@@ -102,37 +102,12 @@ fn operand_note(edit: &Edit) -> Option<&str> {
     edit.note.as_deref().filter(|_| edit.node_before == Some("binary") && edit.node_after == Some("binary"))
 }
 
-/// A short source text: the source when it exists (D9: the display shows the source, not a const
-/// value), else the token text.
+/// The full source text for a fact (design 54.7: a fact text has no cut): the source when it
+/// exists (D9: the display shows the source, not a const value), else the token text.
 fn short(source: &Option<String>, text: &Option<String>) -> String {
-    let text = source.clone().or_else(|| text.clone()).unwrap_or_default();
-    let line = one_line(&text);
-    let chars: Vec<char> = line.chars().collect();
-    if chars.len() > 60 { format!("{}…", chars[..token_end(&chars, 60, 0)].iter().collect::<String>().trim_end()) } else { line }
+    semilla_syntax::tree::full(&source.clone().or_else(|| text.clone()).unwrap_or_default())
 }
 
-/// True if a text can be cut before the character `at`: the position is not inside a token
-/// (a name, a number, or a keyword).
-fn token_boundary(chars: &[char], at: usize) -> bool {
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    at == 0 || at >= chars.len() || !(word(chars[at - 1]) && word(chars[at]))
-}
-
-/// The end of a cut near `end` that is not in the middle of a token (brief 5h, C7). The cut moves
-/// back to the start of the token. If the cut then has `keep` characters or less, it moves to the
-/// end of the token: the text of the first difference always stays.
-fn token_end(chars: &[char], end: usize, keep: usize) -> usize {
-    let end = end.min(chars.len());
-    if token_boundary(chars, end) {
-        return end;
-    }
-    match (keep + 1..end).rev().find(|at| token_boundary(chars, *at)) {
-        Some(at) => at,
-        None => (end..=chars.len()).find(|at| token_boundary(chars, *at)).unwrap_or(chars.len()),
-    }
-}
-
-/// The short texts of a changed pair: see [`short_texts`].
 /// The text of a moved node (batch 5n, B1): the node and its two places. The two sides of a move
 /// have the same text, so "`a` → `a`" says nothing. `None` for an edit that is not a move.
 fn moved_text(edit: &Edit) -> Option<String> {
@@ -141,7 +116,24 @@ fn moved_text(edit: &Edit) -> Option<String> {
     if edit.kind != EditKind::Moved && (old.is_empty() || old != new) {
         return None;
     }
-    let text = short(&edit.source_after, &edit.text_after);
+    let mut text = short(&edit.source_after, &edit.text_after);
+    // Design 54.7: a statement that only gets or loses its `;` shows the two sides. The source
+    // text of an expression statement stops before the `;` (design 52.1), and the token text
+    // of the statement has it.
+    let has = |text: &Option<String>| text.as_deref().is_some_and(|text| text.trim_end().ends_with(';'));
+    if has(&edit.text_before) != has(&edit.text_after) {
+        let side = |source: &Option<String>, token_text: &Option<String>| {
+            let side = short(source, token_text);
+            // The `;` goes before the end mark of a block text.
+            let mark = semilla_core::text::LINE_MARK;
+            let (body, end) = match side.strip_suffix(mark) {
+                Some(body) => (body, mark.to_string()),
+                None => (side.as_str(), String::new()),
+            };
+            if has(token_text) && !body.ends_with(';') { format!("{body};{end}") } else { side }
+        };
+        text = format!("{}` → `{}", side(&edit.source_before, &edit.text_before), side(&edit.source_after, &edit.text_after));
+    }
     let place = |anchor: &Anchor| anchor.path.iter().map(|segment| segment.to_string()).collect::<Vec<_>>().join("/");
     Some(if before == after {
         format!("`{text}` in `{before}` (line {} after the step)", edit.line)
@@ -189,32 +181,19 @@ pub(crate) fn stale_site(renames: &semilla_syntax::Renames, tree_after: &Workspa
 }
 
 fn short_pair(edit: &Edit) -> (String, String) {
-    let (old, new) = full_pair(edit);
-    short_texts(old, new)
+    (short(&edit.source_before, &edit.text_before), short(&edit.source_after, &edit.text_after))
 }
 
-/// The short texts of a pair of texts with one line each (batch 5k, D6). A long pair shows each
-/// changed token of the two sides. A cut is only in a part that is equal on the two sides, and
-/// each cut has the mark `…`. So the two sides never look the same, and no cut hides a change.
+/// The texts of a pair of texts with one line each. Design 54.7: a fact text has no cut, so
+/// the two sides are the full texts.
 pub(crate) fn short_texts(old: String, new: String) -> (String, String) {
-    if old.chars().count() <= 60 && new.chars().count() <= 60 {
-        return (old, new);
-    }
-    let (a, b) = (cut_tokens(&old), cut_tokens(&new));
-    let (marks_a, marks_b) = changed_tokens(&a, &b);
-    let (short_old, short_new) = (cut_equal(&a, &marks_a), cut_equal(&b, &marks_b));
-    // The last check (batch 6a, A2): two different texts never show as two equal sides. If a
-    // cut hides the difference, the full texts show.
-    if short_old == short_new && old != new {
-        return (old, new);
-    }
-    (short_old, short_new)
+    (old, new)
 }
 
 /// The two sides of an "old → new" fact text (batch 6a, A2). Each fact text with two sides
 /// uses this function: the attributes, the generics, the where clause, the signature parts,
-/// the `use` lines, the docs, and the values. Each side is on one line. A cut keeps each
-/// part that differs, with some context, and each cut has the mark `…`.
+/// the `use` lines, the docs, and the values. Each side is the full text on one line
+/// (design 54.7).
 pub(crate) fn sides(old: &str, new: &str) -> (String, String) {
     short_texts(one_line(old), one_line(new))
 }
@@ -225,210 +204,10 @@ pub(crate) fn sides_text(old: &str, new: &str) -> String {
     format!("`{old}` → `{new}`")
 }
 
-/// The full text of the two sides of a pair for the diff block of a report, or `None` if the
-/// sides are equal.
-pub(crate) fn pair_content(old: &str, new: &str) -> Option<String> {
-    let (old, new) = (one_line(old), one_line(new));
-    (old != new).then(|| {
-        let mut lines = Vec::new();
-        if !old.is_empty() {
-            lines.push(format!("- {old}"));
-        }
-        if !new.is_empty() {
-            lines.push(format!("+ {new}"));
-        }
-        lines.join("\n")
-    })
-}
-
-/// The tokens for a cut: the display tokens, but each word of a comment is one token. Then a
-/// long doc comment with one changed word shows the changed word, not the full comment.
-fn cut_tokens(text: &str) -> Vec<(bool, String)> {
-    let mut tokens = Vec::new();
-    for (space, token) in display_tokens(text) {
-        if token.starts_with("//") || token.starts_with("/*") {
-            tokens.extend(token.split_whitespace().enumerate().map(|(index, word)| (space || index > 0, word.to_string())));
-        } else {
-            tokens.push((space, token));
-        }
-    }
-    tokens
-}
-
-/// The marks of one side of a token diff: `changed[i]` is true for a token that the other side
-/// does not have, and `gap[i]` is true when the other side has changed tokens before token `i`
-/// (`gap[len]`: after the last token).
-struct Marks {
-    changed: Vec<bool>,
-    gap: Vec<bool>,
-}
-
-/// The token diff of two texts: the equal start, the equal end, and the longest common
-/// subsequence of the middle part. A very long middle part is all changed.
-fn changed_tokens(a: &[(bool, String)], b: &[(bool, String)]) -> (Marks, Marks) {
-    let equal = |i: usize, j: usize| a[i].1 == b[j].1;
-    let prefix = (0..a.len().min(b.len())).take_while(|i| equal(*i, *i)).count();
-    let suffix = (0..a.len().min(b.len()) - prefix).take_while(|k| equal(a.len() - 1 - k, b.len() - 1 - k)).count();
-    let (n, m) = (a.len() - prefix - suffix, b.len() - prefix - suffix);
-    // `pairs`: the equal tokens of the middle part, as indexes of the two sides.
-    let mut pairs = Vec::new();
-    if n > 0 && m > 0 && n * m <= 1_000_000 {
-        let mut table = vec![0u32; (n + 1) * (m + 1)];
-        for i in (0..n).rev() {
-            for j in (0..m).rev() {
-                table[i * (m + 1) + j] = if equal(prefix + i, prefix + j) { table[(i + 1) * (m + 1) + j + 1] + 1 } else { table[(i + 1) * (m + 1) + j].max(table[i * (m + 1) + j + 1]) };
-            }
-        }
-        let (mut i, mut j) = (0, 0);
-        while i < n && j < m {
-            if equal(prefix + i, prefix + j) {
-                pairs.push((prefix + i, prefix + j));
-                i += 1;
-                j += 1;
-            } else if table[(i + 1) * (m + 1) + j] >= table[i * (m + 1) + j + 1] {
-                i += 1;
-            } else {
-                j += 1;
-            }
-        }
-    } else if n > 0 && m > 0 {
-        // Design 37.15: a long middle part (the body of a macro) uses a diff that is fast when
-        // few tokens changed. If more than `MOST_CHANGED` tokens changed, all is changed.
-        pairs = long_pairs(n, m, |i, j| equal(prefix + i, prefix + j)).into_iter().map(|(i, j)| (prefix + i, prefix + j)).collect();
-    }
-    let mut marks_a = Marks { changed: vec![true; a.len()], gap: vec![false; a.len() + 1] };
-    let mut marks_b = Marks { changed: vec![true; b.len()], gap: vec![false; b.len() + 1] };
-    let all = (0..prefix).map(|i| (i, i)).chain(pairs).chain((0..suffix).rev().map(|k| (a.len() - 1 - k, b.len() - 1 - k)));
-    let (mut next_a, mut next_b) = (0, 0);
-    for (i, j) in all.chain([(a.len(), b.len())]) {
-        // Before this equal pair, the side A has the tokens `next_a..i` and the side B has the
-        // tokens `next_b..j`. They are the changed tokens.
-        marks_a.gap[i] = j > next_b;
-        marks_b.gap[j] = i > next_a;
-        if i < a.len() {
-            marks_a.changed[i] = false;
-            marks_b.changed[j] = false;
-        }
-        (next_a, next_b) = (i + 1, j + 1);
-    }
-    (marks_a, marks_b)
-}
-
-/// The equal token pairs of two long token lists (the diff method of Myers), in order. The
-/// result is empty if the two lists differ in more than `MOST_CHANGED` tokens.
-fn long_pairs(n: usize, m: usize, equal: impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
-    const MOST_CHANGED: usize = 1000;
-    let max = (n + m).min(MOST_CHANGED) as isize;
-    let (n, m) = (n as isize, m as isize);
-    let at = |k: isize| (k + max + 1) as usize;
-    let mut ends = vec![0isize; 2 * max as usize + 3];
-    let mut rounds: Vec<Vec<isize>> = Vec::new();
-    let mut found = None;
-    'search: for d in 0..=max {
-        rounds.push(ends.clone());
-        for k in (-d..=d).step_by(2) {
-            let mut x = if k == -d || (k != d && ends[at(k - 1)] < ends[at(k + 1)]) { ends[at(k + 1)] } else { ends[at(k - 1)] + 1 };
-            let mut y = x - k;
-            while x < n && y < m && equal(x as usize, y as usize) {
-                x += 1;
-                y += 1;
-            }
-            ends[at(k)] = x;
-            if x >= n && y >= m {
-                found = Some(d);
-                break 'search;
-            }
-        }
-    }
-    let Some(last) = found else { return Vec::new() };
-    let mut pairs = Vec::new();
-    let (mut x, mut y) = (n, m);
-    for d in (0..=last).rev() {
-        let ends = &rounds[d as usize];
-        let k = x - y;
-        let before = if k == -d || (k != d && ends[at(k - 1)] < ends[at(k + 1)]) { k + 1 } else { k - 1 };
-        let (start_x, start_y) = if d == 0 { (0, 0) } else { (ends[at(before)], ends[at(before)] - before) };
-        while x > start_x && y > start_y {
-            x -= 1;
-            y -= 1;
-            pairs.push((x as usize, y as usize));
-        }
-        (x, y) = (start_x, start_y);
-    }
-    pairs.reverse();
-    pairs
-}
-
-/// One side of a pair with a cut in each long equal part. An equal token stays when it starts
-/// less than 15 characters from a change.
-fn cut_equal(tokens: &[(bool, String)], marks: &Marks) -> String {
-    const CONTEXT: usize = 15;
-    let size = |index: usize| tokens[index].1.chars().count() + usize::from(tokens[index].0);
-    let mut keep = marks.changed.clone();
-    let mut distance = usize::MAX;
-    for index in 0..tokens.len() {
-        if marks.changed[index] {
-            distance = 0;
-            continue;
-        }
-        if marks.gap[index] {
-            distance = 0;
-        }
-        keep[index] |= distance < CONTEXT;
-        distance = distance.saturating_add(size(index));
-    }
-    distance = usize::MAX;
-    for index in (0..tokens.len()).rev() {
-        if marks.changed[index] {
-            distance = 0;
-            continue;
-        }
-        if marks.gap[index + 1] {
-            distance = 0;
-        }
-        keep[index] |= distance < CONTEXT;
-        distance = distance.saturating_add(size(index));
-    }
-    let mut out = String::new();
-    let mut index = 0;
-    while index < tokens.len() {
-        if !keep[index] {
-            let end = (index..tokens.len()).find(|at| keep[*at]).unwrap_or(tokens.len());
-            // A cut of a very short part hides text and saves no space.
-            if (index..end).map(size).sum::<usize>() > 3 {
-                out.push('…');
-                index = end;
-                continue;
-            }
-        }
-        if tokens[index].0 && !out.is_empty() && !out.ends_with('…') {
-            out.push(' ');
-        }
-        out.push_str(&tokens[index].1);
-        index += 1;
-    }
-    out
-}
-
 /// The full texts of a changed pair, on one line each.
 fn full_pair(edit: &Edit) -> (String, String) {
     let full = |source: &Option<String>, text: &Option<String>| one_line(&source.clone().or_else(|| text.clone()).unwrap_or_default());
     (full(&edit.source_before, &edit.text_before), full(&edit.source_after, &edit.text_after))
-}
-
-/// The full text of a long pair for the report (C4), or `None` for a short pair.
-fn long_content(edit: &Edit) -> Option<String> {
-    let (old, new) = full_pair(edit);
-    (old.chars().count() > 60 || new.chars().count() > 60).then(|| {
-        let mut lines = Vec::new();
-        if !old.is_empty() {
-            lines.push(format!("- {old}"));
-        }
-        if !new.is_empty() {
-            lines.push(format!("+ {new}"));
-        }
-        lines.join("\n")
-    })
 }
 
 /// The inserted text of a pair whose old text is the new text without one part (a new match arm),
@@ -506,7 +285,6 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                     file: edit.file.clone(),
                     part: "edit".into(),
                     description: format!("moved statement `{text}` from `{before}` to `{after}`"),
-                    content: long_content(edit),
                     // Fix round 2 of 8c (design 41.7, 42): a move changes the order of
                     // execution, so a moved statement is `semantics`, as an added statement.
                     // An extracted or inlined variable keeps `move`.
@@ -543,7 +321,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             at: anchor.clone(),
             file: edit.file.clone(),
             part: "edit".into(),
-            description: format!("{what} `{var}` = `{}` ({uses} use{}){place}", semilla_syntax::tree::short(&expr, 100), if uses == 1 { "" } else { "s" }),
+            description: format!("{what} `{var}` = `{}` ({uses} use{}){place}", semilla_syntax::tree::one_line(&expr), if uses == 1 { "" } else { "s" }),
             category: Category::Move,
             reason: anchor.and_then(|anchor| context.step.reasons.get(&anchor.to_string()).cloned()),
             ..fact_base()
@@ -659,13 +437,13 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
                 paired.insert(added);
                 // Design 51, rule R4: a line with no change that names a renamed item.
                 let text = if line_text(edit) == line_text(&edits[added]) {
-                    format!("the `use` line still names the old item (the line did not follow the rename): `{}`{}", semilla_syntax::tree::short(&line_text(edit), 100), in_module(&item))
+                    format!("the `use` line still names the old item (the line did not follow the rename): `{}`{}", semilla_syntax::tree::one_line(&line_text(edit)), in_module(&item))
                 } else {
                     format!("changed `use` line: {}{}", sides_text(&line_text(edit), &line_text(&edits[added])), in_module(&item))
                 };
                 (text, vec![index, added])
             }
-            None => (format!("removed `use` line: `{}`{}", semilla_syntax::tree::short(&line_text(edit), 100), in_module(&item)), vec![index]),
+            None => (format!("removed `use` line: `{}`{}", semilla_syntax::tree::one_line(&line_text(edit)), in_module(&item)), vec![index]),
         };
         let at = added.and_then(|j| item_of(&edits[j])).unwrap_or(item.clone());
         push(facts, fact_of, &indexes, Fact {
@@ -689,7 +467,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             at: Some(Anchor::item(&item)),
             file: edit.file.clone(),
             part: "edit".into(),
-            description: format!("added `use` line: `{}`{}{}", semilla_syntax::tree::short(&line_text(edit), 100), in_module(&item), names_text(names)),
+            description: format!("added `use` line: `{}`{}{}", semilla_syntax::tree::one_line(&line_text(edit)), in_module(&item), names_text(names)),
             category: Category::Import,
             reason: context.step.reasons.get(&item).cloned(),
             ..fact_base()
@@ -908,7 +686,6 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             file: edit.file.clone(),
             part: if is_local_order { "member order".into() } else { "edit".into() },
             description: format!("{description}{location}"),
-            content: long_content(edit),
             category,
             reason: context.step.reasons.get(&place).or_else(|| context.step.reasons.get(&item).filter(|_| order_spotlight.is_some())).cloned(),
             spotlight: order_spotlight.is_some(),
@@ -916,26 +693,7 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             ..fact_base()
         });
     }
-    full_texts(edits, fact_of, facts, start);
     crate::inner::compare(edits, fact_of, facts, start);
-}
-
-/// Each fact with a cut text keeps the full texts of its edits in its content (design 38.1).
-/// A fold and a merge compare the content too, so a change after the cut point is never
-/// hidden. The facts from `start` on are the facts of [`derive`].
-fn full_texts(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fact], start: usize) {
-    for (index, fact) in facts.iter_mut().enumerate().skip(start) {
-        if fact.content.is_some() || !fact.description.contains('…') {
-            continue;
-        }
-        let lines: Vec<String> = (0..edits.len()).filter(|&i| fact_of[i] == Some(index)).filter_map(|i| {
-            let (old, new) = full_pair(&edits[i]);
-            pair_content(&old, &new)
-        }).collect();
-        if !lines.is_empty() {
-            fact.content = Some(lines.join("\n"));
-        }
-    }
 }
 
 /// The module of a `use` line for its fact text (design 38.8): " in `a::b`". The path of a
@@ -1362,102 +1120,32 @@ fn drop_facts(facts: &mut Vec<Fact>, fact_of: &mut [Option<usize>], target: &[us
 mod tests {
     use super::*;
 
-    fn pair_raw(old: &str, new: &str) -> (String, String) {
-        short_texts(one_line(old), one_line(new))
-    }
-
-    fn pair(old: &str, new: &str) -> (String, String) {
-        short_texts(one_line(old), one_line(new))
-    }
-
-    /// Design 37.15: a long text (the body of a macro) with a small change shows the changed
-    /// part with context and cut marks. Before, each side showed the full text.
+    /// Design 54.7: the two sides of a long pair are the full texts. No side has a cut mark.
+    /// The negative test: a short pair does not change.
     #[test]
-    fn a_long_text_with_a_small_change_shows_the_changed_part() {
-        let body = |mark: &str| (0..3000).map(|index| if index == 1700 { format!("let v{index} = {mark} ;") } else { format!("let v{index} = {index} ;") }).collect::<Vec<_>>().join(" ");
-        let (old, new) = pair(&body("7"), &body("call ( 8 )"));
-        assert!(old.chars().count() < 120 && new.chars().count() < 120, "{old}\n{new}");
-        assert!(old.starts_with('…') && old.ends_with('…') && new.starts_with('…') && new.ends_with('…'), "{old}\n{new}");
-        assert!(old.contains("v1700 = 7 ;") && new.contains("v1700 = call ( 8 ) ;"), "{old}\n{new}");
-        // Two changes that are far apart: each change shows, with a cut mark between them.
-        let two = body("7").replace("let v40 = 40 ;", "let v40 = 41 ;").replace("let v2900 = 2900 ;", "let w2900 = 2900 ;");
-        let (old, new) = pair(&body("7"), &two);
-        assert!(new.contains("v40 = 41") && new.contains("w2900") && old.contains("v40 = 40") && old.contains("v2900"), "{old}\n{new}");
-        assert!(new.chars().count() < 200 && new.matches('…').count() == 3, "{new}");
+    fn a_long_pair_shows_the_full_text_of_each_side() {
+        let tail = "first_parameter + second_parameter + third_parameter + fourth_parameter + fifth_parameter";
+        let (old, new) = sides(&format!("let total  = alpha(1) + {tail};"), &format!("let total = alpha(2) + {tail};"));
+        assert_eq!(old, format!("let total = alpha(1) + {tail};"));
+        assert_eq!(new, format!("let total = alpha(2) + {tail};"));
+        assert!(!old.contains('…') && !new.contains('…'));
+        assert_eq!(sides("pad(\" \")", "pad(\"  \")"), ("pad(\" \")".to_string(), "pad(\"  \")".to_string()));
     }
 
-    /// The fast diff gives the same pairs as the table for a small case, and no pair for two
-    /// lists with no equal token.
+    /// Design 54.7: a text with more than one line keeps its lines and the indent of each
+    /// line. The negative tests: a text with one line has no line mark, and a token with more
+    /// than one line (a string) gives the form with one line.
     #[test]
-    fn the_fast_diff_finds_each_equal_pair() {
-        let (a, b) = (["a", "b", "c", "d", "e"], ["a", "x", "c", "e", "y"]);
-        assert_eq!(long_pairs(a.len(), b.len(), |i, j| a[i] == b[j]), vec![(0, 0), (2, 2), (4, 3)]);
-        assert_eq!(long_pairs(2, 2, |_, _| false), Vec::new());
-        assert_eq!(long_pairs(3, 0, |_, _| false), Vec::new());
-    }
-
-    /// Brief 5h, C7: a short text of a fact has no cut in the middle of a token, and the cut of a
-    /// pair stays around the first difference (batch 5d, C4).
-    #[test]
-    fn a_short_text_has_no_cut_in_a_token() {
-        // The case of the trial: the old cut ended in the name `CARGO_MANIFEST_DIR`.
-        let old = "/// The fee rules of the ledger, with each rate.\n/// # let x = 1;\n/// assert_eq!(fee(100), 1);";
-        let new = "/// The fee rules of the ledger, with each rate.\n/// # std::fs::write(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../planted.txt\"), \"x\").unwrap();\n/// assert_eq!(fee(100), 1);";
-        let (before, after) = pair(old, new);
-        assert_ne!(before, after);
-        assert!(after.contains("std::fs::write"), "the cut has the first difference: {after}");
-        let whole = |text: &str, full: &str| {
-            let full = full.split_whitespace().collect::<Vec<_>>().join(" ");
-            let inner = text.trim_start_matches('…').trim_end_matches('…');
-            let at = full.find(inner).unwrap_or_else(|| panic!("`{inner}` is not a part of `{full}`"));
-            let chars = |text: &str, at: usize| text[..at].chars().count();
-            let all: Vec<char> = full.chars().collect();
-            assert!(token_boundary(&all, chars(&full, at)), "the start of `{text}` is in a token");
-            assert!(token_boundary(&all, chars(&full, at + inner.len())), "the end of `{text}` is in a token");
-        };
-        whole(&before, old);
-        whole(&after, new);
-        assert!(!after.ends_with("CARGO_M…"), "{after}");
-
-        // A difference in a long token: the cut keeps the full token.
-        let (before, after) = pair(&format!("let total = {}_old + the_other_value_of_the_account_with_a_long_name;", "a".repeat(70)), &format!("let total = {}_new + the_other_value_of_the_account_with_a_long_name;", "a".repeat(70)));
-        assert!(before.contains("_old") && after.contains("_new"), "{before} / {after}");
-
-        // A long added text: the cut is before the token that does not fit.
-        let text = short(&Some("pub fn a_function_with_a_long_name(first_parameter: u64, second_parameter_name: u64) -> u64".into()), &None);
-        assert_eq!(text, "pub fn a_function_with_a_long_name(first_parameter: u64,…");
-    }
-
-    /// Batch 5k, D6 (trial 6, attempt 11): a cut text keeps each changed token. A cut is only in
-    /// the equal parts, and each cut has the mark `…`. The white space in a literal does not
-    /// change.
-    #[test]
-    fn a_cut_text_keeps_the_changed_tokens() {
-        // The case of the trial: the change is `/ 2` at the end of a long expression.
-        let (before, after) = pair("account.cents", "account.cents.saturating_sub(0).max(0).min(u64::MAX).checked_add(0).unwrap_or(0) / 2");
-        assert_eq!(before, "account.cents");
-        assert!(after.ends_with("/ 2") && after.contains("saturating_sub(0)"), "{after}");
-        // A change at each end of a long text: the equal middle part is cut.
-        let middle = "first_value_of_the_account + second_value_of_the_account + third_value_of_the_account + fourth_value";
-        let (before, after) = pair(&format!("let a = 1 + {middle} / 2;"), &format!("let a = 7 + {middle} / 3;"));
-        assert!(before.contains("1 +") && before.contains("/ 2") && after.contains("7 +") && after.contains("/ 3"), "{before} / {after}");
-        assert!(before.matches('…').count() == 1 && after.matches('…').count() == 1 && before.chars().count() < 70, "the equal part has one cut: {before} / {after}");
-        // A removed part: the side with no changed token shows the place of the change.
-        let (before, after) = pair(&format!("{middle} + the_removed_value + the_last_value_of_the_account"), &format!("{middle} + the_last_value_of_the_account"));
-        assert!(before.contains("the_removed_value") && after.contains("fourth_value + the_last_value"), "{before} / {after}");
-        assert!(before.starts_with('…') && after.starts_with('…'), "{before} / {after}");
-
-        // A long doc comment: the cut keeps the changed word, and it cuts the equal words.
-        let (before, after) = pair("/// Takes `amount` and the fee from the account. Returns the new balance.", "/// Takes `amount` and the fee from the account. Returns the new cents.");
-        assert_eq!((before.as_str(), after.as_str()), ("…Returns the new balance.", "…Returns the new cents."));
-
-        // The white space in a literal.
-        assert_eq!(one_line("let  a =\n    \"  \";"), "let a = \"  \";");
-        assert_eq!(one_line("x = ' ' ; y = r#\"a  \"  b\"# ; z: &'a  str"), "x = ' ' ; y = r#\"a  \"  b\"# ; z: &'a str");
-        assert_eq!(one_line("a // one  \"two\n  + b \"  \""), "a // one  \"two + b \"  \"");
-        let (before, after) = pair_raw("pad(\" \")", "pad(\"  \")");
-        assert_eq!((before.as_str(), after.as_str()), ("pad(\" \")", "pad(\"  \")"));
-        assert_eq!(short(&Some("let pad = \"  \";".into()), &None), "let pad = \"  \";");
-        assert_eq!(semilla_syntax::tree::short("let pad  = \"  \";", 60), "let pad = \"  \";");
+    fn a_text_with_more_than_one_line_keeps_its_lines() {
+        let source = "for item in items.iter().filter(|item| **item > 0) {\n        if *item > limit {\n            total += item;\n        }\n        count += 1;\n    }";
+        assert_eq!(short(&Some(source.into()), &None), "⏎for item in items.iter().filter(|item| **item > 0) {⏎    if *item > limit {⏎        total += item;⏎    }⏎    count += 1;⏎}⏎");
+        // A text with more than one line that is short on one line stays in the fact line.
+        assert_eq!(short(&Some("if a {\n        b();\n    }".into()), &None), "if a { b(); }");
+        assert_eq!(short(&Some("let pad  = \"  \";".into()), &None), "let pad = \"  \";");
+        let text = "let text = \"a\n    b\";";
+        assert_eq!(short(&Some(text.into()), &None), one_line(text));
+        // A long statement with one line: the full text, no cut. It is a block text.
+        let long = format!("let total = {};", vec!["a_long_name_of_a_value"; 12].join(" + "));
+        assert_eq!(short(&Some(long.clone()), &None), format!("⏎{long}⏎"));
     }
 }

@@ -34,6 +34,9 @@ pub struct OpenStep {
     /// The result of the build check of the step (design 53), when the command has it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_check: Option<semilla_core::BuildCheck>,
+    /// The facts of the agent of the step (design 54).
+    #[serde(default, skip_serializing_if = "semilla_core::AgentFacts::is_empty")]
+    pub agent: semilla_core::AgentFacts,
 }
 
 /// True if the environment asks for the compiled check of each step (`SEMILLA_COMPILED`, design
@@ -233,6 +236,7 @@ fn hard_problem(step: &semilla_core::report::StepReport) -> bool {
         || !step.uncovered.is_empty()
         || step.facts.iter().any(|fact| fact.spotlight && fact.reason.is_none())
         || step.claims.iter().any(|claim| !(claim.status.is_verified() || claim.status.is_pending() || matches!(claim.status, ClaimStatus::NotChecked { .. })))
+        || step.agent_facts.iter().any(|fact| !fact.holds)
 }
 
 /// The problems of a rejected step, one text for each: a fact with no reason, a claim that is
@@ -244,6 +248,9 @@ pub(crate) fn step_problems(step: &semilla_core::report::StepReport) -> Vec<Stri
     }
     for claim in step.claims.iter().filter(|c| !c.status.is_verified()) {
         problems.push(format!("claim {} is {}{}", claim.claim, claim.status.text(), claim.hint.as_ref().map(|h| format!("; {h}")).unwrap_or_default()));
+    }
+    for fact in step.agent_facts.iter().filter(|fact| !fact.holds) {
+        problems.push(format!("the fact {} of the agent is false: {}", fact.id, fact.line()));
     }
     problems.extend(step.errors.iter().cloned());
     problems.extend(step.uncovered.iter().map(|u| format!("uncovered {}", u.description)));
@@ -792,7 +799,7 @@ impl App {
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
         }
-        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env(), build_check: None });
+        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env(), build_check: None, agent: Default::default() });
         self.save_session(&session)?;
         let mut text = format!("step {} started at tree {tree}", session.changeset.steps.len());
         if session.changeset.steps.is_empty() {
@@ -814,7 +821,8 @@ impl App {
         let number = highest.max(session.last_claim) + 1;
         let id = format!("c{number}");
         let open = session.open.as_mut().context("`semilla claim` is a command of the old protocol (for the replay), and no step of the old protocol is open. In the usual flow, give each claim to the step: `semilla step \"<intent>\" --claim '…'`")?;
-        if let Some(message) = semilla_core::ops::retired(op).or_else(|| crate::onestep::retired_claim(op)) {
+        // A stored plan can have a claim that a new step cannot give (design 54.3).
+        if let Some(message) = semilla_core::ops::retired(op).or_else(|| crate::onestep::retired_claim(op)).filter(|_| !crate::onestep::STORED_CLAIMS.contains(&op)) {
             bail!("{message}");
         }
         let Some(info) = semilla_core::ops::op(op) else {
@@ -932,7 +940,7 @@ impl App {
             group.steps.retain(|index| *index != step.index);
         }
         let claims = step.claims.len();
-        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled, build_check: None });
+        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled, build_check: None, agent: step.agent });
         self.save_session(&session)?;
         Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla old-step end`", step.index))
     }
@@ -969,7 +977,7 @@ impl App {
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
         let index = session.changeset.steps.len();
-        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check });
+        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check, agent: open.agent });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         if queue {
@@ -1496,7 +1504,7 @@ impl App {
         if let Some(open) = session.open {
             let tree = self.repo.write_tree()?;
             let index = set.steps.len();
-            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check });
+            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check, agent: open.agent });
             set.head_tree = tree;
         }
         Ok(set)
@@ -1942,7 +1950,19 @@ impl App {
         // Design 53: `tag` shows each marked line of the build check that `status` shows (a step
         // with no check, a step with a target that does not build). It does not refuse the tag.
         let marks: String = semilla_core::claim::build_check_lines(&set.steps).iter().filter(|line| line.starts_with("! ")).map(|line| format!("\n{}", semilla_core::text::inline(line))).collect();
-        Ok(format!("{line}\ntagged {commit} with {} steps; the change set is closed{notice}{marks}", set.steps.len()))
+        // Design 54.5: the count of the facts of the agent, and of the items that are not stated.
+        let agent: usize = verdict.report.steps.iter().map(|step| step.agent_facts.len()).sum();
+        let mut gaps = format!("\n{agent} fact(s) of the agent, each one checked");
+        for step in verdict.report.steps.iter().filter(|step| !step.agent_facts.is_empty()) {
+            gaps.push_str(&format!("\nstep {}  {}", step.step, semilla_core::text::quoted(&step.intent)));
+            for fact in &step.agent_facts {
+                gaps.push_str(&format!("\n  {} {}", if fact.holds { "✓" } else { "✗" }, fact.line()));
+            }
+        }
+        if let Some(line) = verdict.report.gap_line() {
+            gaps.push_str(&format!("\n{line}"));
+        }
+        Ok(format!("{line}\ntagged {commit} with {} steps; the change set is closed{notice}{marks}{gaps}", set.steps.len()))
     }
 
     /// Loads the change set of a tagged commit into the session (for a review).
@@ -2242,6 +2262,14 @@ pub(crate) fn short_text(report: &Report) -> String {
         put_line(&mut text, &format!("step {}  {}{detail}{claims}", step.step, semilla_core::text::quoted(&step.intent)));
         for claim in step.claims.iter().filter(|claim| !claim.status.is_verified() && !claim.status.is_pending() && !matches!(claim.status, ClaimStatus::NotChecked { .. })) {
             put_line(&mut text, &format!("  ✗ {} {}", claim.claim, claim.status.text()));
+        }
+        // Design 54.5: each fact of the agent with its check result, and one line with the
+        // count of the items that are not stated.
+        for fact in &step.agent_facts {
+            put_line(&mut text, &format!("  {} {}", if fact.holds { "✓" } else { "✗" }, fact.line()));
+        }
+        if let Some(line) = step.gap_line() {
+            put_line(&mut text, &format!("  {line}"));
         }
         for fact in step.facts.iter().filter(|fact| fact.spotlight && fact.reason.is_none()) {
             put_line(&mut text, &format!("  ✗ {} has a spotlight with no reason: {}", fact.id, fact.description));

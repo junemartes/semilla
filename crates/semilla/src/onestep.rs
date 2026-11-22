@@ -15,13 +15,21 @@ use crate::app::{App, OpenStep, Session};
 
 /// The claims that stay (design 24.2, rule 5, and design 35.3). Each other op is retired as a
 /// claim.
-pub const CLAIMS: &[&str] = &["rewrite-pattern", "no-panic", "no-unsafe", "no-io", "calls-only", "tested-by"];
+pub const CLAIMS: &[&str] = &["no-panic", "no-unsafe", "no-io", "calls-only", "tested-by"];
+
+/// The claims that only a stored record can have (design 54.3): a session or a plan from
+/// before the facts of the agent. They keep their check. A new step cannot give them.
+pub const STORED_CLAIMS: &[&str] = &["rewrite-pattern"];
 
 /// The message for an op that is retired as a claim, or `None`.
 pub fn retired_claim(op: &str) -> Option<String> {
     // Design 35.3: Semilla derives each rename and each move. A claim cannot add to the fact.
     if matches!(op, "rename" | "move-item") {
-        return Some(format!("the claim `{op}` is gone: Semilla derives each rename and each move as a fact; remove the claim (the claims that stay: {})", CLAIMS.join(", ")));
+        return Some(format!("the claim `{op}` is gone: Semilla derives each rename and each move as a fact; remove the claim, or state the fact with `--same 'rename OLD NEW'` or `--same 'move FROM TO'` (the claims that stay: {})", CLAIMS.join(", ")));
+    }
+    // Design 54.3: a pattern is a `same` fact of the agent.
+    if STORED_CLAIMS.contains(&op) {
+        return Some(format!("the claim `{op}` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'` (the claims that stay: {})", CLAIMS.join(", ")));
     }
     (!CLAIMS.contains(&op) && semilla_core::ops::op(op).is_some()).then(|| format!("the claim `{op}` is retired: Semilla derives this change as a fact; remove the claim (the claims that stay: {})", CLAIMS.join(", ")))
 }
@@ -35,6 +43,11 @@ pub struct StepRequest {
     pub claims: Vec<String>,
     /// Each reason as `ANCHOR=TEXT`.
     pub reasons: Vec<String>,
+    /// Each `same` fact of the agent (design 54): `rename OLD NEW`, `move FROM TO`, or
+    /// `rewrite FROM => TO`.
+    pub same: Vec<String>,
+    /// Each `change` fact of the agent (design 54): `ITEM[,ITEM]=TEXT`.
+    pub change: Vec<String>,
     pub tree: bool,
     /// Phase 1 only; phase 2 runs in the background (B1). Only with `compiled`.
     pub fast: bool,
@@ -96,6 +109,7 @@ impl StepRequest {
         if let Some(group) = &self.group {
             parts.push(format!("--group {}", quote(group)));
         }
+        parts.extend(semilla_core::AgentFacts { same: self.same.clone(), change: self.change.clone() }.options());
         for claim in &self.claims {
             parts.push(format!("--claim {}", quote(claim)));
         }
@@ -273,6 +287,11 @@ impl App {
         if before == tree {
             bail!("the working tree has no change since the last step (tree {tree}); edit the code first");
         }
+        // The form of each fact of the agent (design 54). The check of the facts comes later.
+        let agent = semilla_core::AgentFacts { same: request.same.clone(), change: request.change.clone() };
+        if let Err(message) = semilla_verify::agent::check_form(&agent) {
+            bail!("{message}");
+        }
 
         // The claims and the reasons.
         let mut claims = Vec::new();
@@ -365,7 +384,7 @@ impl App {
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: None });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: None, agent });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -438,6 +457,9 @@ impl App {
         // list then has only the status and a short cause (brief 5g, item 4).
         let body = semilla_verify::views::text_report_with(std::slice::from_ref(&report), !accepted);
         let body = body.lines().skip(1).collect::<Vec<_>>().join("\n");
+        // Design 54.4: a rejected step is not stored, so `semilla fact` has no step for the
+        // gaps. The line gives the options for the command of the step.
+        let body = if accepted { body } else { body.lines().map(|line| match line.trim_start().strip_prefix(semilla_core::report::GAP_COMMAND) { Some(rest) => format!("  {} {}", semilla_core::report::GAP_OPTIONS, rest.split_once(' ').map(|(_, options)| options).unwrap_or_default()), None => line.to_string() }).collect::<Vec<_>>().join("\n") };
         let mut text = String::new();
         if let Some(commit) = &closed {
             put_line(&mut text, &format!("the change set of {commit} is tagged and closed; a new change set starts at HEAD"));
@@ -617,6 +639,14 @@ impl App {
                     None => blocked.push(format!("claim {}", claim.claim)),
                 }
             }
+            // Design 54: a fact of the agent that is false. The body below shows the cause. The
+            // command to run again omits the fact: the gap list then names its items.
+            let false_facts: Vec<&semilla_core::AgentFact> = report.agent_facts.iter().filter(|fact| !fact.holds).collect();
+            for fact in &false_facts {
+                put_line(&mut text, &format!("  ✗ fact {} of the agent is false: `--{} '{}'`", fact.id, fact.kind, fact.options.join("', '")));
+                corrected.same.retain(|option| fact.kind != "same" || !fact.options.contains(option));
+                corrected.change.retain(|option| fact.kind != "change" || !fact.options.contains(option));
+            }
             for error in &report.errors {
                 // The body below shows each error one time. The top summary does not repeat it
                 // (Part B item 4 of batch 5j).
@@ -648,6 +678,14 @@ impl App {
                     (false, true) => " (with the complete list of `calls`)",
                     (false, false) => "",
                 };
+                if !false_facts.is_empty() {
+                    put_line(&mut text, "correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.");
+                }
+                let what = match (what, false_facts.is_empty()) {
+                    (what, true) => what.to_string(),
+                    ("", false) => " (without the false fact)".to_string(),
+                    (what, false) => format!("{}, and without the false fact)", what.trim_end_matches(')')),
+                };
                 for (claim, added) in &widened {
                     let entries: Vec<String> = added.iter().map(|entry| format!("`{entry}`")).collect();
                     text.push_str(&format!(
@@ -670,6 +708,9 @@ impl App {
             }
             if failed > 0 {
                 causes.push(format!("{failed} claim{} not verified", if failed == 1 { "" } else { "s" }));
+            }
+            if !false_facts.is_empty() {
+                causes.push(format!("{} false fact{} of the agent", false_facts.len(), if false_facts.len() == 1 { "" } else { "s" }));
             }
             if let Some(error) = blocked.iter().find(|error| !error.starts_with("claim ")) {
                 causes.push(error.lines().next().unwrap_or("").chars().take(200).collect());
@@ -801,6 +842,82 @@ impl App {
     }
 
     /// Removes the last stored step (`semilla undo`), so that the agent can do it again.
+    /// Adds facts of the agent to a stored step (design 54.4): `semilla fact`. The trees of
+    /// the step do not change, so the stored result of the build check stays, and no build
+    /// check runs. Only the check of the facts runs again. A false fact stores nothing.
+    /// Returns the text, and true if the facts are stored.
+    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String]) -> Result<(String, bool)> {
+        let previous = self.load_session()?;
+        if previous.open.is_some() || previous.replay.is_some() {
+            bail!("a step of the old protocol or a replay is open; `semilla fact` adds facts to a stored step of `semilla step`");
+        }
+        if previous.tagged.is_some() {
+            bail!("the change set is tagged and closed; a fact cannot go to a tagged step");
+        }
+        let last = previous.changeset.steps.len().checked_sub(1).context("no stored step; give the facts to the step: `semilla step \"<intent>\" --same '…' --change '…'`")?;
+        let index = step.unwrap_or(last);
+        if index > last {
+            bail!("no step {index}; the last stored step is step {last}");
+        }
+        let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec() };
+        if added.is_empty() {
+            bail!("give one fact or more: `semilla fact --same 'rewrite FROM => TO'` or `semilla fact --change 'ITEM=TEXT'`");
+        }
+        if let Err(message) = semilla_verify::agent::check_form(&added) {
+            bail!("{message}");
+        }
+        let mut session = previous.clone();
+        let stored = &mut session.changeset.steps[index];
+        // A fact that the step has is not a new fact.
+        let mut count = 0;
+        for (list, texts) in [(&mut stored.agent.same, same), (&mut stored.agent.change, change)] {
+            for text in texts {
+                if !list.contains(text) {
+                    list.push(text.clone());
+                    count += 1;
+                }
+            }
+        }
+        let (intent, compiled) = (stored.intent.clone(), stored.compiled);
+        self.save_session(&session)?;
+        let result = match self.check(Some(index), false) {
+            Ok(result) => result,
+            Err(error) => {
+                self.save_session(&previous)?;
+                return Err(error);
+            }
+        };
+        let report = result.report.steps.first().cloned().unwrap_or_default();
+        let mut text = String::new();
+        let lines = semilla_verify::views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
+        if report.agent_facts.iter().any(|fact| !fact.holds) {
+            self.save_session(&previous)?;
+            put_line(&mut text, &format!("rejected: no fact is added to step {index} {}", semilla_core::text::quoted(&intent)));
+            for fact in report.agent_facts.iter().filter(|fact| !fact.holds) {
+                put_line(&mut text, &format!("  ✗ fact {} of the agent is false: `--{} '{}'`", fact.id, fact.kind, fact.options.join("', '")));
+            }
+            for line in &lines {
+                put_line(&mut text, line);
+            }
+            put_line(&mut text, "correct each false fact, then run the command again. A missing fact is not a reject: the gap list names the items.");
+            return Ok((text, false));
+        }
+        // The stored result of a step with the compiled check is for the old record: the
+        // background check makes the result of the new record.
+        if compiled {
+            self.queue_session(&session.changeset)?;
+        }
+        put_line(&mut text, &format!("stored: {count} new fact(s) of the agent in step {index} {}; no build check runs again (the trees of the step are the same)", semilla_core::text::quoted(&intent)));
+        for line in &lines {
+            put_line(&mut text, line);
+        }
+        if report.gaps.is_empty() {
+            put_line(&mut text, "  not stated: 0 item(s)");
+        }
+        put_line(&mut text, "For each fact of the step, run `semilla status --verbose`.");
+        Ok((text, true))
+    }
+
     pub fn undo(&mut self) -> Result<String> {
         let mut session = self.load_session()?;
         if session.open.is_some() {

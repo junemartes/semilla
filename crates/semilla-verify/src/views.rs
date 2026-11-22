@@ -803,8 +803,13 @@ impl<'a> Shared<'a> {
 /// and the lines under it. `diff` adds the content change of the fact (a build code change,
 /// design 28.3): a change of a file with many facts shows one time, after the last fact.
 fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -> (String, Vec<String>) {
-    let head = format!("derived: {} [{}]{}", fact.description, fact.label(), fact.mark());
-    let mut lines: Vec<String> = Vec::new();
+    // The origin of the fact (design 54.5): `derived` (Semilla filled it in) or `stated`.
+    let origin = if fact.status.is_empty() { "derived" } else { fact.status.as_str() };
+    // Design 54.7: a long text and a text with more than one line are in a block below the
+    // fact line. No line of a block has a cut.
+    let (text, blocks) = semilla_core::text::fact_layout(&fact.description);
+    let head = format!("{origin}: {text} [{}]{}", fact.label(), fact.mark());
+    let mut lines: Vec<String> = blocks.iter().map(|line| format!("        {line}")).collect();
     let mut put = |line: &str| lines.push(line.to_string());
     for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
         if matches!(fact.part.as_str(), "edit" | "body") {
@@ -826,7 +831,7 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
             items.dedup();
             let more = if items.len() > 4 { format!(", and {} more", items.len() - 4) } else { String::new() };
             items.truncate(4);
-            put(&format!("      {} site(s): {} (in {}{more})", group.sites.len(), group.edit, items.join(", ")));
+            put(&format!("      {} site(s): {} (in {}{more})", group.sites.len(), semilla_core::text::flat_text(&group.edit), items.join(", ")));
         }
     }
     if !fact.affected.is_empty() {
@@ -908,14 +913,14 @@ fn is_spotlight_line(line: &str) -> bool {
 
 /// The runs of facts (in the order of the output) with an equal spotlight line (design 38.4):
 /// for each fact of a run of two facts or more, the first and the last index of the run.
-fn spotlight_runs(order: &[&semilla_core::report::Fact], names: bool) -> Vec<Option<(usize, usize)>> {
+fn spotlight_runs(order: &[&semilla_core::report::Fact], names: bool, place_of: &dyn Fn(&semilla_core::report::Fact) -> Result<usize, usize>) -> Vec<Option<(usize, usize)>> {
     let none = Shared::default();
     let lines: Vec<Option<String>> = order.iter().map(|fact| fact_lines(fact, &none, names).1.into_iter().find(|line| is_spotlight_line(line))).collect();
     let mut runs = vec![None; order.len()];
     let mut start = 0;
     while start < order.len() {
         let mut end = start;
-        while lines[start].is_some() && end + 1 < order.len() && lines[end + 1] == lines[start] && rank(order[end + 1]) == rank(order[start]) {
+        while lines[start].is_some() && end + 1 < order.len() && lines[end + 1] == lines[start] && rank(order[end + 1]) == rank(order[start]) && place_of(order[end + 1]) == place_of(order[start]) {
             end += 1;
         }
         if end > start {
@@ -970,16 +975,25 @@ pub fn fit_line(line: &str) -> String {
 /// - The order of the facts follows [`rank`]. A fact keeps its number.
 /// - Facts with the same text, the same category, the same compare result, and the same lines
 ///   below are one line with the count, the numbers, and the places.
-/// Returns the build code section (it comes before the claims) and the other facts.
-fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, String) {
+/// Returns the build code section (it comes before the claims) and the other facts. Each
+/// other entry has the place of its lines (design 54.5) and the lines: the index of the fact
+/// of the agent that the fact is below, or the group of a fact that Semilla filled in.
+fn fact_list(step: &StepReport, names: bool) -> (String, Vec<(Result<usize, usize>, String)>) {
     use text::put_line as put;
-    let (mut first, mut rest) = (String::new(), String::new());
+    let facts = &step.facts;
+    let mut first = String::new();
+    let mut rest: Vec<(Result<usize, usize>, String)> = Vec::new();
     let out = &mut first;
+    // The place of a fact: below the fact of the agent that states it, or in a group.
+    let place_of = |fact: &semilla_core::report::Fact| match step.agent_facts.iter().position(|agent| agent.facts.contains(&fact.id)) {
+        Some(agent) => Ok(agent),
+        None => Err(fact.filled_group()),
+    };
     let mut order: Vec<&semilla_core::report::Fact> = facts.iter().collect();
-    order.sort_by_key(|fact| rank(fact));
+    order.sort_by_key(|fact| (place_of(fact).err().unwrap_or(0), rank(fact)));
     // Design 38.4: a spotlight line that is equal for a run of facts shows one time, after the
     // last fact of the run, with the fact numbers. The texts of such a run do not share.
-    let runs = spotlight_runs(&order, names);
+    let runs = spotlight_runs(&order, names, &|fact| place_of(fact));
     let alone: Vec<&semilla_core::report::Fact> = order.iter().enumerate().filter(|(index, _)| runs[*index].is_none()).map(|(_, fact)| *fact).collect();
     let shared = Shared::new(&alone, names);
     // Design 28.3: the build code changes of the step come first, with the diff. The manifest
@@ -1006,6 +1020,9 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
         lines: Vec<String>,
         /// The full texts (design 38.1): facts with a different content stay apart.
         content: Option<&'a str>,
+        /// The fact of the agent that the facts are below. Facts below two facts stay apart.
+        agent: Option<usize>,
+        place: Result<usize, usize>,
     }
     let mut shown: Vec<Line> = Vec::new();
     for (index, fact) in order.iter().enumerate() {
@@ -1022,30 +1039,57 @@ fn fact_list(facts: &[semilla_core::report::Fact], names: bool) -> (String, Stri
             }
         }
         let place = fact.at.as_ref().map(|at| at.to_string()).or_else(|| fact.file.clone()).unwrap_or_else(|| fact.part.clone());
-        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref()) {
+        let agent = place_of(fact).ok();
+        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref() && line.agent == agent) {
             Some(line) => {
                 line.ids.push(&fact.id);
                 line.places.push(place);
             }
-            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines, content: fact.content.as_deref() }),
+            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines, content: fact.content.as_deref(), agent, place: place_of(fact) }),
         }
     }
     // Design 38.5: no line of the text output is longer than `LINE_MAX` characters. The merge
     // above compares the full lines, so a cut never makes two different facts look equal.
+    // Design 54.7: the cut applies only to a list of places. A fact line and the lines below
+    // it show the full text.
     let fit = |line: String| if names { line } else { fit_line(&line) };
     for line in shown {
-        let out = if line.rank == 0 { &mut first } else { &mut rest };
+        let mut block = String::new();
+        let out = if line.rank == 0 { &mut first } else { &mut block };
         if line.ids.len() == 1 {
-            put(out, &fit(format!("  ◆ {} {}", line.ids[0], line.head)));
+            put(out, &format!("  ◆ {} {}", line.ids[0], line.head));
         } else {
-            put(out, &fit(format!("  ◆ {} {} × {} (also {})", line.ids[0], line.head, line.ids.len(), id_list(&line.ids[1..]))));
+            put(out, &format!("  ◆ {} {} × {} (also {})", line.ids[0], line.head, line.ids.len(), id_list(&line.ids[1..])));
             put(out, &fit(format!("      places: {}", line.places.join(", "))));
         }
         for text in &line.lines {
-            put(out, &fit(text.clone()));
+            put(out, text);
+        }
+        if line.rank != 0 {
+            rest.push((line.place, block));
         }
     }
     (first, rest)
+}
+
+/// The lines of the facts of the agent and of the gap list of one step (design 54.5, parts 1
+/// and 2). `below` gives the lines of the facts that are below one fact of the agent. With
+/// `limit`, the gap list shows its first lines and a count.
+pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize) -> Vec<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !step.agent_facts.is_empty() {
+        lines.push("  facts of the agent (Semilla checks the tag of each fact, not its sentence):".to_string());
+    }
+    for (index, fact) in step.agent_facts.iter().enumerate() {
+        lines.push(format!("  {} {}", if fact.holds { "✓" } else { "✗" }, fact.line()));
+        lines.extend(fact.lines().iter().map(|line| format!("      {line}")));
+        lines.extend(below(index));
+    }
+    lines.extend(step.gap_lines(limit));
+    if let Some(command) = step.gap_command(limit) {
+        lines.push(format!("  {command}"));
+    }
+    lines
 }
 
 /// The text report. With `short_failures`, a claim that is not verified shows only its status
@@ -1063,8 +1107,9 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
     let put = |out: &mut String, line: &str| text::put_line(out, &if names { line.to_string() } else { fit_line(line) });
     let mut out = String::new();
     for step in steps {
+        let start = out.len();
         put(&mut out, &format!("step {}  {}", step.step, text::quoted(&step.intent)));
-        let (build_code, facts) = fact_list(&step.facts, names);
+        let (build_code, facts) = fact_list(step, names);
         out.push_str(&build_code);
         for claim in &step.claims {
             let mark = match &claim.status {
@@ -1094,8 +1139,20 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
                 put(&mut out, &format!("      hint: {hint}"));
             }
         }
-        // The facts: Semilla derives them, the agent writes no claim (design 22.5).
-        out.push_str(&facts);
+        // Design 54.5, the order of the result: the facts of the agent with the facts below
+        // them, the gap list, then the facts that Semilla filled in, in groups.
+        let below = |agent: usize| -> Vec<String> { facts.iter().filter(|(place, _)| *place == Ok(agent)).flat_map(|(_, block)| block.lines().map(|line| format!("  {line}"))).collect() };
+        for line in agent_lines(step, if names { None } else { Some(semilla_core::report::GAP_LIMIT) }, &below) {
+            // Design 54.7: a line with a fact text has no cut.
+            text::put_line(&mut out, &line);
+        }
+        for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
+            let blocks: Vec<&String> = facts.iter().filter(|(place, _)| *place == Err(group)).map(|(_, block)| block).collect();
+            if !blocks.is_empty() {
+                put(&mut out, &format!("  {name}, filled in by Semilla:"));
+            }
+            blocks.iter().for_each(|block| out.push_str(block));
+        }
         for uncovered in &step.uncovered {
             let at = uncovered.at.as_ref().map(|a| a.to_string()).or_else(|| uncovered.file.clone()).unwrap_or_default();
             put(&mut out, &format!("  ✗ uncovered  {at}"));
@@ -1113,6 +1170,9 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         }
         for note in &step.notes {
             put(&mut out, &format!("  note: {note}"));
+        }
+        if out[start..].contains(text::CHILD_MARK) {
+            put(&mut out, &format!("  note: {}", text::CHILD_NOTE));
         }
         out.push('\n');
     }

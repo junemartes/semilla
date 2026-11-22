@@ -174,7 +174,104 @@ pub struct StepReport {
     /// 40.3). `semilla status --verbose` shows them.
     #[serde(default, skip_serializing_if = "MirMapCounts::is_empty")]
     pub mir_map: MirMapCounts,
+    /// The facts of the agent with their check results (design 54).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_facts: Vec<AgentFact>,
+    /// The gap list (design 54.4): the edits of existing code that can change the behavior and
+    /// that no agent fact states. The list is never a cause of a reject.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<Gap>,
 }
+
+/// One fact of the agent with its check result (design 54).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentFact {
+    /// The number in the step, for example `a1`.
+    pub id: String,
+    /// `same` or `change`.
+    pub kind: String,
+    /// The claim of a `same` fact (`rename OLD NEW`), or the items of a `change` fact as the
+    /// agent gave them.
+    pub text: String,
+    /// The sentences of a `change` fact. Semilla does not check them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sentences: Vec<String>,
+    /// The check result: true if the tag agrees with the edit that Semilla sees.
+    pub holds: bool,
+    /// The text of the check result: what holds, or the cause of a false fact.
+    pub result: String,
+    /// The lines below the result: a note, a candidate, or what Semilla sees in an item.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    /// The places that the fact covers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub places: Vec<String>,
+    /// The numbers of the facts that are fully below this fact. Each one has the origin `stated`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<String>,
+    /// The facts with some places below this fact: the number and the count of the places.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partial: Vec<String>,
+    /// The options that give the fact again, for the command of a rejected step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+}
+
+impl AgentFact {
+    /// The first line of the fact in an output, without the mark.
+    pub fn line(&self) -> String {
+        let sentences: String = self.sentences.iter().map(|text| format!(" {}", crate::text::quoted(text))).collect();
+        format!("{} {}: {}{sentences} ({})", self.id, self.kind, self.text, self.result)
+    }
+
+    /// The lines below the first line: the places, the notes, and the facts with some places.
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if !self.places.is_empty() {
+            lines.push(format!("places: {}", self.places.join(", ")));
+        }
+        if !self.partial.is_empty() {
+            lines.push(format!("a part of: {}", self.partial.join(", ")));
+        }
+        lines.extend(self.notes.iter().cloned());
+        lines
+    }
+}
+
+/// One line of the gap list (design 54.4): the places with one equal edit that no agent fact
+/// states.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gap {
+    /// The edit: the text of the fact without the place, or the pattern of the group.
+    pub text: String,
+    /// The places, in the order of the facts.
+    pub places: Vec<String>,
+    /// The items of the places.
+    pub items: Vec<String>,
+    /// The numbers of the facts with the edits.
+    pub facts: Vec<String>,
+    /// The option that states the line: `--same 'rewrite FROM => TO'` if one pattern covers
+    /// each place, else `--change 'ITEMS=TEXT'`.
+    pub option: String,
+}
+
+impl Gap {
+    /// The first line of the gap in an output, without the mark.
+    pub fn line(&self) -> String {
+        let places = if self.places.len() == 1 { "1 place".to_string() } else { format!("{} places", self.places.len()) };
+        format!("{places}: {} ({})", self.text, self.facts.join(", "))
+    }
+}
+
+/// The start of the line with the one command that states the gaps of a stored step.
+pub const GAP_COMMAND: &str = "to state them, add facts to the stored step (no build check runs again): semilla fact --step ";
+
+/// The start of the same line for a step that is not stored: the options go to the command of
+/// the step.
+pub const GAP_OPTIONS: &str = "to state them, add these options to the command of the step:";
+
+/// The count of the first gap lines that the output of a step and the short status show.
+pub const GAP_LIMIT: usize = 5;
 
 /// The counts of the map from the MIR elements that differ to the nodes and the edits of a
 /// step (design 40.2 and 40.3).
@@ -287,7 +384,9 @@ pub struct Fact {
     /// The part: `type`, `visibility`, `member added`, `parameter`, `return type`, …
     pub part: String,
     pub description: String,
-    /// Always `derived`: Semilla computed the fact from the diff.
+    /// The origin of the fact (design 54.5). `derived`: Semilla filled the fact in from the
+    /// diff. `stated`: Semilla computed the fact from the diff, and a checked fact of the agent
+    /// covers each place of it.
     pub status: String,
     /// The category (design 35): the kind of change that the text shows. A record with no
     /// category is a record of an older Semilla: it gives an error.
@@ -365,6 +464,10 @@ pub struct Fact {
     /// names, with the bodies. Each output shows "through: `T` (2 bodies)".
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub through: std::collections::BTreeMap<String, Vec<String>>,
+    /// True if each place of the fact is in a test or in a bench (design 54.5). The agent
+    /// writes no fact for such a place, and the gap list does not have it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test: bool,
 }
 
 /// The kinds of spotlight that one reason can cover (design 37.19): the name for a reason
@@ -666,6 +769,81 @@ impl StepReport {
             && self.uncovered.is_empty()
             && self.facts.iter().all(|fact| !fact.spotlight || fact.reason.is_some())
             && self.claims.iter().all(|claim| claim.status.is_verified())
+            && self.agent_facts.iter().all(|fact| fact.holds)
+    }
+
+    /// The items of the gap list, with no item two times.
+    pub fn gap_items(&self) -> Vec<&str> {
+        let mut items: Vec<&str> = self.gaps.iter().flat_map(|gap| gap.items.iter().map(String::as_str)).collect();
+        items.sort();
+        items.dedup();
+        items
+    }
+
+    /// The line with the count of the items that are not stated, or `None` for no gap.
+    pub fn gap_line(&self) -> Option<String> {
+        gap_count_line(self.gap_items().len(), self.gaps.iter().map(|gap| gap.places.len()).sum())
+    }
+
+    /// The lines of the gap list (design 54.4), largest group first. With `limit`, the first
+    /// lines and a count of the other lines. Each line starts with two spaces.
+    pub fn gap_lines(&self, limit: Option<usize>) -> Vec<String> {
+        let Some(head) = self.gap_line() else { return Vec::new() };
+        let mut lines = vec![format!("  {head}")];
+        let shown = limit.unwrap_or(self.gaps.len()).min(self.gaps.len());
+        for gap in &self.gaps[..shown] {
+            lines.push(format!("  ? {}", gap.line()));
+            lines.push(format!("      in: {}", gap.items.join(", ")));
+            lines.push(format!("      to state it: {}", gap.option));
+        }
+        if shown < self.gaps.len() {
+            lines.push(format!("  and {} more line(s) with {} place(s): `semilla status --verbose` shows each line", self.gaps.len() - shown, self.gaps[shown..].iter().map(|gap| gap.places.len()).sum::<usize>()));
+        }
+        lines
+    }
+
+    /// The line with the one command that adds a fact for each shown gap line to the stored step.
+    pub fn gap_command(&self, limit: Option<usize>) -> Option<String> {
+        let shown = limit.unwrap_or(self.gaps.len()).min(self.gaps.len());
+        let mut options: Vec<&str> = Vec::new();
+        for gap in &self.gaps[..shown] {
+            if !options.contains(&gap.option.as_str()) {
+                options.push(&gap.option);
+            }
+        }
+        (!options.is_empty()).then(|| format!("{GAP_COMMAND}{} {}", self.step, options.join(" ")))
+    }
+}
+
+impl Report {
+    /// The line with the count of the items that are not stated, for each step of the change
+    /// set together (design 54.4), or `None` for no gap.
+    pub fn gap_line(&self) -> Option<String> {
+        gap_count_line(self.steps.iter().map(|step| step.gap_items().len()).sum(), self.steps.iter().flat_map(|step| &step.gaps).map(|gap| gap.places.len()).sum())
+    }
+}
+
+/// The line with the count of the items that are not stated (design 54.4).
+pub fn gap_count_line(items: usize, places: usize) -> Option<String> {
+    (items > 0).then(|| format!("not stated: {items} item(s) with {places} place(s) that can change the behavior of existing code and that no fact of the agent states"))
+}
+
+/// The groups of the facts that Semilla filled in (design 48.3), in the order of the output.
+pub const FILLED_GROUPS: &[&str] = &["new and removed items", "declarations", "tests and benches", "other facts"];
+
+impl Fact {
+    /// The group of the fact in the list of the facts that Semilla filled in (design 48.3): an
+    /// index of [`FILLED_GROUPS`].
+    pub fn filled_group(&self) -> usize {
+        if self.test {
+            2
+        } else {
+            match self.category {
+                Category::Added | Category::Removed => 0,
+                Category::Declaration => 1,
+                _ => 3,
+            }
+        }
     }
 }
 

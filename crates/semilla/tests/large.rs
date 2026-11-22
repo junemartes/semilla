@@ -427,7 +427,7 @@ fn changed_tree() -> (Tree, Vec<Change>) {
     replace_one(t, &route, "/// Step 0 of the route part.", "/// Step 0 of the route part: the first mix.");
     changes.push(Change { name: "docs: a function", facts: vec![expect("docs", "no code", &["changed docs `/// Step 0 of the route part.` → `/// Step 0 of the route part: the first mix.`"])] });
     replace_one(t, &audit, "//! The audit part of the depot. The numbers have no meaning.", "//! The audit part of the depot. The numbers have no meaning at all.");
-    changes.push(Change { name: "docs: a module", facts: vec![expect("docs", "no code", &["changed docs `…numbers have no meaning.` → `…numbers have no meaning at all.`"])] });
+    changes.push(Change { name: "docs: a module", facts: vec![expect("docs", "no code", &["changed docs `//! The audit part of the depot. The numbers have no meaning.` → `//! The audit part of the depot. The numbers have no meaning at all.`"])] });
     replace_one(t, &quota, "/// A record of the quota part.", "/// One record of the quota part.");
     changes.push(Change { name: "docs: a type", facts: vec![expect("docs", "no code", &["changed docs `/// A record of the quota part.` → `/// One record of the quota part.`"])] });
     replace_one(t, &merge, "    /// Makes a record with no marks.", "    /// Makes a new record with no marks.");
@@ -595,10 +595,22 @@ struct Fact {
 }
 
 /// The facts of an output, without their numbers. A needle can change the numbers.
+/// Design 54.7: a long text of a fact is in a block below the fact line (the lines with eight
+/// spaces). The text of the fact here is the fact line and the lines of its blocks.
 fn facts(output: &str) -> Vec<Fact> {
-    let mut facts = Vec::new();
+    let mut facts: Vec<Fact> = Vec::new();
+    let mut block = false;
     for line in output.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("◆ f") else { continue };
+        let Some(rest) = line.trim_start().strip_prefix("◆ f") else {
+            block = block && line.starts_with("        ");
+            if block {
+                let fact = facts.last_mut().expect("a block is below a fact line");
+                fact.text.push('\n');
+                fact.text.push_str(line.trim_start());
+            }
+            continue;
+        };
+        block = true;
         let (_, rest) = rest.split_once(": ").expect("a fact line has its source and its text");
         let (text, class) = rest.rsplit_once(" [").expect("a fact line has its category");
         let (category, compare) = class.trim_end_matches(']').split_once(" · ").expect("a fact line has its compare result");

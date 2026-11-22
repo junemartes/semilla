@@ -107,6 +107,23 @@ impl Category {
         matches!(self, Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Attribute)
     }
 
+    /// The table of design 54.2, column 1: true if an edit with this category can change the
+    /// behavior of existing code. A `change` fact of the agent holds for an item with such an
+    /// edit. `added` and `removed` are not in the column: the code is new, or it is gone.
+    pub fn can_change_behavior(self) -> bool {
+        match self {
+            Category::Semantics | Category::Macro | Category::Text | Category::Declaration | Category::Attribute | Category::Manifest | Category::File | Category::BuildCode | Category::Indirect => true,
+            Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Added | Category::Removed => false,
+        }
+    }
+
+    /// The table of design 54.2, column 2: true if an edit with this category is in the gap
+    /// list when the agent states no fact for it. The agent writes no fact for a declaration,
+    /// an attribute, or a build input (design 48.2): Semilla shows them alone.
+    pub fn agent_states(self) -> bool {
+        matches!(self, Category::Semantics | Category::Macro | Category::Text)
+    }
+
     /// The role of the subgroup of a fact with this category (design 35.7).
     pub fn role(self) -> Role {
         match self {

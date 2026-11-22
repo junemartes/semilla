@@ -91,6 +91,9 @@
   // The title of a build code change of a step (design 28.3).
   const BUILD_CODE_SECTION = 'build code changed in this step; read this change first';
   // A folded fact has the count and the text of its sites in its description (batch 5x, part E).
+  // Design 54.7: a long code text of a fact (a block text) has the mark `⏎` at its start, at
+  // its end, and at each line end. The UI shows the full text on one line.
+  const flatText = (text) => String(text || '').replace(/`⏎([^]*?)⏎`/g, (all, inner) => '`' + inner.replace(/ ?⏎ */g, ' ') + '`').replace(/^⏎|⏎$/g, '').replace(/ ?⏎ */g, ' ');
   const folds = (fact, group) => ['site(s)', 'bodies'].some((what) => fact.description.startsWith(group.sites.length + ' ' + what + ': ' + group.edit));
   // A list of more than 8 bodies shows the count and the scope (batch 5x, part E).
   function affectedText(list) {
@@ -121,8 +124,8 @@
   // The text parts of one derived fact (design 22.5, 35): the text of the change with the
   // category and the compare result, then the details.
   function factParts(fact) {
-    const parts = ['step ' + fact.step + ': ' + fact.id + ' derived: ' + fact.description + ' [' + fact.label + ']' + (fact.mark || '')];
-    for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ') && !folds(fact, group)) parts.push(group.sites.length + ' site(s): ' + group.edit);
+    const parts = ['step ' + fact.step + ': ' + fact.id + ' ' + (fact.status || 'derived') + ': ' + flatText(fact.description) + ' [' + fact.label + ']' + (fact.mark || '')];
+    for (const group of fact.sites || []) if (!fact.description.startsWith(group.edit + ' in ') && !folds(fact, group)) parts.push(group.sites.length + ' site(s): ' + flatText(group.edit));
     // Design 35.5: the mismatch mark.
     if (fact.mismatch) parts.push(MISMATCH + (fact.affected && fact.affected.length ? ': ' + (fact.affected.length <= 8 ? fact.affected.join(', ') : affectedText(fact.affected)) : ''));
     else if (fact.affected && fact.affected.length) parts.push(affectedText(fact.affected) + (fact.other_edits ? ' (with ' + fact.other_edits + (fact.other_edits === 1 ? ' other edit' : ' other edits') + ' of this body)' : ''));
@@ -361,6 +364,7 @@
         const first = fact.build_code_change ? h('b', null, BUILD_CODE_SECTION + ': ') : null;
         return h('li', { class: fact.spotlight || fact.mismatch ? 'warning fact' : 'fact' }, '◆ ', first, parts.join('; '), fact.content ? h('pre', { class: 'diff' }, fact.content) : null);
       });
+      if (cs.gap_line) root.appendChild(h('p', { class: 'facts' }, cs.gap_line));
       root.appendChild(h('h3', {}, 'Derived facts'));
       root.appendChild(h('ul', { class: 'messages facts' }, items));
     }
@@ -436,6 +440,24 @@
       })));
     };
     factList('Build code changes: read these changes first', allFacts.filter((fact) => fact.build_code_change));
+    // Design 54.5: the facts of the agent with the check results, then the items that are not
+    // stated, then the facts of Semilla. The origin of each fact is in its line.
+    const agent = (state.changeset.agent || []).filter((view) => group.steps.includes(view.step));
+    const agentFacts = agent.flatMap((view) => view.facts.map((fact) => ({ step: view.step, fact })));
+    if (agentFacts.length) {
+      body.appendChild(h('h4', {}, 'Facts of the agent (' + agentFacts.length + '): Semilla checks the tag, not the sentence'));
+      body.appendChild(h('ul', { class: 'messages facts' }, agentFacts.map(({ step, fact }) => {
+        const lines = [].concat(fact.places && fact.places.length ? ['places: ' + fact.places.join(', ')] : [], fact.facts && fact.facts.length ? ['states: ' + fact.facts.join(', ')] : [], fact.partial && fact.partial.length ? ['a part of: ' + fact.partial.join(', ')] : [], fact.notes || []);
+        const sentences = (fact.sentences || []).map((text) => ' ' + quoted(text)).join('');
+        return h('li', { class: fact.holds ? 'fact' : 'warning fact' }, (fact.holds ? '✓ ' : '✗ ') + 'step ' + step + ': ' + fact.id + ' ' + fact.kind + ': ' + fact.text + sentences + ' (' + fact.result + ')', lines.map((line) => h('div', { class: 'why' }, line)));
+      })));
+    }
+    const gaps = agent.flatMap((view) => view.gaps.map((gap) => ({ step: view.step, gap })));
+    if (gaps.length) {
+      body.appendChild(h('h4', {}, 'Not stated (' + gaps.length + '): can change the behavior of existing code, and no fact of the agent states it'));
+      body.appendChild(h('ul', { class: 'messages facts' }, gaps.map(({ step, gap }) =>
+        h('li', { class: 'fact' }, '? step ' + step + ': ' + gap.places.length + (gap.places.length === 1 ? ' place: ' : ' places: ') + gap.text + ' (' + gap.facts.join(', ') + ')', h('div', { class: 'why' }, 'in: ' + gap.items.join(', '))))));
+    }
     factList('Derived facts', allFacts.filter((fact) => !fact.build_code_change));
     if (group.uncovered.length) {
       body.appendChild(

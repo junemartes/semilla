@@ -7,6 +7,7 @@ Semilla shows what changed in each step of your work. You edit the code with you
 ```sh
 # 1. edit the code for one intent
 semilla step "<intent>"              # check and store the step
+#    optional: state your facts with --same and --change (see "The facts that you state")
 # 2. repeat for each intent
 # 3. at the end
 git add -A && git commit -m "<message>"   # `-A` adds each new file of the steps
@@ -20,8 +21,8 @@ semilla tag                          # the final check, the result line, the git
 - `semilla tag` prints the result line: `result: accepted · 3 steps · 4 facts · 0 claims`. The line has no score, and a count of zero does not show. After `tag`, the change set is closed. The next `semilla step` starts a new change set at `HEAD`.
 - `semilla status` prints one line for each step, each problem that `semilla tag` rejects, and the result line. `--verbose` adds the facts. `semilla status COMMIT` shows a tagged commit. `semilla verify` checks the session and takes no commit.
 - `semilla review [COMMIT] --md FILE` writes the report for the reviewer (`--full` adds the change tree, the public API changes, all flow views, and all sources). Write the file outside the repository. The review of a change set with no compiled step starts no build. The review shows the stored result of the build check of each step. It does not run the build check again.
-- The options of `semilla step`: `--group "TITLE"` (steps with the same title make one group; Semilla derives the kind of a group from its facts: `rename`, `move`, or `change`), `--claim 'OP ANCHOR key=value …'` (an optional property claim), `--reason 'ANCHOR=TEXT'` (the reason for a fact in the spotlight), `--tree` (also print the change tree), `--compiled` (also run the compiled check), `--no-check` (do not run the build check). An anchor is an item path (`ledger_core::fees::charge`, `ledger_core::Account.balance`) or a position `FILE:LINE[:COLUMN]`.
-- The MCP server (`semilla mcp`) has the same `step`, `undo`, and `tag` tools. Each fact in its JSON has the field `category`. The `step` tool has the arguments `compiled` and `no_check`. The `replay_apply` tool has the argument `no_check`.
+- The options of `semilla step`: `--group "TITLE"` (steps with the same title make one group; Semilla derives the kind of a group from its facts: `rename`, `move`, or `change`), `--same 'KIND FROM TO'` and `--change 'ITEM=TEXT'` (the facts that you state, see below), `--claim 'OP ANCHOR key=value …'` (an optional property claim), `--reason 'ANCHOR=TEXT'` (the reason for a fact in the spotlight), `--tree` (also print the change tree), `--compiled` (also run the compiled check), `--no-check` (do not run the build check). An anchor is an item path (`ledger_core::fees::charge`, `ledger_core::Account.balance`) or a position `FILE:LINE[:COLUMN]`.
+- The MCP server (`semilla mcp`) has the same `step`, `fact`, `undo`, and `tag` tools. Each fact in its JSON has the fields `category` and `status` (`derived` or `stated`). The `step` tool has the arguments `same`, `change` (two lists of texts), `compiled`, and `no_check`. The `fact` tool has the arguments `same`, `change`, and `step`. A step of a replay plan has the same two keys `same` and `change`. The `replay_apply` tool has the argument `no_check`.
 - The replay (work first, steps later): run `semilla replay begin` (the work becomes the target; the working tree is `HEAD` again), `semilla replay plan` (it writes `.semilla/plan.json`), `semilla replay apply --full` (it runs all steps from the base, with the build check of each step; `--no-check` turns the build check off), and `semilla replay end`. A plan step needs an intent, its takes (`FILE`, `FILE:START-END`, `FILE:LINE`, or an item path) or edits, and optional `claims` and `reasons`. `semilla step` does not work inside a replay.
 
 ## The build check
@@ -54,7 +55,7 @@ The check uses the tool chain that cargo uses for you in the repository: the fil
 
 ## What Semilla derives
 
-You write nothing for a fact. There is one fact for each difference of the syntax tree, and the text of the fact shows the difference. A fact line has the text of the change, then the category. The category says what kind of change the text shows. It does not say if the change has an effect. The category comes from the text of the edit: the same edit always gets the same category.
+Semilla derives each fact, also when you state none. There is one fact for each difference of the syntax tree, and the text of the fact shows the difference. A fact line has the text of the change, then the category. The category says what kind of change the text shows. It does not say if the change has an effect. The category comes from the text of the edit: the same edit always gets the same category.
 
 ```text
   ◆ f1 derived: changed expression `self.cmp(rhs)` → `Ord::cmp(self, rhs)` at `semver::impls::<Prerelease as PartialOrd>::partial_cmp/tail/args[0]` [semantics]
@@ -77,18 +78,81 @@ You write nothing for a fact. There is one fact for each difference of the synta
 | `manifest`, `file`, `build code` | a key of a manifest or of a cargo or rustup configuration; a file that is not Rust code; a change of build code |
 | `text` | changed source text with no other fact |
 
-- Equal facts fold into one line: "3 site(s): changed literal `1` → `2`". Facts fold only if their full texts are equal, also after a cut mark (`…`). The same type change in many places is one fact: "type `u32` → `u64` in 5 places: …". A fact that needs a reason does not fold. The fact IDs start at `f1` in each step. Facts with the same text, category, and lines below are one line in the text output: "[import] × 3 (also f3, f5)", then "places: src/one.rs, src/two.rs, src/four.rs".
+- Equal facts fold into one line: "3 site(s): changed literal `1` → `2`". Facts fold only if their full texts are equal. The same type change in many places is one fact: "type `u32` → `u64` in 5 places: …". A fact that needs a reason does not fold. The fact IDs start at `f1` in each step. Facts with the same text, category, and lines below are one line in the text output: "[import] × 3 (also f3, f5)", then "places: src/one.rs, src/two.rs, src/four.rs".
 - Two lines under a fact ask for no reason. "! public API: …": a different crate can use the changed item. "! unsafe code: the changed body has an `unsafe` block": the edit is in a body with `unsafe` code.
 - More fact texts: "public API: a different crate can no longer use `shop_core::over` [move]"; "doc test of `shop_core::cart::Cart::sum_below` changed [docs]"; "added macro call `same!(Cart)` (makes: `impl PartialEq for Cart`) [added]"; a field fact lists its forced sites with the exact edit: "1 site(s): add `..` to the pattern (in demo::a)". A local macro with the name of a standard macro: "added macro `matches` (it replaces the standard macro `matches!`; each call in its scope: `demo::f`)". A new `cfg` twin of an item: "added `slab::Slab::capacity#1` (a twin of `slab::Slab::capacity` under `cfg(not(feature = \"std\"))`) with the body: `{ self.entries.capacity() + 0 }`"; the old item keeps its name. A statement that moves in its body is one fact, also into or out of a block or a closure: "moved statement `s += a * 2` from `shop_core::mix/S1` to `shop_core::mix/S1/then/S0` [semantics]". A moved statement is `semantics`: a move changes the order of execution. Each other change of the statement is its own fact. An extracted variable is one fact: "extracted variable `area` = `a * b + 1` (2 uses) at `demo::g/S0`" (also "inlined variable …").
 - Renames and moves: do nothing. Semilla derives a rename or a move from the syntax tree, also when the step has other changes. The pair passes when the old item is equal to the new item after the map of the names. The rename or the move is one fact, and the forced edits go under it: "moved `shop_core::over` → `shop_app::over`, with 1 `use` line(s) [move]". A forced edit is a use that names the item on each side, a `use` line that the map explains, or the `mod` line. Each other change is its own fact at the new path, with the full old and new text: "changed operator `ver.minor > minor` → `ver.minor >= minor` at `semver::eval::matches_caret_op/S3/then/S0/then/S0/value` [semantics]"; "changed path `Fault::TooMany` → `Failure::Invalid` at …"; "added `use` line: `use std::fmt;` in `shop_app`". Limit: Semilla does not resolve the names again after the map. A rename that makes a name point to a different item by shadowing is not detected in the default mode.
 - The map of a rename changes only a reference to the renamed item. A word in a string or in a comment, and a path to a different item with the same name, are not references: a change of such a place is its own fact ("changed literal `\"load\"` → `\"fetch\"` at `depot::net::name/tail` [semantics]"). A member after `.` and a name in a macro input are references by name: the syntax tree does not give their target. They go under the rename fact only if no other declaration of the workspace has the old name or the new name. Then the fact has the line "note: 2 site(s) by name (the syntax tree does not give the type of the receiver or the target of the path)". Do nothing for it. If the name is not free, each such use is its own fact: "changed method_call: `l.load()` → `l.fetch()` at `depot::net::c/tail`". A place that did not follow the rename also has a fact: "`load` still names the old item `load` (the place did not follow the rename to `fetch`; …)", or "`load` now names a different item: …". Read this fact: the step possibly does not compile, or the place now uses a different item.
-- The own tokens of a node are the tokens that are in no child. If the own tokens and a child change in one step, the fact has the two changes. A node with no block has one fact with the full old text and the full new text: "changed break: `break 'p 1` → `break 'q 2` … [semantics]". A node with a block keeps the facts of its children and has one more fact with its own tokens: "changed async: `async move {…}` → `async {…}` … [semantics]" (`…` is a child, `{…}` is a block). A comma that the grammar permits before a closing delimiter and an empty statement give no fact.
+- The own tokens of a node are the tokens that are in no child. If the own tokens and a child change in one step, the fact has the two changes. A node with no block has one fact with the full old text and the full new text: "changed break: `break 'p 1` → `break 'q 2` … [semantics]". A node with a block keeps the facts of its children and has one more fact with its own tokens: "changed async: `async move {▫}` → `async {▫}` … [semantics]". The mark `▫` is in place of a child (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact. A comma that the grammar permits before a closing delimiter and an empty statement give no fact.
 - An identifier in a pattern is a local only if it is a sure binding. A name of a constant, a static, a variant, or a struct with no named fields, and a name that starts with an upper-case letter, is a use of an item: "changed pattern `LOW` → `HIGH` at `yard::work::n2b/S0/arm[0].pat` [semantics]", not "renamed local". The words `ref` and `mut` and the sign `@` make a binding sure. A name from a `use` line in a block of a body resolves through that line, not through the module.
 - If Semilla cannot derive a pair, the two items show as removed and added, and a note gives the cause: "… show(s) as removed and added: Semilla does not derive the rename (…)". This is also the result when two name maps pass with the same count of other facts. The note does not reject the step. A swap of two names gives no rename fact: each body edit is its own fact. A pair warning (`! pair: …`) shows a removed and an added item with a similar text. It does not reject the step. If they are two different items, run the printed `semilla pair refuse` command with a reason. Two entities of a different kind with one path are not a pair: "removed `quickcheck::arbitrary::Gen` (a trait)" and "added `quickcheck::arbitrary::Gen` (a struct)". An `impl` block follows the rename of its type: its changed header is one `declaration` fact, and each member edit is its own fact.
 
+## The facts that you state
+
+You know the intent of the step. Semilla knows the edits. A fact of yours connects the two: it puts the edits of the step below one line that the reviewer reads first. **Write very simple, high-level facts.** A step usually has 0 to 3 facts.
+
+| You write | When | Semilla checks |
+|---|---|---|
+| `--change 'ITEM[,ITEM]=TEXT'` | The behavior of existing code changes on purpose. `ITEM` is a function, a type, an `impl`, a module, or a file. `TEXT` is one sentence: how the behavior changes. | Each item has an edit that can change the behavior (a body edit, a macro call, a signature, an attribute). |
+| `--same 'rename OLD NEW'` | You renamed an item. | Semilla derives the same rename from the syntax tree. |
+| `--same 'move FROM TO'` | You moved an item to a different module. | Semilla derives the same move. |
+| `--same 'rewrite FROM => TO'` | One mechanical rewrite at many places. Each side is a Rust expression. A variable (`$a`, `$b`) is in place of one expression. | Each site: the full difference of the edit is the pattern. |
+
+```sh
+semilla step "use the method for the total" \
+  --same 'rewrite $a.total => $a.total()' \
+  --change 'limit=the limit of a cart is 20 items, not 10'
+```
+
+```text
+  facts of the agent (Semilla checks the tag of each fact, not its sentence):
+  ✓ a1 same: rewrite `$a.total` => `$a.total()` (holds: 2 site(s))
+      places: shop::a/tail/lhs, shop::b/tail/lhs
+    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+        in: shop::a, shop::b
+  ✓ a2 change: `limit` "the limit of a cart is 20 items, not 10" (holds: the behavior of existing code can change in each item)
+      places: shop::limit/tail/args[0]
+    ◆ f2 stated: changed literal `10` → `20` at `shop::limit/tail/args[0]` [semantics]
+```
+
+**What you do not write.** Write no fact for a new item, a removed item, a signature, a bound, an attribute, docs, imports, layout, a manifest, or a test. Semilla shows them alone, in the groups "filled in by Semilla". Do not write the intent again as a fact. Do not write `extract` or `inline`: they have no check yet, and the command says so.
+
+**The rules of a fact.**
+
+- Semilla checks the tag, not the sentence. A `same` fact is a check of the form: it does not say that the compiled code is equal.
+- `ITEM` is a loose path: `limit`, `cart::limit`, `Cart::total`, or `src/cart.rs`. The old path and the new path are valid. If the path names two items, the message gives the candidates: write more of the path.
+- A `change` fact on an item with no edit, or with only a rename site, a move, or docs, is false. The message shows what Semilla sees in the item.
+- A `change` fact on a new or a removed item is not false, but it does nothing: "note: Semilla shows `ITEM` as added: the fact covers no existing code".
+- A `rewrite` site with one more edit is not a site. That edit keeps its own fact. A pattern with no site is false: the message shows the nearest edits and the cause.
+- A variable is one expression. It is not a type, a pattern, or a method name. For such a change, use `--change`.
+- Two forms of one change need two `rewrite` facts: `rewrite $c.total => $c.total()` and `rewrite $c.total => Cart::total($c)`.
+- A false fact rejects the step. Nothing is stored. The last line is the command with no false fact.
+
+**The gap list.** After your facts, Semilla prints each edit of existing code that can change the behavior and that no fact states. Tests, benches, new items, and removed items are not in the list. The list never rejects a step.
+
+```text
+  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: changed expression `c.total` → `c.total()` (f1)
+      in: shop::a, shop::b
+      to state it: --same 'rewrite $a.total => $a.total()'
+  ? 1 place: changed literal `10` → `20` (f2)
+      in: shop::limit
+      to state it: --change 'shop::limit=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite $a.total => $a.total()' --change 'shop::limit=TEXT'
+```
+
+- Each line is a group of equal edits, largest first. Start at the top: one fact for the first line explains the most places.
+- "to state it" is an option that passes the check. Read it before you use it. Use a `rewrite` option only if the rewrite is what you did on purpose. Write your sentence in place of `TEXT`.
+- The step output shows the first 5 lines. `semilla status --verbose` shows each line.
+- A gap is not an error. If an edit is not a part of your intent (a side effect that you did not plan), look at it. Then state it, or correct the code in the next step.
+
+**How to add a fact.** `semilla fact [--step N] --same '…' --change '…'` adds facts to a stored step (default: the last step). No build check runs again, because the code of the step is the same. The output shows each fact with its result and the new count of the gaps. A false fact stores nothing.
+
+If a step has a gap, `semilla status`, `semilla tag`, and the review show one line with the count: "not stated: 2 item(s) with 5 place(s) …". With no gap, there is no line.
+
 ## The optional claims
 
-A claim says a property that the diff does not show. If it is false, the step is rejected. A property claim (each claim of the table but `rewrite-pattern`) reads the compiled code. So it starts the compiled check for its step: "note: the claim `no-panic` is a property claim, so this step runs the compiled check (as with `--compiled`)". Each example below runs in the tests (`crates/semilla/tests/e2e.rs`).
+A claim says a property that the diff does not show. If it is false, the step is rejected. A property claim (each claim of the table) reads the compiled code. So it starts the compiled check for its step: "note: the claim `no-panic` is a property claim, so this step runs the compiled check (as with `--compiled`)". Each example below runs in the tests (`crates/semilla/tests/e2e.rs`).
 
 | Claim | Example | Result |
 |---|---|---|
@@ -96,8 +160,8 @@ A claim says a property that the diff does not show. If it is false, the step is
 | `no-panic` | `--claim 'no-panic shop_core::cart::share'` on `total / n` | `refuted: implicit panic sites: division by zero …` |
 | `no-unsafe`, `no-io` | `--claim 'no-io shop_core::cart::sum_wide'` | `verified (mir)` |
 | `calls-only` | `--claim 'calls-only shop_core::cart::save calls=["std::fs"]'` | `verified (mir)`: each call to another crate is under a path in `calls`. Calls to `core` and `alloc` are always allowed |
-| `rewrite-pattern` | `--claim 'rewrite-pattern shop_core::cart::show from="$c.total($m)" to="$c.total($m).min(9)"'` | `verified`: each site in the anchor is rewritten, and no site is missed |
 
+- The claim `rewrite-pattern` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'`. A stored session with the claim still reads.
 - The claims `rename` and `move-item` are gone. The command says: "the claim `move-item` is gone: Semilla derives each rename and each move …". `semilla ops` lists the claims. The anchor of a method of a trait impl is `<Type as Trait>::method`: `--claim 'no-unsafe shop_core::cart::<Weight as core::convert::From<Kilos>>::from'`. If a name matches no item, the message lists the nearest names.
 - An entry of `calls` matches full path segments: `std::fs` matches `std::fs::write`. If entries are missing, the claim is refuted, and the `run again:` line has the complete list. Use it only if the function must make these calls.
 - Semilla does not run tests, and it does not check what a test asserts. It does not follow a call through a trait object or a function pointer. Do not change an honest test to get `verified`. A property claim examines the local code that can run from the function. The result gives the scope: "examined: 3 local bodies (1 through trait impls, 0 drop bodies); not examined: …". Something "not examined" gives `verified (partial)`. A refuted `no-panic` claim gives the route to a site in a different item: "the route to `semver::parse::<Comparator as FromStr>::from_str`: `semver::eval::matches_req` → a generic function of a different crate → each trait impl of `semver::Comparator` → `semver::parse::<Comparator as FromStr>::from_str`".
@@ -119,7 +183,7 @@ A claim says a property that the diff does not show. If it is false, the step is
 - A mismatch mark shows when a fact of the category `rename`, `move`, `visibility`, `import`, `docs`, or `attribute` has `code different`: "! the compiled code changes: <shop_core::Account as std::fmt::Debug>::fmt". The mark asks for no reason. A derived `Debug` body shows the new name of a type or a field: then the fact is `[rename · code different]` with the mark. This is correct: do nothing. The line "! public API: the compare does not cover the code of a different crate" replaces the short form.
 - A note under a fact (`note: …`) gives a limit of its compare result, or the count of the by-name sites of a rename. A note asks for no reason, and you do nothing for it. Example of a condition that Semilla did not check: "note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::percent`)". Example of configurations that do not agree: "note: the compiled code is equal in `dev`; different in `release`" (the compare result is `code different`).
 - An equal compare that uses two build conditions or more needs each joint state. Semilla adds the missing configuration and checks the step again: "Semilla added the configurations `dev, features fast`, `release, features fast` for a joint state". The limit is 4 added feature selections. If a state is still missing, a note names it and gives the `feature-sets` entry for `[workspace.metadata.semilla]`. A step that breaks one configuration is rejected: the message names the configuration and shows the compiler error.
-- For a large project, `semilla step --compiled --fast` runs only the syntax phase and runs the compiled check in the background. Then a fact with code has the compare result `pending`. The check runs at once when the step has a claim other than `rewrite-pattern`, or a possible rename or move. `semilla status --wait` waits for it. Without a compiled check, `--fast` has no effect, and a note says so.
+- For a large project, `semilla step --compiled --fast` runs only the syntax phase and runs the compiled check in the background. Then a fact with code has the compare result `pending`. The check runs at once when the step has a claim, or a possible rename or move. `semilla status --wait` waits for it. Without a compiled check, `--fast` has no effect, and a note says so.
 - The check builds the code in a sandbox with no network. If a dependency is not in the cargo cache, run `cargo fetch`. A changed manifest needs a new `Cargo.lock` in the same step: if the command says "`Cargo.lock` does not agree with the manifests", run `cargo update --workspace --offline`.
 
 ## When a reason is necessary
@@ -139,7 +203,7 @@ A fact in the spotlight needs `--reason 'ANCHOR=TEXT'`. The reviewer reads the r
 
 - A step of the size of a pull request (500 to 800 changed lines) is a usual step. The text output puts the facts in this order: a build code change; each body edit (with `--compiled`: with `code different`); each declaration, added item, and removed item; each other code fact; the manifest facts; the docs facts, the file facts, and each other fact with no code. A fact keeps its number: `f6` can come before `f1`.
 - One reason can cover each open spotlight of one kind in the step: `--reason 'kind:KIND=TEXT'`. The `run again:` line prints a kind reason for a kind with 4 open spotlights or more: `run again: semilla step 'update to the new version' --reason 'kind:new-attribute=<why>' --reason 'kind:cfg-attribute=<why>' --reason 'kind:inactive-code=<why>'`. Each covered spotlight says so: "reason (key `kind:inactive-code`; one reason covers 26 spotlights of the kind inactive-code)". The reason of an exact key goes first. The kinds: `cfg-attribute`, `new-attribute`, `changed-attribute`, `inactive-code`, `indirect-change`, `changed-macro`, `build-input`, `build-setting`, `manifest-key`, `package-setting`, `new-dependency`, `dependency-features`, `dependency-setting`, `other-file`. A changed file of build code needs its own reason.
-- A spotlight line that is equal for a run of facts shows one time, after the last fact: "spotlight of f1 to f4: …". No output line has more than 500 characters: a cut says "`semilla status --verbose` shows the full line". A text that many facts have shows one time, at its first fact: "(the same text for f10 to f39)" or "(the same list for f10 to f39)". Each other fact says "the same text as f10" or "the same list as f10". The diff of a manifest file shows one time, after the last manifest fact of the file. A "build input" spotlight shows five causes, then "and 25 more (`semilla status --verbose` shows each cause)". A long changed text shows the changed part between cut marks (`…`).
+- A spotlight line that is equal for a run of facts shows one time, after the last fact: "spotlight of f1 to f4: …". No list line has more than 500 characters: a cut says "`semilla status --verbose` shows the full line". A fact line is never cut. A text that many facts have shows one time, at its first fact: "(the same text for f10 to f39)" or "(the same list for f10 to f39)". Each other fact says "the same text as f10" or "the same list as f10". The diff of a manifest file shows one time, after the last manifest fact of the file. A "build input" spotlight shows five causes, then "and 25 more (`semilla status --verbose` shows each cause)". A fact shows its full text. A text of more than 80 characters, or with more than one line, goes in a block below the fact line: the line has the reference `[1]`, and the block starts with `[1]`.
 - With `--compiled`, a feature that only one tree has gives no compare for its configurations, and the step does not fail: "! configurations `dev, features serde1`, `release, features serde1` are not checked: only the code before the step has the feature `serde1`. The code after the step has no such configuration: no compare". With `--compiled`, changed build code makes a cache entry of 500 MB or more for each tree. After each step, Semilla removes the entries that no stored step uses, and it keeps the 4 newest of them. `semilla cache --clean` removes each such entry: "removed 4 entries of the build code cache that no stored step uses: 4 kB freed".
 - The time to expect, from ten real crates with 300 to 1700 changed lines of Rust code: a run takes 0.1 to 0.9 s in the default mode with `--no-check`. The build check adds 0.1 to 3.6 s for the first step of a repository (cargo checks each dependency), and 0.1 to 0.6 s for each next step. With `--compiled`, the first run takes 0.5 to 23 s with an empty cache; the `cargo check` of the two trees uses most of the time. After an accepted step, `semilla review --md` takes less than 1 second.
 
@@ -153,6 +217,8 @@ A fact in the spotlight needs `--reason 'ANCHOR=TEXT'`. The reviewer reads the r
 | `not stored … the build check cannot run on this machine` | Correct the environment (the cause is in the message), or run the printed command with `--no-check`. |
 | `build check: no new failure found …`, then `! build check: the target …` | The step is stored. A target does not build, and Semilla did not check a new error in it. Read the line. If your step made the error, correct it in the next step. |
 | `build check: not run …`, `! build check of step N: …` | Nothing. The reviewer reads the line. |
+| `✗ fact a2 of the agent is false: …` | The tag does not agree with the edit that Semilla sees. Read the lines "Semilla sees: …" below the fact. Correct the fact, or run the printed command (it has no false fact). Do not change the code to make a fact true. |
+| `not stated: N item(s) …` | The step is stored. State the gaps: run the printed `semilla fact …` command with your sentence in place of each `TEXT`. Remove an option that is not true for your intent. |
 | `refuted` | The claim is false. Run the printed command (without the claim), or fix the code. |
 | `malformed` | The anchor or an argument is wrong. The message names it. A `tested-by` test must have `#[test]` and no `#[ignore]`. |
 | `the claim … is gone` | Run the command again without the claim. |

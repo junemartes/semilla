@@ -92,7 +92,7 @@ pub fn content_change(old: Option<&str>, new: Option<&str>, old_size: Option<u64
     if lines.len() > MAX_LINES {
         let more = lines.len() - MAX_LINES;
         lines.truncate(MAX_LINES);
-        lines.push(format!("… {more} more line(s)"));
+        lines.push(format!("({more} more changed line(s) of the file: `git diff` shows them)"));
     }
     if lines.iter().all(|l| l.starts_with("@@")) {
         return "only the line ends or the final line break changed".into();

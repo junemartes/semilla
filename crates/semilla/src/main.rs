@@ -81,6 +81,18 @@ enum Command {
         /// An explicit claim: `OP ANCHOR key=value …`. The anchor can be `FILE:LINE[:COLUMN]`.
         #[arg(long = "claim")]
         claims: Vec<String>,
+        /// A fact of the agent: an exact change that keeps the form. `rename OLD NEW`,
+        /// `move FROM TO`, or `rewrite FROM => TO` (a pattern of the syntax tree; `$name` is a
+        /// variable for one expression). Semilla checks it against the syntax tree. A false
+        /// fact rejects the step.
+        #[arg(long = "same")]
+        same: Vec<String>,
+        /// A fact of the agent: the behavior of existing code changes on purpose.
+        /// `ITEM[,ITEM]=TEXT`: the items (a loose path of an item, an `impl`, a module, or a
+        /// file) and one sentence. Semilla checks that each item has an edit that can change
+        /// the behavior. It does not check the sentence.
+        #[arg(long = "change")]
+        change: Vec<String>,
         /// The reason for a fact in the spotlight: `ANCHOR=TEXT`. One reason can cover each open
         /// spotlight of one kind in the step: `kind:KIND=TEXT`. The kinds: `cfg-attribute`,
         /// `new-attribute`, `changed-attribute`, `inactive-code`, `indirect-change`,
@@ -108,6 +120,22 @@ enum Command {
         /// a large project). Without `--compiled` it has no effect.
         #[arg(long)]
         fast: bool,
+    },
+    /// Add facts of the agent to a stored step: `semilla fact --same '…' --change '…'`.
+    ///
+    /// The step is the last stored step, or `--step N`. No build check runs again: the trees
+    /// of the step do not change. A false fact stores nothing.
+    #[command(display_order = 2)]
+    Fact {
+        /// The number of the stored step. The default is the last stored step.
+        #[arg(long)]
+        step: Option<usize>,
+        /// `rename OLD NEW`, `move FROM TO`, or `rewrite FROM => TO` (see `semilla step --help`).
+        #[arg(long = "same")]
+        same: Vec<String>,
+        /// `ITEM[,ITEM]=TEXT` (see `semilla step --help`).
+        #[arg(long = "change")]
+        change: Vec<String>,
     },
     /// Remove the last stored step (the working tree keeps its changes).
     #[command(display_order = 2)]
@@ -437,7 +465,7 @@ fn command_mode(command: &Command) -> buildcode::Mode {
 /// command that is not an agent command. `status` with no commit shows the session of the agent.
 /// The worker has the mode of its job.
 fn is_reviewer_command(command: &Command) -> bool {
-    !matches!(command, Command::Step { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index | Command::Cache { .. } | Command::Worker | Command::Status { commit: None, .. })
+    !matches!(command, Command::Step { .. } | Command::Fact { .. } | Command::Undo | Command::OldStep { .. } | Command::Check { .. } | Command::Tag { .. } | Command::Replay { .. } | Command::Index | Command::Cache { .. } | Command::Worker | Command::Status { commit: None, .. })
 }
 
 /// The line for the option `--trust-build-code`, which is gone (design 28.3).
@@ -516,9 +544,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, reasons, tree, compiled, no_check, fast } => {
+        Command::Step { intent, group, claims, same, change, reasons, tree, compiled, no_check, fast } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, tree, fast, compiled, no_check };
+            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, tree, fast, compiled, no_check };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
@@ -532,6 +560,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if !stored {
                 // A return runs `Drop`: it removes the temporary cache folder of `--fresh`.
+                return Ok(ExitCode::from(1));
+            }
+        }
+        Command::Fact { step, same, change } => {
+            let (text, stored) = app.add_facts(step, &same, &change)?;
+            print!("{text}");
+            if !stored {
                 return Ok(ExitCode::from(1));
             }
         }
@@ -752,10 +787,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let optional: Vec<&str> = app::optional_args(op.name).into_iter().filter(|arg| !op.args.contains(arg)).collect();
             println!("  optional: {}", optional.join(", "));
             let example_args: Vec<String> = op.args.iter().map(|a| format!("{a}=…")).collect();
-            if let Some(message) = onestep::retired_claim(op.name) {
-                println!("  {message}");
+            // A claim that is gone has no example: the message names the option to use.
+            match onestep::retired_claim(op.name) {
+                Some(message) => println!("  {message}"),
+                None => println!("  example: semilla step \"<intent>\" --claim '{} <anchor> {}'", op.name, example_args.join(" ")),
             }
-            println!("  example: semilla step \"<intent>\" --claim '{} <anchor> {}'", op.name, example_args.join(" "));
         }
         Command::Mcp => unreachable!(),
     }

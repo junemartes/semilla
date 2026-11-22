@@ -791,10 +791,8 @@ pub(crate) fn twin_text(ws: &Workspace, path: &str) -> Option<(String, Option<St
         source[at..].to_string()
     });
     let (body_text, content) = match body {
-        Some(body) if body.chars().count() > BODY_TEXT => {
-            let cut: String = body.chars().take(BODY_TEXT).collect();
-            (format!(" with the body: `{}…`", cut.trim_end()), Some(format!("+ {body}")))
-        }
+        // Design 54.7: a long body shows its full text, with its lines.
+        Some(body) if body.chars().count() > BODY_TEXT => (format!(" with the body: `{}`", semilla_syntax::tree::full(&body)), None),
         Some(body) => (format!(" with the body: `{body}`"), None),
         None => (String::new(), None),
     };

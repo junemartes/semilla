@@ -45,6 +45,12 @@ pub struct PlanStep {
     pub edits: Vec<PlanEdit>,
     #[serde(default)]
     pub claims: Vec<PlanClaim>,
+    /// The `same` facts of the agent (design 54), as for `semilla step --same`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub same: Vec<String>,
+    /// The `change` facts of the agent (design 54), as for `semilla step --change`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub change: Vec<String>,
     /// Notes of the draft for the agent (`apply` ignores them): the changes without a draft claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub todo: Vec<String>,
@@ -518,7 +524,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false, build_check: None };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default() };
             let mut map = semilla_verify::checks::renames(&rename_step, &before_ws);
             semilla_verify::sites::resolve(&mut map, &before_ws, &after_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
@@ -742,6 +748,19 @@ impl App {
                 if let Err(error) = self.claim(&claim.op, at.as_deref(), claim.args.clone()) {
                     lines.push(format!("✗ claim {} at {}: {error:#}", claim.op, at.unwrap_or_default()));
                 }
+            }
+            // Design 54: the facts of the agent of the step. The check of the change set
+            // checks each fact; a fact with a wrong form is a problem of the plan.
+            let agent = semilla_core::AgentFacts { same: step.same.clone(), change: step.change.clone() };
+            match semilla_verify::agent::check_form(&agent) {
+                Ok(()) => {
+                    let mut session = self.load_session()?;
+                    if let Some(open) = session.open.as_mut() {
+                        open.agent = agent;
+                    }
+                    self.save_session(&session)?;
+                }
+                Err(error) => lines.push(format!("✗ {error}")),
             }
             // Design 53: the build check of the new tree of the step. A step that does not build
             // is a problem of the plan. A check that cannot run is a problem too, with its cause.

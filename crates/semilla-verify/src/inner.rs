@@ -2,21 +2,19 @@
 //!
 //! A body can get a new form: the statements of a closure (`data.with_mut(|shared| { … })`)
 //! become statements of the function body. The diff then gives one "deleted statement" fact and
-//! some "added" facts. Each fact text shows only the head of a long statement, so the text does
-//! not show if a statement in the cut part changed. This module compares the inner statements of
-//! one side with the statements of the other side, and it adds the result to the fact texts.
+//! some "added" facts. The reader must not compare the long texts by eye. This module compares
+//! the inner statements of one side with the statements of the other side, and it adds the
+//! result to the fact texts.
 
 use semilla_core::Fact;
 use semilla_syntax::Edit;
 use semilla_syntax::rs::{AstNode, SyntaxNode, WalkEvent, ast};
+use semilla_syntax::tree::CHILD_MARK;
 use semilla_syntax::tt::compare_text;
 
 /// The smallest similarity of two statements (equal tokens / tokens of the longer statement)
 /// for the text "except: …".
 const SIMILAR: f64 = 0.6;
-
-/// The most inner statements that a fact text names one by one.
-const NAMES: usize = 3;
 
 /// One statement: its token text (for the compare) and its source text on one line (for the
 /// fact text).
@@ -89,14 +87,28 @@ fn similarity(a: &[String], b: &[String]) -> f64 {
     row[m] as f64 / n.max(m) as f64
 }
 
-/// The head of a statement for a fact text: `data.with_mut(…)`, or a short text.
+/// The head of a statement for a fact text: `data.with_mut(▫)`, or the first words.
 fn head(source: &str) -> String {
     let start: String = source.chars().take_while(|c| *c != '(' && *c != '{' && *c != '|').collect();
     let start = start.trim_end();
     if !start.is_empty() && start.chars().count() <= 40 && source[start.len()..].trim_start().starts_with('(') {
-        return format!("{start}(…)");
+        return format!("{start}({CHILD_MARK})");
     }
-    semilla_syntax::tree::short(source, 40)
+    // The name of a statement that has its own fact with the full text (design 54.7): the
+    // child mark is in place of the part that the own fact shows.
+    let line = semilla_syntax::tree::one_line(source);
+    if line.chars().count() <= 40 {
+        return line;
+    }
+    let mut name = String::new();
+    for word in line.split(' ') {
+        if name.chars().count() + word.chars().count() > 40 {
+            break;
+        }
+        name.push_str(word);
+        name.push(' ');
+    }
+    format!("{name}{CHILD_MARK}")
 }
 
 /// Inserts `text` in a fact description before the place (" at `…`"), or at the end.
@@ -217,11 +229,6 @@ pub(crate) fn compare(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fa
                     format!(" (the same text as an inner statement of the {gone} `{name}`)")
                 } else {
                     let (old, new) = crate::edits::sides(&inner.source, &flat[*f].1.stmt.source);
-                    if old.contains('…') || new.contains('…') {
-                        let line = format!("= the inner statement of the {gone} `{name}`: {}", inner.source);
-                        let content = facts[target].content.take().map(|content| format!("{content}\n{line}")).unwrap_or(line);
-                        facts[target].content = Some(content);
-                    }
                     if gone == "deleted" {
                         format!(" (an inner statement of the {gone} `{name}`, except: `{old}` → `{new}`)")
                     } else {
@@ -251,10 +258,8 @@ pub(crate) fn compare(edits: &[Edit], fact_of: &[Option<usize>], facts: &mut [Fa
                     parts.push(format!("{changed} with a change in {other}"));
                 }
                 if !missing.is_empty() {
-                    let mut names: Vec<String> = missing.iter().take(NAMES).map(|stmt| format!("`{}`", semilla_syntax::tree::short(&stmt.source, 40))).collect();
-                    if missing.len() > NAMES {
-                        names.push(format!("and {} more", missing.len() - NAMES));
-                    }
+                    // Design 54.7: each statement, with its full text.
+                    let names: Vec<String> = missing.iter().map(|stmt| format!("`{}`", semilla_syntax::tree::one_line(&stmt.source))).collect();
                     parts.push(format!("{} not in {other}: {}", missing.len(), names.join(", ")));
                 }
                 format!(" (inner statements: {})", parts.join("; "))

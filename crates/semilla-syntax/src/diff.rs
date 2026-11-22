@@ -931,8 +931,8 @@ fn node_source(item: &Item, node: &Node) -> Option<String> {
     source_between(item, node.start, node.end).map(|text| dedent(&text, node.start.1))
 }
 
-/// The source text of the own tokens of a node on one line (design 52.1): `…` is in place of
-/// each child, and `{…}` is in place of each block.
+/// The source text of the own tokens of a node on one line (design 52.1): `▫` is in place of
+/// each child, and `{▫}` is in place of each block.
 fn own_source(item: &Item, node: &Node) -> Option<String> {
     let mut out = String::new();
     let mut at = node.start;
@@ -941,7 +941,7 @@ fn own_source(item: &Item, node: &Node) -> Option<String> {
             return None;
         }
         out.push_str(&source_between(item, at, child.start)?);
-        out.push_str(if child.kind == "block" { "{…}" } else { crate::tree::CHILD_MARK });
+        out.push_str(if child.kind == "block" { "{▫}" } else { crate::tree::CHILD_MARK });
         at = child.end;
     }
     out.push_str(&source_between(item, at, node.end)?);
