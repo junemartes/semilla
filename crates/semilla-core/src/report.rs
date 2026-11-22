@@ -181,6 +181,194 @@ pub struct StepReport {
     /// that no agent fact states. The list is never a cause of a reject.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<Gap>,
+    /// The count of the changed lines of the line diff of the step (design 55.4): each removed
+    /// line of the old tree and each added line of the new tree. A record of an earlier version
+    /// has no cover check: the count is 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub changed_lines: usize,
+    /// The changed lines that are in the position of no fact (design 55.4). Each one is a
+    /// defect of Semilla. The list never rejects a step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_fact: Vec<Position>,
+    /// The tags of the agent (design 55.3), in the order of the command. A tag is a name for
+    /// a part of the step. It is not a fact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<Tag>,
+}
+
+/// A range of lines of one file (design 55.2): the place of an edit in the line diff.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Position {
+    pub file: String,
+    /// True for lines of the old tree (a deleted text). False for lines of the new tree.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub old: bool,
+    /// The first line, from 1.
+    pub start: usize,
+    /// The last line.
+    pub end: usize,
+}
+
+impl Position {
+    /// The text of the position: `FILE:LINE` or `FILE:START-END` for the new tree,
+    /// `FILE:-LINE` or `FILE:-START-END` for the old tree.
+    pub fn text(&self) -> String {
+        let side = if self.old { "-" } else { "" };
+        if self.start == self.end {
+            format!("{}:{side}{}", self.file, self.start)
+        } else {
+            format!("{}:{side}{}-{}", self.file, self.start, self.end)
+        }
+    }
+
+    /// The text of a list of positions, for example `a.rs:3-5, a.rs:-9, b.rs:1`.
+    pub fn list(positions: &[Position]) -> String {
+        positions.iter().map(Position::text).collect::<Vec<_>>().join(", ")
+    }
+
+    /// The count of the lines.
+    pub fn lines(&self) -> usize {
+        self.end + 1 - self.start.min(self.end + 1)
+    }
+
+    /// True if each line of `other` is a line of this position.
+    pub fn contains(&self, other: &Position) -> bool {
+        self.file == other.file && self.old == other.old && self.start <= other.start && other.end <= self.end
+    }
+
+    /// True if the two positions have a line in common.
+    pub fn meets(&self, other: &Position) -> bool {
+        self.file == other.file && self.old == other.old && self.start <= other.end && other.start <= self.end
+    }
+
+    /// The positions in order, with no line twice: ranges that touch are one range.
+    pub fn normal(mut positions: Vec<Position>) -> Vec<Position> {
+        positions.sort();
+        let mut out: Vec<Position> = Vec::new();
+        for position in positions {
+            match out.last_mut() {
+                Some(last) if last.file == position.file && last.old == position.old && position.start <= last.end + 1 => last.end = last.end.max(position.end),
+                _ => out.push(position),
+            }
+        }
+        out
+    }
+}
+
+/// One place of a tag (design 55.3): a range of lines, or a full file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub file: String,
+    /// `None`: the full file, the two trees. Else: (old tree, first line, last line).
+    pub lines: Option<(bool, usize, usize)>,
+}
+
+impl Place {
+    /// Reads `FILE`, `FILE:LINE`, `FILE:START-END`, `FILE:-LINE`, `FILE:-START-END`, and the two
+    /// forms of a hunk header of `git diff`: `FILE:-START,COUNT` and `FILE:+START,COUNT`.
+    pub fn parse(text: &str) -> Result<Place, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("a position has no text".to_string());
+        }
+        // The lines come after the last `:`, if the text after it starts like a line range.
+        let split = text.rsplit_once(':').filter(|(file, lines)| !file.is_empty() && lines.starts_with(|first: char| first.is_ascii_digit() || first == '-' || first == '+'));
+        let Some((file, lines)) = split else {
+            return Ok(Place { file: text.to_string(), lines: None });
+        };
+        let error = || format!("`{text}` is not a position: write FILE, FILE:LINE, FILE:START-END, or FILE:-START-END for lines of the old tree");
+        let (old, rest) = match lines.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, lines.strip_prefix('+').unwrap_or(lines)),
+        };
+        let number = |part: &str| part.parse::<usize>().ok().filter(|_| part.bytes().all(|byte| byte.is_ascii_digit()));
+        let (start, end) = if let Some((start, count)) = rest.split_once(',') {
+            // The form of a hunk header: the first line and the count of the lines.
+            let (start, count) = (number(start).ok_or_else(error)?, number(count).ok_or_else(error)?);
+            if count == 0 {
+                return Err(format!("`{text}` has no line: a hunk side with the count 0 has no line in this tree; use the other side of the hunk"));
+            }
+            (start, start + count - 1)
+        } else if let Some((start, end)) = rest.split_once('-') {
+            (number(start).ok_or_else(error)?, number(end).ok_or_else(error)?)
+        } else {
+            let line = number(rest).ok_or_else(error)?;
+            (line, line)
+        };
+        if start == 0 || end < start {
+            return Err(format!("`{text}` is not a line range: the first line is 1 or more, and the last line is not before the first line"));
+        }
+        Ok(Place { file: file.to_string(), lines: Some((old, start, end)) })
+    }
+
+    /// The text of the place, in the form of [`Position::text`].
+    pub fn text(&self) -> String {
+        match self.lines {
+            None => self.file.clone(),
+            Some((old, start, end)) => Position { file: self.file.clone(), old, start, end }.text(),
+        }
+    }
+
+    /// True if each line of the position is in the place.
+    pub fn contains(&self, position: &Position) -> bool {
+        self.file == position.file && self.lines.is_none_or(|(old, start, end)| old == position.old && start <= position.start && position.end <= end)
+    }
+
+    /// True if a line of the position is in the place.
+    pub fn meets(&self, position: &Position) -> bool {
+        self.file == position.file && self.lines.is_none_or(|(old, start, end)| old == position.old && start <= position.end && position.start <= end)
+    }
+}
+
+/// One tag of the agent with the facts in its lines (design 55.3). A tag makes no claim about
+/// the behavior: it groups the facts for the reader.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tag {
+    pub name: String,
+    /// The places, as [`Place::text`] prints them.
+    pub places: Vec<String>,
+    /// The numbers of the facts of Semilla whose edit is fully in the lines of the tag.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<String>,
+    /// A note for each fact with only a part of its edit in the lines of the tag.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    /// The count of the changed lines of the facts of the tag, in the two trees.
+    #[serde(default)]
+    pub lines: usize,
+    /// The error of the tag: a place with no edit in its lines. A step with such a tag is not
+    /// stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// True if the error is an error of the form: the text of the tag is not a tag, or a line
+    /// number is after the last line of the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub form: bool,
+}
+
+/// Reads the text of a `--tag` option: `PLACE[,PLACE]=NAME` (design 55.3). The name is the
+/// text after the first `=`. A `,` before a digit continues a hunk header form (`a.rs:-3,2`).
+pub fn parse_tag(text: &str) -> Result<(Vec<Place>, String), String> {
+    let Some((places, name)) = text.split_once('=') else {
+        return Err(format!("`{text}` is not a tag: write PLACE[,PLACE]=NAME, for example src/net.rs:40-88,src/cfg.rs:12=retry option"));
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(format!("the tag `{text}` has no name: write PLACE[,PLACE]=NAME"));
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for part in places.split(',') {
+        let count = !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+        match parts.last_mut() {
+            Some(last) if count && last.rsplit_once(':').is_some_and(|(_, lines)| lines.starts_with(['-', '+']) && !lines.contains(',')) => {
+                last.push(',');
+                last.push_str(part);
+            }
+            _ => parts.push(part.to_string()),
+        }
+    }
+    let places = parts.iter().map(|part| Place::parse(part)).collect::<Result<Vec<_>, _>>()?;
+    Ok((places, name.to_string()))
 }
 
 /// One fact of the agent with its check result (design 54).
@@ -215,13 +403,18 @@ pub struct AgentFact {
     /// The options that give the fact again, for the command of a rejected step.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// The width of a `change` fact (design 55.3): the count of the facts, of the items, and
+    /// of the changed lines that it covers. The result line shows it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub covers: String,
 }
 
 impl AgentFact {
     /// The first line of the fact in an output, without the mark.
     pub fn line(&self) -> String {
         let sentences: String = self.sentences.iter().map(|text| format!(" {}", crate::text::quoted(text))).collect();
-        format!("{} {}: {}{sentences} ({})", self.id, self.kind, self.text, self.result)
+        let covers = if self.covers.is_empty() { String::new() } else { format!("; {}", self.covers) };
+        format!("{} {}: {}{sentences} ({}{covers})", self.id, self.kind, self.text, self.result)
     }
 
     /// The lines below the first line: the places, the notes, and the facts with some places.
@@ -381,6 +574,11 @@ pub struct Fact {
     pub at: Option<Anchor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// The lines of the edit of the fact in the line diff of the step (design 55.2), in order.
+    /// Empty for a fact with no edit of its own (an `indirect` fact), and in a record of an
+    /// earlier version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions: Vec<Position>,
     /// The part: `type`, `visibility`, `member added`, `parameter`, `return type`, …
     pub part: String,
     pub description: String,
@@ -770,6 +968,95 @@ impl StepReport {
             && self.facts.iter().all(|fact| !fact.spotlight || fact.reason.is_some())
             && self.claims.iter().all(|claim| claim.status.is_verified())
             && self.agent_facts.iter().all(|fact| fact.holds)
+            && self.tags.iter().all(|tag| tag.error.is_none())
+    }
+
+    /// The lines of the cover check (design 55.4), without the indent. A record of an earlier
+    /// version has no cover check and no line. A changed line with no fact is a defect of
+    /// Semilla: its lines have the mark `!`.
+    pub fn cover_lines(&self) -> Vec<String> {
+        if self.changed_lines == 0 {
+            return Vec::new();
+        }
+        if self.no_fact.is_empty() {
+            return vec![format!("cover: each of the {} changed line(s) is in a fact", self.changed_lines)];
+        }
+        let missing: usize = self.no_fact.iter().map(Position::lines).sum();
+        vec![format!("! cover: {missing} of the {} changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)", self.changed_lines), format!("! changed lines with no fact: {}", Position::list(&self.no_fact))]
+    }
+
+    /// The lines of the cover check that need the reader: the lines with the mark `!`.
+    pub fn no_fact_lines(&self) -> Vec<String> {
+        self.cover_lines().into_iter().filter(|line| line.starts_with('!')).collect()
+    }
+
+    /// The fact with the number `id`.
+    pub fn fact(&self, id: &str) -> Option<&Fact> {
+        self.facts.iter().find(|fact| fact.id == id)
+    }
+
+    /// The positions of the facts with the numbers `ids`, in the normal form (design 55.2).
+    pub fn positions_of(&self, ids: &[String]) -> Vec<Position> {
+        Position::normal(ids.iter().filter_map(|id| self.fact(id)).flat_map(|fact| fact.positions.iter().cloned()).collect())
+    }
+
+    /// The text of the counts of a group of facts (design 55.3): "14 fact(s): 9 semantics, 3
+    /// rename, 2 added". The largest category is first.
+    pub fn count_text(&self, ids: &[String]) -> String {
+        let mut counts: Vec<(usize, Category)> = Vec::new();
+        for fact in ids.iter().filter_map(|id| self.fact(id)) {
+            match counts.iter_mut().find(|(_, category)| *category == fact.category) {
+                Some((count, _)) => *count += 1,
+                None => counts.push((1, fact.category)),
+            }
+        }
+        counts.sort_by_key(|(count, category)| (std::cmp::Reverse(*count), Category::ALL.iter().position(|other| other == category)));
+        let list: Vec<String> = counts.iter().map(|(count, category)| format!("{count} {}", category.name())).collect();
+        if list.is_empty() {
+            "0 fact(s)".to_string()
+        } else {
+            format!("{} fact(s): {}", ids.len(), list.join(", "))
+        }
+    }
+
+    /// The head line of a tag in an output (design 55.3), without the indent.
+    pub fn tag_head(&self, tag: &Tag) -> String {
+        format!("tag `{}` ({}): {}; {} changed line(s)", tag.name, tag.places.join(", "), self.count_text(&tag.facts), tag.lines)
+    }
+
+    /// The numbers of the facts that are in no tag, in the order of the facts.
+    pub fn not_in_a_tag(&self) -> Vec<String> {
+        self.facts.iter().filter(|fact| !self.tags.iter().any(|tag| tag.facts.contains(&fact.id))).map(|fact| fact.id.clone()).collect()
+    }
+
+    /// The count of the changed lines of the positions of the facts `ids`: each line one time.
+    pub fn line_count(&self, ids: &[String]) -> usize {
+        self.positions_of(ids).iter().map(Position::lines).sum()
+    }
+
+    /// The tags of the facts `ids` as a text for a line of the gap list (design 55.3), or
+    /// `None` for a step with no tag.
+    pub fn tags_of(&self, ids: &[String]) -> Option<String> {
+        if self.tags.is_empty() {
+            return None;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for tag in &self.tags {
+            let inside: Vec<&str> = ids.iter().filter(|id| tag.facts.contains(id)).map(String::as_str).collect();
+            if inside.len() == ids.len() {
+                parts.push(format!("`{}`", tag.name));
+            } else if !inside.is_empty() {
+                parts.push(format!("`{}` ({})", tag.name, inside.join(", ")));
+            }
+        }
+        let outside: Vec<&str> = ids.iter().filter(|id| !self.tags.iter().any(|tag| tag.facts.contains(id))).map(String::as_str).collect();
+        if outside.len() == ids.len() {
+            return Some("not in a tag".to_string());
+        }
+        if !outside.is_empty() {
+            parts.push(format!("not in a tag ({})", outside.join(", ")));
+        }
+        Some(format!("{}: {}", if parts.len() == 1 && outside.is_empty() { "tag" } else { "tags" }, parts.join(", ")))
     }
 
     /// The items of the gap list, with no item two times.
@@ -795,6 +1082,14 @@ impl StepReport {
         for gap in &self.gaps[..shown] {
             lines.push(format!("  ? {}", gap.line()));
             lines.push(format!("      in: {}", gap.items.join(", ")));
+            // Design 55.2: the lines of the edits. Design 55.3: the tags of the facts.
+            let positions = self.positions_of(&gap.facts);
+            if !positions.is_empty() {
+                lines.push(format!("      lines: {}", Position::list(&positions)));
+            }
+            if let Some(tags) = self.tags_of(&gap.facts) {
+                lines.push(format!("      {tags}"));
+            }
             lines.push(format!("      to state it: {}", gap.option));
         }
         if shown < self.gaps.len() {

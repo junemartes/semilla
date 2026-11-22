@@ -9,6 +9,7 @@
 //! - [`flow`]: flow views of functions.
 //! - [`graph`]: the workspace graph.
 
+pub mod cover;
 pub mod diff;
 pub mod doc;
 pub mod flow;

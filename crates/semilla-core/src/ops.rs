@@ -32,6 +32,9 @@ pub enum Category {
     Attribute,
     /// A doc comment or a comment.
     Docs,
+    /// Changed lines with equal tokens (design 55.5): white space, line breaks, line endings,
+    /// a comma with no meaning, or the same items in a new order.
+    Layout,
     /// A `use` line, a `mod` line, an `extern crate` line.
     Import,
     /// A macro definition or a macro call.
@@ -61,6 +64,7 @@ impl Category {
         Category::Semantics,
         Category::Attribute,
         Category::Docs,
+        Category::Layout,
         Category::Import,
         Category::Macro,
         Category::Manifest,
@@ -82,6 +86,7 @@ impl Category {
             Category::Semantics => "semantics",
             Category::Attribute => "attribute",
             Category::Docs => "docs",
+            Category::Layout => "layout",
             Category::Import => "import",
             Category::Macro => "macro",
             Category::Manifest => "manifest",
@@ -104,7 +109,7 @@ impl Category {
     /// True if the text of the change gives no cause for different compiled code. Such a fact
     /// with the result `code different` gets the mismatch mark (design 35.2).
     pub fn expects_equal(self) -> bool {
-        matches!(self, Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Attribute)
+        matches!(self, Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Layout | Category::Attribute)
     }
 
     /// The table of design 54.2, column 1: true if an edit with this category can change the
@@ -113,7 +118,7 @@ impl Category {
     pub fn can_change_behavior(self) -> bool {
         match self {
             Category::Semantics | Category::Macro | Category::Text | Category::Declaration | Category::Attribute | Category::Manifest | Category::File | Category::BuildCode | Category::Indirect => true,
-            Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Added | Category::Removed => false,
+            Category::Rename | Category::Move | Category::Visibility | Category::Import | Category::Docs | Category::Layout | Category::Added | Category::Removed => false,
         }
     }
 
@@ -129,7 +134,7 @@ impl Category {
         match self {
             Category::Rename | Category::Move | Category::Import | Category::Visibility => Role::Mechanical,
             Category::Declaration => Role::Interface,
-            Category::Docs => Role::Docs,
+            Category::Docs | Category::Layout => Role::Docs,
             Category::Manifest | Category::File | Category::BuildCode | Category::Attribute => Role::Config,
             Category::Indirect => Role::Propagation,
             Category::Added | Category::Removed | Category::Semantics | Category::Macro | Category::Text => Role::Core,
@@ -140,7 +145,7 @@ impl Category {
     /// the category with the highest weight.
     pub fn weight(self) -> u8 {
         match self {
-            Category::Docs => 0,
+            Category::Docs | Category::Layout => 0,
             Category::Rename | Category::Move | Category::Import | Category::Visibility => 1,
             Category::Attribute | Category::Manifest | Category::File | Category::Text => 2,
             Category::Declaration | Category::Added | Category::Removed | Category::Macro => 3,

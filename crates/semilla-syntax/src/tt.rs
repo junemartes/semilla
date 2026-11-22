@@ -380,7 +380,7 @@ pub(crate) fn flat_tokens(node: &SyntaxNode) -> Vec<Flat> {
     out
 }
 
-fn flat(token: &SyntaxToken, in_tree: bool) -> Option<Flat> {
+pub(crate) fn flat(token: &SyntaxToken, in_tree: bool) -> Option<Flat> {
     if token.kind().is_trivia() || token.kind() == SyntaxKind::SHEBANG {
         return None;
     }

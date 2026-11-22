@@ -66,6 +66,10 @@ pub struct Step {
     /// checks them again. A stored step with no field is a step with no agent fact.
     #[serde(default, skip_serializing_if = "AgentFacts::is_empty")]
     pub agent: AgentFacts,
+    /// The tags of the agent (design 55.3): each `--tag` text `PLACE[,PLACE]=NAME`, in the order
+    /// of the command. A tag is not a fact. A stored step with no field has no tag.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// The facts of the agent for one step (design 54): the texts of the options `--same` and
@@ -390,6 +394,7 @@ mod tests {
             compiled: false,
             build_check: None,
             agent: Default::default(),
+            tags: Vec::new(),
         };
         let set = ChangeSet { steps: vec![step], ..Default::default() };
         assert_eq!(set.next_claim_id(), "c3");

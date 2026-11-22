@@ -1336,6 +1336,17 @@ fn fact_place(model: &Model, view: &crate::summary::FactView) -> Result<usize, u
     agent.ok_or(view.fact.filled_group())
 }
 
+/// True if the step of the fact has a tag (design 55.3): the fact shows in the group of its tag.
+fn in_tagged_step(model: &Model, view: &crate::summary::FactView) -> bool {
+    model.report().steps.iter().any(|step| step.step == view.step && !step.tags.is_empty())
+}
+
+/// The lines of the cover check of the steps that need the reader (design 55.4): the changed
+/// lines with no fact.
+fn no_fact_lines(reports: &[&semilla_core::report::StepReport]) -> Vec<String> {
+    reports.iter().flat_map(|step| step.no_fact_lines().into_iter().map(move |line| format!("{} (step {})", line, step.step))).collect()
+}
+
 /// The fact items of [`fact_items`] that `keep` selects.
 fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Option<bool>, keep: &dyn Fn(&crate::summary::FactView) -> bool) -> Vec<(String, Option<String>)> {
     let mut views: Vec<&crate::summary::FactView> = model
@@ -1482,6 +1493,13 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
                 for line in agent.lines() {
                     let _ = writeln!(out, "  - {}", md_with_code(&line));
                 }
+                // Design 55.3: in a step with tags, each fact shows in the group of its tag.
+                if !step.tags.is_empty() {
+                    if !agent.facts.is_empty() {
+                        let _ = writeln!(out, "  - facts, in the groups of the tags below: {}", agent.facts.join(", "));
+                    }
+                    continue;
+                }
                 let below = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| fact_place(model, view) == Ok(index));
                 md_fact_items(out, &below, "  ");
             }
@@ -1496,7 +1514,8 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         let _ = writeln!(out, "{}\n", md(&semilla_core::report::gap_count_line(items, places).unwrap_or_default()));
         for step in &reports {
             for gap in &step.gaps {
-                let _ = writeln!(out, "- step {}: {}; in: {}", step.step, md_with_code(&gap.line()), gap.items.iter().map(|item| code(item)).collect::<Vec<_>>().join(", "));
+                let tags = step.tags_of(&gap.facts).map(|tags| format!("; {}", md_with_code(&tags))).unwrap_or_default();
+                let _ = writeln!(out, "- step {}: {}; in: {}{tags}", step.step, md_with_code(&gap.line()), gap.items.iter().map(|item| code(item)).collect::<Vec<_>>().join(", "));
             }
         }
         out.push('\n');
@@ -1504,12 +1523,45 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
         // Design 54.14: a change set with a fact of the agent always has the count line.
         let _ = writeln!(out, "{}\n", md(semilla_core::report::NO_GAP_LINE));
     }
-    let total = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view).is_err()).len();
+    // Design 55.3: the facts of a step with tags, in the groups of the tags, in the order of
+    // the agent. Then the facts of the step that are in no tag. A tag is not a fact.
+    let tags: usize = reports.iter().map(|step| step.tags.len()).sum();
+    if tags > 0 {
+        let _ = writeln!(out, "#### Tags of the agent ({tags})\n");
+        let _ = writeln!(out, "A tag is a name of the agent for a part of a step. It is not a fact, and Semilla does not check the name.\n");
+        for step in reports.iter().filter(|step| !step.tags.is_empty()) {
+            for (index, tag) in step.tags.iter().enumerate() {
+                let _ = writeln!(out, "Step {}, {}:\n", step.step, md_with_code(&step.tag_head(tag)));
+                let first = |id: &str| step.tags.iter().position(|other| other.facts.iter().any(|fact| fact == id)) == Some(index);
+                let facts = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| first(&view.fact.id));
+                md_fact_items(out, &facts, "");
+                let earlier: Vec<&str> = tag.facts.iter().filter(|id| !first(id)).map(String::as_str).collect();
+                if !earlier.is_empty() {
+                    let _ = writeln!(out, "- also in this tag, shown in a tag above: {}", earlier.join(", "));
+                }
+                for note in &tag.notes {
+                    let _ = writeln!(out, "- note: {}", md_with_code(note));
+                }
+                out.push('\n');
+            }
+            let outside = step.not_in_a_tag();
+            if !outside.is_empty() {
+                let _ = writeln!(out, "Step {}, not in a tag: {}; {} changed line(s):\n", step.step, step.count_text(&outside), step.line_count(&outside));
+                let facts = fact_items_where(model, Some(&[step.step]), full, Some(false), &|view| outside.contains(&view.fact.id));
+                md_fact_list(out, &facts);
+            }
+        }
+    }
+    // Design 55.4: a changed line with no fact is a defect of Semilla. The review shows it.
+    for line in no_fact_lines(&reports) {
+        let _ = writeln!(out, "{}\n", md_with_code(&line));
+    }
+    let total = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view).is_err() && !in_tagged_step(model, view)).len();
     if total > 0 {
         let _ = writeln!(out, "#### Derived facts ({total})\n");
     }
     for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
-        let facts = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view) == Err(group));
+        let facts = fact_items_where(model, Some(steps), full, Some(false), &|view| fact_place(model, view) == Err(group) && !in_tagged_step(model, view));
         if facts.is_empty() {
             continue;
         }
@@ -1556,6 +1608,22 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
         out.push_str("</ul>\n");
     } else if count > 0 {
         let _ = writeln!(out, "<p class=\"muted\">{}</p>", esc(semilla_core::report::NO_GAP_LINE));
+    }
+    // Design 55.3, the smallest change of the local UI: one line for each tag, with its
+    // counts and the numbers of its facts. The lists of the facts stay as they are.
+    let tags: usize = reports.iter().map(|step| step.tags.len()).sum();
+    if tags > 0 {
+        let _ = writeln!(out, "<h4>Tags of the agent ({tags})</h4>\n<p class=\"muted\">A tag is a name of the agent for a part of a step. It is not a fact.</p>\n<ul class=\"tags\">");
+        for step in &reports {
+            for tag in &step.tags {
+                let _ = writeln!(out, "<li>step {}: {}; facts: {}</li>", step.step, esc(&step.tag_head(tag)), esc(&tag.facts.join(", ")));
+            }
+        }
+        out.push_str("</ul>\n");
+    }
+    // Design 55.4: a changed line with no fact is a defect of Semilla.
+    for line in no_fact_lines(&reports) {
+        let _ = writeln!(out, "<p class=\"warn\">{}</p>", esc(&line));
     }
     let total = fact_items_where(model, Some(steps), true, Some(false), &|view| fact_place(model, view).is_err()).len();
     if total == 0 {

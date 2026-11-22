@@ -22,7 +22,7 @@ semilla tag                          # the final check, the result line, the git
 - `semilla status` prints one line for each step, each problem that `semilla tag` rejects, and the result line. `--verbose` adds the facts. `semilla status COMMIT` shows a tagged commit. `semilla verify` checks the session and takes no commit.
 - `semilla review [COMMIT] --md FILE` writes the report for the reviewer (`--full` adds the change tree, the public API changes, all flow views, and all sources). Write the file outside the repository. The review of a change set with no compiled step starts no build. The review shows the stored result of the build check of each step. It does not run the build check again.
 - The options of `semilla step`: `--group "TITLE"` (steps with the same title make one group; Semilla derives the kind of a group from its facts: `rename`, `move`, or `change`), `--same 'KIND FROM TO'` and `--change 'ITEM=TEXT'` (the facts that you state, see below), `--claim 'OP ANCHOR key=value …'` (an optional property claim), `--reason 'ANCHOR=TEXT'` (the reason for a fact in the spotlight), `--tree` (also print the change tree), `--compiled` (also run the compiled check), `--no-check` (do not run the build check). An anchor is an item path (`ledger_core::fees::charge`, `ledger_core::Account.balance`) or a position `FILE:LINE[:COLUMN]`.
-- The MCP server (`semilla mcp`) has the same `step`, `fact`, `undo`, and `tag` tools. Each fact in its JSON has the fields `category` and `status` (`derived` or `stated`). The `step` tool has the arguments `same`, `change` (two lists of texts), `compiled`, and `no_check`. The `fact` tool has the arguments `same`, `change`, and `step`. A step of a replay plan has the same two keys `same` and `change`. The `replay_apply` tool has the argument `no_check`.
+- The MCP server (`semilla mcp`) has the same `step`, `fact`, `undo`, and `tag` tools. Each fact in its JSON has the fields `category` and `status` (`derived` or `stated`). The `step` tool has the arguments `same`, `change` (two lists of texts), `compiled`, and `no_check`. The `fact` tool has the arguments `same`, `change`, and `step`. The `step` tool and the `fact` tool also have the argument `tags` (a list of texts, see "The tags of a step"). A step of a replay plan has the same two keys `same` and `change`, and the key `tag`. The `replay_apply` tool has the argument `no_check`.
 - The replay (work first, steps later): run `semilla replay begin` (the work becomes the target; the working tree is `HEAD` again), `semilla replay plan` (it writes `.semilla/plan.json`), `semilla replay apply --full` (it runs all steps from the base, with the build check of each step; `--no-check` turns the build check off), and `semilla replay end`. A plan step needs an intent, its takes (`FILE`, `FILE:START-END`, `FILE:LINE`, or an item path) or edits, and optional `claims` and `reasons`. `semilla step` does not work inside a replay.
 
 ## The build check
@@ -161,6 +161,72 @@ If a step has a gap, `semilla status`, `semilla tag`, and the review show one li
 **A changed text with two long sides** shows as one block, a line diff: "changed item: [1] (line diff: `-` old, `+` new)". Each line of the old text and of the new text is in the block.
 
 **A replay plan.** A plan step with a false fact or a refuted claim has the mark `✗` on its plan line, with the cause below it. `semilla replay apply` then has the exit code 1, with and without `--full`.
+
+## The tags of a step
+
+A tag is a name for a part of a step. Use tags to put the facts of a large step in groups that a reviewer can read one at a time. You give the part by positions in the line diff.
+
+```
+semilla step "add the retry option" \
+  --tag 'src/net.rs:40-88,src/cfg.rs:12=retry option' \
+  --tag 'src/net.rs:-120-131=old loop removed'
+```
+
+**A tag is not a fact.** A tag makes no claim, and Semilla checks no behavior for it. A tag does not replace a fact: each fact of Semilla and each gap stay in the output, and the result of the step is the same. State the intent with `--same` and `--change` as before.
+
+**How to write a position.**
+
+| You write | The lines |
+|---|---|
+| `FILE` | The full file, the old tree and the new tree. |
+| `FILE:LINE`, `FILE:START-END` | Lines of the new tree (the working tree of the step). |
+| `FILE:-LINE`, `FILE:-START-END` | Lines of the old tree. A deleted text has only such lines. |
+| `FILE:+START,COUNT`, `FILE:-START,COUNT` | One side of a hunk header, as `git diff` prints it. |
+
+Read the positions from the hunk headers of `git diff`. The header `@@ -120,12 +40,49 @@` of `src/net.rs` gives two places:
+
+- `src/net.rs:+40,49` (or `src/net.rs:40-88`): the 49 lines of the new tree.
+- `src/net.rs:-120,12` (or `src/net.rs:-120-131`): the 12 lines of the old tree.
+
+A side with the count 0 has no line (`@@ -23,0 +29,2 @@` has only new lines): use the other side. Write the two sides of a hunk if the hunk deletes a statement and adds a different statement.
+
+**The rule.** A tag has each fact whose edit is fully in its places.
+
+- A fact that changes a text has old lines and new lines. It is in the tag if all its new lines are in the places, or all its old lines are.
+- A range of the new tree does not have a deleted text. Give the old-tree place (`FILE:-LINE`) for it.
+- A fact with only a part of its lines in the tag is not in the tag. The output has a note with the full position of the fact. Make the range wider, or let the fact be in the group "not in a tag".
+- `semilla status --verbose` prints the position of each fact (the line `lines:`). The gap list of the step output prints the positions of each gap.
+
+**The errors.**
+
+- A text that is not `PLACE[,PLACE]=NAME`, or a line number after the last line of the file: exit code 2. No step is stored.
+- A place with no edit in its lines: the step is not stored (exit code 1). The message names the nearest positions with an edit: "the step has no edit in `src/net.rs:1-3`; the nearest positions with an edit: src/net.rs:11". Correct the position and run the step again.
+
+**The output with tags.** The facts show in the groups of the tags, in your order. The last group is "not in a tag". A fact of two tags shows in the first tag.
+
+```
+  tag `method calls` (crates/shop-core/src/facts.rs:11-17): 2 fact(s): 2 semantics; 6 changed line(s)
+  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+  …
+  not in a tag: 2 fact(s): 2 semantics; 4 changed line(s)
+```
+
+A gap line names its tag (`tag: NAME`, or "not in a tag"). A step with no tag has the same output as before: it has no tag line.
+
+**How to add a tag later.** `semilla fact --tag 'PLACE=NAME'` adds a tag to a stored step. No build check runs again.
+
+**The width of a `change` fact.** The result line of a `change` fact tells what it covers: "covers 2 fact(s) in 1 item(s) with 6 changed line(s)". A fact that covers many facts in many items tells the reviewer little. Write one narrow fact for each change of the behavior.
+
+## The cover check
+
+Each changed line of the diff of a step is in the position of a fact of Semilla. The step output has one line for this check:
+
+```
+  cover: each of the 18 changed line(s) is in a fact
+```
+
+- A changed line with no change of the code gets a fact too: a `layout` fact (equal tokens: white space, line breaks, the same items in a new order), a line-ending fact, or a comment fact (category `docs`).
+- A line with the mark `!` is a defect of Semilla, and not an error of yours: "! changed lines with no fact: src/a.rs:12-14". The step is stored. Read these lines in the diff, because no fact of Semilla describes them.
 
 ## The optional claims
 

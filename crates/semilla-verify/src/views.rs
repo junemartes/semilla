@@ -903,8 +903,19 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
             }
         }
     }
+    // Design 55.5, class 4: a doc test fact shows the changed doc lines. A code block of the
+    // docs is code: `cargo test` compiles and runs it.
+    if let Some(content) = fact.content.as_deref().filter(|_| fact.part == "doc test" && !fact.build_code_change) {
+        put(&format!("      {DOC_TEST_LINES}"));
+        for line in content.lines() {
+            put(&format!("        {line}"));
+        }
+    }
     (head, lines)
 }
+
+/// The line above the changed doc lines of a doc test fact (design 55.5).
+pub const DOC_TEST_LINES: &str = "changed doc lines (a code block of the docs is the code of a doc test; `-` old, `+` new):";
 
 /// True for the spotlight line of a fact.
 fn is_spotlight_line(line: &str) -> bool {
@@ -978,11 +989,13 @@ pub fn fit_line(line: &str) -> String {
 /// Returns the build code section (it comes before the claims) and the other facts. Each
 /// other entry has the place of its lines (design 54.5) and the lines: the index of the fact
 /// of the agent that the fact is below, or the group of a fact that Semilla filled in.
-fn fact_list(step: &StepReport, names: bool) -> (String, Vec<(Result<usize, usize>, String)>) {
+fn fact_list(step: &StepReport, names: bool) -> (String, Vec<Block>) {
     use text::put_line as put;
     let facts = &step.facts;
     let mut first = String::new();
-    let mut rest: Vec<(Result<usize, usize>, String)> = Vec::new();
+    let mut rest: Vec<Block> = Vec::new();
+    // Design 55.3: the group of a fact in a step with tags is its first tag.
+    let tag_of = |fact: &semilla_core::report::Fact| step.tags.iter().position(|tag| tag.facts.contains(&fact.id));
     let out = &mut first;
     // The place of a fact: below the fact of the agent that states it, or in a group.
     let place_of = |fact: &semilla_core::report::Fact| match step.agent_facts.iter().position(|agent| agent.facts.contains(&fact.id)) {
@@ -1023,6 +1036,10 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<(Result<usize, usiz
         /// The fact of the agent that the facts are below. Facts below two facts stay apart.
         agent: Option<usize>,
         place: Result<usize, usize>,
+        /// The first tag of the facts (design 55.3). Facts of different tags stay apart.
+        tag: Option<usize>,
+        /// The positions of the facts (design 55.2).
+        positions: Vec<semilla_core::Position>,
     }
     let mut shown: Vec<Line> = Vec::new();
     for (index, fact) in order.iter().enumerate() {
@@ -1040,12 +1057,14 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<(Result<usize, usiz
         }
         let place = fact.at.as_ref().map(|at| at.to_string()).or_else(|| fact.file.clone()).unwrap_or_else(|| fact.part.clone());
         let agent = place_of(fact).ok();
-        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref() && line.agent == agent) {
+        let tag = tag_of(fact);
+        match shown.iter_mut().find(|line| line.rank == rank(fact) && line.head == head && line.lines == lines && line.content == fact.content.as_deref() && line.agent == agent && line.tag == tag) {
             Some(line) => {
                 line.ids.push(&fact.id);
                 line.places.push(place);
+                line.positions.extend(fact.positions.iter().cloned());
             }
-            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines, content: fact.content.as_deref(), agent, place: place_of(fact) }),
+            None => shown.push(Line { ids: vec![&fact.id], places: vec![place], rank: rank(fact), head, lines, content: fact.content.as_deref(), agent, place: place_of(fact), tag, positions: fact.positions.clone() }),
         }
     }
     // Design 38.5: no line of the text output is longer than `LINE_MAX` characters. The merge
@@ -1065,11 +1084,56 @@ fn fact_list(step: &StepReport, names: bool) -> (String, Vec<(Result<usize, usiz
         for text in &line.lines {
             put(out, text);
         }
+        // Design 55.2: `status --verbose` shows the lines of each fact, in the form of a
+        // position of a tag. It is the last line of the fact: each other line keeps its place.
+        if names && !line.positions.is_empty() {
+            put(out, &format!("      lines: {}", semilla_core::Position::list(&semilla_core::Position::normal(line.positions.clone()))));
+        }
         if line.rank != 0 {
-            rest.push((line.place, block));
+            rest.push(Block { place: line.place, tag: line.tag, text: block });
         }
     }
     (first, rest)
+}
+
+/// The lines of one fact line of the text report, with the place of the block in the output.
+struct Block {
+    /// The fact of the agent that the facts are below, or the group of the filled facts.
+    place: Result<usize, usize>,
+    /// The first tag of the facts (design 55.3).
+    tag: Option<usize>,
+    text: String,
+}
+
+/// The lines of the tags of one step (design 55.3): each tag with its facts, in the order of
+/// the agent, then the group of the facts in no tag. `blocks` gives the lines of the facts of
+/// one tag (`None`: no tag). A step with no tag gives no line.
+pub fn tag_lines(step: &StepReport, blocks: &dyn Fn(Option<usize>) -> Vec<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if step.tags.is_empty() {
+        return lines;
+    }
+    lines.push("  tags of the agent (a tag is a name for a part of the step; it is not a fact, and Semilla does not check the name):".to_string());
+    for (index, tag) in step.tags.iter().enumerate() {
+        if let Some(error) = &tag.error {
+            lines.push(format!("  ✗ tag: {error}"));
+            continue;
+        }
+        lines.push(format!("  {}", step.tag_head(tag)));
+        lines.extend(blocks(Some(index)));
+        // A fact of two tags shows in its first tag (design 55.3).
+        let earlier: Vec<String> = tag.facts.iter().filter(|id| step.tags[..index].iter().any(|other| other.facts.contains(id))).cloned().collect();
+        if !earlier.is_empty() {
+            lines.push(format!("      also in this tag, shown in a tag above: {}", earlier.join(", ")));
+        }
+        lines.extend(tag.notes.iter().map(|note| format!("      note: {note}")));
+    }
+    let outside = step.not_in_a_tag();
+    if !outside.is_empty() {
+        lines.push(format!("  not in a tag: {}; {} changed line(s)", step.count_text(&outside), step.line_count(&outside)));
+        lines.extend(blocks(None));
+    }
+    lines
 }
 
 /// The lines of the facts of the agent and of the gap list of one step (design 54.5, parts 1
@@ -1141,17 +1205,37 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         }
         // Design 54.5, the order of the result: the facts of the agent with the facts below
         // them, the gap list, then the facts that Semilla filled in, in groups.
-        let below = |agent: usize| -> Vec<String> { facts.iter().filter(|(place, _)| *place == Ok(agent)).flat_map(|(_, block)| block.lines().map(|line| format!("  {line}"))).collect() };
+        // Design 55.3: in a step with tags, each fact shows in the group of its tag. The fact
+        // of the agent names its facts.
+        let tagged = !step.tags.is_empty();
+        let below = |agent: usize| -> Vec<String> {
+            if tagged {
+                let ids = &step.agent_facts[agent].facts;
+                return if ids.is_empty() { Vec::new() } else { vec![format!("      facts, in the groups of the tags below: {}", ids.join(", "))] };
+            }
+            facts.iter().filter(|block| block.place == Ok(agent)).flat_map(|block| block.text.lines().map(|line| format!("  {line}"))).collect()
+        };
         for line in agent_lines(step, if names { None } else { Some(semilla_core::report::GAP_LIMIT) }, &below) {
             // Design 54.7: a line with a fact text has no cut.
             text::put_line(&mut out, &line);
         }
-        for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate() {
-            let blocks: Vec<&String> = facts.iter().filter(|(place, _)| *place == Err(group)).map(|(_, block)| block).collect();
+        for (group, name) in semilla_core::report::FILLED_GROUPS.iter().enumerate().filter(|_| !tagged) {
+            let blocks: Vec<&String> = facts.iter().filter(|block| block.place == Err(group)).map(|block| &block.text).collect();
             if !blocks.is_empty() {
                 put(&mut out, &format!("  {name}, filled in by Semilla:"));
             }
             blocks.iter().for_each(|block| out.push_str(block));
+        }
+        // Design 55.3: the facts in the groups of the tags. Each fact line is the line of a
+        // step with no tag.
+        let of_tag = |tag: Option<usize>| -> Vec<String> { facts.iter().filter(|block| block.tag == tag).flat_map(|block| block.text.lines().map(str::to_string)).collect() };
+        for line in tag_lines(step, &of_tag) {
+            text::put_line(&mut out, &line);
+        }
+        // Design 55.4: the cover check of the step.
+        // The list of the lines with no fact has no cut.
+        for line in step.cover_lines() {
+            text::put_line(&mut out, &format!("  {line}"));
         }
         for uncovered in &step.uncovered {
             let at = uncovered.at.as_ref().map(|a| a.to_string()).or_else(|| uncovered.file.clone()).unwrap_or_default();

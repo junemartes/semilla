@@ -173,15 +173,12 @@ impl App {
                 (None, None) => bail!("no item {spec} in the working tree or in the target"),
             }
         } else {
-            match spec.rsplit_once(':') {
-                Some((file, lines)) if lines.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
-                    let (start, end) = match lines.split_once('-') {
-                        Some((a, b)) => (a.parse::<usize>()?, b.parse::<usize>()?),
-                        None => (lines.parse::<usize>()?, lines.parse::<usize>()?),
-                    };
-                    (file.to_string(), Box::new(move |h: &Hunk| overlaps(h.new_range(), (start, end))))
-                }
-                _ => return take_file(spec.trim_start_matches("./")),
+            // The parser of a position is the parser of a place of a tag (design 55.3).
+            let place = semilla_core::Place::parse(spec).map_err(|error| anyhow::anyhow!("{error}"))?;
+            match place.lines {
+                Some((true, ..)) => bail!("`{spec}` gives lines of the old tree; `semilla replay take` copies lines of the target: write FILE:LINE or FILE:START-END"),
+                Some((false, start, end)) => (place.file, Box::new(move |h: &Hunk| overlaps(h.new_range(), (start, end)))),
+                None => return take_file(spec.trim_start_matches("./")),
             }
         };
         let file = file.trim_start_matches("./").to_string();

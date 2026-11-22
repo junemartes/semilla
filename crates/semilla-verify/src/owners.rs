@@ -489,7 +489,7 @@ pub fn assign(input: &Input, report: &mut StepReport) {
             continue;
         }
         unknown.insert(description.clone(), report.facts.len());
-        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: body.span.as_ref().map(|(file, _)| file.clone()),
@@ -846,7 +846,7 @@ pub fn source_files(input: &Input, report: &mut StepReport) {
         };
         let anchor = Anchor::item(&name);
         let place = anchor.to_string();
-        report.facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        report.facts.push(Fact { positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", report.facts.len() + 1),
             at: Some(anchor),
             file: Some(file.clone()),
@@ -872,7 +872,7 @@ fn is_derived(name: &str, ws: &Workspace) -> bool {
     let Some((ty, trait_path)) = name.strip_prefix('<').and_then(|rest| rest.split_once(">::")).and_then(|(inner, _)| inner.split_once(" as ")) else { return false };
     let trait_name = trait_path.rsplit("::").next().unwrap_or(trait_path);
     let ty = ty.split('<').next().unwrap_or(ty);
-    ws.items.get(ty).is_some_and(|item| item.attrs.iter().any(|attr| attr.contains("derive") && crate::hints::words(attr).contains(&trait_name)))
+    ws.items.get(ty).is_some_and(|item| crate::facts::derives_trait(&item.attrs, trait_name))
 }
 
 /// Adds a body to the `affected` list of its owner.

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use semilla_core::{Anchor, Category, Fact, SiteGroup, Step};
 use semilla_syntax::rs::{AstNode, ast};
+use semilla_syntax::tt::{Delimiter, TokenStream, TokenTree};
 use semilla_syntax::{Edit, EditKind, ItemKind, Workspace};
 
 use crate::checks::BodyIndex;
@@ -326,7 +327,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
                 crate::assoc_api_note(&anchor.item, name, before, after)
             }
             _ if key.1.starts_with("trait impl") => crate::impl_api_note(&anchor.item, before, after),
-            _ if key.1 == "attribute" && descriptions.iter().any(|text| text.contains("derive added: ") || text.contains("derive removed: ")) => crate::derive_api_note(&anchor.item, before, after),
+            _ if key.1 == "attribute" && edit_indexes.iter().any(|&i| derive_changed(&edits[i])) => crate::derive_api_note(&anchor.item, before, after),
             _ => declaration_note,
         };
         // A changed `must_use` or `deprecated` attribute changes the warnings of a different
@@ -336,7 +337,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             && edit_indexes.iter().any(|&i| changed_attributes(&edits[i]).iter().any(|name| name == "must_use" || name == "deprecated"))
             && (crate::declaration_reach(before, &anchor.item) != crate::Reach::No || crate::declaration_reach(after, &anchor.item) != crate::Reach::No);
         index_of.insert(key.clone(), facts.len());
-        facts.push(Fact { build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
+        facts.push(Fact { positions: Vec::new(), build_code: None, build_code_change: false, causes: Vec::new(), reason_covers: 0, branches: None, through: Default::default(), test: false, unsafe_code: false, other_edits: 0, reason_key: None, reason_item: None,
             id: format!("f{}", facts.len() + 1),
             at: Some(anchor.clone()),
             file: first.file.clone(),
@@ -354,7 +355,7 @@ pub fn derive(step: &Step, edits: &[Edit], owners: &[Option<usize>], before: &Wo
             status: "derived".into(),
             // The category comes from the part of the declaration (design 35). The compare
             // result comes later, from the bodies of the fact.
-            category: part_category(&key.1, &descriptions),
+            category: part_category(&key.1, descriptions, edit_indexes.iter().any(|&i| derive_changed(&edits[i]))),
             compare: Default::default(),
             affected,
             spotlight: spotlight_why.is_some(),
@@ -1141,47 +1142,237 @@ fn attribute_texts(text: &str) -> Vec<String> {
     out
 }
 
-/// The description of an attribute fact. A derive fact names the traits.
-fn attribute_description(item: &str, edit: &Edit) -> String {
-    // The display texts (design 39.2): the source text of each attribute, one on each line. An
-    // attribute with the same tokens on the two sides has one display text: so a change of
-    // spaces only is no change of the list.
-    let (old_shown, new_shown) = (edit.source_before.clone().or_else(|| edit.text_before.clone()), edit.source_after.clone().or_else(|| edit.text_after.clone()));
-    let new_shown = new_shown.map(|new| {
-        let compare = |text: &Option<String>| attribute_texts(text.as_deref().unwrap_or(""));
-        align(&compare(&edit.text_before), &attribute_texts(old_shown.as_deref().unwrap_or("")), &compare(&edit.text_after), attribute_texts(&new)).map(|list| list.join("\n")).unwrap_or(new)
-    });
-    let (text_before, text_after) = (old_shown, new_shown);
-    let derives = |text: &Option<String>| -> Vec<String> {
-        text.as_deref()
-            .unwrap_or("")
-            .lines()
-            .filter(|line| line.contains("derive"))
-            .flat_map(|line| line.split(['(', ')', ',']).skip(1).map(|t| t.split_whitespace().collect::<String>()).filter(|t| !t.is_empty() && !t.starts_with(']')).collect::<Vec<_>>())
-            .collect()
-    };
-    let (old, new) = (derives(&text_before), derives(&text_after));
-    let added: Vec<&String> = new.iter().filter(|d| !old.contains(d)).collect();
-    let removed: Vec<&String> = old.iter().filter(|d| !new.contains(d)).collect();
-    let mut parts = Vec::new();
-    if !added.is_empty() {
-        parts.push(format!("derive added: {}", added.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+/// One attribute, read from its tokens (design 55.1): the path, and the elements of its list.
+struct Meta {
+    path: String,
+    /// The elements of `path(…)`, split at the commas of the list. `None` with no list.
+    list: Option<Vec<Vec<TokenTree>>>,
+}
+
+/// Reads a path and an optional list in parentheses: `derive(Clone)`, `repr(u8)`, `inline`.
+fn read_meta(trees: &[TokenTree]) -> Option<Meta> {
+    let mut path = String::new();
+    let mut at = 0;
+    while let Some(tree) = trees.get(at) {
+        match tree {
+            TokenTree::Ident(word) => path.push_str(&word.to_string()),
+            TokenTree::Punct(mark) if mark.as_char() == ':' => path.push(':'),
+            _ => break,
+        }
+        at += 1;
     }
-    if !removed.is_empty() {
-        parts.push(format!("derive removed: {}", removed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+    let path = path.trim_start_matches("::").to_string();
+    if path.is_empty() {
+        return None;
+    }
+    let list = match trees.get(at) {
+        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis => {
+            let mut elements: Vec<Vec<TokenTree>> = vec![Vec::new()];
+            for tree in group.stream() {
+                match &tree {
+                    TokenTree::Punct(mark) if mark.as_char() == ',' => elements.push(Vec::new()),
+                    _ => elements.last_mut().unwrap().push(tree),
+                }
+            }
+            elements.retain(|element| !element.is_empty());
+            Some(elements)
+        }
+        _ => None,
+    };
+    Some(Meta { path, list })
+}
+
+/// Reads one attribute text (`#[…]` or `#![…]`). `None` for a text that is not one attribute.
+fn attribute_meta(text: &str) -> Option<Meta> {
+    let stream: TokenStream = text.parse().ok()?;
+    let inner = stream.into_iter().find_map(|tree| match tree {
+        TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket => Some(group.stream()),
+        _ => None,
+    })?;
+    read_meta(&inner.into_iter().collect::<Vec<_>>())
+}
+
+/// The text of some tokens with no white space.
+fn compact_tokens(trees: &[TokenTree]) -> String {
+    trees.iter().map(|tree| tree.to_string()).collect::<String>().split_whitespace().collect()
+}
+
+/// Adds the entries of each derive list of an attribute (design 55.1): the list of a `derive`
+/// attribute, and each `derive(…)` in a `cfg_attr`. Each entry is the condition of its
+/// `cfg_attr` (empty for a plain `derive`) and the path of the trait.
+fn derive_entries(meta: &Meta, condition: &str, out: &mut Vec<(String, String)>) {
+    let Some(list) = &meta.list else { return };
+    if meta.path == "derive" {
+        out.extend(list.iter().map(|element| (condition.to_string(), compact_tokens(element))));
+    } else if meta.path == "cfg_attr" {
+        let Some((first, rest)) = list.split_first() else { return };
+        let inner = compact_tokens(first);
+        let condition = if condition.is_empty() { inner } else { format!("{condition},{inner}") };
+        for element in rest {
+            if let Some(meta) = read_meta(element) {
+                derive_entries(&meta, &condition, out);
+            }
+        }
+    }
+}
+
+/// The parts of a `cfg_attr` that are not a derive list: the condition and each other element,
+/// with no white space. `None` for an attribute with no list.
+fn no_derive(meta: &Meta) -> Option<Vec<String>> {
+    let list = meta.list.as_ref()?;
+    Some(list.iter().enumerate().filter(|(index, element)| *index == 0 || read_meta(element).is_none_or(|inner| inner.path != "derive")).map(|(_, element)| compact_tokens(element)).collect())
+}
+
+/// The entries of the derive lists of some attribute texts: see [`derive_entries`]. The source is
+/// the token tree of each attribute, not a search for the word `derive` in its text.
+pub(crate) fn derive_list(attrs: &[String]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for text in attrs.iter().flat_map(|text| attribute_texts(text)) {
+        if let Some(meta) = attribute_meta(&text) {
+            derive_entries(&meta, "", &mut out);
+        }
+    }
+    out
+}
+
+/// True if a derive list of the attribute texts names the trait (the last segment of a path).
+pub(crate) fn derives_trait(attrs: &[String], trait_name: &str) -> bool {
+    derive_list(attrs).iter().any(|(_, path)| path.rsplit("::").next() == Some(trait_name))
+}
+
+/// The entries that only `new` has and the entries that only `old` has, each with its count.
+fn list_sides<T: PartialEq + Clone>(old: &[T], new: &[T]) -> (Vec<T>, Vec<T>) {
+    let mut added = new.to_vec();
+    let mut removed = Vec::new();
+    for entry in old {
+        match added.iter().position(|other| other == entry) {
+            Some(at) => {
+                added.remove(at);
+            }
+            None => removed.push(entry.clone()),
+        }
+    }
+    (added, removed)
+}
+
+/// The change of an attribute edit (design 55.1).
+pub(crate) struct AttributeChange {
+    /// The text of the change: each attribute that the item gets, loses, or changes.
+    pub text: String,
+    /// True if a derive list (also one in a `cfg_attr`) gets or loses a trait.
+    pub derive: bool,
+}
+
+/// The change of an attribute edit (design 55.1). The rule: the text shows each attribute that
+/// the item gets, loses, or changes.
+///
+/// 1. An attribute with the same tokens on the two sides is not a change.
+/// 2. The `derive` attributes that changed show in the short form (the added and the removed
+///    traits), if a trait is added or removed.
+/// 3. Each other pair of attributes with the same path is one "changed" entry with the two
+///    full texts. Each other attribute is "added" or "removed".
+pub(crate) fn attribute_change(edit: &Edit) -> AttributeChange {
+    // The compare texts find the change. The display texts (design 39.2) show it.
+    let compare = |text: &Option<String>| attribute_texts(text.as_deref().unwrap_or(""));
+    let shown = |source: &Option<String>, compare: &[String]| {
+        let shown = attribute_texts(source.as_deref().unwrap_or(""));
+        if shown.len() == compare.len() { shown } else { compare.to_vec() }
+    };
+    let (old_compare, new_compare) = (compare(&edit.text_before), compare(&edit.text_after));
+    let (old_shown, new_shown) = (shown(&edit.source_before, &old_compare), shown(&edit.source_after, &new_compare));
+    // 1. The attributes that only one side has, in the order of the text.
+    let mut used = vec![false; new_compare.len()];
+    let mut old_only: Vec<usize> = Vec::new();
+    for (index, text) in old_compare.iter().enumerate() {
+        match (0..new_compare.len()).find(|&at| !used[at] && new_compare[at] == *text) {
+            Some(at) => used[at] = true,
+            None => old_only.push(index),
+        }
+    }
+    let mut new_only: Vec<usize> = (0..new_compare.len()).filter(|&at| !used[at]).collect();
+    let (old_metas, new_metas): (Vec<Option<Meta>>, Vec<Option<Meta>>) = (old_compare.iter().map(|text| attribute_meta(text)).collect(), new_compare.iter().map(|text| attribute_meta(text)).collect());
+    let entries = |metas: &[Option<Meta>], only: &[usize], plain: bool| {
+        let mut out = Vec::new();
+        for meta in only.iter().filter_map(|&index| metas[index].as_ref()).filter(|meta| !plain || meta.path == "derive") {
+            derive_entries(meta, "", &mut out);
+        }
+        out
+    };
+    let (each_added, each_removed) = list_sides(&entries(&old_metas, &old_only, false), &entries(&new_metas, &new_only, false));
+    let derive = !each_added.is_empty() || !each_removed.is_empty();
+    let mut parts: Vec<String> = Vec::new();
+    // 2. The short form of the plain `derive` attributes.
+    let (added, removed) = list_sides(&entries(&old_metas, &old_only, true), &entries(&new_metas, &new_only, true));
+    let names = |list: &[(String, String)]| list.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ");
+    if !added.is_empty() || !removed.is_empty() {
+        let mut short = Vec::new();
+        if !added.is_empty() {
+            short.push(format!("derive added: {}", names(&added)));
+        }
+        if !removed.is_empty() {
+            short.push(format!("derive removed: {}", names(&removed)));
+        }
+        parts.push(short.join("; "));
+        let plain = |metas: &[Option<Meta>], index: usize| metas[index].as_ref().is_some_and(|meta| meta.path == "derive");
+        old_only.retain(|&index| !plain(&old_metas, index));
+        new_only.retain(|&index| !plain(&new_metas, index));
+    }
+    // 3. The pairs with the same path, then the added and the removed attributes.
+    let (mut entries, mut removed): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    for &index in &old_only {
+        let path = old_metas[index].as_ref().map(|meta| meta.path.as_str());
+        let pair = new_only.iter().position(|&at| path.is_some() && new_metas[at].as_ref().map(|meta| meta.path.as_str()) == path);
+        match pair {
+            Some(at) => {
+                let other = new_only.remove(at);
+                // A `cfg_attr` pair that differs only in its derive lists has the short form too.
+                let (added, removed) = match (&old_metas[index], &new_metas[other]) {
+                    (Some(old), Some(new)) if old.path == "cfg_attr" && no_derive(old).is_some() && no_derive(old) == no_derive(new) => {
+                        let list = |meta: &Meta| {
+                            let mut out = Vec::new();
+                            derive_entries(meta, "", &mut out);
+                            out
+                        };
+                        list_sides(&list(old), &list(new))
+                    }
+                    _ => Default::default(),
+                };
+                let mut short = Vec::new();
+                if !added.is_empty() {
+                    short.push(format!("derive added: {}", names(&added)));
+                }
+                if !removed.is_empty() {
+                    short.push(format!("derive removed: {}", names(&removed)));
+                }
+                match short.is_empty() {
+                    true => entries.push(format!("changed {}", crate::edits::sides_text(&old_shown[index], &new_shown[other]))),
+                    false => entries.push(format!("{} (in `{}`)", short.join("; "), semilla_syntax::tree::one_line(&old_shown[index]))),
+                }
+            }
+            None => removed.push(format!("removed `{}`", semilla_syntax::tree::one_line(&old_shown[index]))),
+        }
+    }
+    entries.extend(new_only.iter().map(|&index| format!("added `{}`", semilla_syntax::tree::one_line(&new_shown[index]))));
+    entries.extend(removed);
+    if !entries.is_empty() {
+        parts.push(entries.join(", "));
     }
     if parts.is_empty() {
-        // The attributes that changed, not the full list (batch 6a, A2).
-        let (old, new) = (text_before.as_deref().unwrap_or(""), text_after.as_deref().unwrap_or(""));
-        let change = match (attribute_texts(old), attribute_texts(new)) {
-            (old, new) if old.is_empty() && !new.is_empty() => Some(new.iter().map(|entry| format!("added `{}`", semilla_syntax::tree::one_line(entry))).collect::<Vec<_>>().join(", ")),
-            (old, new) if new.is_empty() && !old.is_empty() => Some(old.iter().map(|entry| format!("removed `{}`", semilla_syntax::tree::one_line(entry))).collect::<Vec<_>>().join(", ")),
-            (old, new) => list_change(&old, &new),
-        };
-        format!("attributes of `{item}`: {}", change.unwrap_or_else(|| crate::edits::sides_text(old, new)))
-    } else {
-        format!("attributes of `{item}`: {}", parts.join("; "))
+        // No attribute reads from one of the texts: the two full texts show.
+        let side = |source: &Option<String>, text: &Option<String>| source.clone().or_else(|| text.clone()).unwrap_or_default();
+        parts.push(crate::edits::sides_text(&side(&edit.source_before, &edit.text_before), &side(&edit.source_after, &edit.text_after)));
     }
+    AttributeChange { text: parts.join("; "), derive }
+}
+
+/// True if an attribute edit adds a trait to a derive list or removes one (design 55.1).
+pub(crate) fn derive_changed(edit: &Edit) -> bool {
+    edit.kind == EditKind::Attrs && attribute_change(edit).derive
+}
+
+/// The description of an attribute fact. A derive fact names the traits.
+fn attribute_description(item: &str, edit: &Edit) -> String {
+    format!("attributes of `{item}`: {}", attribute_change(edit).text)
 }
 
 /// The text of a trait impl for a fact and for the list of the public API changes:
@@ -1208,7 +1399,7 @@ fn replaced_derive(impl_path: &str, before: &Workspace, after: &Workspace) -> Op
     let ty = ty.split('<').next().unwrap_or(ty).trim();
     let trait_name = trait_path.rsplit("::").next().unwrap_or(trait_path).split('<').next().unwrap_or(trait_path).trim();
     let path = format!("{module}::{}", ty.rsplit("::").next().unwrap_or(ty));
-    let derives = |ws: &Workspace| ws.items.get(&path).is_some_and(|item| item.attrs.iter().any(|attr| attr.contains("derive") && crate::hints::words(attr).contains(&trait_name)));
+    let derives = |ws: &Workspace| ws.items.get(&path).is_some_and(|item| derives_trait(&item.attrs, trait_name));
     (derives(before) && !derives(after)).then(|| (path.clone(), trait_name.to_string()))
 }
 
@@ -1503,11 +1694,14 @@ pub fn harmless_attribute_edit(edit: &Edit) -> bool {
 }
 
 /// The category of a type-level fact from its part (design 35, "Decided by Claude").
-pub(crate) fn part_category(part: &str, descriptions: &[String]) -> Category {
+///
+/// `derive` is true if an edit of the fact changes the traits of a derive list. The source of
+/// this is the token tree of the attributes (design 55.1), not the text of the fact.
+pub(crate) fn part_category(part: &str, descriptions: &[String], derive: bool) -> Category {
     match part {
         "visibility" => Category::Visibility,
         // A `derive` list is a part of the declaration (design 35.2).
-        "attribute" if descriptions.iter().any(|text| text.contains(": derive added: ") || text.contains("derive removed: ")) => Category::Declaration,
+        "attribute" if derive => Category::Declaration,
         "attribute" => Category::Attribute,
         "member added" | "trait impl added" | "associated added" | BODY_ADDED => Category::Added,
         "member removed" | "trait impl removed" | "associated removed" | BODY_REMOVED => Category::Removed,

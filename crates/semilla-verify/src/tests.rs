@@ -51,7 +51,7 @@ fn claim(id: &str, op: &str, at: Option<&str>, args: serde_json::Value) -> Claim
 
 fn step(claims: Vec<Claim>) -> Step {
     // The tests of the compare results need a step with the compiled check (design 50).
-    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default() }
+    Step { index: 0, intent: "test".into(), claims, tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() }
 }
 
 fn run(before: &str, after: &str, claims: Vec<Claim>, bodies: &[(&str, BodyStatus)], effect: Option<Effect>) -> StepReport {
@@ -1247,7 +1247,9 @@ fn type_changes_are_derived_facts() {
     assert_eq!(report.uncovered.len(), 0, "{:#?}", report.uncovered);
     // A body edit is never a fact.
     let (found, report) = facts(&src.replace("    f(a)\n", "    f(a) + 1\n"));
-    assert!(found.is_empty());
+    assert!(found.is_empty(), "{:#?} {:?}", placed(&report), report.no_fact);
+    // The cover check shows the two changed lines: no fact has them (design 55.4).
+    assert_eq!(semilla_core::Position::list(&report.no_fact), "src/lib.rs:10, src/lib.rs:-10");
     assert_eq!(report.uncovered.len(), 1);
 }
 
@@ -5781,8 +5783,10 @@ fn a_changed_source_text_with_no_other_fact_gets_the_net_fact() {
     assert_eq!(class, Compare::CodeEqual);
 
     // No net fact: a change of the format, a comma at the end, a known part.
-    assert_eq!(facts("pub struct Table(pub u8);", "pub struct Table(\n    pub u8,\n);"), []);
-    assert_eq!(facts("    type Item = u8;", "    type Item  =\n        u8;"), []);
+    // The one fact is the layout fact of the file (design 55.5).
+    let layout = |count: usize| vec![(format!("layout of `src/lib.rs`: {count} changed lines with equal tokens"), Compare::NoCode, false)];
+    assert_eq!(facts("pub struct Table(pub u8);", "pub struct Table(\n    pub u8,\n);"), layout(4));
+    assert_eq!(facts("    type Item = u8;", "    type Item  =\n        u8;"), layout(3));
     let (text, _, _) = one("pub fn new(x: u8) -> Table {", "pub const fn new(x: u8) -> Table {");
     assert!(text.starts_with("qualifiers of `demo::Table::new`"), "{text}");
     let (text, _, _) = one("pub struct Table(pub u8);", "pub(crate) struct Table(pub u8);");
@@ -6896,7 +6900,7 @@ fn a_fact_text_shows_the_source_text_of_a_changed_attribute() {
     assert!(!texts.iter().any(|text| text.contains("# [")), "{texts:#?}");
     // A change of the format only gives no fact.
     let report = run_derived(before, &before.replace("alias = \"version one\"", "alias=\"version one\""), &[("demo::f", equal("n0"))]);
-    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    assert!(only_layout(&report), "{:#?}", report.facts);
 }
 
 // Batch 8a fix round, D2 (design 39.2): the compare text of a token tree does not depend on
@@ -6907,7 +6911,7 @@ fn a_change_of_spaces_in_a_token_tree_gives_no_fact() {
     let spaced = "#[cfg( feature = \"std\" )]\n#[cfg_attr(feature = \"serde1\", derive(Clone,\n    Debug))]\npub struct S;\n\nmacro_rules! pick {\n    ($a:expr => $b:expr) => {\n        $a + - $b\n    };\n}\n\npub fn f(a: u32) -> u32 {\n    let v = vec![a => 1];\n    pick!(a => 1)\n}\n";
     let bodies = [("demo::f", equal("n0"))];
     let report = run_derived(base, spaced, &bodies);
-    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    assert!(only_layout(&report), "{:#?}", report.facts);
     // One token changes in each kind: one fact each, and the fact text shows the change.
     let cases = [
         ("feature = \"std\" )", "feature = \"alloc\" )", "attributes of `demo::S`"),
@@ -6919,10 +6923,13 @@ fn a_change_of_spaces_in_a_token_tree_gives_no_fact() {
     // An added attribute next to a spaced one shows only the new attribute.
     let added = spaced.replace("pub struct S;", "#[cfg_attr(doc_cfg, doc(cfg(feature = \"std\")))]\npub struct S;");
     let texts = descriptions(&run_derived(base, &added, &bodies));
-    assert_eq!(texts, ["attributes of `demo::S`: added `#[cfg_attr(doc_cfg, doc(cfg(feature = \"std\")))]`"], "{texts:#?}");
+    assert_eq!(texts[0], "attributes of `demo::S`: added `#[cfg_attr(doc_cfg, doc(cfg(feature = \"std\")))]`", "{texts:#?}");
+    assert!(texts.len() == 2 && texts[1].starts_with("layout of `src/lib.rs`: "), "{texts:#?}");
     for (from, to, start) in cases {
         let report = run_derived(base, &spaced.replace(from, to), &bodies);
-        let texts = descriptions(&report);
+        // The second fact is the layout fact of the other lines (design 55.5).
+        let texts: Vec<String> = report.facts.iter().filter(|fact| fact.category != Category::Layout).map(|fact| fact.description.clone()).collect();
+        assert_eq!(report.facts.len(), 2, "{from}: {:#?}", descriptions(&report));
         assert_eq!(texts.len(), 1, "{from}: {texts:#?}");
         assert!(texts[0].starts_with(start), "{from}: {texts:#?}");
     }
@@ -6935,9 +6942,9 @@ fn a_crlf_file_with_a_string_continuation_parses_and_a_line_end_change_gives_no_
     let lf = "/// The text.\npub fn text() -> &'static str {\n    \"enums must have an explicit \\\n     repr\"\n}\n";
     let crlf = lf.replace('\n', "\r\n");
     let report = run_derived(lf, &crlf, &[("demo::text", equal("n0"))]);
-    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    assert_eq!(descriptions(&report), ["line endings of `src/lib.rs`: LF → CRLF in 5 lines; the text of each line is equal"]);
     let report = run_derived(&crlf, lf, &[("demo::text", equal("n0"))]);
-    assert!(report.facts.is_empty(), "{:#?}", report.facts);
+    assert!(only_layout(&report), "{:#?}", report.facts);
     // A change of the literal in the CRLF file is one value fact.
     let report = run_derived(&crlf, &crlf.replace("explicit", "exact"), &[("demo::text", different(false))]);
     let texts = descriptions(&report);
@@ -8489,8 +8496,10 @@ fn a_token_with_no_meaning_in_the_grammar_gives_no_fact() {
         ("pub fn f<T>(a: T) -> T where T: Clone { a }\n", "pub fn f<T>(a: T) -> T where T: Clone, { a }\n"),
     ];
     for (before, after) in cases {
-        assert_eq!(tree_lines(before, after), Vec::<String>::new(), "{after}");
-        assert_eq!(tree_lines(after, before), Vec::<String>::new(), "{after}");
+        // The one fact is the layout fact of the file (design 55.5): no token with a meaning changes.
+        for lines in [tree_lines(before, after), tree_lines(after, before)] {
+            assert!(lines.len() == 1 && lines[0].starts_with("layout of `src/lib.rs`: ") && lines[0].ends_with(" with equal tokens [layout]"), "{after}: {lines:#?}");
+        }
     }
     // The comma after an arm is in the part of the body of the arm. A body gets a block and
     // its comma goes: the `match` has no fact of its own tokens.
@@ -8709,7 +8718,7 @@ fn a_change_fact_holds_for_an_item_with_an_edit_that_can_change_the_behavior() {
     let fact = agent_fact(&report, "a1");
     assert!(report.accepted() && fact.holds && fact.kind == "change" && fact.sentences == ["the fee is 3"], "{fact:#?}");
     assert_eq!((fact.places.as_slice(), fact.facts.as_slice()), (&["demo::a/tail/rhs".to_string()][..], &["f1".to_string()][..]));
-    assert_eq!(agent_text(&report)[1], "  ✓ a1 change: `demo::a` \"the fee is 3\" (holds: the behavior of existing code can change in each item)");
+    assert_eq!(agent_text(&report)[1], "  ✓ a1 change: `demo::a` \"the fee is 3\" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))");
     // The fact of Semilla stays, with its text and its category. Only the origin changes.
     assert_eq!(origins(&report), ["f1 stated"]);
     assert_eq!(fact_lines(&report), fact_lines(&run_agent(AGENT_BASE, &body, &[], &[])));
@@ -8938,12 +8947,15 @@ fn the_gap_list_groups_equal_edits_and_gives_the_option_that_covers_them() {
             "  not stated: 5 item(s) with 5 place(s) that can change the behavior of existing code and that no fact of the agent states",
             "  ? 3 places: `$a.total` => `$a.total()` (f1, f2)",
             "      in: demo::a, demo::b, demo::d",
+            "      lines: src/lib.rs:11, src/lib.rs:14, src/lib.rs:17, src/lib.rs:-11, src/lib.rs:-14, src/lib.rs:-17",
             "      to state it: --same 'rewrite $a.total => $a.total()'",
             "  ? 1 place: changed expression `x` → `x + 0` (f3)",
             "      in: demo::idle",
+            "      lines: src/lib.rs:20, src/lib.rs:-20",
             "      to state it: --change 'demo::idle=TEXT'",
             "  ? 1 place: changed literal `1` → `5` (f4)",
             "      in: demo::inner::a",
+            "      lines: src/lib.rs:24, src/lib.rs:-24",
             "      to state it: --change 'demo::inner::a=TEXT'",
             "  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite $a.total => $a.total()' --change 'demo::idle=TEXT' --change 'demo::inner::a=TEXT'",
         ]
@@ -9519,4 +9531,666 @@ fn the_note_of_a_macro_call_prints_only_with_no_item_candidate() {
     assert_eq!(fact.notes, ["`<Price as Scale<u16>>::scale` names no item, no module, and no file of the old tree or the new tree", "candidates: `shop::<Price as Scale<u64>>::scale`, `shop::Scale::scale`"], "{fact:#?}");
     // Negative: no call has the name. No note.
     assert!(macro_notes("<Dime as Other>::scale").is_empty());
+}
+
+// Batch 9b4, D1 (design 55.1): an attribute fact shows each attribute that the item gets,
+// loses, or changes. The source of a derive list is the token tree, not a search for a word.
+#[test]
+fn an_attribute_fact_shows_each_changed_attribute() {
+    let bodies: [(&str, BodyStatus); 0] = [];
+    let text = |before: &str, after: &str| descriptions(&run_derived(before, after, &bodies));
+    // A derive change with two other changes: the short form, then each other attribute.
+    let before = "#[derive(Clone)]\n#[repr(u8)]\n#[must_use]\npub enum Kind {\n    A,\n    B,\n}\n";
+    let after = "#[derive(Clone, Debug)]\n#[repr(u16)]\n#[non_exhaustive]\npub enum Kind {\n    A,\n    B,\n}\n";
+    let report = run_derived(before, after, &bodies);
+    let texts = descriptions(&report);
+    assert_eq!(texts.len(), 1, "{texts:#?}");
+    assert!(texts[0].starts_with("attributes of `demo::Kind`: derive added: Debug; changed `#[repr(u8)]` → `#[repr(u16)]`, added `#[non_exhaustive]`, removed `#[must_use]`"), "{texts:#?}");
+    assert_eq!(report.facts[0].category, Category::Declaration);
+    // The word `derive` in a lint name is not a derive list.
+    let before = "#[allow(clippy::derive_partial_eq_without_eq)]\n#[inline]\npub fn f() {}\n";
+    let after = "#[allow(clippy::derive_partial_eq_without_eq, unused)]\n#[inline(never)]\n#[cold]\npub fn f() {}\n";
+    let report = run_derived(before, after, &bodies);
+    let texts = descriptions(&report);
+    assert_eq!(texts, ["attributes of `demo::f`: changed `#[allow(clippy::derive_partial_eq_without_eq)]` → `#[allow(clippy::derive_partial_eq_without_eq, unused)]`, changed `#[inline]` → `#[inline(never)]`, added `#[cold]`"], "{texts:#?}");
+    assert_eq!(report.facts[0].category, Category::Attribute);
+    // An item with only a derive change keeps the short form.
+    let texts = text("#[derive(Clone, Copy)]\npub struct S;\n", "#[derive(Clone, PartialEq)]\npub struct S;\n");
+    assert_eq!(texts.len(), 1, "{texts:#?}");
+    assert!(texts[0].starts_with("attributes of `demo::S`: derive added: PartialEq; derive removed: Copy"), "{texts:#?}");
+    // A derive list in a `cfg_attr`: the short form names the attribute.
+    let report = run_derived("#[cfg_attr(feature = \"a\", derive(Clone))]\npub struct S;\n", "#[cfg_attr(feature = \"a\", derive(Clone, Debug))]\npub struct S;\n", &bodies);
+    let texts = descriptions(&report);
+    assert!(texts[0].starts_with("attributes of `demo::S`: derive added: Debug (in `#[cfg_attr(feature = \"a\", derive(Clone))]`)"), "{texts:#?}");
+    assert_eq!(report.facts[0].category, Category::Declaration);
+    // A `cfg_attr` whose condition changes too shows the two full texts.
+    let texts = text("#[cfg_attr(feature = \"a\", derive(Clone))]\npub struct S;\n", "#[cfg_attr(feature = \"b\", derive(Clone, Debug))]\npub struct S;\n");
+    assert!(texts[0].starts_with("attributes of `demo::S`: changed `#[cfg_attr(feature = \"a\", derive(Clone))]` → `#[cfg_attr(feature = \"b\", derive(Clone, Debug))]`"), "{texts:#?}");
+    // Negative: equal tokens in a new layout give no fact.
+    let texts = text("#[derive(Clone, Debug)]\n#[repr(u8)]\npub enum Kind {\n    A,\n}\n", "#[derive(Clone,\n    Debug)]\n#[repr( u8 )]\npub enum Kind {\n    A,\n}\n");
+    assert_eq!(texts, ["layout of `src/lib.rs`: 5 changed lines with equal tokens"]);
+}
+
+// Batch 9b4, D1: the word `derive` in the text of an inner attribute is not a derive list.
+#[test]
+fn the_word_derive_in_an_inner_attribute_is_no_derive_list() {
+    let before = "#![doc(html_root_url = \"https://docs.rs/derive-more/1.0\")]\npub fn f() {}\n";
+    let after = "#![doc(html_root_url = \"https://docs.rs/derive-more/2.0\")]\n#![no_std]\npub fn f() {}\n";
+    let texts = descriptions(&run_derived(before, after, &[]));
+    assert!(texts.iter().all(|text| !text.contains("derive added") && !text.contains("derive removed")), "{texts:#?}");
+    assert!(texts.iter().any(|text| text.contains("derive-more/1.0") && text.contains("derive-more/2.0")), "{texts:#?}");
+    assert!(texts.iter().any(|text| text.contains("added `#![no_std]`")), "{texts:#?}");
+}
+
+/// The facts of a report with their positions: `category | text | positions`.
+fn placed(report: &StepReport) -> Vec<String> {
+    report.facts.iter().map(|fact| format!("{} | {} | {}", fact.category.name(), fact.description, semilla_core::Position::list(&fact.positions))).collect()
+}
+
+/// True if each fact of the report is a layout fact (design 55.5): no token with a meaning
+/// changes.
+fn only_layout(report: &StepReport) -> bool {
+    !report.facts.is_empty() && report.facts.iter().all(|fact| fact.category == Category::Layout)
+}
+
+/// Runs a step with facts of the agent and tags (design 55.3).
+fn run_tagged(before: &[(&str, &str)], after: &[(&str, &str)], same: &[&str], change: &[&str], tags: &[&str]) -> StepReport {
+    let (_d1, old) = load_files(before);
+    let (_d2, new) = load_files(after);
+    let mut step = step(Vec::new());
+    step.compiled = false;
+    step.agent = semilla_core::AgentFacts { same: same.iter().map(|text| text.to_string()).collect(), change: change.iter().map(|text| text.to_string()).collect() };
+    step.tags = tags.iter().map(|text| text.to_string()).collect();
+    verify_step_with(&StepInput { step: &step, before: &old, after: &new }, &NoOracle, &NoOracle, true).report
+}
+
+const TAG_LIB_OLD: &str = "pub mod net;\npub fn f(a: u32) -> u32 {\n    let b = a + 1;\n    let c = b * 2;\n    log(c);\n    c\n}\n\npub fn log(_: u32) {}\n\npub fn g(a: u32) -> u32 {\n    a\n}\n";
+const TAG_LIB_NEW: &str = "pub mod net;\npub fn f(a: u32) -> u32 {\n    let b = a + 2;\n    let c = b * 3;\n    c\n}\n\npub fn log(_: u32) {}\n\npub fn g(a: u32) -> u32 {\n    a + 1\n}\n";
+const TAG_NET_OLD: &str = "pub fn retry() -> u32 {\n    3\n}\n";
+const TAG_NET_NEW: &str = "pub fn retry() -> u32 {\n    5\n}\n\npub fn wait() -> u32 {\n    10\n}\n";
+
+/// The step of the tests of the tags: six facts in two files (f1 and f2: two literals of
+/// `demo::f`; f3: a deleted statement of `demo::f`; f4: `demo::g`; f5: `demo::net::retry`; f6:
+/// the added `demo::net::wait`).
+fn tag_step(same: &[&str], change: &[&str], tags: &[&str]) -> StepReport {
+    let old = [("Cargo.toml", MANIFEST), ("src/lib.rs", TAG_LIB_OLD), ("src/net.rs", TAG_NET_OLD)];
+    let new = [("Cargo.toml", MANIFEST), ("src/lib.rs", TAG_LIB_NEW), ("src/net.rs", TAG_NET_NEW)];
+    run_tagged(&old, &new, same, change, tags)
+}
+
+/// The facts of each tag of a report.
+fn tag_facts(report: &StepReport) -> Vec<(String, Vec<String>)> {
+    report.tags.iter().map(|tag| (tag.name.clone(), tag.facts.clone())).collect()
+}
+
+fn text_of(report: &StepReport) -> String {
+    views::text_report_with(std::slice::from_ref(report), false)
+}
+
+/// Design 55.2 (batch 9b4, T1): each fact of Semilla has a position from the syntax tree: the
+/// lines of the new tree, and the lines of the old tree (`-`) for a changed or a deleted text.
+#[test]
+fn each_fact_has_a_position_from_the_syntax_tree() {
+    let report = tag_step(&[], &[], &[]);
+    assert_eq!(
+        placed(&report),
+        [
+            "semantics | changed literal `1` → `2` at `demo::f/S0/init/rhs` | src/lib.rs:3, src/lib.rs:-3",
+            "semantics | changed literal `2` → `3` at `demo::f/S1/init/rhs` | src/lib.rs:4, src/lib.rs:-4",
+            "semantics | deleted statement `log(c)` at `demo::f/S2` | src/lib.rs:-5",
+            "semantics | changed expression `a` → `a + 1` at `demo::g/tail` | src/lib.rs:11, src/lib.rs:-12",
+            "semantics | changed literal `3` → `5` at `demo::net::retry/tail` | src/net.rs:2, src/net.rs:-2",
+            "added | added `demo::net::wait` (the public API changes: a different crate can now use the item) | src/net.rs:4-7",
+        ]
+    );
+    // The default output of a step stays short: it has the position of each gap, and the
+    // cover line. `status --verbose` has the position of each fact.
+    let short = text_of(&report);
+    assert!(short.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n"), "{short}");
+    assert!(!short.contains("[added]\n      lines:"), "{short}");
+    let verbose = views::text_report(std::slice::from_ref(&report));
+    assert!(verbose.contains("      lines: src/net.rs:4-7\n"), "{verbose}");
+    assert!(verbose.contains("      lines: src/lib.rs:-5\n"), "{verbose}");
+    // Negative test: a step with no agent fact and no tag has no line of a tag.
+    assert!(!short.contains("tag"), "{short}");
+    // Negative test: an equal line is in no position.
+    assert!(report.facts.iter().flat_map(|fact| &fact.positions).all(|position| !(position.file == "src/lib.rs" && !position.old && position.contains(&semilla_core::Position { file: "src/lib.rs".into(), old: false, start: 8, end: 8 }))));
+}
+
+/// Design 55.4 (batch 9b4, T4): each changed line of the diff is in the position of a fact.
+/// The diff of `src/net.rs` puts the closing brace of `retry` in the added lines; Semilla
+/// takes the equal diff that agrees with the syntax tree.
+#[test]
+fn each_changed_line_of_a_step_is_in_a_fact() {
+    let report = tag_step(&[], &[], &[]);
+    assert_eq!(report.changed_lines, 13);
+    assert!(report.no_fact.is_empty(), "{:?}", report.no_fact);
+    assert_eq!(report.cover_lines(), ["cover: each of the 13 changed line(s) is in a fact"]);
+    assert!(text_of(&report).contains("\n  cover: each of the 13 changed line(s) is in a fact\n"));
+    // The count of the lines of all facts is the count of the changed lines.
+    let all: Vec<String> = report.facts.iter().map(|fact| fact.id.clone()).collect();
+    assert_eq!(report.line_count(&all), 13);
+    // Negative test: a step with no changed line has no cover line.
+    let same = run_tagged(&[("Cargo.toml", MANIFEST), ("src/lib.rs", TAG_NET_OLD)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", TAG_NET_OLD)], &[], &[], &[]);
+    assert!(same.cover_lines().is_empty());
+}
+
+/// Design 55.4: a changed line with no fact is a defect of Semilla. The check does not hide
+/// it and does not reject the step: the outputs have one marked line with the positions.
+#[test]
+fn a_changed_line_with_no_fact_gives_a_marked_line() {
+    let mut report = tag_step(&[], &[], &[]);
+    // A fact list that misses a line: the fact of `demo::g` goes away.
+    let lost: Vec<semilla_core::Position> = report.facts[3].positions.clone();
+    report.facts.remove(3);
+    report.no_fact = lost;
+    assert_eq!(
+        report.cover_lines(),
+        [
+            "! cover: 2 of the 13 changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)",
+            "! changed lines with no fact: src/lib.rs:11, src/lib.rs:-12",
+        ]
+    );
+    assert_eq!(report.no_fact_lines(), report.cover_lines());
+    assert!(report.accepted());
+    let text = text_of(&report);
+    assert!(text.contains("\n  ! changed lines with no fact: src/lib.rs:11, src/lib.rs:-12\n"), "{text}");
+    // The record keeps the list.
+    let stored: StepReport = serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+    assert_eq!(stored.no_fact, report.no_fact);
+    // The check itself finds a line with a changed token and no fact (the call `f(a)` gets a
+    // new operand in a place where the type rule gives the only fact).
+    let found = run_derived("pub struct S {\n    pub a: u32,\n}\n", "pub struct S {\n    pub a: u32,\n}\n", &[]);
+    assert!(found.no_fact.is_empty() && found.changed_lines == 0);
+}
+
+/// Design 55.5, class 1: a file with only a new layout has one `layout` fact with the count
+/// and the positions. The fact cannot change behavior and is never in the gap list.
+#[test]
+fn a_file_with_only_a_new_layout_gets_one_layout_fact() {
+    let before = "pub fn f(a: u32, b: u32) -> u32 {\n    g(a,\n      b)\n}\n\npub fn g(a: u32, b: u32) -> u32 { a + b }\n";
+    let after = "pub fn f(a: u32, b: u32) -> u32 {\n    g(a, b)\n}\n\npub fn g(a: u32, b: u32) -> u32 {\n    a + b\n}\n";
+    let report = run_derived(before, after, &[]);
+    assert_eq!(placed(&report), ["layout | layout of `src/lib.rs`: 7 changed lines with equal tokens | src/lib.rs:2, src/lib.rs:5-7, src/lib.rs:-2-3, src/lib.rs:-6"]);
+    assert!(only_layout(&report));
+    assert!(report.gaps.is_empty() && report.gap_line().is_none());
+    assert!(!report.facts[0].category.can_change_behavior());
+    assert!(report.no_fact.is_empty());
+    assert_eq!(report.changed_lines, 7);
+    // Negative test: a line with a layout change and a token change is not a layout line. The
+    // fact of the token has the line, and the step has no layout fact.
+    let after = "pub fn f(a: u32, b: u32) -> u32 {\n    g(a, b + 1)\n}\n\npub fn g(a: u32, b: u32) -> u32 { a + b }\n";
+    let report = run_derived(before, after, &[]);
+    assert_eq!(placed(&report), ["semantics | changed expression `b` → `b + 1` at `demo::f/tail/args[1]` | src/lib.rs:2, src/lib.rs:-2-3"]);
+    assert!(report.no_fact.is_empty());
+    assert_eq!(report.gap_items().len(), 1);
+}
+
+/// Design 55.5, class 2: a file that changes its line endings has one fact for the file.
+#[test]
+fn a_change_of_the_line_endings_gets_one_fact_for_the_file() {
+    let before = "pub fn f() -> u32 {\r\n    1\r\n}\r\n\r\npub fn g() -> u32 {\r\n    2\r\n}\r\n";
+    let after = before.replace("\r\n", "\n");
+    let report = run_derived(before, &after, &[]);
+    assert_eq!(placed(&report), ["layout | line endings of `src/lib.rs`: CRLF → LF in 7 lines; the text of each line is equal | src/lib.rs:1-7, src/lib.rs:-1-7"]);
+    assert!(report.gaps.is_empty() && report.no_fact.is_empty());
+    // Negative test: a token change in a file with new line endings has its own fact.
+    let after = after.replace("    2\n", "    3\n");
+    let report = run_derived(before, &after, &[]);
+    let facts = placed(&report);
+    assert_eq!(facts.len(), 2, "{facts:#?}");
+    assert!(facts.iter().any(|fact| fact.starts_with("semantics | changed literal `2` → `3`") && fact.ends_with("| src/lib.rs:6, src/lib.rs:-6")), "{facts:#?}");
+    assert!(facts.iter().any(|fact| fact.starts_with("layout | line endings of `src/lib.rs`: CRLF → LF in 6 lines")), "{facts:#?}");
+    assert!(report.no_fact.is_empty());
+}
+
+/// Design 55.5, class 3: a changed comment that is in no body gets a fact with its text.
+#[test]
+fn a_comment_between_two_items_gets_a_fact_with_its_text() {
+    let before = "pub fn f() -> u32 {\n    1\n}\n\n// Between.\n\npub fn g() -> u32 {\n    2\n}\n";
+    let after = "pub fn f() -> u32 {\n    1\n}\n\n// Between the items.\n// More.\n\npub fn g() -> u32 {\n    2\n}\n";
+    let report = run_derived(before, after, &[]);
+    assert_eq!(placed(&report), ["docs | comment in `src/lib.rs`: changed `// Between.` → `// Between the items.⏎// More.` | src/lib.rs:5-6, src/lib.rs:-5"]);
+    assert!(report.gaps.is_empty() && report.no_fact.is_empty());
+    // An added comment and a removed comment.
+    let added = run_derived("pub fn f() {}\n\npub fn g() {}\n", "pub fn f() {}\n\n// New.\npub fn g() {}\n", &[]);
+    assert_eq!(placed(&added), ["docs | comment in `src/lib.rs`: added `// New.` | src/lib.rs:3"]);
+    let removed = run_derived("pub fn f() {}\n\n// New.\npub fn g() {}\n", "pub fn f() {}\n\npub fn g() {}\n", &[]);
+    assert_eq!(placed(&removed), ["docs | comment in `src/lib.rs`: removed `// New.` | src/lib.rs:-3"]);
+    // Negative test: a comment line that becomes code is not a comment fact.
+    let code = run_derived("pub fn f() {}\n\n// pub fn h() {}\npub fn g() {}\n", "pub fn f() {}\n\npub fn h() {}\npub fn g() {}\n", &[]);
+    let facts = placed(&code);
+    assert!(facts.iter().any(|fact| fact.starts_with("added | added `demo::h`")), "{facts:#?}");
+    assert!(code.no_fact.is_empty(), "{:?} {facts:#?}", code.no_fact);
+}
+
+/// Design 55.5, class 4: a doc change shows the changed text. A change in a code block of the
+/// docs is the code of a doc test: the fact says this.
+#[test]
+fn a_doc_change_shows_its_text_and_names_the_code_of_a_doc_test() {
+    let before = "/// Adds one.\n///\n/// The value must be small. The function\n/// does not check it.\n///\n/// ```\n/// assert_eq!(demo::f(1), 2);\n/// ```\npub fn f(a: u32) -> u32 {\n    a + 1\n}\n";
+    let after = "/// Adds one.\n///\n/// The value must be small. The function\n/// does not check the value.\n///\n/// ```\n/// assert_eq!(demo::f(2), 3);\n/// ```\npub fn f(a: u32) -> u32 {\n    a + 1\n}\n";
+    let report = run_derived(before, after, &[]);
+    assert_eq!(placed(&report), ["docs | doc test of `demo::f` changed | src/lib.rs:4, src/lib.rs:7, src/lib.rs:-4, src/lib.rs:-7"]);
+    let text = text_of(&report);
+    assert!(text.contains("a code block of the docs is the code of a doc test"), "{text}");
+    assert!(text.contains("- /// assert_eq!(demo::f(1), 2);") && text.contains("+ /// assert_eq!(demo::f(2), 3);"), "{text}");
+    assert!(text.contains("+ /// does not check the value."), "{text}");
+    assert!(report.no_fact.is_empty());
+    // Negative test: a doc change with an equal code block is no change of a doc test.
+    let after = before.replace("does not check it.", "does not check the value.");
+    let report = run_derived(before, &after, &[]);
+    let facts = placed(&report);
+    assert_eq!(facts.len(), 1, "{facts:#?}");
+    assert!(facts[0].starts_with("docs | ") && !facts[0].contains("doc test") && facts[0].ends_with("| src/lib.rs:4, src/lib.rs:-4"), "{facts:#?}");
+    let text = text_of(&report);
+    assert!(!text.contains("the code of a doc test"), "{text}");
+    assert!(text.contains("does not check the value."), "{text}");
+}
+
+/// Design 55.5: the other classes of a changed line: a file that Semilla does not parse, a
+/// manifest, a macro input, a `cfg` line, a deleted statement, an added item.
+#[test]
+fn each_other_class_of_a_changed_line_is_in_a_fact() {
+    let report = run_derived_files(&[("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"), ("src/lib.rs", "pub fn f() {}\n"), ("README.md", "one\ntwo\n")], &[("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.2.0\"\nedition = \"2021\"\n"), ("src/lib.rs", "pub fn f() {}\n"), ("README.md", "one\nthree\n")], &[]);
+    assert_eq!(placed(&report), ["manifest | Cargo.toml: package.version \"0.1.0\" → \"0.2.0\" | Cargo.toml:3, Cargo.toml:-3", "file | README.md: changed | README.md:2, README.md:-2"]);
+    assert!(report.no_fact.is_empty());
+    let before = "macro_rules! m {\n    ($a:expr) => { $a + 1 };\n}\n#[cfg(unix)]\npub fn f(a: u32) -> u32 {\n    let b = a * 2;\n    let c = m!(b);\n    println!(\"{}\", c);\n    c\n}\npub mod inner {\n    pub fn g() {}\n}\n";
+    let after = "macro_rules! m {\n    ($a:expr) => { $a + 2 };\n}\n#[cfg(windows)]\npub fn f(a: u32) -> u32 {\n    let c = m!(a * 2);\n    println!(\"{} {}\", c, a);\n    c\n}\npub mod inner {\n    pub fn g() {}\n    pub fn h() {}\n}\npub mod other;\n";
+    let report = run_derived(before, after, &[]);
+    let facts = placed(&report);
+    for expected in [
+        "attribute | attributes of `demo::f`: changed `#[cfg(unix)]` → `#[cfg(windows)]` | src/lib.rs:4, src/lib.rs:-4",
+        "macro | replace macro input `m!(b)` → `m!(a * 2)` at `demo::f/S1/init` | src/lib.rs:6, src/lib.rs:-7",
+        "semantics | deleted statement `let b = a * 2;` at `demo::f/S0` | src/lib.rs:-6",
+        "declaration | changed macro `m`: `macro_rules! m { ($a:expr) => { $a + 1 }; }` → `macro_rules! m { ($a:expr) => { $a + 2 }; }` | src/lib.rs:2, src/lib.rs:-2",
+        "added | added `demo::inner::h` (the public API changes: a different crate can now use the item) | src/lib.rs:12",
+        "added | added `demo::other` (the public API changes: a different crate can now use the item) | src/lib.rs:14",
+    ] {
+        assert!(facts.iter().any(|fact| fact == expected), "{expected}\n{facts:#?}");
+    }
+    assert!(report.no_fact.is_empty());
+    assert_eq!(report.changed_lines, 11);
+}
+
+/// Design 55.2 and 55.3: a record of a step from before batch 9b4 has no position, no tag, and
+/// no cover count. It reads, and its outputs have no new line.
+#[test]
+fn an_old_record_with_no_position_and_no_tag_reads() {
+    let report = tag_step(&[], &[], &[]);
+    let mut value = serde_json::to_value(&report).unwrap();
+    let object = value.as_object_mut().unwrap();
+    for key in ["changed_lines", "no_fact", "tags"] {
+        object.remove(key);
+    }
+    for fact in object.get_mut("facts").unwrap().as_array_mut().unwrap() {
+        assert!(fact.as_object_mut().unwrap().remove("positions").is_some());
+    }
+    let old: StepReport = serde_json::from_value(value).unwrap();
+    assert!(old.facts.iter().all(|fact| fact.positions.is_empty()));
+    assert!(old.tags.is_empty() && old.no_fact.is_empty() && old.changed_lines == 0);
+    assert_eq!(descriptions(&old), descriptions(&report));
+    let text = views::text_report(std::slice::from_ref(&old));
+    assert!(!text.contains("lines:") && !text.contains("cover:") && !text.contains("tag"), "{text}");
+    // An old record of a step has no key `tags`.
+    let step: Step = serde_json::from_value(serde_json::json!({"index": 0, "intent": "x", "claims": [], "tree_before": "a", "tree_after": "b"})).unwrap();
+    assert!(step.tags.is_empty());
+}
+
+/// Design 55.3 (batch 9b4, T2): a tag has each fact whose edit is fully in its lines.
+#[test]
+fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
+    // One of the two literal edits of one function.
+    let report = tag_step(&[], &[], &["src/lib.rs:3=first edit"]);
+    assert_eq!(tag_facts(&report), [("first edit".to_string(), vec!["f1".to_string()])]);
+    assert!(report.accepted());
+    let text = text_of(&report);
+    assert!(text.contains("  tag `first edit` (src/lib.rs:3): 1 fact(s): 1 semantics; 2 changed line(s)\n  ◆ f1 derived: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n  not in a tag: 5 fact(s): 4 semantics, 1 added; 11 changed line(s)\n"), "{text}");
+    // The line of a gap names the tag of its facts.
+    assert!(text.contains("      in: demo::f\n      lines: src/lib.rs:3-4, src/lib.rs:-3-5\n      tags: `first edit` (f1), not in a tag (f2, f3)\n"), "{text}");
+    assert!(text.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n      not in a tag\n"), "{text}");
+    // Two positions in two files, and a full file. The two tags have the fact f5: it shows
+    // in the first tag, and the second tag names it. Each total counts it one time.
+    let report = tag_step(&[], &[], &["src/lib.rs:3-4,src/net.rs:2=retry option", "src/net.rs=net"]);
+    assert_eq!(tag_facts(&report), [("retry option".to_string(), vec!["f1".to_string(), "f2".to_string(), "f5".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
+    let text = text_of(&report);
+    assert!(text.contains("  tag `retry option` (src/lib.rs:3-4, src/net.rs:2): 3 fact(s): 3 semantics; 6 changed line(s)\n"), "{text}");
+    assert!(text.contains("  tag `net` (src/net.rs): 2 fact(s): 1 added, 1 semantics; 6 changed line(s)\n  ◆ f6 derived: added `demo::net::wait` (the public API changes: a different crate can now use the item) [added]\n      also in this tag, shown in a tag above: f5\n  not in a tag: 2 fact(s): 2 semantics; 3 changed line(s)\n"), "{text}");
+    assert_eq!(text.matches("◆ f5 ").count(), 1, "{text}");
+    assert!(text.contains("      tags: `retry option`, `net`\n"), "{text}");
+    // The hunk header `@@ -3,2 +3,2 @@` names the same lines on each side.
+    for place in ["src/lib.rs:+3,2", "src/lib.rs:-3,2", "src/lib.rs:-3-4"] {
+        let report = tag_step(&[], &[], &[&format!("{place}=hunk")]);
+        assert_eq!(tag_facts(&report), [("hunk".to_string(), vec!["f1".to_string(), "f2".to_string()])], "{place}");
+    }
+    // Negative test: a tag in the lines of `demo::g` does not have a fact of `demo::f`.
+    let report = tag_step(&[], &[], &["src/lib.rs:10-12=g"]);
+    assert_eq!(tag_facts(&report), [("g".to_string(), vec!["f4".to_string()])]);
+}
+
+/// Design 55.3: a deleted text has lines of the old tree only. The form `FILE:-LINE` names
+/// them, as the old side of a hunk header.
+#[test]
+fn a_tag_on_a_deleted_statement_uses_the_lines_of_the_old_tree() {
+    // The hunk header of the deleted line is `@@ -5 +4,0 @@`.
+    let report = tag_step(&[], &[], &["src/lib.rs:-5=no log"]);
+    assert_eq!(tag_facts(&report), [("no log".to_string(), vec!["f3".to_string()])]);
+    assert!(text_of(&report).contains("  tag `no log` (src/lib.rs:-5): 1 fact(s): 1 semantics; 1 changed line(s)\n  ◆ f3 derived: deleted statement `log(c)` at `demo::f/S2` [semantics]\n"));
+    // Negative test: the new-tree lines around the deleted statement do not have the fact.
+    let report = tag_step(&[], &[], &["src/lib.rs:2-6=f"]);
+    assert_eq!(tag_facts(&report), [("f".to_string(), vec!["f1".to_string(), "f2".to_string()])]);
+    assert!(report.not_in_a_tag().contains(&"f3".to_string()));
+}
+
+/// Design 55.3: a fact that is only in part in the lines of a tag is not in the tag. The
+/// output has a note with the position of the full fact.
+#[test]
+fn a_position_that_cuts_a_fact_in_two_does_not_have_the_fact() {
+    let report = tag_step(&[], &[], &["src/net.rs:5-6=half"]);
+    assert_eq!(tag_facts(&report), [("half".to_string(), Vec::new())]);
+    assert!(report.accepted());
+    assert_eq!(report.tags[0].notes, ["f6 is not in the tag: only a part of its lines is in the positions of the tag; the full fact: src/net.rs:4-7"]);
+    let text = text_of(&report);
+    assert!(text.contains("  tag `half` (src/net.rs:5-6): 0 fact(s); 0 changed line(s)\n      note: f6 is not in the tag: only a part of its lines is in the positions of the tag; the full fact: src/net.rs:4-7\n  not in a tag: 6 fact(s): 5 semantics, 1 added; 13 changed line(s)\n"), "{text}");
+    // Negative test: the full lines of the fact give no note.
+    let report = tag_step(&[], &[], &["src/net.rs:4-7=full"]);
+    assert_eq!(tag_facts(&report), [("full".to_string(), vec!["f6".to_string()])]);
+    assert!(report.tags[0].notes.is_empty());
+}
+
+/// Design 55.3: the check of a tag is a check of the form. A position with no edit in its
+/// lines is an error with the nearest positions that have an edit. The step is not stored.
+#[test]
+fn a_tag_position_with_no_edit_is_an_error() {
+    let report = tag_step(&[], &[], &["src/lib.rs:8=nothing"]);
+    assert_eq!(report.tags[0].error.as_deref(), Some("the tag `nothing` has a position with no edit: the step has no edit in `src/lib.rs:8`; the nearest positions with an edit: src/lib.rs:3-4, src/lib.rs:11"));
+    assert!(!report.tags[0].form);
+    assert!(!report.accepted());
+    assert!(text_of(&report).contains("  ✗ tag: the tag `nothing` has a position with no edit"));
+    // A file that the step does not change, and a file that is not in the trees.
+    for place in ["Cargo.toml", "src/other.rs:1"] {
+        let report = tag_step(&[], &[], &[&format!("{place}=nothing")]);
+        let file = place.split(':').next().unwrap();
+        assert_eq!(report.tags[0].error.as_deref(), Some(&*format!("the tag `nothing` has a position with no edit: the step does not change the file `{file}`; the changed files: src/lib.rs, src/net.rs")));
+        assert!(!report.accepted());
+    }
+    // One position of two with no edit is also an error: each position needs an edit.
+    let report = tag_step(&[], &[], &["src/lib.rs:3,src/lib.rs:8=part"]);
+    assert!(report.tags[0].error.is_some() && !report.accepted());
+    // A line number after the last line of the file is an error of the form.
+    let report = tag_step(&[], &[], &["src/net.rs:99=end"]);
+    assert_eq!(report.tags[0].error.as_deref(), Some("the position `src/net.rs:99` of the tag `end` is after the last line: `src/net.rs` has 7 line(s) in the new tree"));
+    assert!(report.tags[0].form);
+    let report = tag_step(&[], &[], &["src/net.rs:-4=end"]);
+    assert_eq!(report.tags[0].error.as_deref(), Some("the position `src/net.rs:-4` of the tag `end` is after the last line: `src/net.rs` has 3 line(s) in the old tree"));
+    // The form of the text of a tag.
+    for (text, cause) in [("src/lib.rs:3", "no `=`"), ("=name", "no position"), ("src/lib.rs:3=", "no name"), ("src/lib.rs:0=zero", "line"), ("src/lib.rs:5-3=back", "line")] {
+        assert!(semilla_core::report::parse_tag(text).is_err(), "{text}: {cause}");
+    }
+    // Negative test: a position that has a part of a fact has an edit. It is no error.
+    let report = tag_step(&[], &[], &["src/net.rs:5=part"]);
+    assert!(report.tags[0].error.is_none() && report.accepted());
+    // Negative test: Semilla does not check the name.
+    let report = tag_step(&[], &[], &["src/lib.rs:3=a wrong name: no behavior change!"]);
+    assert_eq!(report.tags[0].name, "a wrong name: no behavior change!");
+    assert!(report.accepted());
+}
+
+/// Design 55.3, the soundness rule: a tag does not replace a fact. The facts, the gap list,
+/// the facts of the agent, and the result of a step with tags are equal to those of the same
+/// step with no tag.
+#[test]
+fn a_tag_changes_no_fact_no_gap_and_no_result() {
+    let tags = ["src/lib.rs:3-4,src/net.rs:2=retry option", "src/net.rs=net", "src/lib.rs:-5=no log", "src/net.rs:5-6=half"];
+    for (same, change) in [(&[][..], &[][..]), (&[][..], &["demo::f=the factors change"][..]), (&[][..], &["demo::f=the factors change", "demo::g=one more", "src/net.rs=the retry count is 5"][..])] {
+        let plain = tag_step(same, change, &[]);
+        let tagged = tag_step(same, change, &tags);
+        assert_eq!(tagged.tags.len(), 4);
+        let facts = |report: &StepReport| serde_json::to_value(&report.facts).unwrap();
+        assert_eq!(facts(&plain), facts(&tagged));
+        assert_eq!(serde_json::to_value(&plain.gaps).unwrap(), serde_json::to_value(&tagged.gaps).unwrap());
+        assert_eq!(serde_json::to_value(&plain.agent_facts).unwrap(), serde_json::to_value(&tagged.agent_facts).unwrap());
+        assert_eq!(plain.gap_line(), tagged.gap_line());
+        assert_eq!(plain.gap_items(), tagged.gap_items());
+        assert_eq!((plain.accepted(), &plain.errors, plain.changed_lines, &plain.no_fact), (tagged.accepted(), &tagged.errors, tagged.changed_lines, &tagged.no_fact));
+        // The full record without the tags is equal.
+        let mut value = serde_json::to_value(&tagged).unwrap();
+        value.as_object_mut().unwrap().remove("tags");
+        assert_eq!(value, serde_json::to_value(&plain).unwrap());
+        // Each fact line of the output of the step with no tag is in the output with tags.
+        let (plain_text, tagged_text) = (text_of(&plain), text_of(&tagged));
+        for line in plain_text.lines().filter(|line| line.starts_with("  ◆ ") || line.starts_with("  ? ") || line.starts_with("  ✓ ")) {
+            assert_eq!(tagged_text.lines().filter(|other| other == &line).count(), 1, "{line}\n{tagged_text}");
+        }
+    }
+    // A tag with an error changes no fact: the report has the same facts, and the step is
+    // not accepted only because of the tag.
+    let plain = tag_step(&[], &[], &[]);
+    let wrong = tag_step(&[], &[], &["src/lib.rs:8=nothing"]);
+    assert_eq!(serde_json::to_value(&plain.facts).unwrap(), serde_json::to_value(&wrong.facts).unwrap());
+    assert!(plain.accepted() && !wrong.accepted());
+}
+
+/// Design 55.3 (T3): a `change` fact and a tag in one step. The fact of the agent keeps its
+/// place and its text; its facts show in the groups of the tags. The result line of a
+/// `change` fact says what it covers, for an item path and for a file path.
+#[test]
+fn a_change_fact_and_a_tag_in_one_step_and_the_width_of_a_change_fact() {
+    let change = ["demo::f=the factors change", "src/net.rs=the retry count is 5, and a wait time"];
+    let plain = tag_step(&[], &change, &[]);
+    let lines: Vec<String> = plain.agent_facts.iter().map(|fact| fact.line()).collect();
+    assert_eq!(
+        lines,
+        [
+            "a1 change: `demo::f` \"the factors change\" (holds: the behavior of existing code can change in each item; covers 3 fact(s) in 1 item(s) with 5 changed line(s))",
+            "a2 change: `src/net.rs` \"the retry count is 5, and a wait time\" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))",
+        ]
+    );
+    let tagged = tag_step(&[], &change, &["src/lib.rs:2-5,src/lib.rs:-5=f", "src/net.rs=net"]);
+    assert_eq!(tag_facts(&tagged), [("f".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
+    let text = text_of(&tagged);
+    assert!(text.contains("  ✓ a1 change: `demo::f` \"the factors change\" (holds: the behavior of existing code can change in each item; covers 3 fact(s) in 1 item(s) with 5 changed line(s))\n      places: demo::f/S0/init/rhs, demo::f/S1/init/rhs, demo::f/S2\n      facts, in the groups of the tags below: f1, f2, f3\n"), "{text}");
+    assert!(text.contains("  tag `f` (src/lib.rs:2-5, src/lib.rs:-5): 3 fact(s): 3 semantics; 5 changed line(s)\n  ◆ f1 stated: changed literal `1` → `2` at `demo::f/S0/init/rhs` [semantics]\n"), "{text}");
+    assert!(text.contains("  not in a tag: 1 fact(s): 1 semantics; 2 changed line(s)\n  ◆ f4 derived: changed expression `a` → `a + 1` at `demo::g/tail` [semantics]\n"), "{text}");
+    // The gap list keeps its place and its text; the gap of `demo::g` is in no tag.
+    assert_eq!(plain.gap_items(), tagged.gap_items());
+    assert!(text.contains("      in: demo::g\n      lines: src/lib.rs:11, src/lib.rs:-12\n      not in a tag\n"), "{text}");
+    // Negative test: a `change` fact that does not hold has no width.
+    let wrong = tag_step(&[], &["demo::log=a change"], &[]);
+    assert!(wrong.agent_facts.iter().all(|fact| !fact.holds && fact.covers.is_empty()), "{:#?}", wrong.agent_facts);
+}
+
+/// The positions of the lines with no fact, as a text.
+fn open_lines(report: &StepReport) -> String {
+    semilla_core::Position::list(&report.no_fact)
+}
+
+/// Design 55.5: an inner attribute and an inner doc line of a module file are lines of the
+/// file of the module. The item `mod a;` is in a different file.
+#[test]
+fn an_inner_attribute_of_a_module_file_has_its_line_in_that_file() {
+    let m = ("Cargo.toml", MANIFEST);
+    let old = [m, ("src/lib.rs", "pub mod a;\n"), ("src/a.rs", "//! Docs of a.\n#![allow(dead_code)]\npub fn f() {}\n")];
+    let new = [m, ("src/lib.rs", "pub mod a;\n"), ("src/a.rs", "//! New docs of a.\n#![allow(unused)]\npub fn f() {}\n")];
+    let report = run_derived_files(&old, &new, &[]);
+    assert_eq!(
+        placed(&report),
+        ["attribute | attributes of `demo::a`: changed `#![allow(dead_code)]` → `#![allow(unused)]` | src/a.rs:2, src/a.rs:-2", "docs | changed docs `//! Docs of a.` → `//! New docs of a.` | src/a.rs:1, src/a.rs:-1"]
+    );
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (4, ""));
+    // Negative test: no position is in the file of the item `mod a;`.
+    assert!(report.facts.iter().flat_map(|fact| &fact.positions).all(|position| position.file != "src/lib.rs"));
+}
+
+/// Design 55.5: the inner attributes and the inner doc lines of a removed file go with the
+/// fact of the removed module.
+#[test]
+fn the_inner_lines_of_a_removed_file_are_in_the_fact_of_the_removed_module() {
+    let m = ("Cargo.toml", MANIFEST);
+    let old = [m, ("src/lib.rs", "pub mod a;\npub fn k() {}\n"), ("src/a.rs", "//! Docs of a.\n#![allow(dead_code)]\n\n// A note.\npub fn f() {}\n")];
+    let report = run_derived_files(&old, &[m, ("src/lib.rs", "pub fn k() {}\n")], &[]);
+    assert_eq!(
+        placed(&report),
+        [
+            "removed | removed `demo::a` (the public API changes: a different crate can no longer use the item) | src/a.rs:-1-3, src/a.rs:-5, src/lib.rs:-1",
+            // Negative test: a plain comment of the file is not a line of the removed module.
+            "docs | comment in `src/a.rs`: removed `// A note.` | src/a.rs:-4",
+        ]
+    );
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (6, ""));
+}
+
+/// Design 55.5: a doc comment in a macro body is a token of the macro. A doc attribute with a
+/// text is a part of the docs.
+#[test]
+fn a_doc_comment_in_a_macro_body_is_a_line_of_the_macro_fact() {
+    let before = "macro_rules! m {\n    () => {\n        /// Doc one.\n        pub fn f() {}\n    };\n}\nm!();\n";
+    let report = run_derived(before, &before.replace("Doc one", "Doc two"), &[]);
+    let facts = placed(&report);
+    assert_eq!(facts.len(), 1, "{facts:#?}");
+    assert!(facts[0].starts_with("declaration | changed macro `m`") && facts[0].ends_with("| src/lib.rs:3, src/lib.rs:-3"), "{facts:#?}");
+    assert_eq!(open_lines(&report), "");
+    let report = run_derived("#[doc = \"One.\"]\npub fn f() {}\n", "#[doc = \"Two.\"]\npub fn f() {}\n", &[]);
+    assert_eq!(placed(&report), ["docs | changed docs `///One.` → `///Two.` | src/lib.rs:1, src/lib.rs:-1"]);
+    // Negative test: a doc comment of an item is not a line of a code fact.
+    let report = run_derived("/// One.\npub fn f() -> u32 {\n    1\n}\n", "/// Two.\npub fn f() -> u32 {\n    2\n}\n", &[]);
+    let facts = placed(&report);
+    assert!(facts.iter().any(|fact| fact.starts_with("semantics | ") && fact.ends_with("| src/lib.rs:3, src/lib.rs:-3")), "{facts:#?}");
+    assert!(facts.iter().any(|fact| fact.starts_with("docs | ") && fact.ends_with("| src/lib.rs:1, src/lib.rs:-1")), "{facts:#?}");
+}
+
+/// Design 55.2: the line diff puts the closing brace of `a` between two blocks of added lines.
+/// Semilla takes the equal diff that agrees with the tree: the brace is not a changed line.
+#[test]
+fn a_closing_brace_between_two_added_blocks_is_not_a_changed_line() {
+    let report = run_derived("pub fn a() {\n    x();\n}\npub fn x() {}\n", "pub fn a() {\n    x();\n    x();\n}\n\npub fn b() {\n    x();\n}\npub fn x() {}\n", &[]);
+    assert_eq!(placed(&report), ["semantics | added statement `x()` at `demo::a/S1` | src/lib.rs:3", "added | added `demo::b` (the public API changes: a different crate can now use the item) | src/lib.rs:5-8"]);
+    // Negative test: line 4 (the brace of `a`) is in no position, and it is not a changed line.
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (5, ""));
+}
+
+/// Design 55.5: a line with equal tokens waits if its hunk has a changed token with no fact.
+/// The rule of the item order gives that token a fact: then the hunk has a new layout only.
+#[test]
+fn an_empty_line_next_to_an_item_at_a_new_place_is_a_layout_line() {
+    let report = run_derived("use std::fmt;\n\nuse std::io;\npub fn f() {}\n", "use std::io;\n\nuse std::fmt;\npub fn f() {}\n", &[]);
+    assert_eq!(placed(&report), ["layout | layout of `src/lib.rs`: 2 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place | src/lib.rs:2-3, src/lib.rs:-1-2"]);
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (4, ""));
+    // Negative test: an empty line next to an edit is a line of the fact of the edit.
+    let report = run_derived("pub fn f() -> u32 {\n    1\n}\n", "pub fn f() -> u32 {\n\n    2\n}\n", &[]);
+    assert_eq!(placed(&report), ["semantics | changed literal `1` → `2` at `demo::f/tail` | src/lib.rs:2-3, src/lib.rs:-2"]);
+}
+
+/// Design 55.5: a delimiter has no meaning alone. A line with only a delimiter is a part of
+/// the edit next to it in its hunk.
+#[test]
+fn a_line_with_only_a_delimiter_joins_the_edit_next_to_it() {
+    let before = "pub fn f(a: u32) -> u32 {\n    let b = a + 1;\n    b * 2\n}\n";
+    let after = "pub fn f(a: u32) -> u32 {\n    a + 5\n}\n\npub fn g(a: u32) -> u32 {\n    let b = a + 1;\n    b * 2\n}\n";
+    let report = run_derived(before, after, &[]);
+    let facts = placed(&report);
+    // Line 3 is the new closing brace of `f`.
+    assert!(facts.contains(&"semantics | added statement `a + 5` at `demo::f/tail` | src/lib.rs:2-3".to_string()), "{facts:#?}");
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (4, ""));
+    // Negative test: with no fact in the hunk, the line stays open (a module order across an
+    // item that can give a macro has no fact).
+    let m = ("Cargo.toml", MANIFEST);
+    let files = |lib: &'static str| vec![m, ("src/lib.rs", lib), ("src/m.rs", "macro_rules! k { () => { 1 } }\n"), ("src/a.rs", "pub fn a() {}\n"), ("src/b.rs", "pub fn b() {}\n")];
+    let report = run_derived_files(&files("mod a;\n#[macro_use]\nmod m;\nmod b;\n"), &files("mod b;\n#[macro_use]\nmod m;\nmod a;\n"), &[]);
+    assert!(placed(&report).is_empty());
+    assert_eq!(open_lines(&report), "src/lib.rs:1, src/lib.rs:4, src/lib.rs:-1, src/lib.rs:-4");
+    assert_eq!(report.cover_lines()[0], "! cover: 4 of the 4 changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)");
+}
+
+/// Design 55.5: the lines with no fact pair their tokens first. The `use` line of a renamed
+/// item is a line of the rename, also with an added `use` line that has the same words.
+#[test]
+fn a_use_line_of_a_rename_is_a_line_of_the_rename_next_to_an_added_use_line() {
+    let m = ("Cargo.toml", MANIFEST);
+    let old = [m, ("src/lib.rs", "mod a;\npub use crate::a::old_name;\n"), ("src/a.rs", "pub fn old_name() -> u32 {\n    1\n}\n")];
+    let new = [m, ("src/lib.rs", "mod a;\npub use crate::a::extra;\npub use crate::a::new_name;\n"), ("src/a.rs", "pub fn new_name() -> u32 {\n    1\n}\n\npub fn extra() -> u32 {\n    2\n}\n")];
+    let report = run_derived_files(&old, &new, &[("demo::a::new_name", equal("n0"))]);
+    let facts = placed(&report);
+    assert_eq!(facts[0], "rename | renamed `demo::a::old_name` → `demo::a::new_name` | src/a.rs:1, src/a.rs:-1, src/lib.rs:3, src/lib.rs:-2", "{facts:#?}");
+    // Negative test: the added `use` line is not a line of the rename.
+    assert!(facts[1].starts_with("import | added `use` line: `pub use crate::a::extra;`") && facts[1].ends_with("| src/lib.rs:2"), "{facts:#?}");
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (9, ""));
+}
+
+/// Design 55.5: a macro has a textual scope. An item can go to a new place between the same
+/// items that can give a macro.
+#[test]
+fn the_item_order_rule_keeps_the_textual_scope_of_a_macro() {
+    let m = ("Cargo.toml", MANIFEST);
+    let files = |lib: &'static str| vec![m, ("src/lib.rs", lib), ("src/m.rs", "macro_rules! k { () => { 1 } }\n"), ("src/a.rs", "pub fn a() {}\n"), ("src/b.rs", "pub fn b() {}\n")];
+    let report = run_derived_files(&files("#[macro_use]\nmod m;\nmod b;\nmod a;\n"), &files("#[macro_use]\nmod m;\nmod a;\nmod b;\n"), &[]);
+    assert_eq!(placed(&report), ["layout | layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place | src/lib.rs:4, src/lib.rs:-3"]);
+    assert_eq!(open_lines(&report), "");
+    // Negative test: an item that goes across `#[macro_use] mod m;` can get a different macro.
+    let report = run_derived_files(&files("mod a;\n#[macro_use]\nmod m;\nmod b;\n"), &files("mod b;\n#[macro_use]\nmod m;\nmod a;\n"), &[]);
+    assert!(!only_layout(&report) && !report.no_fact.is_empty());
+}
+
+/// Design 55.5: the item pair. The line diff pairs the body lines of the old `f` with the
+/// lines of the new `e`. The first lines of `f` are changed lines, and their tokens are equal
+/// in the pair of `f`: they are lines of the facts of `f`.
+#[test]
+fn a_line_with_equal_tokens_in_its_item_pair_joins_a_fact_of_the_item() {
+    let old = "#[allow(unused)]\n#[inline]\nfn f(a: u32) -> u32 {\n    let b = a + 1;\n    let c = b * 2;\n    let d = c - 3;\n    d\n}\n";
+    let new = "#[inline]\nfn e(a: u32) -> u32 {\n    let b = a + 1;\n    let c = b * 2;\n    let d = c - 3;\n    d\n}\n\n#[allow(unused)]\n#[inline]\nfn f(a: u32) -> u32 {\n    e(a)\n}\n";
+    let report = run_derived(old, new, &[]);
+    let facts = placed(&report);
+    assert!(facts.contains(&"semantics | deleted statement `let b = a + 1;` at `demo::f/S0` | src/lib.rs:-1, src/lib.rs:-3-4".to_string()), "{facts:#?}");
+    assert!(facts.contains(&"semantics | added statement `e(a)` at `demo::f/tail` | src/lib.rs:9-12".to_string()), "{facts:#?}");
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (9, ""));
+    assert!(!facts.iter().any(|fact| fact.starts_with("layout")), "{facts:#?}");
+    // Negative test: `f` goes across a macro definition. The rule does not apply: the lines
+    // stay in the marked line.
+    let report = run_derived(&format!("{old}macro_rules! k {{ () => {{ 1 }} }}\n"), &new.replace("\n\n#[allow", "\nmacro_rules! k { () => { 1 } }\n#[allow"), &[]);
+    assert_eq!(open_lines(&report), "src/lib.rs:9-11, src/lib.rs:-1, src/lib.rs:-3");
+}
+
+/// Design 55.2: an `impl` that moves with its type is a part of the move: its lines are lines
+/// of the move fact, and not layout lines.
+#[test]
+fn the_lines_of_an_impl_that_moves_with_its_type_are_lines_of_the_move() {
+    let m = ("Cargo.toml", MANIFEST);
+    let old = [m, ("src/lib.rs", "mod error;\n"), ("src/error.rs", "pub struct Quoted(pub char);\nimpl Quoted {\n    pub fn get(&self) -> char {\n        self.0\n    }\n}\npub fn show(ch: char) -> char {\n    Quoted(ch).get()\n}\n")];
+    let new = [
+        m,
+        ("src/lib.rs", "mod error;\nmod quoted;\n"),
+        ("src/error.rs", "use crate::quoted::Quoted;\npub fn show(ch: char) -> char {\n    Quoted(ch).get()\n}\n"),
+        ("src/quoted.rs", "pub struct Quoted(pub char);\nimpl Quoted {\n    pub fn get(&self) -> char {\n        self.0\n    }\n}\n"),
+    ];
+    let report = run_derived_files(&old, &new, &[("demo::error::show", equal("n1")), ("demo::quoted::Quoted::get", equal("n1"))]);
+    let facts = placed(&report);
+    assert!(facts.iter().any(|fact| fact.starts_with("move | moved `demo::error::Quoted` → `demo::quoted::Quoted`") && fact.contains("src/quoted.rs:1-6") && fact.contains("src/error.rs:-1-6")), "{facts:#?}");
+    // Negative test: the step has no layout fact and no line with no fact.
+    assert!(!facts.iter().any(|fact| fact.starts_with("layout")), "{facts:#?}");
+    assert_eq!(open_lines(&report), "");
+}
+
+/// Design 55.2: a module with a new name has a file with a new name. Each item of the file
+/// goes with the rename: its lines are lines of the rename fact.
+#[test]
+fn the_lines_of_the_file_of_a_renamed_module_are_lines_of_the_rename() {
+    let m = ("Cargo.toml", MANIFEST);
+    let over = "pub fn over(x: u32, limit: u32) -> u32 {\n    if x > limit { x - limit } else { 0 }\n}\n";
+    let old = [m, ("src/lib.rs", "mod cart;\npub fn a(x: u32) -> u32 { cart::over(x, 3) }\n"), ("src/cart.rs", over)];
+    let lib = "mod basket;\npub fn a(x: u32) -> u32 { basket::over(x, 3) }\n";
+    let report = run_derived_files(&old, &[m, ("src/lib.rs", lib), ("src/basket.rs", over)], &[("demo::a", equal("n0")), ("demo::basket::over", equal("n1"))]);
+    assert_eq!(placed(&report), ["rename | renamed `demo::cart` → `demo::basket` | src/basket.rs:1-3, src/cart.rs:-1-3, src/lib.rs:1-2, src/lib.rs:-1-2"]);
+    assert_eq!((report.changed_lines, open_lines(&report).as_str()), (10, ""));
+    // Negative test: an edit in the file and an added item keep their own lines.
+    let more = format!("{}\npub fn extra() -> u32 {{\n    2\n}}\n", over.replace("{ 0 }", "{ 1 }"));
+    let report = run_derived_files(&old, &[m, ("src/lib.rs", lib), ("src/basket.rs", more.as_str())], &[("demo::a", equal("n0"))]);
+    assert_eq!(
+        placed(&report),
+        [
+            "rename | renamed `demo::cart` → `demo::basket` | src/basket.rs:1, src/cart.rs:-1, src/lib.rs:1-2, src/lib.rs:-1-2",
+            "semantics | changed literal `0` → `1` at `demo::basket::over/S0/else/tail` | src/basket.rs:2-3, src/cart.rs:-2-3",
+            "added | added `demo::basket::extra` | src/basket.rs:4-7",
+        ]
+    );
+    assert_eq!(open_lines(&report), "");
 }

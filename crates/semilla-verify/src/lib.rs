@@ -35,6 +35,8 @@ pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
 mod uncompiled;
 pub mod pattern;
+mod positions;
+mod tags;
 pub mod views;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -576,7 +578,9 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         item_reasons(input, &mut plain.report);
         kind_reasons(input, &mut plain.report);
         no_compare_result(input.step, &mut plain.report);
+        positions::assign(input, &mut plain);
         agent::apply(input, &mut plain);
+        tags::apply(input, &mut plain);
         return plain;
     }
     let mut outcome = identity::derive(input, bodies, exprs, plain);
@@ -587,7 +591,9 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     item_reasons(input, &mut outcome.report);
     kind_reasons(input, &mut outcome.report);
     no_compare_result(input.step, &mut outcome.report);
+    positions::assign(input, &mut outcome);
     agent::apply(input, &mut outcome);
+    tags::apply(input, &mut outcome);
     outcome
 }
 
@@ -1798,7 +1804,7 @@ fn derived_body(name: &str, types: &[String], before: &Workspace, after: &Worksp
     let ty_name = ty.rsplit("::").next()?;
     let ty_path = types.iter().find(|path| path.as_str() == ty || path.rsplit("::").next() == Some(ty_name))?;
     let derives = |ws: &Workspace| {
-        ws.items.get(ty_path).is_some_and(|item| item.attrs.iter().any(|attr| attr.contains("derive") && attr.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == trait_name)))
+        ws.items.get(ty_path).is_some_and(|item| facts::derives_trait(&item.attrs, &trait_name))
     };
     let hand_written = |ws: &Workspace| ws.items.values().any(|item| item.kind == semilla_syntax::ItemKind::Impl && item.path.contains(&format!("<{ty_name} as ")) && item.path.split(" as ").nth(1).is_some_and(|tr| tr.trim_end_matches('>').rsplit("::").next() == Some(trait_name.as_str())));
     (derives(before) && derives(after) && !hand_written(before) && !hand_written(after)).then(|| (trait_name, ty_path.clone()))

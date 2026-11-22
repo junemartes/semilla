@@ -5340,3 +5340,174 @@ Decided by Claude: "no item candidate" means "no candidate with that name". The 
 | A renamed enum, no child candidate | 0.78 | 0.77 | 0.41 |
 
 The fact lines are equal to batch 9b2 in each case. Decided by Claude: each memo has the content as its key, not an address, so a memo cannot give the result of a different input.
+
+## 55. Batch 9b4: positions, tags, and the cover check
+
+The decision of the user (2026-11-22):
+
+> "I think the agent should be able to tag different parts of the step to organize it. To do it the agent can use hunk positions to specify exactly what is part of the tag. Semilla should still have facts that should cover the full diff for the step"
+
+> "In particular tags should not replace facts"
+
+The rules of this section:
+
+- A fact of Semilla has a position in the line diff. The position comes from the syntax tree.
+- A tag is a name for a part of a step. The agent gives the part by positions. A tag is not a fact.
+- The facts of Semilla cover the full diff. The cover check finds each changed line that is in no fact.
+- **Soundness.** No rule of this section hides an edit. A tag changes no fact, no line of the gap list, and no result of a step. A changed line with no fact is printed with the mark `!`.
+
+### 55.1 The text of an attribute fact (D1)
+
+**The defect.** An attribute fact showed only the short form of a derive list. A second change of the attributes of the same item was not in the text. The category of the fact came from a text search in the text of the fact.
+
+**The rule.** The text of an attribute fact shows each attribute that the item gets, loses, or changes. The source is the token tree of the attributes.
+
+1. An attribute with the same tokens on the two sides is not a change.
+2. A changed `derive` list shows in the short form (`derive added: …; derive removed: …`) if a trait is added or removed. A `derive(…)` in a `cfg_attr` is a derive list with the condition of the `cfg_attr`. A `cfg_attr` pair that differs also in a different part shows its two full texts (rule 3).
+3. Each other pair of attributes with the same path is one entry: changed `OLD` → `NEW`, with the two full texts.
+4. Each other attribute is an entry `added` or `removed`, with its full text.
+
+The category is `declaration` if a derive list gets or loses a trait. A trait under a new condition is a removed trait and an added trait. Else the category is `attribute`. The token tree gives this answer, not the text of the fact (`AttributeChange.derive`).
+
+**The other text searches.** These places of the product select a text or a category by a text search in a text of the report. Batch 9b4 changes none of them.
+
+| Place | The search | What it selects |
+|-------|------------|-----------------|
+| `semilla-verify/src/facts.rs`, `part_category` | `" renamed to "` in each description | the category `rename` of a parameter fact |
+| `semilla-verify/src/facts.rs`, the causes of an `indirect` fact | the start of a cause text (a backquote, `static`, `code that`) | the quotes around a cause |
+| `semilla-verify/src/facts.rs`, `is_rival` | `" (the call means "`, `" (the path means "` | a cause of the rival rule (no note) |
+| `semilla-core/src/report.rs`, `Fact::api_change` | `"(the public API can change"`, `"(the public API changes"` | the mark of a public API fact |
+| `semilla-verify/src/lib.rs`, the API fact of a rename or a move | `"public API"` in a visibility fact | no second fact with the same statement |
+| `semilla-verify/src/lib.rs`, the note of generic arguments | `"generic arguments go by position"` | the note is added one time |
+| `semilla-verify/src/lib.rs` and `owners.rs`, a manifest fact | the end `": format only"` | a manifest fact with no effect |
+| `semilla-verify/src/owners.rs`, the owner of an edit | the start ``added ` `` or ``removed ` `` | a fact of a full item |
+| `semilla-verify/src/lib.rs`, the notes of the rename search | the text of a step note | the help text of a pair that Semilla did not derive |
+| `semilla/src/app.rs`, the result line | the start of the line `result:` | the exit code and the short status |
+
+Decided by Claude: the list is a record for a later batch. Each entry needs a field of the fact in place of the search. This batch makes the field only for the attribute fact, because only that search gave a wrong text.
+
+### 55.2 The position of a fact (T1)
+
+**The form.** A position is a range of lines of one file. `FILE:LINE` and `FILE:START-END` are lines of the new tree. `FILE:-LINE` and `FILE:-START-END` are lines of the old tree. A deleted text has only lines of the old tree. A fact can have more than one position. Decided by Claude: the sign `-` for the old tree is the sign of the old side of a hunk header of `git diff`.
+
+**The source.** Semilla finds the position from the syntax tree: the lines of the changed node, or the lines of the changed own tokens of an item. No rule searches a source text.
+
+**The rules** (each one is "Decided by Claude"):
+
+1. *Changed lines only.* The position of an edit is each changed line of the line diff in the lines of its node. If the lines of the node have no changed line, Semilla uses the wider node of the edit. If that node also has no changed line, the position is the lines of the edit (a statement at a new place between equal lines).
+2. *Two sides.* An edit that changes a text has lines of the old tree and lines of the new tree. An added text has lines of the new tree. A deleted text has lines of the old tree.
+3. *The line diff agrees with the tree.* A line diff can put a block of added or removed lines at more than one place (a closing brace between two blocks). For each hunk, Semilla takes the equal diff whose changed lines agree best with the lines of the edits. The count of the changed lines does not change.
+4. *A rename.* Each changed line whose tokens are equal after the map of the names of a rename fact is a line of that fact. The lines with no fact pair their tokens first. Then a `use` line of the rename does not lose its pair to an added `use` line with the same words.
+5. *An item that goes with a move or a rename.* The map of the paths gives each item that goes with a `move` fact or a `rename` fact (an `impl` of a moved type, each item of a module with a new name). Each changed line of such an item that no other fact has is a line of that fact. The soundness rule of 49.3 holds: a difference after the map is an edit with its own fact. The lines of these items also guide rule 3.
+6. *A fact with no position.* An `indirect` fact has no edit in the step, thus it has no position. A fact of the public API with no edit of its own ("a `pub use` line names …") also has none.
+7. *A file that Semilla does not parse.* The fact of the file has each changed line of the file.
+8. *A doc test.* The fact of a doc test has the changed lines of the code block in the docs.
+
+**The record.** A stored fact keeps its positions (the field `positions`). A stored step keeps the count of the changed lines and the lines with no fact. A record of an earlier version has no such field, and Semilla reads it as before. It prints no position and no cover line for it.
+
+**The output.** Decided by Claude:
+
+- The default output of a step stays short. It has positions only in the gap list (a line `lines:` below each gap).
+- `semilla status --verbose` prints a line `lines:` as the last line of each fact.
+- The stored step has the positions as data. The MCP tools give the same texts as the commands.
+
+### 55.3 The tags of the agent (T2, T3)
+
+**The option.** `--tag 'PLACE[,PLACE]=NAME'` on `semilla step` and `semilla fact`; the argument `tags` of the MCP tools `step` and `fact`; the key `tag` of a plan step. A step can have many tags. One parser reads the places for each of them, and for `semilla replay take`.
+
+**A place.** `FILE` (the full file, the two trees), `FILE:LINE`, `FILE:START-END`, `FILE:-LINE`, `FILE:-START-END`. Semilla also reads the two sides of a hunk header: `FILE:+START,COUNT` and `FILE:-START,COUNT`. The name is the text after the first `=`.
+
+**The rule of a tag.** A tag has each fact whose edit is fully in its places. The places of one tag can share the lines of a fact between them.
+
+Decided by Claude:
+
+- *The two sides.* The two sides of a fact are the two sides of one change. A fact is in the tag if each of its new-tree lines is in the places, or each of its old-tree lines is. A range of the new tree does not have a deleted text: a deleted text needs a place of the old tree.
+- *A part of a fact.* A fact with only a part of its lines in the tag is not in the tag. The output has a note with the full position of the fact.
+- *A tag is a field of the step.* The step stores the text of each tag. Semilla finds the facts of a tag again in each check. A tag is not in the list of the agent facts.
+- *Errors.* A text that is not a tag, or a line number after the last line of the file, is a form error (exit code 2); no step is stored. A place with no edit in its lines makes the step not accepted (exit code 1). The message names the nearest positions with an edit, or the changed files. It is a hard problem of a plan step. The command to run again omits the tag with the error.
+- *`semilla fact --tag`* adds a tag to a stored step. It can add a tag with no fact of the agent. A tag with an error adds nothing.
+- *A fact of two tags* shows in its first tag. Each later tag names it ("also in this tag, shown in a tag above").
+- *The count of a tag* is the count of the changed lines of its facts, on the two sides.
+
+**A tag does not replace a fact.** A tag makes no claim about the behavior. A step with a tag has the same facts, the same gap list, and the same result as the step with no tag. A test compares the two outputs line by line, and it compares the stored facts.
+
+**The outputs (T3).** A step with no tag has the output of the earlier version. With a tag:
+
+- The step output, `status --verbose`, and the Markdown review show the facts in the groups of the tags, in the order of the agent. Each group has a head line: the name, the places, the count of the facts by category, and the count of the changed lines. The last group is "not in a tag".
+- A gap line names its tag (`tag: NAME`, or "not in a tag").
+- An agent fact names its facts by their numbers ("facts, in the groups of the tags below: f3, f4"). Each fact shows one time.
+- The short `status` prints no tag.
+- The local UI gets the smallest change: one line for each tag with its counts and the numbers of its facts. The lists of the facts stay as they are.
+
+**The width of a `change` fact.** The result line of a `change` fact that holds tells what the fact covers: "covers N fact(s) in M item(s) with K changed line(s)". Decided by Claude: the width is in the result line, with or without a tag, because a wide `change` fact tells the reader less than a narrow one.
+
+### 55.4 The cover check (T4)
+
+**The rule.** Each changed line of the line diff of a step is in the position of a fact. The text report of each step prints one line:
+
+    cover: each of the N changed line(s) is in a fact
+
+A changed line with no fact is a defect of Semilla. It is not an error of the agent, and it does not reject the step. Semilla does not hide it. The step prints two marked lines:
+
+    ! cover: K of the N changed line(s) are in no fact (a defect of Semilla: read these lines in the diff)
+    ! changed lines with no fact: FILE:START-END, …
+
+Decided by Claude:
+
+- The count of the changed lines is the count of Semilla (rule 3 of 55.2), on the two sides. A file at a new path counts as a removed file and an added file.
+- The short `status`, the Markdown review, and the local UI print only the `!` lines.
+- A line that no rule of 55.5 explains stays in the marked line. No rule puts a line in a fact only to make the count zero.
+
+### 55.5 The classes of a changed line with no edit
+
+A changed line can have no difference of the syntax tree, or a difference that the facts did not place. Each class has one general rule. Each rule is "Decided by Claude" if the brief of the batch does not name it.
+
+**The classes of the brief.**
+
+- *Layout.* The tokens of the changed lines of a hunk are equal on the two sides (white space, line breaks, a comma or a semicolon with no meaning, design 52.2). If the hunk has an edit with a fact, the line joins the nearest fact of the hunk: the layout of an edit is a part of the edit. Else the line is in the fact `layout of FILE: N changed lines with equal tokens`. The category is the new category `layout` (the role of docs, the weight 0).
+- *Line endings.* A pair of lines with an equal text and different line endings is in the fact `line endings of FILE: …; the text of each line is equal`.
+- *A comment that is not in a body.* A plain comment in no item gets a fact of the category `docs` for each block of comment lines of a hunk: `comment in FILE: added …`, `removed …`, or `changed … → …`.
+- *The text of a doc change.* The doc lines are lines of the doc fact of the item. A code block in the docs is code of a doc test: its lines are lines of the doc test fact.
+
+**The classes that the fixtures gave.**
+
+- *The inner lines of a module file.* An inner attribute or an inner doc line of the file of `mod a;` belongs to the item `a`, and the item is in a different file. The position is in the file of the module.
+- *The inner lines of a removed file.* They are lines of the fact of the removed module. A plain comment of the file keeps its own comment fact.
+- *A doc comment in a token tree.* A doc comment in a macro body is a token of the macro. It is code: the fact of the macro has the line. A doc comment of an item stays a line of the docs.
+- *A doc attribute with a text.* `#[doc = "…"]` and `#![doc = include_str!(…)]` are docs. `#[doc(hidden)]` is an attribute.
+- *A delimiter line.* A line whose tokens with no pair are only delimiters (`{ } ( ) [ ] , ;`) has no meaning alone. It joins the nearest fact of its hunk on its side. With no fact in the hunk, the line stays open.
+- *A line that waits.* A line with equal tokens in a hunk that has a changed token with no fact waits for the later rules. If each such token gets a fact, the line joins the nearest fact, or it is a layout line. If a token stays with no fact, the line stays with it in the marked line.
+- *The same items in a new order.* A module item with equal tokens at a new place in its container is a layout line ("N changed lines of M items with equal tokens at a new place"). A macro has a textual scope. Thus an item that can give a macro does not go to a new place: a `macro_rules!` definition, an item with a definition in it, an item with `#[macro_use]`, a macro call. Each other item goes to a new place only between the same such items. A `use` line has no such limit.
+- *The item pair.* The line diff can pair the lines of an old item with the lines of a different new item. The tree pairs the old item with its new item. A changed line whose tokens all have a pair in the item pair is not a difference of the item. It joins the rename fact of a word on the line, else the nearest fact of the item, else the layout fact. The rule needs the two items in one file, between the same items that can give a macro. It does not apply to a `use` line or a module.
+
+**Soundness of the classes.** Each rule needs equal tokens (after the map of a rename or a move), or a line with only delimiters next to an edit with a fact. A token that differs and has no fact keeps its line in the marked line. Each rule has a test with a negative test.
+
+### 55.6 The measure
+
+The ten fixtures of `b7cfix/`, each as one step with `SEMILLA_NO_CHECK=1` and no fact of the agent:
+
+| | Count |
+|---|---|
+| Changed lines (the two sides) | 10906 |
+| In the fact of an edit (each other line) | 9008 |
+| In a doc fact | 625 |
+| In a comment fact | 106 |
+| In a layout fact | 1167 |
+| In a line-ending fact | 0 |
+| No fact, with only the classes of the brief | 70 |
+| No fact, with the classes of the fixtures | 0 |
+
+The 70 lines by class: `mod` lines in a new order after `#[macro_use]` 20; the item pair 13; the inner lines of a module file or a removed file 22; a doc comment in a macro and a doc attribute with a text 5; a brace between two added blocks 6; a delimiter line 2; a line that waits 1; a `use` line of a rename 1. The cases of `b9a/` gave one more class: the file of a module with a new name (rule 5 of 55.2; 2 lines of one case). Each of the 134 cases now has the line "cover: each of the N changed line(s) is in a fact".
+
+The fact lines of the default step output (the binary of batch 9b3 against this batch): 1538 and 1594 on the fixtures. 18 lines have a new text because of 55.1. 56 lines are new because of 55.4 (30 layout facts, 26 comment facts). No fact goes away. No fact changes its category. The cases of `b9a/` (60), `b9a2/` (59), and batch 9a3 (15) have 308 fact lines; 3 lines are new (comment facts), and no line changes.
+
+The time of a step on the ten fixtures: 2.80 s before and 3.25 s after, as a sum (the smallest of three runs for each fixture).
+
+### 55.7 The limits and the open questions
+
+- A fact can have a position on a line that `git diff` shows as an equal line. Semilla uses its own line pairs (rule 3 of 55.2). On the fixtures, 39 lines of the positions are not changed lines (rule 1 of 55.2, the last case).
+- The closing brace of a moved item can be a line of the visibility fact of the item: the delimiter rule runs before the move rule.
+- The item pair rule and the rule of the item order do not apply to an item that can give a macro. Its lines stay in the marked line.
+- A gap with many places has a long `lines:` line.
+- The short `status` does not list the tags. The gap lines of the Markdown review have no positions.
+- A range of the new tree does not have a deleted text. The message of a place with no edit names the nearest positions with an edit, in the two trees.

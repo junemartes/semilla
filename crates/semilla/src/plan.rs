@@ -51,6 +51,9 @@ pub struct PlanStep {
     /// The `change` facts of the agent (design 54), as for `semilla step --change`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub change: Vec<String>,
+    /// The tags of the agent (design 55.3), as for `semilla step --tag`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag: Vec<String>,
     /// Notes of the draft for the agent (`apply` ignores them): the changes without a draft claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub todo: Vec<String>,
@@ -524,7 +527,7 @@ impl App {
             let renames = semilla_verify::hints::likely_renames(&plain, &before_ws, &after_ws);
             let mut claims = semilla_verify::hints::suggest_claims_with_renames(&[], &[], &renames);
             claims.extend(semilla_verify::hints::local_rename_claims(&semilla_verify::hints::likely_local_renames(&plain, &before_ws, &after_ws)));
-            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default() };
+            let rename_step = semilla_core::Step { index: 0, intent: String::new(), claims: claims.clone(), tree_before: String::new(), tree_after: String::new(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
             let mut map = semilla_verify::checks::renames(&rename_step, &before_ws);
             semilla_verify::sites::resolve(&mut map, &before_ws, &after_ws);
             let edits = semilla_syntax::diff(&before_ws, &after_ws, &map);
@@ -756,11 +759,14 @@ impl App {
             // Design 54: the facts of the agent of the step. The check of the change set
             // checks each fact; a fact with a wrong form is a problem of the plan.
             let agent = semilla_core::AgentFacts { same: step.same.clone(), change: step.change.clone() };
-            match semilla_verify::agent::check_form(&agent) {
+            // Design 55.3: the tags of the step. A tag with a wrong form is a problem of the plan.
+            let tag_form = step.tag.iter().find_map(|tag| semilla_core::report::parse_tag(tag).err().map(|error| format!("tag `{tag}`: {error}")));
+            match semilla_verify::agent::check_form(&agent).and(tag_form.map_or(Ok(()), Err)) {
                 Ok(()) => {
                     let mut session = self.load_session()?;
                     if let Some(open) = session.open.as_mut() {
                         open.agent = agent;
+                        open.tags = step.tag.clone();
                     }
                     self.save_session(&session)?;
                 }
@@ -838,6 +844,7 @@ impl App {
                 let wrong = |status: &semilla_core::ClaimStatus| !(status.is_verified() || status.is_pending() || matches!(status, semilla_core::ClaimStatus::NotChecked { .. }));
                 lines.extend(report.agent_facts.iter().filter(|fact| !fact.holds).map(|fact| format!("✗ fact {} of the agent is false: `--{} '{}'`", fact.id, fact.kind, fact.options.join("', '"))));
                 lines.extend(report.claims.iter().filter(|claim| wrong(&claim.status)).map(|claim| format!("✗ claim {} is {}", claim.claim, claim.status.text())));
+                lines.extend(report.tags.iter().filter_map(|tag| tag.error.as_ref()).map(|error| format!("✗ {error}")));
                 if lines.is_empty() {
                     lines.push("✗ the step is rejected: see the result below".to_string());
                 }

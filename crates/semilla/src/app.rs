@@ -37,6 +37,9 @@ pub struct OpenStep {
     /// The facts of the agent of the step (design 54).
     #[serde(default, skip_serializing_if = "semilla_core::AgentFacts::is_empty")]
     pub agent: semilla_core::AgentFacts,
+    /// The tags of the agent of the step (design 55.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// True if the environment asks for the compiled check of each step (`SEMILLA_COMPILED`, design
@@ -237,6 +240,8 @@ pub(crate) fn hard_problem(step: &semilla_core::report::StepReport) -> bool {
         || step.facts.iter().any(|fact| fact.spotlight && fact.reason.is_none())
         || step.claims.iter().any(|claim| !(claim.status.is_verified() || claim.status.is_pending() || matches!(claim.status, ClaimStatus::NotChecked { .. })))
         || step.agent_facts.iter().any(|fact| !fact.holds)
+        // Design 55.3: a tag with a position with no edit.
+        || step.tags.iter().any(|tag| tag.error.is_some())
 }
 
 /// The problems of a rejected step, one text for each: a fact with no reason, a claim that is
@@ -252,6 +257,7 @@ pub(crate) fn step_problems(step: &semilla_core::report::StepReport) -> Vec<Stri
     for fact in step.agent_facts.iter().filter(|fact| !fact.holds) {
         problems.push(format!("the fact {} of the agent is false: {}", fact.id, fact.line()));
     }
+    problems.extend(step.tags.iter().filter_map(|tag| tag.error.clone()));
     problems.extend(step.errors.iter().cloned());
     problems.extend(step.uncovered.iter().map(|u| format!("uncovered {}", u.description)));
     problems
@@ -799,7 +805,7 @@ impl App {
         } else if session.changeset.head_tree != tree {
             bail!("the working tree changed after the last step ended; put all changes inside steps");
         }
-        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env(), build_check: None, agent: Default::default() });
+        session.open = Some(OpenStep { intent: intent.to_string(), tree_before: tree.clone(), claims: Vec::new(), reasons: BTreeMap::new(), compiled: compiled_env(), build_check: None, agent: Default::default(), tags: Vec::new() });
         self.save_session(&session)?;
         let mut text = format!("step {} started at tree {tree}", session.changeset.steps.len());
         if session.changeset.steps.is_empty() {
@@ -940,7 +946,7 @@ impl App {
             group.steps.retain(|index| *index != step.index);
         }
         let claims = step.claims.len();
-        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled, build_check: None, agent: step.agent });
+        session.open = Some(OpenStep { intent: step.intent, tree_before: step.tree_before, claims: step.claims, reasons: step.reasons, compiled: step.compiled, build_check: None, agent: step.agent, tags: step.tags });
         self.save_session(&session)?;
         Ok(format!("step {} is open again, with {claims} claim(s); edit, claim or unclaim, then `semilla old-step end`", step.index))
     }
@@ -977,7 +983,7 @@ impl App {
         let open = session.open.take().context("no step is open")?;
         let tree = self.repo.write_tree()?;
         let index = session.changeset.steps.len();
-        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check, agent: open.agent });
+        session.changeset.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check, agent: open.agent, tags: open.tags });
         session.changeset.head_tree = tree.clone();
         self.save_session(&session)?;
         if queue {
@@ -1504,7 +1510,7 @@ impl App {
         if let Some(open) = session.open {
             let tree = self.repo.write_tree()?;
             let index = set.steps.len();
-            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check, agent: open.agent });
+            set.steps.push(Step { index, intent: open.intent, claims: open.claims, tree_before: open.tree_before, tree_after: tree.clone(), reasons: open.reasons, compiled: open.compiled, build_check: open.build_check, agent: open.agent, tags: open.tags });
             set.head_tree = tree;
         }
         Ok(set)
@@ -2269,6 +2275,11 @@ pub(crate) fn short_text(report: &Report) -> String {
             put_line(&mut text, &format!("  {} {}", if fact.holds { "✓" } else { "✗" }, fact.line()));
         }
         if let Some(line) = step.gap_line() {
+            put_line(&mut text, &format!("  {line}"));
+        }
+        // Design 55.4: a changed line with no fact is a defect of Semilla. The line stays in
+        // the short text.
+        for line in step.no_fact_lines() {
             put_line(&mut text, &format!("  {line}"));
         }
         for fact in step.facts.iter().filter(|fact| fact.spotlight && fact.reason.is_none()) {

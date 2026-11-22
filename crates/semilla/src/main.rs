@@ -93,6 +93,14 @@ enum Command {
         /// the behavior. It does not check the sentence.
         #[arg(long = "change")]
         change: Vec<String>,
+        /// A tag of the agent: a name for a part of the step. `PLACE[,PLACE]=NAME`. A place is
+        /// `FILE:LINE` or `FILE:START-END` (lines of the new tree), `FILE:-START-END` (lines of
+        /// the old tree, for a deleted text), or `FILE` (the full file). The two sides of a
+        /// hunk header of `git diff` also work: `FILE:+START,COUNT` and `FILE:-START,COUNT`.
+        /// A tag has each fact whose edit is fully in its lines. A tag is not a fact: it
+        /// changes no fact, no gap, and no result. Semilla does not check the name.
+        #[arg(long = "tag")]
+        tag: Vec<String>,
         /// The reason for a fact in the spotlight: `ANCHOR=TEXT`. One reason can cover each open
         /// spotlight of one kind in the step: `kind:KIND=TEXT`. The kinds: `cfg-attribute`,
         /// `new-attribute`, `changed-attribute`, `inactive-code`, `indirect-change`,
@@ -136,6 +144,9 @@ enum Command {
         /// `ITEM[,ITEM]=TEXT` (see `semilla step --help`).
         #[arg(long = "change")]
         change: Vec<String>,
+        /// `PLACE[,PLACE]=NAME`: a tag, a name for a part of the step (see `semilla step --help`).
+        #[arg(long = "tag")]
+        tag: Vec<String>,
     },
     /// Remove the last stored step (the working tree keeps its changes).
     #[command(display_order = 2)]
@@ -453,6 +464,7 @@ fn phase1_ok(report: &semilla_core::Report) -> bool {
                 && step.facts.iter().all(|f| !f.spotlight || f.reason.is_some())
                 && step.claims.iter().all(|c| c.status.is_verified() || c.status.is_pending())
                 && step.agent_facts.iter().all(|fact| fact.holds)
+                && step.tags.iter().all(|tag| tag.error.is_none())
         })
 }
 
@@ -549,9 +561,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Replay { action: ReplayAction::End } => println!("{}", app.replay_end()?),
         Command::Replay { action: ReplayAction::Abort } => println!("{}", app.replay_abort()?),
-        Command::Step { intent, group, claims, same, change, reasons, tree, compiled, no_check, fast } => {
+        Command::Step { intent, group, claims, same, change, tag, reasons, tree, compiled, no_check, fast } => {
             let intent = intent.context("give the intent: `semilla step \"<intent>\"`")?;
-            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, tree, fast, compiled, no_check };
+            let request = onestep::StepRequest { intent, group, claims, reasons, same, change, tags: tag, tree, fast, compiled, no_check };
             let (text, stored) = app.step_once(&request)?;
             print!("{text}");
             // Design 37.22: the build code cache keeps the entries of the stored steps and the
@@ -568,8 +580,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::from(1));
             }
         }
-        Command::Fact { step, same, change } => {
-            let (text, stored) = app.add_facts(step, &same, &change)?;
+        Command::Fact { step, same, change, tag } => {
+            let (text, stored) = app.add_facts(step, &same, &change, &tag)?;
             print!("{text}");
             if !stored {
                 return Ok(ExitCode::from(1));

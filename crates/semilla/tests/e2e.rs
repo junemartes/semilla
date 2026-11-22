@@ -378,6 +378,11 @@ fn replay_flow() {
 
     // Step 2: one hunk by its target line.
     run(repo, &["old-step", "begin", "a larger max in the app"], 0);
+    // Design 55.3: the parser of the position is the parser of a place of a tag. Lines of
+    // the old tree and a line 0 are errors.
+    let old_tree = semilla(repo, &["replay", "take", &format!("{main}:-3")]);
+    assert!(old_tree.status.code() == Some(2) && String::from_utf8_lossy(&old_tree.stderr).contains("gives lines of the old tree"), "{}", String::from_utf8_lossy(&old_tree.stderr));
+    assert_eq!(semilla(repo, &["replay", "take", &format!("{main}:0")]).status.code(), Some(2));
     run(repo, &["replay", "take", &format!("{main}:3")], 0);
     run(repo, &["check"], 0);
     let ended = run(repo, &["old-step", "end"], 0);
@@ -7768,7 +7773,7 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     // The gap list: the largest group first, with the option that covers the group. The test
     // function is not in the list.
     let list = format!(
-        "  not stated: 6 item(s) with 7 place(s) {GAP_HEAD}\n  ? 3 places: `$a.total` => `$a.total()` (f1, f2)\n      in: shop_core::facts::a, shop_core::facts::b, shop_core::facts::d\n      to state it: --same 'rewrite $a.total => $a.total()'\n  ? 2 places: 2 different edits (f3, f4)\n      in: shop_core::facts::idle\n      to state it: --change 'shop_core::facts::idle=TEXT'\n  ? 1 place: changed literal `1` → `5` (f5)\n"
+        "  not stated: 6 item(s) with 7 place(s) {GAP_HEAD}\n  ? 3 places: `$a.total` => `$a.total()` (f1, f2)\n      in: shop_core::facts::a, shop_core::facts::b, shop_core::facts::d\n      lines: crates/shop-core/src/facts.rs:11, crates/shop-core/src/facts.rs:14, crates/shop-core/src/facts.rs:17, crates/shop-core/src/facts.rs:-11, crates/shop-core/src/facts.rs:-14, crates/shop-core/src/facts.rs:-17\n      to state it: --same 'rewrite $a.total => $a.total()'\n  ? 2 places: 2 different edits (f3, f4)\n      in: shop_core::facts::idle\n      lines: crates/shop-core/src/facts.rs:20-25\n      to state it: --change 'shop_core::facts::idle=TEXT'\n  ? 1 place: changed literal `1` → `5` (f5)\n"
     );
     assert!(out.contains(&list), "{out}");
     assert!(!out.lines().any(|line| line.starts_with("      in: ") && line.contains("tests::t")), "{out}");
@@ -7825,7 +7830,7 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     let out = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(output.status.success(), "{out}{}", String::from_utf8_lossy(&output.stderr));
     assert!(out.starts_with("stored: 2 new fact(s) of the agent in step 0 \"use the method\"; no build check runs again (the trees of the step are the same)\n") && !out.contains("build check:"), "{out}");
-    assert!(out.contains("  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: the behavior of existing code can change in each item)\n      places: shop_core::facts::idle/S0, shop_core::facts::idle/S1\n"), "{out}");
+    assert!(out.contains("  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: the behavior of existing code can change in each item; covers 2 fact(s) in 1 item(s) with 6 changed line(s))\n      places: shop_core::facts::idle/S0, shop_core::facts::idle/S1\n"), "{out}");
     assert!(out.contains("  ✓ a3 change: `inner` \"the fee is 5\" (holds: ") && out.contains(&format!("  not stated: 1 item(s) with 1 place(s) {GAP_HEAD}\n")), "{out}");
     assert!(out.contains("  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop_core::facts::tail=TEXT'\n"), "{out}");
     let step = session_steps(repo)[0].clone();
@@ -7995,4 +8000,156 @@ fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
     assert_eq!(code, Some(0), "{out}");
     assert!(out.starts_with("✓ plan step 0: \"use the method\"\n") && !out.contains("✗ plan step") && !out.contains("is false"), "{out}");
     assert_eq!(session_steps(repo)[0]["agent"], serde_json::json!({"same": ["rewrite $a.total => $a.total()"], "change": ["shop_core::facts::idle=idle scales the value"]}));
+}
+
+/// Design 55.3 (batch 9b4, T2 and T3): the option `--tag` of `semilla step` and of
+/// `semilla fact`. A tag groups the facts in the outputs. It changes no fact and no gap.
+#[test]
+fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
+    let file = "crates/shop-core/src/facts.rs";
+    let fact_lines = |text: &str| -> Vec<String> { text.lines().filter(|line| line.starts_with("  ◆ ") || line.starts_with("  ? ") || line.starts_with("  not stated: ")).map(str::to_string).collect() };
+    // The same step with no tag.
+    let plain_dir = facts_setup();
+    let (code, plain) = tree_mode(&plain_dir.path().join("repo"), &["step", "use the method"]);
+    assert_eq!(code, Some(0), "{plain}");
+    assert!(!plain.contains("tag") && plain.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{plain}");
+    let plain_steps = session_steps(&plain_dir.path().join("repo"));
+
+    let dir = facts_setup();
+    let repo = &dir.path().join("repo");
+    // The form of a tag: exit code 2, and no step is open after it.
+    for (tag, cause) in [
+        (format!("{file}:11"), "is not a tag: write PLACE[,PLACE]=NAME".to_string()),
+        (format!("{file}:9999=x"), format!("the position `{file}:9999` of the tag `x` is after the last line: `{file}` has 42 line(s) in the new tree")),
+        (format!("{file}:-9999=x"), format!("`{file}` has 36 line(s) in the old tree")),
+    ] {
+        let (code, out) = tree_mode(repo, &["step", "use the method", "--tag", &tag]);
+        assert!(code == Some(2) && out.contains(&cause), "{tag}: {code:?} {out}");
+    }
+    // A position with no edit: the step is not stored (exit code 1). The output has the
+    // nearest positions with an edit, and the command to run again has no tag.
+    let (code, out) = tree_mode(repo, &["step", "use the method", "--tag", &format!("{file}:1-3=x")]);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.starts_with("rejected: step 0 \"use the method\" is not stored\n") && out.contains(&format!("  ✗ tag `x` has a position with no edit: `--tag '{file}:1-3=x'`\n")), "{out}");
+    assert!(out.contains(&format!("  ✗ tag: the tag `x` has a position with no edit: the step has no edit in `{file}:1-3`; the nearest positions with an edit: {file}:11\n")), "{out}");
+    assert!(out.ends_with("run again: semilla step 'use the method'\n"), "{out}");
+    // A file that the step does not change.
+    let (code, out) = tree_mode(repo, &["step", "use the method", "--tag", "crates/shop-core/src/lib.rs=x"]);
+    assert!(code == Some(1) && out.contains(&format!("the step does not change the file `crates/shop-core/src/lib.rs`; the changed files: {file}\n")), "{code:?} {out}");
+    let (_, status) = tree_mode(repo, &["status"]);
+    assert!(status.contains("no open change set"), "{status}");
+
+    // Two tags: lines of the new tree, and a line of the old tree for the old place of a
+    // moved call (the hunk header `@@ -23 +29 @@`).
+    let (code, out) = tree_mode(repo, &["step", "use the method", "--tag", &format!("{file}:11-17=method calls"), "--tag", &format!("{file}:20-25,{file}:-23=idle and tail")]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics]\n")), "{out}");
+    assert!(out.contains(&format!("  tag `idle and tail` ({file}:20-25, {file}:-23): 3 fact(s): 3 semantics; 8 changed line(s)\n  ◆ f3 derived: added `let` [1]")), "{out}");
+    assert!(out.contains("  not in a tag: 2 fact(s): 2 semantics; 4 changed line(s)\n  ◆ f7 derived: "), "{out}");
+    assert!(out.contains("      tag: `method calls`\n      to state it: --same 'rewrite $a.total => $a.total()'\n") && out.contains("      not in a tag\n      to state it: --change 'shop_core::facts::inner::a=TEXT'\n"), "{out}");
+    assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
+    // A tag does not replace a fact: each fact line and each gap line of the step with no
+    // tag is in the output one time, and the stored facts are equal.
+    for line in fact_lines(&plain) {
+        assert_eq!(out.lines().filter(|other| *other == line).count(), 1, "{line}\n{out}");
+    }
+    assert_eq!(fact_lines(&plain).len(), fact_lines(&out).len(), "{out}");
+    let steps = session_steps(repo);
+    assert_eq!(steps[0]["tags"], serde_json::json!([format!("{file}:11-17=method calls"), format!("{file}:20-25,{file}:-23=idle and tail")]));
+    assert!(plain_steps[0].get("tags").is_none(), "{}", plain_steps[0]);
+    assert_eq!(steps[0]["agent"], plain_steps[0]["agent"]);
+
+    // `semilla fact --tag` adds a tag to the stored step. A fact of two tags shows in the
+    // first tag; the second tag names it.
+    let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{file}:+29,1=tail"), "--change", "shop_core::facts::idle=idle scales the value"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.starts_with("stored: 1 new fact(s) of the agent and 1 new tag(s) in step 0 \"use the method\"; no build check runs again"), "{out}");
+    assert!(out.contains("(holds: the behavior of existing code can change in each item; covers 2 fact(s) in 1 item(s) with 6 changed line(s))\n"), "{out}");
+    assert!(out.contains(&format!("  tag `tail` ({file}:29): 1 fact(s): 1 semantics; 2 changed line(s)\n      also in this tag, shown in a tag above: f6\n")), "{out}");
+    assert!(out.contains("      tags: `idle and tail`, `tail`\n"), "{out}");
+    // A tag with no edit adds nothing (exit code 1); a line after the last line: exit code 2.
+    let stored = session_steps(repo)[0].clone();
+    let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{file}:1=none")]);
+    assert!(code == Some(1) && out.starts_with("rejected: no fact and no tag is added to step 0") && out.contains("  ✗ tag: the tag `none` has a position with no edit: "), "{code:?} {out}");
+    let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{file}:999=none")]);
+    assert!(code == Some(2) && out.contains("is after the last line"), "{code:?} {out}");
+    assert_eq!(session_steps(repo)[0], stored);
+
+    // `status --verbose` has the groups of the tags and the lines of each fact. The short
+    // `status` has no line of a tag.
+    let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
+    assert!(verbose.contains("      facts, in the groups of the tags below: f3, f4\n"), "{verbose}");
+    assert!(verbose.contains(&format!("  ◆ f2 derived: changed expression `e.total` → `e.total()` at `shop_core::facts::d/tail/rhs` [semantics]\n      lines: {file}:17, {file}:-17\n")), "{verbose}");
+    assert!(verbose.contains(&format!("  tag `tail` ({file}:29): 1 fact(s): 1 semantics; 2 changed line(s)\n")), "{verbose}");
+    let (_, status) = tree_mode(repo, &["status"]);
+    assert!(!status.contains("tag `") && !status.contains("changed lines with no fact"), "{status}");
+    // The Markdown review has the groups of the tags, and the tag of each gap.
+    let md = repo.join(".semilla/review.md");
+    tree_mode(repo, &["review", "--md", md.to_str().unwrap()]);
+    let report = std::fs::read_to_string(&md).unwrap();
+    assert!(report.contains("#### Tags of the agent (3)\n") && report.contains(&format!("Step 0, tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s):\n\n- step 0: f1 derived: ")), "{report}");
+    assert!(report.contains("- also in this tag, shown in a tag above: f6\n") && report.contains("Step 0, not in a tag: 2 fact(s): 2 semantics; 4 changed line(s):\n"), "{report}");
+    assert!(report.contains("in: `shop_core::facts::inner::a`; not in a tag\n") && report.contains("; tag: `method calls`\n"), "{report}");
+    assert!(!report.contains("#### Derived facts") && report.contains("  - facts, in the groups of the tags below: f3, f4\n"), "{report}");
+    for id in ["f1", "f2", "f3", "f4", "f5", "f6", "f7"] {
+        assert_eq!(report.matches(&format!("- step 0: {id} ")).count(), 1, "{id}\n{report}");
+    }
+    // Negative test: the review of the step with no tag has no tag section.
+    let plain_repo = plain_dir.path().join("repo");
+    let md = plain_repo.join(".semilla/review.md");
+    tree_mode(&plain_repo, &["review", "--md", md.to_str().unwrap()]);
+    let report = std::fs::read_to_string(&md).unwrap();
+    assert!(!report.contains("Tags of the agent") && !report.contains("not in a tag") && report.contains("#### Derived facts (7)"), "{report}");
+}
+
+/// Design 55.3: the MCP tools `step` and `fact`, and a step of a replay plan, take tags.
+#[test]
+fn the_mcp_tools_and_a_plan_step_take_tags() {
+    let dir = facts_setup();
+    let repo = &dir.path().join("repo");
+    let file = "crates/shop-core/src/facts.rs";
+    let env = [("SEMILLA_COMPILED", "0")];
+    let calls = mcp_calls_env(
+        repo,
+        &[
+            ("step", serde_json::json!({"intent": "use the method", "tags": [format!("{file}:1-3=none")]})),
+            ("step", serde_json::json!({"intent": "use the method", "tags": [format!("{file}:11-17=method calls")]})),
+            ("fact", serde_json::json!({"tags": [format!("{file}:20-25=idle")]})),
+            ("fact", serde_json::json!({"tags": [format!("{file}:2=none")]})),
+            ("results", serde_json::json!({})),
+        ],
+        &env,
+    );
+    assert!(calls[0].1 && calls[0].0.contains("rejected: step 0") && calls[0].0.contains("has a position with no edit"), "{}", calls[0].0);
+    assert!(!calls[1].1 && calls[1].0.contains("accepted: step 0") && calls[1].0.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n")), "{}", calls[1].0);
+    assert!(!calls[2].1 && calls[2].0.contains("stored: 0 new fact(s) of the agent and 1 new tag(s) in step 0") && calls[2].0.contains(&format!("  tag `idle` ({file}:20-25): 2 fact(s): 2 semantics; 6 changed line(s)\n")), "{}", calls[2].0);
+    assert!(calls[3].1 && calls[3].0.contains("rejected: no fact and no tag is added to step 0"), "{}", calls[3].0);
+    // A tag changes no result: the short result has the gap count of the step with no tag.
+    assert!(calls[4].0.contains(&format!("  not stated: 6 item(s) with 7 place(s) {GAP_HEAD}\n")) && calls[4].0.contains("result: accepted"), "{}", calls[4].0);
+    assert_eq!(session_steps(repo)[0]["tags"], serde_json::json!([format!("{file}:11-17=method calls"), format!("{file}:20-25=idle")]));
+
+    // A step of a replay plan has the key `tag`.
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "use the method"]);
+    run(repo, &["tag"], 0);
+    run(repo, &["replay", "begin", "--commit", "HEAD"], 0);
+    let plan = |tag: &str| {
+        let edits: Vec<serde_json::Value> = facts_edits().iter().map(|(find, replace)| serde_json::json!({"file": file, "find": find, "replace": replace})).collect();
+        let plan = serde_json::json!({"steps": [{"intent": "use the method", "tag": [tag], "edits": edits}]});
+        std::fs::write(repo.join(".semilla/plan.json"), serde_json::to_string_pretty(&plan).unwrap()).unwrap();
+    };
+    // A tag with a position with no edit stops the plan.
+    plan(&format!("{file}:1-3=none"));
+    let (code, out) = tree_mode(repo, &["replay", "apply"]);
+    assert!(code == Some(1) && out.contains("has a position with no edit") && !out.contains("✓ plan step"), "{code:?} {out}");
+    // A tag with a wrong form is a problem of the plan.
+    plan(&format!("{file}:11-17"));
+    let (code, out) = tree_mode(repo, &["replay", "apply"]);
+    assert!(code != Some(0) && out.contains("is not a tag: write PLACE[,PLACE]=NAME"), "{code:?} {out}");
+    plan(&format!("{file}:11-17=method calls"));
+    let (code, out) = tree_mode(repo, &["replay", "apply"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.starts_with("✓ plan step 0: \"use the method\"\n"), "{out}");
+    assert_eq!(session_steps(repo)[0]["tags"], serde_json::json!([format!("{file}:11-17=method calls")]));
+    let (_, verbose) = tree_mode(repo, &["status", "--verbose"]);
+    assert!(verbose.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n")), "{verbose}");
 }

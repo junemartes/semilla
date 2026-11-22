@@ -48,6 +48,8 @@ pub struct StepRequest {
     pub same: Vec<String>,
     /// Each `change` fact of the agent (design 54): `ITEM[,ITEM]=TEXT`.
     pub change: Vec<String>,
+    /// Each tag of the agent (design 55.3): `PLACE[,PLACE]=NAME`.
+    pub tags: Vec<String>,
     pub tree: bool,
     /// Phase 1 only; phase 2 runs in the background (B1). Only with `compiled`.
     pub fast: bool,
@@ -110,6 +112,9 @@ impl StepRequest {
             parts.push(format!("--group {}", quote(group)));
         }
         parts.extend(semilla_core::AgentFacts { same: self.same.clone(), change: self.change.clone() }.options());
+        for tag in &self.tags {
+            parts.push(format!("--tag {}", quote(tag)));
+        }
         for claim in &self.claims {
             parts.push(format!("--claim {}", quote(claim)));
         }
@@ -292,6 +297,12 @@ impl App {
         if let Err(message) = semilla_verify::agent::check_form(&agent) {
             bail!("{message}");
         }
+        // The form of each tag (design 55.3). The check of the positions comes with the facts.
+        for tag in &request.tags {
+            if let Err(message) = semilla_core::report::parse_tag(tag) {
+                bail!("`--tag '{tag}'`: {message}");
+            }
+        }
 
         // The claims and the reasons.
         let mut claims = Vec::new();
@@ -384,7 +395,7 @@ impl App {
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: None, agent });
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: None, agent, tags: request.tags.clone() });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -438,6 +449,14 @@ impl App {
             }
         };
         let report = result.report.steps.first().cloned().unwrap_or_default();
+        // Design 55.3: a line number of a tag after the last line of its file is an error of
+        // the form of the command, as a tag with no name.
+        if let Some(error) = report.tags.iter().filter(|tag| tag.form).find_map(|tag| tag.error.clone()) {
+            let mut restore = if closed.is_some() { previous.clone() } else { saved.clone() };
+            restore.open = None;
+            self.save_session(&restore)?;
+            bail!("{error}");
+        }
         let accepted = report.accepted();
         // Design 53: the build check of the new tree, after the syntax phase. It runs also for a
         // step that the syntax phase does not accept, so that one result shows each cause. The
@@ -647,6 +666,16 @@ impl App {
                 corrected.same.retain(|option| fact.kind != "same" || !fact.options.contains(option));
                 corrected.change.retain(|option| fact.kind != "change" || !fact.options.contains(option));
             }
+            // Design 55.3: a tag with a position that has no edit. The body below shows the
+            // cause. The command to run again omits the tag: a tag changes no fact.
+            let bad_tags: Vec<&semilla_core::report::Tag> = report.tags.iter().filter(|tag| tag.error.is_some()).collect();
+            for (tag, option) in report.tags.iter().zip(&request.tags).filter(|(tag, _)| tag.error.is_some()) {
+                put_line(&mut text, &format!("  ✗ tag `{}` has a position with no edit: `--tag '{option}'`", tag.name));
+                corrected.tags.retain(|other| other != option);
+            }
+            if !bad_tags.is_empty() {
+                put_line(&mut text, "correct the positions of the tag and run the step again. Or run the step without the tag (the command below): a tag changes no fact, no gap, and no result.");
+            }
             for error in &report.errors {
                 // The body below shows each error one time. The top summary does not repeat it
                 // (Part B item 4 of batch 5j).
@@ -846,7 +875,7 @@ impl App {
     /// the step do not change, so the stored result of the build check stays, and no build
     /// check runs. Only the check of the facts runs again. A false fact stores nothing.
     /// Returns the text, and true if the facts are stored.
-    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String]) -> Result<(String, bool)> {
+    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String], tags: &[String]) -> Result<(String, bool)> {
         let previous = self.load_session()?;
         if previous.open.is_some() || previous.replay.is_some() {
             bail!("a step of the old protocol or a replay is open; `semilla fact` adds facts to a stored step of `semilla step`");
@@ -860,11 +889,16 @@ impl App {
             bail!("no step {index}; the last stored step is step {last}");
         }
         let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec() };
-        if added.is_empty() {
-            bail!("give one fact or more: `semilla fact --same 'rewrite FROM => TO'` or `semilla fact --change 'ITEM=TEXT'`");
+        if added.is_empty() && tags.is_empty() {
+            bail!("give one fact or more: `semilla fact --same 'rewrite FROM => TO'` or `semilla fact --change 'ITEM=TEXT'`; or give a tag: `semilla fact --tag 'PLACE=NAME'`");
         }
         if let Err(message) = semilla_verify::agent::check_form(&added) {
             bail!("{message}");
+        }
+        for tag in tags {
+            if let Err(message) = semilla_core::report::parse_tag(tag) {
+                bail!("`--tag '{tag}'`: {message}");
+            }
         }
         let mut session = previous.clone();
         let stored = &mut session.changeset.steps[index];
@@ -878,6 +912,14 @@ impl App {
                 }
             }
         }
+        // Design 55.3: a tag is not a fact. It has its own list and its own count.
+        let mut tag_count = 0;
+        for tag in tags {
+            if !stored.tags.contains(tag) {
+                stored.tags.push(tag.clone());
+                tag_count += 1;
+            }
+        }
         let (intent, compiled) = (stored.intent.clone(), stored.compiled);
         self.save_session(&session)?;
         let result = match self.check(Some(index), false) {
@@ -889,7 +931,23 @@ impl App {
         };
         let report = result.report.steps.first().cloned().unwrap_or_default();
         let mut text = String::new();
-        let lines = semilla_verify::views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
+        let mut lines = semilla_verify::views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
+        // The head line, the notes, and the error of each tag. The facts of a tag show in
+        // `semilla status --verbose`.
+        lines.extend(semilla_verify::views::tag_lines(&report, &|_| Vec::new()));
+        if let Some(error) = report.tags.iter().filter(|tag| tag.form).find_map(|tag| tag.error.clone()) {
+            self.save_session(&previous)?;
+            bail!("{error}");
+        }
+        if report.tags.iter().any(|tag| tag.error.is_some()) {
+            self.save_session(&previous)?;
+            put_line(&mut text, &format!("rejected: no fact and no tag is added to step {index} {}", semilla_core::text::quoted(&intent)));
+            for line in &lines {
+                put_line(&mut text, line);
+            }
+            put_line(&mut text, "correct the positions of the tag, then run the command again.");
+            return Ok((text, false));
+        }
         if report.agent_facts.iter().any(|fact| !fact.holds) {
             self.save_session(&previous)?;
             put_line(&mut text, &format!("rejected: no fact is added to step {index} {}", semilla_core::text::quoted(&intent)));
@@ -907,7 +965,8 @@ impl App {
         if compiled {
             self.queue_session(&session.changeset)?;
         }
-        put_line(&mut text, &format!("stored: {count} new fact(s) of the agent in step {index} {}; no build check runs again (the trees of the step are the same)", semilla_core::text::quoted(&intent)));
+        let new_tags = if tags.is_empty() { String::new() } else { format!(" and {tag_count} new tag(s)") };
+        put_line(&mut text, &format!("stored: {count} new fact(s) of the agent{new_tags} in step {index} {}; no build check runs again (the trees of the step are the same)", semilla_core::text::quoted(&intent)));
         for line in &lines {
             put_line(&mut text, line);
         }
