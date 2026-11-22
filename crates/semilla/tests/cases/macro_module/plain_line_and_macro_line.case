@@ -1,0 +1,45 @@
+note: A-g: a plain `mod` line and a line in a macro input with one name and one file give one module (the plain line has it)
+rule+: R59.1-7
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! pick {
+    ($($t:tt)*) => { $($t)* };
+}
+
+#[cfg(unix)]
+mod unix;
+pick! {
+    #[cfg(not(unix))]
+    mod unix;
+}
+=== old src/unix.rs
+pub fn open() -> u32 {
+    3
+}
+=== new src/unix.rs
+pub fn open() -> u32 {
+    4
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `3` → `4` (f1)
+      in: depot::unix::open
+      lines: src/unix.rs:2, src/unix.rs:-2
+      to state it: --change 'depot::unix::open=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::unix::open=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `3` → `4` at `depot::unix::open/tail` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `3` → `4` at `depot::unix::open/tail` [semantics]
+    lines: src/unix.rs:2, src/unix.rs:-2

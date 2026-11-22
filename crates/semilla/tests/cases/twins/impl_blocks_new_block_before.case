@@ -1,0 +1,52 @@
+note: two impl blocks of one type with a new block before them: one added impl block
+rule+: R59.3-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart;
+impl Cart {
+    pub fn one(&self) -> u32 {
+        1
+    }
+}
+impl Cart {
+    pub fn two(&self) -> u32 {
+        2
+    }
+}
+=== new src/lib.rs
+pub struct Cart;
+impl Cart {
+    pub fn zero(&self) -> u32 {
+        0
+    }
+}
+impl Cart {
+    pub fn one(&self) -> u32 {
+        1
+    }
+}
+impl Cart {
+    pub fn two(&self) -> u32 {
+        2
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added]
+  ◆ f2 derived: added `depot::impl Cart#0` with: `fn zero` [added]
+  cover: each of the 5 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `depot::Cart::zero` (the public API changes: a different crate can now use the item) [added]
+    lines: src/lib.rs:3-5
+◆ f2 derived: added `depot::impl Cart#0` with: `fn zero` [added]
+    lines: src/lib.rs:2-6

@@ -1,0 +1,32 @@
+note: B3 of the brief (B-a): the fact of a removed body shows the body, and its position has each line of the body
+rule+: R59.2-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Price {
+    fn net(&self) -> u32;
+    fn gross(&self) -> u32 {
+        self.net() + 2
+    }
+}
+=== new src/lib.rs
+pub trait Price {
+    fn net(&self) -> u32;
+    fn gross(&self) -> u32;
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: body removed from `depot::Price::gross`: `{ self.net() + 2 }` [removed]
+    lines: src/lib.rs:3, src/lib.rs:-3-5

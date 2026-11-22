@@ -201,6 +201,11 @@ pub struct StepReport {
     /// The cause of each changed line with no fact (design 56.4), for the verbose output.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_fact_causes: Vec<NoFactCause>,
+    /// The changed lines that only the rule of the equal tokens (design 59, B-b) puts in a
+    /// fact, by item pair, for the verbose output. The cause has the item and the lines of the
+    /// two items of the pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equal_token_lines: Vec<NoFactCause>,
     /// The tags of the agent (design 55.3), in the order of the command. A tag is a name for
     /// a part of the step. It is not a fact.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1271,6 +1276,12 @@ impl StepReport {
     /// and the lines.
     pub fn cause_lines(&self) -> Vec<String> {
         self.no_fact_causes.iter().map(|cause| format!("! cause: {}: {}", cause.cause, Position::list(&cause.positions))).collect()
+    }
+
+    /// The lines that only the rule of the equal tokens puts in a fact (design 59, B-b),
+    /// without the indent: "equal tokens: in `ITEM` (old lines A-B, new lines C-D): LINES".
+    pub fn equal_token_lines(&self) -> Vec<String> {
+        self.equal_token_lines.iter().map(|group| format!("equal tokens: {}: {}", group.cause, Position::list(&group.positions))).collect()
     }
 
     /// The lines of the cover check that need the reader: the lines with the mark `!`.

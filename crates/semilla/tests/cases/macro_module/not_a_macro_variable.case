@@ -1,0 +1,38 @@
+note: negative (A-f): `mod $unix;` has a macro variable, not an identifier; a `macro_rules!` definition in the input is not a line: the file keeps its `file` fact
+rule+: R59.1-6
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! pick {
+    ($($t:tt)*) => { $($t)* };
+}
+
+pick! {
+    mod $unix;
+    macro_rules! inner {
+        () => { mod unix; };
+    }
+}
+=== old src/unix.rs
+pub fn open() -> u32 { 3 }
+=== new src/unix.rs
+pub fn open() -> u32 { 4 }
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: src/unix.rs: changed [file]
+      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/unix.rs:=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'src/unix.rs:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/unix.rs:=the reason of the test'
+◆ f1 derived: src/unix.rs: changed [file]
+    lines: src/unix.rs:1, src/unix.rs:-1

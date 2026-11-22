@@ -145,6 +145,11 @@ pub struct Workspace {
     /// 56.3). An inline module is not in the map: its place is its item.
     #[serde(default)]
     pub module_files: BTreeMap<String, String>,
+    /// The modules of a `mod NAME;` line in the input of a macro call (design 59, A-a), by
+    /// module path. Semilla does not expand the macro: it does not know if the build has the
+    /// module.
+    #[serde(default)]
+    pub macro_modules: BTreeMap<String, MacroModule>,
     /// The files of the parsed targets that the loader cannot parse, with the reason (design
     /// 37.5). The file is not in `parsed_files`.
     pub parse_errors: BTreeMap<String, String>,
@@ -155,6 +160,19 @@ pub struct Workspace {
     /// file again with it (design 44, FIX 1).
     #[serde(skip)]
     pub editions: BTreeMap<String, Edition>,
+}
+
+/// The source of a module whose `mod NAME;` line is in the input of a macro call (design 59).
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct MacroModule {
+    /// The path of the macro call item.
+    pub call: String,
+    /// The file of the module.
+    pub file: String,
+    /// The file and the line of the `mod` token of the declaration.
+    pub at: (String, usize),
+    /// The text of the declaration (`mod unix;`).
+    pub text: String,
 }
 
 /// One function, constant, or static of a file, for [`Workspace::body_items`].
@@ -366,7 +384,7 @@ impl Workspace {
                 // The rule does not look at the other targets of the package: `src/main.rs`
                 // of a package with no library has the form `depot (bin "depot")` too.
                 let module = target_root(&package.name, kind, name);
-                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, module_files: &mut workspace.module_files, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition };
+                let mut loader = Loader { root, items: &mut items, parsed: &mut workspace.parsed_files, inner_attrs: &mut workspace.inner_attrs, inner_attrs_display: &mut workspace.inner_attrs_display, module_files: &mut workspace.module_files, macro_modules: &mut workspace.macro_modules, parse_errors: &mut workspace.parse_errors, editions: &mut workspace.editions, crate_name: &package.name, edition: package.edition };
                 loader.load_file(file, &module, matches!(kind.as_str(), "test" | "bench"))?;
             }
         }
@@ -947,6 +965,7 @@ impl Twins {
 
 
 /// One attribute of an item: an `#[…]` attribute or a doc comment (design 39.3).
+#[derive(Clone)]
 pub(crate) struct Attr {
     /// The compare text: `# [cfg (test)]`. A doc comment is `# [doc = "…"]`.
     pub(crate) text: String,
@@ -1063,6 +1082,7 @@ struct Loader<'a> {
     inner_attrs: &'a mut BTreeMap<String, (String, Vec<String>)>,
     inner_attrs_display: &'a mut BTreeMap<String, Vec<String>>,
     module_files: &'a mut BTreeMap<String, String>,
+    macro_modules: &'a mut BTreeMap<String, MacroModule>,
     parse_errors: &'a mut BTreeMap<String, String>,
     editions: &'a mut BTreeMap<String, Edition>,
     crate_name: &'a str,
@@ -1101,6 +1121,9 @@ impl Loader<'_> {
         let mut other_index = 0;
         let mut twins = Twins::new(items);
         let mut call_index: BTreeMap<String, usize> = BTreeMap::new();
+        // Design 59, A-a: the `mod NAME;` lines in the inputs of the macro calls of the list,
+        // with the path of the call, in source order.
+        let mut declared: Vec<(Declaration, String)> = Vec::new();
         for item in items {
             let attrs = attributes(item.syntax());
             match item {
@@ -1265,11 +1288,18 @@ impl Loader<'_> {
                     let path = match item {
                         ast::Item::MacroRules(definition) => format!("{module}::{}", twins.name(&format!("{}!", name_of(definition)))),
                         ast::Item::MacroCall(call) => {
-                            let name = format!("{}!", compare_opt(call.path().as_ref()));
+                            // The path of the call has no space (design 59): `crate::table!`.
+                            let name = format!("{}!", compare_opt(call.path().as_ref()).replace(' ', ""));
                             let definitions = twins.count.get(&name).copied().filter(|count| *count >= 2).unwrap_or(0);
                             let index = call_index.entry(name.clone()).or_insert(definitions);
                             *index += 1;
-                            format!("{module}::{name}#{}", *index - 1)
+                            let path = format!("{module}::{name}#{}", *index - 1);
+                            if let Some(tree) = call.token_tree() {
+                                let mut found = Vec::new();
+                                declarations(tree.syntax(), &source.text, self.edition, &[], &mut found);
+                                declared.extend(found.into_iter().map(|declaration| (declaration, path.clone())));
+                            }
+                            path
                         }
                         _ => unreachable!(),
                     };
@@ -1313,6 +1343,65 @@ impl Loader<'_> {
                     let signature = without_parts(other.syntax(), plain_start(other.syntax()), &[]);
                     self.add_parts(format!("{module}::{name}"), ItemKind::Other, item.syntax(), &Text::default(), &attrs, None, Vec::new(), source, test, signature);
                 }
+            }
+        }
+        self.load_declared(items, module, source, dir, test, declared)
+    }
+
+    /// Loads the module files of the `mod NAME;` lines in the inputs of the macro calls of one
+    /// item list (design 59, A-b to A-h). The file of a declaration follows the rule of a plain
+    /// `mod` line, and the parent is the module of the call. A declaration with no file gives
+    /// no module. Two declarations of one path with one file give one module. Two files of one
+    /// path are twin modules (`NAME#0`, `NAME#1`), as for `cfg_attr(…, path = …)`. A name of a
+    /// plain `mod` line of the same list gives no module here: the plain line has the module,
+    /// and a different file keeps its `file` fact.
+    fn load_declared(&mut self, items: &[ast::Item], module: &str, source: &Source, dir: &Path, test: bool, declared: Vec<(Declaration, String)>) -> Result<()> {
+        if declared.is_empty() {
+            return Ok(());
+        }
+        let plain: BTreeSet<String> = items.iter().filter_map(|item| match item {
+            ast::Item::Module(item_mod) => Some(name_of(item_mod)),
+            _ => None,
+        }).collect();
+        let file = &source.rel;
+        let file_base = if *dir == module_dir(&self.root.join(file)) { self.root.join(file).parent().map(Path::to_path_buf).unwrap_or_default() } else { dir.to_path_buf() };
+        // The files of each path, in source order: (file, by attribute, test, declaration, call).
+        let mut by_path: BTreeMap<Vec<String>, Vec<(PathBuf, bool, bool, Declaration, String)>> = BTreeMap::new();
+        let mut order: Vec<Vec<String>> = Vec::new();
+        for (declaration, call) in declared {
+            if declaration.names.len() == 1 && plain.contains(&declaration.names[0]) {
+                continue;
+            }
+            // A declaration in a `mod NAME { … }` of the input: its folder is below `NAME/`.
+            let inner_dir = declaration.names[..declaration.names.len() - 1].iter().fold(dir.to_path_buf(), |dir, name| dir.join(name));
+            let base = if declaration.names.len() == 1 { file_base.clone() } else { inner_dir.clone() };
+            let name = declaration.names.last().cloned().unwrap_or_default();
+            let is_test = test || is_cfg_test(&declaration.attrs);
+            let list = by_path.entry(declaration.names.clone()).or_insert_with(|| {
+                order.push(declaration.names.clone());
+                Vec::new()
+            });
+            for (found, by_attr) in mod_files(&declaration.attrs, &base, &inner_dir, &name) {
+                if !list.iter().any(|entry| entry.0 == found) {
+                    list.push((found, by_attr, is_test, declaration.clone(), call.clone()));
+                }
+            }
+        }
+        for names in order {
+            let files = &by_path[&names];
+            let path = format!("{module}::{}", names.join("::"));
+            for (index, (found, by_attr, is_test, declaration, call)) in files.iter().enumerate() {
+                let path = if files.len() > 1 { format!("{path}#{index}") } else { path.clone() };
+                let text = std::fs::read_to_string(found)?;
+                let rel = relative(self.root, found);
+                let Some(parsed) = self.parse(&rel, &text) else { continue };
+                self.parsed.insert(rel.clone());
+                self.record_inner_attrs(&path, &rel, parsed.syntax());
+                self.macro_modules.insert(path.clone(), MacroModule { call: call.clone(), file: rel.clone(), at: (source.rel.clone(), declaration.line), text: declaration.text.clone() });
+                let child_dir = if *by_attr { found.parent().map(Path::to_path_buf).unwrap_or_default() } else { module_dir(found) };
+                let inner = Source::new(&rel, &text, &parsed, self.edition);
+                let content: Vec<ast::Item> = parsed.items().collect();
+                self.load_items(&content, &path, &inner, &child_dir, *is_test)?;
             }
         }
         Ok(())
@@ -1451,6 +1540,75 @@ impl Loader<'_> {
             macro_definition: value.kind() == SyntaxKind::MACRO_RULES,
         };
         self.items.push(item);
+    }
+}
+
+/// A `mod NAME;` line in the tokens of a macro input (design 59, A-a).
+#[derive(Clone)]
+struct Declaration {
+    /// The names of the `mod NAME { … }` blocks of the input around the line, then the name.
+    names: Vec<String>,
+    /// The attributes of the line.
+    attrs: Vec<Attr>,
+    /// The line of the `mod` token.
+    line: usize,
+    /// The text of the line: `#[path = "a.rs"] pub mod a;`.
+    text: String,
+}
+
+/// The `mod NAME;` lines of a token tree, at each depth (design 59, A-a). A line is this token
+/// sequence: attributes, a visibility, `mod`, one identifier, `;`. The attributes and the
+/// visibility are optional. `mod $name;` is not a line: `$` is not an identifier. The tokens of
+/// a `macro_rules!` definition in the input are not lines. A `mod NAME { … }` block in the
+/// input gives its name to the lines in its braces (A-h). `outer`: the names of the blocks
+/// around the tree.
+fn declarations(tree: &SyntaxNode, text: &str, edition: Edition, outer: &[String], out: &mut Vec<Declaration>) {
+    use rs::NodeOrToken;
+    let elements: Vec<rs::SyntaxElement> = tree.children_with_tokens().filter(|element| !element.kind().is_trivia()).collect();
+    let word = |index: usize| -> Option<String> { elements.get(index).and_then(|element| element.as_token()).map(|token| token.text().to_string()) };
+    let group = |index: usize, open: &str| elements.get(index).and_then(|element| element.as_node()).is_some_and(|node| node.kind() == SyntaxKind::TOKEN_TREE && node.first_token().is_some_and(|token| token.text() == open));
+    let ident = |index: usize| elements.get(index).and_then(|element| element.as_token()).filter(|token| token.kind() == SyntaxKind::IDENT).map(|token| token.text().trim_start_matches("r#").to_string());
+    for (index, element) in elements.iter().enumerate() {
+        match element {
+            NodeOrToken::Node(node) if node.kind() == SyntaxKind::TOKEN_TREE => {
+                // The body of a `macro_rules!` definition (A-f).
+                if index >= 3 && word(index - 3).as_deref() == Some("macro_rules") && word(index - 2).as_deref() == Some("!") && ident(index - 1).is_some() {
+                    continue;
+                }
+                let mut names = outer.to_vec();
+                if index >= 2 && word(index - 2).as_deref() == Some("mod") && group(index, "{") {
+                    names.extend(ident(index - 1));
+                }
+                declarations(node, text, edition, &names, out);
+            }
+            NodeOrToken::Token(token) if token.text() == "mod" => {
+                let (Some(name), Some(";")) = (ident(index + 1), word(index + 2).as_deref()) else { continue };
+                // The visibility, then the attributes, before `mod`.
+                let mut start = index;
+                if start >= 1 && word(start - 1).as_deref() == Some("pub") {
+                    start -= 1;
+                } else if start >= 2 && group(start - 1, "(") && word(start - 2).as_deref() == Some("pub") {
+                    start -= 2;
+                }
+                while start >= 2 && group(start - 1, "[") && word(start - 2).as_deref() == Some("#") {
+                    start -= 2;
+                }
+                let from = usize::from(elements[start].text_range().start());
+                let to = usize::from(elements[index + 2].text_range().end());
+                let Some(line_text) = text.get(from..to) else { continue };
+                // The attributes come from a parse of the text of the line.
+                let Ok(parsed) = rs::parse_file(line_text, edition) else { continue };
+                let Some(ast::Item::Module(item_mod)) = parsed.items().next() else { continue };
+                if item_mod.item_list().is_some() || name_of(&item_mod).trim_start_matches("r#") != name {
+                    continue;
+                }
+                let line = text[..usize::from(token.text_range().start())].matches('\n').count() + 1;
+                let mut names = outer.to_vec();
+                names.push(name);
+                out.push(Declaration { names, attrs: attributes(item_mod.syntax()), line, text: tree::one_line(line_text) });
+            }
+            _ => {}
+        }
     }
 }
 

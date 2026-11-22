@@ -693,6 +693,97 @@ fn comment_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTreeMa
 }
 
 /// The two equal sides of a text "`OLD` → `NEW`", if a fact line has them.
+/// The tokens of a line for the eighth property: each word (a name, a keyword, a number), each
+/// string literal, and each other character that is not white space. The runner has its own
+/// lexer. A `,` and a `;` can be tokens with no meaning (design 52.2): they are not in the list.
+fn simple_tokens(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let end = if c.is_whitespace() {
+            at += 1;
+            continue;
+        } else if c == '"' {
+            let mut end = at + 1;
+            while end < chars.len() && chars[end] != '"' {
+                end += if chars[end] == '\\' { 2 } else { 1 };
+            }
+            (end + 1).min(chars.len())
+        } else if word(c) {
+            (at..chars.len()).find(|index| !word(chars[*index])).unwrap_or(chars.len())
+        } else {
+            at + 1
+        };
+        let token: String = chars[at..end].iter().collect();
+        if token != "," && token != ";" {
+            out.push(token);
+        }
+        at = end;
+    }
+    out
+}
+
+/// Property 8 (design 59, B-e). The output of `status --verbose` lists each line that only the
+/// rule of the equal tokens puts in a fact, with the item pair: "equal tokens: in `ITEM` (old
+/// lines A-B of `F`, new lines C-D of `G`): LINES". The runner reads the two trees itself:
+/// each token of such a line is in the text of the item of the other tree, as often as the
+/// line has it. The check is weaker than the rule: it does not prove that the tree compare
+/// pairs the token.
+fn equal_token_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let text = |tree: &BTreeMap<String, Vec<u8>>, file: &str| tree.get(file).map(|bytes| String::from_utf8_lossy(bytes).replace("\r\n", "\n"));
+    for line in output.lines().map(str::trim).filter(|line| line.starts_with("equal tokens: in `")) {
+        let parse = || -> Option<(usize, usize, String, usize, usize, String, String)> {
+            let rest = line.split_once(" (old lines ")?.1;
+            let (old_range, rest) = rest.split_once(" of `")?;
+            let (old_file, rest) = rest.split_once("`, new lines ")?;
+            let (new_range, rest) = rest.split_once(" of `")?;
+            let (new_file, list) = rest.split_once("`): ")?;
+            let range = |text: &str| -> Option<(usize, usize)> {
+                let (a, b) = text.split_once('-')?;
+                Some((a.parse().ok()?, b.parse().ok()?))
+            };
+            let ((a, b), (c, d)) = (range(old_range)?, range(new_range)?);
+            Some((a, b, old_file.to_string(), c, d, new_file.to_string(), list.to_string()))
+        };
+        let Some((a, b, old_file, c, d, new_file, list)) = parse() else {
+            problems.push(format!("the line `{line}` has not the form of an equal-token line"));
+            continue;
+        };
+        let Ok(lines) = position_lines(&list) else {
+            problems.push(format!("the line `{line}` has no list of positions"));
+            continue;
+        };
+        for (file, is_old, number) in lines {
+            let (own, other, other_file, range) = if is_old { (old, new, &new_file, (c, d)) } else { (new, old, &old_file, (a, b)) };
+            let (Some(own_text), Some(other_text)) = (text(own, &file), text(other, other_file)) else {
+                problems.push(format!("`{line}`: a tree has no file `{file}` or `{other_file}`"));
+                continue;
+            };
+            let Some(here) = own_text.lines().nth(number - 1) else {
+                problems.push(format!("`{line}`: the file `{file}` has no line {number}"));
+                continue;
+            };
+            let mut pool: BTreeMap<String, usize> = BTreeMap::new();
+            for token in other_text.lines().skip(range.0 - 1).take(range.1 + 1 - range.0).flat_map(simple_tokens) {
+                *pool.entry(token).or_default() += 1;
+            }
+            let mut need: BTreeMap<String, usize> = BTreeMap::new();
+            for token in simple_tokens(here) {
+                *need.entry(token).or_default() += 1;
+            }
+            let missing: Vec<String> = need.iter().filter(|(token, count)| pool.get(*token).copied().unwrap_or(0) < **count).map(|(token, _)| format!("`{token}`")).collect();
+            if !missing.is_empty() {
+                problems.push(format!("`{line}`: the item of the other tree does not have the token(s) {} of the line {}{}:{number}", missing.join(", "), if is_old { "-" } else { "" }, file));
+            }
+        }
+    }
+    problems
+}
+
 fn empty_change(line: &str) -> Option<String> {
     const ARROW: &str = "` → `";
     line.match_indices(ARROW).find_map(|(at, _)| {
@@ -1140,6 +1231,11 @@ fn check(case: &Case) -> Result<Outcome, String> {
         for problem in comment_problems(&status.stdout, &case.old, &case.new) {
             work.fail("comments", format!("`status --verbose`: {problem}"));
         }
+        // Property 8: each token of a line of the rule of the equal tokens is in the item of
+        // the other tree (design 59, B-e).
+        for problem in equal_token_problems(&status.stdout, &case.old, &case.new) {
+            work.fail("equal_tokens", format!("`status --verbose`: {problem}"));
+        }
         for comment in facts(&run.all()).iter().flat_map(|fact| comment_subs(&fact.subs).1) {
             let lines = std::iter::once(&comment.head).chain(comment.text.iter().flatten());
             for line in lines.filter(|line| !markdown.contains(no_escape(line).trim())) {
@@ -1292,6 +1388,30 @@ fn the_helpers_of_the_properties_read_the_output() {
     assert!(hunk_lines("@@ -1 +1 @@\n", &|_| true).is_err());
     let folder = Path::new("/tmp/x");
     assert_eq!(normal("base `1ea5d28`: /tmp/x/repo/a 62b58cee548ee0eeb2e6e08b7968d0dd20c28424 deadbeef", folder), "base `<COMMIT>`: <REPO>/a <TREE> deadbeef");
+}
+
+/// Design 59, B-e, property 8. A true line gives no problem. A line with a token that the item
+/// of the other tree does not have gives a problem.
+// rule+ R59.2-5
+// rule- R59.2-5
+#[test]
+fn the_eighth_property_finds_a_token_that_the_other_item_does_not_have() {
+    let tree = |text: &str| -> BTreeMap<String, Vec<u8>> { [("src/lib.rs".to_string(), text.as_bytes().to_vec())].into_iter().collect() };
+    let old = tree("pub fn f() -> u32 {\n    g(\n        1,\n        2,\n    )\n}\n");
+    let new = tree("pub fn f() -> u32 {\n    g(1, 2)\n}\n");
+    assert_eq!(simple_tokens("    g(1, \"a b\"),"), ["g", "(", "1", "\"a b\"", ")"]);
+    let good = "  equal tokens: in `depot::f` (old lines 1-6 of `src/lib.rs`, new lines 1-3 of `src/lib.rs`): src/lib.rs:2, src/lib.rs:-2-5\n";
+    assert_eq!(equal_token_problems(good, &old, &new), Vec::<String>::new());
+    // A token that the new item does not have.
+    let changed = tree("pub fn f() -> u32 {\n    g(1, 3)\n}\n");
+    let problems = equal_token_problems(good, &old, &changed);
+    assert!(problems.iter().any(|problem| problem.contains("`2`")), "{problems:#?}");
+    // A count: the old line has the token two times.
+    let twice = tree("pub fn f() -> u32 {\n    g(1, 1)\n}\n");
+    let problems = equal_token_problems("  equal tokens: in `depot::f` (old lines 1-3 of `src/lib.rs`, new lines 1-6 of `src/lib.rs`): src/lib.rs:-2\n", &twice, &old);
+    assert!(problems.iter().any(|problem| problem.contains("`1`")), "{problems:#?}");
+    // A line of a different form.
+    assert_eq!(equal_token_problems("  equal tokens: in `depot::f`: src/lib.rs:2\n", &old, &new).len(), 1);
 }
 
 /// Design 58.11, property 7. The runner reads the comment tokens of the two trees itself. A

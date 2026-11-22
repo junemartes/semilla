@@ -513,7 +513,12 @@ fn node_scope(item: &Item, node: &Node, edit: &Edit, side: usize, diffs: &BTreeM
     }
     let diff = diffs.get(&item.file)?;
     let wide = span(node.start.0, node.end.0);
-    let mut lines = if edit.kind == EditKind::Modified && diff.sides[side].shape.is_some() {
+    // Design 59, B-a: the position has each line of each node that the text of the fact
+    // shows. An edit of the own tokens shows the own tokens only (design 52.1). A `Modified`
+    // edit with the full text of the node shows the full node.
+    let text = if side == OLD { edit.text_before.as_ref() } else { edit.text_after.as_ref() };
+    let full_text = text == Some(&node.text);
+    let mut lines = if edit.kind == EditKind::Modified && !full_text && diff.sides[side].shape.is_some() {
         let children: Vec<(Pos, Pos)> = node.children.iter().map(|child| (child.start, child.end)).collect();
         diff.sides[side].token_lines(node.start, node.end, &children, &|_| true)
     } else {
@@ -573,7 +578,18 @@ fn edit_scopes(edit: &Edit, input: &StepInput, diffs: &BTreeMap<String, FileDiff
     for (side, (anchor, workspace)) in [(&edit.before, input.before), (&edit.after, input.after)].into_iter().enumerate() {
         let Some(anchor) = anchor else { continue };
         let scope = match semilla_syntax::resolve(workspace, anchor) {
-            Some(semilla_syntax::Resolved::Item(item)) => item_scope(item, edit.kind, side, diffs, &indexes[side]),
+            Some(semilla_syntax::Resolved::Item(item)) => item_scope(item, edit.kind, side, diffs, &indexes[side]).map(|mut scope| {
+                // Design 59, B-a: a body that a step adds to a function or removes from it is
+                // in the text of the fact ("body removed from …: `{ … }`"). The position has
+                // each line of the body.
+                let node = if side == OLD { edit.node_before } else { edit.node_after };
+                if edit.kind == EditKind::Signature && node == Some("body") {
+                    if let Some(body) = item.body.as_ref().filter(|body| body.start.0 > 0) {
+                        scope.lines.extend(body.start.0..=body.end.0);
+                    }
+                }
+                scope
+            }),
             Some(semilla_syntax::Resolved::Node(item, node)) => node_scope(item, node, edit, side, diffs, &indexes[side]),
             // The node is not in the tree (a part of a signature with no node): the item.
             None => workspace.items.get(&anchor.item).and_then(|item| item_scope(item, if anchor.path.is_empty() { edit.kind } else { EditKind::Signature }, side, diffs, &indexes[side])),
@@ -729,6 +745,50 @@ fn wider_ranges(edit: &Edit, side: usize, input: &StepInput, diffs: &BTreeMap<St
     out
 }
 
+/// True if the tree compare pairs a token with an equal token (design 59, B-b and B-d). The
+/// owner of the token is the smallest item that has it, and the item needs a partner of its
+/// kind. A token of the body is equal if the lowest node pair around it has equal tokens, or
+/// if the token is an own token of that pair (in no child) and the own tokens of the pair are
+/// equal. A token of the head of the item is equal if the head of the pair is equal: the
+/// name, the signature, and the list of the members for a code token, the attributes, the docs (with the
+/// plain comments of the item), or the visibility for a token of that class. The compare is
+/// strict: a rename map makes no token equal here. Each other token is not equal.
+fn equal_token<'w>(side: usize, file: &str, token: &LineToken, indexes: &[ItemIndex<'w>; 2], node_pairs: &BTreeMap<String, Vec<semilla_syntax::NodePair>>, partner: &dyn Fn(usize, &Item) -> Option<&'w Item>) -> bool {
+    let at = token.start;
+    let Some(item) = indexes[side].by_file.get(file).into_iter().flatten().copied().filter(|item| (item.line_start, item.col_start) <= at && at < (item.line_end, item.col_end)).max_by_key(|item| ((item.line_start, item.col_start), std::cmp::Reverse((item.line_end, item.col_end)))) else { return false };
+    if item.kind == ItemKind::Use {
+        return false;
+    }
+    let Some(other) = partner(side, item).filter(|other| other.kind == item.kind) else { return false };
+    let old_item = if side == OLD { item } else { other };
+    match token.class {
+        TokenClass::Comment | TokenClass::Doc => return item.docs == other.docs,
+        TokenClass::Attribute => return item.attrs == other.attrs,
+        TokenClass::Visibility => return item.vis == other.vis,
+        TokenClass::Code => {}
+    }
+    let Some(body) = item.body.as_ref().filter(|body| body.start.0 > 0 && body.start <= at && at < body.end) else {
+        // The name of an item is not in the signature of each kind (a field): a pair by a
+        // rename has two names.
+        let name = |path: &str| path.rsplit(['.', ':']).next().unwrap_or("").to_string();
+        return name(&item.path) == name(&other.path) && item.signature == other.signature && item.members == other.members;
+    };
+    if other.body.is_none() {
+        return false;
+    }
+    // The nodes around the token, from the body down.
+    let mut chain: Vec<&Node> = vec![body];
+    while let Some(child) = chain.last().and_then(|node| node.children.iter().find(|child| child.start.0 > 0 && child.start <= at && at < child.end)) {
+        chain.push(child);
+    }
+    let Some(pairs) = node_pairs.get(&old_item.path) else { return false };
+    for (depth, node) in chain.iter().enumerate().rev() {
+        let Some(pair) = pairs.iter().find(|pair| pair.ranges[side] == (node.start, node.end) && pair.kinds[side] == node.kind) else { continue };
+        return pair.equal || (depth + 1 == chain.len() && pair.own_equal);
+    }
+    false
+}
+
 fn count(value: usize, noun: &str) -> String {
     format!("{value} {noun}{}", if value == 1 { "" } else { "s" })
 }
@@ -736,7 +796,7 @@ fn count(value: usize, noun: &str) -> String {
 /// Gives each fact its position, adds the facts of the cover check (layout, line endings, a
 /// comment that is in no item), and writes the changed lines with no fact into the report.
 pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
-    let StepOutcome { report, edits, fact_of, renames, .. } = outcome;
+    let StepOutcome { report, edits, fact_of, renames, node_pairs, .. } = outcome;
     let (mut diffs, own) = file_diffs(input);
     if diffs.is_empty() {
         return;
@@ -1524,6 +1584,42 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         }
     }
 
+    // 9a2. A line with equal tokens in the pairs of the tree compare (design 59, B-b). Each
+    // token of a changed line with no fact is equal if the tree compare pairs it with an
+    // equal token. Then the line has no difference of the tree: it joins the nearest fact of
+    // its item, else it is a line of the layout fact (R55.5-1). A line with one token that is
+    // not equal stays open (B-c).
+    let open_tokens: Vec<(String, usize, usize)> = open.iter().filter(|(_, state)| **state == Open::Token).map(|(key, _)| key.clone()).collect();
+    let mut equal_lines: BTreeMap<(String, String), [BTreeSet<usize>; 2]> = BTreeMap::new();
+    for key in open_tokens {
+        let (file, side, line) = (&key.0, key.1, key.2);
+        let Some(source) = diffs.get(file).map(|diff| &diff.sides[side]).filter(|source| source.shape.is_some()) else { continue };
+        let here = &source.tokens_at[line - 1];
+        if here.is_empty() || !here.iter().all(|index| equal_token(side, file, &source.tokens()[*index], &indexes, node_pairs, &partner)) {
+            continue;
+        }
+        let Some(item) = innermost(side, file, line) else { continue };
+        if let Some(other) = partner(side, item) {
+            let (old_item, new_item) = if side == OLD { (item, other) } else { (other, item) };
+            let cause = format!("in `{}` (old lines {}-{} of `{}`, new lines {}-{} of `{}`)", old_item.path, old_item.line_start, old_item.line_end, old_item.file, new_item.line_start, new_item.line_end, new_item.file);
+            equal_lines.entry((file.clone(), cause)).or_default()[side].insert(line);
+        }
+        let near = |side: usize, line: usize| -> Option<usize> {
+            claims.range((item.file.clone(), side, item.line_start)..=(item.file.clone(), side, item.line_end)).filter_map(|(at, facts)| facts.iter().copied().find(|fact| *fact < fact_count).map(|fact| (at.2.abs_diff(line), fact))).min().map(|(_, fact)| fact)
+        };
+        let other = partner(side, item);
+        let fact = near(side, line).or_else(|| other.and_then(|other| claims.range((other.file.clone(), 1 - side, other.line_start)..=(other.file.clone(), 1 - side, other.line_end)).find_map(|(_, facts)| facts.iter().copied().find(|fact| *fact < fact_count))));
+        match fact {
+            Some(fact) => {
+                lines_of[fact].entry(file.clone()).or_default()[side].insert(line);
+            }
+            None => {
+                layout.entry(file.clone()).or_default()[side].insert(line);
+            }
+        }
+        open.remove(&key);
+    }
+
     // 9b. A line with equal tokens in a hunk that had a changed token with no fact: the rule
     // of step 7 again, after the rules of steps 8 and 9. The line is a part of the edit next
     // to it. With no fact in the hunk and no changed token with no fact, the hunk has a new
@@ -1714,7 +1810,7 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         let items = indexes[*side].by_file.get(file.as_str()).filter(|items| !items.is_empty());
         let cause = match (diffs.get(file).is_some_and(|diff| diff.parsed), items) {
             (false, _) => "a file that Semilla does not parse".to_string(),
-            (true, None) => "a file with no item in the tree (for example a file behind a `mod` line in a macro input)".to_string(),
+            (true, None) => "a file with no item in the tree (for example a module file with no item)".to_string(),
             (true, Some(items)) => {
                 let line_state = match state {
                     Open::Equal | Open::Pending => "the tokens of the line are equal in the line diff",
@@ -1736,12 +1832,80 @@ pub(crate) fn assign(input: &StepInput, outcome: &mut StepOutcome) {
         };
         causes.entry((file.clone(), cause)).or_default()[*side].insert(*line);
     }
+    report.equal_token_lines = equal_lines.iter().map(|((file, cause), lines)| semilla_core::report::NoFactCause { cause: cause.clone(), positions: position_list(&diffs, file, lines) }).collect();
     report.no_fact_causes = causes.iter().map(|((file, cause), lines)| semilla_core::report::NoFactCause { cause: cause.clone(), positions: position_list(&diffs, file, lines) }).collect();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tree(text: &str) -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"depot\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), text).unwrap();
+        let workspace = Workspace::load(dir.path()).unwrap();
+        (dir, workspace)
+    }
+
+    /// Design 59, B-b and B-c: a token is equal only if the tree compare pairs it with an equal
+    /// token. The own tokens of a call with equal own tokens are equal; a literal in a pair
+    /// with a difference is not; a token of an item with no partner is not.
+    // rule+ R59.2-2 R59.2-3 R59.2-4
+    // rule- R59.2-2 R59.2-3 R59.2-4
+    #[test]
+    fn a_token_is_equal_only_in_a_pair_of_the_tree_compare() {
+        let old_text = "pub fn f(a: u32) -> u32 {\n    g(\n        a,\n        1,\n    )\n}\nfn g(a: u32, b: u32) -> u32 { a + b }\npub fn gone() -> u32 { 5 }\n";
+        let new_text = "pub fn f(a: u32) -> u32 {\n    g(a, 2)\n}\nfn g(a: u32, b: u32) -> u32 { a + b }\n";
+        let ((_old_dir, old), (_new_dir, new)) = (tree(old_text), tree(new_text));
+        let (_, maps) = semilla_syntax::diff_maps(&old, &new, &semilla_syntax::Renames::default());
+        // The tree compare keeps the pairs of the body of `f`: the call with a difference, and
+        // the argument `a` with equal tokens.
+        let pairs = &maps.pairs["depot::f"];
+        assert!(pairs.iter().any(|pair| pair.kinds == ["call", "call"] && !pair.equal && pair.own_equal), "{pairs:?}");
+        assert!(pairs.iter().any(|pair| pair.equal && pair.ranges[OLD].0 == (3, 8)), "{pairs:?}");
+        let indexes = [ItemIndex::new(&old), ItemIndex::new(&new)];
+        let partner = |side: usize, item: &Item| -> Option<&Item> { [&new, &old][side].items.get(&item.path) };
+        let shape = cover::shape(old_text, semilla_syntax::rs::Edition::Edition2021);
+        let equal = |line: usize, text: &str| -> bool {
+            let token = shape.tokens.iter().find(|token| token.start.0 == line && token.text == text).unwrap();
+            equal_token(OLD, "src/lib.rs", token, &indexes, &maps.pairs, &partner)
+        };
+        // An own token of the call, and a token in a pair with equal tokens.
+        assert!(equal(2, "g") && equal(2, "(") && equal(3, "a") && equal(5, ")"));
+        // A token in a pair with a difference (B-c): `1` → `2`.
+        assert!(!equal(4, "1"));
+        // A token of an item with no partner.
+        assert!(!equal(8, "5"));
+        // A token of the head: equal for a pair with one name, not equal for a pair with two
+        // names (a pair by a rename).
+        assert!(equal(1, "f") && equal(1, "u32"));
+        let renamed_item = |side: usize, item: &Item| -> Option<&Item> { [&new, &old][side].items.get(if item.path == "depot::f" { "depot::g" } else { item.path.as_str() }) };
+        let head = shape.tokens.iter().find(|token| token.start.0 == 1 && token.text == "u32").unwrap();
+        assert!(!equal_token(OLD, "src/lib.rs", head, &indexes, &maps.pairs, &renamed_item));
+        // A rename map makes no token equal here: the compare of the pair is strict.
+        let renamed = semilla_syntax::NodePair { ranges: [((3, 8), (3, 9)), ((2, 6), (2, 7))], kinds: ["path", "path"], equal: false, own_equal: false };
+        let strict: BTreeMap<String, Vec<semilla_syntax::NodePair>> = [("depot::f".to_string(), vec![renamed])].into_iter().collect();
+        assert!(!equal_token(OLD, "src/lib.rs", shape.tokens.iter().find(|token| token.start.0 == 3 && token.text == "a").unwrap(), &indexes, &strict, &partner));
+        // The own tokens of a pair count only for the lowest node of the token. A token in a
+        // child with no pair is not equal, also when the pair of an ancestor has equal own tokens.
+        let call = pairs.iter().find(|pair| pair.kinds == ["call", "call"]).unwrap().clone();
+        let ancestor_only: BTreeMap<String, Vec<semilla_syntax::NodePair>> = [("depot::f".to_string(), vec![call])].into_iter().collect();
+        assert!(!equal_token(OLD, "src/lib.rs", shape.tokens.iter().find(|token| token.start.0 == 3 && token.text == "a").unwrap(), &indexes, &ancestor_only, &partner));
+        // A pair of two fields with an equal type and two names (a pair by a rename): the head
+        // tokens are not equal. The signatures are equal, so only the name makes the difference.
+        let (field_old, field_new) = ("pub struct P {\n    pub x: u32,\n}\n", "pub struct P {\n    pub y: u32,\n}\n");
+        let ((_fo_dir, fo), (_fn_dir, fnew)) = (tree(field_old), tree(field_new));
+        let field_of = |ws: &Workspace| ws.items.values().find(|item| item.kind == ItemKind::Field).unwrap().path.clone();
+        let (x, y) = (field_of(&fo), field_of(&fnew));
+        assert_eq!(fo.items[&x].signature, fnew.items[&y].signature);
+        let field_indexes = [ItemIndex::new(&fo), ItemIndex::new(&fnew)];
+        let field_pair = |side: usize, item: &Item| -> Option<&Item> { if side == OLD { fnew.items.get(if item.path == x { &y } else { &item.path }) } else { fo.items.get(if item.path == y { &x } else { &item.path }) } };
+        let field_shape = cover::shape(field_old, semilla_syntax::rs::Edition::Edition2021);
+        let field_type = field_shape.tokens.iter().find(|token| token.start.0 == 2 && token.text == "u32").unwrap();
+        assert!(!equal_token(OLD, "src/lib.rs", field_type, &field_indexes, &BTreeMap::new(), &field_pair));
+    }
 
     fn pairs(a: &str, b: &str) -> Vec<(usize, usize)> {
         let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());

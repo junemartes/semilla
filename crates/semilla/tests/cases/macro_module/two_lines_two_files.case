@@ -1,0 +1,68 @@
+note: A-g: two lines of one name with two files give twin modules `imp#0` and `imp#1`
+rule+: R59.1-7
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! cfg_if {
+    (if #[cfg($m:meta)] { $($a:item)* } else { $($b:item)* }) => {
+        $(#[cfg($m)] $a)*
+        $(#[cfg(not($m))] $b)*
+    };
+}
+
+cfg_if! {
+    if #[cfg(unix)] {
+        #[path = "unix.rs"]
+        mod imp;
+    } else {
+        #[path = "other.rs"]
+        mod imp;
+    }
+}
+=== old src/unix.rs
+pub fn open() -> u32 {
+    3
+}
+=== new src/unix.rs
+pub fn open() -> u32 {
+    4
+}
+=== old src/other.rs
+pub fn open() -> u32 {
+    5
+}
+=== new src/other.rs
+pub fn open() -> u32 {
+    6
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `3` → `4` (f1)
+      in: depot::imp#0::open
+      lines: src/unix.rs:2, src/unix.rs:-2
+      to state it: --change 'depot::imp#0::open=TEXT'
+  ? 1 place: changed literal `5` → `6` (f2)
+      in: depot::imp#1::open
+      lines: src/other.rs:2, src/other.rs:-2
+      to state it: --change 'depot::imp#1::open=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::imp#0::open=TEXT' --change 'depot::imp#1::open=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `3` → `4` at `depot::imp#0::open/tail` [semantics]
+  ◆ f2 derived: changed literal `5` → `6` at `depot::imp#1::open/tail` [semantics]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: module of a macro input: `depot::imp#0` (`src/unix.rs`) has its line `#[path = "unix.rs"] mod imp;` in the input of the macro call `depot::cfg_if!#0` (`src/lib.rs:11`); Semilla does not expand the macro, so it does not know if the build has this module
+  ! spotlight: module of a macro input: `depot::imp#1` (`src/other.rs`) has its line `#[path = "other.rs"] mod imp;` in the input of the macro call `depot::cfg_if!#0` (`src/lib.rs:14`); Semilla does not expand the macro, so it does not know if the build has this module
+
+=== positions
+◆ f1 derived: changed literal `3` → `4` at `depot::imp#0::open/tail` [semantics]
+    lines: src/unix.rs:2, src/unix.rs:-2
+◆ f2 derived: changed literal `5` → `6` at `depot::imp#1::open/tail` [semantics]
+    lines: src/other.rs:2, src/other.rs:-2

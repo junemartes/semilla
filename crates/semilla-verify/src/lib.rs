@@ -550,6 +550,9 @@ pub struct StepOutcome {
     pub stated_causes: BTreeMap<usize, String>,
     /// The feature selections that the check added for a proof (batch 5u, part C).
     pub selections: Vec<Selection>,
+    /// The node pairs of the tree compare of each body, by the path of the old item (design
+    /// 59, B-d).
+    pub node_pairs: BTreeMap<String, Vec<semilla_syntax::NodePair>>,
 }
 
 /// Checks one step with the old protocol: an edit with no claim and no type-level fact is
@@ -567,9 +570,23 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         Some((before, after)) => &StepInput { step: input.step, before, after },
         None => input,
     };
+    // Design 59, part C: the twins of one path pair by their tokens, then in source order.
+    let twin_pairs = identity::twin_pairs(input.before, input.after);
+    let (input, twin_moves) = match &twin_pairs {
+        Some((before, after, moved)) => (&StepInput { step: input.step, before, after }, moved.as_slice()),
+        None => (input, &[][..]),
+    };
     // A reason with no text is not a reason (brief 5f, A4: an empty value proves nothing).
     let mut step = input.step.clone();
     step.reasons.retain(|_, reason| !reason.trim().is_empty());
+    // Design 59: the name of a macro call with a path has no space (`depot::crate::table!#0`).
+    // A record of an earlier version has the key with spaces (`depot::crate :: table!#0`).
+    step.reasons = std::mem::take(&mut step.reasons).into_iter().map(|(key, reason)| (macro_call_key(&key), reason)).collect();
+    for change in &mut step.agent.change {
+        if let Some((items, text)) = change.split_once('=').filter(|(items, _)| items.contains(" :: ")) {
+            *change = format!("{}={text}", items.split(',').map(macro_call_key).collect::<Vec<_>>().join(","));
+        }
+    }
     impl_names(&mut step, input.before, input.after);
     let input = &StepInput { step: &step, before: input.before, after: input.after };
     let mut plain = verify_core(input, bodies, exprs, derive_edits, false);
@@ -581,6 +598,8 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         kind_reasons(input, &mut plain.report);
         no_compare_result(input.step, &mut plain.report);
         positions::assign(input, &mut plain);
+        macro_module_spotlight(input, &mut plain.report);
+        twin_notes(twin_moves, &mut plain.report);
         agent::apply(input, &mut plain);
         tags::apply(input, &mut plain);
         comments::apply(input, &mut plain);
@@ -595,10 +614,64 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     kind_reasons(input, &mut outcome.report);
     no_compare_result(input.step, &mut outcome.report);
     positions::assign(input, &mut outcome);
+    macro_module_spotlight(input, &mut outcome.report);
+    twin_notes(twin_moves, &mut outcome.report);
     agent::apply(input, &mut outcome);
     tags::apply(input, &mut outcome);
     comments::apply(input, &mut outcome);
     outcome
+}
+
+/// The key of an earlier version for a macro call with a path (`depot::crate :: table!#0`), in
+/// the form of today (`depot::crate::table!#0`). Each other key stays as it is.
+pub(crate) fn macro_call_key(key: &str) -> String {
+    if key.contains(" :: ") && key.contains('!') {
+        key.replace(" :: ", "::")
+    } else {
+        key.to_string()
+    }
+}
+
+/// Design 59, A-d: a module whose `mod` line is in the input of a macro call. Semilla does
+/// not expand the macro, so it does not know if the build has the module. Each such module
+/// with a fact (an item of the module, or a line of its file) gets one spotlight line. The
+/// line is not a reject: it needs no reason.
+fn macro_module_spotlight(input: &StepInput, report: &mut StepReport) {
+    let mut modules: BTreeMap<&String, &semilla_syntax::MacroModule> = BTreeMap::new();
+    for workspace in [input.before, input.after] {
+        for (path, module) in &workspace.macro_modules {
+            modules.entry(path).or_insert(module);
+        }
+    }
+    for (path, module) in modules {
+        let inside = format!("{path}::");
+        let has_fact = report.facts.iter().any(|fact| {
+            fact.at.as_ref().is_some_and(|at| at.item == *path || at.item.starts_with(&inside)) || fact.positions.iter().any(|position| position.file == module.file) || fact.file.as_ref() == Some(&module.file)
+        });
+        if !has_fact {
+            continue;
+        }
+        let line = format!(
+            "module of a macro input: `{path}` (`{}`) has its line `{}` in the input of the macro call `{}` (`{}:{}`); Semilla does not expand the macro, so it does not know if the build has this module",
+            module.file, module.text, module.call, module.at.0, module.at.1
+        );
+        if !report.spotlight.contains(&line) {
+            report.spotlight.push(line);
+        }
+    }
+}
+
+/// Design 59, C-e: a pair of twins with two different numbers has one key in the facts (the
+/// number of the tree with more twins of the path). Each such pair with a fact gets one note
+/// with the two paths, so the reader finds each twin in its own tree.
+fn twin_notes(moves: &[(String, String, String)], report: &mut StepReport) {
+    for (old, new, key) in moves {
+        let inside = |path: &str| path == key || path.strip_prefix(key.as_str()).is_some_and(|rest| rest.starts_with("::") || rest.starts_with('.'));
+        if !report.facts.iter().any(|fact| fact.at.as_ref().is_some_and(|at| inside(&at.item))) {
+            continue;
+        }
+        report.notes.push(format!("twins: `{old}` of the old tree and `{new}` of the new tree are one pair (equal tokens first, then the source order); the facts name the pair `{key}`"));
+    }
 }
 
 /// A step with no compiled check (design 50): no fact has a compare result. This is the last
@@ -1661,7 +1734,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     // to `facts`. The report shows each distinct error one time, complete.
     let mut seen = std::collections::BTreeSet::new();
     report.errors.retain(|error| seen.insert(error.clone()));
-    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections }
+    StepOutcome { report, edits, owners, fact_of, renames, bodies, identity_reason, stated_causes: BTreeMap::new(), selections, node_pairs: body_maps.pairs }
 }
 
 /// Sets the compare result of each fact (design 35, "Decided by Claude").
@@ -3157,7 +3230,7 @@ pub fn verify_changeset_cached(
             }
             Err(error) => {
                 let step_report = StepReport { step: step.index, intent: step.intent.clone(), errors: vec![format!("{error:#}")], ..Default::default() };
-                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new() });
+                outcomes.push(StepOutcome { report: step_report, edits: Vec::new(), owners: Vec::new(), fact_of: Vec::new(), renames: Default::default(), bodies: Vec::new(), selections: Vec::new(), identity_reason: None, stated_causes: BTreeMap::new(), node_pairs: BTreeMap::new() });
             }
         }
     }

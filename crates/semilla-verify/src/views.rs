@@ -1287,6 +1287,10 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
             for line in step.cause_lines() {
                 text::put_line(&mut out, &format!("  {line}"));
             }
+            // Design 59, B-e: the lines of the rule of the equal tokens.
+            for line in step.equal_token_lines() {
+                text::put_line(&mut out, &format!("  {line}"));
+            }
         }
         // Design 55.1: the command that gives the hunks of the step.
         for line in step.hunk_lines(names) {

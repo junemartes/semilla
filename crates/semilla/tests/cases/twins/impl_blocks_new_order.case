@@ -1,0 +1,44 @@
+note: two impl blocks of one type in a new order: no changed block; the order of `impl` blocks has no meaning, so the lines are layout lines (C-d)
+rule+: R59.3-3
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart;
+impl Cart {
+    pub fn one(&self) -> u32 {
+        1
+    }
+}
+impl Cart {
+    pub fn two(&self) -> u32 {
+        2
+    }
+}
+=== new src/lib.rs
+pub struct Cart;
+impl Cart {
+    pub fn two(&self) -> u32 {
+        2
+    }
+}
+impl Cart {
+    pub fn one(&self) -> u32 {
+        1
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: layout of `src/lib.rs`: 8 changed lines of 2 items with equal tokens at a new place [layout]
+  cover: each of the 8 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: layout of `src/lib.rs`: 8 changed lines of 2 items with equal tokens at a new place [layout]
+    lines: src/lib.rs:3-4, src/lib.rs:8-9, src/lib.rs:-3-4, src/lib.rs:-8-9

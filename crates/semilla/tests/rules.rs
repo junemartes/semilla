@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The first and the last section whose subsections must each tell their state in the index.
-const INDEXED: std::ops::RangeInclusive<u32> = 48..=58;
+const INDEXED: std::ops::RangeInclusive<u32> = 48..=59;
 /// The start of the line that gives the state of a subsection with no identity.
 const NO_RULE: &str = "Rule index: no rule: ";
 const NOT_INDEXED: &str = "Rule index: not indexed: ";

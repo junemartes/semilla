@@ -1037,6 +1037,143 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
     Some((apply(before, &from_after), apply(after, &from_before)))
 }
 
+/// The pairs of the twins of a step (design 59, part C). Twins are the items of one parent
+/// with one path and one kind (the suffix `#N` in source order). The twins of one path pair in
+/// two passes. Pass 1: a twin pairs with a twin of the other tree with equal tokens: first the
+/// longest list of such pairs in their order, then each other twin in source order. Pass 2: in
+/// each gap between two pairs of pass 1 in their order, the twins that remain pair in source
+/// order. A twin with no partner is an added or a removed item.
+///
+/// The compare pairs items by their keys. If a pair has two different numbers, one tree gets
+/// new keys: the tree with fewer twins of the path takes the numbers of the other tree for its
+/// paired twins. Thus each twin with no partner keeps the number of its own tree, and the keys
+/// of each tree stay different. The items in a twin (the items of a twin module) get the new
+/// key of the twin. `None` if no key changes. The list has each pair with two different
+/// numbers: (the old path, the new path, the key of the pair in the compare).
+pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace, Vec<(String, String, String)>)> {
+    // The groups: the base path, the kind, and the flag of a macro definition.
+    type Group = (String, &'static str, bool);
+    let groups = |ws: &Workspace| -> BTreeMap<Group, Vec<(usize, String)>> {
+        let mut out: BTreeMap<Group, Vec<(usize, String)>> = BTreeMap::new();
+        for (path, item) in &ws.items {
+            let Some(base) = twin_base(path) else { continue };
+            // A use line has no twin: the `use` lines of a module compare as a set. A twin in a
+            // twin keeps the rule of the source order.
+            if item.kind == ItemKind::Use || base.contains('#') {
+                continue;
+            }
+            let Ok(number) = path[base.len() + 1..].parse::<usize>() else { continue };
+            out.entry((base.to_string(), kind_name(item.kind), item.macro_definition)).or_default().push((number, path.clone()));
+        }
+        for list in out.values_mut() {
+            list.sort();
+        }
+        out
+    };
+    // The tokens of a twin, and of each item in it.
+    let text = |ws: &Workspace, path: &str| -> Vec<(String, String)> {
+        let inside = |key: &str| key.len() > path.len() && key.starts_with(path) && matches!(key.as_bytes()[path.len()], b':' | b'.');
+        ws.items.range(path.to_string()..).take_while(|(key, _)| key.starts_with(path)).filter(|(key, _)| key.as_str() == path || inside(key)).map(|(key, item)| (key[path.len()..].to_string(), item.text.clone())).collect()
+    };
+    let (old_groups, new_groups) = (groups(before), groups(after));
+    // For each tree: the twin keys that change (the old key to the new key).
+    let mut keys: [BTreeMap<String, String>; 2] = Default::default();
+    let mut moved: Vec<(String, String, String)> = Vec::new();
+    for (group, old_list) in &old_groups {
+        let Some(new_list) = new_groups.get(group) else { continue };
+        let mut partner: Vec<Option<usize>> = vec![None; old_list.len()];
+        let mut taken = vec![false; new_list.len()];
+        let old_texts: Vec<Vec<(String, String)>> = old_list.iter().map(|(_, path)| text(before, path)).collect();
+        let new_texts: Vec<Vec<(String, String)>> = new_list.iter().map(|(_, path)| text(after, path)).collect();
+        // Pass 1: equal tokens. First the longest list of equal pairs in their order, then each
+        // other twin with an equal twin that remains, in source order.
+        let anchors = crate::positions::matches(old_list.len(), new_list.len(), &|i, j| old_texts[i] == new_texts[j]);
+        for (i, j) in &anchors {
+            partner[*i] = Some(*j);
+            taken[*j] = true;
+        }
+        for i in 0..old_list.len() {
+            if partner[i].is_some() {
+                continue;
+            }
+            if let Some(j) = (0..new_list.len()).find(|&j| !taken[j] && new_texts[j] == old_texts[i]) {
+                partner[i] = Some(j);
+                taken[j] = true;
+            }
+        }
+        // Pass 2: the source order, in each gap between two pairs of pass 1 in their order.
+        let mut start = (0, 0);
+        for (end_i, end_j) in anchors.iter().copied().chain(std::iter::once((old_list.len(), new_list.len()))) {
+            let mut free = (start.1..end_j).filter(|&j| !taken[j]).collect::<Vec<usize>>().into_iter();
+            for i in start.0..end_i {
+                if partner[i].is_some() {
+                    continue;
+                }
+                let Some(j) = free.next() else { break };
+                partner[i] = Some(j);
+                taken[j] = true;
+            }
+            start = (end_i + 1, end_j + 1);
+        }
+        let pairs: Vec<(usize, usize)> = partner.iter().enumerate().filter_map(|(i, j)| j.map(|j| (i, j))).collect();
+        if pairs.iter().all(|(i, j)| old_list[*i].0 == new_list[*j].0) {
+            continue;
+        }
+        // The tree with fewer twins takes the numbers of the other tree.
+        let (side, from, to): (usize, &Vec<(usize, String)>, &Vec<(usize, String)>) = if old_list.len() <= new_list.len() { (0, old_list, new_list) } else { (1, new_list, old_list) };
+        let mut map = BTreeMap::new();
+        for (i, j) in &pairs {
+            let (own, other) = if side == 0 { (*i, *j) } else { (*j, *i) };
+            if from[own].1 != to[other].1 {
+                map.insert(from[own].1.clone(), to[other].1.clone());
+            }
+        }
+        // The keys of a tree stay different: else the group keeps the source order.
+        let ws = if side == 0 { before } else { after };
+        let result: BTreeSet<&String> = from.iter().map(|(_, path)| map.get(path).unwrap_or(path)).collect();
+        if result.len() != from.len() || map.values().any(|new| !from.iter().any(|(_, other)| other == new) && ws.items.contains_key(new)) {
+            continue;
+        }
+        moved.extend(pairs.iter().filter(|(i, j)| old_list[*i].0 != new_list[*j].0).map(|(i, j)| (old_list[*i].1.clone(), new_list[*j].1.clone(), if side == 0 { new_list[*j].1.clone() } else { old_list[*i].1.clone() })));
+        keys[side].extend(map);
+    }
+    if keys.iter().all(BTreeMap::is_empty) {
+        return None;
+    }
+    // A key with a new prefix: the twin, and each item in it.
+    let rekey = |key: &str, map: &BTreeMap<String, String>| -> String {
+        for (from, to) in map {
+            if key == from {
+                return to.clone();
+            }
+            if key.len() > from.len() && key.starts_with(from.as_str()) && matches!(key.as_bytes()[from.len()], b':' | b'.') {
+                return format!("{to}{}", &key[from.len()..]);
+            }
+        }
+        key.to_string()
+    };
+    let apply = |ws: &Workspace, map: &BTreeMap<String, String>| -> Workspace {
+        let mut ws = ws.clone();
+        if map.is_empty() {
+            return ws;
+        }
+        ws.items = std::mem::take(&mut ws.items)
+            .into_values()
+            .map(|mut item| {
+                item.path = rekey(&item.path, map);
+                (item.path.clone(), item)
+            })
+            .collect();
+        ws.module_files = std::mem::take(&mut ws.module_files).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
+        ws.inner_attrs = std::mem::take(&mut ws.inner_attrs).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
+        ws.inner_attrs_display = std::mem::take(&mut ws.inner_attrs_display).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
+        ws.macro_modules = std::mem::take(&mut ws.macro_modules).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
+        ws.body_index = Default::default();
+        ws
+    };
+    Some((apply(before, &keys[0]), apply(after, &keys[1]), moved))
+}
+
 /// The text of a twin that a step adds or removes (design 38.3): "(a twin of `P` under
 /// `cfg(…)`) with the body: `{ … }`". `None` if `path` is not such a twin: the tree must have
 /// the plain path `P` too, which only [`twin_keys`] makes.

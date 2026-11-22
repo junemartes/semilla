@@ -1,0 +1,45 @@
+note: a line in the file of a child module: the parent is the module of the call, and the file is in the folder of that module
+rule+: R59.1-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! pick {
+    ($($t:tt)*) => { $($t)* };
+}
+
+pub mod net;
+=== both src/net.rs
+pick! {
+    mod tcp;
+}
+=== old src/net/tcp.rs
+pub fn port() -> u32 {
+    80
+}
+=== new src/net/tcp.rs
+pub fn port() -> u32 {
+    8080
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `80` → `8080` (f1)
+      in: depot::net::tcp::port
+      lines: src/net/tcp.rs:2, src/net/tcp.rs:-2
+      to state it: --change 'depot::net::tcp::port=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::net::tcp::port=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `80` → `8080` at `depot::net::tcp::port/tail` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: module of a macro input: `depot::net::tcp` (`src/net/tcp.rs`) has its line `mod tcp;` in the input of the macro call `depot::net::pick!#0` (`src/net.rs:2`); Semilla does not expand the macro, so it does not know if the build has this module
+
+=== positions
+◆ f1 derived: changed literal `80` → `8080` at `depot::net::tcp::port/tail` [semantics]
+    lines: src/net/tcp.rs:2, src/net/tcp.rs:-2

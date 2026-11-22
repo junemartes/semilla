@@ -23,8 +23,8 @@ pub mod sites;
 pub mod tree;
 pub mod tt;
 
-pub use diff::{BodyMaps, Edit, EditKind, Refactor, Renames, SiteCount, StatementMap, diff, diff_maps};
-pub use load::{BodyItem, BodyItems, CodeFile, CrateInfo, Item, ItemKind, Target, Workspace};
+pub use diff::{BodyMaps, Edit, EditKind, NodePair, Refactor, Renames, SiteCount, StatementMap, diff, diff_maps};
+pub use load::{BodyItem, BodyItems, CodeFile, CrateInfo, Item, ItemKind, MacroModule, Target, Workspace};
 pub use tree::Node;
 
 use semilla_core::{Anchor, Segment};

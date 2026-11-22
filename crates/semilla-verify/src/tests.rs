@@ -11220,3 +11220,20 @@ fn a_rename_gives_the_comments_of_the_renamed_item_only() {
     assert_eq!(comment_heads(&report), ["f1: docs of `demo::cost`, no edit in this step (src/lib.rs:1)"]);
     assert_eq!(report.facts[0].category, Category::Rename);
 }
+
+/// Design 59, R59.3-5: the name of a macro call with a path has no space, and a key of an
+/// earlier version reads in the form of today. A call with no path keeps its name, and a key
+/// with no macro call does not change.
+// rule+ R59.3-5
+// rule- R59.3-5
+#[test]
+fn the_name_of_a_macro_call_with_a_path_has_no_space() {
+    let (_dir, ws) = load("macro_rules! table { ($($t:tt)*) => {}; }\ncrate::table!(A);\ntable!(B);\n");
+    let calls: Vec<&String> = ws.items.keys().filter(|key| key.contains("table!#")).collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls.iter().any(|key| key.ends_with("::crate::table!#0")), "{calls:?}");
+    assert!(calls.iter().all(|key| !key.contains(' ')), "{calls:?}");
+    assert_eq!(crate::macro_call_key("demo::crate :: table!#0"), "demo::crate::table!#0");
+    assert_eq!(crate::macro_call_key("demo::table!#0"), "demo::table!#0");
+    assert_eq!(crate::macro_call_key("demo::<Cart as Add>::add"), "demo::<Cart as Add>::add");
+}

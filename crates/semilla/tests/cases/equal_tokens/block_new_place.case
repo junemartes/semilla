@@ -1,0 +1,47 @@
+note: B2 of the brief: a block gets a new place on its line, and its content changes: the old line `unsafe {` has equal tokens in the pairs of the tree
+rule+: R59.2-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn check(p: *const u32) -> u32 { p as u32 }
+pub fn read(p: *const u32) -> u32 {
+    unsafe {
+        check(p)
+            .wrapping_add(1)
+    }
+}
+=== new src/lib.rs
+fn check(p: *const u32) -> u32 { p as u32 }
+pub fn read(p: *const u32) -> u32 {
+    let n = check(p);
+    unsafe { n.wrapping_add(2) }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f2)
+      in: depot::read
+      lines: src/lib.rs:4, src/lib.rs:-5-6
+      to state it: --change 'depot::read=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::read=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move]
+      ! unsafe code: the changed body has an `unsafe` block
+  ◆ f2 derived: changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics]
+      ! unsafe code: the changed body has an `unsafe` block
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: depot::read/S1/body/tail/args[0]
+  ! spotlight: unsafe code: depot::read/S1/body/tail/recv
+
+=== positions
+◆ f1 derived: extracted variable `n` = `check(p)` (1 use) at `depot::read/S0` [move]
+    lines: src/lib.rs:3-4, src/lib.rs:-3-4
+◆ f2 derived: changed literal `1` → `2` at `depot::read/S0/body/tail/args[0]` [semantics]
+    lines: src/lib.rs:4, src/lib.rs:-5-6

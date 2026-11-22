@@ -1,0 +1,60 @@
+note: A-g: a line in a macro input with the name of a plain `mod` line and a different file gives no module: that file keeps its `file` fact
+rule+: R59.1-7
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! pick {
+    ($($t:tt)*) => { $($t)* };
+}
+
+#[cfg(unix)]
+mod unix;
+pick! {
+    #[cfg(not(unix))]
+    #[path = "other.rs"]
+    mod unix;
+}
+=== old src/unix.rs
+pub fn open() -> u32 {
+    3
+}
+=== new src/unix.rs
+pub fn open() -> u32 {
+    4
+}
+=== old src/other.rs
+pub fn open() -> u32 {
+    5
+}
+=== new src/other.rs
+pub fn open() -> u32 {
+    6
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `3` → `4` (f2)
+      in: depot::unix::open
+      lines: src/unix.rs:2, src/unix.rs:-2
+      to state it: --change 'depot::unix::open=TEXT'
+  to state them, add these options to the command of the step: --change 'depot::unix::open=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed literal `3` → `4` at `depot::unix::open/tail` [semantics]
+  ◆ f1 derived: src/other.rs: changed [file]
+      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/other.rs:=…'
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'src/other.rs:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/other.rs:=the reason of the test' --change 'depot::unix::open=the text of the test'
+◆ f2 stated: changed literal `3` → `4` at `depot::unix::open/tail` [semantics]
+    lines: src/unix.rs:2, src/unix.rs:-2
+◆ f1 derived: src/other.rs: changed [file]
+    lines: src/other.rs:2, src/other.rs:-2

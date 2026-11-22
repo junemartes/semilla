@@ -143,6 +143,24 @@ pub struct BodyMaps {
     pub round3: usize,
     pub composites: usize,
     pub gap_pairs: usize,
+    /// The node pairs of the tree compare of each body, by the path of the old item (design 59,
+    /// B-d). The cover check reads them for a changed line with no fact.
+    pub pairs: BTreeMap<String, Vec<NodePair>>,
+}
+
+/// One node pair of the tree compare (design 59, B-d): the places of the two nodes, and the
+/// state of their tokens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodePair {
+    /// The first place and the place after the end, on the old side and on the new side.
+    pub ranges: [(Pos, Pos); 2],
+    /// The kinds of the two nodes.
+    pub kinds: [&'static str; 2],
+    /// True if the two nodes have equal tokens.
+    pub equal: bool,
+    /// True if the own tokens of the two nodes (the tokens that are in no child) are equal, in
+    /// order (design 52.1). A token with no meaning (design 52.2) is not in the own tokens.
+    pub own_equal: bool,
 }
 
 impl Edit {
@@ -775,6 +793,7 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
             moves: Vec::new(),
             maps: Vec::new(),
             variable_edits: Vec::new(),
+            pairs: Vec::new(),
         };
         context.block(old, new, &[], &[]);
         if context.map.is_some() {
@@ -783,7 +802,8 @@ fn diff_item(before: &Item, after: &Item, renames: &Renames, edits: &mut Vec<Edi
             detect_moves(&mut context.edits);
         }
         maps.gap_pairs += context.gap_pairs.len();
-        let Context { edits: mut body_edits, variable_edits, maps: body_maps, .. } = context;
+        let Context { edits: mut body_edits, variable_edits, maps: body_maps, pairs, .. } = context;
+        maps.pairs.entry(before.path.clone()).or_default().extend(pairs);
         body_edits.extend(variable_edits);
         body_edits.sort_by_key(|edit| edit.line);
         edits.extend(body_edits);
@@ -887,6 +907,8 @@ struct Context<'a> {
     /// The edits of the extracted and the inlined variables. They are not in `edits` during
     /// the walk, so a node compare does not count them as a change of the node.
     variable_edits: Vec<Edit>,
+    /// Each node pair of the compare (design 59, B-d).
+    pairs: Vec<NodePair>,
 }
 
 /// The source text of a node, cut from the source of its item.
@@ -959,6 +981,21 @@ fn dedent(text: &str, column: usize) -> String {
 }
 
 impl Context<'_> {
+    /// Keeps a node pair of the compare (design 59, B-d). The compare is strict: a rename map
+    /// does not make two tokens equal here. For a block, the place of each statement in the own
+    /// tokens does not count: each statement has its own pair or its own edit.
+    fn pair(&mut self, before: &Node, after: &Node, block: bool) {
+        if before.start.0 == 0 || after.start.0 == 0 {
+            return;
+        }
+        let equal = before.text == after.text;
+        let own_equal = equal || {
+            let tidy = |text: String| if block { text.split(' ').filter(|word| *word != crate::tree::CHILD_MARK).collect::<Vec<_>>().join(" ") } else { text };
+            tidy(before.own_text(&[])) == tidy(after.own_text(&[]))
+        };
+        self.pairs.push(NodePair { ranges: [(before.start, before.end), (after.start, after.end)], kinds: [before.kind, after.kind], equal, own_equal });
+    }
+
     /// True if a node did not change: the text is equal, or the text with the renames is equal.
     /// A rename of a name applies only where the text changed (design 37.10): a different item
     /// can have the same name (`a.len()` and `b.len()`). A place that keeps the old name and gets
@@ -1040,6 +1077,7 @@ impl Context<'_> {
 
     /// Compares two blocks. `before_path` and `after_path` are the role paths of the blocks.
     fn block(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
+        self.pair(before, after, true);
         if self.map.is_some() {
             self.block_mapped(before, after, before_path, after_path);
             return;
@@ -1047,6 +1085,9 @@ impl Context<'_> {
         let old: Vec<&Node> = before.children.iter().collect();
         let new: Vec<&Node> = after.children.iter().collect();
         let pairs = lcs(&old, &new, |a, b| self.same(a, b));
+        for (pi, pj) in &pairs {
+            self.pair(old[*pi], new[*pj], false);
+        }
         let (mut i, mut j) = (0, 0);
         for (pi, pj) in pairs.into_iter().chain(std::iter::once((old.len(), new.len()))) {
             self.gap(&old[i..pi], &new[j..pj], &old, &new, before_path, after_path);
@@ -1377,6 +1418,7 @@ impl Context<'_> {
 
     /// Compares two paired nodes.
     fn node(&mut self, before: &Node, after: &Node, before_path: &[String], after_path: &[String]) {
+        self.pair(before, after, false);
         if self.same(before, after) {
             // The statements inside an equal node with a block are in place.
             if self.map.is_some() && before.has_block() {
@@ -1438,6 +1480,7 @@ impl Context<'_> {
                     }
                     self.block(old_child, new_child, &bp, &ap);
                 } else {
+                    self.pair(old_child, new_child, true);
                     self.mark_visited(old_child, new_child);
                 }
             } else {

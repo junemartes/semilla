@@ -1,0 +1,46 @@
+note: B-b: a call on some lines goes to one line, two arguments change, and a new statement is above it: the first line of the old call has equal tokens
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn pad(f: &mut Vec<u32>, a: u32, b: u32) {
+    f.splice(
+        0..1,
+        [a, b],
+    );
+}
+=== new src/lib.rs
+pub fn pad(f: &mut Vec<u32>, a: u32, b: u32) {
+    let c = a + b;
+    f.splice(1..2, [c, b]);
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 4 places: 4 different edits (f1, f2, f3, f4)
+      in: depot::pad
+      lines: src/lib.rs:2-3, src/lib.rs:-2-5
+      to state it: --change 'depot::pad=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::pad=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added `let` `let c = a + b;` at `depot::pad/S0` [semantics]
+  ◆ f2 derived: changed literal `0` → `1` at `depot::pad/S0/args[0]/start` [semantics]
+  ◆ f3 derived: changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics]
+  ◆ f4 derived: changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `let` `let c = a + b;` at `depot::pad/S0` [semantics]
+    lines: src/lib.rs:2
+◆ f2 derived: changed literal `0` → `1` at `depot::pad/S0/args[0]/start` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-2-3
+◆ f3 derived: changed literal `1` → `2` at `depot::pad/S0/args[0]/end` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f4 derived: changed path `a` → `c` at `depot::pad/S0/args[1]/elems[0]` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-4-5

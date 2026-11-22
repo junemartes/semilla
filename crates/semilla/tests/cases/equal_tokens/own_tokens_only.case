@@ -1,0 +1,42 @@
+note: negative of B-a: the fact of the own tokens of a node with a block shows `{▫}` for the block: its position has the lines of the own tokens only, and the edit in the block has its own fact
+rule-: R59.2-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn run() -> impl std::future::Future<Output = u32> {
+    async move {
+        1
+    }
+}
+=== new src/lib.rs
+pub fn run() -> impl std::future::Future<Output = u32> {
+    async {
+        2
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: depot::run
+      lines: src/lib.rs:2-3, src/lib.rs:-2-3
+      to state it: --change 'depot::run=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::run=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: `▫` is in place of a child of the node (a condition, a block, an argument). It is not a cut: each edit in the child has its own fact.
+
+=== positions
+◆ f1 derived: changed async: `async move {▫}` → `async {▫}` at `depot::run/tail` [semantics]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 derived: changed literal `1` → `2` at `depot::run/tail/body/tail` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-3

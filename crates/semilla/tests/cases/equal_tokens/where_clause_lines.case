@@ -1,0 +1,30 @@
+note: B-b: a `where` clause on new lines with one changed bound
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn pick<T, U>(t: T, u: U) -> T where U: Copy, T: Default { let _ = u; t }
+=== new src/lib.rs
+pub fn pick<T, U>(t: T, u: U) -> T
+where
+    U: Clone,
+    T: Default,
+{
+    let _ = u;
+    t
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: where clause of `depot::pick` changed `U: Copy` → `U: Clone` (the public API can change: a different crate can use the item) [declaration]
+  cover: each of the 9 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: where clause of `depot::pick` changed `U: Copy` → `U: Clone` (the public API can change: a different crate can use the item) [declaration]
+    lines: src/lib.rs:1-8, src/lib.rs:-1

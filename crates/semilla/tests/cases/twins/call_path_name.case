@@ -1,0 +1,35 @@
+note: the name of a macro call with a path has no space: `depot::crate::table!#0`
+rule+: R59.3-5
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[macro_export]
+macro_rules! table {
+    ($($n:ident = $v:expr,)*) => { $(pub const $n: u32 = $v;)* };
+}
+crate::table!(A = 1,);
+=== new src/lib.rs
+#[macro_export]
+macro_rules! table {
+    ($($n:ident = $v:expr,)*) => { $(pub const $n: u32 = $v;)* };
+}
+crate::table!(A = 2,);
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro call `crate::table!(A = 1,)` → `crate::table!(A = 2,)` (makes items that Semilla cannot list) [declaration]
+      ✗ spotlight: the macro call `crate::table!(A = 2,)` makes items that Semilla cannot list; it needs a reason: --reason 'depot::crate::table!#0=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'depot::crate::table!#0=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::crate::table!#0=the reason of the test'
+◆ f1 derived: changed macro call `crate::table!(A = 1,)` → `crate::table!(A = 2,)` (makes items that Semilla cannot list) [declaration]
+    lines: src/lib.rs:5, src/lib.rs:-5

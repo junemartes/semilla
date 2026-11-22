@@ -2692,7 +2692,7 @@ The rule: the driver finds a descriptor from the compiler data (a `static` or a 
 
 **The rule.**
 
-1. **The names.** A macro definition has the plain name `m::name!`. Each macro call has a number in source order: `m::name!#N`. A new call at the end changes no other name. The reason key of a changed definition is the plain name: `--reason 'k::tests::t!=<why>'`.
+1. **The names.** A macro definition has the plain name `m::name!`. Each macro call has a number in source order: `m::name!#N`. Since batch 9n, the name of a call with a path has no space: `m::crate::name!#0` (59.3). A new call at the end changes no other name. The reason key of a changed definition is the plain name: `--reason 'k::tests::t!=<why>'`.
 2. **The made items come from the compiler.** The driver writes each item of the expanded code with the place of the outermost macro call (`semilla-mir/src/made.rs`). Semilla puts an item under a call if the place is in the source range of the call. Semilla does not expand a macro.
 3. **The text.** "added macro call `same!(&str)` (makes: `impl PartialEq for AsKebabCase<&str>`)", "removed macro call `…` (made: …)", "changed macro call `old` → `new` (…)". A definition gives "added macro `same`". Since batch 9t, the text of the call is the tokens of the call, and a filter of source lines is never the text (57.2).
 4. **The rules of an item with no macro apply to a made item.** The public API (a made item that a different crate can use gives a line under "Public API changes": "added `…` (the macro call `…` makes it)"), a new attribute that can change the behavior, unsafe code, and an implicit call (`Drop`, `Deref`) with its spotlight. "Public" is the effective visibility from the compiler. A trait impl has no visibility: a different crate can use it if it can name the trait and the type. An added impl is `minor`, a removed impl is `major`.
@@ -2994,7 +2994,7 @@ Batch 7c. The user gave the target on 2026-11-15: a pull request usually has 500
 1. The loader follows each `mod` declaration, also under a `cfg` condition that is off. A `cfg_attr(COND, path = "…")` attribute names one file for a part of the configurations: the loader reads each such file. Two files of one module name are twin modules (`sys#0`, `sys#1`).
 2. The items of the file get their usual syntax facts. Each fact has the compare result `no compare`, with the note "no compare: no checked configuration compiles …".
 3. A file that no checked unit reads has one "inactive code" spotlight. The key of its reason is the file. The facts of the file ask for no reason of their own.
-4. A file that does not parse, and a file that no `mod` declaration names, keep the `file` fact and its spotlight.
+4. A file that does not parse, and a file that no `mod` declaration names, keep the `file` fact and its spotlight. Since batch 9n, a `mod NAME;` line in the input of a macro call at an item position also names a file (59.1).
 
 **Limits.** Semilla does not compile such a file, so it cannot see an error in it. A twin number changes when the count of the files of a module changes.
 
@@ -3188,6 +3188,8 @@ The reverse step (statements go into a closure) uses the words "the added". An a
 4. A removed twin that a checked unit compiles (each own `cfg` condition is true in a unit that reads its file) has `code different`, not "no checked configuration compiles".
 
 **The limit.** The condition of an outer item (an impl under `cfg`) is not a part of the test of rule 4.
+
+**Batch 9n.** Rule 1 is for an item with no twin in one tree. When the two trees have twins of one path, the twins pair by their tokens first, then in source order (59.3).
 
 ### 38.4 A spotlight line of a run of facts
 
@@ -5528,7 +5530,7 @@ A changed line can have no difference of the syntax tree, or a difference that t
 
 **The classes of the brief.**
 
-- [R55.5-1] *Layout.* The tokens of the changed lines of a hunk are equal on the two sides (white space, line breaks, a comma or a semicolon with no meaning, design 52.2). If the hunk has an edit with a fact, the line joins the nearest fact of the hunk: the layout of an edit is a part of the edit. Else the line is in the fact `layout of FILE: N changed lines with equal tokens`. The category is the new category `layout` (the role of docs, the weight 0).
+- [R55.5-1] *Layout.* The tokens of the changed lines of a hunk are equal on the two sides (white space, line breaks, a comma or a semicolon with no meaning, design 52.2). If the hunk has an edit with a fact, the line joins the nearest fact of the hunk: the layout of an edit is a part of the edit. Else the line is in the fact `layout of FILE: N changed lines with equal tokens`. The category is the new category `layout` (the role of docs, the weight 0). Since batch 9n, a changed line whose tokens are equal in the node pairs of the tree compare follows the same rule (59.2, B-b): the tokens need not be equal in the hunk.
 - [R55.5-2] *Line endings.* A pair of lines with an equal text and different line endings is in the fact `line endings of FILE: …; the text of each line is equal`.
 - [R55.5-3] *A comment that is not in a body.* A plain comment in no item gets a fact of the category `docs` for each block of comment lines of a hunk: `comment in FILE: added …`, `removed …`, or `changed … → …`.
 - *The text of a doc change.* The doc lines are lines of the doc fact of the item. A code block in the docs is code of a doc test: its lines are lines of the doc test fact.
@@ -5668,7 +5670,7 @@ The brief of batch 9b4b has seven parts. P1 and P2 are in 55.8, 55.2, and 55.3. 
 **Limits.**
 
 - An attribute macro on the block can change each member. The fact of the attribute shows it; the members keep their own facts.
-- Two calls of one macro in a block pair by their index.
+- Two calls of one macro in a block pair by their index. (Changed by batch 9n: twins pair by their tokens first, then in source order, 59.3.)
 - A const of a module with a changed attribute also gets a "type of" fact with the full text of the item.
 - A new ABI of an `extern` block changes the path of the block: its members are removed and added.
 - The note of the public API of a member is the note of a function of the same impl. For a twin impl (`<&Rgb as std::ops::Add>::Output#0`) and for an impl whose header changes in the step, the note is "Semilla did not find the impl block of the method". Before, the fact of the block had the more exact note ("a `pub use` line names …") in one fact of the fixtures (utf8_iter). The category and the edit text are the same.
@@ -5705,7 +5707,7 @@ Decided by Claude: `file!` is in the list of the macros, because its value is th
 
 **What the batch found.** The example of the brief (an impl with an edit, and a new impl with an equal method tail after it) has a fact for each line after P1: the lines of git are lines of the facts of the edits. One real class remains. The line diff pairs the body lines of an old item `f` with the lines of a new item `e`, and the step adds a `macro_rules!` definition between the two places. The item pair rule of 55.5 did not apply (the items that can give a macro differ around the pair): 5 lines stayed open. Now the rule applies if the order check of 56.5 examined the pair: the tokens of the lines have a pair in the item pair, and the lines join the facts of `f`. The added definition has its own `added` fact.
 
-**Rule 2.** No token with no pair and no fact was found, on the fixtures and on the cases. No hole of 49.3 is known.
+**Rule 2.** No token with no pair and no fact was found, on the fixtures and on the cases. No hole of 49.3 is known. Batch 9n adds rule 1 for each node kind: a line whose tokens are equal in the node pairs of the tree compare (59.2, B-b).
 
 [R56.4-3] **Rule 3: the cause lines.** The full text of a step (`semilla status --verbose`) prints one line for each cause, below the `!` lines of the cover check:
 
@@ -5714,7 +5716,7 @@ Decided by Claude: `file!` is in the list of the macros, because its value is th
 The cause has the smallest item of the tree that has the line, the state of its tokens, and the state of the line:
 
 - "a file that Semilla does not parse"
-- "a file with no item in the tree (for example a file behind a `mod` line in a macro input)"
+- "a file with no item in the tree (for example a module file with no item)". Before batch 9n, the example was a file behind a `mod` line in a macro input: such a file is now a module file (59.1).
 - "a line in no item of the tree; …"
 - "in `PATH`: its tokens are in no pair of the tree compare; …", "… in a pair with equal tokens; …", "… in a pair with a difference; …"
 - The state of the line: "the tokens of the line are equal in the line diff", "the changed tokens of the line are comments", "a token of the line changes".
@@ -5782,8 +5784,8 @@ The ten fixtures of `b7cfix/`, each as one step with `SEMILLA_NO_CHECK=1` and no
 Rule index: no rule: the subsection has limits and open questions.
 
 - A changed file that is not UTF-8 text has no position, and the command of 55.8 shows hunks for it (55.8).
-- A file behind a `mod` line in a macro input has only a `file` fact (not in this batch).
-- The rule of 56.4 for "each node kind" is not done as a new layout rule: no open line remained as an example (56.4).
+- (Removed by batch 9n.) A file behind a `mod` line in a macro input had only a `file` fact. Now 59.1 applies.
+- (Removed by batch 9n.) The rule of 56.4 for "each node kind" was not done as a new layout rule. Now the rule of the equal tokens of 59.2 (B-b) applies to each node kind.
 - The order check of 56.5 does not apply to the items of a module with a new name.
 - Extract and inline (9c) and the forced inliner (9d) are not in this batch.
 
@@ -5895,8 +5897,8 @@ The positive case: the condition of the rule holds, and the test sees the result
 2. [R57.6-2] The test fails for a rule with no test of the negative case, unless the identity gives the cause in the form `[R<section>-<number>; no negative case: CAUSE]`.
 3. [R57.6-3] The test fails for a marker with an identity that the design does not have.
 4. [R57.6-4] The test fails for an identity that is in the design two times, or that is not in the section of its number.
-5. [R57.6-5] The test fails for a subsection of the sections 48 to 58 that has no identity and no line that starts with "Rule index: no rule: CAUSE" or "Rule index: not indexed: CAUSE".
-6. [R57.6-6] The lock (batch 9t2, Decided by Claude). The test fails for a subsection of the sections 48 to 58 that has the line "Rule index: not indexed: CAUSE", unless the list `STAY_NOT_INDEXED` of `crates/semilla/tests/rules.rs` names the subsection. The list gives the cause of each entry. The test also fails for an entry of the list that has no such line in the design. The list of today has one entry: 48.1 (57.9).
+5. [R57.6-5] The test fails for a subsection of the sections 48 to 59 (58 before batch 9n) that has no identity and no line that starts with "Rule index: no rule: CAUSE" or "Rule index: not indexed: CAUSE".
+6. [R57.6-6] The lock (batch 9t2, Decided by Claude). The test fails for a subsection of the sections 48 to 59 (58 before batch 9n) that has the line "Rule index: not indexed: CAUSE", unless the list `STAY_NOT_INDEXED` of `crates/semilla/tests/rules.rs` names the subsection. The list gives the cause of each entry. The test also fails for an entry of the list that has no such line in the design. The list of today has one entry: 48.1 (57.9).
 
 The test also fails for a marker that is not above a `#[test]` line, for a cause of less than three words, and for a rule that has a negative test and the text "no negative case".
 
@@ -5909,7 +5911,7 @@ The test also fails for a marker that is not above a `#[test]` line, for a cause
 
 A change of a rule keeps the identity, and the tests and the expected texts change with it.
 
-**The scope.** The index has rules of the sections 44.1 (the six core rules) and 48 to 58. The six core rules are in the index because the rules of 48 to 56 depend on them. No other section before 48 is in the index. After batch 9t2, one subsection has the line "Rule index: not indexed" (48.1), and the lock (check 6) keeps this state. A subsection with an identity can have more rules with no identity (57.9).
+**The scope.** The index has rules of the sections 44.1 (the six core rules) and 48 to 59 (batch 9n adds 59). The six core rules are in the index because the rules of 48 to 56 depend on them. No other section before 48 is in the index. After batch 9t2, one subsection has the line "Rule index: not indexed" (48.1), and the lock (check 6) keeps this state. A subsection with an identity can have more rules with no identity (57.9).
 
 ### 57.7 The decisions of Claude
 
@@ -6170,3 +6172,131 @@ Rule index: no rule: the subsection has limits and open questions.
 - Open question: a `move` fact gives no comment. The docs can name the old module.
 - Open question: the size. The docs of a public item can be long: the output of `socket2` has 78 percent more lines. An option that shows only the head lines is possible. It is not in this batch, because R58.7-1 gives the full text.
 - Open question: the local UI and the review show the comments as plain text. A link from the comment to the source lines is not in this batch.
+
+## 59. Batch 9n: a module in a macro input, a line with equal tokens, and the pair of twins
+
+The decisions of the user (2026-11-22):
+
+> "Semilla should still have facts that should cover the full diff for the step"
+
+> "find general rules to fit the fixes you're making"
+
+The user also decided: accuracy of the facts and of the categories comes first, and each check uses the syntax tree. A measure of the coordinator on 117 version pairs of real crates found three classes where the facts are not accurate or not complete. This section has the general rule of each class.
+
+**Soundness.** No rule of this section hides an edit of the author. Part A replaces one `file` fact with the facts of the items of the file. Part B puts a line in a fact only if each token of the line is equal in a pair of the tree compare, or if the fact shows the node of the line. Part C changes which items pair: each difference of a pair has its fact, and an item with no partner is an added or a removed item.
+
+### 59.1 A module file behind a `mod` line in a macro input (part A)
+
+**The defect.** `pick! { mod unix; pub use unix::open; }` names the file `src/unix.rs`. The loader did not see the `mod` line, because it is a token of a macro input. Each edit of the file was behind one `file` fact ("Rust code that Semilla does not parse"), with a spotlight that needs a reason.
+
+**The rules.**
+
+1. [R59.1-1] **A-a.** The loader finds a `mod NAME;` line in the tokens of each macro call that is an item of a module, at each depth of the token tree of its input. A line is this token sequence: attributes (`#` and a `[…]` group), a visibility (`pub`, or `pub` and a `(…)` group), `mod`, one identifier, `;`. The attributes and the visibility are optional (`declarations`, `semilla-syntax/src/load.rs`).
+2. [R59.1-2] **A-b.** The file of the line follows the rule of a plain `mod` line: `NAME.rs`, `NAME/mod.rs`, a `#[path = "…"]` attribute, and a `cfg_attr(…, path = "…")` attribute in the attribute tokens. The parent is the module of the macro call, and the folder is the folder of that module. The loader reads the attributes with a parse of the text of the line.
+3. [R59.1-3] **A-c.** If the file exists, it is a module file. Its items are items of the tree with the path `PARENT::NAME::…`. Each rule of the tree applies to them: facts, positions, renames, moves, comments, the gap list. A plain `mod` line in the file names a module file too.
+4. [R59.1-4] **A-d.** Semilla does not expand the macro, so it does not know if the build has the module. Each such module with a fact (a fact of an item of the module, or a fact with a line of the file of the module) gets one spotlight line of the step: "module of a macro input: `depot::unix` (`src/unix.rs`) has its line `mod unix;` in the input of the macro call `depot::pick!#0` (`src/lib.rs:6`); Semilla does not expand the macro, so it does not know if the build has this module". The line is not a reject: it needs no reason.
+5. [R59.1-5] **A-e.** A line with no file gives no module, no fact, and no error.
+6. [R59.1-6] **A-f.** These are not a line: a token in a macro call in a body; a token in a `macro_rules!` definition (also a definition in a macro input); `mod $name;` (`$` is not an identifier); a text in a string or in a comment (they are no `mod` token). A file that only such a place names keeps its `file` fact.
+7. [R59.1-7] **A-g.** Two lines of one name in one parent with one file give one module. Two lines of one name with two files give twin modules `NAME#0` and `NAME#1` in source order, as two files of `cfg_attr(…, path = …)` (37.3). A plain `mod` line of the same name in the same parent has the module: the line in the macro input gives no second module. If the line in the macro input names a different file, that file keeps its `file` fact (Decided by Claude: two modules of one path from two kinds of lines are a rare case, and the `file` fact hides nothing).
+8. [R59.1-8] **A-h.** A `mod NAME { … }` group in a macro input gives its name to each line in its braces: such a line resolves below the folder `NAME/`, and its module has the path `PARENT::NAME::CHILD`. The block `NAME` is not an item of the tree.
+9. [R59.1-9] **A-i.** The fact of the macro call does not change. A new `mod extra;` token in the input gives the fact of the changed call, as before. The items of a new file are added items.
+
+**A-j.** The compiled mode (`--compiled`) and the build check do not change. With `--compiled`, an item of such a module has its usual compare: "changed literal `3` → `4` at `depot::unix::open/tail` [semantics · code different]" when the macro keeps the line. When the macro does not keep the line, no checked unit reads the file: the fact has `no compare`, and the file gets the "inactive code" spotlight of 37.3.
+
+**Decided by Claude.**
+
+- *The form of the mark* (A-d): one spotlight line for each module, not a note on each fact. A module can have many facts, and the reader needs the cause one time. The line names the module, the file, the line of the macro input, and the call.
+- *The record.* The loader writes each such module in `Workspace::macro_modules` (the call, the file, the place of the line, and the text of the line).
+- *A line in a twin* (two macro calls with one name) has the path of its own call.
+
+### 59.2 A changed line with equal tokens, and the position of a fact (part B)
+
+**The defects.** (1) The text of a fact showed a node, and the position of the fact did not have each line of the node: "body removed from `depot::Price::gross`: `{ self.net() + 2 }`" had no line `self.net() + 2`. (2) A changed line whose tokens are equal in the tree compare, but not in the hunk of the line diff, stayed in the `!` line: a line that gets a comma in a macro input (`level: 2` → `level: 2,`), and the line `unsafe {` of a block with a new place on its line.
+
+**The rules.**
+
+1. [R59.2-1] **B-a.** The position of a fact has each line of each node that the text of the fact shows. The fact kinds that show the text of a node, and their lines:
+   - an added or a removed item: the lines of the item (before the batch);
+   - an added or a removed statement, a moved statement, a changed expression with the two texts (`Inserted`, `Deleted`, `Moved`, `Replaced`), an extracted or an inlined variable: the lines of the node (before the batch);
+   - a part of a signature (a parameter, the return type, the generics, the `where` clause): the lines of the part (before the batch);
+   - **new:** a body that a step adds to a function or removes from it ("body added to …", "body removed from …"): the lines of the body;
+   - **new:** a changed node with the full text of the node (`Modified`, for example "changed operator `a + g( 1, b, )` → `a - g( 1, b )`"): the lines of the node. A fact of the own tokens of a node with a block (52.1, the text has `{▫}`) keeps the lines of the own tokens.
+   - The other kinds show no node text, or they keep their rule of 55.2: a visibility, an attribute, a docs fact, and a comment (the tokens of their class), a list of members (the names), a file.
+2. [R59.2-2] **B-b.** After each fact has its position, each changed line with no fact (a line with a changed token in its hunk) in an item pair of the tree gets this test. A token of the line is equal if the tree compare pairs it with an equal token: it is in a node pair with equal tokens, or it is an own token of a node pair (in no child) and the own tokens of the pair are equal in order. A token with no meaning (52.2) is not in the own tokens, so it is equal too. A token of the head of an item (not in the body) is equal if the head of the item pair is equal: the name, the signature, and the list of the members for a code token, the attributes, the docs and the comments of the item, or the visibility for a token of that class. If each token of the line is equal, the line follows R55.5-1: it joins the nearest fact of its item, else it is a line of the `layout` fact.
+3. [R59.2-3] **B-c.** A line with one token that is not equal, and with no fact for that token, stays in the `!` line with its cause. Such a line is never a layout line. A token of an item with no partner, of a `use` line, and of a body with no partner is not equal. The compare is strict: a token that is equal only after the map of a rename is not equal here (the rules of a rename of 55.2 have such lines).
+4. [R59.2-4] **B-d.** The tree compare keeps each node pair that it compares (`BodyMaps::pairs`, by the path of the old item): the places of the two nodes, their kinds, "equal tokens", and "equal own tokens". The compare adds a pair at the start of the compare of two nodes, of two blocks, and for each pair of equal statements of the order rule of a block. The test of B-b reads these pairs and makes no second text compare of the item.
+5. [R59.2-5] **B-e.** Property 8 of the case runner. `semilla status --verbose` lists each line that only B-b puts in a fact, with the item pair: "equal tokens: in `depot::rules` (old lines 5-16 of `src/lib.rs`, new lines 5-16 of `src/lib.rs`): src/lib.rs:9". The runner reads the two trees with its own lexer: each token of such a line (without `,` and `;`, which can be tokens with no meaning) is in the lines of the item of the other tree, as often as the line has it. The check is weaker than the rule: it does not prove that the tree compare pairs the token.
+
+**The examples of the brief.** B1: "changed literal `4` → `5` …" has the lines `src/lib.rs:9, src/lib.rs:13, src/lib.rs:-9, src/lib.rs:-13`, and the cover line is "each of the 4 changed line(s) is in a fact". B2: the old line `unsafe {` joins the fact "extracted variable `n` = `check(p)`". B3: "body removed from …" has the lines `src/lib.rs:3, src/lib.rs:-3-5`.
+
+**Decided by Claude.**
+
+- *The order of the rules.* B-b runs after the item pair rule of 55.5 (step 9a) and before the rule of a line that waits (step 9b): a line that waits for a changed token gets its result after B-b.
+- *A head token* uses the parts of the item compare (the name, the signature, the members, the attributes, the docs, the visibility), because the tree compare has no node pairs for the head of an item. The name is a part of the test because the signature of a field does not have it: a field pair of a rename has two names. The first run of the test suite found this (an existing test of a field rename got a false `layout` fact); the rule has the name since then.
+- *The pairs are strict.* A pair with equal tokens after the map of a rename only is a pair with a difference for B-b. This is careful: it can leave a line open, and it never puts a line in a fact by error.
+
+### 59.3 The pair of twins (part C)
+
+**The defect.** Twins are the items of one parent with one path and one kind: they get the suffix `#N` in source order (two `impl` blocks of one type, `cfg` variants, macro calls with one name, items with no name). The old twin `#N` paired with the new twin `#N`. A new call at the start of three calls gave one false "changed" fact for each call after it.
+
+**The rules.**
+
+1. [R59.3-1] **C-a, C-b.** The twins of one path, one kind, and one flag of a macro definition pair in two passes, for each kind of twin (`identity::twin_pairs`). Pass 1: a twin pairs with a twin of the other tree with equal tokens (the tokens of the item and of each item in it): first the longest list of such pairs in their order, then each other such twin in source order. Pass 2: in each gap between two pairs of pass 1 in their order, the twins that remain pair in source order. A `use` line has no twin (the `use` lines of a module compare as a set), and a twin in a twin keeps the source order.
+2. [R59.3-2] **C-c.** A twin with no partner is an added item or a removed item. The example of the brief gives one fact: "added macro call `table!(Z = 9,)` (makes items that Semilla cannot list) [added]".
+3. [R59.3-3] **C-d.** A new order of twins with equal tokens has no edit. The rules of the order apply to its lines: a macro call can give a macro, so a call at a new place gets the fact of 56.5 ("moved `depot::a::table!#1` (it can give a macro) past 1 item: …" [macro]); two `impl` blocks in a new order are layout lines (R55.5-4).
+4. [R59.3-4] **C-e.** The number `#N` of a twin is its number in source order in its own tree. The compare pairs items by their keys. If a pair has two different numbers, the tree with fewer twins of the path takes the numbers of the other tree for its paired twins (a new key for the compare only). Thus each twin with no partner keeps the number of its own tree in each fact, reason key, and `--change` item, and the keys of each tree stay different. A pair with two numbers has the number of the tree with more twins of the path (the new tree when the count is equal). Each such pair with a fact gets one note: "twins: `depot::a::table!#1` of the old tree and `depot::a::table!#2` of the new tree are one pair (equal tokens first, then the source order); the facts name the pair `depot::a::table!#2`". If the new keys of a tree are not all different (a twin of a different kind with the same path), the group keeps the source order.
+5. [R59.3-5] **The name of a macro call.** The name of a macro call with a path has no space: `depot::crate::table!#0` (before: `depot::crate :: table!#0`). A reason key and a `--change` item of a record of an earlier version with ` :: ` in the name of a macro call read in the form of today (`macro_call_key`).
+
+**The kinds of twins** (C-b) and what they did before:
+
+| Kind | Path | Before the batch |
+|---|---|---|
+| a macro call of a module | `m::table!#N` | the source order |
+| a macro call of an impl, a trait, an `extern` block | `m::Owner::make!#N` | the source order |
+| two `impl` blocks of one type | `m::impl Cart#N` | the source order |
+| `cfg` variants of an item | `m::sep#N` | the source order; an item with no twin in one tree: by its text (38.3) |
+| two files of one module (`cfg_attr` path, A-g) | `m::imp#N` | the source order |
+| an item with no name | `m::item#N` | the source order |
+| a `use` line | `m::use#N` | by its text, as a set (no change) |
+
+**Decided by Claude.**
+
+- *C-e.* The tree with fewer twins takes the numbers, so no fact names a twin by a number that it does not have in its own tree when the twin has no partner. A pair keeps one key. A different choice gives a collision: an added twin can have the old number of a different pair.
+- *Pass 2 in the gaps of pass 1.* The brief says "the twins that remain pair in source order". A pass 2 over the full list paired an edited call with a new call before it ("a new call and an edit of a different call" gave two false facts). The gaps keep the source order and respect the pairs of pass 1.
+- *A record of an earlier version* reads: a stored step has no key of the compare. A reason key of a twin is the number in source order of its own tree, as before, for each twin with no partner and for each pair with equal numbers.
+
+**C-f.** Pass 2 can give a false "changed" fact. The case `twins/two_changed_one_new` (two calls change, a new call is at the start) gives "changed `table!(A = 1,)` → `table!(Z = 9,)`", "changed `table!(B = 2,)` → `table!(A = 5,)`", and "added `table!(B = 6,)`". A pair by the most similar text is not a part of this batch.
+
+### 59.4 The tests
+
+Rule index: no rule: the subsection lists the tests of the rules of 59.1 to 59.3.
+
+- The case set has three new groups: `macro_module` (22 cases), `equal_tokens` (10 cases), and `twins` (12 cases). Each case of the brief is in them. Each rule has its markers there or in a unit test (`positions::tests::a_token_is_equal_only_in_a_pair_of_the_tree_compare`, `the_eighth_property_finds_a_token_that_the_other_item_does_not_have`).
+- No case of the batch has a `!` line of the cover check. The negative of B-c is the unit test: no real case with such a line is known.
+- The existing cases: no expected text changes (0 of 421 cases, for each part).
+- The check of the batch (Decided by Claude). A product mutation for each part made a test fail. Two mutations of B-b made only tests of other rules fail: own tokens that count at each depth, and a head compare with no name. The unit test of B-b now has two more asserts: a token in a child with no pair is not equal when only an ancestor pair has equal own tokens, and two fields with an equal type and two names have no equal head token. Each of the two mutations now fails this test.
+
+### 59.5 The measure
+
+Rule index: no rule: the subsection is a measure.
+
+The ten fixtures of `b7cfix/`, each as one step with `SEMILLA_NO_CHECK=1`, the binary of batch 9m and the binary of this batch:
+
+- `nu-ansi-term` (part C): 264 facts before, 243 after. 21 false facts "changed macro call `test!(…)` → `test!(…)`" [declaration] and 4 "added macro call" facts of the wrong calls go away. 4 "added macro call" facts of the 4 new calls are new. The categories: `declaration` 48 → 27; each other count is equal.
+- Each other fixture: each fact line is equal (the text, the category, and the position in `status --verbose`).
+- No fixture has a `file` fact of a module of a macro input, a line of B-b, or a changed line with no fact, before or after.
+- A script checks each fact that goes away (25, all in `nu-ansi-term`): each line of its position is in the position of a fact after the batch.
+- The time of a step on the ten fixtures (the sum of the smallest of three runs): 3.53 s before, 3.58 s after (a second measure: 3.52 s and 3.54 s).
+
+### 59.6 The limits and the open questions
+
+Rule index: no rule: the subsection has limits and open questions.
+
+- Semilla does not know the condition of a line in a macro input. A module that the macro does not keep has facts for code that is not in the build. The spotlight line of A-d tells the reader. With `--compiled`, the "inactive code" spotlight tells it too.
+- A `use` line in a macro input (`pub use unix::open;`) is a token of the call: no rule resolves a name through it.
+- A line in a macro input with the name of a plain `mod` line and a different file keeps its `file` fact (A-g).
+- B-b has no example on the ten fixtures. Its classes come from the measure of the coordinator.
+- Property 8 checks the tokens against the lines of the item of the other tree that the product gives. The runner does not find the item itself.
+- C-f: pass 2 can give a false "changed" fact (59.3).
+- A twin in a twin (a twin function in a twin module) keeps the source order.
+- Open question: the key of a pair with two numbers is the number of the tree with more twins. Does the user want the new number always, with a different rule for a removed twin?
