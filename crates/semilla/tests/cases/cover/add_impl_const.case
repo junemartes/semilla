@@ -1,0 +1,50 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+//! The crate docs.
+
+pub fn first_item() -> u32 { 0 }
+
+pub struct Tool;
+impl Tool {
+    pub fn a(&self) -> u32 { 1 }
+    pub fn c(&self) -> u32 { 3 }
+}
+
+pub fn last_item() -> u32 { 0 }
+=== new src/lib.rs
+//! The crate docs.
+
+pub fn first_item() -> u32 { 0 }
+
+pub struct Tool;
+impl Tool {
+    pub fn a(&self) -> u32 { 1 }
+    /// The new doc.
+    /// One more line.
+    #[cfg(all())]
+    pub const ZERO: u32 = 0;
+    pub fn c(&self) -> u32 { 3 }
+}
+
+pub fn last_item() -> u32 { 0 }
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added `depot::Tool::ZERO` (the public API changes: a different crate can now use the item) [added]
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Tool::ZERO`; it needs a reason: --reason 'depot::Tool::ZERO=…'
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::Tool::ZERO
+run again: semilla step 'the change' --reason 'depot::Tool::ZERO=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Tool::ZERO=the reason of the test'
+◆ f1 derived: added `depot::Tool::ZERO` (the public API changes: a different crate can now use the item) [added]
+    lines: src/lib.rs:8-11

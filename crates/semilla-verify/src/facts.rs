@@ -1423,7 +1423,7 @@ pub(crate) fn is_lint_tool(name: &str) -> bool {
 
 /// The name of one attribute text, for example `cfg` for `# [cfg (test)]` and `rustfmt::skip`
 /// for `#[rustfmt::skip]`.
-fn attribute_name(text: &str) -> Option<String> {
+pub(crate) fn attribute_name(text: &str) -> Option<String> {
     let inner = text.trim().strip_prefix('#')?.trim_start().strip_prefix('!').unwrap_or_else(|| text.trim().strip_prefix('#').unwrap()).trim_start();
     let inner = inner.strip_prefix('[')?.trim_start();
     let end = inner.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':' || c == ' ')).unwrap_or(inner.len());

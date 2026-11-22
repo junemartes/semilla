@@ -87,16 +87,11 @@ pub(crate) fn in_range(item: &Item, place: (&str, usize, usize)) -> bool {
     (line > item.line_start || col >= item.col_start) && (line < item.line_end || col < item.col_end)
 }
 
-/// The text of a macro call for a fact: `same!(&str)`.
+/// The text of a macro call for a fact: `same!(&str)`. The text is the tokens of the call
+/// (design 57.2): the path, the `!`, the delimiters, and the full input. It is not a filter of
+/// the source lines. The outer attributes and the docs of the call item are not in the text.
 pub(crate) fn call_text(item: &Item) -> String {
-    semilla_syntax::tree::one_line(&call_full(item))
-}
-
-/// The full text of a macro call on one line, with no comment line and no attribute line.
-fn call_full(item: &Item) -> String {
-    let text = item.source.lines().filter(|line| !line.trim_start().starts_with("//") && !line.trim_start().starts_with("#[")).collect::<Vec<_>>().join(" ");
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    text.trim_end_matches(';').trim_end().to_string()
+    item.display.signature.clone()
 }
 
 /// The name of a macro definition: `same` for `m::same!` and for `m::same!#1`.
@@ -357,8 +352,7 @@ pub(crate) fn apply(step: &Step, edits: &[Edit], fact_of: &[Option<usize>], befo
                 (Some(old), None) => Some(format!("removed macro call `{name}` ({})", list_text(old, "made"))),
                 (Some(old), Some(new)) => {
                     // Design 54.7: the two sides are the full texts of the call.
-                    let full = call_full(call);
-                    let (old_side, new_side) = crate::edits::sides(&change.old.map(call_full).unwrap_or_default(), &full);
+                    let (old_side, new_side) = crate::edits::sides(&change.old.map(call_text).unwrap_or_default(), &name);
                     let sides = format!("changed macro call `{old_side}` → `{new_side}`");
                     let (made, makes) = (list_text(old, "made"), list_text(new, "makes"));
                     Some(if made.strip_prefix("made") == makes.strip_prefix("makes") { format!("{sides} ({makes})") } else { format!("{sides} ({made}; {makes})") })

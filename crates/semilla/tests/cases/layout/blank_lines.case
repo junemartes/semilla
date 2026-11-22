@@ -1,0 +1,63 @@
+note: layout
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub enum Mode { Idle, Busy, Done }
+pub struct Pair { pub left: u32, pub right: u8 }
+#[derive(PartialEq, PartialOrd)]
+pub enum Level { Low, High }
+pub fn limit() -> u32 { 10 }
+pub fn total(a: bool, b: &bool, v: &[u32]) -> u32 {
+    let mut n = 0;
+    if a & &*b { n += 1; }
+    let s = "a  b";
+    n += s.len() as u32;
+    for x in v { n += x; }
+    n
+}
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
+pub fn double() -> u32 { twice!(limit()) }
+pub trait Shape { fn area(&self) -> u32; fn sides(&self) -> u32; }
+impl Shape for Pair {
+    fn area(&self) -> u32 { self.left }
+    fn sides(&self) -> u32 { 2 }
+}
+=== new src/lib.rs
+pub enum Mode { Idle, Busy, Done }
+pub struct Pair { pub left: u32, pub right: u8 }
+#[derive(PartialEq, PartialOrd)]
+pub enum Level { Low, High }
+
+
+pub fn limit() -> u32 { 10 }
+pub fn total(a: bool, b: &bool, v: &[u32]) -> u32 {
+    let mut n = 0;
+    if a & &*b { n += 1; }
+    let s = "a  b";
+    n += s.len() as u32;
+    for x in v { n += x; }
+    n
+}
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
+pub fn double() -> u32 { twice!(limit()) }
+pub trait Shape { fn area(&self) -> u32; fn sides(&self) -> u32; }
+impl Shape for Pair {
+    fn area(&self) -> u32 { self.left }
+    fn sides(&self) -> u32 { 2 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: layout of `src/lib.rs`: 2 changed lines with equal tokens [layout]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: layout of `src/lib.rs`: 2 changed lines with equal tokens [layout]
+    lines: src/lib.rs:5-6

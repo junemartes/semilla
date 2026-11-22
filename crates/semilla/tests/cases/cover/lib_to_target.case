@@ -1,0 +1,89 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== old src/checks.rs
+use crate::list::first;
+
+#[test]
+fn one() {
+    let v = [1, 2];
+    assert_eq!(first(&v), 1);
+}
+
+#[test]
+fn two() {
+    let v = [2, 1];
+    assert_eq!(first(&v), 2);
+}
+=== old src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+#[cfg(test)]
+mod checks;
+=== new src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== new tests/checks.rs
+use depot::list::first;
+
+#[test]
+fn one() {
+    let v = [1, 2];
+    assert_eq!(first(&v), 1);
+}
+
+#[test]
+fn two() {
+    let v = [2, 1];
+    assert_eq!(first(&v), 2);
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  tests and benches, filled in by Semilla:
+  ◆ f3 derived: removed `depot::checks` [removed]
+  ◆ f4 derived: added `depot (test "checks")::one` [added]
+  ◆ f5 derived: added `depot (test "checks")::two` [added]
+  ◆ f1 derived: removed `use` line: `use crate::list::first;` in `depot::checks` [import]
+  ◆ f2 derived: added `use` line: `use depot::list::first;` in `depot (test "checks")` [import]
+  cover: each of the 28 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+  ! pair: `depot::checks::one` (removed) and `depot (test "checks")::one` (added) are 100% similar: they can be one item with a new place and a second change. Semilla does not derive one item: no name map of the step has this pair
+  ! pair: `depot::checks::two` (removed) and `depot (test "checks")::two` (added) are 100% similar: they can be one item with a new place and a second change. Semilla does not derive one item: no name map of the step has this pair
+=== positions
+◆ f3 derived: removed `depot::checks` [removed]
+    lines: src/checks.rs:-3-13, src/lib.rs:-6-7
+◆ f4 derived: added `depot (test "checks")::one` [added]
+    lines: tests/checks.rs:3-8
+◆ f5 derived: added `depot (test "checks")::two` [added]
+    lines: tests/checks.rs:9-13
+◆ f1 derived: removed `use` line: `use crate::list::first;` in `depot::checks` [import]
+    lines: src/checks.rs:-1-2
+◆ f2 derived: added `use` line: `use depot::list::first;` in `depot (test "checks")` [import]
+    lines: tests/checks.rs:1-2

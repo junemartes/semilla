@@ -1,0 +1,48 @@
+note: A string in the input has a line that starts with `//` and a line that starts with `#[`. The text has each line of the string.
+rule+: R57.2-1
+exit: 1
+must_match: "one\\n// two\\n#\[three\]\\nfour"
+must_match: "one\\n// 2\\n#\[three\]\\nfour"
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! table {
+    ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: &str = $v;)* };
+}
+
+table!(
+    A = "one
+// two
+#[three]
+four",
+);
+=== new src/lib.rs
+macro_rules! table {
+    ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: &str = $v;)* };
+}
+
+table!(
+    A = "one
+// 2
+#[three]
+four",
+);
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro call `table!( A = "one\n// two\n#[three]\nfour", )` → `table!( A = "one\n// 2\n#[three]\nfour", )` (makes items that Semilla cannot list) [declaration]
+      ✗ spotlight: the macro call `table!( A = "one\n// 2\n#[three]\nfour", )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#0=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'depot::table!#0=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#0=the reason of the test'
+◆ f1 derived: changed macro call `table!( A = "one\n// two\n#[three]\nfour", )` → `table!( A = "one\n// 2\n#[three]\nfour", )` (makes items that Semilla cannot list) [declaration]
+    lines: src/lib.rs:7, src/lib.rs:-7

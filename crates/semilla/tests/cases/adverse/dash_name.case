@@ -1,0 +1,53 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== both src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== old -x.txt
+one
+=== old src/--help.rs
+fn f() {}
+=== new -x.txt
+two
+=== new src/--help.rs
+fn g() {}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: -x.txt: changed [file]
+  ◆ f2 derived: src/--help.rs: changed [file]
+      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/--help.rs:=…'
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'src/--help.rs:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/--help.rs:=the reason of the test'
+◆ f1 derived: -x.txt: changed [file]
+    lines: -x.txt:1, -x.txt:-1
+◆ f2 derived: src/--help.rs: changed [file]
+    lines: src/--help.rs:1, src/--help.rs:-1

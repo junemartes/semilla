@@ -1,0 +1,80 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn beta(v: &[u32]) -> u32 {
+    let mut best = 0;
+    for x in v {
+        if *x > best {
+            best = *x;
+        }
+    }
+    best
+}
+
+pub fn gamma(a: u32, b: u32) -> u32 {
+    let low = a.min(b);
+    let high = a.max(b);
+    high - low
+}
+
+pub fn delta(a: u32) -> u32 {
+    a + 1
+}
+=== new src/lib.rs
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn gamma(a: u32, b: u32) -> u32 {
+    let low = a.min(b);
+    let high = a.max(b);
+    high - low
+}
+
+pub fn delta(a: u32) -> u32 {
+    a + 1
+}
+
+pub fn beta(v: &[u32]) -> u32 {
+    let mut best = 0;
+    for x in v {
+        if *x >= best {
+            best = *x;
+        }
+    }
+    best
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed operator `*x > best` → `*x >= best` (f1)
+      in: depot::beta
+      lines: src/lib.rs:18-27, src/lib.rs:-9-18
+      to state it: --change 'depot::beta=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::beta=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
+  cover: each of the 20 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
+    lines: src/lib.rs:18-27, src/lib.rs:-9-18

@@ -1,0 +1,40 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+pub mod util;
+=== both src/main.rs
+mod util;
+fn main() { println!("{}", util::helper(1)); }
+=== old src/util.rs
+pub fn helper(n: u32) -> u32 {
+    let k = n * 2;
+    k + 1
+}
+=== new src/util.rs
+pub fn helper(n: u32) -> u32 {
+    let k = n * 3;
+    k + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: changed literal `2` → `3` (f1)
+      in: depot (bin "depot")::util::helper, depot::util::helper
+      lines: src/util.rs:2, src/util.rs:-2
+      to state it: --same 'rewrite 2 => 3'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite 2 => 3'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: 2 site(s): changed literal `2` → `3` [semantics]
+      in: depot (bin "depot")::util::helper, depot::util::helper
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: 2 site(s): changed literal `2` → `3` [semantics]
+    lines: src/util.rs:2, src/util.rs:-2

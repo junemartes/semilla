@@ -208,7 +208,7 @@ impl<'a> MirMap<'a> {
                 let ws = sides[side];
                 let Some(item) = ws.items.get(&anchor.item) else { continue };
                 // Since design 44, a constant owns the elements of its users by a symbol link.
-                let whole = matches!(item.kind, ItemKind::Const | ItemKind::Static) || (item.kind == ItemKind::Macro && item.source.contains("macro_rules!"));
+                let whole = matches!(item.kind, ItemKind::Const | ItemKind::Static) || crate::owners::is_macro_definition(item);
                 let (start, end) = match semilla_syntax::resolve(ws, anchor) {
                     Some(semilla_syntax::Resolved::Node(_, node)) => (node.start, node.end),
                     // The place of an edit of a whole item: an added or a removed item, or the

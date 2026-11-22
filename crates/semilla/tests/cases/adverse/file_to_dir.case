@@ -1,0 +1,49 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== both src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== old notes
+a note
+=== new notes/one.txt
+a note
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: notes: removed [file]
+      ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'notes:=…'
+  ◆ f2 derived: notes/one.txt: added [file]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'notes:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'notes:=the reason of the test'
+◆ f1 derived: notes: removed [file]
+    lines: notes:-1
+◆ f2 derived: notes/one.txt: added [file]
+    lines: notes/one.txt:1

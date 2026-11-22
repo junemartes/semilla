@@ -1,0 +1,79 @@
+option: --same
+option: rewrite $a.total => $a.total()
+exit: 1
+must_match: ✗ a1 same
+same_facts_as_no_option: yes
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(d.total() + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  ✗ fact a1 of the agent is false: `--same 'rewrite $a.total => $a.total()'`
+
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✗ a1 same: rewrite `$a.total` => `$a.total()` (false: no changed place has the old form `$a.total` and the new form `$a.total()`)
+      nearest edit at `depot::both/tail/lhs/args[0]/lhs` (f1): the old code has the form `$a.total` and the new code has the form `$a.total()`, but the edit changes more than the pattern
+          - c.total
+          + d.total()
+          a fact that holds: `--same 'rewrite c.total => d.total()'` (1 site(s))
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `c.total` → `d.total()` (f1)
+      in: depot::both
+      lines: src/lib.rs:8, src/lib.rs:-8
+      to state it: --change 'depot::both=TEXT'
+  to state them, add these options to the command of the step: --change 'depot::both=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
+run again (without the false fact): semilla step 'the change'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --change 'depot::both=the text of the test'
+◆ f1 stated: changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
+    lines: src/lib.rs:8, src/lib.rs:-8

@@ -1,0 +1,53 @@
+rule-: R56.2-4
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Code(u32);
+
+impl Code {
+    /// Codes below this point are OS errors.
+    /// The crates use the codes above it.
+    pub const INTERNAL_START: u32 = 1 << 31;
+
+    /// Codes at or above this point are for users.
+    /// They are custom errors.
+    pub const CUSTOM_START: u32 = (1 << 31) + (1 << 30);
+
+    pub fn get(&self) -> u32 { self.0 }
+}
+=== new src/lib.rs
+pub struct Code(u32);
+
+impl Code {
+    /// Codes at or above this point are for users.
+    /// They are custom errors.
+    pub const CUSTOM_START: u32 = (1 << 31) + (1 << 30);
+
+    /// Codes below this point are OS errors.
+    /// The crates use the codes above it.
+    pub const INTERNAL_START: u32 = 1 << 30;
+
+    pub fn get(&self) -> u32 { self.0 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: depot::Code::INTERNAL_START
+      lines: src/lib.rs:8-11, src/lib.rs:-4-7
+      to state it: --change 'depot::Code::INTERNAL_START=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::Code::INTERNAL_START=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics]
+  cover: each of the 8 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `depot::Code::INTERNAL_START` changed: 1 << 31 → 1 << 30 (the public API can change: a different crate can use the item) [semantics]
+    lines: src/lib.rs:8-11, src/lib.rs:-4-7

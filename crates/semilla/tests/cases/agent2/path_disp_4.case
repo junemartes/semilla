@@ -1,0 +1,125 @@
+option: --change
+option: <Price as std::fmt::Display>::fmt=the text has a dollar sign
+exit: 0
+must_match: ✓ a1 change
+must_not_match: not stated: [1-9]
+same_facts_as_no_option: yes
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub mod money {
+    use std::fmt;
+    pub struct Price(pub u64);
+    pub trait Scale<T> { fn scale(&self, by: T) -> Self; }
+    impl fmt::Display for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
+    }
+    impl fmt::Debug for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "P{}", self.0) }
+    }
+    impl Scale<u64> for Price { fn scale(&self, by: u64) -> Self { Price(self.0 * by) } }
+    impl Scale<u32> for Price { fn scale(&self, by: u32) -> Self { Price(self.0 * by as u64) } }
+    impl Price { pub fn cents(&self) -> u64 { self.0 } }
+    impl<T: Copy, const N: usize> Scale<[T; N]> for Price { fn scale(&self, _by: [T; N]) -> Self { Price(self.0 + 7) } }
+}
+pub mod stock {
+    pub struct Bin(pub u32);
+    impl std::fmt::Display for Bin {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "bin {}", self.0) }
+    }
+}
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub fn start() -> Mode { Mode::Idle }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub struct Cart { pub total: u32 }
+pub fn a(c: &Cart) -> u32 { wrap(c.total + 1) }
+pub fn b(c: &Cart) -> u32 { wrap(c.total * 2) }
+pub fn guard(v: &mut Vec<u8>) -> usize {
+    struct G<'a>(&'a mut Vec<u8>);
+    impl Drop for G<'_> {
+        fn drop(&mut self) {
+            let mut index = 0;
+            loop {
+                if index >= self.0.len() {
+                    return;
+                }
+                self.0[index] = 0;
+                index += 1;
+            }
+        }
+    }
+    let g = G(v);
+    g.0.len()
+}
+=== new src/lib.rs
+pub mod money {
+    use std::fmt;
+    pub struct Price(pub u64);
+    pub trait Scale<T> { fn scale(&self, by: T) -> Self; }
+    impl fmt::Display for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "${}", self.0) }
+    }
+    impl fmt::Debug for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "P{}", self.0) }
+    }
+    impl Scale<u64> for Price { fn scale(&self, by: u64) -> Self { Price(self.0 * by) } }
+    impl Scale<u32> for Price { fn scale(&self, by: u32) -> Self { Price(self.0 * by as u64) } }
+    impl Price { pub fn cents(&self) -> u64 { self.0 } }
+    impl<T: Copy, const N: usize> Scale<[T; N]> for Price { fn scale(&self, _by: [T; N]) -> Self { Price(self.0 + 7) } }
+}
+pub mod stock {
+    pub struct Bin(pub u32);
+    impl std::fmt::Display for Bin {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "bin {}", self.0) }
+    }
+}
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub fn start() -> Mode { Mode::Idle }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub struct Cart { pub total: u32 }
+pub fn a(c: &Cart) -> u32 { wrap(c.total + 1) }
+pub fn b(c: &Cart) -> u32 { wrap(c.total * 2) }
+pub fn guard(v: &mut Vec<u8>) -> usize {
+    struct G<'a>(&'a mut Vec<u8>);
+    impl Drop for G<'_> {
+        fn drop(&mut self) {
+            let mut index = 0;
+            loop {
+                if index >= self.0.len() {
+                    return;
+                }
+                self.0[index] = 0;
+                index += 1;
+            }
+        }
+    }
+    let g = G(v);
+    g.0.len()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 change: `<Price as std::fmt::Display>::fmt` "the text has a dollar sign" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
+      places: depot::money::<Price as fmt::Display>::fmt/tail/args[1]
+    ◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics]
+  not stated: 0 item(s)
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: changed literal `"{}"` → `"${}"` at `depot::money::<Price as fmt::Display>::fmt/tail/args[1]` [semantics]
+    lines: src/lib.rs:6, src/lib.rs:-6

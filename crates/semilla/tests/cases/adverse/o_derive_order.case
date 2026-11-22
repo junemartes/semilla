@@ -1,0 +1,26 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[derive(Clone, Debug)]
+#[repr(u8)]
+pub enum E { A }
+=== new src/lib.rs
+#[repr(u8)]
+#[derive(Debug, Clone)]
+pub enum E { A }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `depot::E`: changed `#[derive(Clone, Debug)]` → `#[derive(Debug, Clone)]` [attribute]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: attributes of `depot::E`: changed `#[derive(Clone, Debug)]` → `#[derive(Debug, Clone)]` [attribute]
+    lines: src/lib.rs:2, src/lib.rs:-1

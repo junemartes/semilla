@@ -1,0 +1,49 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn f(n: u32) -> u32 {
+    match n {
+        0..=5 => 1,
+        3 => 2,
+        _ => 3,
+    }
+}
+=== new src/lib.rs
+pub fn f(n: u32) -> u32 {
+    match n {
+        3 => 2,
+        0..=5 => 1,
+        _ => 3,
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 4 places: 4 different edits (f1, f2, f3, f4)
+      in: depot::f
+      lines: src/lib.rs:4, src/lib.rs:-3
+      to state it: --change 'depot::f=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::f=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed pattern `0..=5` → `3` at `depot::f/S0/arm[0].pat` [semantics]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::f/S0/arm[0].body` [semantics]
+  ◆ f3 derived: changed pattern `3` → `0..=5` at `depot::f/S0/arm[1].pat` [semantics]
+  ◆ f4 derived: changed literal `2` → `1` at `depot::f/S0/arm[1].body` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed pattern `0..=5` → `3` at `depot::f/S0/arm[0].pat` [semantics]
+    lines: src/lib.rs:-3
+◆ f2 derived: changed literal `1` → `2` at `depot::f/S0/arm[0].body` [semantics]
+    lines: src/lib.rs:-3
+◆ f3 derived: changed pattern `3` → `0..=5` at `depot::f/S0/arm[1].pat` [semantics]
+    lines: src/lib.rs:4
+◆ f4 derived: changed literal `2` → `1` at `depot::f/S0/arm[1].body` [semantics]
+    lines: src/lib.rs:4

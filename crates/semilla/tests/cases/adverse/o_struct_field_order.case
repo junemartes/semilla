@@ -1,0 +1,33 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[repr(C)]
+pub struct P {
+    pub a: u8,
+    pub b: u32,
+}
+=== new src/lib.rs
+#[repr(C)]
+pub struct P {
+    pub b: u32,
+    pub a: u8,
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration]
+      ✗ spotlight: an order change in a type with `#[repr]` or an order derive (`PartialOrd`, `Ord`, `Hash`); it needs a reason: --reason 'depot::P=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'depot::P=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::P=the reason of the test'
+◆ f1 derived: member order of `depot::P`: `a, b` → `b, a` [declaration]
+    lines: src/lib.rs:4, src/lib.rs:-3

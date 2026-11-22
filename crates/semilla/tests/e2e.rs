@@ -7099,6 +7099,7 @@ fn semilla_no_tool_chain(repo: &Path, args: &[&str]) -> (Option<i32>, String) {
     (output.status.code(), format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
 }
 
+// rule+ R49.3-5 R50.1-1
 #[test]
 fn the_default_step_needs_no_tool_chain_and_gives_no_compare_result() {
     // Design 50: `semilla step` derives the facts from the syntax tree. It starts no build.
@@ -7140,6 +7141,7 @@ fn the_default_step_needs_no_tool_chain_and_gives_no_compare_result() {
     assert!(builds.is_empty(), "{builds:?}");
 }
 
+// rule- R49.3-5 R50.1-1
 #[test]
 fn the_option_compiled_gives_the_compare_results_and_a_mixed_set_tells_its_modes() {
     let dir = setup();
@@ -7247,6 +7249,8 @@ fn cart_type_error() -> String {
     CART_V0.replace("        s\n    }", "        \"sum\"\n    }")
 }
 
+// rule+ R53.1-2
+// rule- R53.1-3 R53.1-4
 #[test]
 fn a_step_that_builds_has_the_result_line_and_a_review_reads_the_record() {
     let dir = setup();
@@ -7284,6 +7288,8 @@ fn a_step_that_builds_has_the_result_line_and_a_review_reads_the_record() {
     assert!(again.contains("\nbuild check: passes (a stored result of this tree)\n"), "{again}");
 }
 
+// rule+ R53.1-3
+// rule- R53.1-2 R53.1-7
 #[test]
 fn a_step_with_a_type_error_is_rejected_with_the_error_of_the_compiler() {
     let dir = setup();
@@ -7325,6 +7331,7 @@ fn a_step_with_a_type_error_is_rejected_with_the_error_of_the_compiler() {
     assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "not_run"}));
 }
 
+// rule+ R53.1-3
 #[test]
 fn a_rename_that_misses_one_call_is_rejected() {
     let dir = setup();
@@ -7344,6 +7351,7 @@ fn a_rename_that_misses_one_call_is_rejected() {
     assert!(step.contains("\nbuild check: passes ("), "{step}");
 }
 
+// rule+ R53.1-4
 #[test]
 fn no_check_stores_the_step_and_the_record_and_the_review_show_not_run() {
     for (args, env, cause) in [(vec!["step", "give the sum as a text", "--no-check"], vec![], "`--no-check`"), (vec!["step", "give the sum as a text"], vec![("SEMILLA_NO_CHECK", "1")], "`SEMILLA_NO_CHECK`")] {
@@ -7371,6 +7379,7 @@ fn no_check_stores_the_step_and_the_record_and_the_review_show_not_run() {
     }
 }
 
+// rule+ R53.1-8
 #[test]
 fn a_target_that_does_not_build_in_the_base_does_not_reject_the_step() {
     let dir = setup();
@@ -7408,6 +7417,7 @@ fn a_target_that_does_not_build_in_the_base_does_not_reject_the_step() {
     assert_eq!(session_steps(repo).len(), 1);
 }
 
+// rule+ R53.1-7
 #[test]
 fn a_build_check_that_cannot_run_does_not_store_the_step() {
     let dir = setup();
@@ -7496,6 +7506,7 @@ fn the_plan_route_has_the_build_check() {
     assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
 }
 
+// rule+ R53.1-7
 #[test]
 fn a_dependency_that_is_not_in_the_cargo_cache_is_a_check_that_cannot_run() {
     // Rule 7 of design 53. Cargo runs with `--offline`: this test opens no network connection.
@@ -7554,6 +7565,7 @@ fn a_target_that_cargo_did_not_check_in_the_base_does_not_reject_the_step() {
     assert!(status.contains(&format!("! build check of step 0: no new failure found: {API_NOT_CHECKED} (a different target did not build then), so Semilla cannot tell if the step makes this error\n")), "{status}");
 }
 
+// rule- R53.1-8
 #[test]
 fn an_error_in_a_target_that_builds_in_the_base_rejects_the_step_of_the_same_example() {
     let dir = shop_with_two_errors();
@@ -7634,6 +7646,7 @@ fn rustup_home_with_proj(dir: &Path, default: &str) -> PathBuf {
     home
 }
 
+// rule+ R53.2-1
 #[test]
 fn the_build_check_uses_the_tool_chain_file_of_the_tree() {
     let dir = setup();
@@ -7661,6 +7674,7 @@ fn the_build_check_uses_the_tool_chain_file_of_the_tree() {
     assert!(step.lines().nth(1).is_some_and(|line| line.starts_with("build check: passes (") && line.ends_with(" s)")), "{step}");
 }
 
+// rule- R53.2-1
 #[test]
 fn a_tree_with_no_tool_chain_file_uses_the_default_of_the_machine() {
     let dir = setup();
@@ -7765,6 +7779,7 @@ fn has_stated(text: &str) -> bool {
 
 const GAP_HEAD: &str = "that can change the behavior of existing code and that no fact of the agent states";
 
+// rule+ R48.2-1
 #[test]
 fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command() {
     let dir = facts_setup();
@@ -7881,6 +7896,7 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     assert!(status.contains("  ✓ a2 change: `shop_core::facts::idle` \"idle scales the value\" (holds: "), "{status}");
 }
 
+// rule+ R54.5-2
 #[test]
 fn a_false_fact_of_the_agent_rejects_the_step_and_hides_no_edit() {
     let dir = facts_setup();
@@ -7918,6 +7934,7 @@ fn a_false_fact_of_the_agent_rejects_the_step_and_hides_no_edit() {
     assert!(out.contains("  new and removed items, filled in by Semilla:\n  ◆ f8 derived: added `shop_core::facts::fresh`"), "{out}");
 }
 
+// rule- R54.3-4
 #[test]
 fn an_old_session_file_and_a_stored_rewrite_pattern_claim_still_read() {
     let dir = facts_setup();
@@ -8005,6 +8022,7 @@ fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
 
 /// Design 55.3 (batch 9b4, T2 and T3): the option `--tag` of `semilla step` and of
 /// `semilla fact`. A tag groups the facts in the outputs. It changes no fact and no gap.
+// rule+ R55-1
 #[test]
 fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let file = "crates/shop-core/src/facts.rs";
@@ -8159,6 +8177,7 @@ fn the_mcp_tools_and_a_plan_step_take_tags() {
 /// Design 55.1 and 55.3 (batch 9b4b, P1 and P2.1): the step output names the line diff command
 /// with the two trees of the step. The hunks of the command are the hunks of Semilla: one tag
 /// with each hunk header has each changed line and each fact, and no fact is "not in a tag".
+// rule+ R55.8-1
 #[test]
 fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
     let dir = facts_setup();

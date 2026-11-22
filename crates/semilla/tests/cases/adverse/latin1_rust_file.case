@@ -1,0 +1,29 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== old src/list.rs (base64)
+Ly8hIFRvb2xzIGZvciBsaXN0cy4KLy8hIEEgc2Vjb25kIGxpbmUuCgovLyBBIHBsYWluIGNvbW1l
+bnQuCnVzZSBzdGQ6OmNtcDo6bWF4OwoKLy8vIFRoZSBmaXJzdCBlbGVtZW50LgpwdWIgZm4gZmly
+c3QodjogJlt1MzJdKSAtPiB1MzIgeyB2WzBdIH0KCi8vLyBUaGUgbGFyZ2VyIG9uZS4KcHViIGZu
+IGxhcmdlcihhOiB1MzIsIGI6IHUzMikgLT4gdTMyIHsKICAgIGxldCBtID0gbWF4KGEsIGIpOwog
+ICAgbQp9Ci8vIGNhZukK
+=== new src/list.rs (base64)
+Ly8hIFRvb2xzIGZvciBsaXN0cy4KLy8hIEEgc2Vjb25kIGxpbmUuCgovLyBBIHBsYWluIGNvbW1l
+bnQuCnVzZSBzdGQ6OmNtcDo6bWF4OwoKLy8vIFRoZSBmaXJzdCBlbGVtZW50LgpwdWIgZm4gZmly
+c3QodjogJlt1MzJdKSAtPiB1MzIgeyB2WzFdIH0KCi8vLyBUaGUgbGFyZ2VyIG9uZS4KcHViIGZu
+IGxhcmdlcihhOiB1MzIsIGI6IHUzMikgLT4gdTMyIHsKICAgIGxldCBtID0gbWF4KGEsIGIpOwog
+ICAgbQp9Ci8vIGNhZukgdHdvCg==
+=== expected
+exit: 2
+=== stderr
+error: load the workspace of tree <TREE>: stream did not contain valid UTF-8
+=== positions
+none: the runner has no accepted step for this case

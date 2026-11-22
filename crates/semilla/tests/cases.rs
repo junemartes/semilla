@@ -1,0 +1,1097 @@
+//! The case set (design 57.3) and the properties of each case (design 57.4).
+//!
+//! Each file `tests/cases/GROUP/NAME.case` is one small change: the files of the old tree, the
+//! files of the new tree, the options of `semilla step`, the checks of the case, and the
+//! expected text of the step. The runner makes the two trees, runs the step with
+//! `SEMILLA_NO_CHECK`, and compares the full result with the expected text. Then it checks the
+//! properties that hold for each change: the cover, no empty change, the same result each
+//! time, the tags, the facts of the agent, and the reader.
+//!
+//! `SEMILLA_CASES_WRITE=1` writes the expected texts again. `SEMILLA_CASES=TEXT` runs only the
+//! cases whose name `GROUP/NAME` has the text.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader"];
+
+/// The line diff command of design 55.8. The test has its own copy of the options: it does not
+/// read them from the product.
+const LINE_DIFF: &[&str] = &["diff", "-U0", "--inter-hunk-context=0", "--diff-algorithm=myers", "--indent-heuristic", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-relative", "--text", "--no-color"];
+
+/// One case of the set.
+struct Case {
+    /// `GROUP/NAME`.
+    id: String,
+    file: PathBuf,
+    options: Vec<String>,
+    exit: Option<i32>,
+    must_match: Vec<String>,
+    must_not_match: Vec<String>,
+    same_facts: bool,
+    /// The known failures: the name of the check and the cause.
+    known: Vec<(String, String)>,
+    old: BTreeMap<String, Vec<u8>>,
+    new: BTreeMap<String, Vec<u8>>,
+    /// The text of the file before the expected text.
+    head: String,
+    expected: Option<String>,
+}
+
+fn base64(text: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let (mut bits, mut count) = (0u32, 0);
+    for c in text.chars().filter(|c| !c.is_whitespace() && *c != '=') {
+        let value = match c {
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32 + 26,
+            '0'..='9' => c as u32 - '0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => return Err(format!("`{c}` is not a base64 character")),
+        };
+        bits = (bits << 6) | value;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    Ok(out)
+}
+
+impl Case {
+    fn parse(id: &str, file: &Path, text: &str) -> Result<Case, String> {
+        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), same_facts: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
+        const EXPECTED: &str = "=== expected\n";
+        let (head, expected) = match text.find(&format!("\n{EXPECTED}")) {
+            Some(at) => (&text[..at + 1], Some(text[at + 1 + EXPECTED.len()..].to_string())),
+            None => (text, None),
+        };
+        if !head.is_empty() && !head.ends_with('\n') {
+            return Err("the last line before the expected text has no line end".into());
+        }
+        case.head = head.to_string();
+        case.expected = expected;
+        // The sections: a line `=== SIDE PATH` and the lines of the file.
+        let mut section: Option<(String, String)> = None;
+        let close = |case: &mut Case, section: Option<(String, String)>| -> Result<(), String> {
+            let Some((title, body)) = section else { return Ok(()) };
+            let (side, rest) = title.split_once(' ').ok_or(format!("the section `{title}` has no path"))?;
+            let forms = [" (base64)", " (no line end at the end)", " (each line ends with CR LF)"];
+            let form = forms.iter().position(|form| rest.ends_with(form));
+            let path = form.map_or(rest, |form| &rest[..rest.len() - forms[form].len()]).to_string();
+            let bytes = match form {
+                Some(0) => base64(&body)?,
+                Some(1) => body.strip_suffix('\n').unwrap_or(&body).as_bytes().to_vec(),
+                Some(_) => body.replace('\n', "\r\n").into_bytes(),
+                None => body.into_bytes(),
+            };
+            match side {
+                "old" => case.old.insert(path, bytes).map(|_| ()),
+                "new" => case.new.insert(path, bytes).map(|_| ()),
+                "both" => case.old.insert(path.clone(), bytes.clone()).or(case.new.insert(path, bytes)).map(|_| ()),
+                _ => return Err(format!("the section `{title}` has no side `old`, `new`, or `both`")),
+            }
+            .map_or(Ok(()), |()| Err(format!("the section `{title}` names a file two times")))
+        };
+        for line in head.split_inclusive('\n') {
+            if let Some(title) = line.strip_prefix("=== ") {
+                close(&mut case, section.take())?;
+                section = Some((title.trim_end_matches('\n').to_string(), String::new()));
+            } else if let Some((_, body)) = &mut section {
+                body.push_str(line);
+            } else {
+                let line = line.trim_end_matches('\n');
+                let (key, value) = line.split_once(": ").ok_or(format!("the line `{line}` has no key"))?;
+                match key {
+                    "note" => {}
+                    // A marker of the rule index (design 57.6). The test of `rules.rs` reads it.
+                    "rule+" | "rule-" => {
+                        if value.split_whitespace().next().is_none() || !value.split_whitespace().all(|name| name.starts_with('R') && name.contains('-')) {
+                            return Err(format!("the marker `{line}` names no identity of a rule"));
+                        }
+                    }
+                    "option" => case.options.push(value.to_string()),
+                    "exit" => case.exit = Some(value.parse().map_err(|_| format!("`{value}` is not an exit code"))?),
+                    "must_match" => case.must_match.push(value.to_string()),
+                    "must_not_match" => case.must_not_match.push(value.to_string()),
+                    "same_facts_as_no_option" if value == "yes" => case.same_facts = true,
+                    "known_failure" => {
+                        let (check, cause) = value.split_once(": ").ok_or(format!("the known failure `{value}` has no cause"))?;
+                        if !CHECKS.contains(&check) || cause.trim().is_empty() {
+                            return Err(format!("the known failure `{value}` names no check of {CHECKS:?}, or it has no cause"));
+                        }
+                        case.known.push((check.to_string(), cause.to_string()));
+                    }
+                    _ => return Err(format!("the line `{line}` has a key that the runner does not know")),
+                }
+            }
+        }
+        close(&mut case, section.take())?;
+        if case.old.is_empty() && case.new.is_empty() {
+            return Err("the case has no file".into());
+        }
+        Ok(case)
+    }
+}
+
+/// A small matcher for the regular expressions of the cases. It knows: a literal, `.`, a
+/// class `[…]`, the escapes `\d \w \s \D \W \S`, a group with `|`, the counts `* + ? {m,n}`,
+/// the anchors `^ $`, and the flags `(?i)`, `(?m)`, `(?s)` at the start. Each other form is an
+/// error: the runner never reads a form with a different meaning.
+mod pattern {
+    #[derive(Debug)]
+    enum Node {
+        Char(char),
+        Any,
+        Set(Vec<(char, char)>, bool),
+        Start,
+        End,
+        Group(Vec<Vec<Node>>),
+        Repeat(Box<Node>, usize, Option<usize>),
+    }
+
+    pub struct Pattern {
+        nodes: Vec<Vec<Node>>,
+        fold: bool,
+        lines: bool,
+        dot_all: bool,
+    }
+
+    struct Parser {
+        chars: Vec<char>,
+        at: usize,
+    }
+
+    fn class(c: char) -> Option<(Vec<(char, char)>, bool)> {
+        let ranges = match c.to_ascii_lowercase() {
+            'd' => vec![('0', '9')],
+            'w' => vec![('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')],
+            's' => vec![(' ', ' '), ('\t', '\t'), ('\n', '\n'), ('\r', '\r')],
+            _ => return None,
+        };
+        Some((ranges, c.is_ascii_uppercase()))
+    }
+
+    impl Parser {
+        fn alternatives(&mut self) -> Result<Vec<Vec<Node>>, String> {
+            let mut all = vec![Vec::new()];
+            while let Some(&c) = self.chars.get(self.at) {
+                match c {
+                    ')' => break,
+                    '|' => {
+                        self.at += 1;
+                        all.push(Vec::new());
+                    }
+                    _ => {
+                        let node = self.counted()?;
+                        all.last_mut().unwrap().push(node);
+                    }
+                }
+            }
+            Ok(all)
+        }
+
+        fn counted(&mut self) -> Result<Node, String> {
+            let atom = self.atom()?;
+            let (min, max) = match self.chars.get(self.at) {
+                Some('*') => (0, None),
+                Some('+') => (1, None),
+                Some('?') => (0, Some(1)),
+                Some('{') => {
+                    let end = (self.at..self.chars.len()).find(|at| self.chars[*at] == '}').ok_or("a count `{` has no end")?;
+                    let text: String = self.chars[self.at + 1..end].iter().collect();
+                    let number = |text: &str| text.parse::<usize>().map_err(|_| format!("`{text}` is not a count"));
+                    let range = match text.split_once(',') {
+                        Some((min, "")) => (number(min)?, None),
+                        Some((min, max)) => (number(min)?, Some(number(max)?)),
+                        None => (number(&text)?, Some(number(&text)?)),
+                    };
+                    self.at = end;
+                    range
+                }
+                _ => return Ok(atom),
+            };
+            self.at += 1;
+            if matches!(self.chars.get(self.at), Some('?' | '+')) {
+                return Err("a lazy count or a possessive count is not a known form".into());
+            }
+            if matches!(atom, Node::Start | Node::End) {
+                return Err("a count after an anchor is not a known form".into());
+            }
+            Ok(Node::Repeat(Box::new(atom), min, max))
+        }
+
+        fn atom(&mut self) -> Result<Node, String> {
+            let c = self.chars[self.at];
+            self.at += 1;
+            Ok(match c {
+                '.' => Node::Any,
+                '^' => Node::Start,
+                '$' => Node::End,
+                '*' | '+' | '?' | '{' => return Err(format!("`{c}` has nothing before it")),
+                '(' => {
+                    if self.chars.get(self.at) == Some(&'?') {
+                        if self.chars.get(self.at + 1) != Some(&':') {
+                            return Err("a group `(?…` is not a known form".into());
+                        }
+                        self.at += 2;
+                    }
+                    let inner = self.alternatives()?;
+                    if self.chars.get(self.at) != Some(&')') {
+                        return Err("a group has no end".into());
+                    }
+                    self.at += 1;
+                    Node::Group(inner)
+                }
+                '[' => {
+                    let not = self.chars.get(self.at) == Some(&'^');
+                    self.at += usize::from(not);
+                    let mut ranges = Vec::new();
+                    let mut first = true;
+                    loop {
+                        let c = *self.chars.get(self.at).ok_or("a class has no end")?;
+                        self.at += 1;
+                        if c == ']' && !first {
+                            break;
+                        }
+                        first = false;
+                        let low = if c == '\\' {
+                            let escape = *self.chars.get(self.at).ok_or("an escape has no character")?;
+                            self.at += 1;
+                            if let Some((inner, false)) = class(escape) {
+                                ranges.extend(inner);
+                                continue;
+                            }
+                            literal(escape)?
+                        } else {
+                            c
+                        };
+                        if self.chars.get(self.at) == Some(&'-') && self.chars.get(self.at + 1).is_some_and(|c| *c != ']') {
+                            let high = self.chars[self.at + 1];
+                            if high == '\\' {
+                                return Err("an escape at the end of a range is not a known form".into());
+                            }
+                            self.at += 2;
+                            ranges.push((low, high));
+                        } else {
+                            ranges.push((low, low));
+                        }
+                    }
+                    Node::Set(ranges, not)
+                }
+                '\\' => {
+                    let escape = *self.chars.get(self.at).ok_or("an escape has no character")?;
+                    self.at += 1;
+                    match class(escape) {
+                        Some((ranges, not)) => Node::Set(ranges, not),
+                        None => Node::Char(literal(escape)?),
+                    }
+                }
+                c => Node::Char(c),
+            })
+        }
+    }
+
+    fn literal(escape: char) -> Result<char, String> {
+        match escape {
+            'n' => Ok('\n'),
+            't' => Ok('\t'),
+            'r' => Ok('\r'),
+            c if c.is_ascii_alphanumeric() => Err(format!("the escape `\\{c}` is not a known form")),
+            c => Ok(c),
+        }
+    }
+
+    impl Pattern {
+        pub fn new(text: &str) -> Result<Pattern, String> {
+            let mut pattern = Pattern { nodes: Vec::new(), fold: false, lines: false, dot_all: false };
+            let mut rest = text;
+            while let Some(flags) = rest.strip_prefix("(?").and_then(|tail| tail.split_once(')')).filter(|(flags, _)| !flags.is_empty() && flags.chars().all(|c| "ims".contains(c))) {
+                pattern.fold |= flags.0.contains('i');
+                pattern.lines |= flags.0.contains('m');
+                pattern.dot_all |= flags.0.contains('s');
+                rest = flags.1;
+            }
+            let mut parser = Parser { chars: rest.chars().collect(), at: 0 };
+            pattern.nodes = parser.alternatives().map_err(|error| format!("the regular expression `{text}`: {error}"))?;
+            if parser.at != parser.chars.len() {
+                return Err(format!("the regular expression `{text}`: a `)` has no start"));
+            }
+            Ok(pattern)
+        }
+
+        /// True if the pattern matches at a position of the text (a search, not a full match).
+        pub fn finds(&self, text: &str) -> bool {
+            let chars: Vec<char> = text.chars().collect();
+            (0..=chars.len()).any(|start| self.alternatives(&self.nodes, &chars, start, &mut |_| true))
+        }
+
+        fn alternatives(&self, all: &[Vec<Node>], text: &[char], at: usize, then: &mut dyn FnMut(usize) -> bool) -> bool {
+            all.iter().any(|nodes| self.sequence(nodes, text, at, then))
+        }
+
+        fn sequence(&self, nodes: &[Node], text: &[char], at: usize, then: &mut dyn FnMut(usize) -> bool) -> bool {
+            let Some((first, rest)) = nodes.split_first() else { return then(at) };
+            match first {
+                Node::Repeat(inner, min, max) => self.repeat(inner, *min, *max, 0, text, at, &mut |next| self.sequence(rest, text, next, then)),
+                Node::Group(all) => self.alternatives(all, text, at, &mut |next| self.sequence(rest, text, next, then)),
+                single => self.one(single, text, at).is_some_and(|next| self.sequence(rest, text, next, then)),
+            }
+        }
+
+        fn repeat(&self, inner: &Node, min: usize, max: Option<usize>, count: usize, text: &[char], at: usize, then: &mut dyn FnMut(usize) -> bool) -> bool {
+            // The longest match first, as in the usual engines.
+            if max.is_none_or(|max| count < max) && self.sequence(std::slice::from_ref(inner), text, at, &mut |next| next > at && self.repeat(inner, min, max, count + 1, text, next, then)) {
+                return true;
+            }
+            count >= min && then(at)
+        }
+
+        fn one(&self, node: &Node, text: &[char], at: usize) -> Option<usize> {
+            let fold = |c: char| if self.fold { c.to_lowercase().next().unwrap_or(c) } else { c };
+            match node {
+                Node::Start => (at == 0 || (self.lines && text[at - 1] == '\n')).then_some(at),
+                Node::End => (at == text.len() || (self.lines && text[at] == '\n') || (at + 1 == text.len() && text[at] == '\n')).then_some(at),
+                Node::Any => text.get(at).filter(|c| self.dot_all || **c != '\n').map(|_| at + 1),
+                Node::Char(c) => text.get(at).filter(|found| fold(**found) == fold(*c)).map(|_| at + 1),
+                Node::Set(ranges, not) => {
+                    let found = *text.get(at)?;
+                    let inside = ranges.iter().any(|(low, high)| (*low..=*high).contains(&found) || (self.fold && ((*low..=*high).contains(&found.to_ascii_lowercase()) || (*low..=*high).contains(&found.to_ascii_uppercase()))));
+                    (inside != *not).then_some(at + 1)
+                }
+                Node::Group(_) | Node::Repeat(..) => unreachable!("the sequence takes these nodes"),
+            }
+        }
+    }
+}
+
+use pattern::Pattern;
+
+/// The result of one command.
+#[derive(Clone, PartialEq)]
+struct Run {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl Run {
+    /// The text of the result for an expected text and for a compare of two runs.
+    fn text(&self) -> String {
+        let mut text = format!("exit: {}\n{}", self.code, self.stdout);
+        if !text.ends_with('\n') {
+            text.push_str("\n(no line end at the end of the output)\n");
+        }
+        if !self.stderr.is_empty() {
+            text.push_str("=== stderr\n");
+            text.push_str(&self.stderr);
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    fn all(&self) -> String {
+        format!("{}{}", self.stdout, self.stderr)
+    }
+}
+
+/// The variables of git for each command of a case: no configuration of the user or of the
+/// system, and a fixed author and date. So each machine gets the same trees.
+fn git_env(command: &mut Command) {
+    for (key, value) in [("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_AUTHOR_NAME", "Case"), ("GIT_AUTHOR_EMAIL", "case@example.com"), ("GIT_COMMITTER_NAME", "Case"), ("GIT_COMMITTER_EMAIL", "case@example.com"), ("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z"), ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")] {
+        command.env(key, value);
+    }
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.current_dir(repo).args(["-c", "core.autocrlf=false", "-c", "core.quotePath=false", "-c", "core.safecrlf=false"]).args(args);
+    git_env(&mut command);
+    let output = command.output().map_err(|error| format!("git does not start: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("git {args:?}: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// A text with no hash and no path of this machine: the commit of the base, each tree, the
+/// folder of the repository, and the folder of the cache.
+fn normal(text: &str, folder: &Path) -> String {
+    let mut text = text.to_string();
+    for (path, name) in [(folder.join("repo"), "<REPO>"), (folder.join("cache"), "<CACHE>"), (folder.to_path_buf(), "<FOLDER>")] {
+        text = text.replace(&path.to_string_lossy().to_string(), name);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < chars.len() {
+        let word_start = at == 0 || !chars[at - 1].is_alphanumeric();
+        let end = (at..chars.len()).find(|index| !hex(chars[*index])).unwrap_or(chars.len());
+        let word_end = end == chars.len() || !chars[end].is_alphanumeric();
+        let before: String = chars[at.saturating_sub(6)..at].iter().collect();
+        if word_start && word_end && end - at == 40 {
+            out.push_str("<TREE>");
+            at = end;
+        } else if word_start && word_end && (7..=12).contains(&(end - at)) && (before.ends_with("base `") || before.ends_with("HEAD `")) {
+            out.push_str("<COMMIT>");
+            at = end;
+        } else {
+            let stop = end.max(at + 1);
+            out.extend(&chars[at..stop]);
+            at = stop;
+        }
+    }
+    out
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// One line of a file: the file, true for the old tree, and the line number.
+type Line = (String, bool, usize);
+
+/// The lines of a list of positions: `a.rs:3-5, a.rs:-9, b.rs:1` (design 55.2).
+fn position_lines(list: &str) -> Result<Vec<Line>, String> {
+    let mut out = Vec::new();
+    for position in list.split(", ") {
+        let (file, range) = position.rsplit_once(':').ok_or(format!("the position `{position}` has no line"))?;
+        let (old, range) = range.strip_prefix('-').map_or((false, range), |range| (true, range));
+        let (start, end) = range.split_once('-').unwrap_or((range, range));
+        let number = |text: &str| text.parse::<usize>().map_err(|_| format!("the position `{position}` has no line number"));
+        out.extend((number(start)?..=number(end)?).map(|line| (file.to_string(), old, line)));
+    }
+    Ok(out)
+}
+
+/// A block of an output: a line and the lines below it with a larger indent.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Block {
+    head: String,
+    subs: Vec<String>,
+}
+
+fn blocks(text: &str, starts: &dyn Fn(&str) -> bool) -> Vec<Block> {
+    let indent = |line: &str| line.chars().take_while(|c| *c == ' ').count();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if starts(line.trim_start()) {
+            let subs = lines[index + 1..].iter().take_while(|sub| !sub.trim().is_empty() && indent(sub) > indent(line)).map(|sub| sub.trim().to_string()).collect();
+            out.push(Block { head: line.trim().to_string(), subs });
+        }
+    }
+    out
+}
+
+/// The facts of an output: each line `◆ fN KIND: TEXT [category]` with its sub lines.
+fn facts(text: &str) -> Vec<Block> {
+    blocks(text, &|line| line.starts_with("◆ "))
+}
+
+/// The entries of the gap list: the count line and each line `? …` with its sub lines.
+fn gaps(text: &str) -> Vec<Block> {
+    blocks(text, &|line| line.starts_with("? ") || line.starts_with("not stated:"))
+}
+
+/// The text of a fact with no number and no kind (`derived`, `stated`): `TEXT [category]`.
+fn fact_text(head: &str) -> String {
+    let rest = head.strip_prefix("◆ ").unwrap_or(head);
+    let rest = rest.split_once(' ').map_or(rest, |(_, rest)| rest);
+    rest.split_once(": ").map_or(rest, |(_, text)| text).to_string()
+}
+
+/// The sub lines of a block without the lines that name a tag (design 55.3: "A gap line names
+/// its tag"). Each other sub line stays.
+fn no_tag_subs(block: &Block) -> Vec<String> {
+    block.subs.iter().filter(|sub| !sub.starts_with("tags: ") && !sub.starts_with("tag: ") && sub.as_str() != "not in a tag").cloned().collect()
+}
+
+/// The two equal sides of a text "`OLD` → `NEW`", if a fact line has them.
+fn empty_change(line: &str) -> Option<String> {
+    const ARROW: &str = "` → `";
+    line.match_indices(ARROW).find_map(|(at, _)| {
+        let (left, right) = (&line[..at], &line[at + ARROW.len()..]);
+        left.match_indices('`').map(|(start, _)| &left[start + 1..]).find(|old| right.strip_prefix(old).is_some_and(|rest| rest.starts_with('`'))).map(str::to_string)
+    })
+}
+
+/// The words of a command line of a shell with single quotes.
+fn shell_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quote = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                quote = !quote;
+                word.get_or_insert_default();
+            }
+            '\\' if !quote => word.get_or_insert_default().extend(chars.next()),
+            ' ' if !quote => words.extend(word.take()),
+            c => word.get_or_insert_default().push(c),
+        }
+    }
+    words.extend(word);
+    words
+}
+
+/// A Markdown text and a fact line with no escape of Markdown, for a compare.
+fn no_escape(text: &str) -> String {
+    text.replace('\\', "").replace("&gt;", ">").replace("&lt;", "<").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
+}
+
+/// A line diff of two texts for a message.
+fn difference(old: &str, new: &str) -> String {
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
+    let mut table = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            table[i][j] = if a[i] == b[j] { table[i + 1][j + 1] + 1 } else { table[i + 1][j].max(table[i][j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, String::new());
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else if j < b.len() && (i == a.len() || table[i][j + 1] >= table[i + 1][j]) {
+            out.push_str(&format!("    + {}\n", b[j]));
+            j += 1;
+        } else {
+            out.push_str(&format!("    - {}\n", a[i]));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The work of one case: the folder, and the results of the checks.
+struct Work {
+    folder: PathBuf,
+    /// The failed checks: the name and the message.
+    failed: Vec<(&'static str, String)>,
+    runs: usize,
+}
+
+impl Work {
+    fn fail(&mut self, check: &'static str, message: String) {
+        self.failed.push((check, message));
+    }
+
+    /// A new copy of the repository of the case, with its own cache folder.
+    fn copy(&mut self, name: &str) -> Result<PathBuf, String> {
+        let folder = self.folder.join(name);
+        copy_dir(&self.folder.join("template"), &folder.join("repo")).map_err(|error| format!("the copy of the repository: {error}"))?;
+        Ok(folder)
+    }
+
+    fn semilla(&mut self, folder: &Path, args: &[String]) -> Result<Run, String> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
+        command.current_dir(folder.join("repo")).args(args);
+        // The default mode (design 50): no compiled check. The build check is off.
+        command.env_remove("SEMILLA_MIR_DRIVER").env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_OWN_LINE_DIFF");
+        command.env("SEMILLA_CACHE_DIR", folder.join("cache")).env("SEMILLA_NO_CHECK", "1");
+        git_env(&mut command);
+        let output = command.output().map_err(|error| format!("semilla does not start: {error}"))?;
+        self.runs += 1;
+        let text = |bytes: &[u8]| normal(&String::from_utf8_lossy(bytes), folder);
+        Ok(Run { code: output.status.code().unwrap_or(-1), stdout: text(&output.stdout), stderr: text(&output.stderr) })
+    }
+
+    fn step(&mut self, folder: &Path, more: &[String]) -> Result<Run, String> {
+        let mut args = vec!["step".to_string(), "the change".to_string()];
+        args.extend(more.iter().cloned());
+        self.semilla(folder, &args)
+    }
+}
+
+/// The changed lines of the step from the test's own call of the line diff (design 55.8). A file
+/// that is not UTF-8 text in a tree is not a text of the two trees: it has no changed line.
+fn changed_lines(case: &Case, folder: &Path) -> Result<BTreeSet<Line>, String> {
+    let repo = folder.join("repo");
+    git(&repo, &["add", "-A"])?;
+    let old = git(&repo, &["rev-parse", "HEAD^{tree}"])?.trim().to_string();
+    let new = git(&repo, &["write-tree"])?.trim().to_string();
+    let mut args: Vec<&str> = LINE_DIFF.to_vec();
+    args.extend([old.as_str(), new.as_str()]);
+    let diff = git(&repo, &args)?;
+    let text_file = |file: &str| [&case.old, &case.new].iter().all(|side| side.get(file).is_none_or(|bytes| std::str::from_utf8(bytes).is_ok()));
+    hunk_lines(&diff, &text_file)
+}
+
+/// The changed lines of the output of the line diff: each line of each side of each hunk.
+fn hunk_lines(diff: &str, text_file: &dyn Fn(&str) -> bool) -> Result<BTreeSet<Line>, String> {
+    let mut lines = BTreeSet::new();
+    let (mut file, mut pending): (Option<String>, Option<String>) = (None, None);
+    for line in diff.lines() {
+        if line.starts_with("diff --git ") {
+            file = None;
+            pending = None;
+        } else if let Some(path) = line.strip_prefix("--- ").filter(|_| file.is_none()) {
+            // Git puts a tab after a path that has a space.
+            pending = path.trim_end_matches('\t').strip_prefix("a/").map(str::to_string);
+        } else if let Some(path) = line.strip_prefix("+++ ").filter(|_| file.is_none()) {
+            file = path.trim_end_matches('\t').strip_prefix("b/").map(str::to_string).or(pending.take());
+        } else if let Some(header) = line.strip_prefix("@@ -") {
+            let name = file.clone().ok_or(format!("the hunk `{line}` has no file"))?;
+            let (ranges, _) = header.split_once(" @@").ok_or(format!("the hunk `{line}` has no end"))?;
+            let (old_range, new_range) = ranges.split_once(" +").ok_or(format!("the hunk `{line}` has no new range"))?;
+            for (old_side, range) in [(true, old_range), (false, new_range)] {
+                let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+                let (start, count): (usize, usize) = (start.parse().map_err(|_| format!("the hunk `{line}`"))?, count.parse().map_err(|_| format!("the hunk `{line}`"))?);
+                if text_file(&name) {
+                    lines.extend((start..start + count).map(|number| (name.clone(), old_side, number)));
+                }
+            }
+        }
+    }
+    Ok(lines)
+}
+
+fn line_text((file, old, line): &Line) -> String {
+    format!("{file}:{}{line}", if *old { "-" } else { "" })
+}
+
+/// The result of the checks of one case.
+struct Outcome {
+    /// The failed checks: the name and the message.
+    failed: Vec<(&'static str, String)>,
+    /// The result of the step, for the compare with the expected text.
+    text: String,
+    /// The count of the runs of the binary.
+    runs: usize,
+    /// True if the runner had an accepted step: only such a step shows its positions.
+    positions: bool,
+}
+
+fn check(case: &Case) -> Result<Outcome, String> {
+    let temp = tempfile::Builder::new().prefix("semilla-case-").tempdir().map_err(|error| format!("no temporary folder: {error}"))?;
+    let mut work = Work { folder: temp.path().to_path_buf(), failed: Vec::new(), runs: 0 };
+    // The old tree is the commit. The new tree is the working tree.
+    let template = work.folder.join("template");
+    let put = |files: &BTreeMap<String, Vec<u8>>| -> Result<(), String> {
+        for (path, bytes) in files {
+            let full = template.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).and_then(|()| std::fs::write(&full, bytes)).map_err(|error| format!("the file `{path}`: {error}"))?;
+        }
+        Ok(())
+    };
+    std::fs::create_dir_all(&template).map_err(|error| error.to_string())?;
+    put(&case.old)?;
+    git(&template, &["init", "-q", "-b", "main"])?;
+    git(&template, &["add", "-A"])?;
+    git(&template, &["commit", "-q", "--allow-empty", "-m", "the old tree"])?;
+    for path in case.old.keys().filter(|path| !case.new.contains_key(*path)) {
+        std::fs::remove_file(template.join(path)).map_err(|error| format!("the file `{path}`: {error}"))?;
+    }
+    put(&case.new)?;
+
+    // The step of the case. Its result is the expected text.
+    let first = work.copy("a")?;
+    let step = work.step(&first, &case.options)?;
+    let mut text = step.text();
+    let step_text = text.clone();
+    let output = step.all();
+
+    // The checks of the case.
+    if case.exit.is_some_and(|exit| exit != step.code) {
+        work.fail("exit", format!("the exit code is {}, the case wants {}", step.code, case.exit.unwrap()));
+    }
+    for (check, patterns, want) in [("must_match", &case.must_match, true), ("must_not_match", &case.must_not_match, false)] {
+        for pattern in patterns {
+            if Pattern::new(pattern)?.finds(&output) != want {
+                work.fail(check, format!("the output {} `{pattern}`", if want { "has no match of" } else { "has a match of" }));
+            }
+        }
+    }
+
+    // Property 2: no fact has an old text that is equal to its new text.
+    for fact in facts(&output) {
+        if let Some(side) = empty_change(&fact.head) {
+            work.fail("empty_change", format!("the two sides of a fact are equal (`{side}`): {}", fact.head));
+        }
+    }
+
+    // Property 3: a second run in a new copy gives the same result.
+    let second = work.copy("b")?;
+    let again = work.step(&second, &case.options)?;
+    if again != step {
+        work.fail("same_result", format!("the second run is different:\n{}", difference(&step_text, &again.text())));
+    }
+
+    // The run with no option, for a case with options.
+    let plain = if case.options.is_empty() {
+        None
+    } else {
+        let folder = work.copy("d")?;
+        Some(work.step(&folder, &[])?)
+    };
+    let fact_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { facts(&run.all()).iter().map(|fact| (fact_text(&fact.head), fact.subs.clone())).collect() };
+    if case.same_facts && let Some(plain) = &plain {
+        let (with, without) = (fact_set(&step), fact_set(plain));
+        if step.code == 2 {
+            // A form error is no result of a step: it has no fact set to compare.
+            if !with.is_empty() {
+                work.fail("same_facts", "the step has a form error (exit 2), but its output has a fact line".to_string());
+            }
+        } else if with != without {
+            let only = |a: &BTreeSet<(String, Vec<String>)>, b: &BTreeSet<(String, Vec<String>)>| a.difference(b).map(|(text, subs)| format!("\n      {text} {subs:?}")).collect::<String>();
+            work.fail("same_facts", format!("the facts with the options are not the facts with no option;\n    only with the options:{}\n    only with no option:{}", only(&with, &without), only(&without, &with)));
+        }
+    }
+
+    // Property 5: a rejected step is not stored, and a false fact of the agent removes no fact
+    // of Semilla.
+    if step.code != 0 {
+        let status = work.semilla(&first, &["status".to_string()])?;
+        if !status.stdout.contains("no open change set") {
+            work.fail("agent_facts", format!("the step is rejected (exit {}), but `semilla status` shows a stored step:\n{}", step.code, status.stdout));
+        }
+    }
+    if let Some(plain) = &plain && output.lines().any(|line| line.trim_start().starts_with("✗ fact ") && line.contains("of the agent is false")) {
+        // The step with only the facts of the agent that hold: the command that the output
+        // gives, or the step with no option. Each of its facts is a fact of the case.
+        let command = output.lines().find_map(|line| line.strip_prefix("run again (without the false fact): semilla ")).map(shell_words);
+        let honest = match command {
+            Some(args) if args.len() > 2 => {
+                let folder = work.copy("f")?;
+                work.semilla(&folder, &args)?
+            }
+            _ => plain.clone(),
+        };
+        let with: BTreeSet<String> = facts(&output).iter().map(|fact| fact_text(&fact.head)).collect();
+        for fact in facts(&honest.all()) {
+            if !with.contains(&fact_text(&fact.head)) {
+                work.fail("agent_facts", format!("a false fact of the agent removes a fact of Semilla: {}", fact.head));
+            }
+        }
+    }
+
+    // The changed lines from the test's own call of the line diff.
+    let diff_folder = work.copy("diff")?;
+    let changed = changed_lines(case, &diff_folder)?;
+
+    // Property 4: a tag that has each hunk changes no fact line and no gap line, and it gives
+    // no note. A tag never replaces a fact.
+    let files: BTreeSet<&str> = changed.iter().map(|(file, _, _)| file.as_str()).collect();
+    if !files.is_empty() && files.iter().all(|file| !file.contains([',', '='])) && step.code != 2 {
+        let folder = work.copy("c")?;
+        let mut options = case.options.clone();
+        // The form `--tag=…`: the name of a file can start with `-`.
+        options.push(format!("--tag={}=whole", files.iter().copied().collect::<Vec<_>>().join(",")));
+        let tagged = work.step(&folder, &options)?;
+        let tagged_output = tagged.all();
+        if tagged.code != step.code {
+            work.fail("tags", format!("the exit code with a tag is {}, without it {}", tagged.code, step.code));
+        }
+        let sorted = |mut list: Vec<Block>| {
+            for block in &mut list {
+                block.subs = no_tag_subs(block);
+            }
+            list.sort();
+            list
+        };
+        for (name, with, without) in [("fact", sorted(facts(&tagged_output)), sorted(facts(&output))), ("gap", sorted(gaps(&tagged_output)), sorted(gaps(&output)))] {
+            if with != without {
+                let show = |list: &[Block]| list.iter().map(|block| format!("{}\n{}", block.head, block.subs.iter().map(|sub| format!("    {sub}\n")).collect::<String>())).collect::<String>();
+                work.fail("tags", format!("a tag changes a {name} line:\n{}", difference(&show(&without), &show(&with))));
+            }
+        }
+        // A new line of the output with a tag is a line of the tag view (design 55.3), or the
+        // command. Only a fact with no position is not in the tag: the tag has each hunk.
+        const NO_POSITION: &str = "facts with no position (a tag selects changed lines; these facts have none): ";
+        let no_position = tagged_output.lines().any(|line| line.trim().starts_with(NO_POSITION));
+        let known: BTreeSet<&str> = output.lines().map(str::trim).collect();
+        for line in tagged_output.lines().map(str::trim).filter(|line| !known.contains(line)) {
+            let of_tag = ["tags of the agent (", "tag `whole` (", "tag: `whole`", "tags: `whole`", "facts, in the groups of the tags below: ", NO_POSITION, "run again"].iter().any(|start| line.starts_with(start)) || (line == "not in a tag" && no_position);
+            let note = ["in part", "also in this tag", "✗ tag"].iter().any(|note| line.contains(note)) || (line.contains("not in a tag") && !no_position);
+            if !of_tag || note {
+                work.fail("tags", format!("a tag gives a new line: {line}"));
+            }
+        }
+    }
+
+    // An accepted step for the reader and for the positions: the step of the case, or the
+    // step with the reasons that the output asks for.
+    let mut accepted = (step.code == 0).then(|| (first.clone(), step.clone()));
+    let (mut last, mut args) = (output.clone(), {
+        let mut args = vec!["step".to_string(), "the change".to_string()];
+        args.extend(case.options.iter().cloned());
+        args
+    });
+    for round in 0..3 {
+        if accepted.is_some() || step.code != 1 {
+            break;
+        }
+        // The command that the output gives (with each reason), or the last command. Then the
+        // options that the gap list asks for.
+        let again = last.lines().rev().find(|line| line.starts_with("run again") && line.contains(": semilla step ")).and_then(|line| line.split_once(": semilla ")).map(|(_, command)| shell_words(&command.replace("<why>", "the reason of the test")));
+        let mut next = again.unwrap_or_else(|| args.clone());
+        if let Some(more) = last.lines().find_map(|line| line.trim().strip_prefix("to state them, add these options to the command of the step: ")) {
+            next.extend(shell_words(&more.replace("=TEXT'", "=the text of the test'")));
+        }
+        if next == args {
+            break;
+        }
+        let folder = work.copy(&format!("e{round}"))?;
+        let run = work.semilla(&folder, &next)?;
+        (last, args) = (run.all(), next);
+        if run.code == 0 {
+            accepted = Some((folder, run));
+        }
+    }
+
+    // Property 1: the cover. The count of the cover line is the count of the changed lines.
+    // Each flagged line is a changed line. For an accepted step, each changed line is in the
+    // position of a fact, or it is flagged.
+    let cover = output.lines().map(str::trim).find(|line| line.starts_with("cover: ") || line.starts_with("! cover: "));
+    let flagged_of = |text: &str| -> Result<BTreeSet<Line>, String> {
+        match text.lines().map(str::trim).find_map(|line| line.strip_prefix("! changed lines with no fact: ")) {
+            Some(list) => Ok(position_lines(list)?.into_iter().collect()),
+            None => Ok(BTreeSet::new()),
+        }
+    };
+    let flagged = flagged_of(&output)?;
+    if step.code != 2 {
+        let words: Vec<&str> = cover.unwrap_or("").split(' ').collect();
+        let number = |before: &str| words.iter().position(|word| *word == before).and_then(|at| words.get(at + 1)).and_then(|word| word.parse::<usize>().ok());
+        let (count, missing) = match cover {
+            None => (0, 0),
+            Some(line) if line.starts_with('!') => (number("the").unwrap_or(usize::MAX), number("cover:").unwrap_or(usize::MAX)),
+            Some(_) => (number("the").unwrap_or(usize::MAX), 0),
+        };
+        if count != changed.len() {
+            work.fail("cover", format!("the cover line counts {count} changed line(s), the line diff of the test has {}: {}", changed.len(), cover.unwrap_or("(no cover line)")));
+        }
+        if missing != flagged.len() {
+            work.fail("cover", format!("the cover line counts {missing} line(s) with no fact, the flagged list has {}", flagged.len()));
+        }
+        for line in flagged.difference(&changed) {
+            work.fail("cover", format!("the flagged line {} is not a changed line", line_text(line)));
+        }
+        if let Some(line) = output.lines().map(str::trim).find(|line| line.starts_with("hunks: `git diff ")) {
+            if !line.ends_with(" <TREE> <TREE>`") {
+                work.fail("cover", format!("the hunk line does not end with the two trees: {line}"));
+            }
+        }
+    }
+    // The positions are a part of the expected text. Only a stored step shows them.
+    text.push_str("=== positions\n");
+    if accepted.is_none() {
+        text.push_str("none: the runner has no accepted step for this case\n");
+    }
+    if let Some((folder, run)) = &accepted {
+        let status = work.semilla(folder, &["status".to_string(), "--verbose".to_string()])?;
+        if step.code != 0 {
+            let words: Vec<String> = args.iter().map(|word| if word.chars().all(|c| c.is_alphanumeric() || "-_=./:".contains(c)) { word.clone() } else { format!("'{}'", word.replace('\'', "'\\''")) }).collect();
+            text.push_str(&format!("the step is not accepted; the positions are from: semilla {}\n", words.join(" ")));
+        }
+        for fact in facts(&status.stdout) {
+            let lines = fact.subs.iter().find(|sub| sub.starts_with("lines: ")).map_or("no position", String::as_str);
+            text.push_str(&format!("{}\n    {lines}\n", fact.head));
+        }
+        let flagged = flagged_of(&run.all())?;
+        let mut in_fact: BTreeSet<Line> = BTreeSet::new();
+        for fact in facts(&status.stdout) {
+            for list in fact.subs.iter().filter_map(|sub| sub.strip_prefix("lines: ")) {
+                in_fact.extend(position_lines(list)?);
+            }
+        }
+        let open: Vec<String> = changed.iter().filter(|line| !in_fact.contains(*line) && !flagged.contains(*line)).map(line_text).collect();
+        if !open.is_empty() {
+            work.fail("cover", format!("{} changed line(s) are in no fact position and not in the flagged list: {}", open.len(), open.join(", ")));
+        }
+        let wide: Vec<String> = in_fact.difference(&changed).map(line_text).collect();
+        if !wide.is_empty() {
+            work.fail("cover", format!("{} line(s) of a fact position are not changed lines: {}", wide.len(), wide.join(", ")));
+        }
+
+        // Property 6: the reader. `status --verbose` and the Markdown review have each fact
+        // line of the accepted step.
+        let report = folder.join("review.md");
+        let review = work.semilla(folder, &["review".to_string(), "--md".to_string(), report.to_string_lossy().to_string()])?;
+        let markdown = no_escape(&std::fs::read_to_string(&report).unwrap_or_default());
+        let status_lines: BTreeSet<&str> = status.stdout.lines().map(str::trim).collect();
+        for fact in facts(&run.all()) {
+            if !status_lines.contains(fact.head.as_str()) {
+                work.fail("reader", format!("`status --verbose` does not have the fact line: {}", fact.head));
+            }
+            let line = no_escape(fact.head.strip_prefix("◆ ").unwrap_or(&fact.head));
+            if review.code != 0 || !markdown.contains(&line) {
+                work.fail("reader", format!("the Markdown review (exit {}) does not have the fact line: {}", review.code, fact.head));
+            }
+        }
+        for fact in facts(&status.stdout) {
+            if let Some(side) = empty_change(&fact.head) {
+                work.fail("empty_change", format!("the two sides of a fact of `status --verbose` are equal (`{side}`): {}", fact.head));
+            }
+        }
+    }
+    Ok(Outcome { failed: work.failed, text, runs: work.runs, positions: accepted.is_some() })
+}
+
+fn cases_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases")
+}
+
+fn load_cases() -> Vec<Case> {
+    let root = cases_dir();
+    let mut cases = Vec::new();
+    let mut groups: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    groups.sort();
+    for group in groups {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&group).unwrap().flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|extension| extension == "case")).collect();
+        files.sort();
+        for file in files {
+            let id = format!("{}/{}", group.file_name().unwrap().to_string_lossy(), file.file_stem().unwrap().to_string_lossy());
+            let text = std::fs::read_to_string(&file).unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+            cases.push(Case::parse(&id, &file, &text).unwrap_or_else(|error| panic!("{}: {error}", file.display())));
+        }
+    }
+    cases
+}
+
+/// The runner of the case set (design 57.3, 57.4).
+// rule+ R44.1-1 R51.3-4 R55-1 R55.2-1 R55.3-4 R55.4-1 R55.4-3 R55.8-1 R57.4-1 R57.4-2 R57.4-3 R57.4-4
+// rule- R57.4-2
+#[test]
+fn each_case_gives_its_expected_text_and_keeps_the_properties() {
+    let start = std::time::Instant::now();
+    let filter = std::env::var("SEMILLA_CASES").ok();
+    let write = std::env::var("SEMILLA_CASES_WRITE").is_ok_and(|value| !value.is_empty() && value != "0");
+    let all = load_cases();
+    assert!(all.len() >= 354, "the case set has {} cases; it had 354 at its start (design 57.3)", all.len());
+    let cases: Vec<&Case> = all.iter().filter(|case| filter.as_ref().is_none_or(|filter| case.id.contains(filter.as_str()))).collect();
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<(usize, Result<Outcome, String>)>> = Mutex::new(Vec::new());
+    let threads = std::thread::available_parallelism().map_or(4, |count| count.get());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(case) = cases.get(index) else { break };
+                    let result = check(case);
+                    results.lock().unwrap().push((index, result));
+                }
+            });
+        }
+    });
+    let mut results = results.into_inner().unwrap();
+    results.sort_by_key(|(index, _)| *index);
+    let mut problems: Vec<String> = Vec::new();
+    let (mut written, mut known_count, mut runs) = (0, 0, 0);
+    let mut no_positions: Vec<&str> = Vec::new();
+    for (index, result) in results {
+        let case = cases[index];
+        let Outcome { mut failed, text, runs: count, positions } = match result {
+            Ok(result) => result,
+            Err(error) => {
+                problems.push(format!("{}: the runner cannot run the case: {error}", case.id));
+                continue;
+            }
+        };
+        runs += count;
+        if !positions {
+            no_positions.push(case.id.as_str());
+        }
+        if case.expected.as_deref() != Some(text.as_str()) {
+            if write {
+                std::fs::write(&case.file, format!("{}=== expected\n{text}", case.head)).unwrap();
+                written += 1;
+            } else {
+                match &case.expected {
+                    Some(expected) => failed.push(("expected", format!("the result is not the expected text (`-` expected, `+` now):\n{}", difference(expected, &text)))),
+                    None => failed.push(("expected", "the case has no expected text; run the test with `SEMILLA_CASES_WRITE=1` and review the text".to_string())),
+                }
+            }
+        }
+        for (check, cause) in &case.known {
+            if failed.iter().any(|(name, _)| name == check) {
+                known_count += 1;
+            } else {
+                problems.push(format!("{}: the known failure `{check}` ({cause}) passes now: remove the line `known_failure` from the case", case.id));
+            }
+        }
+        for (check, message) in failed {
+            if !case.known.iter().any(|(name, _)| name == check) {
+                problems.push(format!("{} [{check}]: {message}", case.id));
+            }
+        }
+    }
+    println!("case set: {} case(s), {runs} run(s) of semilla, {known_count} known failure(s), {written} expected text(s) written, {threads} thread(s), {:.1} s", cases.len(), start.elapsed().as_secs_f64());
+    println!("no accepted step, so no check of the fact positions, for {} case(s): {}", no_positions.len(), no_positions.join(", "));
+    assert!(problems.is_empty(), "{} problem(s) in the case set:\n{}", problems.len(), problems.join("\n"));
+}
+
+#[test]
+fn the_pattern_matcher_knows_the_forms_of_the_cases() {
+    let finds = |pattern: &str, text: &str| Pattern::new(pattern).unwrap().finds(text);
+    assert!(finds("not stated: [1-9]", "  not stated: 3 item(s)") && !finds("not stated: [1-9]", "  not stated: 0 item(s)"));
+    assert!(finds("(Rest|Idle).*Busy|Busy", "x Busy") && finds("(Rest|Idle).*Busy|Busy", "Rest to Busy") && !finds("(Rest|Idle).*Busy", "Rest\nBusy"));
+    assert!(finds(r"\$\w+\.total => \$\w+\.sum\(\)", "rewrite $a.total => $b.sum()") && !finds(r"\$\w+\.total", "$.total"));
+    assert!(finds("(?i)behavior", "the Behavior") && !finds("behavior", "the Behavior"));
+    assert!(finds(r"(?m)^\s*-\s+self\.0\[index\] = 0;", "a\n  -   self.0[index] = 0;") && !finds(r"^\s*-\s+self", "a\n  - self"));
+    assert!(finds("a{2,3}$", "caa") && !finds("a{2,3}$", "ca") && finds("[^a-c]x", "dx") && !finds("[^a-c]x", "bx") && finds("ab?c+", "acc"));
+    for unknown in ["a*?", r"\bword", "(?=a)", "(a", "a)", "[a"] {
+        assert!(Pattern::new(unknown).is_err(), "`{unknown}` is not a known form");
+    }
+}
+
+#[test]
+fn a_case_file_gives_the_two_trees_and_the_checks() {
+    let text = "note: a note\noption: --same\noption: rename a b\nexit: 1\nmust_match: x+\nknown_failure: cover: the cause\n=== both Cargo.toml\n[package]\n=== old a.rs\n=== old b.rs (no line end at the end)\nfn b() {}\n=== new a.rs (each line ends with CR LF)\nfn a() {}\n\n=== new c.bin (base64)\n/wA=\n=== expected\nexit: 1\n=== old not a section\n";
+    let case = Case::parse("g/n", Path::new("n.case"), text).unwrap();
+    assert_eq!(case.options, ["--same", "rename a b"]);
+    assert_eq!((case.exit, case.must_match.len(), case.same_facts), (Some(1), 1, false));
+    assert_eq!(case.known, [("cover".to_string(), "the cause".to_string())]);
+    assert_eq!(case.old.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect::<Vec<_>>(), [("Cargo.toml", &b"[package]\n"[..]), ("a.rs", &b""[..]), ("b.rs", &b"fn b() {}"[..])]);
+    assert_eq!(case.new.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect::<Vec<_>>(), [("Cargo.toml", &b"[package]\n"[..]), ("a.rs", &b"fn a() {}\r\n\r\n"[..]), ("c.bin", &b"\xff\x00"[..])]);
+    assert_eq!(case.expected.as_deref(), Some("exit: 1\n=== old not a section\n"));
+    // A line that the runner does not know is an error: a wrong key never turns a check off.
+    for bad in ["exits: 1\n=== old a.rs\n", "known_failure: cover\n=== old a.rs\n", "known_failure: speed: slow\n=== old a.rs\n", "=== left a.rs\n", "=== old a.rs\n=== old a.rs\n", "note: no file\n"] {
+        assert!(Case::parse("g/n", Path::new("n.case"), bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn the_helpers_of_the_properties_read_the_output() {
+    assert_eq!(empty_change("◆ f1 derived: changed macro call `t!( A = 1, )` → `t!( A = 1, )` (makes items) [declaration]").as_deref(), Some("t!( A = 1, )"));
+    assert_eq!(empty_change("◆ f1 derived: changed `a` → `b`, changed `c` → `c` [x]").as_deref(), Some("c"));
+    assert_eq!(empty_change("◆ f1 derived: changed `a` → `a b` and `x` → `y` [semantics]"), None);
+    assert_eq!(position_lines("a.rs:3-4, a.rs:-9, b c.rs:1").unwrap(), [("a.rs".to_string(), false, 3), ("a.rs".to_string(), false, 4), ("a.rs".to_string(), true, 9), ("b c.rs".to_string(), false, 1)]);
+    assert!(position_lines("a.rs").is_err());
+    assert_eq!(shell_words("step 'the change' --reason 'a::b=it'\\''s <why>' x"), ["step", "the change", "--reason", "a::b=it's <why>", "x"]);
+    assert_eq!(fact_text("◆ f12 stated: 2 site(s): changed `a` → `b` [semantics]"), "2 site(s): changed `a` → `b` [semantics]");
+    let text = "  head:\n  ◆ f1 derived: one [docs]\n      in: a\n      lines: a.rs:1\n  ◆ f2 derived: two [docs]\n  not stated: 1 item(s)\n  ? 1 place\n      in: b\n";
+    assert_eq!(facts(text), [Block { head: "◆ f1 derived: one [docs]".into(), subs: vec!["in: a".into(), "lines: a.rs:1".into()] }, Block { head: "◆ f2 derived: two [docs]".into(), subs: vec![] }]);
+    assert_eq!(gaps(text).len(), 2);
+    let diff = "diff --git a/a b.rs b/a b.rs\nindex 1..2 100644\n--- a/a b.rs\t\n+++ b/a b.rs\t\n@@ -3,0 +4,2 @@ fn f() {\n+x\n+--- a/not a file\n@@ -9 +11 @@\n-y\n+z\ndiff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\n@@ -0,0 +1 @@\n+n\ndiff --git a/gone.rs b/gone.rs\ndeleted file mode 100644\n--- a/gone.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-g\n-h\ndiff --git a/raw.bin b/raw.bin\n--- a/raw.bin\n+++ b/raw.bin\n@@ -1 +1 @@\n-r\n+s\n";
+    let lines: Vec<String> = hunk_lines(diff, &|file| file != "raw.bin").unwrap().iter().map(line_text).collect();
+    assert_eq!(lines, ["a b.rs:4", "a b.rs:5", "a b.rs:11", "a b.rs:-9", "gone.rs:-1", "gone.rs:-2", "new.rs:1"]);
+    assert!(hunk_lines("@@ -1 +1 @@\n", &|_| true).is_err());
+    let folder = Path::new("/tmp/x");
+    assert_eq!(normal("base `1ea5d28`: /tmp/x/repo/a 62b58cee548ee0eeb2e6e08b7968d0dd20c28424 deadbeef", folder), "base `<COMMIT>`: <REPO>/a <TREE> deadbeef");
+}

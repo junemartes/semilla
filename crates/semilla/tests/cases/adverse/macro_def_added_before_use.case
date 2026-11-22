@@ -1,0 +1,29 @@
+rule+: R56.5-2
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! two { () => { 2 } }
+
+pub fn a() -> u32 { two!() }
+=== new src/lib.rs
+macro_rules! two { () => { 2 } }
+
+macro_rules! two { () => { 3 } }
+
+pub fn a() -> u32 { two!() }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added `depot::two!#1` (a twin of `depot::two!`) [added]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `depot::two!#1` (a twin of `depot::two!`) [added]
+    lines: src/lib.rs:3-4

@@ -690,7 +690,7 @@ enum MacroCause {
 
 /// True for the item of a `macro_rules!` definition.
 pub(crate) fn is_macro_definition(item: &semilla_syntax::Item) -> bool {
-    item.kind == semilla_syntax::ItemKind::Macro && item.source.contains("macro_rules!")
+    item.kind == semilla_syntax::ItemKind::Macro && item.macro_definition
 }
 
 /// The fact of a macro call item: the fact of the call, or the fact of an added or removed

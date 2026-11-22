@@ -1,0 +1,99 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both build.rs
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+}
+=== both examples/demo/main.rs
+mod part;
+fn main() { part::go(); }
+=== both examples/demo/part.rs
+pub fn go() {
+    let n = 1;
+    println!("{}", n);
+}
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== old benches/list.rs
+fn main() {
+    let v = [1u32];
+    let _ = depot::list::first(&v);
+}
+
+pub fn extra(n: u32) -> u32 {
+    let k = n + 40;
+    k * 2
+}
+=== old src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== new benches/list.rs
+fn main() {
+    let v = [1u32];
+    let _ = depot::list::first(&v);
+}
+=== new src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+
+pub fn extra(n: u32) -> u32 {
+    let k = n + 41;
+    k * 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `40` → `41` (f2)
+      in: depot::list::extra
+      lines: benches/list.rs:-5, benches/list.rs:-7, benches/list.rs:-9, src/list.rs:15, src/list.rs:17, src/list.rs:19
+      to state it: --change 'depot::list::extra=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::extra=TEXT'
+  tests and benches, filled in by Semilla:
+  ◆ f1 derived: moved `depot (bench "list")::extra` → `depot::list::extra` [move]
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics]
+  ◆ f3 derived: public API: a different crate can now use `depot::list::extra` [move]
+  cover: each of the 10 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: moved `depot (bench "list")::extra` → `depot::list::extra` [move]
+    lines: benches/list.rs:-6, benches/list.rs:-8, src/list.rs:16, src/list.rs:18
+◆ f2 derived: changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics]
+    lines: benches/list.rs:-5, benches/list.rs:-7, benches/list.rs:-9, src/list.rs:15, src/list.rs:17, src/list.rs:19
+◆ f3 derived: public API: a different crate can now use `depot::list::extra` [move]
+    no position

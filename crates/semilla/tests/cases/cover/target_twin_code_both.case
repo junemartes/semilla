@@ -1,0 +1,81 @@
+rule+: R56.1-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== old src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== old tests/list.rs
+//! A test target.
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+#[test]
+fn one() { assert_eq!(first(&[1]), 1); }
+=== new src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[1] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== new tests/list.rs
+//! A test target.
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[2] }
+
+#[test]
+fn one() { assert_eq!(first(&[1]), 1); }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `0` → `1` (f2)
+      in: depot::list::first
+      lines: src/list.rs:8, src/list.rs:-8
+      to state it: --change 'depot::list::first=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::list::first=TEXT'
+  tests and benches, filled in by Semilla:
+  ◆ f1 derived: changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics]
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `0` → `2` at `depot (test "list")::first/tail/index` [semantics]
+    lines: tests/list.rs:4, tests/list.rs:-4
+◆ f2 derived: changed literal `0` → `1` at `depot::list::first/tail/index` [semantics]
+    lines: src/list.rs:8, src/list.rs:-8

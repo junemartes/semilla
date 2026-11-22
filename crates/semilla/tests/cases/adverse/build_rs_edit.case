@@ -1,0 +1,68 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both benches/list.rs
+fn main() {
+    let v = [1u32];
+    let _ = depot::list::first(&v);
+}
+=== both examples/demo/main.rs
+mod part;
+fn main() { part::go(); }
+=== both examples/demo/part.rs
+pub fn go() {
+    let n = 1;
+    println!("{}", n);
+}
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== both src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== old build.rs
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+}
+=== new build.rs
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-cfg=fast");
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  ! build code changed in this step; read this change first
+  ◆ f1 derived: build.rs: changed [build code]
+      ✗ spotlight: build script: this file is code of the build script of `depot`. Cargo runs it before each build of the package, and it can change the code and the result of the build; it needs a reason: --reason 'build.rs:=…'
+      diff:
+        @@ line 3 @@
+        +     println!("cargo:rustc-cfg=fast");
+  cover: each of the 1 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: build script: build.rs
+run again: semilla step 'the change' --reason 'build.rs:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'build.rs:=the reason of the test'
+◆ f1 derived: build.rs: changed [build code]
+    lines: build.rs:3

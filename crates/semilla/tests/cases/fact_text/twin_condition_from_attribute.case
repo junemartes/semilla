@@ -1,0 +1,59 @@
+note: A new `cfg` twin. Its docs name a different `cfg`, and a statement of its body has a `cfg` attribute. The condition of the twin comes from the attribute of the item.
+rule+: R57.2-6
+rule-: R57.2-6
+must_match: a twin of `depot::Slab::name` under `cfg\(not\(unix\)\)`\) with the body: `\{ #\[cfg\(debug_assertions\)\] \{ return "debug"; \} "two" \}`
+must_not_match: under `cfg\(test\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Slab;
+
+impl Slab {
+    pub fn name(&self) -> &'static str {
+        "one"
+    }
+}
+=== new src/lib.rs
+pub struct Slab;
+
+impl Slab {
+    #[cfg(unix)]
+    pub fn name(&self) -> &'static str {
+        "one"
+    }
+
+    #[doc = "Not under #[cfg(test)]."]
+    #[inline]
+    #[cfg(not(unix))]
+    pub fn name(&self) -> &'static str {
+        #[cfg(debug_assertions)]
+        { return "debug"; }
+        "two"
+    }
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  new and removed items, filled in by Semilla:
+  ◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ #[cfg(debug_assertions)] { return "debug"; } "two" }` [added]
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Slab::name#1`; it needs a reason: --reason 'depot::Slab::name#1=…'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute]
+      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::Slab::name=…'
+  cover: each of the 10 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::Slab::name
+  ! spotlight: cfg attribute: depot::Slab::name#1
+run again: semilla step 'the change' --reason 'depot::Slab::name=<why>' --reason 'depot::Slab::name#1=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Slab::name=the reason of the test' --reason 'depot::Slab::name#1=the reason of the test'
+◆ f2 derived: added `depot::Slab::name#1` (a twin of `depot::Slab::name` under `cfg(not(unix))`) with the body: `{ #[cfg(debug_assertions)] { return "debug"; } "two" }` [added]
+    lines: src/lib.rs:8-16
+◆ f1 derived: attributes of `depot::Slab::name`: added `#[cfg(unix)]` [attribute]
+    lines: src/lib.rs:4

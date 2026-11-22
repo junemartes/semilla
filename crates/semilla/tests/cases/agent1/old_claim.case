@@ -1,0 +1,56 @@
+rule+: R54.3-4
+option: --claim
+option: rewrite-pattern src/lib.rs from=10 to=20
+exit: 2
+same_facts_as_no_option: yes
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 20 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== expected
+exit: 2
+=== stderr
+error: the claim `rewrite-pattern` is gone: state the pattern as a fact of the step, `--same 'rewrite FROM => TO'` (the claims that stay: no-panic, no-unsafe, no-io, calls-only, tested-by)
+=== positions
+none: the runner has no accepted step for this case

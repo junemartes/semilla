@@ -92,6 +92,10 @@ pub struct Item {
     /// The display texts of the parts (design 39.2): the source text as written, on one line.
     #[serde(skip)]
     pub display: ItemDisplay,
+    /// True for the definition of a macro (`macro_rules! name { … }`). The kind of the syntax
+    /// node gives the value (design 57.2): a search in the source text does not.
+    #[serde(skip)]
+    pub macro_definition: bool,
 }
 
 /// The display texts of the parts of an item, in the order of the compare texts.
@@ -1394,7 +1398,7 @@ impl Loader<'_> {
             let name = format!("{}!", compare_opt(call.path().as_ref()));
             let path = path_of(true, &name);
             let entry = path.rsplit("::").next().unwrap_or(&name).to_string();
-            self.add_parts(path, ItemKind::Macro, node, &Text::default(), &attrs, None, Vec::new(), source, test, node_texts(node));
+            self.add_parts(path, ItemKind::Macro, node, &Text::default(), &attrs, None, Vec::new(), source, test, call_texts(node));
             one(entry)
         } else {
             node_texts(node)
@@ -1444,6 +1448,7 @@ impl Loader<'_> {
             source: text_source,
             test,
             display: ItemDisplay { vis: vis.1.clone(), signature: signature.1, attrs: attr_display, members: member_display },
+            macro_definition: value.kind() == SyntaxKind::MACRO_RULES,
         };
         self.items.push(item);
     }
@@ -1614,8 +1619,23 @@ fn signature_of(item: &ast::Item) -> Text {
             let tokens: Vec<Flat> = flat_tokens(item.syntax()).into_iter().filter(|token| !skip.iter().any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))).collect();
             texts(&tokens)
         }
+        ast::Item::MacroCall(call) => call_texts(call.syntax()),
         other => node_texts(other.syntax()),
     }
+}
+
+/// The texts of a macro call (design 57.2): each token of the call, which is the path, the `!`,
+/// the delimiters, and the full input. The outer attributes and the docs of the call item are
+/// not in the texts: they have their own facts (design 55.1). The compare text has the `;` of
+/// the item. The display text does not have it.
+fn call_texts(node: &SyntaxNode) -> Text {
+    let skip: Vec<TextRange> = node.children().filter(|child| matches!(child.kind(), SyntaxKind::DOC_COMMENT | SyntaxKind::ATTR)).map(|child| child.text_range()).collect();
+    let mut tokens: Vec<Flat> = flat_tokens(node).into_iter().filter(|token| !skip.iter().any(|range| usize::from(range.start()) <= token.start && token.end <= usize::from(range.end()))).collect();
+    let compare = texts(&tokens).0;
+    if tokens.last().is_some_and(|token| !token.in_tree && token.text == ";") {
+        tokens.pop();
+    }
+    (compare, texts(&tokens).1)
 }
 
 fn source_lines(source: &str, start: usize, end: usize) -> String {

@@ -1,0 +1,57 @@
+rule+: R56.2-4
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Tool { n: u32 }
+
+impl Tool {
+    /// The size.
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.n
+    }
+
+    pub fn grow(&mut self, by: u32) -> u32 {
+        if by == 0 {
+            return self.n;
+        } else {
+            self.n += by;
+        }
+        self.n
+    }
+}
+=== new src/lib.rs
+pub struct Tool { n: u32 }
+
+impl Tool {
+    pub fn grow(&mut self, by: u32) -> u32 {
+        if by == 0 {
+            return self.n;
+        } else {
+            self.n += by;
+        }
+        self.n
+    }
+
+    /// The size.
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.n
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: layout of `src/lib.rs`: 12 changed lines with equal tokens [layout]
+  cover: each of the 12 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: layout of `src/lib.rs`: 12 changed lines with equal tokens [layout]
+    lines: src/lib.rs:12-17, src/lib.rs:-4-9

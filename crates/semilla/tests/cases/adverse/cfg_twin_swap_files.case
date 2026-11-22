@@ -1,0 +1,60 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+#[cfg(unix)]
+#[path = "imp_unix.rs"]
+mod imp;
+#[cfg(windows)]
+#[path = "imp_win.rs"]
+mod imp;
+
+pub fn top() -> u32 { imp::value() }
+=== old src/imp_unix.rs
+pub fn value() -> u32 {
+    let k = 4;
+    k + 1
+}
+=== old src/imp_win.rs
+pub fn value() -> u32 {
+    let k = 4;
+    k + 2
+}
+=== new src/imp_unix.rs
+pub fn value() -> u32 {
+    let k = 4;
+    k + 2
+}
+=== new src/imp_win.rs
+pub fn value() -> u32 {
+    let k = 4;
+    k + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: depot::imp#0::value
+      lines: src/imp_unix.rs:3, src/imp_unix.rs:-3
+      to state it: --change 'depot::imp#0::value=TEXT'
+  ? 1 place: changed literal `2` → `1` (f2)
+      in: depot::imp#1::value
+      lines: src/imp_win.rs:3, src/imp_win.rs:-3
+      to state it: --change 'depot::imp#1::value=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::imp#0::value=TEXT' --change 'depot::imp#1::value=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics]
+  ◆ f2 derived: changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `depot::imp#0::value/tail/rhs` [semantics]
+    lines: src/imp_unix.rs:3, src/imp_unix.rs:-3
+◆ f2 derived: changed literal `2` → `1` at `depot::imp#1::value/tail/rhs` [semantics]
+    lines: src/imp_win.rs:3, src/imp_win.rs:-3

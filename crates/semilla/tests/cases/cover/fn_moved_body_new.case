@@ -1,0 +1,93 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn dirs() -> Vec<u32> { vec![1, 2] }
+
+pub fn helper() -> u32 { 7 }
+
+pub struct Found { pub file: Option<u32>, pub dirs: Vec<u32> }
+
+/// Finds the things.
+pub fn probe() -> Found {
+    let mut result = Found { file: None, dirs: Vec::new() };
+    for dir in dirs() {
+        // an old comment
+        let names = [1, 2, 3];
+        for name in names.iter() {
+            if dir == *name {
+                result.file = Some(dir);
+            }
+        }
+        result.dirs.push(dir);
+    }
+    result
+}
+=== new src/lib.rs
+pub fn dirs() -> Vec<u32> { vec![1, 2] }
+
+/// Finds the things.
+pub fn probe() -> Found {
+    let mut result = Found { file: None, dirs: Vec::new() };
+    if result.file.is_none() {
+        result.file = Some(0);
+    }
+
+    for dir in dirs() {
+        let d = dir + 1;
+        if d > 1 {
+            result.dirs.push(d);
+        }
+    }
+
+    result
+}
+
+pub fn helper() -> u32 { 7 }
+
+pub struct Found { pub file: Option<u32>, pub dirs: Vec<u32> }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 7 places: 7 different edits (f3, f4, f5, f6, f7, f1, f8)
+      in: depot::probe
+      lines: src/lib.rs:6-9, src/lib.rs:11-13, src/lib.rs:-12-16, src/lib.rs:-18
+      to state it: --change 'depot::probe=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::probe=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` [semantics]
+  ◆ f3 derived: added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics]
+  ◆ f4 derived: added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0` [semantics]
+  ◆ f5 derived: deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0` [semantics]
+  ◆ f6 derived: added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics]
+  ◆ f7 derived: deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics]
+  ◆ f8 derived: changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics]
+  ◆ f9 derived: layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout]
+  ◆ f2 derived: removed comment `// an old comment` [docs]
+  cover: each of the 23 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: moved statement `result.dirs.push(dir)` from `depot::probe/S1/body/S2` to `depot::probe/S2/body/S1/then/S0` [semantics]
+    lines: src/lib.rs:12-13, src/lib.rs:-18
+◆ f3 derived: added `if` `if result.file.is_none() { result.file = Some(0); }` at `depot::probe/S1` [semantics]
+    lines: src/lib.rs:6-9
+◆ f4 derived: added `let` `let d = dir + 1;` at `depot::probe/S2/body/S0` [semantics]
+    lines: src/lib.rs:11
+◆ f5 derived: deleted statement `let names = [1, 2, 3];` at `depot::probe/S1/body/S0` [semantics]
+    lines: src/lib.rs:-12
+◆ f6 derived: added `if` `if d > 1 { result.dirs.push(d); }` (each inner statement is a moved statement of the body) at `depot::probe/S2/body/S1` [semantics]
+    lines: src/lib.rs:12-13
+◆ f7 derived: deleted statement `for name in names.iter() { if dir == *name { result.file = Some(dir); } }` at `depot::probe/S1/body/S1` [semantics]
+    lines: src/lib.rs:-13-16
+◆ f8 derived: changed path `dir` → `d` at `depot::probe/S2/body/S1/then/S0/args[0]` [semantics]
+    lines: src/lib.rs:13, src/lib.rs:-18
+◆ f9 derived: layout of `src/lib.rs`: 5 changed lines with equal tokens; 4 changed lines of 2 items with equal tokens at a new place [layout]
+    lines: src/lib.rs:16, src/lib.rs:19-22, src/lib.rs:-3-6
+◆ f2 derived: removed comment `// an old comment` [docs]
+    lines: src/lib.rs:-11

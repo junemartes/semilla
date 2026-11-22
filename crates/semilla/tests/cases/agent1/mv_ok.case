@@ -1,0 +1,74 @@
+rule+: R49.3-2
+option: --same
+option: move idle conf::idle
+exit: 0
+must_match: ✓ a1 same
+same_facts_as_no_option: yes
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+pub use conf::idle;
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { /// Gives three.
+ pub fn idle() -> u32 { 3 } pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: move idle conf::idle (holds: Semilla derives the move from the syntax tree)
+      places: depot::idle, depot::conf::idle
+    ◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move]
+    ◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move]
+  not stated: 0 item(s)
+  other facts, filled in by Semilla:
+  ◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: moved `depot::idle` → `depot::conf::idle` [move]
+    lines: src/lib.rs:16-17, src/lib.rs:-13-14, src/lib.rs:-17
+◆ f3 stated: public API: `depot::idle` is now `depot::conf::idle` (a `pub use` line can keep the old path) [move]
+    no position
+◆ f2 derived: added `use` line: `pub use conf::idle;` in `depot`: added the public name `depot::idle` (`depot::conf::idle`) [import]
+    lines: src/lib.rs:13

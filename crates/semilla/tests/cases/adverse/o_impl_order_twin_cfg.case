@@ -1,0 +1,43 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct T;
+impl T {
+    #[cfg(unix)]
+    pub fn a(&self) -> u32 { 1 }
+    #[cfg(windows)]
+    pub fn a(&self) -> u32 { 2 }
+}
+=== new src/lib.rs
+pub struct T;
+impl T {
+    #[cfg(windows)]
+    pub fn a(&self) -> u32 { 1 }
+    #[cfg(unix)]
+    pub fn a(&self) -> u32 { 2 }
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `depot::T::a#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
+      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::T::a#0=…'
+  ◆ f2 derived: attributes of `depot::T::a#1`: changed `#[cfg(windows)]` → `#[cfg(unix)]` [attribute]
+      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::T::a#1=…'
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::T::a#0
+  ! spotlight: cfg attribute: depot::T::a#1
+run again: semilla step 'the change' --reason 'depot::T::a#0=<why>' --reason 'depot::T::a#1=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::T::a#0=the reason of the test' --reason 'depot::T::a#1=the reason of the test'
+◆ f1 derived: attributes of `depot::T::a#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
+    lines: src/lib.rs:4, src/lib.rs:-3-4
+◆ f2 derived: attributes of `depot::T::a#1`: changed `#[cfg(windows)]` → `#[cfg(unix)]` [attribute]
+    lines: src/lib.rs:5

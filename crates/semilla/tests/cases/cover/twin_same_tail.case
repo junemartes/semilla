@@ -1,0 +1,160 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Source;
+pub trait Draw<T> { fn sample(&self, seed: u32) -> T; }
+pub struct Small(usize);
+impl Small { fn new(v: usize) -> Small { Small(v) } }
+pub struct Large(usize);
+impl Large { fn new(v: usize) -> Large { Large(v) } }
+pub struct Other;
+pub struct Third;
+fn check(_: u32) {}
+
+impl Draw<Small> for Source {
+    #[inline]
+    fn sample(&self, seed: u32) -> Small {
+        check(seed);
+
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Small::new(value)
+    }
+}
+
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+=== new src/lib.rs
+pub struct Source;
+pub trait Draw<T> { fn sample(&self, seed: u32) -> T; }
+pub struct Small(usize);
+impl Small { fn new(v: usize) -> Small { Small(v) } }
+pub struct Large(usize);
+impl Large { fn new(v: usize) -> Large { Large(v) } }
+pub struct Other;
+pub struct Third;
+fn check(_: u32) {}
+
+impl Draw<Small> for Source {
+    #[inline]
+    fn sample(&self, seed: u32) -> Small {
+        const {
+            assert!(true);
+        }
+
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Small::new(value)
+    }
+}
+
+impl Draw<Small> for Other {
+    #[inline]
+    fn sample(&self, seed: u32) -> Small {
+        const {
+            assert!(true);
+        }
+
+        let _extra = 1;
+
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Small::new(value)
+    }
+}
+
+impl Draw<Small> for Third {
+    #[inline]
+    fn sample(&self, seed: u32) -> Small {
+        const {
+            assert!(true);
+        }
+
+        let _extra = 1;
+
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Small::new(value)
+    }
+}
+
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f3, f4)
+      in: depot::<Source as Draw>::sample
+      lines: src/lib.rs:14-26, src/lib.rs:28, src/lib.rs:-14
+      to state it: --change 'depot::<Source as Draw>::sample=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::<Source as Draw>::sample=TEXT'
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+  ◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+  other facts, filled in by Semilla:
+  ◆ f3 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics]
+  ◆ f4 derived: added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics]
+  cover: each of the 50 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::<Other as Draw>::sample
+  ! spotlight: cfg attribute: depot::<Third as Draw>::sample
+  ! spotlight: cfg attribute: depot::impl <Other as Draw>
+  ! spotlight: cfg attribute: depot::impl <Third as Draw>
+
+=== positions
+◆ f1 derived: trait impl `<Other as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+    lines: src/lib.rs:27, src/lib.rs:29-54
+◆ f2 derived: trait impl `<Third as Draw<Small>>` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+    lines: src/lib.rs:55-62
+◆ f3 derived: deleted statement `check(seed)` at `depot::<Source as Draw>::sample/S0` [semantics]
+    lines: src/lib.rs:-14
+◆ f4 derived: added `const_block` `const { assert!(true); }` at `depot::<Source as Draw>::sample/S0` [semantics]
+    lines: src/lib.rs:14-26, src/lib.rs:28

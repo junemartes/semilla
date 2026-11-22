@@ -1,0 +1,47 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+//! The crate docs.
+
+pub fn first_item() -> u32 { 0 }
+
+pub struct Tool;
+impl Tool {
+    pub fn a(&self) -> u32 { 1 }
+    /// The new doc.
+    /// One more line.
+    #[cfg(all())]
+    pub fn b(&self) -> u32 { 2 }
+    pub fn c(&self) -> u32 { 3 }
+}
+
+pub fn last_item() -> u32 { 0 }
+=== new src/lib.rs
+//! The crate docs.
+
+pub fn first_item() -> u32 { 0 }
+
+pub struct Tool;
+impl Tool {
+    pub fn a(&self) -> u32 { 1 }
+    pub fn c(&self) -> u32 { 3 }
+}
+
+pub fn last_item() -> u32 { 0 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: removed `depot::Tool::b` (the public API changes: a different crate can no longer use the item) [removed]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::Tool::b
+
+=== positions
+◆ f1 derived: removed `depot::Tool::b` (the public API changes: a different crate can no longer use the item) [removed]
+    lines: src/lib.rs:-8-11

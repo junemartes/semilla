@@ -1044,29 +1044,18 @@ pub(crate) fn twin_text(ws: &Workspace, path: &str) -> Option<(String, Option<St
     let base = twin_base(path)?;
     ws.items.get(base)?;
     let item = ws.items.get(path)?;
-    // The `cfg` attributes of the source, as the source writes them.
-    let source = one_line_source(&item.source);
-    let mut conditions = Vec::new();
-    let mut rest = source.as_str();
-    while let Some(at) = rest.find("#[cfg(") {
-        let tail = &rest[at + 2..];
-        let mut depth = 0usize;
-        let end = tail.char_indices().find(|(_, c)| {
-            match c {
-                '(' => depth += 1,
-                ')' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            *c == ']' && depth == 0
-        });
-        let Some((end, _)) = end else { break };
-        conditions.push(format!("`{}`", &tail[..end]));
-        rest = &tail[end..];
-    }
+    // The `cfg` attributes of the item, as the source writes them. They come from the
+    // attribute nodes of the item, and the body comes from the body node (design 57.2): a
+    // filter of the source lines is never the text of a fact.
+    let condition = |display: &String| {
+        let inner = display.trim().strip_prefix('#')?.trim_start().strip_prefix('[')?.strip_suffix(']')?;
+        Some(format!("`{}`", inner.trim()))
+    };
+    let conditions: Vec<String> = item.attrs.iter().zip(&item.display.attrs).filter(|(text, _)| crate::facts::attribute_name(text).as_deref() == Some("cfg")).filter_map(|(_, display)| condition(display)).collect();
     let under = if conditions.is_empty() { String::new() } else { format!(" under {}", conditions.join(" and ")) };
-    let body = item.body.as_ref().map(|_| {
-        let at = source.find('{').unwrap_or(0);
-        source[at..].to_string()
+    let body = item.body.as_ref().map(|body| {
+        let source = ws.rust_files.get(&item.file).and_then(|file| file.get(body.span.0..body.span.1));
+        source.map_or_else(|| body.text.clone(), semilla_syntax::tree::one_line)
     });
     let (body_text, content) = match body {
         // Design 54.7: a long body shows its full text, with its lines.
@@ -1079,9 +1068,3 @@ pub(crate) fn twin_text(ws: &Workspace, path: &str) -> Option<(String, Option<St
 
 /// The most characters of a twin body in a fact text. The report content has the full body.
 const BODY_TEXT: usize = 200;
-
-/// A source text on one line, with no doc comment line.
-fn one_line_source(source: &str) -> String {
-    let lines: Vec<&str> = source.lines().filter(|line| !line.trim_start().starts_with("///") && !line.trim_start().starts_with("//!")).collect();
-    semilla_syntax::tree::one_line(&lines.join("\n"))
-}

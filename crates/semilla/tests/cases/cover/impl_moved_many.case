@@ -1,0 +1,127 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Tool { n: u32 }
+
+impl Tool {
+    /// The size.
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.n
+    }
+
+    pub fn grow(&mut self, by: u32) -> u32 {
+        if by == 0 {
+            return self.n;
+        } else {
+            self.n += by;
+        }
+        self.n
+    }
+}
+
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn beta(v: &[u32]) -> u32 {
+    let mut best = 0;
+    for x in v {
+        if *x > best {
+            best = *x;
+        }
+    }
+    best
+}
+
+pub fn gamma(a: u32, b: u32) -> u32 {
+    let low = a.min(b);
+    let high = a.max(b);
+    high - low
+}
+=== new src/lib.rs
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn beta(v: &[u32]) -> u32 {
+    let mut best = 0;
+    for x in v {
+        if *x >= best {
+            best = *x;
+        }
+    }
+    best
+}
+
+pub fn gamma(a: u32, b: u32) -> u32 {
+    let low = a.min(b);
+    let high = a.max(b);
+    high - low
+}
+
+pub struct Tool { n: u32 }
+
+impl Tool {
+    /// The size.
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.n + 0
+    }
+
+    pub fn grow(&mut self, by: u32) -> u32 {
+        if by == 0 {
+            return self.n;
+        } else {
+            self.n += by + 1;
+        }
+        self.n
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `by` → `by + 1` (f1)
+      in: depot::Tool::grow
+      lines: src/lib.rs:34-42, src/lib.rs:-10-19
+      to state it: --change 'depot::Tool::grow=TEXT'
+  ? 1 place: changed expression `self.n` → `self.n + 0` (f2)
+      in: depot::Tool::size
+      lines: src/lib.rs:24, src/lib.rs:26-33, src/lib.rs:-2-9
+      to state it: --change 'depot::Tool::size=TEXT'
+  ? 1 place: changed operator `*x > best` → `*x >= best` (f3)
+      in: depot::beta
+      lines: src/lib.rs:12, src/lib.rs:-31
+      to state it: --change 'depot::beta=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::Tool::grow=TEXT' --change 'depot::Tool::size=TEXT' --change 'depot::beta=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics]
+  ◆ f2 derived: changed expression `self.n` → `self.n + 0` at `depot::Tool::size/tail` [semantics]
+  ◆ f3 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
+  ◆ f4 derived: layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout]
+  cover: each of the 40 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics]
+    lines: src/lib.rs:34-42, src/lib.rs:-10-19
+◆ f2 derived: changed expression `self.n` → `self.n + 0` at `depot::Tool::size/tail` [semantics]
+    lines: src/lib.rs:24, src/lib.rs:26-33, src/lib.rs:-2-9
+◆ f3 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
+    lines: src/lib.rs:12, src/lib.rs:-31
+◆ f4 derived: layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout]
+    lines: src/lib.rs:25, src/lib.rs:-1

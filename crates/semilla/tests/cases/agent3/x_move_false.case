@@ -1,0 +1,135 @@
+option: --same
+option: move limit stock::limit
+must_match: `10` → `11`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub mod money {
+    use std::fmt;
+    pub struct Price(pub u64);
+    pub trait Scale<T> { fn scale(&self, by: T) -> Self; }
+    impl fmt::Display for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
+    }
+    impl fmt::Debug for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "P{}", self.0) }
+    }
+    impl Scale<u64> for Price { fn scale(&self, by: u64) -> Self { Price(self.0 * by) } }
+    impl Scale<u32> for Price { fn scale(&self, by: u32) -> Self { Price(self.0 * by as u64) } }
+    impl Price { pub fn cents(&self) -> u64 { self.0 } }
+    impl<T: Copy, const N: usize> Scale<[T; N]> for Price { fn scale(&self, _by: [T; N]) -> Self { Price(self.0 + 7) } }
+}
+pub mod stock {
+    pub struct Bin(pub u32);
+    impl std::fmt::Display for Bin {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "bin {}", self.0) }
+    }
+}
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub fn start() -> Mode { Mode::Idle }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub struct Cart { pub total: u32 }
+pub fn a(c: &Cart) -> u32 { wrap(c.total + 1) }
+pub fn b(c: &Cart) -> u32 { wrap(c.total * 2) }
+pub fn guard(v: &mut Vec<u8>) -> usize {
+    struct G<'a>(&'a mut Vec<u8>);
+    impl Drop for G<'_> {
+        fn drop(&mut self) {
+            let mut index = 0;
+            loop {
+                if index >= self.0.len() {
+                    return;
+                }
+                self.0[index] = 0;
+                index += 1;
+            }
+        }
+    }
+    let g = G(v);
+    g.0.len()
+}
+=== new src/lib.rs
+pub mod money {
+    use std::fmt;
+    pub struct Price(pub u64);
+    pub trait Scale<T> { fn scale(&self, by: T) -> Self; }
+    impl fmt::Display for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
+    }
+    impl fmt::Debug for Price {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "P{}", self.0) }
+    }
+    impl Scale<u64> for Price { fn scale(&self, by: u64) -> Self { Price(self.0 * by) } }
+    impl Scale<u32> for Price { fn scale(&self, by: u32) -> Self { Price(self.0 * by as u64) } }
+    impl Price { pub fn cents(&self) -> u64 { self.0 } }
+    impl<T: Copy, const N: usize> Scale<[T; N]> for Price { fn scale(&self, _by: [T; N]) -> Self { Price(self.0 + 7) } }
+}
+pub mod stock {
+    pub struct Bin(pub u32);
+    pub fn limit() -> u32 { 11 }
+    impl std::fmt::Display for Bin {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "bin {}", self.0) }
+    }
+}
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub fn start() -> Mode { Mode::Idle }
+
+pub fn uses_limit() -> u32 { stock::limit() + stock::limit() }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub struct Cart { pub total: u32 }
+pub fn a(c: &Cart) -> u32 { wrap(c.total + 1) }
+pub fn b(c: &Cart) -> u32 { wrap(c.total * 2) }
+pub fn guard(v: &mut Vec<u8>) -> usize {
+    struct G<'a>(&'a mut Vec<u8>);
+    impl Drop for G<'_> {
+        fn drop(&mut self) {
+            let mut index = 0;
+            loop {
+                if index >= self.0.len() {
+                    return;
+                }
+                self.0[index] = 0;
+                index += 1;
+            }
+        }
+    }
+    let g = G(v);
+    g.0.len()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: move limit stock::limit (holds: Semilla derives the move from the syntax tree)
+      places: depot::uses_limit/tail/lhs/callee, depot::uses_limit/tail/rhs/callee, depot::stock::limit
+    ◆ f1 stated: moved `depot::limit` → `depot::stock::limit` [move]
+    ◆ f3 stated: public API: `depot::limit` is now `depot::stock::limit` (a different crate can no longer use the old path) [move]
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `10` → `11` (f2)
+      in: depot::stock::limit
+      lines: src/lib.rs:18, src/lib.rs:-25
+      to state it: --change 'depot::stock::limit=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::stock::limit=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed literal `10` → `11` at `depot::stock::limit/tail` [semantics]
+  cover: each of the 5 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: moved `depot::limit` → `depot::stock::limit` [move]
+    lines: src/lib.rs:26-27, src/lib.rs:-26
+◆ f3 stated: public API: `depot::limit` is now `depot::stock::limit` (a different crate can no longer use the old path) [move]
+    no position
+◆ f2 derived: changed literal `10` → `11` at `depot::stock::limit/tail` [semantics]
+    lines: src/lib.rs:18, src/lib.rs:-25

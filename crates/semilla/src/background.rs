@@ -361,13 +361,22 @@ pub enum State {
 }
 
 pub fn state(app: &App, key: &str, hash: &str) -> State {
-    if stored_for(app, key, hash).is_some() {
+    state_of(|| jobs(app).iter().any(|(_, job)| job.key == key && job.mode == app.mode), || stored_for(app, key, hash).is_some(), || stored(app, key).is_some())
+}
+
+/// The state from the three reads, in the order of the reads (design 57.5). The worker stores
+/// the result first, and then it removes the job. Thus this function reads the job first, and
+/// then the result: a worker that completes between the two reads gives `Ready`. The opposite
+/// order gave `Stale` for a result that was ready.
+fn state_of(queued: impl FnOnce() -> bool, ready: impl FnOnce() -> bool, older: impl FnOnce() -> bool) -> State {
+    let queued = queued();
+    if ready() {
         return State::Ready;
     }
-    if jobs(app).iter().any(|(_, job)| job.key == key && job.mode == app.mode) {
+    if queued {
         return State::Queued;
     }
-    if stored(app, key).is_some() { State::Stale } else { State::Missing }
+    if older() { State::Stale } else { State::Missing }
 }
 
 /// Waits until a key is ready, at most `timeout`. Runs the worker in this process when no worker
@@ -389,6 +398,32 @@ pub fn wait(app: &mut App, key: &str, hash: &str, timeout: std::time::Duration) 
 mod tests {
     use super::*;
     use semilla_core::{Category, Compare, Fact};
+
+    // Batch 9t, part E (design 57.5): a worker that completes between the reads of `state`
+    // never gives `Stale`.
+    // rule+ R57.5-1
+    // rule- R57.5-1
+    #[test]
+    fn a_worker_that_completes_between_the_reads_gives_ready() {
+        // The clock counts the reads. The worker completes after `done_after` reads: from then
+        // on the job is gone and the result is there.
+        let run = |done_after: usize, older: bool| {
+            let clock = std::cell::Cell::new(0);
+            let done = || {
+                let done = clock.get() >= done_after;
+                clock.set(clock.get() + 1);
+                done
+            };
+            state_of(|| !done(), &done, || older)
+        };
+        assert_eq!(run(0, true), State::Ready);
+        assert_eq!(run(1, true), State::Ready, "the worker completes after the first read");
+        assert_eq!(run(2, true), State::Queued, "the next read of the state gives `Ready`");
+        assert_eq!(run(usize::MAX, false), State::Queued);
+        // No job and no result of this change set.
+        assert_eq!(state_of(|| false, || false, || true), State::Stale);
+        assert_eq!(state_of(|| false, || false, || false), State::Missing);
+    }
 
     /// Puts the old category names of 8c into each `category` field of a JSON value, in turn.
     fn old_names(value: &mut serde_json::Value, next: &mut usize) {

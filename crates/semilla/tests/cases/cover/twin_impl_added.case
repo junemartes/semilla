@@ -1,0 +1,104 @@
+rule-: R56.1-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Source;
+pub trait Draw<T> { fn sample(&self, seed: u32) -> T; }
+pub struct Small(usize);
+impl Small { fn new(v: usize) -> Small { Small(v) } }
+pub struct Large(usize);
+impl Large { fn new(v: usize) -> Large { Large(v) } }
+
+impl Draw<Small> for Source {
+    fn sample(&self, seed: u32) -> Small {
+        check(seed);
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Small::new(value)
+    }
+}
+=== new src/lib.rs
+pub struct Source;
+pub trait Draw<T> { fn sample(&self, seed: u32) -> T; }
+pub struct Small(usize);
+impl Small { fn new(v: usize) -> Small { Small(v) } }
+pub struct Large(usize);
+impl Large { fn new(v: usize) -> Large { Large(v) } }
+
+impl Draw<Small> for Source {
+    fn sample(&self, seed: u32) -> Small {
+        const { assert!(true) };
+
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Small::new(value)
+    }
+}
+
+impl Draw<Large> for Source {
+    fn sample(&self, seed: u32) -> Large {
+        const { assert!(true) };
+
+        #[cfg(target_pointer_width = "32")]
+        let value = seed as u32 as usize;
+        #[cfg(target_pointer_width = "64")]
+        let value = seed as u64 as usize;
+        #[cfg(not(any(
+            target_pointer_width = "32",
+            target_pointer_width = "64"
+        )))]
+        compile_error!("no width");
+
+        Large::new(value)
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: trait impl `<Source as Draw<Small>>` removed with: `fn sample` (the public API can change: a different crate can use the item) [removed]
+  ◆ f2 derived: trait impl `<Source as Draw<Small>>#0` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+  ◆ f3 derived: trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+  ◆ f4 derived: added `depot::<Source as Draw>::sample#0` (the public API can change: Semilla did not find the impl block of the method) [added]
+  ◆ f5 derived: added `depot::<Source as Draw>::sample#1` (the public API can change: Semilla did not find the impl block of the method) [added]
+  cover: each of the 21 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::<Source as Draw>::sample
+  ! spotlight: cfg attribute: depot::<Source as Draw>::sample#0
+  ! spotlight: cfg attribute: depot::<Source as Draw>::sample#1
+  ! spotlight: cfg attribute: depot::impl <Source as Draw>
+  ! spotlight: cfg attribute: depot::impl <Source as Draw>#0
+  ! spotlight: cfg attribute: depot::impl <Source as Draw>#1
+
+=== positions
+◆ f1 derived: trait impl `<Source as Draw<Small>>` removed with: `fn sample` (the public API can change: a different crate can use the item) [removed]
+    lines: src/lib.rs:-10
+◆ f2 derived: trait impl `<Source as Draw<Small>>#0` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+    lines: src/lib.rs:10-11
+◆ f3 derived: trait impl `<Source as Draw<Large>>#1` added with: `fn sample` (the public API can change: a different crate can use the item) [added]
+    lines: src/lib.rs:25-42
+◆ f4 derived: added `depot::<Source as Draw>::sample#0` (the public API can change: Semilla did not find the impl block of the method) [added]
+    lines: src/lib.rs:10-11
+◆ f5 derived: added `depot::<Source as Draw>::sample#1` (the public API can change: Semilla did not find the impl block of the method) [added]
+    lines: src/lib.rs:27-41

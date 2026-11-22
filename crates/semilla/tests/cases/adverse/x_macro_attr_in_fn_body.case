@@ -1,0 +1,44 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! table { ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* } }
+pub fn f() -> u32 {
+    table!(
+        A = 1,
+        #[cfg(unix)]
+        B = 2,
+    );
+    A
+}
+=== new src/lib.rs
+macro_rules! table { ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* } }
+pub fn f() -> u32 {
+    table!(
+        A = 1,
+        #[cfg(windows)]
+        B = 2,
+    );
+    A
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: replace macro input, see f1 (f1)
+      in: depot::f
+      lines: src/lib.rs:5, src/lib.rs:-5
+      to state it: --change 'depot::f=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::f=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: replace macro input `table!( A = 1, #[cfg(unix)] B = 2, );` → `table!( A = 1, #[cfg(windows)] B = 2, );` at `depot::f/S0` [macro]
+    lines: src/lib.rs:5, src/lib.rs:-5

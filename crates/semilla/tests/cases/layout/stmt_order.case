@@ -1,0 +1,67 @@
+note: a move fact of statements (not layout)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub enum Mode { Idle, Busy, Done }
+pub struct Pair { pub left: u32, pub right: u8 }
+#[derive(PartialEq, PartialOrd)]
+pub enum Level { Low, High }
+pub fn limit() -> u32 { 10 }
+pub fn total(a: bool, b: &bool, v: &[u32]) -> u32 {
+    let mut n = 0;
+    if a & &*b { n += 1; }
+    let s = "a  b";
+    n += s.len() as u32;
+    for x in v { n += x; }
+    n
+}
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
+pub fn double() -> u32 { twice!(limit()) }
+pub trait Shape { fn area(&self) -> u32; fn sides(&self) -> u32; }
+impl Shape for Pair {
+    fn area(&self) -> u32 { self.left }
+    fn sides(&self) -> u32 { 2 }
+}
+=== new src/lib.rs
+pub enum Mode { Idle, Busy, Done }
+pub struct Pair { pub left: u32, pub right: u8 }
+#[derive(PartialEq, PartialOrd)]
+pub enum Level { Low, High }
+pub fn limit() -> u32 { 10 }
+pub fn total(a: bool, b: &bool, v: &[u32]) -> u32 {
+    let mut n = 0;
+    if a & &*b { n += 1; }
+    for x in v { n += x; }
+    let s = "a  b";
+    n += s.len() as u32;
+    n
+}
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
+pub fn double() -> u32 { twice!(limit()) }
+pub trait Shape { fn area(&self) -> u32; fn sides(&self) -> u32; }
+impl Shape for Pair {
+    fn area(&self) -> u32 { self.left }
+    fn sides(&self) -> u32 { 2 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: moved statement, see f1 (f1)
+      in: depot::total
+      lines: src/lib.rs:9, src/lib.rs:-11
+      to state it: --change 'depot::total=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved statement `for x in v { n += x; }` from `depot::total/S4` to `depot::total/S2` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: moved statement `for x in v { n += x; }` from `depot::total/S4` to `depot::total/S2` [semantics]
+    lines: src/lib.rs:9, src/lib.rs:-11

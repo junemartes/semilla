@@ -1,0 +1,26 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn f<A: Default, B: Default>() -> (A, B) {
+    (A::default(), B::default())
+}
+=== new src/lib.rs
+pub fn f<B: Default, A: Default>() -> (A, B) {
+    (A::default(), B::default())
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: generics of `depot::f` `<A: Default, B: Default>` → `<B: Default, A: Default>` (the public API can change: a different crate can use the item); generic arguments go by position: 0 site(s) in 0 other item(s) [declaration]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: generics of `depot::f` `<A: Default, B: Default>` → `<B: Default, A: Default>` (the public API can change: a different crate can use the item); generic arguments go by position: 0 site(s) in 0 other item(s) [declaration]
+    lines: src/lib.rs:1, src/lib.rs:-1

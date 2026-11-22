@@ -1,0 +1,46 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Code(u32);
+
+impl Code {
+    /// Codes below this point are OS errors.
+    /// The crates use the codes above it.
+    pub const INTERNAL_START: u32 = 1 << 31;
+
+    /// Codes at or above this point are for users.
+    /// They are custom errors.
+    pub const CUSTOM_START: u32 = (1 << 31) + (1 << 30);
+
+    pub fn get(&self) -> u32 { self.0 }
+}
+=== new src/lib.rs
+pub struct Code(u32);
+
+impl Code {
+    /// Codes at or above this point are for users.
+    /// They are custom errors.
+    pub const CUSTOM_START: u32 = (1 << 31) + (1 << 30);
+
+    /// Codes below this point are OS errors.
+    /// The crates use the codes above it.
+    pub const INTERNAL_START: u32 = 1 << 31;
+
+    pub fn get(&self) -> u32 { self.0 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: layout of `src/lib.rs`: 8 changed lines with equal tokens [layout]
+  cover: each of the 8 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: layout of `src/lib.rs`: 8 changed lines with equal tokens [layout]
+    lines: src/lib.rs:8-11, src/lib.rs:-4-7

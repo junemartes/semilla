@@ -1,0 +1,57 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+//! The crate docs.
+
+pub mod list;
+
+pub fn top() -> u32 { 1 }
+=== old src/list.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== new src/list/mod.rs
+//! Tools for lists.
+//! A second line.
+
+// A plain comment.
+use std::cmp::max;
+
+/// The first element.
+pub fn first(v: &[u32]) -> u32 { v[0] }
+
+/// The larger one.
+pub(crate) fn larger(a: u32, b: u32) -> u32 {
+    let m = max(a, b);
+    m
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: visibility of `depot::list::larger`: `pub` → `pub(crate)` (the public API changes: a different crate can no longer use the item) [visibility]
+  ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move]
+  cover: each of the 28 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: visibility of `depot::list::larger`: `pub` → `pub(crate)` (the public API changes: a different crate can no longer use the item) [visibility]
+    lines: src/list.rs:-11, src/list/mod.rs:11
+◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 13 lines keep their tokens [move]
+    lines: src/list.rs:-1-10, src/list.rs:-12-14, src/list/mod.rs:1-10, src/list/mod.rs:12-14

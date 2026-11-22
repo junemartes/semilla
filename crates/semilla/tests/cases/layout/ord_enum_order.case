@@ -1,0 +1,64 @@
+note: NOT layout: derive(PartialOrd)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub enum Mode { Idle, Busy, Done }
+pub struct Pair { pub left: u32, pub right: u8 }
+#[derive(PartialEq, PartialOrd)]
+pub enum Level { Low, High }
+pub fn limit() -> u32 { 10 }
+pub fn total(a: bool, b: &bool, v: &[u32]) -> u32 {
+    let mut n = 0;
+    if a & &*b { n += 1; }
+    let s = "a  b";
+    n += s.len() as u32;
+    for x in v { n += x; }
+    n
+}
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
+pub fn double() -> u32 { twice!(limit()) }
+pub trait Shape { fn area(&self) -> u32; fn sides(&self) -> u32; }
+impl Shape for Pair {
+    fn area(&self) -> u32 { self.left }
+    fn sides(&self) -> u32 { 2 }
+}
+=== new src/lib.rs
+pub enum Mode { Idle, Busy, Done }
+pub struct Pair { pub left: u32, pub right: u8 }
+#[derive(PartialEq, PartialOrd)]
+pub enum Level { High, Low }
+pub fn limit() -> u32 { 10 }
+pub fn total(a: bool, b: &bool, v: &[u32]) -> u32 {
+    let mut n = 0;
+    if a & &*b { n += 1; }
+    let s = "a  b";
+    n += s.len() as u32;
+    for x in v { n += x; }
+    n
+}
+macro_rules! twice { ($e:expr) => { $e * 2 }; }
+pub fn double() -> u32 { twice!(limit()) }
+pub trait Shape { fn area(&self) -> u32; fn sides(&self) -> u32; }
+impl Shape for Pair {
+    fn area(&self) -> u32 { self.left }
+    fn sides(&self) -> u32 { 2 }
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: member order of `depot::Level`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration]
+      ✗ spotlight: an order change in a type with `#[repr]` or an order derive (`PartialOrd`, `Ord`, `Hash`); it needs a reason: --reason 'depot::Level=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'depot::Level=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Level=the reason of the test'
+◆ f1 derived: member order of `depot::Level`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration]
+    lines: src/lib.rs:4, src/lib.rs:-4

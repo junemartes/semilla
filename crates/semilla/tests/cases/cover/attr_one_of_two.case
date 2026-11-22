@@ -1,0 +1,38 @@
+note: An item has two attributes, and one of them changes. The attribute with the same tokens is not in the fact (design 55.1).
+rule+: R55.1-1
+must_match: attributes of `depot::limit`: changed `#\[cfg\(unix\)\]` → `#\[cfg\(windows\)\]` \[attribute\]
+must_not_match: inline
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+//! The crate docs.
+
+#[inline]
+#[cfg(unix)]
+pub fn limit() -> u32 { 10 }
+=== new src/lib.rs
+//! The crate docs.
+
+#[inline]
+#[cfg(windows)]
+pub fn limit() -> u32 { 10 }
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
+      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::limit=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::limit
+run again: semilla step 'the change' --reason 'depot::limit=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::limit=the reason of the test'
+◆ f1 derived: attributes of `depot::limit`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
+    lines: src/lib.rs:4, src/lib.rs:-4

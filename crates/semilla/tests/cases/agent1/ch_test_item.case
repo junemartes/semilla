@@ -1,0 +1,66 @@
+option: --change
+option: t_limit=one more assert
+exit: 0
+must_match: a1 change
+same_facts_as_no_option: yes
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); assert!(limit() > 2); } }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 change: `t_limit` "one more assert" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))
+      places: depot::tests::t_limit/S1
+    ◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics]
+  not stated: 0 item(s)
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: added macro statement `assert!(limit() > 2);` at `depot::tests::t_limit/S1` [semantics]
+    lines: src/lib.rs:19, src/lib.rs:-19

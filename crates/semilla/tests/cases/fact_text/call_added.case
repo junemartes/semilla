@@ -1,0 +1,49 @@
+note: A new call with an outer attribute, a comment, and an attribute in its input.
+rule-: R57.2-2
+exit: 1
+must_match: added macro call `table!\( #\[cfg\(unix\)\] B = 2, \)`
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! table {
+    ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* };
+}
+
+table!(
+    A = 1,
+);
+=== new src/lib.rs
+macro_rules! table {
+    ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* };
+}
+
+table!(
+    A = 1,
+);
+
+#[cfg(unix)]
+table!(
+    // a comment
+    #[cfg(unix)]
+    B = 2,
+);
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added macro call `table!( #[cfg(unix)] B = 2, )` (makes items that Semilla cannot list) [added]
+      ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::table!#1`; the macro call `table!( #[cfg(unix)] B = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#1=…'
+  cover: each of the 7 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: depot::table!#1
+run again: semilla step 'the change' --reason 'depot::table!#1=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::table!#1=the reason of the test'
+◆ f1 derived: added macro call `table!( #[cfg(unix)] B = 2, )` (makes items that Semilla cannot list) [added]
+    lines: src/lib.rs:8-14

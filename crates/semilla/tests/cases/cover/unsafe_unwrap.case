@@ -1,0 +1,71 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn clear(p: *mut u32, live: &mut bool) {
+    unsafe {
+        if *live {
+            *p = 0;
+            *live = false;
+        }
+    }
+}
+=== new src/lib.rs
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn clear(p: *mut u32, live: &mut bool) {
+    if *live {
+        // SAFETY: the pointer is valid.
+        unsafe { *p = 0 };
+        *live = false;
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f3, f1, f4)
+      in: depot::clear
+      lines: src/lib.rs:10-13, src/lib.rs:-10-14
+      to state it: --change 'depot::clear=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::clear=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` [semantics]
+      ! unsafe code: the changed body has an `unsafe` block
+  ◆ f3 derived: deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics]
+      ! unsafe code: the changed body has an `unsafe` block
+  ◆ f4 derived: added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics]
+      ! unsafe code: the changed body has an `unsafe` block
+  ◆ f2 derived: added comment `// SAFETY: the pointer is valid.` [docs]
+  cover: each of the 9 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: depot::clear/S0
+  ! spotlight: unsafe code: depot::clear/S0/then/S0
+
+=== positions
+◆ f1 derived: moved statement `if *live { *p = 0; *live = false; }` from `depot::clear/S0/body/S0` to `depot::clear/S0` [semantics]
+    lines: src/lib.rs:10-13, src/lib.rs:-10-14
+◆ f3 derived: deleted statement `unsafe { if *live { *p = 0; *live = false; } }` (each inner statement is a moved statement of the body) at `depot::clear/S0` [semantics]
+    lines: src/lib.rs:-10-14
+◆ f4 derived: added `unsafe` `unsafe { *p = 0 }` at `depot::clear/S0/then/S0` [semantics]
+    lines: src/lib.rs:12
+◆ f2 derived: added comment `// SAFETY: the pointer is valid.` [docs]
+    lines: src/lib.rs:11

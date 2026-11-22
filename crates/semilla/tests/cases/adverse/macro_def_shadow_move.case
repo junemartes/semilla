@@ -1,0 +1,43 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! two { () => { 2 } }
+
+pub fn a() -> u32 { two!() }
+
+macro_rules! two { () => { 3 } }
+
+pub fn b() -> u32 { two!() }
+=== new src/lib.rs
+macro_rules! two { () => { 2 } }
+
+macro_rules! two { () => { 3 } }
+
+pub fn a() -> u32 { two!() }
+
+pub fn b() -> u32 { two!() }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: moved, see f1 (f1)
+      in: depot::a
+      lines: src/lib.rs:5, src/lib.rs:-3
+      to state it: --change 'depot::a=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::a=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved `depot::a` past 1 item that can give a macro: `depot::two!#1`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro]
+  ◆ f2 derived: layout of `src/lib.rs`: 2 changed lines with equal tokens [layout]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: moved `depot::a` past 1 item that can give a macro: `depot::two!#1`; a macro has a textual scope: a macro call in `depot::a` can have a new meaning [macro]
+    lines: src/lib.rs:5, src/lib.rs:-3
+◆ f2 derived: layout of `src/lib.rs`: 2 changed lines with equal tokens [layout]
+    lines: src/lib.rs:6, src/lib.rs:-4

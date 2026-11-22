@@ -1,0 +1,41 @@
+note: Only the docs of the call item change. The step has the docs fact and no fact "changed macro call".
+rule-: R57.2-3
+exit: 0
+must_match: changed docs `/// The table\.` → `/// The table of the depot\.` \[docs\]
+must_not_match: changed macro call
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! table {
+    ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* };
+}
+
+/// The table.
+table!(
+    A = 1,
+);
+=== new src/lib.rs
+macro_rules! table {
+    ($($(#[$m:meta])* $n:ident = $v:expr,)*) => { $($(#[$m])* pub const $n: u32 = $v;)* };
+}
+
+/// The table of the depot.
+table!(
+    A = 1,
+);
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed docs `/// The table.` → `/// The table of the depot.` [docs]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed docs `/// The table.` → `/// The table of the depot.` [docs]
+    lines: src/lib.rs:5, src/lib.rs:-5

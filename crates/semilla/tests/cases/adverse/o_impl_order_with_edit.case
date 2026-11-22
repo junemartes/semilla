@@ -1,0 +1,45 @@
+rule-: R56.2-4
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct T;
+impl T {
+    pub fn a(&self) -> u32 {
+        1
+    }
+    pub fn b(&self) -> u32 {
+        2
+    }
+}
+=== new src/lib.rs
+pub struct T;
+impl T {
+    pub fn b(&self) -> u32 {
+        2
+    }
+    pub fn a(&self) -> u32 {
+        7
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `7` (f1)
+      in: depot::T::a
+      lines: src/lib.rs:6-8, src/lib.rs:-3-5
+      to state it: --change 'depot::T::a=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::T::a=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `7` at `depot::T::a/tail` [semantics]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `7` at `depot::T::a/tail` [semantics]
+    lines: src/lib.rs:6-8, src/lib.rs:-3-5

@@ -1,0 +1,36 @@
+rule+: R55.5-4
+rule-: R56.5-1
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct T;
+impl T {
+    pub fn a(&self) -> u32 { 1 }
+}
+impl Clone for T {
+    fn clone(&self) -> T { T }
+}
+=== new src/lib.rs
+pub struct T;
+impl Clone for T {
+    fn clone(&self) -> T { T }
+}
+impl T {
+    pub fn a(&self) -> u32 { 1 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: layout of `src/lib.rs`: 6 changed lines of 1 item with equal tokens at a new place [layout]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: layout of `src/lib.rs`: 6 changed lines of 1 item with equal tokens at a new place [layout]
+    lines: src/lib.rs:5-7, src/lib.rs:-2-4

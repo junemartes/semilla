@@ -1,0 +1,86 @@
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn beta(v: &[u32]) -> u32 {
+    let mut best = 0;
+    for x in v {
+        if *x > best {
+            best = *x;
+        }
+    }
+    best
+}
+
+pub fn gamma(a: u32, b: u32) -> u32 {
+    let low = a.min(b);
+    let high = a.max(b);
+    high - low
+}
+
+pub fn delta(a: u32) -> u32 {
+    a + 1
+}
+=== new src/lib.rs
+pub fn beta(v: &[u32]) -> u32 {
+    let mut best = 1;
+    for x in v {
+        if *x > best {
+            best = *x;
+        }
+    }
+    best + 0
+}
+
+pub fn alpha(v: &[u32]) -> u32 {
+    let mut n = 0;
+    for x in v {
+        n += x;
+    }
+    n
+}
+
+pub fn gamma(a: u32, b: u32) -> u32 {
+    let low = a.min(b);
+    let high = a.max(b);
+    high - low
+}
+
+pub fn delta(a: u32) -> u32 {
+    a + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: depot::beta
+      lines: src/lib.rs:2, src/lib.rs:8-10, src/lib.rs:15, src/lib.rs:-10, src/lib.rs:-16
+      to state it: --change 'depot::beta=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::beta=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `0` → `1` at `depot::beta/S0/init` [semantics]
+  ◆ f2 derived: changed expression `best` → `best + 0` at `depot::beta/tail` [semantics]
+  ◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens; 12 changed lines of 1 item with equal tokens at a new place [layout]
+  cover: each of the 20 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `0` → `1` at `depot::beta/S0/init` [semantics]
+    lines: src/lib.rs:2, src/lib.rs:-10
+◆ f2 derived: changed expression `best` → `best + 0` at `depot::beta/tail` [semantics]
+    lines: src/lib.rs:8-10, src/lib.rs:15, src/lib.rs:-16
+◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens; 12 changed lines of 1 item with equal tokens at a new place [layout]
+    lines: src/lib.rs:11-14, src/lib.rs:16, src/lib.rs:-1-8
