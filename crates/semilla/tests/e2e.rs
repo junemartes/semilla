@@ -2516,6 +2516,7 @@ fn an_attribute_of_a_new_item_follows_the_allow_list() {
     assert!(out.contains("`track_caller` on `shop_core::cart::tracked`"), "{out}");
 }
 
+// rule- R50.4-3
 #[test]
 fn a_changed_order_of_generic_parameters_lists_each_site() {
     // Brief 5h, B4 (D9). Generic arguments go by position. A site with explicit arguments keeps
@@ -2537,6 +2538,8 @@ fn a_changed_order_of_generic_parameters_lists_each_site() {
     let out = run(repo, &["step", "reorder tier"], 0);
     assert!(fact_line(&out, "generics of `shop_core::cart::tier`").contains("generic arguments go by position: 1 site(s) in 1 other item(s) [declaration · code different]"), "{out}");
     assert!(out.contains("affected bodies: shop_core::cart::gold, shop_core::cart::tier"), "{out}");
+    // Design 50.4: the name "items with a use:" is the name of the default mode only.
+    assert!(!out.contains("items with a use:"), "{out}");
     again(repo);
 
     // Batch 5k, D10: the name in a comment or in a literal is not a site.
@@ -7142,6 +7145,8 @@ fn the_default_step_needs_no_tool_chain_and_gives_no_compare_result() {
 }
 
 // rule- R49.3-5 R50.1-1
+// rule+ R49.4-1 R49.4-2
+// rule- R49.4-1 R49.4-2
 #[test]
 fn the_option_compiled_gives_the_compare_results_and_a_mixed_set_tells_its_modes() {
     let dir = setup();
@@ -7181,6 +7186,8 @@ fn the_option_compiled_gives_the_compare_results_and_a_mixed_set_tells_its_modes
     assert!(tag.lines().any(|line| line.starts_with("result: accepted · 4 steps · ") && line.contains("2 with no compiled check")), "{tag}");
 }
 
+// rule+ R50.4-2
+// rule- R50.4-2
 #[test]
 fn a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning() {
     // Design 50: two name maps pass with the same count of other facts. The items show as
@@ -7205,6 +7212,7 @@ fn a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning() {
     assert!(fact_line(&renamed, "renamed `shop_core::cart::one` → `shop_core::cart::first`").ends_with("[rename]") && !renamed.contains("! pair:"), "{renamed}");
 }
 
+// rule+ R50.4-3
 #[test]
 fn the_item_list_of_a_default_step_comes_from_the_syntax_tree() {
     // Design 50: a default step has no line "affected bodies:". The items with a site of a
@@ -7251,6 +7259,7 @@ fn cart_type_error() -> String {
 
 // rule+ R53.1-2
 // rule- R53.1-3 R53.1-4
+// rule- R53.3-2 R53.3-5 R53.3-6 R53.3-9 R53.6-4
 #[test]
 fn a_step_that_builds_has_the_result_line_and_a_review_reads_the_record() {
     let dir = setup();
@@ -7265,6 +7274,10 @@ fn a_step_that_builds_has_the_result_line_and_a_review_reads_the_record() {
     assert!(fact_line(&step, "changed literal `10` → `20`").ends_with("[semantics]"), "{step}");
     assert!(!COMPILED_TEXTS.iter().any(|text| step.contains(text)), "{step}");
     assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
+    // A check that passes has no line of a different result, no way out, and no record of a reject.
+    assert!(!step.contains("does not build") && !step.contains("--no-check") && !step.contains("not run") && !step.contains("! build check"), "{step}");
+    let session: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap()).unwrap();
+    assert!(session["rejected"].is_null(), "{session}");
     // The check has its own folder in the cache. The repository has no `target` folder.
     assert!(check_folder(repo).join("target").is_dir() && !repo.join("target").exists());
 
@@ -7290,6 +7303,8 @@ fn a_step_that_builds_has_the_result_line_and_a_review_reads_the_record() {
 
 // rule+ R53.1-3
 // rule- R53.1-2 R53.1-7
+// rule+ R53.3-2 R53.3-4 R53.3-5 R53.3-12
+// rule- R53.3-12 R53.4-7
 #[test]
 fn a_step_with_a_type_error_is_rejected_with_the_error_of_the_compiler() {
     let dir = setup();
@@ -7309,6 +7324,10 @@ fn a_step_with_a_type_error_is_rejected_with_the_error_of_the_compiler() {
     assert!(end.contains("the code after the step does not build: correct the code, then run: semilla step 'give the sum as a text'\n"), "{step}");
     assert!(end.contains("or store the step with no build check (the record and the review then say `build check: not run`): semilla step 'give the sum as a text' --no-check\n"), "{step}");
     assert!(session_steps(repo).is_empty());
+    // The record of the reject has the cause. Each failed target is a target of the step.
+    let session: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap()).unwrap();
+    assert_eq!(session["rejected"]["cause"], "the build check fails: the code after the step does not build", "{session}");
+    assert!(!step.contains("not a cause of this result"), "{step}");
 
     // `SEMILLA_NO_CHECK` with the value `0` or with an empty value does not turn the check off.
     for value in ["0", ""] {
@@ -7327,7 +7346,7 @@ fn a_step_with_a_type_error_is_rejected_with_the_error_of_the_compiler() {
     assert!(ended.contains("rejected: the step is not stored, and it stays open") && ended.contains("error[E0308]") && ended.contains("`semilla old-step end --no-check`"), "{ended}");
     let (code, ended) = semilla_checked(repo, &["old-step", "end", "--no-check"], &[]);
     assert_eq!(code, Some(0), "{ended}");
-    assert!(ended.contains("build check: not run (`--no-check`)"), "{ended}");
+    assert!(ended.contains("build check: not run (`--no-check`)") && !ended.contains("rejected"), "{ended}");
     assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "not_run"}));
 }
 
@@ -7352,6 +7371,7 @@ fn a_rename_that_misses_one_call_is_rejected() {
 }
 
 // rule+ R53.1-4
+// rule+ R53.3-6 R53.6-4
 #[test]
 fn no_check_stores_the_step_and_the_record_and_the_review_show_not_run() {
     for (args, env, cause) in [(vec!["step", "give the sum as a text", "--no-check"], vec![], "`--no-check`"), (vec!["step", "give the sum as a text"], vec![("SEMILLA_NO_CHECK", "1")], "`SEMILLA_NO_CHECK`")] {
@@ -7380,6 +7400,8 @@ fn no_check_stores_the_step_and_the_record_and_the_review_show_not_run() {
 }
 
 // rule+ R53.1-8
+// rule+ R53.3-9 R53.4-5 R53.4-7 R53.6-2
+// rule- R53.4-6 R53.4-8
 #[test]
 fn a_target_that_does_not_build_in_the_base_does_not_reject_the_step() {
     let dir = setup();
@@ -7418,6 +7440,8 @@ fn a_target_that_does_not_build_in_the_base_does_not_reject_the_step() {
 }
 
 // rule+ R53.1-7
+// rule+ R53.3-7
+// rule- R53.3-8
 #[test]
 fn a_build_check_that_cannot_run_does_not_store_the_step() {
     let dir = setup();
@@ -7442,6 +7466,8 @@ fn a_build_check_that_cannot_run_does_not_store_the_step() {
     assert!(step.contains("build check: not run (`--no-check`)"), "{step}");
 }
 
+// rule+ R53.5-1 R53.5-2
+// rule- R53.5-2 R53.5-3
 #[test]
 fn the_compiled_check_is_the_build_check_and_no_second_build_runs() {
     let dir = setup();
@@ -7480,6 +7506,8 @@ fn the_mcp_tool_has_the_build_check_and_the_parameter_no_check() {
     assert!(calls[2].0.contains("! build check of step 0: not run"), "{}", calls[2].0);
 }
 
+// rule+ R53.3-10 R53.3-11
+// rule- R53.3-10 R53.3-11
 #[test]
 fn the_plan_route_has_the_build_check() {
     let dir = setup();
@@ -7496,6 +7524,7 @@ fn the_plan_route_has_the_build_check() {
     let (_, out) = semilla_checked(repo, &["replay", "apply"], &[]);
     assert!(out.contains("✗ plan step 0") && out.contains("    ✗ the code after the step does not build\n      ✗ build check: fails ("), "{out}");
     assert!(out.contains("error[E0308]: mismatched types") && out.contains("a step that does not build needs a change of the plan, or `--no-check`"), "{out}");
+    assert!(!out.contains("✓ plan step") && !out.contains("build check: passes"), "{out}");
     let (_, out) = semilla_checked(repo, &["replay", "apply", "--no-check"], &[]);
     assert!(out.contains("build check: not run (`--no-check`)") && !out.contains("does not build"), "{out}");
     // A plan that builds.
@@ -7503,6 +7532,7 @@ fn the_plan_route_has_the_build_check() {
     let (code, out) = semilla_checked(repo, &["replay", "apply"], &[]);
     assert_eq!(code, Some(0), "{out}");
     assert!(out.contains("✓ plan step 0") && out.contains("    build check: passes ("), "{out}");
+    assert!(!out.contains("does not build") && !out.contains("needs a change of the plan"), "{out}");
     assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
 }
 
@@ -7545,6 +7575,8 @@ fn shop_with_two_errors() -> common::TestDir {
 const SHOP_LIB_CORRECT: &str = "pub fn price() -> u32 {\n    10\n}\n";
 const API_NOT_CHECKED: &str = "the target `shop` (test \"api\") does not build after the step, and cargo did not check it before the step";
 
+// rule+ R53.4-6 R53.4-8
+// rule- R53.4-5 R53.6-2
 #[test]
 fn a_target_that_cargo_did_not_check_in_the_base_does_not_reject_the_step() {
     let dir = shop_with_two_errors();
@@ -7566,6 +7598,7 @@ fn a_target_that_cargo_did_not_check_in_the_base_does_not_reject_the_step() {
 }
 
 // rule- R53.1-8
+// rule+ R53.4-7
 #[test]
 fn an_error_in_a_target_that_builds_in_the_base_rejects_the_step_of_the_same_example() {
     let dir = shop_with_two_errors();
@@ -7591,6 +7624,7 @@ fn an_error_in_a_target_that_builds_in_the_base_rejects_the_step_of_the_same_exa
     assert!(session_steps(repo).is_empty());
 }
 
+// rule+ R53.6-5
 #[test]
 fn tag_prints_each_marked_line_of_the_build_check() {
     let dir = setup();
@@ -7617,6 +7651,7 @@ fn tag_prints_each_marked_line_of_the_build_check() {
     assert_eq!(tagged.matches("build check").count(), 2, "{tagged}");
 }
 
+// rule- R53.6-5
 #[test]
 fn tag_prints_no_line_of_a_build_check_that_passes() {
     let dir = setup();
@@ -7647,6 +7682,7 @@ fn rustup_home_with_proj(dir: &Path, default: &str) -> PathBuf {
 }
 
 // rule+ R53.2-1
+// rule+ R53.3-7
 #[test]
 fn the_build_check_uses_the_tool_chain_file_of_the_tree() {
     let dir = setup();
@@ -7675,6 +7711,7 @@ fn the_build_check_uses_the_tool_chain_file_of_the_tree() {
 }
 
 // rule- R53.2-1
+// rule- R53.3-7
 #[test]
 fn a_tree_with_no_tool_chain_file_uses_the_default_of_the_machine() {
     let dir = setup();
@@ -7827,6 +7864,10 @@ fn a_step_with_no_agent_fact_is_valid_and_prints_the_gap_list_with_one_command()
     assert!(code == Some(0) && tag.contains(&format!("0 fact(s) of the agent, each one checked\nnot stated: 6 item(s) with 7 place(s) {GAP_HEAD}")), "{tag}");
 }
 
+// rule+ R54.12-2
+// rule- R54.12-2
+// rule+ R54.4-5 R54.4-6 R54.5-3
+// rule- R54.4-5 R54.4-6
 #[test]
 fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     let dir = facts_setup();
@@ -7886,6 +7927,12 @@ fn the_fact_command_adds_facts_to_the_stored_step_with_no_second_build_check() {
     let at = |text: &str| report.find(text).unwrap_or_else(|| panic!("no `{text}` in:\n{report}"));
     assert!(report.contains("facts of the agent: 4, each one checked against the edit") && report.contains("\nnot stated: 0 item(s)\n") && !report.contains("to state it"), "{report}");
     assert!(at("#### Facts of the agent (4)") < at("✓ a1 same: rewrite `$a.total` =&gt; `$a.total()` (the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)") && at("f1 stated: ") < at("f7 derived: "), "{report}");
+    // Design 54.12: the HTML export has the same words for the `rewrite` fact, and a `change`
+    // fact keeps the word "holds".
+    let html = repo.join(".semilla/review.html");
+    tree_mode(repo, &["review", "--html", html.to_str().unwrap()]);
+    let page = std::fs::read_to_string(&html).unwrap();
+    assert!(page.contains("(the form holds: 3 site(s) have exactly this edit. Semilla does not check that the behavior is the same)") && page.contains("(holds: "), "{page}");
     // `tag` has the agent facts.
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "use the method"]);
     let (code, tag) = tree_mode(repo, &["tag"]);
@@ -7960,6 +8007,8 @@ fn an_old_session_file_and_a_stored_rewrite_pattern_claim_still_read() {
     assert!(out.contains("      places: shop_core::facts::b/tail/lhs, shop_core::facts::d/tail/rhs\n"), "{out}");
 }
 
+// rule+ R48.5-2 R54.13-1 R54.13-2 R54.13-3
+// rule- R54.13-1 R54.13-2 R54.13-3
 #[test]
 fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
     let dir = facts_setup();
@@ -8023,6 +8072,8 @@ fn the_mcp_tools_and_a_plan_step_take_the_facts_of_the_agent() {
 /// Design 55.3 (batch 9b4, T2 and T3): the option `--tag` of `semilla step` and of
 /// `semilla fact`. A tag groups the facts in the outputs. It changes no fact and no gap.
 // rule+ R55-1
+// rule+ R55.2-10 R55.3-9 R55.3-10 R55.3-11 R55.3-12 R55.3-13 R55.3-14 R55.3-15
+// rule- R55.2-10 R55.3-9 R55.3-10 R55.3-12 R55.3-13 R55.3-14 R55.3-15
 #[test]
 fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     let file = "crates/shop-core/src/facts.rs";
@@ -8065,6 +8116,12 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
     assert!(out.contains(&format!("  tag `method calls` ({file}:11-17): 2 fact(s): 2 semantics; 6 changed line(s)\n  ◆ f1 derived: 2 site(s): changed expression `c.total` → `c.total()` [semantics]\n")), "{out}");
     assert!(out.contains(&format!("  tag `idle and tail` ({file}:20-25, {file}:-23): 3 fact(s): 3 semantics; 8 changed line(s)\n  ◆ f3 derived: added `let` [1]")), "{out}");
     assert!(out.contains("  not in a tag: 2 fact(s): 2 semantics; 4 changed line(s)\n  ◆ f7 derived: "), "{out}");
+    // Negative test: no fact is in the two tags, thus no tag names a fact of a tag above.
+    assert!(!out.contains("also in this tag"), "{out}");
+    // Design 55.2: the default output has positions only in the gap list. No fact line has a
+    // line `lines:` below it.
+    assert!(out.contains("\n      lines: "), "{out}");
+    assert!(!out.lines().zip(out.lines().skip(1)).any(|(fact, next)| fact.starts_with("  ◆ ") && next.trim_start().starts_with("lines: ")), "{out}");
     assert!(out.contains("      tag: `method calls`\n      to state it: --same 'rewrite $a.total => $a.total()'\n") && out.contains("      not in a tag\n      to state it: --change 'shop_core::facts::inner::a=TEXT'\n"), "{out}");
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     // A tag does not replace a fact: each fact line and each gap line of the step with no
@@ -8123,6 +8180,7 @@ fn a_tag_groups_the_facts_of_a_step_and_changes_no_fact() {
 }
 
 /// Design 55.3: the MCP tools `step` and `fact`, and a step of a replay plan, take tags.
+// rule+ R55.3-14 R55.3-18
 #[test]
 fn the_mcp_tools_and_a_plan_step_take_tags() {
     let dir = facts_setup();
@@ -8178,6 +8236,8 @@ fn the_mcp_tools_and_a_plan_step_take_tags() {
 /// with the two trees of the step. The hunks of the command are the hunks of Semilla: one tag
 /// with each hunk header has each changed line and each fact, and no fact is "not in a tag".
 // rule+ R55.8-1
+// rule+ R55.8-3
+// rule- R55.8-3
 #[test]
 fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
     let dir = facts_setup();
@@ -8206,6 +8266,7 @@ fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
         }
     }
     assert!(places.len() >= 5 && lines == 18, "{places:?} {lines}\n{diff}");
+    assert!(!out.contains("git gave no line diff"), "{out}");
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     let (code, out) = tree_mode(repo, &["fact", "--tag", &format!("{}=each hunk", places.join(","))]);
     assert_eq!(code, Some(0), "{out}");
@@ -8229,4 +8290,105 @@ fn the_step_output_names_the_command_that_gives_the_hunks_of_a_tag() {
     assert!(out.contains("\n  cover: each of the 18 changed line(s) is in a fact\n"), "{out}");
     let verbose = own(&["status", "--verbose"]);
     assert!(verbose.contains(" hunk(s) are the hunks of the line diff of Semilla:\n    crates/shop-core/src/facts.rs @@ -"), "{verbose}");
+}
+
+// ---- Batch 9t2 (design 57.6): the tests of the rules that had no test ----
+
+/// Design 53.3: the build check runs also for a step that the syntax phase rejects, so one run
+/// shows each cause. Negative test: with no check, the output has no result of a check.
+// rule+ R53.3-1 R53.3-8
+// rule- R53.3-1
+#[test]
+fn a_step_that_the_syntax_phase_rejects_has_the_result_of_the_build_check() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let args = ["step", "raise the limit", "--same", "rename shop_core::cart::gold shop_core::cart::silver"];
+    // The tree builds, and the fact of the agent is false.
+    let (code, step) = semilla_checked(repo, &args, &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 0") && step.contains("fact a1 of the agent is false"), "{step}");
+    assert!(step.contains("\nbuild check: passes ("), "{step}");
+    assert!(session_steps(repo).is_empty());
+    // With no check, the same step has no result line of a check that passes.
+    let (code, step) = semilla_checked(repo, &[&args[..], &["--no-check"]].concat(), &[]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 0") && !step.contains("build check: passes"), "{step}");
+    // A check that cannot run: the first line says "rejected", and the line of the check shows.
+    let home = dir.path().join("no-rustup");
+    std::fs::create_dir_all(&home).unwrap();
+    let (code, step) = semilla_checked(repo, &args, &[("RUSTUP_HOME", home.to_str().unwrap()), ("RUSTUP_TOOLCHAIN", "stable")]);
+    assert_eq!(code, Some(1), "{step}");
+    assert!(step.starts_with("rejected: step 0") && step.contains("\n  ! build check: cannot run: the toolchain `stable`"), "{step}");
+    assert!(session_steps(repo).is_empty());
+}
+
+/// Design 53.5: with `--fast`, the compiled check runs later, so the build check runs cargo
+/// itself. The negative test is `the_compiled_check_is_the_build_check_and_no_second_build_runs`.
+// rule+ R53.5-3
+// rule- R53.5-1
+#[test]
+fn a_fast_step_of_the_compiled_check_runs_the_build_check_itself() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let output = semilla_env(repo, &["step", "raise the limit", "--compiled", "--fast"], &[("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "0"), ("SEMILLA_NO_WORKER", "1")]);
+    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{text}");
+    let line = text.lines().find(|line| line.starts_with("build check: ")).expect("the result line of the build check");
+    assert!(line.starts_with("build check: passes (") && line.ends_with(" s)") && !text.contains("the build of the compiled check"), "{text}");
+    assert!(check_folder(repo).join("target").is_dir());
+    assert_eq!(session_steps(repo)[0]["build_check"], serde_json::json!({"result": "passes"}));
+}
+
+/// Design 51.4, decision 5: the variable `SEMILLA_SITE_COUNTS` adds the line with the three
+/// counts to each rename fact. Negative test: with no variable, no fact has the line.
+// rule+ R51.4-5
+// rule- R51.4-5
+#[test]
+fn the_line_of_the_site_counts_shows_only_with_its_variable() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/cart.rs", &CART_V0.replace("pub fn total(", "pub fn sum("));
+    write(repo, "crates/shop-app/src/main.rs", &MAIN_V0.replace("cart.total(", "cart.sum("));
+    let step = |env: &[(&str, &str)]| {
+        let output = semilla_env(repo, &["step", "rename `total` to `sum`"], &[&[("SEMILLA_COMPILED", "0")], env].concat());
+        assert!(output.status.success());
+        format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
+    };
+    let plain = step(&[]);
+    assert!(plain.contains("renamed `shop_core::cart::Cart::total` → `shop_core::cart::Cart::sum`") && !plain.contains("sites: "), "{plain}");
+    run(repo, &["undo"], 0);
+    let counts = step(&[("SEMILLA_SITE_COUNTS", "1")]);
+    let line = counts.lines().find(|line| line.contains("sites: ")).unwrap_or_else(|| panic!("no line of the counts:\n{counts}"));
+    assert!(line.contains(" sure, ") && line.contains(" by name, ") && line.trim_end().ends_with(" with their own fact"), "{counts}");
+}
+
+/// Design 48.5, negative test: an MCP step and a plan step with no key `same` or `change` have
+/// no fact of the agent, in the output and in the record.
+// rule- R48.5-2
+// rule- R55.3-18
+// rule- R54.5-3
+#[test]
+fn an_mcp_step_and_a_plan_step_with_no_key_have_no_fact_of_the_agent() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-app/src/main.rs", MAIN_V1);
+    let calls = mcp_calls_env(repo, &[("step", serde_json::json!({"intent": "raise the limit"}))], &[("SEMILLA_COMPILED", "0"), ("SEMILLA_NO_CHECK", "1")]);
+    assert!(!calls[0].1 && calls[0].0.contains("accepted: step 0"), "{}", calls[0].0);
+    assert!(!calls[0].0.contains("facts of the agent") && !calls[0].0.contains(" a1 "), "{}", calls[0].0);
+    assert!(session_steps(repo)[0].get("agent").is_none(), "{:?}", session_steps(repo));
+    // Design 55.3: with no argument `tags`, the step has no tag.
+    assert!(!calls[0].0.contains("  tag `") && !calls[0].0.contains("not in a tag") && session_steps(repo)[0].get("tags").is_none(), "{}", calls[0].0);
+    // The same edit as a step of a plan.
+    run(repo, &["undo"], 0);
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "raise the limit"]);
+    run(repo, &["replay", "begin", "--commit", "HEAD"], 0);
+    let plan = serde_json::json!({"steps": [{"intent": "raise the limit", "edits": [{"file": "crates/shop-app/src/main.rs", "find": "cart.total(10)", "replace": "cart.total(20)"}]}]});
+    std::fs::write(repo.join(".semilla/plan.json"), serde_json::to_string_pretty(&plan).unwrap()).unwrap();
+    let (code, out) = tree_mode(repo, &["replay", "apply"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("✓ plan step 0") && !out.contains("fact a1") && !out.contains("facts of the agent"), "{out}");
+    assert!(session_steps(repo)[0].get("agent").is_none(), "{:?}", session_steps(repo));
+    assert!(session_steps(repo)[0].get("tags").is_none(), "{:?}", session_steps(repo));
 }

@@ -1,0 +1,97 @@
+note: design 50.4: a macro call has one fact for each changed argument, and a changed comment has the fact "changed comment".
+note: the macro call and the comment of `keep` do not change: they have no fact.
+rule+: R50.4-10
+rule-: R50.4-10
+exit: 0
+must_match: changed expression `c\.total` → `c\.total \+ 1` at `depot::show/tail/args\[1\]`
+must_match: changed expression `c\.items\.len\(\)` → `c\.items\.len\(\) \* 2` at `depot::show/tail/args\[2\]`
+must_match: changed comment `// the text of the cart` → `// the full text of the cart`
+must_not_match: depot::keep
+must_not_match: changed macro
+must_not_match: the same text
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub fn show(c: &Cart) -> String {
+    // the text of the cart
+    format!("{} {}", c.total, c.items.len())
+}
+pub fn keep(c: &Cart) -> String {
+    // the same text
+    format!("{}", c.total)
+}
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub fn show(c: &Cart) -> String {
+    // the full text of the cart
+    format!("{} {}", c.total + 1, c.items.len() * 2)
+}
+pub fn keep(c: &Cart) -> String {
+    // the same text
+    format!("{}", c.total)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f2, f3)
+      in: depot::show
+      lines: src/lib.rs:22, src/lib.rs:-22
+      to state it: --change 'depot::show=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::show=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]` [semantics]
+  ◆ f3 derived: changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics]
+  ◆ f1 derived: changed comment `// the text of the cart` → `// the full text of the cart` [docs]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 derived: changed expression `c.total` → `c.total + 1` at `depot::show/tail/args[1]` [semantics]
+    lines: src/lib.rs:22, src/lib.rs:-22
+◆ f3 derived: changed expression `c.items.len()` → `c.items.len() * 2` at `depot::show/tail/args[2]` [semantics]
+    lines: src/lib.rs:22, src/lib.rs:-22
+◆ f1 derived: changed comment `// the text of the cart` → `// the full text of the cart` [docs]
+    lines: src/lib.rs:21, src/lib.rs:-21

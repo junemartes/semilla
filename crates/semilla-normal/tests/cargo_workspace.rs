@@ -346,7 +346,14 @@ fn two_versions_of_a_two_crate_workspace() {
     let units = semilla_normal::read_units(&scratch.join("out-v1/n0")).expect("a unit record in each file");
     assert_eq!(units.len(), files.len(), "{units:?}");
     let unit = |prefix: &str| units.iter().find(|unit| unit.target.starts_with(prefix)).unwrap_or_else(|| panic!("no unit {prefix}: {units:?}"));
-    let (lib, test, bin) = (unit("app_b.lib."), unit("app_b.test."), unit("app_b.bin."));
+    let (lib, bin) = (unit("app_b.lib."), unit("app_b.bin."));
+    // `app_b` has two test units: the library and the binary. The order of their files comes
+    // from a hash in the file name, and the hash depends on the path of the tree. So the test
+    // selects the test unit of the library by its root.
+    let mut test_roots: Vec<&str> = units.iter().filter(|unit| unit.target.starts_with("app_b.test.")).map(|unit| unit.root.as_str()).collect();
+    test_roots.sort();
+    assert_eq!(test_roots, ["app_b/src/lib.rs", "app_b/src/main.rs"], "{units:?}");
+    let test = units.iter().find(|unit| unit.target.starts_with("app_b.test.") && unit.root == lib.root).expect("the test unit of the library");
     assert!(lib.cfg.contains("debug_assertions") && !lib.cfg.contains("test"), "{lib:?}");
     assert!(test.cfg.contains("test") && test.cfg.contains("debug_assertions"), "{test:?}");
     assert_eq!((lib.package.as_str(), lib.folder.as_str(), lib.root.as_str()), ("app_b", "app_b", "app_b/src/lib.rs"));

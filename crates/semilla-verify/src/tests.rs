@@ -7684,6 +7684,8 @@ fn a_fact_of_the_default_mode_has_no_compare_result() {
 }
 
 /// Design 50: no note gives a cause for a compare that Semilla did not make.
+// rule+ R50.4-1
+// rule- R50.4-1
 #[test]
 fn a_doc_test_fact_of_the_default_mode_has_no_note_about_the_compare() {
     let before = "/// Adds one.\n///\n/// ```\n/// assert_eq!(demo::inc(1), 2);\n/// ```\npub fn inc(x: u32) -> u32 {\n    x + 1\n}\n";
@@ -7805,6 +7807,7 @@ fn a_pattern_site_names_the_exact_edit() {
 
 /// Design 50, part 4: a use that changes to a different variant is a decision of the author.
 /// The fact of the removed variant does not take it.
+// rule+ R50.4-4
 #[test]
 fn a_use_that_changes_to_a_different_variant_gets_its_own_fact() {
     let before = "pub enum Mode {\n    Slow,\n    Quick,\n    Off,\n}\npub fn a() -> Mode {\n    Mode::Slow\n}\npub fn b() -> Mode {\n    Mode::Slow\n}\npub fn c() -> Mode {\n    Mode::Slow\n}\n";
@@ -7835,6 +7838,8 @@ fn a_fact_with_a_long_text_has_the_full_text() {
 
 /// Design 50, part 4: a type change in N places is one fact in the default mode, and the fact
 /// names each place.
+// rule+ R50.4-7
+// rule- R50.4-7
 #[test]
 fn a_type_change_in_the_default_mode_names_each_place() {
     let before = "pub struct Pair {\n    pub a: u32,\n    pub b: u32,\n}\npub fn one(x: u32) -> u32 {\n    x\n}\n";
@@ -7965,6 +7970,8 @@ fn a_pure_rename_gives_no_fact_for_a_place_with_the_old_word_that_is_not_a_site(
 
 /// Design 51, D1: a path with a qualifier that resolves to a different item (class 3).
 // rule- R51.3-1
+// rule+ R51.2-3
+// rule- R51.2-2
 #[test]
 fn a_changed_path_to_a_different_module_is_not_under_the_rename_fact() {
     depot_second_edit(("crate::net::load(1)", "crate::net::fetch(1)"), "changed path `crate::net::load` → `crate::net::fetch` at `demo::net::a/tail/callee`");
@@ -8002,6 +8009,7 @@ fn a_changed_use_line_of_a_different_item_is_not_under_the_rename_fact() {
 
 /// Design 51, D7: a string literal is never a site (class 1).
 // rule- R51.3-1
+// rule+ R51.2-1
 #[test]
 fn a_changed_string_literal_with_the_old_name_is_not_under_the_rename_fact() {
     depot_second_edit((r#"{ "load" }"#, r#"{ "fetch" }"#), r#"changed literal `"load"` → `"fetch"` at `demo::net::name/tail`"#);
@@ -8104,6 +8112,7 @@ fn a_method_rename_with_a_free_name_keeps_its_sites_and_gives_their_count() {
 
 /// Design 51, rule R2 for a method: a method of a second type has the old name or the new name.
 // rule- R51.3-2
+// rule- R51.4-1
 #[test]
 fn a_method_rename_with_a_name_of_a_second_type_gives_each_call_its_own_fact() {
     let calls = ["changed method_call: `c.total()` → `c.sum()` at `demo::a/tail`", "changed expression `c.total()` → `c.sum()` at `demo::b/tail/lhs`"];
@@ -8200,6 +8209,8 @@ fn a_second_edit_at_a_trait_method_rename_has_its_own_fact() {
 /// Design 51, D11 and rule R5, a local: the scope of the map is the body. A literal and a
 /// member after `.` are never sites of a local.
 // rule+ R51.3-5
+// rule+ R51.4-6
+// rule- R51.4-6
 #[test]
 fn a_second_edit_at_a_local_rename_has_its_own_fact() {
     let before = "pub struct P { pub n: u32, pub m: u32 }\npub fn f(a: u32, p: &P) -> String {\n    let n = a + 1;\n    let twice = n * 2;\n    format!(\"{} {} {}\", \"n\", n + twice, p.n)\n}\n";
@@ -8264,6 +8275,8 @@ const SCOPE_RENAME: [(&str, &str); 5] = [("pub fn load(k: u32)", "pub fn fetch(k
 /// of a module of the workspace is a sure site. Class 1 and class 3: a local, a parameter, and
 /// a method with the old name stay. No site is a site by name, so the fact has no count.
 // rule+ R51.3-1
+// rule+ R51.2-2
+// rule- R51.2-1 R51.2-3 R51.2-4
 #[test]
 fn a_path_that_the_syntax_tree_resolves_to_the_item_is_a_sure_site() {
     pure_rename(SCOPE, &swap(SCOPE, &SCOPE_RENAME), &[DEPOT_FACT]);
@@ -8284,6 +8297,7 @@ const MACRO_INPUT_RENAME: [(&str, &str); 3] = [("pub fn load", "pub fn fetch"), 
 /// Design 51, class 4: a word in a macro input that the syntax phase cannot read is a site by
 /// name. A free name keeps the site under the rename fact, with the count. A name that is not
 /// free gives the macro call its own fact.
+// rule+ R51.2-4
 #[test]
 fn a_word_in_a_macro_input_is_a_site_by_name() {
     let fact = "renamed `demo::load` → `demo::fetch`";
@@ -8299,6 +8313,8 @@ fn a_word_in_a_macro_input_is_a_site_by_name() {
 /// Design 51, rule R4: a sure site that the author did not change still names the old item (the
 /// tree does not build). The fact says so, and it does not show two equal texts.
 // rule- R51.3-4
+// rule+ R51.4-7
+// rule- R51.4-7
 #[test]
 fn a_sure_site_that_did_not_follow_the_rename_says_that_it_names_the_old_item() {
     let pure = swap(DEPOT, &DEPOT_RENAME);
@@ -8311,10 +8327,16 @@ fn a_sure_site_that_did_not_follow_the_rename_says_that_it_names_the_old_item() 
     rename_with_second_edit(CART, &swap(&pure, &[("c: &Basket", "c: &Cart")]), CART_FACT, &["parameter of `demo::a` `c: &Cart` still names the old item `Cart` (the place did not follow the rename to `Basket`; the syntax tree shows no other item with the old name for the place)"]);
     let holder = "pub struct Holder { pub c: Cart }\n";
     rename_with_second_edit(&format!("{CART}{holder}"), &format!("{pure}{holder}"), CART_FACT, &["type of `demo::Holder.c`: `Cart` still names the old item `Cart` (the place did not follow the rename to `Basket`; the syntax tree shows no other item with the old name for the place)"]);
+    // Negative test (51.4, decision 7): with each site changed, no fact has one of these texts.
+    for (before, after) in [(DEPOT, swap(DEPOT, &DEPOT_RENAME)), (CART, pure)] {
+        let texts = plain_texts(&run_tree(before, &after));
+        assert!(!texts.iter().any(|text| text.contains("did not follow the rename") || text.contains("now names a different item")), "{texts:#?}");
+    }
 }
 
 /// Design 51, rule R4: the fact of a place that did not follow the rename does not say "the old
 /// item" if the syntax tree gives a different target for the old name after the step.
+// rule+ R51.4-7
 #[test]
 fn a_place_that_did_not_follow_the_rename_names_the_item_that_the_old_name_gives() {
     let pure = swap(DEPOT, &DEPOT_RENAME);
@@ -8625,6 +8647,8 @@ fn each_form_of_a_use_line_in_a_block_gives_the_scope_of_its_names() {
 /// Design 52.3: a glob import of an external crate in a block. The tool cannot list its
 /// names, so a bare name of the block is a site by name (class 4): it follows the rename only
 /// if the name is free.
+// rule+ R51.4-4
+// rule- R51.4-4
 #[test]
 fn a_glob_import_of_an_external_crate_in_a_block_makes_a_bare_name_a_site_by_name() {
     let before = "pub mod gauge {\n    pub fn read(k: u32) -> u32 { k }\n}\npub mod work {\n    use crate::gauge::read;\n    pub fn w() -> u32 { use std::cmp::*; read(5) }\n}\n";
@@ -9186,6 +9210,8 @@ const MANY: &str = "pub mod tools {\n    pub fn one(k: u32) -> u32 { k + 1 }\n  
 /// rule. The same check runs. The negative tests: a pair that does not pass is false with
 /// its cause, a stated pair does not replace a pair that Semilla derives, and an edit that
 /// is not the rename keeps its fact.
+// rule+ R54.16-4
+// rule- R54.16-4
 #[test]
 fn a_stated_rename_is_a_candidate_of_the_rename_rule() {
     let names = [("one", "uno"), ("two", "dos"), ("three", "tres"), ("four", "cuatro"), ("five", "cinco")];
@@ -9238,6 +9264,8 @@ fn a_stated_rename_is_a_candidate_of_the_rename_rule() {
     let fact = agent_fact(&report, "a1");
     assert!(!fact.holds && fact.notes.iter().any(|note| note.starts_with("the stated pair is no fact: ")), "{fact:#?}");
     assert!(report.facts.iter().all(|fact| fact.category != Category::Rename), "{:#?}", fact_lines(&report));
+    // Design 54.16, negative: Semilla derives no rename with an item of the fact. No option.
+    assert!(!fact.notes.iter().any(|note| note.contains("a fact that holds")), "{fact:#?}");
     // Negative: a stated pair does not replace a pair that Semilla derives alone.
     let after = MODES.replace("Mode::Idle", "State::Rest").replace("Mode", "State").replace("    Idle,", "    Rest,");
     let report = run_agent(MODES, &after, &["rename Mode::Idle State::Busy"], &[]);
@@ -9277,6 +9305,8 @@ fn a_stated_move_keeps_each_edit_of_the_body() {
 /// Design 54.16: a pattern with a form error gets the correct form, and a false pattern gets
 /// the near pattern that holds as a complete option. The negative tests: no repair and no
 /// near pattern give no option.
+// rule+ R54.16-1 R54.16-2 R54.16-3 R54.16-5
+// rule- R54.16-1 R54.16-2 R54.16-3 R54.16-5
 #[test]
 fn a_false_pattern_gets_the_near_pattern_that_holds() {
     let facts = |same: &str| semilla_core::AgentFacts { same: vec![same.to_string()], change: Vec::new() };
@@ -9315,6 +9345,8 @@ fn a_false_pattern_gets_the_near_pattern_that_holds() {
 
 /// Design 54.15: the gap line of a long text is short. It has the kind of the edit and the
 /// reference of the fact with the full text. The negative test: a short text stays.
+// rule+ R54.15-5
+// rule- R54.15-5
 #[test]
 fn the_gap_line_of_a_long_text_is_short() {
     let fields: String = (1..=12).map(|n| format!("        field_number_{n}: u32,\n")).collect();
@@ -9467,6 +9499,8 @@ const CFG_TWINS: [(&str, &str); 2] = [
 /// Design 54.19 (batch 9b3, G3): items that a path cannot tell apart. Each candidate has the
 /// same path with no twin mark: the path names each of them. The negative tests: a path with
 /// a twin mark selects one, and candidates that differ in generic arguments stay a reject.
+// rule+ R54.19-1 R54.19-2 R54.19-3 R54.19-4
+// rule- R54.19-1 R54.19-2 R54.19-3 R54.19-4
 #[test]
 fn a_path_names_each_item_that_it_cannot_tell_apart() {
     let (first, second) = ("shop::<Price as Scale>::scale#0", "shop::<Price as Scale>::scale#1");
@@ -9521,6 +9555,8 @@ const TARGET_FILES: [(&str, &str); 8] = [
 /// Design 54.20 (batch 9b3, G5): a path that starts with the name of a target whose file
 /// Semilla does not parse names the file. The negative tests: a target that Semilla parses
 /// (the path names the item), a target with two changed files, and a name of no target.
+// rule+ R54.20-1 R54.20-2 R54.20-3
+// rule- R54.20-1 R54.20-2 R54.20-3
 #[test]
 fn a_path_that_starts_with_a_target_name_names_the_file_that_semilla_does_not_parse() {
     let edit = |at: usize, from: &str, to: &str| TARGET_FILES[at].1.replace(from, to);
@@ -9608,6 +9644,8 @@ fn the_note_of_a_macro_call_prints_only_with_no_item_candidate() {
 // loses, or changes. The source of a derive list is the token tree, not a search for a word.
 // rule+ R44.1-5 R55.1-3 R55.1-5
 // rule- R55.1-5
+// rule+ R55.1-2 R55.1-4
+// rule- R55.1-2 R55.1-4
 #[test]
 fn an_attribute_fact_shows_each_changed_attribute() {
     let bodies: [(&str, BodyStatus); 0] = [];
@@ -9848,6 +9886,8 @@ fn a_comment_between_two_items_gets_a_fact_with_its_text() {
 
 /// Design 55.5, class 4: a doc change shows the changed text. A change in a code block of the
 /// docs is the code of a doc test: the fact says this.
+// rule+ R55.2-8
+// rule- R55.2-8
 #[test]
 fn a_doc_change_shows_its_text_and_names_the_code_of_a_doc_test() {
     let before = "/// Adds one.\n///\n/// The value must be small. The function\n/// does not check it.\n///\n/// ```\n/// assert_eq!(demo::f(1), 2);\n/// ```\npub fn f(a: u32) -> u32 {\n    a + 1\n}\n";
@@ -9872,6 +9912,8 @@ fn a_doc_change_shows_its_text_and_names_the_code_of_a_doc_test() {
 
 /// Design 55.5: the other classes of a changed line: a file that Semilla does not parse, a
 /// manifest, a macro input, a `cfg` line, a deleted statement, an added item.
+// rule+ R55.2-7
+// rule- R55.2-7
 #[test]
 fn each_other_class_of_a_changed_line_is_in_a_fact() {
     let report = run_derived_files(&[("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"), ("src/lib.rs", "pub fn f() {}\n"), ("README.md", "one\ntwo\n")], &[("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.2.0\"\nedition = \"2021\"\n"), ("src/lib.rs", "pub fn f() {}\n"), ("README.md", "one\nthree\n")], &[]);
@@ -9893,10 +9935,14 @@ fn each_other_class_of_a_changed_line_is_in_a_fact() {
     }
     assert!(report.no_fact.is_empty());
     assert_eq!(report.changed_lines, 11);
+    // Negative test (design 55.2, rule 7): a file that Semilla parses has no fact of the file.
+    assert!(!facts.iter().any(|fact| fact.starts_with("file | ")), "{facts:#?}");
 }
 
 /// Design 55.2 and 55.3: a record of a step from before batch 9b4 has no position, no tag, and
 /// no cover count. It reads, and its outputs have no new line.
+// rule+ R55.2-9 R55.8-4
+// rule- R55.2-9 R55.8-4
 #[test]
 fn an_old_record_with_no_position_and_no_tag_reads() {
     let report = tag_step(&[], &[], &[]);
@@ -9915,6 +9961,10 @@ fn an_old_record_with_no_position_and_no_tag_reads() {
     assert_eq!(descriptions(&old), descriptions(&report));
     let text = views::text_report(std::slice::from_ref(&old));
     assert!(!text.contains("lines:") && !text.contains("cover:") && !text.contains("tag"), "{text}");
+    assert!(!text.contains("hunks:"), "{text}");
+    // Negative test: the record of today has the cover line and the hunk line.
+    let text = views::text_report(std::slice::from_ref(&report));
+    assert!(text.contains("  cover: each of the ") && text.contains("  hunks: "), "{text}");
     // An old record of a step has no key `tags`.
     let step: Step = serde_json::from_value(serde_json::json!({"index": 0, "intent": "x", "claims": [], "tree_before": "a", "tree_after": "b"})).unwrap();
     assert!(step.tags.is_empty());
@@ -9968,6 +10018,8 @@ fn a_tag_has_each_fact_whose_edit_is_fully_in_its_lines() {
 
 /// Design 55.3: a deleted text has lines of the old tree only. The form `FILE:-LINE` names
 /// them, as the old side of a hunk header.
+// rule+ R55.3-2
+// rule- R55.3-2 R55.3-16
 #[test]
 fn a_tag_on_a_deleted_statement_uses_the_lines_of_the_old_tree() {
     // The deleted line is the last line of the old side of the hunk `@@ -3,3 +3,2 @@`.
@@ -9989,6 +10041,7 @@ fn a_tag_on_a_deleted_statement_uses_the_lines_of_the_old_tree() {
 /// head line has two counts: the full facts, and the facts in part.
 // rule+ R55.3-5
 // rule- R55.3-4
+// rule+ R55.3-16
 #[test]
 fn a_fact_with_lines_in_a_tag_and_lines_out_of_it_is_in_the_tag_in_part() {
     let report = tag_step(&[], &[], &["src/net.rs:5-6=half"]);
@@ -10091,6 +10144,8 @@ fn a_tag_changes_no_fact_no_gap_and_no_result() {
 /// Design 55.3 (T3): a `change` fact and a tag in one step. The fact of the agent keeps its
 /// place and its text; its facts show in the groups of the tags. The result line of a
 /// `change` fact says what it covers, for an item path and for a file path.
+// rule+ R55.3-8 R55.3-11
+// rule- R55.3-8 R55.3-11
 #[test]
 fn a_change_fact_and_a_tag_in_one_step_and_the_width_of_a_change_fact() {
     let change = ["demo::f=the factors change", "src/net.rs=the retry count is 5, and a wait time"];
@@ -10103,6 +10158,8 @@ fn a_change_fact_and_a_tag_in_one_step_and_the_width_of_a_change_fact() {
             "a2 change: `src/net.rs` \"the retry count is 5, and a wait time\" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 2 changed line(s))",
         ]
     );
+    // Negative test: with no tag, a fact of the agent does not name the groups of the tags.
+    assert!(!text_of(&plain).contains("in the groups of the tags below") && !text_of(&plain).contains("not in a tag"), "{}", text_of(&plain));
     let tagged = tag_step(&[], &change, &["src/lib.rs:2-5,src/lib.rs:-5=f", "src/net.rs=net"]);
     assert_eq!(tag_facts(&tagged), [("f".to_string(), vec!["f1".to_string(), "f2".to_string(), "f3".to_string()]), ("net".to_string(), vec!["f5".to_string(), "f6".to_string()])]);
     let text = text_of(&tagged);
@@ -10124,6 +10181,8 @@ fn open_lines(report: &StepReport) -> String {
 
 /// Design 55.5: an inner attribute and an inner doc line of a module file are lines of the
 /// file of the module. The item `mod a;` is in a different file.
+// rule+ R55.5-5
+// rule- R55.5-5
 #[test]
 fn an_inner_attribute_of_a_module_file_has_its_line_in_that_file() {
     let m = ("Cargo.toml", MANIFEST);
@@ -10137,10 +10196,15 @@ fn an_inner_attribute_of_a_module_file_has_its_line_in_that_file() {
     assert_eq!((report.changed_lines, open_lines(&report).as_str()), (4, ""));
     // Negative test: no position is in the file of the item `mod a;`.
     assert!(report.facts.iter().flat_map(|fact| &fact.positions).all(|position| position.file != "src/lib.rs"));
+    // Negative test: an outer attribute of the line `mod a;` is a line of the file of that line.
+    let report = run_derived_files(&old, &[m, ("src/lib.rs", "#[allow(unused)]\npub mod a;\n"), old[2]], &[]);
+    assert_eq!(placed(&report), ["attribute | attributes of `demo::a`: added `#[allow(unused)]` | src/lib.rs:1"]);
 }
 
 /// Design 55.5: the inner attributes and the inner doc lines of a removed file go with the
 /// fact of the removed module.
+// rule+ R55.5-6
+// rule- R55.5-6
 #[test]
 fn the_inner_lines_of_a_removed_file_are_in_the_fact_of_the_removed_module() {
     let m = ("Cargo.toml", MANIFEST);
@@ -10159,6 +10223,8 @@ fn the_inner_lines_of_a_removed_file_are_in_the_fact_of_the_removed_module() {
 
 /// Design 55.5: a doc comment in a macro body is a token of the macro. A doc attribute with a
 /// text is a part of the docs.
+// rule+ R55.5-7 R55.5-8
+// rule- R55.5-7 R55.5-8
 #[test]
 fn a_doc_comment_in_a_macro_body_is_a_line_of_the_macro_fact() {
     let before = "macro_rules! m {\n    () => {\n        /// Doc one.\n        pub fn f() {}\n    };\n}\nm!();\n";
@@ -10169,6 +10235,12 @@ fn a_doc_comment_in_a_macro_body_is_a_line_of_the_macro_fact() {
     assert_eq!(open_lines(&report), "");
     let report = run_derived("#[doc = \"One.\"]\npub fn f() {}\n", "#[doc = \"Two.\"]\npub fn f() {}\n", &[]);
     assert_eq!(placed(&report), ["docs | changed docs `///One.` → `///Two.` | src/lib.rs:1, src/lib.rs:-1"]);
+    // Negative test: `#[doc(hidden)]` has no text. It is an attribute, not docs.
+    let report = run_derived("#[doc(hidden)]\npub fn f() {}\n", "#[doc(hidden)]\n#[doc(alias = \"g\")]\npub fn f() {}\n", &[]);
+    assert_eq!(placed(&report), ["attribute | attributes of `demo::f`: added `#[doc(alias = \"g\")]` | src/lib.rs:2"]);
+    let report = run_derived("pub fn f() {}\n", "#[doc(hidden)]\npub fn f() {}\n", &[]);
+    let facts = placed(&report);
+    assert!(facts.len() == 1 && facts[0].starts_with("attribute | attributes of `demo::f`: added `#[doc(hidden)]`") && facts[0].ends_with("| src/lib.rs:1"), "{facts:#?}");
     // Negative test: a doc comment of an item is not a line of a code fact.
     let report = run_derived("/// One.\npub fn f() -> u32 {\n    1\n}\n", "/// Two.\npub fn f() -> u32 {\n    2\n}\n", &[]);
     let facts = placed(&report);
@@ -10180,6 +10252,8 @@ fn a_doc_comment_in_a_macro_body_is_a_line_of_the_macro_fact() {
 /// brace of `a` (line 4) is a changed line, and the brace of `b` (line 8) is an equal line.
 /// The tree shows `b` at the lines 5 to 8. The fact gets the lines of the block as git shows
 /// it: each line of a position is a changed line of the command.
+// rule+ R55.2-3
+// rule- R55.2-3
 #[test]
 fn a_block_at_a_slid_place_has_the_lines_that_git_shows() {
     let report = run_derived("pub fn a() {\n    x();\n}\npub fn x() {}\n", "pub fn a() {\n    x();\n    x();\n}\n\npub fn b() {\n    x();\n}\npub fn x() {}\n", &[]);
@@ -10319,6 +10393,8 @@ fn scope_facts(old: &[&str], new: &[&str]) -> Vec<String> {
 /// a fact that names the definition and the items between the two places. An item that goes
 /// across a definition gets a fact that names the item and the definition.
 // rule+ R56.5-1
+// rule+ R56.5-3 R56.5-4 R56.5-5 R56.5-6
+// rule- R56.5-3 R56.5-4 R56.5-5 R56.5-6
 #[test]
 fn a_move_across_an_item_that_can_give_a_macro_gets_a_macro_fact() {
     let (m, a, b, c) = (SCOPE_MACRO, SCOPE_A, SCOPE_B, SCOPE_C);
@@ -10383,6 +10459,7 @@ fn a_line_with_equal_tokens_in_its_item_pair_joins_a_fact_of_the_item() {
 
 /// Design 55.2: an `impl` that moves with its type is a part of the move: its lines are lines
 /// of the move fact, and not layout lines.
+// rule+ R55.2-4
 #[test]
 fn the_lines_of_an_impl_that_moves_with_its_type_are_lines_of_the_move() {
     let m = ("Cargo.toml", MANIFEST);
@@ -10404,6 +10481,8 @@ fn the_lines_of_an_impl_that_moves_with_its_type_are_lines_of_the_move() {
 /// Design 55.2 and 56.3: a module with a new name has a file with a new name. The lines with
 /// the old name or the new name are lines of the rename fact. The lines of the file with equal
 /// tokens are lines of the fact of the source place.
+// rule+ R55.2-4 R56.3-4
+// rule- R55.2-4
 #[test]
 fn the_lines_of_the_file_of_a_renamed_module_are_lines_of_the_rename() {
     let m = ("Cargo.toml", MANIFEST);
@@ -10507,6 +10586,8 @@ fn an_item_of_a_target_is_not_a_twin_of_an_item_of_the_library() {
 
 /// Example 3: the tests of a module move to an integration test. The result is the removed
 /// module with its items and the added items of the target. No item pairs across the targets.
+// rule+ R56.1-2 R56.1-6
+// rule- R56.1-2 R56.1-6
 #[test]
 fn the_tests_of_a_module_that_move_to_a_test_target_do_not_pair() {
     let lib = ("src/lib.rs", "pub mod checks;\n");
@@ -10537,6 +10618,8 @@ fn the_tests_of_a_module_that_move_to_a_test_target_do_not_pair() {
 
 /// The move rule of an item with equal tokens pairs an item across two targets. The fact is an
 /// explicit move fact, and its two paths name the two targets.
+// rule+ R56.1-2 R56.1-5
+// rule- R56.1-5
 #[test]
 fn a_move_of_an_item_to_a_different_target_names_the_two_targets() {
     let helper = "fn helper(a: u32, b: u32) -> u32 {\n    let sum = a + b;\n    sum * 2\n}\n";
@@ -10555,6 +10638,8 @@ fn a_move_of_an_item_to_a_different_target_names_the_two_targets() {
 
 /// The facts of the agent resolve an item of a target by the path with the target. A loose
 /// path with one match resolves too.
+// rule+ R56.1-4
+// rule- R56.1-4
 #[test]
 fn an_agent_fact_resolves_the_path_of_an_item_of_a_target() {
     let lib = ("src/lib.rs", "pub mod list;\n");
@@ -10664,6 +10749,8 @@ fn a_tag_with_each_hunk_header_has_each_fact_with_a_position() {
 
 /// Design 55.3, rule 3 (batch 9b4b, P2.1): the side of a hunk header with the count 0 is a
 /// valid place. It selects the hunk that has this header side.
+// rule+ R55.3-3
+// rule- R55.3-3
 #[test]
 fn a_hunk_side_with_the_count_0_names_its_hunk() {
     // The hunk `@@ -13 +12,0 @@` of `src/net.rs` deletes the statement `log(b);`.
@@ -10717,6 +10804,8 @@ fn a_fact_with_no_position_is_not_a_part_of_the_count_of_the_facts_in_no_tag() {
 
 /// Design 55.3 (batch 9b4b, P2.2): equal facts stay one line with `× N` in the group of a tag,
 /// as in the output with no tag.
+// rule+ R55.3-17
+// rule- R55.3-17
 #[test]
 fn equal_facts_stay_one_line_in_the_group_of_a_tag() {
     let file = |name: &str| format!("use std::fmt::Debug;\n\npub fn {name}() {{}}\n");
@@ -10745,6 +10834,8 @@ fn equal_facts_stay_one_line_in_the_group_of_a_tag() {
 /// Design 55.2, rule 5 (batch 9b4b, P1): a fact whose own lines are all equal lines of the
 /// command gets the changed lines of the smallest wider node that has a changed line. The old
 /// body of `load` is the body of `try_load` now: the command shows its lines as equal lines.
+// rule+ R55.2-5
+// rule- R55.2-5
 #[test]
 fn a_fact_with_only_equal_lines_gets_the_changed_lines_of_the_wider_node() {
     let before = "pub fn parse(input: &str) -> Result<u32, String> {\n    input.parse().map_err(|_| String::new())\n}\n\npub fn load(input: &str) -> Result<u32, String> {\n    let size = parse(input)?;\n    Ok(size + 1)\n}\n";
@@ -10786,6 +10877,7 @@ fn member_facts(old: &str, new: &str) -> Vec<String> {
 }
 
 // rule+ R56.2-2
+// rule- R56.2-1
 #[test]
 fn the_docs_of_each_member_and_of_a_use_line_have_the_docs_fact() {
     // A `use` line, a constant of an inherent impl, a type and a constant of a trait impl, a
@@ -10807,6 +10899,7 @@ fn the_docs_of_each_member_and_of_a_use_line_have_the_docs_fact() {
     assert_eq!(facts, ["semantics | value of `demo::Shape::SIDES` changed: 4 → 5 (the public API can change: a different crate can use the item) | src/lib.rs:8, src/lib.rs:-8", "docs | changed docs `/// The count of sides.` → `/// The count of the sides.` | src/lib.rs:7, src/lib.rs:-7"]);
 }
 
+// rule+ R56.2-1
 #[test]
 fn an_added_or_removed_member_has_one_fact_with_its_docs_and_attributes() {
     let cases = [
@@ -10866,6 +10959,8 @@ fn place_facts(before: &[(&str, &str)], after: &[(&str, &str)]) -> Vec<String> {
 }
 
 // rule+ R56.3-1
+// rule+ R56.3-4 R56.3-8
+// rule- R56.3-4
 #[test]
 fn a_module_with_a_new_source_place_gets_one_fact_with_the_two_places() {
     let block = place_block(PLACE_LIST);
@@ -10892,6 +10987,8 @@ fn a_module_with_a_new_source_place_gets_one_fact_with_the_two_places() {
 }
 
 // rule+ R56.3-2
+// rule+ R56.3-3
+// rule- R56.3-3
 #[test]
 fn an_edit_in_a_module_with_a_new_source_place_keeps_its_own_fact() {
     // An edit of a statement, a changed inner doc line, a changed plain comment, and a changed
@@ -10919,6 +11016,8 @@ fn an_edit_in_a_module_with_a_new_source_place_keeps_its_own_fact() {
 }
 
 // rule+ R56.3-6
+// rule+ R56.3-5 R56.3-7
+// rule- R56.3-5 R56.3-7 R56.3-8
 #[test]
 fn a_node_that_depends_on_the_file_path_is_named_in_the_fact_of_the_source_place() {
     let extra = "pub fn one() -> u32 {\n    1\n}\n";
@@ -10941,4 +11040,50 @@ fn a_node_that_depends_on_the_file_path_is_named_in_the_fact_of_the_source_place
     assert_eq!(run("\n#[path = \"extra.rs\"]\npub mod extra;\n", &[("src/extra.rs", "src/list/extra.rs", extra)]), ["attribute | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 3 of 3 items and 29 lines keep their tokens; the meaning of 1 node depends on the path of the file: `path = \"extra.rs\"` (`src/list/mod.rs:29`) | src/list.rs:-1-30, src/list/mod.rs:1-30", "move | source place of `demo::list::extra`: file `src/extra.rs` → file `src/list/extra.rs`; 1 of 1 item and 3 lines keep their tokens | src/extra.rs:-1-3, src/list/extra.rs:1-3"]);
     // Negative test: a name `path` that is no attribute, and a macro with a different name.
     assert_eq!(run("\npub fn here(path: &str) -> String {\n    let path = path;\n    format!(\"{path}\")\n}\n", &[]), ["move | source place of `demo::list`: file `src/list.rs` → file `src/list/mod.rs`; 4 of 4 items and 32 lines keep their tokens | src/list.rs:-1-32, src/list/mod.rs:1-32"]);
+}
+
+// ---- Batch 9t2 (design 57.6): the tests of the decisions of 51.4 that had no test ----
+
+/// Design 51.4, decision 1: a local is a name in a path, not a member. A local with the old
+/// name or the new name of a method does not take the name: the name of the method stays free.
+/// The negative test is `a_method_rename_with_a_name_of_a_second_type_gives_each_call_its_own_fact`.
+// rule+ R51.4-1
+#[test]
+fn a_local_with_the_name_of_a_method_does_not_take_the_name() {
+    for name in ["total", "sum"] {
+        let local = format!("pub fn d() -> u32 {{ let {name} = 1; {name} + 1 }}\n");
+        let (before, after) = (format!("{CART_TOTAL}{local}"), format!("{}{local}", swap(CART_TOTAL, &CART_TOTAL_RENAME)));
+        let report = run_tree(&before, &after);
+        assert_eq!(rename_and_other(&report), (vec![CART_TOTAL_FACT.to_string()], Vec::new()), "{report:#?}");
+        assert!(note_of(&report, CART_TOTAL_FACT).is_some_and(|note| note.starts_with("2 site(s) by name (")), "{report:#?}");
+    }
+}
+
+/// Design 51.4, decision 3: `self.name` and `self.name()` in an `impl` of the type that has the
+/// member are sure sites. A second type has the name, so the name is not free: the site with
+/// `self` stays under the rename fact. Negative test: a site with a different receiver is a
+/// site by name, and it has its own fact.
+// rule+ R51.4-3
+// rule- R51.4-3
+#[test]
+fn a_member_after_self_in_an_impl_of_the_type_is_a_sure_site() {
+    let more = "impl Tank {\n    pub fn get(&self) -> u32 { self.level }\n}\npub struct Vat { pub level: u32 }\n";
+    let (before, after) = (format!("{TANK}{more}"), format!("{}{}", swap(TANK, &TANK_RENAME), more.replace("self.level", "self.depth")));
+    rename_with_second_edit(&before, &after, TANK_FACT, &["2 site(s): changed expression `t.level` → `t.depth`"]);
+    let more = "impl Cart {\n    pub fn twice(&self) -> u32 { self.total() * 2 }\n}\npub struct Bill { pub lines: Vec<u32> }\nimpl Bill {\n    pub fn total(&self) -> u32 { 0 }\n}\n";
+    let (before, after) = (format!("{CART_TOTAL}{more}"), format!("{}{}", swap(CART_TOTAL, &CART_TOTAL_RENAME), more.replace("self.total()", "self.sum()")));
+    rename_with_second_edit(&before, &after, CART_TOTAL_FACT, &["changed method_call: `c.total()` → `c.sum()` at `demo::a/tail`", "changed expression `c.total()` → `c.sum()` at `demo::b/tail/lhs`"]);
+}
+
+/// Design 51.4, decision 9: an inline argument of a format string is not a site of a renamed
+/// local: the changed literal is its own fact. Negative test: an argument after the format
+/// string is a site, and its macro call has no fact of its own.
+// rule+ R51.4-9
+// rule- R51.4-9
+#[test]
+fn an_inline_argument_of_a_format_string_is_not_a_site_of_a_renamed_local() {
+    let before = "pub fn f(a: u32) -> String {\n    let total = a + 1;\n    format!(\"{total}\")\n}\npub fn g(a: u32) -> String {\n    let total = a + 1;\n    format!(\"{}\", total)\n}\n";
+    let texts = plain_texts(&run_tree(before, &before.replace("total", "sum")));
+    assert_eq!(texts, ["2 bodies: renamed local `total` → `sum`", r#"changed literal `"{total}"` → `"{sum}"` at `demo::f/tail/args[0]`"#]);
+    assert!(!texts.iter().any(|text| text.contains("demo::g")), "{texts:#?}");
 }

@@ -339,6 +339,8 @@ mod tests {
         assert_eq!(claim.at.unwrap().to_string(), "a::f/S0");
     }
 
+    // rule+ R53.4-8 R53.6-1 R53.6-3 R53.6-4
+    // rule- R53.6-1 R53.6-3 R53.6-4
     #[test]
     fn the_build_check_record_and_its_lines() {
         // Design 53: a stored step of an earlier version has no result, and no line.

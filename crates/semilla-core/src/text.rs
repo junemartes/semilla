@@ -247,6 +247,8 @@ mod tests {
     /// Design 54.15: an old block text and a new block text make one block, a line diff. Each
     /// line of the two texts is in the block. The negative tests: one side with one line and
     /// two blocks with no arrow between them keep the two blocks.
+    // rule+ R54.15-1 R54.15-2 R54.15-3
+    // rule- R54.15-1 R54.15-3
     #[test]
     fn two_block_texts_of_a_change_are_one_line_diff() {
         let text = "changed item: `⏎struct Row {⏎    a: u32,⏎    b: u32,⏎    c: u32,⏎}⏎` → `⏎struct Row {⏎    a: u32,⏎    b: u64,⏎    d: u8,⏎    c: u32,⏎}⏎` at `m::f/S0`";
@@ -270,6 +272,30 @@ mod tests {
         let (line, blocks) = fact_layout("added loop `⏎for a in b {⏎    c(a);⏎}⏎` at `m::f/S2`, removed `⏎if x {⏎    y();⏎}⏎`");
         assert_eq!(line, "added loop [1] at `m::f/S2`, removed [2]");
         assert_eq!(blocks.len(), 6);
+    }
+
+    /// Design 54.15: above 1 000 000 cells of the compare table, the diff has each old line,
+    /// then each new line. The negative test: at the limit, an equal line has the mark ` `.
+    // rule+ R54.15-4
+    // rule- R54.15-4
+    #[test]
+    fn a_line_diff_above_the_cell_limit_has_each_old_line_then_each_new_line() {
+        let side = |count: usize, word: &str| {
+            let mut lines: Vec<String> = (0..count).map(|index| format!("{word} {index}")).collect();
+            lines[count / 2] = "the same line".to_string();
+            format!("first⏎{}⏎last", lines.join("⏎"))
+        };
+        // 1001 lines on each side between the equal start and the equal end: 1 002 001 cells.
+        let (old, new) = (side(1001, "old"), side(1001, "new"));
+        let diff = line_diff(&old, &new);
+        let marks: String = diff.iter().map(|(mark, _)| *mark).collect();
+        assert_eq!(marks, format!(" {}{} ", "-".repeat(1001), "+".repeat(1001)));
+        assert_eq!(diff.iter().filter(|(_, line)| *line == "the same line").map(|(mark, _)| *mark).collect::<String>(), "-+");
+        // Negative: 1000 lines on each side are 1 000 000 cells. The compare runs.
+        let (old, new) = (side(1000, "old"), side(1000, "new"));
+        let diff = line_diff(&old, &new);
+        assert_eq!(diff.iter().filter(|(_, line)| *line == "the same line").map(|(mark, _)| *mark).collect::<String>(), " ");
+        assert_eq!(diff.len(), 2 + 999 + 999 + 1);
     }
 
     /// Design 54.7: a block text moves to a block. The fact line keeps a reference. Each

@@ -1,3 +1,4 @@
+rule-: R48.5-1
 option: --same
 option: refactor limit cap
 exit: 2

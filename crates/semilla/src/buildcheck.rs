@@ -252,6 +252,7 @@ mod tests {
         }
     }
 
+    // rule+ R53.3-9
     #[test]
     fn only_a_tree_in_which_each_target_builds_has_the_word_passes() {
         assert_eq!(result_lines(&BuildCheck::Passes, &[], "0.1 s"), ["build check: passes (0.1 s)"]);
@@ -273,6 +274,7 @@ mod tests {
         BuildError { package: "path+file:///work/demo#0.1.0".to_string(), kinds: vec![kind.to_string()], name: name.to_string(), text: text.to_string() }
     }
 
+    // rule+ R53.4-7
     #[test]
     fn the_errors_of_the_step_come_first() {
         // Rule 8 of design 53: a bench does not build before the step. The step breaks the
@@ -297,11 +299,36 @@ mod tests {
         assert!(text.contains("the target `workspace` (cargo starts no build) does not build") && text.contains("failed to parse manifest"), "{text}");
     }
 
+    // rule+ R53.3-3
+    // rule- R53.3-3
     #[test]
     fn a_long_list_of_errors_has_a_count() {
         let unit = vec!["`demo` (lib)".to_string()];
         let errors = (0..8).map(|index| error("lib", "demo", &format!("error: e{index}"))).collect();
         let text = fail_text(&BuildRun { failed: unit.clone(), errors, ..Default::default() }, &unit, &[], &[], "0.1 s");
         assert!(text.contains("error: e4") && !text.contains("error: e5") && text.contains("(3 more errors of the compiler"), "{text}");
+        // Negative: a list of 5 errors shows each error and has no count line.
+        let errors = (0..5).map(|index| error("lib", "demo", &format!("error: e{index}"))).collect();
+        let text = fail_text(&BuildRun { failed: unit.clone(), errors, ..Default::default() }, &unit, &[], &[], "0.1 s");
+        assert!(text.contains("error: e4") && !text.contains("more error"), "{text}");
+    }
+
+    /// Design 53.3: an error that two targets give shows one time. The negative test: two
+    /// different errors show one time each.
+    // rule+ R53.3-4
+    // rule- R53.3-4
+    #[test]
+    fn an_error_that_two_targets_give_shows_one_time() {
+        let units = vec!["`demo` (lib)".to_string(), "`demo` (lib test)".to_string()];
+        let same = "error[E0308]: mismatched types\n --> src/lib.rs:2:5";
+        let run = BuildRun { failed: units.clone(), errors: vec![error("lib", "demo", same), error("lib", "demo", same)], ..Default::default() };
+        let text = fail_text(&run, &units, &[], &[], "0.1 s");
+        assert_eq!(text.matches("error[E0308]").count(), 1, "{text}");
+        // Negative: the second target gives a different error. Each error shows.
+        let other = "error[E0308]: mismatched types\n --> src/lib.rs:9:5";
+        let run = BuildRun { failed: units.clone(), errors: vec![error("lib", "demo", same), error("lib", "demo", other)], ..Default::default() };
+        let text = fail_text(&run, &units, &[], &[], "0.1 s");
+        assert_eq!(text.matches("error[E0308]").count(), 2, "{text}");
+        assert!(text.contains("src/lib.rs:2:5") && text.contains("src/lib.rs:9:5"), "{text}");
     }
 }

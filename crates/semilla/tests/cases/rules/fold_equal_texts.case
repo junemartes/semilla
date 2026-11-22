@@ -1,0 +1,81 @@
+note: design 50.4: only facts with equal full texts fold to one fact "N site(s): ...". The edit of `wrap3` has a different new text.
+rule+: R50.4-6
+rule-: R50.4-6
+exit: 0
+must_match: ◆ f[0-9]+ derived: 2 site\(s\): changed expression `x` → `x \+ 1`
+must_match: ◆ f[0-9]+ derived: changed expression `x` → `x \+ 2` at `depot::wrap3/tail`
+must_not_match: 3 site\(s\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub fn wrap3(x: u32) -> u32 { x }
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x + 1 }
+pub fn wrap2(x: u32) -> u32 { x + 1 }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub fn wrap3(x: u32) -> u32 { x + 2 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: changed expression `x` → `x + 1` (f1)
+      in: depot::wrap, depot::wrap2
+      lines: src/lib.rs:9-10, src/lib.rs:-9-10
+      to state it: --same 'rewrite x => x + 1'
+  ? 1 place: changed expression `x` → `x + 2` (f2)
+      in: depot::wrap3
+      lines: src/lib.rs:20, src/lib.rs:-20
+      to state it: --change 'depot::wrap3=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite x => x + 1' --change 'depot::wrap3=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: 2 site(s): changed expression `x` → `x + 1` [semantics]
+      in: depot::wrap, depot::wrap2
+  ◆ f2 derived: changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: 2 site(s): changed expression `x` → `x + 1` [semantics]
+    lines: src/lib.rs:9-10, src/lib.rs:-9-10
+◆ f2 derived: changed expression `x` → `x + 2` at `depot::wrap3/tail` [semantics]
+    lines: src/lib.rs:20, src/lib.rs:-20

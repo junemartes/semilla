@@ -1,0 +1,83 @@
+note: design 48.3, 54.12, 54.6: a fact of the agent shows with its check result. A `same` claim makes one unit of its places.
+note: the edit of `limit` is not a place of the claim, thus it is not below the fact of the agent.
+rule+: R48.3-1 R48.3-2 R54.12-1 R54.6-3
+rule-: R48.3-2
+option: --same
+option: rewrite $a.total => $a.total()
+exit: 0
+must_match: ✓ a1 same: rewrite `\$a\.total` => `\$a\.total\(\)` \(the form holds: 2 site\(s\) have exactly this edit\. Semilla does not check that the behavior is the same\)
+must_match: (?s)✓ a1 same.*\n      places: depot::a/tail/lhs, depot::b/tail/lhs\n    ◆ f1 stated: 2 site\(s\).*\n  not stated: 1 item
+must_match: (?s)facts of the agent.*not stated: 1 item.*other facts, filled in by Semilla:\n  ◆ f2 derived: changed literal `10` → `11`
+must_not_match: stated: changed literal
+same_facts_as_no_option: yes
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total() + 1 }
+pub fn b(c: &Cart) -> u32 { c.total() * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 11 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 same: rewrite `$a.total` => `$a.total()` (the form holds: 2 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
+      places: depot::a/tail/lhs, depot::b/tail/lhs
+    ◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+        in: depot::a, depot::b
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `10` → `11` (f2)
+      in: depot::limit
+      lines: src/lib.rs:11, src/lib.rs:-11
+      to state it: --change 'depot::limit=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::limit=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: 2 site(s): changed expression `c.total` → `c.total()` [semantics]
+    lines: src/lib.rs:6-7, src/lib.rs:-6-7
+◆ f2 derived: changed literal `10` → `11` at `depot::limit/tail` [semantics]
+    lines: src/lib.rs:11, src/lib.rs:-11

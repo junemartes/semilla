@@ -1336,6 +1336,8 @@ mod build_check_tests {
         assert_eq!(package_name("shop 0.1.0 (path+file:///work/shop)"), "shop");
     }
 
+    // rule+ R53.4-1 R53.4-2 R53.4-3 R53.4-4 R53.4-9
+    // rule- R53.4-1 R53.4-2 R53.4-3 R53.4-4 R53.4-9
     #[test]
     fn the_state_of_a_unit_comes_from_the_facts_of_the_cargo_run() {
         // The base tree of design 53.4: the library does not build, so cargo does not check
@@ -1356,6 +1358,10 @@ mod build_check_tests {
         assert_eq!(built, words(&["`shop` (build script run)", "`shop` (build script)"]));
         let run = BuildRun { failed: words(&["`shop` (lib test)", "`shop` (lib)"]), built, targets, ..Default::default() };
         assert_eq!(run.state("`shop` (lib)"), UnitState::Fails);
+        // The failed list comes from the lines "could not compile" of cargo (R53.4-1).
+        assert_eq!(failed_units("error: could not compile `shop` (lib) due to 1 previous error\nerror: could not compile `shop` (lib test) due to 2 previous errors\n"), run.failed);
+        // Negative: an error line of a different kind and a warning line name no target.
+        assert_eq!(failed_units("error: expected one of `!` or `::`, found `x`\nwarning: `shop` (lib) generated 1 warning\n"), Vec::<String>::new());
         assert_eq!(run.state("`shop` (build script)"), UnitState::Builds);
         assert_eq!(run.state("`shop` (test \"api\")"), UnitState::NotChecked);
         assert_eq!(run.state("`shop` (example \"demo\")"), UnitState::NotChecked);

@@ -1,0 +1,97 @@
+note: design 50.4, negative case: the moved `impl` block has no second edit. The move fact covers the block, and no item of the block has a fact.
+rule-: R50.4-9
+exit: 0
+must_match: ◆ f[0-9]+ derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl \[move\]
+must_not_match: changed literal
+must_not_match: depot::state::Mode::(rank|busy)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+impl Mode {
+    pub fn busy(&self) -> bool { matches!(self, Mode::Busy) }
+    pub fn rank(&self) -> u32 { 1 }
+}
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub fn mode_name(m: &state::Mode) -> &'static str { match m { state::Mode::Idle => "idle", state::Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub mod state {
+pub enum Mode { Idle, Busy }
+impl Mode {
+    pub fn busy(&self) -> bool { matches!(self, Mode::Busy) }
+    pub fn rank(&self) -> u32 { 1 }
+}
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f3, f4)
+      in: depot::mode_name
+      lines: src/lib.rs:15, src/lib.rs:-16
+      to state it: --change 'depot::mode_name=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::mode_name=TEXT'
+  new and removed items, filled in by Semilla:
+  ◆ f5 derived: added `depot::state` (the public API changes: a different crate can now use the item) [added]
+  declarations, filled in by Semilla:
+  ◆ f2 derived: parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration]
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move]
+  ◆ f3 derived: changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics]
+  ◆ f4 derived: changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics]
+  ◆ f6 derived: public API: `depot::Mode` is now `depot::state::Mode` (a different crate can no longer use the old path) [move]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f5 derived: added `depot::state` (the public API changes: a different crate can now use the item) [added]
+    lines: src/lib.rs:19-20, src/lib.rs:25
+◆ f2 derived: parameter of `depot::mode_name` `m: &Mode` → `m: &state::Mode` (the public API can change: a different crate can use the item) [declaration]
+    lines: src/lib.rs:15, src/lib.rs:-16
+◆ f1 derived: moved `depot::Mode` → `depot::state::Mode`, with 1 impl [move]
+    lines: src/lib.rs:-15
+◆ f3 derived: changed pattern `Mode::Idle` → `state::Mode::Idle` at `depot::mode_name/S0/arm[0].pat` [semantics]
+    lines: src/lib.rs:15, src/lib.rs:-16
+◆ f4 derived: changed pattern `Mode::Busy` → `state::Mode::Busy` at `depot::mode_name/S0/arm[1].pat` [semantics]
+    lines: src/lib.rs:15, src/lib.rs:-16
+◆ f6 derived: public API: `depot::Mode` is now `depot::state::Mode` (a different crate can no longer use the old path) [move]
+    no position

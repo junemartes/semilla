@@ -3984,7 +3984,7 @@ Status: batch 9b (section 54) is the code of this section. The kinds `extract` a
 
 ### 48.1 The step is the smallest unit
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
+Rule index: not indexed: the items are the step model of the compiled check before section 49. Two items do not agree with R49.3-5 (57.9).
 
 - The agent groups one logical unit of work into a step. This is the hardest part, and the agent does it.
 - The compare result belongs to the step: `code equal` or `code different`.
@@ -4014,13 +4014,11 @@ Rules:
 
 ### 48.3 The result that the reviewer reads
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-1. The intent of the step, and the facts of the agent, each with its check result.
+1. [R48.3-1] The intent of the step, and the facts of the agent, each with its check result.
 2. **Not stated:** each existing item with a fact that can change the behavior (54.2) that no `change` item covers and no `same` claim explains. This is the gap list (54.4). Before 49, the unit was a body with a compiled difference.
 3. The facts that Semilla filled in, in groups: new and removed items, declarations, tests and benches, and the other facts (54.6). Before 49, the second group was "the bodies that follow a declaration". The syntax tree has no fact for a derived body, so the group is the declaration facts.
 
-A `same` claim makes one review unit of all its places.
+[R48.3-2] A `same` claim makes one review unit of all its places.
 
 ### 48.4 Protocol rules (Decided by Claude)
 
@@ -4034,9 +4032,7 @@ A `same` claim makes one review unit of all its places.
 
 ### 48.5 The command (Decided by Claude)
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-One command for each step. The new options stay next to `--claim` and `--reason`:
+[R48.5-1] One command for each step. The new options stay next to `--claim` and `--reason`:
 
 ```
 semilla step "<intent>" \
@@ -4046,7 +4042,7 @@ semilla step "<intent>" \
   --change 'ITEM[,ITEM]=TEXT'
 ```
 
-`--same 'rewrite FROM => TO'` replaces the claim `rewrite-pattern`: a new step cannot give that claim, and a stored record that has it still reads (54.3). The MCP tool `step` and each step of a replay plan have the same two keys (`same`, `change`). The command `semilla fact` adds facts to a stored step (54.4).
+`--same 'rewrite FROM => TO'` replaces the claim `rewrite-pattern`: a new step cannot give that claim, and a stored record that has it still reads (54.3). [R48.5-2] The MCP tool `step` and each step of a replay plan have the same two keys (`same`, `change`). The command `semilla fact` adds facts to a stored step (54.4).
 
 ### 48.6 Data
 
@@ -4087,7 +4083,7 @@ Findings:
 
 ### 48.7 What this section removes
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
+Rule index: no rule: the subsection is history: it lists the parts that section 48 removes.
 
 - The compare result of one edit, and the per-edit mark of the category rule.
 - The element attribution rules as a product goal: the owner rules, the dependence as a cause, the doubt rule for an idle edit. No new rule has the removal of an `indirect` fact as its only goal.
@@ -4150,10 +4146,8 @@ The six pull requests of 48.6 have 437 facts with the compiled compare.
 
 ### 49.4 The optional compiled check
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-- An option of the `step` command runs the compare of today.
-- Decided by Claude: a property claim (`tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`) needs the compiled code, so it starts the check for its step.
+- [R49.4-1] An option of the `step` command runs the compare of today.
+- Decided by Claude: [R49.4-2] a property claim (`tested-by`, `no-panic`, `no-unsafe`, `no-io`, `calls-only`) needs the compiled code, so it starts the check for its step.
 - Decided by Claude: the check gets no new attribution rule and no new normal form rule, with one exception (49.6).
 - Later (not in batch 9a): the output of the check becomes one list for the step, the bodies that change with no edit.
 
@@ -4272,24 +4266,22 @@ Before this batch, three rules could put a difference under a rename or move fac
 
 ### 50.4 The audit of the rules that drop, fold, or absorb a difference
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 | Rule | File | Result | Test |
 |---|---|---|---|
 | A path edit under a rename or a move | `checks.rs`, `forced_path` | corrected (50.3, rule 1) | `a_rename_from_the_syntax_tree_and_a_use_with_a_second_difference`, `a_path_to_a_different_item_is_not_a_forced_edit_of_a_move` |
 | A `use` line under a rename or a move | `checks.rs`, `imports_follow_map`, `ImportMap::forced` | corrected (50.3, rules 2 to 4); it relied on phase 2 | `a_use_line_with_a_second_difference_gets_its_own_fact`, `an_import_that_a_moved_item_needs_goes_under_the_move_fact`, `a_use_line_that_the_map_does_not_change_keeps_its_fact` |
 | A site of a field in a pattern | `facts.rs`, `pattern_site` | corrected (50.3, rule 5) | `a_pattern_site_names_the_exact_edit` |
-| A note "no compare: …" in a step with no compare | `lib.rs`, `no_compare_result` | corrected: the default mode has no such note | `a_doc_test_fact_of_the_default_mode_has_no_note_about_the_compare` |
-| The pair warning of a pair that waits for phase 2 | `lib.rs`, `verify_changeset_cached` | corrected: a default step waits for nothing | `a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning` |
-| The list of items under a fact (the sites of a generic item, the items that read a changed file) | `views.rs` | exact: the list comes from the syntax tree; the default mode names it "items with a use:" | `the_item_list_of_a_default_step_comes_from_the_syntax_tree` |
-| A use of a removed or an added member that changes to a different member | `facts.rs` | exact | `a_use_that_changes_to_a_different_variant_gets_its_own_fact` |
-| A call site of a parameter fact, a literal site of a field fact | `facts.rs`, `call_site`, `literal_site` | exact: the site line has the full text of the argument or the field | cases `add_param_calls`, `rm_param_calls`, `add_field_literals`, `rm_field_uses` |
-| The fold "N site(s): …" of equal facts | `edits.rs`, `fold` | exact: only facts with equal full texts fold | case `p4_fold_sites` |
-| The type change "in N places" | `edits.rs`, `type_change` | exact: the fact names each place | `a_type_change_in_the_default_mode_names_each_place` |
-| The fold of a renamed macro and of a renamed local | `edits.rs`, `hints.rs` | exact: each site is equal after the map | cases `rn_local`, `rn_param`, `r2_local_use` |
-| The cut mark `…` in a long text | `edits.rs`, `short_texts` | exact for a pair of texts (the changed part shows). A text of one side is a label: the field `content` of the fact has the full text | `a_fact_with_a_cut_text_has_the_full_text` |
-| The children of a removed, an added, or a moved owner; ", with N impl" | `edits.rs`, `identity.rs` | exact: each other edit of a moved block is its own fact | `a_moved_type_with_a_second_change_is_a_move_and_one_fact_for_each_change` |
-| A macro call, a comment | `edits.rs` | exact: one fact for each changed argument; "changed comment `…` → `…`" | cases `p4_macro_call`, `c_comment` |
+| A note "no compare: …" in a step with no compare | `lib.rs`, `no_compare_result` | [R50.4-1] corrected: the default mode has no such note | `a_doc_test_fact_of_the_default_mode_has_no_note_about_the_compare` |
+| The pair warning of a pair that waits for phase 2 | `lib.rs`, `verify_changeset_cached` | [R50.4-2] corrected: a default step waits for nothing | `a_pair_that_the_default_mode_does_not_derive_has_its_pair_warning` |
+| The list of items under a fact (the sites of a generic item, the items that read a changed file) | `views.rs` | [R50.4-3] exact: the list comes from the syntax tree; the default mode names it "items with a use:" | `the_item_list_of_a_default_step_comes_from_the_syntax_tree` |
+| A use of a removed or an added member that changes to a different member | `facts.rs` | [R50.4-4] exact | `a_use_that_changes_to_a_different_variant_gets_its_own_fact` |
+| A call site of a parameter fact, a literal site of a field fact | `facts.rs`, `call_site`, `literal_site` | [R50.4-5] exact: the site line has the full text of the argument or the field | cases `add_param_calls`, `rm_param_calls`, `add_field_literals`, `rm_field_uses` |
+| The fold "N site(s): …" of equal facts | `edits.rs`, `fold` | [R50.4-6] exact: only facts with equal full texts fold | case `p4_fold_sites` |
+| The type change "in N places" | `edits.rs`, `type_change` | [R50.4-7] exact: the fact names each place | `a_type_change_in_the_default_mode_names_each_place` |
+| The fold of a renamed macro and of a renamed local | `edits.rs`, `hints.rs` | [R50.4-8] exact: each site is equal after the map | cases `rn_local`, `rn_param`, `r2_local_use` |
+| The cut mark `…` in a long text | `edits.rs`, `short_texts` | exact for a pair of texts (the changed part shows). A text of one side is a label: the field `content` of the fact has the full text. *Replaced by R54.7-1: a fact has the full text, and no text has a cut* | `a_fact_with_a_long_text_has_the_full_text` |
+| The children of a removed, an added, or a moved owner; ", with N impl" | `edits.rs`, `identity.rs` | [R50.4-9] exact: each other edit of a moved block is its own fact | `a_moved_type_with_a_second_change_is_a_move_and_one_fact_for_each_change` |
+| A macro call, a comment | `edits.rs` | [R50.4-10] exact: one fact for each changed argument; "changed comment `…` → `…`" | cases `p4_macro_call`, `c_comment` |
 | "The MIR proof of a body covers the edits inside that body" | `lib.rs` | relies on phase 2. Only a retired identity claim reaches it; the default mode does not | none |
 | The map of a rename (`Renames.sites`) | `sites.rs` (two crates), `diff.rs` | exact since batch 9a2: the map changes only a reference to the item (51.2). A site by name has the count in a note (51.3, R3). The accepted limit of 50.2 stays | the cases of `b9a2/cases/`; the tests of section 51 in `tests.rs`; cases `shadow_item`, `shadow_local` |
 
@@ -4374,14 +4366,12 @@ The map of batch 9a was a map of words. `Renames::apply` changed each word that 
 
 ### 51.2 The rule and the classes
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 **The map of a rename is a map of the references to the item. It is not a map of words.** A token with the old name is in one of four classes:
 
-1. **Never a site.** A token in a string, a character, or a byte string literal. A comment or a doc text. A lifetime or a label. A token that declares a different thing (a different item, a local, a parameter, a generic parameter).
-2. **A sure site.** The declaration of the item. A path that the syntax tree resolves to the item: through the module scope, a `use` line, `crate`, `self`, `super`, `Self`, and a glob import of a module or an enum of the workspace.
-3. **A sure other thing.** A path that resolves to a different item, to a local of the body, or to an external crate.
-4. **Not sure (by name).** A member after `.`. A path that the tree cannot resolve (an external glob import, a path with a generic parameter). Batch 9a3 resolves a name from a `use` line in a block (52.4): only a block with a glob import whose names the tool cannot list makes its bare names by name. A token in the input of a macro that the syntax phase cannot read.
+1. [R51.2-1] **Never a site.** A token in a string, a character, or a byte string literal. A comment or a doc text. A lifetime or a label. A token that declares a different thing (a different item, a local, a parameter, a generic parameter).
+2. [R51.2-2] **A sure site.** The declaration of the item. A path that the syntax tree resolves to the item: through the module scope, a `use` line, `crate`, `self`, `super`, `Self`, and a glob import of a module or an enum of the workspace.
+3. [R51.2-3] **A sure other thing.** A path that resolves to a different item, to a local of the body, or to an external crate.
+4. [R51.2-4] **Not sure (by name).** A member after `.`. A path that the tree cannot resolve (an external glob import, a path with a generic parameter). Batch 9a3 resolves a name from a `use` line in a block (52.4): only a block with a glob import whose names the tool cannot list makes its bare names by name. A token in the input of a macro that the syntax phase cannot read.
 
 A path with no sure resolution is in class 4. No token is in class 2 on a guess.
 
@@ -4404,25 +4394,23 @@ A path with no sure resolution is in class 4. No token is in class 2 on a guess.
 
 ### 51.4 The decisions of the batch
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 Each item is **Decided by Claude**.
 
-1. **The kinds of a name (R2).** A method name, a field name, a name in a path (a value and a type together), a macro name. A word in a macro input that the syntax phase cannot read is each kind. A local is a name in a path, not a member: a local `total` does not take the name of a method `total`.
+1. **The kinds of a name (R2).** A method name, a field name, a name in a path (a value and a type together), a macro name. A word in a macro input that the syntax phase cannot read is each kind. [R51.4-1] A local is a name in a path, not a member: a local `total` does not take the name of a method `total`.
 2. **The compare is strict.** A text is equal only after the map of the table. A by-name site is under the fact only if the new item does not keep the place with the old name, and the old item does not have the place with the new name.
-3. **`self.name` and `self.name()`** in an `impl` of a type of the workspace that has the member are sure sites.
-4. **A bare name that the tree cannot resolve** is a forced edit of 50.3 only if no other value or type has the old name or the new name.
-5. **The words of the note of R3.** The variable `SEMILLA_SITE_COUNTS=1` adds a line with the three counts to each rename fact ("sites: 10 sure, 0 by name, 0 with their own fact"). It is a tool of the measure.
-6. **The fold of a renamed local.** The fact "renamed local `a` → `b`, N edit(s)" has an edit only if the map of the step plus the bare names of the locals gives the new text of the edit. Else rule 7 of 36.1 decides.
-7. **The texts of R4.** The fact of a site that did not follow the rename has one of four texts. A `use` line has a fifth text:
+3. [R51.4-3] **`self.name` and `self.name()`** in an `impl` of a type of the workspace that has the member are sure sites.
+4. [R51.4-4] **A bare name that the tree cannot resolve** is a forced edit of 50.3 only if no other value or type has the old name or the new name.
+5. **The words of the note of R3.** [R51.4-5] The variable `SEMILLA_SITE_COUNTS=1` adds a line with the three counts to each rename fact ("sites: 10 sure, 0 by name, 0 with their own fact"). It is a tool of the measure.
+6. [R51.4-6] **The fold of a renamed local.** The fact "renamed local `a` → `b`, N edit(s)" has an edit only if the map of the step plus the bare names of the locals gives the new text of the edit. Else rule 7 of 36.1 decides.
+7. [R51.4-7] **The texts of R4.** The fact of a site that did not follow the rename has one of four texts. A `use` line has a fifth text:
    - "`load` still names the old item `load` (the place did not follow the rename to `fetch`; the syntax tree shows no other item with the old name for the place)": no declaration of the tree after the step gives the name.
    - "`load` now names a different item: `load` is `depot::net::load` after the step (before the step: the item with the new name `fetch`)": the tree resolves the old name to a different item.
    - "`load` did not follow the rename to `fetch`: a `use` line gives the old name `load` to the renamed item `depot::disk::fetch`".
    - "`c: &Cart` did not follow the rename to `Basket`: a call of the macro `alias` has the old name `Cart` in its input and can make an item with this name".
    - "the `use` line still names the old item (the line did not follow the rename): `use crate::disk::load;` in `depot::ui`".
-8. **R4 for a long macro call.** The fact "changed macro call `…` → `…`" cut each side at 60 characters. A change after the cut gave two equal texts. The fact now uses the cut rule of 50.4 (the changed part shows). If the cut hides the name of the macro, the text gives the name first: "changed macro call `quickcheck!`: `…> bool { true } }` → `…> bool { true } fn cstring(_p: CString) -> bool { true } }`".
-9. **An inline argument of a format string** (`format!("{total}")`) is not a site of a renamed local. The changed literal is its own fact.
-10. **A comment between two items** still has no fact (51.6).
+8. **R4 for a long macro call.** The fact "changed macro call `…` → `…`" cut each side at 60 characters. A change after the cut gave two equal texts. The fact now uses the cut rule of 50.4 (the changed part shows). If the cut hides the name of the macro, the text gives the name first: "changed macro call `quickcheck!`: `…> bool { true } }` → `…> bool { true } fn cstring(_p: CString) -> bool { true } }`". *Replaced: the fact now has the full text of the call (R54.7-1, 57.2). No text has a cut.*
+9. [R51.4-9] **An inline argument of a format string** (`format!("{total}")`) is not a site of a renamed local. The changed literal is its own fact.
+10. **A comment between two items** still has no fact (51.6). *Replaced: such a comment now has a fact of the category `docs` (R55.5-3).*
 11. **The test of a step of PR size** (`large.rs`) has 3 facts with the name `count_above`, not 2: the changed call `pair.count_above(3)` is a by-name site, and 11 other types have a method with the name (R2).
 
 ### 51.5 The results
@@ -4502,7 +4490,7 @@ Rule index: no rule: the subsection has limits only.
 - A closure with a return type and a block (`|x| -> Type { … }`) can look like a struct literal to the place reader.
 - The texts of R4 exist for an edit in a body, a `use` line, and a part of a signature or of a member. Each other text route can still show two equal texts for a site that did not follow the rename. The first text of decision 7 ("still names the old item") is not sure when a macro of a different crate makes the name.
 - An inline argument of a format string is not a site of a renamed local (decision 9).
-- **A comment between two items has no fact.** A changed `//` comment in a body gives "changed comment … [docs]". A comment between two items is in no item. A fact for it needs a new entity (the comments of a module) with its own pairing: with a simple rule, an added or a removed item next to a banner or a file header gives a fact "removed comment" for a comment that the author did not change. This is more than a small change, so the batch did not do it. The case `cm_between` records the behavior. A comment between two items of an inline module is in the text of the module, so the fact of the module shows it (`cm_mod_between`).
+- **A comment between two items has no fact.** *Replaced by R55.5-3 (batch 9b4): the comment now has a fact.* A changed `//` comment in a body gives "changed comment … [docs]". A comment between two items is in no item. A fact for it needs a new entity (the comments of a module) with its own pairing: with a simple rule, an added or a removed item next to a banner or a file header gives a fact "removed comment" for a comment that the author did not change. This is more than a small change, so the batch did not do it. The case `cm_between` records the behavior. A comment between two items of an inline module is in the text of the module, so the fact of the module shows it (`cm_mod_between`).
 
 ### 51.7 Known defects after the batch
 
@@ -4721,11 +4709,9 @@ Batch 9a4b (the same date) corrected five items of the check: the three states o
 
 ### 53.3 The order with the syntax phase, and the output
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 **Decided by Claude:**
 
-- The build check runs after the syntax phase, also when the syntax phase does not accept the step (a missing reason, a false claim). So one run shows each cause. A tree that passes is in the result file, so the run with the reasons does not build again.
+- [R53.3-1] The build check runs after the syntax phase, also when the syntax phase does not accept the step (a missing reason, a false claim). So one run shows each cause. A tree that passes is in the result file, so the run with the reasons does not build again.
 - **`passes`:**
 
 ```text
@@ -4735,7 +4721,7 @@ base `e86f84a`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `10` → `20` at `shop_app::main/S1` [semantics]
 ```
 
-- **`fails`.** The first line, then the result line of the check, then the first 5 errors of the compiler (a count line tells the number of the others), then the facts of the syntax phase (they can help the author: a rename fact names the item that a call misses), then the two ways out. An error that two targets give (the library and its test build) shows one time.
+- **`fails`.** [R53.3-2] The first line, then the result line of the check, then the first 5 errors of the compiler ([R53.3-3] a count line tells the number of the others), then the facts of the syntax phase (they can help the author: a rename fact names the item that a call misses), then the two ways out. [R53.3-4] An error that two targets give (the library and its test build) shows one time.
 
 ```text
 rejected: step 0 "rename `total` to `sum`" is not stored
@@ -4754,8 +4740,8 @@ the code after the step does not build: correct the code, then run: semilla step
 or store the step with no build check (the record and the review then say `build check: not run`): semilla step 'rename `total` to `sum`' --no-check
 ```
 
-- Each of the two commands has each missing reason of the syntax phase (`--reason '…=<why>'`). The exit code is 1. The record of the rejected step (`session.rejected`) has the cause "the build check fails: the code after the step does not build".
-- **`not run`:** the line "build check: not run (`--no-check`)" or "build check: not run (`SEMILLA_NO_CHECK`)" after the first line. No process of the tool chain starts.
+- Each of the two commands has each missing reason of the syntax phase (`--reason '…=<why>'`). [R53.3-5] The exit code is 1. The record of the rejected step (`session.rejected`) has the cause "the build check fails: the code after the step does not build".
+- **`not run`:** [R53.3-6] the line "build check: not run (`--no-check`)" or "build check: not run (`SEMILLA_NO_CHECK`)" after the first line. No process of the tool chain starts.
 - **Cannot run:**
 
 ```text
@@ -4768,9 +4754,9 @@ correct the environment (the cause is above), then run: semilla step 'raise the 
 or store the step with no build check (the record and the review then say `build check: not run`): semilla step 'raise the limit' --no-check
 ```
 
-- The source in the brackets is one of: "the file `rust-toolchain.toml` of the tree", "the file `rust-toolchain` of the tree", "the variable RUSTUP_TOOLCHAIN", "the default of rustup". With no rustup default and no `cargo` in `PATH`: "cannot find a toolchain: rustup has no default toolchain, and `PATH` has no `cargo`. Run `rustup default stable`".
-- The causes of "cannot run": no tool chain; the sandbox or cargo does not start; a dependency that is not in the cargo cache ("a dependency is not in the cargo cache of this machine, and the build check does not download (cargo runs with `--offline`). Run `cargo fetch` in the repository.", then the lines of cargo); no space on the disk; no permission to write the build folder; the cache folder cannot be written. If the syntax phase also rejects the step, the first line says "rejected", and the line "! build check: cannot run: …" shows too.
-- **`no new failure found` (rule 8, batch 9a4b).** A target does not build after the step, and the step is not the known cause. The result line does not have the word `passes`. Each line below it has the mark `!` and tells in plain words what Semilla did not check. The time is the time of the two checks. **Decided by Claude:** the words of the result and of the two lines.
+- [R53.3-7] The source in the brackets is one of: "the file `rust-toolchain.toml` of the tree", "the file `rust-toolchain` of the tree", "the variable RUSTUP_TOOLCHAIN", "the default of rustup". With no rustup default and no `cargo` in `PATH`: "cannot find a toolchain: rustup has no default toolchain, and `PATH` has no `cargo`. Run `rustup default stable`".
+- The causes of "cannot run": no tool chain; the sandbox or cargo does not start; a dependency that is not in the cargo cache ("a dependency is not in the cargo cache of this machine, and the build check does not download (cargo runs with `--offline`). Run `cargo fetch` in the repository.", then the lines of cargo); no space on the disk; no permission to write the build folder; the cache folder cannot be written. [R53.3-8] If the syntax phase also rejects the step, the first line says "rejected", and the line "! build check: cannot run: …" shows too.
+- **`no new failure found` (rule 8, batch 9a4b).** A target does not build after the step, and the step is not the known cause. [R53.3-9] The result line does not have the word `passes`. Each line below it has the mark `!` and tells in plain words what Semilla did not check. The time is the time of the two checks. **Decided by Claude:** the words of the result and of the two lines.
 
 ```text
 accepted: step 0 "raise the limit" stored in group G1 "raise the limit"
@@ -4784,11 +4770,9 @@ build check: no new failure found (0.2 s)
   ! build check: the target `shop` (test "api") does not build after the step, and cargo did not check it before the step (the targets `shop` (lib test), `shop` (lib) did not build then), so Semilla cannot tell if the step makes this error
 ```
 - A step that the syntax phase rejects shows the result line of a check that passes too: the build is not the cause of the reject.
-- **The plan route.** `semilla replay apply` runs the check for each step of the plan. A good result is one more line below the step: "✓ plan step 0: …", "    build check: passes (0.4 s)". A step that does not build is a problem of the plan: "    ✗ the code after the step does not build", then the result line and the errors. The last line names the ways out: "a step that does not build needs a change of the plan, or `--no-check`". `semilla old-step end` stops with "rejected: the step is not stored, and it stays open".
+- **The plan route.** `semilla replay apply` runs the check for each step of the plan. [R53.3-10] A good result is one more line below the step: "✓ plan step 0: …", "    build check: passes (0.4 s)". [R53.3-11] A step that does not build is a problem of the plan: "    ✗ the code after the step does not build", then the result line and the errors. The last line names the ways out: "a step that does not build needs a change of the plan, or `--no-check`". [R53.3-12] `semilla old-step end` stops with "rejected: the step is not stored, and it stays open".
 
 ### 53.4 A base that does not build (rule 8)
-
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
 
 **Decided by Claude:**
 
@@ -4798,49 +4782,45 @@ Rule index: not indexed: batch 9t did not give identities to the rules of this s
 
 | State | The fact |
 |---|---|
-| does not build | cargo names the target in a line "could not compile" |
-| builds | the run has no failed target, or cargo gives a `compiler-artifact` message for the target (for the run of a build script: a `build-script-executed` message) |
-| not checked | the target is in the target list of the tree (`cargo metadata --no-deps`), and cargo gives no message for it |
-| new | the target is not in the target list of the tree |
+| [R53.4-1] does not build | cargo names the target in a line "could not compile" |
+| [R53.4-2] builds | the run has no failed target, or cargo gives a `compiler-artifact` message for the target (for the run of a build script: a `build-script-executed` message) |
+| [R53.4-3] not checked | the target is in the target list of the tree (`cargo metadata --no-deps`), and cargo gives no message for it |
+| [R53.4-4] new | the target is not in the target list of the tree |
 
 - **The result for each target that does not build after the step:**
 
 | State before the step | Result |
 |---|---|
 | builds, or new | the step is rejected (`fails`): the step makes the error |
-| does not build | no reject; the first list of the record; "did not check a new error of the step in this target" |
-| not checked | no reject; the second list of the record; "Semilla cannot tell if the step makes this error" |
+| does not build | [R53.4-5] no reject; the first list of the record; "did not check a new error of the step in this target" |
+| not checked | [R53.4-6] no reject; the second list of the record; "Semilla cannot tell if the step makes this error" |
 
 - **The example.** The library of `shop` has a type error, and `tests/api.rs` has a different type error. In the tree before the step, cargo gives only `` `shop` (lib) `` and `` `shop` (lib test) `` as failed. It does not check `` `shop` (test "api") ``. A step that corrects the library is stored with the second text of 53.3. Batch 9a4 rejected this step. The same step with a new error in a target that builds before the step (a package that does not use `shop`, or a build script) is rejected.
-- The message of a reject shows the errors of the targets of the step first. One line names each other target: "(not a cause of this result: the target `shop-core` (test "old") does not build before the step too)", and "(not a cause of this result: the target `shop` (test "api") does not build after the step, and cargo did not check it before the step)".
+- [R53.4-7] The message of a reject shows the errors of the targets of the step first. One line names each other target: "(not a cause of this result: the target `shop-core` (test "old") does not build before the step too)", and "(not a cause of this result: the target `shop` (test "api") does not build after the step, and cargo did not check it before the step)".
 - **Decided by Claude:**
   - The target list comes from a second cargo process (`cargo metadata --no-deps`, with the same tool chain and sandbox). It runs only after a check that fails. The result file of the tree keeps the two lists (`built`, `targets`).
-  - A tree in which cargo starts no build (a manifest that cargo rejects) has the state "not checked" for each target.
+  - [R53.4-9] A tree in which cargo starts no build (a manifest that cargo rejects) has the state "not checked" for each target.
   - A target with no known state counts as new, so the step is rejected. This is the safe direction.
-  - The step output names the targets that did not build before the step as the cause. The record does not keep these names, so `status` and the review say "a different target did not build then".
+  - [R53.4-8] The step output names the targets that did not build before the step as the cause. The record does not keep these names, so `status` and the review say "a different target did not build then".
 
 ### 53.5 With `--compiled` (rule 9)
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 **Decided by Claude:**
 
-- The compiled check builds each target of the new tree in the configuration `dev` (`cargo check --workspace --all-targets`, 35.4), with the MIR driver. If the compiled check of the command built this configuration for the step, the build check does not run cargo: "build check: passes (the build of the compiled check)". The record is `passes`.
-- If the compiled check does not accept the step, the build check does not run: the reject of the compiled check for a tree that does not build is the reject of before ("the code after the step does not compile in the configuration `dev` …"), and its output has no line of the build check.
-- The build check runs cargo itself in the other cases of an accepted compiled step: `--fast` (the compiled check runs in the background, later), the narrow configuration (the compiled check did not build each target), and a step with no body to compare.
+- The compiled check builds each target of the new tree in the configuration `dev` (`cargo check --workspace --all-targets`, 35.4), with the MIR driver. [R53.5-1] If the compiled check of the command built this configuration for the step, the build check does not run cargo: "build check: passes (the build of the compiled check)". The record is `passes`.
+- [R53.5-2] If the compiled check does not accept the step, the build check does not run: the reject of the compiled check for a tree that does not build is the reject of before ("the code after the step does not compile in the configuration `dev` …"), and its output has no line of the build check.
+- [R53.5-3] The build check runs cargo itself in the other cases of an accepted compiled step: `--fast` (the compiled check runs in the background, later), the narrow configuration (the compiled check did not build each target), and a step with no body to compare.
 - **Rule 9 does not change in batch 9a4b.** The build of the compiled check still counts as the build check, and it uses the pinned tool chain of Semilla (`toolchain_root`), not the tool chain of the author. So the result "passes (the build of the compiled check)" is a result of the pinned tool chain. A build check that runs cargo itself uses the tool chain of 53.2.
 
 ### 53.6 The record and the review
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 **Decided by Claude:**
 
-- `Step.build_check` has the JSON form `{"result": "passes"}`, `{"result": "not_run"}`, or `{"result": "base_fails", "targets": ["…"], "not_checked": ["…"]}`. The record `base_fails` is the result `no new failure found`. It keeps two lists: `targets` (the targets that do not build before the step and after it) and `not_checked` (the targets that do not build after the step and that cargo did not check before it). An empty list `not_checked` is not written. **Decided by Claude:** the JSON name stays `base_fails`, so a record of batch 9a4 still reads. A rejected step has no record: it is not stored. A step of an older version has no field, and no output line.
+- [R53.6-1] `Step.build_check` has the JSON form `{"result": "passes"}`, `{"result": "not_run"}`, or `{"result": "base_fails", "targets": ["…"], "not_checked": ["…"]}`. The record `base_fails` is the result `no new failure found`. It keeps two lists: `targets` (the targets that do not build before the step and after it) and `not_checked` (the targets that do not build after the step and that cargo did not check before it). [R53.6-2] An empty list `not_checked` is not written. **Decided by Claude:** the JSON name stays `base_fails`, so a record of batch 9a4 still reads. A rejected step has no record: it is not stored. [R53.6-3] A step of an older version has no field, and no output line.
 - The field is in the change set, so it is in the hash of the change set and in the git note of `semilla tag`. The reviewer of a tagged commit gets the record.
 - The record is not an input of the step check. The key of a step result in the memo of the process does not have the field (53.8).
-- `semilla status`, `semilla review --md`, `semilla review --html`, and the UI show one line for each result, after the base line: "build check of step 0: passes", "build check of each step: passes", "! build check of steps 1, 3: not run: the author turned the check off, so Semilla did not check that this code builds", "! build check of step 2: no new failure found: the target `demo` (bench "speed") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it". The mark `!` is on each line that tells a gap. A line with no mark has the word `passes`.
-- **`semilla tag`** (batch 9a4b) prints each line with the mark, after its own lines. It does not refuse the change set: the user decided that `--no-check` is permitted. A change set in which each step passes gets no line.
+- [R53.6-4] `semilla status`, `semilla review --md`, `semilla review --html`, and the UI show one line for each result, after the base line: "build check of step 0: passes", "build check of each step: passes", "! build check of steps 1, 3: not run: the author turned the check off, so Semilla did not check that this code builds", "! build check of step 2: no new failure found: the target `demo` (bench "speed") does not build before the step and after it, so Semilla did not check a new error of the step in this target, or in a target that needs it". The mark `!` is on each line that tells a gap. A line with no mark has the word `passes`.
+- [R53.6-5] **`semilla tag`** (batch 9a4b) prints each line with the mark, after its own lines. It does not refuse the change set: the user decided that `--no-check` is permitted. A change set in which each step passes gets no line.
 
 ### 53.7 The tests
 
@@ -4916,7 +4896,7 @@ Rule index: no rule: the subsection has limits and open questions.
 
 ### 53.10 Batch 9a4b: the fix round
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
+Rule index: no rule: the subsection is the history of a fix round and a measure. The rules of the fix round are in 53.1 to 53.6.
 
 Date: 2026-11-21. The coordinator verified batch 9a4 and found five defects of the check. No rule of the syntax phase or of phase 2 changes.
 
@@ -5043,16 +5023,16 @@ Decided by Claude:
 
 **The rule.** [R54.4-1] The gap list has each edit of an existing item that can be a gap (column 2 of 54.2) and that no fact of the agent covers. An item of a new or a removed item, and an item of a test or a bench (a `#[test]` or `#[bench]` function, an item below `#[cfg(test)]`, a file below `tests/` or `benches/`) are not in the list. The gap list is never a reject. A step with no agent fact is valid.
 
-**Equal edits make one line.** Semilla makes the general pattern of each edit: the old text and the new text, with a variable (`$a`, `$b`) in place of each part of the old node that the new node keeps. Edits with the same pattern are one line with the count of the places. The order is the count of the places, largest first.
+**Equal edits make one line.** [R54.4-2] Semilla makes the general pattern of each edit: the old text and the new text, with a variable (`$a`, `$b`) in place of each part of the old node that the new node keeps. Edits with the same pattern are one line with the count of the places. The order is the count of the places, largest first.
 
-**The proposed option** of a line:
+[R54.4-3] **The proposed option** of a line:
 
 - two places or more, and the pattern as a `rewrite` claim covers each place (Semilla runs the real check of 54.3): `--same 'rewrite FROM => TO'`;
 - else: `--change 'ITEM=TEXT'` with the items of the line. The other edits of one item make one line ("3 different edits").
 
 Thus the option that explains the largest set of edits comes first, and an option that Semilla prints is never a false fact of form. The agent decides if the option is true for the intent, and it writes the sentence (`TEXT`).
 
-**The output.** The step output has the count line, at most 5 lines of the list (`GAP_LIMIT`), "and N more line(s)", and one complete command:
+**The output.** [R54.4-4] The step output has the count line, at most 5 lines of the list (`GAP_LIMIT`), "and N more line(s)", and one complete command:
 
 ```text
   not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
@@ -5071,12 +5051,13 @@ Thus the option that explains the largest set of edits comes first, and an optio
 
 - Cause of the form: the stored step has the two trees, and they do not change. So the stored result of the build check stays valid, and Semilla only runs the syntax phase and the check of the facts again (0.05 to 0.85 s for the fixtures). A second `semilla step` cannot do this: the working tree has no new edit.
 - The new facts go after the stored facts of the agent. The output shows each agent fact with its result and the new count of the gaps.
-- A false fact stores nothing (exit code 1). A form error, a step that does not exist, or a call with no option has the exit code 2.
-- In a rejected step, the last line of the gap list says "add these options to the command of the step", because no step is stored.
+- [R54.4-5] A false fact stores nothing (exit code 1).
+- [R54.4-6] A form error, a step that does not exist, or a call with no option has the exit code 2.
+- [R54.4-7] In a rejected step, the last line of the gap list says "add these options to the command of the step", because no step is stored.
 
 ### 54.5 The record, the origin, and the order of the result (C)
 
-- **The record.** The stored step keeps the option texts of the agent (`Step.agent: AgentFacts { same, change }`). The report of a step has each agent fact with its kind, its text, its sentences, its check result, its places, and its notes (`StepReport.agent_facts`), and the gap list (`StepReport.gaps`). Decided by Claude: as for each other result (rule T6), `status`, `tag`, and `review` compute the results again from the stored trees and the stored options. An old session file has no `agent` key and reads as a step with no agent fact.
+- **The record.** [R54.5-3] The stored step keeps the option texts of the agent (`Step.agent: AgentFacts { same, change }`). The report of a step has each agent fact with its kind, its text, its sentences, its check result, its places, and its notes (`StepReport.agent_facts`), and the gap list (`StepReport.gaps`). Decided by Claude: as for each other result (rule T6), `status`, `tag`, and `review` compute the results again from the stored trees and the stored options. An old session file has no `agent` key and reads as a step with no agent fact.
 - [R54.5-1] **The origin.** Each fact of Semilla has `derived` (Semilla filled it in) or `stated` (a fact of the agent covers each edit of it, and the check holds). The word is in the fact line: "◆ f1 stated: …".
 - **The order** (48.3) of the step output, `status --verbose`, and the Markdown review:
   1. the intent, the build check, the build code notes, the claims, then "facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):" (54.12) with each agent fact (`✓ a1 …` or `✗ a2 …`), its places, and the `stated` facts below it;
@@ -5088,16 +5069,14 @@ Thus the option that explains the largest set of edits comes first, and an optio
 
 ### 54.6 The groups of the facts that Semilla filled in
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-The `derived` facts show in four groups, each with the heading "NAME, filled in by Semilla:" (`report::FILLED_GROUPS`, `Fact::filled_group`):
+[R54.6-1] The `derived` facts show in four groups, each with the heading "NAME, filled in by Semilla:" (`report::FILLED_GROUPS`, `Fact::filled_group`):
 
 1. **new and removed items** (the categories `added` and `removed`);
 2. **declarations** (the category `declaration`);
 3. **tests and benches** (each place of the fact is in a test or a bench);
 4. **other facts.**
 
-The test group wins over the first two groups. In a group, the order is the order of before (37). A step with no agent fact has the same facts with the same texts and the same categories; only the group headings and the order of the groups are new.
+[R54.6-2] The test group wins over the first two groups. In a group, the order is the order of before (37). [R54.6-3; no negative case: the rule holds for each step with an agent fact; it has no condition] A step with no agent fact has the same facts with the same texts and the same categories; only the group headings and the order of the groups are new.
 
 ### 54.7 The full text (D)
 
@@ -5242,22 +5221,18 @@ Limits:
 
 ### 54.12 Batch 9b2: the words of a `rewrite` fact
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-A reader of "(holds: 1 site(s))" understands that Semilla checked the behavior. Semilla checks only the form. The new result text: "the form holds: N site(s) have exactly this edit. Semilla does not check that the behavior is the same". `rename` and `move` keep "holds": Semilla proves them from the syntax tree.
+A reader of "(holds: 1 site(s))" understands that Semilla checked the behavior. Semilla checks only the form. [R54.12-1] The new result text: "the form holds: N site(s) have exactly this edit. Semilla does not check that the behavior is the same". `rename` and `move` keep "holds": Semilla proves them from the syntax tree.
 
 ```text
   facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
   ✓ a1 same: rewrite `10` => `20` (the form holds: 1 site(s) have exactly this edit. Semilla does not check that the behavior is the same)
 ```
 
-The heading is now true for each kind. The words are the same in the step output, `semilla fact`, `status`, `tag`, the Markdown review, the HTML export, and the local UI (the result text is a field of the record).
+The heading is now true for each kind. [R54.12-2] The words are the same in the step output, `semilla fact`, `status`, `tag`, the Markdown review, the HTML export, and the local UI (the result text is a field of the record).
 
 ### 54.13 Batch 9b2: the mark of a plan step
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-`semilla replay apply` printed "✓ plan step 0: …" for a step with a false agent fact or a refuted claim. The result of the change set was "rejected" and the exit code was 1 with `--full`. Now **the mark of the plan line agrees with the result of the step**:
+`semilla replay apply` printed "✓ plan step 0: …" for a step with a false agent fact or a refuted claim. The result of the change set was "rejected" and the exit code was 1 with `--full`. [R54.13-1] Now **the mark of the plan line agrees with the result of the step**:
 
 ```text
 ✗ plan step 0: "raise the fee"
@@ -5269,9 +5244,9 @@ Rule index: not indexed: batch 9t did not give identities to the rules of this s
     ✗ claim c1 is refuted: explicit panic sites: lit::keep/S0/then/tail
 ```
 
-A false fact and a refuted claim are consistent: the mark `✗`, one line with the cause below the plan line, the full cause in the report of the step, "result: rejected", and the exit code 1.
+[R54.13-2] A false fact and a refuted claim are consistent: the mark `✗`, one line with the cause below the plan line, the full cause in the report of the step, "result: rejected", and the exit code 1.
 
-Decided by Claude: **a false agent fact is a problem of phase 1.** Before, `replay apply` without `--full` printed "phase 1 passed" and had the exit code 0 for a false fact, but the exit code 1 for a refuted claim. Now `phase1_ok` needs each agent fact to hold, as `semilla step` does.
+Decided by Claude: [R54.13-3] **a false agent fact is a problem of phase 1.** Before, `replay apply` without `--full` printed "phase 1 passed" and had the exit code 0 for a false fact, but the exit code 1 for a refuted claim. Now `phase1_ok` needs each agent fact to hold, as `semilla step` does.
 
 ### 54.14 Batch 9b2: the count line of the gaps
 
@@ -5281,9 +5256,7 @@ The test `a_review_after_a_step_uses_the_stored_result_of_the_step` passed in 30
 
 ### 54.15 Batch 9b2: the line diff of two block texts
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
-A fact "changed item: [1] → [2]" printed two blocks that differ in one token. Now, if the old text and the new text are block texts with more than one line each, the layout prints **one block as a line diff**:
+A fact "changed item: [1] → [2]" printed two blocks that differ in one token. [R54.15-1] Now, if the old text and the new text are block texts with more than one line each, the layout prints **one block as a line diff**:
 
 ```text
   ◆ f2 derived: changed item: [1] (line diff: `-` old, `+` new) at `long::pick/S0` [semantics]
@@ -5295,27 +5268,25 @@ A fact "changed item: [1] → [2]" printed two blocks that differ in one token. 
               }
 ```
 
-- Each line of the old text and of the new text is in the block, with the mark ` `, `-`, or `+`. No line is cut and no equal line is left out. The lines with ` ` and `-` are the old text. The lines with ` ` and `+` are the new text.
-- The compare is by full lines, with the indent. Above 1 000 000 cells of the compare table, the block has each old line (`-`), then each new line (`+`).
+- [R54.15-2; no negative case: the rule holds for each line of each line diff; it has no condition] Each line of the old text and of the new text is in the block, with the mark ` `, `-`, or `+`. No line is cut and no equal line is left out. The lines with ` ` and `-` are the old text. The lines with ` ` and `+` are the new text.
+- [R54.15-3] The compare is by full lines, with the indent. [R54.15-4] The compare table has the lines between the equal start lines and the equal end lines. Above 1 000 000 cells of this table, that part has each old line (`-`), then each new line (`+`).
 - One side with one line, short texts, and two blocks with no arrow between them keep the form of batch 9b (54.7).
 - The description of the fact in the record does not change. The line diff is a layout (`semilla_core::text::fact_layout`, `line_diff`).
 
-**The gap line.** If the text of a gap group is longer than 80 characters, the line has the kind of the edit and the reference of the fact: "? 1 place: changed item, see f1 (f1)". The full text is at the fact.
+**The gap line.** [R54.15-5] If the text of a gap group is longer than 80 characters, the line has the kind of the edit and the reference of the fact: "? 1 place: changed item, see f1 (f1)". The full text is at the fact.
 
 Limits: the local UI shows a block text on one line, with no line diff. The text of a macro definition or of the input of a macro call is a token text on one line, and it keeps the form of batch 9b.
 
 ### 54.16 Batch 9b2: help with a near claim that holds
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 **The general rule.** When a fact is false or has a form error, and a fact that holds is near it, Semilla prints that fact as a complete option that the agent can copy.
 
-- **A form error with a repair.** A side that starts with `.` gets a variable for the receiver. A side that ends with `;` loses it. Semilla prints the repair only if the two repaired sides parse: "… A side that starts with `.` has no receiver: write a variable (`$a`) for the receiver. The correct form: `--same 'rewrite $a.total => $a.sum()'`". A text with no repair (`+ => -`) gets no form.
-- **A plain name in a pattern.** A name in a pattern matches only that name. If a pattern with no site has plain names with a small first letter, Semilla tries each name as a variable (at most 4 names): "a name in a pattern matches only that name (`raw`). For a variable, write `$raw`", then "a fact that holds: `--same 'rewrite Cart { total: $raw } => Cart::of($raw)'` (3 site(s))" if that pattern has sites.
-- **The nearest edit.** Below each nearest edit of a false pattern (54.3), Semilla prints the pattern of that edit if it holds: "a fact that holds: `--same 'rewrite $a.total => $a.sum()'` (2 site(s))".
-- **A false rename or move.** If Semilla derives a rename or a move with the old item or the new item of the fact, it prints it: "a fact that holds: `--same 'rename depot::Mode::Idle depot::State::Rest'`" (at most 3).
+- [R54.16-1] **A form error with a repair.** A side that starts with `.` gets a variable for the receiver. A side that ends with `;` loses it. Semilla prints the repair only if the two repaired sides parse: "… A side that starts with `.` has no receiver: write a variable (`$a`) for the receiver. The correct form: `--same 'rewrite $a.total => $a.sum()'`". A text with no repair (`+ => -`) gets no form.
+- [R54.16-2] **A plain name in a pattern.** A name in a pattern matches only that name. If a pattern with no site has plain names with a small first letter, Semilla tries each name as a variable (at most 4 names): "a name in a pattern matches only that name (`raw`). For a variable, write `$raw`", then "a fact that holds: `--same 'rewrite Cart { total: $raw } => Cart::of($raw)'` (3 site(s))" if that pattern has sites.
+- [R54.16-3] **The nearest edit.** Below each nearest edit of a false pattern (54.3), Semilla prints the pattern of that edit if it holds: "a fact that holds: `--same 'rewrite $a.total => $a.sum()'` (2 site(s))".
+- [R54.16-4] **A false rename or move.** If Semilla derives a rename or a move with the old item or the new item of the fact, it prints it: "a fact that holds: `--same 'rename depot::Mode::Idle depot::State::Rest'`" (at most 3).
 
-Soundness: Semilla prints an option only after the check of that option passes on this step. The option is help text. It is no fact until the agent states it.
+Soundness: [R54.16-5] Semilla prints an option only after the check of that option passes on this step. The option is help text. It is no fact until the agent states it.
 
 Decided by Claude: the rule covers `rewrite`, `rename`, and `move`. A false `change` fact already shows what Semilla sees in the item (54.2), and the gap list gives the `change` option that holds. A printed pattern is 200 characters or less.
 
@@ -5367,36 +5338,32 @@ Decided by Claude: the rule of the fourth list item (a short path agrees by the 
 
 ### 54.19 Batch 9b3: items that a path cannot tell apart (G3)
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 Two `impl` blocks with different `#[cfg]` conditions can have the same header. The paths of Semilla differ only in the twin mark (`…::scale#0`, `…::scale#1`). The agent cannot know the mark.
 
-**The rule.** If each candidate of a path has the same path with no twin mark (and with the generic arguments of its `impl` header), the path names each of them, as a module names each item in it. The result line names the count:
+**The rule.** [R54.19-1] If each candidate of a path has the same path with no twin mark (and with the generic arguments of its `impl` header), the path names each of them, as a module names each item in it. The result line names the count:
 
 ```text
   ✓ a1 change: `<Price as Scale<u8>>::scale` "…" (holds: the behavior of existing code can change in each item (2 items with this path))
 ```
 
-- A path with a twin mark (`scale#0`) selects one item.
-- Candidates that differ in a part that the agent can write (generic arguments, a module) stay a reject with the candidates (54.10).
-- The check is the check of a module: one item or more must have an edit that can change the behavior. An edit in each item is below the fact.
+- [R54.19-2] A path with a twin mark (`scale#0`) selects one item.
+- [R54.19-3] Candidates that differ in a part that the agent can write (generic arguments, a module) stay a reject with the candidates (54.10).
+- [R54.19-4] The check is the check of a module: one item or more must have an edit that can change the behavior. An edit in each item is below the fact.
 
 Limit (decided by Claude): the rule is for the `ITEM` of a `change` fact. A `rename` or a `move` of such items needs one pair for each item, so `OLD` with two candidates stays a reject. The candidates show the twin marks.
 
 ### 54.20 Batch 9b3: a path that starts with the name of a target (G5)
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
-
 Semilla does not parse each file with Rust code into items: the files of a package of the tree that is not a workspace member, for example. A changed file of this kind is a `[file]` fact ("this file is code of the bench target `speed` of the package in …"). The agent writes the path of the compiler: `speed::run`.
 
-**The rule.** If a path names no item, and its first segment is the name of a target whose files Semilla does not parse, the path names the file. The result line says so:
+**The rule.** [R54.20-1] If a path names no item, and its first segment is the name of a target whose files Semilla does not parse, the path names the file. The result line says so:
 
 ```text
   ✓ a1 change: `speed::run` "…" (holds: the behavior of existing code can change in each item (Semilla does not parse `tools/probe/benches/speed.rs`, a file of the bench target `speed` of the package in `tools/probe` (not a workspace member): the fact covers the full file))
 ```
 
-- A target with two files or more: the path names the one file of the target that the step changes. If the step changes two files or more, the fact is false, and the message gives the files: "give the path of the file".
-- If Semilla parses the file of the target (each target of a workspace member), the path resolves to the item as before: `load::run` names `shop::load::run`.
+- [R54.20-2] A target with two files or more: the path names the one file of the target that the step changes. If the step changes two files or more, the fact is false, and the message gives the files: "give the path of the file".
+- [R54.20-3] If Semilla parses the file of the target (each target of a workspace member), the path resolves to the item as before: `load::run` names `shop::load::run`.
 - A build script is not in the rule: it has its own category and its own reason.
 
 Decided by Claude: the rule applies to each target kind that the loader does not parse, and thus also to the library of a package that is not a member. Soundness: the fact covers the `[file]` fact, the same as a fact with the file path.
@@ -5409,7 +5376,7 @@ Decided by Claude: "no item candidate" means "no candidate with that name". The 
 
 ### 54.22 Batch 9b3: the time of the children search (G6)
 
-Rule index: not indexed: batch 9t did not give identities to the rules of this subsection (57.9).
+Rule index: no rule: the subsection has the cause of a time defect, a change of the speed, and a measure. No result changes.
 
 **The cause.** The search of 54.11 checks each tied child map with one full run of the check (`verify_core`). One run had three costs that do not depend on the map: the opaque table of the two trees, the net check of the diff (it made the tokens of each changed file again, it searched all items for each item, and it made a display text for each token), and the cover of the `cfg` conditions.
 
@@ -5453,9 +5420,9 @@ Batch 9b4b corrects this section: the line diff of a step is the diff of one `gi
 **The rule.** The text of an attribute fact shows each attribute that the item gets, loses, or changes. The source is the token tree of the attributes.
 
 1. [R55.1-1] An attribute with the same tokens on the two sides is not a change.
-2. A changed `derive` list shows in the short form (`derive added: …; derive removed: …`) if a trait is added or removed. A `derive(…)` in a `cfg_attr` is a derive list with the condition of the `cfg_attr`. A `cfg_attr` pair that differs also in a different part shows its two full texts (rule 3).
+2. [R55.1-2] A changed `derive` list shows in the short form (`derive added: …; derive removed: …`) if a trait is added or removed. A `derive(…)` in a `cfg_attr` is a derive list with the condition of the `cfg_attr`. A `cfg_attr` pair that differs also in a different part shows its two full texts (rule 3).
 3. [R55.1-3] Each other pair of attributes with the same path is one entry: changed `OLD` → `NEW`, with the two full texts.
-4. Each other attribute is an entry `added` or `removed`, with its full text.
+4. [R55.1-4] Each other attribute is an entry `added` or `removed`, with its full text.
 
 [R55.1-5] The category is `declaration` if a derive list gets or loses a trait. A trait under a new condition is a removed trait and an added trait. Else the category is `attribute`. The token tree gives this answer, not the text of the fact (`AttributeChange.derive`).
 
@@ -5486,32 +5453,32 @@ Decided by Claude: the list is a record for a later batch. Each entry needs a fi
 
 1. [R55.2-1; no negative case: the rule has no condition: it holds for each step, and the runner of the case set checks it on each case] *Changed lines only.* Each line of a position is a changed line of the line diff of the step (55.8). The position of an edit is each changed line in the lines of its node.
 2. [R55.2-2] *Two sides.* An edit that changes a text has lines of the old tree and lines of the new tree. An added text has lines of the new tree. A deleted text has lines of the old tree.
-3. *The lines of git.* A line diff can put a block of added or removed lines at more than one place (a closing brace between two blocks). Semilla moves such a block to the place that agrees with the edits of the tree, only to find the fact of each line. The position that it prints is the line of the command: the two lines have the same text. Thus a block at a slid place has the lines that git shows.
-4. *A rename, and an item that goes with a move or a rename.* Each changed line whose tokens are equal after the map of the names of a rename fact is a line of that fact. The lines with no fact pair their tokens first. Then a `use` line of the rename does not lose its pair to an added `use` line with the same words. The map of the paths gives each item that goes with a `move` fact or a `rename` fact (an `impl` of a moved type, each item of a module with a new name). Each changed line of such an item that no other fact has is a line of that fact. The soundness rule of 49.3 holds: a difference after the map is an edit with its own fact. The lines of these items also guide rule 3.
-5. *A fact whose own lines are all equal lines.* A statement can go to a new place between lines that the command shows as equal lines. The fact gets the changed lines of the smallest wider node that has a changed line: the node above the node of the edit, then the item, then each item around it, then the file. The rule gives a position only: it gives no line to the cover check. The stored step has the count of these facts (`wider_facts`).
+3. [R55.2-3] *The lines of git.* A line diff can put a block of added or removed lines at more than one place (a closing brace between two blocks). Semilla moves such a block to the place that agrees with the edits of the tree, only to find the fact of each line. The position that it prints is the line of the command: the two lines have the same text. Thus a block at a slid place has the lines that git shows.
+4. [R55.2-4] *A rename, and an item that goes with a move or a rename.* Each changed line whose tokens are equal after the map of the names of a rename fact is a line of that fact. The lines with no fact pair their tokens first. Then a `use` line of the rename does not lose its pair to an added `use` line with the same words. The map of the paths gives each item that goes with a `move` fact or a `rename` fact (an `impl` of a moved type, each item of a module with a new name). Each changed line of such an item that no other fact has is a line of that fact. The soundness rule of 49.3 holds: a difference after the map is an edit with its own fact. The lines of these items also guide rule 3.
+5. [R55.2-5] *A fact whose own lines are all equal lines.* A statement can go to a new place between lines that the command shows as equal lines. The fact gets the changed lines of the smallest wider node that has a changed line: the node above the node of the edit, then the item, then each item around it, then the file. The rule gives a position only: it gives no line to the cover check. The stored step has the count of these facts (`wider_facts`).
 6. [R55.2-6] *A fact with no position.* An `indirect` fact has no edit in the step, thus it has no position. A fact of the public API with no edit of its own ("a `pub use` line names …") also has none.
-7. *A file that Semilla does not parse.* The fact of the file has each changed line of the file.
-8. *A doc test.* The fact of a doc test has the changed lines of the code block in the docs.
+7. [R55.2-7] *A file that Semilla does not parse.* The fact of the file has each changed line of the file.
+8. [R55.2-8] *A doc test.* The fact of a doc test has the changed lines of the code block in the docs.
 
-**The record.** A stored fact keeps its positions (the field `positions`). A stored step keeps the count of the changed lines and the lines with no fact. A record of an earlier version has no such field, and Semilla reads it as before. It prints no position and no cover line for it.
+**The record.** A stored fact keeps its positions (the field `positions`). A stored step keeps the count of the changed lines and the lines with no fact. [R55.2-9] A record of an earlier version has no such field, and Semilla reads it as before. It prints no position and no cover line for it.
 
 **The output.** Decided by Claude:
 
 - The default output of a step stays short. It has positions only in the gap list (a line `lines:` below each gap).
-- `semilla status --verbose` prints a line `lines:` as the last line of each fact.
+- [R55.2-10] `semilla status --verbose` prints a line `lines:` as the last line of each fact.
 - The stored step has the positions as data. The MCP tools give the same texts as the commands.
 
 ### 55.3 The tags of the agent (T2, T3)
 
-**The option.** `--tag 'PLACE[,PLACE]=NAME'` on `semilla step` and `semilla fact`; the argument `tags` of the MCP tools `step` and `fact`; the key `tag` of a plan step. A step can have many tags. One parser reads the places for each of them, and for `semilla replay take`.
+**The option.** [R55.3-18] `--tag 'PLACE[,PLACE]=NAME'` on `semilla step` and `semilla fact`; the argument `tags` of the MCP tools `step` and `fact`; the key `tag` of a plan step. A step can have many tags. One parser reads the places for each of them, and for `semilla replay take`.
 
 **A place.** `FILE` (the full file, the two trees), `FILE:LINE`, `FILE:START-END`, `FILE:-LINE`, `FILE:-START-END`. Semilla also reads the two sides of a hunk header: `FILE:+START,COUNT` and `FILE:-START,COUNT`. The name is the text after the first `=`.
 
 **The rule of a tag** (the brief of batch 9b4b, P2.1):
 
 1. The unit of a tag is the hunk of the line diff of 55.8.
-2. A place selects changed lines. A place that has the full new side of a hunk, or the full old side, selects the two sides of that hunk. A place `FILE` selects each hunk of the file. A place that has a part of a side selects only the changed lines in its range.
-3. A hunk with no line on one side needs a place of the side that has lines. The forms `FILE:+START,COUNT` and `FILE:-START,COUNT` take the numbers of the hunk header as git prints them. A side with the count 0 is a full side: it names its hunk.
+2. [R55.3-2] A place selects changed lines. A place that has the full new side of a hunk, or the full old side, selects the two sides of that hunk. A place `FILE` selects each hunk of the file. A place that has a part of a side selects only the changed lines in its range.
+3. [R55.3-3] A hunk with no line on one side needs a place of the side that has lines. The forms `FILE:+START,COUNT` and `FILE:-START,COUNT` take the numbers of the hunk header as git prints them. A side with the count 0 is a full side: it names its hunk.
 4. [R55.3-4] A fact is in a tag if each line of its position is a selected line of the tag. The places of one tag can share the lines of a fact between them.
 5. [R55.3-5] A fact with lines in the tag and lines out of it shows with the tag and the mark "in part", with the lines that are not in the tag. It is not in the group "not in a tag". A fact that is fully in a different tag shows there.
 6. [R55.3-6] A fact with no position (55.2, rule 6) is not a part of the count "not in a tag". These facts have their own line: "facts with no position (a tag selects changed lines; these facts have none): …".
@@ -5520,23 +5487,23 @@ Decided by Claude:
 
 - *The two sides.* The rule of batch 9b4 stays for a place that has a part of a hunk: a fact is also in the tag if each of its new-tree lines is a selected line, or each of its old-tree lines is. A range of the new tree that is not a full side of a hunk does not select a deleted text.
 - *A part of a fact.* Batch 9b4 put such a fact in the group "not in a tag", with a note. Now rule 5 applies: the fact shows with the first tag that has a part of it.
-- *A tag is a field of the step.* The step stores the text of each tag. Semilla finds the facts of a tag again in each check. A tag is not in the list of the agent facts.
+- [R55.3-13] *A tag is a field of the step.* The step stores the text of each tag. Semilla finds the facts of a tag again in each check. A tag is not in the list of the agent facts.
 - [R55.3-7] *Errors.* A text that is not a tag, or a line number after the last line of the file, is a form error (exit code 2); no step is stored. A place with no edit in its lines makes the step not accepted (exit code 1). The message names the nearest positions with an edit, or the changed files. It is a hard problem of a plan step. The command to run again omits the tag with the error.
-- *`semilla fact --tag`* adds a tag to a stored step. It can add a tag with no fact of the agent. A tag with an error adds nothing.
-- *A fact of two tags* shows in its first tag. Each later tag names it ("also in this tag, shown in a tag above").
-- *The head line of a tag* has the count of the facts by rule 4, the count of the facts in part by rule 5 (only if it is not zero), and the count of the changed lines that the places select, on the two sides: "tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)". Equal facts stay one line with the count (`× N`), as in the output with no tag.
+- [R55.3-14] *`semilla fact --tag`* adds a tag to a stored step. It can add a tag with no fact of the agent. A tag with an error adds nothing.
+- [R55.3-15] *A fact of two tags* shows in its first tag. Each later tag names it ("also in this tag, shown in a tag above").
+- [R55.3-16] *The head line of a tag* has the count of the facts by rule 4, the count of the facts in part by rule 5 (only if it is not zero), and the count of the changed lines that the places select, on the two sides: "tag `half` (src/net.rs:5-6): 0 fact(s); 1 fact(s) in part; 2 changed line(s)". [R55.3-17] Equal facts stay one line with the count (`× N`), as in the output with no tag.
 
 **A tag does not replace a fact.** A tag makes no claim about the behavior. A step with a tag has the same facts, the same gap list, and the same result as the step with no tag. A test compares the two outputs line by line, and it compares the stored facts.
 
 **The outputs (T3).** A step with no tag has the output of the earlier version. With a tag:
 
-- The step output, `status --verbose`, and the Markdown review show the facts in the groups of the tags, in the order of the agent. Each group has a head line: the name, the places, the count of the facts by category, and the count of the changed lines. The last group is "not in a tag".
-- A gap line names its tag (`tag: NAME`, or "not in a tag").
-- An agent fact names its facts by their numbers ("facts, in the groups of the tags below: f3, f4"). Each fact shows one time.
-- The short `status` prints no tag.
+- [R55.3-9] The step output, `status --verbose`, and the Markdown review show the facts in the groups of the tags, in the order of the agent. Each group has a head line: the name, the places, the count of the facts by category, and the count of the changed lines. The last group is "not in a tag".
+- [R55.3-10] A gap line names its tag (`tag: NAME`, or "not in a tag").
+- [R55.3-11] An agent fact names its facts by their numbers ("facts, in the groups of the tags below: f3, f4"). Each fact shows one time.
+- [R55.3-12] The short `status` prints no tag.
 - The local UI gets the smallest change: one line for each tag with its counts and the numbers of its facts. The lists of the facts stay as they are.
 
-**The width of a `change` fact.** The result line of a `change` fact that holds tells what the fact covers: "covers N fact(s) in M item(s) with K changed line(s)". Decided by Claude: the width is in the result line, with or without a tag, because a wide `change` fact tells the reader less than a narrow one.
+**The width of a `change` fact.** [R55.3-8] The result line of a `change` fact that holds tells what the fact covers: "covers N fact(s) in M item(s) with K changed line(s)". Decided by Claude: the width is in the result line, with or without a tag, because a wide `change` fact tells the reader less than a narrow one.
 
 ### 55.4 The cover check (T4)
 
@@ -5568,10 +5535,10 @@ A changed line can have no difference of the syntax tree, or a difference that t
 
 **The classes that the fixtures gave.**
 
-- *The inner lines of a module file.* An inner attribute or an inner doc line of the file of `mod a;` belongs to the item `a`, and the item is in a different file. The position is in the file of the module. A module whose file changes pairs its inner lines across the two files (56.3).
-- *The inner lines of a removed file.* They are lines of the fact of the removed module. A plain comment of the file keeps its own comment fact.
-- *A doc comment in a token tree.* A doc comment in a macro body is a token of the macro. It is code: the fact of the macro has the line. A doc comment of an item stays a line of the docs.
-- *A doc attribute with a text.* `#[doc = "…"]` and `#![doc = include_str!(…)]` are docs. `#[doc(hidden)]` is an attribute.
+- [R55.5-5] *The inner lines of a module file.* An inner attribute or an inner doc line of the file of `mod a;` belongs to the item `a`, and the item is in a different file. The position is in the file of the module. A module whose file changes pairs its inner lines across the two files (56.3).
+- [R55.5-6] *The inner lines of a removed file.* They are lines of the fact of the removed module. A plain comment of the file keeps its own comment fact.
+- [R55.5-7] *A doc comment in a token tree.* A doc comment in a macro body is a token of the macro. It is code: the fact of the macro has the line. A doc comment of an item stays a line of the docs.
+- [R55.5-8] *A doc attribute with a text.* `#[doc = "…"]` and `#![doc = include_str!(…)]` are docs. `#[doc(hidden)]` is an attribute.
 - *A delimiter line.* A line whose tokens with no pair are only delimiters (`{ } ( ) [ ] , ;`) has no meaning alone. It joins the nearest fact of its hunk on its side. With no fact in the hunk, the line stays open.
 - *A line that waits.* A line with equal tokens in a hunk that has a changed token with no fact waits for the later rules. If each such token gets a fact, the line joins the nearest fact, or it is a layout line. If a token stays with no fact, the line stays with it in the marked line.
 - [R55.5-4] *The same items in a new order.* A module item with equal tokens at a new place in its container is a layout line ("N changed lines of M items with equal tokens at a new place"). A macro has a textual scope. Thus a new order across an item that can give a macro is not a layout change: it gets a fact of the category `macro` (56.5). A `use` line with two segments or more has no order meaning. The same members of an impl, a trait, or an `extern` block in a new order are a layout change (56.2).
@@ -5634,9 +5601,9 @@ Each option is explicit, so the configuration of the user does not change the hu
 
 **How Semilla runs it.** Decided by Claude: Semilla has the two trees as texts in memory, for each route (a step, a replay, a plan step, the MCP tools). It writes the changed text files of the two trees to a temporary folder and runs the command there with `--no-index`. A file has its index as its name: a name has no effect on the lines of a diff, and no file of the trees can be a configuration file or an attribute file of the command. The command gets no user configuration, no system configuration, and no attribute file. Semilla checks the result: each line that is in no hunk is equal in the two texts. A test compares the hunks with the hunks of the command on the two trees of a repository.
 
-**If git gives no line diff** (git does not start, or the check of the result fails), Semilla uses its own line diff for the step. The stored step has the mark `own_diff`. The step output says "hunks: git gave no line diff of this step; the N hunk(s) are the hunks of the line diff of Semilla", and `semilla status --verbose` prints each hunk header. The variable `SEMILLA_OWN_LINE_DIFF` selects this route for a test. No route of the product needs it in normal use.
+**If git gives no line diff** (git does not start, or the check of the result fails), Semilla uses its own line diff for the step. The stored step has the mark `own_diff`. [R55.8-3] The step output says "hunks: git gave no line diff of this step; the N hunk(s) are the hunks of the line diff of Semilla", and `semilla status --verbose` prints each hunk header. The variable `SEMILLA_OWN_LINE_DIFF` selects this route for a test. No route of the product needs it in normal use.
 
-**The record.** The stored step has the hunks (`hunks`), the two trees (`diff_trees`), the mark `own_diff`, and the count `wider_facts`. A record of an earlier version has none of them: Semilla prints no hunk line for it.
+**The record.** The stored step has the hunks (`hunks`), the two trees (`diff_trees`), the mark `own_diff`, and the count `wider_facts`. [R55.8-4] A record of an earlier version has none of them: Semilla prints no hunk line for it.
 
 **Limits.**
 
@@ -5655,7 +5622,7 @@ The brief of batch 9b4b has seven parts. P1 and P2 are in 55.8, 55.2, and 55.3. 
 
 **The rule.** [R56.1-1] An item belongs to one target. The root file of a target is the root of its own item tree. Two items of two different targets never share an identity, a path, or a pair in the tree compare.
 
-**The path form.** Decided by Claude: the root of the library is the package name, as before. The root of each other target is the form that cargo prints for a target: `PACKAGE (KIND "NAME")`.
+**The path form.** Decided by Claude: the root of the library is the package name, as before. [R56.1-2] The root of each other target is the form that cargo prints for a target: `PACKAGE (KIND "NAME")`.
 
 | Target | File (example) | Path of an item |
 |---|---|---|
@@ -5670,9 +5637,9 @@ The brief of batch 9b4b has seven parts. P1 and P2 are in 55.8, 55.2, and 55.3. 
 - A build script is not a parsed target. It keeps its `file` fact and its spotlight.
 - The compiled compare names a body by the crate name of its target (`list::first`). Semilla maps the path form to that name.
 
-**The facts of the agent.** `--same` and `--change` resolve an item by the new path form: `--change 'depot (test "list")::first=…'`. The target is a part of the word, with its quotes. A loose path with one match still resolves. The package name names each target of the package, and the crate name of a target (`list`) names the target. An exact path comes first: `depot::first` is the item of the library if the library has one.
+**The facts of the agent.** [R56.1-4] `--same` and `--change` resolve an item by the new path form: `--change 'depot (test "list")::first=…'`. The target is a part of the word, with its quotes. A loose path with one match still resolves. The package name names each target of the package, and the crate name of a target (`list`) names the target. An exact path comes first: `depot::first` is the item of the library if the library has one.
 
-**A move across two targets.** The move rule of today pairs an item with equal tokens that goes from the library to a different target. It stays, as an explicit move fact that names the two targets: "moved `depot::helper` → `depot (bin "depot")::helper`". The tests of a module that move to a test target do not pair (example 3 of the brief): the step has "removed `depot::checks::tests`", "added `depot (test "checks")::one`", and the two `use` facts. The note "! pair: … are 100% similar" names each such pair, as for each other removed and added pair with no name map.
+**A move across two targets.** [R56.1-5] The move rule of today pairs an item with equal tokens that goes from the library to a different target. It stays, as an explicit move fact that names the two targets: "moved `depot::helper` → `depot (bin "depot")::helper`". [R56.1-6] The tests of a module that move to a test target do not pair (example 3 of the brief): the step has "removed `depot::checks::tests`", "added `depot (test "checks")::one`", and the two `use` facts. The note "! pair: … are 100% similar" names each such pair, as for each other removed and added pair with no name map.
 
 **Result.** On the fixtures, 113 fact texts change only by the path form of an item of a target. Two false facts go away (bytes): the bench file `benches/buf.rs` shared an identity with the module `bytes::buf`, and its removed inner attributes gave "attributes of `bytes::buf`: removed `#![feature(test)]`, …" and "added docs" with the docs of the module. Now these lines are lines of the removed items of `bytes (bench "buf")`.
 
@@ -5680,7 +5647,7 @@ The brief of batch 9b4b has seven parts. P1 and P2 are in 55.8, 55.2, and 55.3. 
 
 **The rules.**
 
-1. The outer attributes and the doc comments of a node are a part of the node. The position of a fact that adds or removes the node has these lines. The rule applies to each node kind: an item, a member of an impl or a trait, a foreign item, a variant, a field, a macro call, a statement, a match arm. The rule makes a position wider only for a fact that adds or removes the node.
+1. [R56.2-1] The outer attributes and the doc comments of a node are a part of the node. The position of a fact that adds or removes the node has these lines. The rule applies to each node kind: an item, a member of an impl or a trait, a foreign item, a variant, a field, a macro call, a statement, a match arm. The rule makes a position wider only for a fact that adds or removes the node.
 2. [R56.2-2] Each node that can have docs gets the docs fact for an edit of its docs (also a `use` line, an associated const, an associated type). Each node that can have attributes gets the attribute fact of 55.1. A changed doc line of a node that stays is in a docs fact, never only in a fact of a different kind.
 3. Each member of a block is an item with a path (Decided by Claude: a member is an item of the tree, as a function of an impl was before). The members: a function, a const, and a type of an impl and of a trait; a function and a static of an `extern` block; a macro call in each of these blocks. An added, a removed, or a changed member gets its own fact. The block gets no fact with its full text for an edit of one member.
 4. [R56.2-4] The same members in a new order in an impl, a trait, or an `extern` block are a layout change. Decided by Claude: the category is `layout` (table 54: no effect on the behavior), because the order of the members of a block has no meaning for the compiler. A member at a new place with an edit keeps the fact of the edit. The order of the fields of a type and of the variants of an enum stays in its rule of the earlier version (it can change the layout in memory and the values).
@@ -5716,17 +5683,17 @@ The brief of batch 9b4b has seven parts. P1 and P2 are in 55.8, 55.2, and 55.3. 
        source place of `depot::list`: a block in `src/lib.rs` → file `src/list.rs`; 4 of 4 items and 40 old lines and 38 new lines keep their tokens [move]
 
 2. [R56.3-2] An item of the module with an edit keeps its own facts. A line with an edit stays in the fact of the edit.
-3. The inner docs and the comments pair across the two places. Equal docs give no "removed" fact and no "added" fact. A changed doc text gives the "changed docs" fact.
-4. A renamed module keeps its rename fact, and rule 1 applies to the file: "source place of `depot::list` (now `depot::items`): file `src/list.rs` → file `src/items.rs`; …".
-5. *Soundness.* A line is in the "keeps its tokens" set only if each of its tokens is in a pair of the tree compare with equal tokens. A node whose meaning depends on the path of the file is named in the fact: a call of `include!`, `include_str!`, `include_bytes!`, or `file!`, and a `#[path]` attribute.
+3. [R56.3-3] The inner docs and the comments pair across the two places. Equal docs give no "removed" fact and no "added" fact. A changed doc text gives the "changed docs" fact.
+4. [R56.3-4] A renamed module keeps its rename fact, and rule 1 applies to the file: "source place of `depot::list` (now `depot::items`): file `src/list.rs` → file `src/items.rs`; …".
+5. *Soundness.* A line is in the "keeps its tokens" set only if each of its tokens is in a pair of the tree compare with equal tokens. [R56.3-5] A node whose meaning depends on the path of the file is named in the fact: a call of `include!`, `include_str!`, `include_bytes!`, or `file!`, and a `#[path]` attribute.
 
        …; 4 of 5 items and 42 lines keep their tokens; the meaning of 2 nodes depends on the path of the file: `include_str!("notes.txt")` (`src/list/mod.rs:41`), `path = "extra.rs"` (`src/list/mod.rs:43`) [macro]
 
 **The category** (Decided by Claude, by table 54):
 
-- `move`, if no node depends on the file path. The items keep their paths and their tokens; only the place of the source changes.
+- [R56.3-8] `move`, if no node depends on the file path. The items keep their paths and their tokens; only the place of the source changes.
 - [R56.3-6] `macro`, if a file-relative macro call is in the module. The call can read a different file, thus the behavior can change.
-- `attribute`, if only a `#[path]` attribute depends on the file path. The attribute can name a different file. The module of the attribute has its own fact of a source place.
+- [R56.3-7] `attribute`, if only a `#[path]` attribute depends on the file path. The attribute can name a different file. The module of the attribute has its own fact of a source place.
 
 Decided by Claude: `file!` is in the list of the macros, because its value is the path of the file. A macro with a different name that expands to one of these macros is not in the list (a limit: Semilla does not expand a macro).
 
@@ -5760,18 +5727,18 @@ The short text does not print the cause lines. The stored step has them (`no_fac
 
 **The rule.** The order of the items of a container matters only for the textual scope of a macro. [R56.5-1] Thus a new order of two items, where one of them can give a macro, gets a fact. The fact is not `layout`.
 
-**The order check.** Each module item has an identity: the path of its tree item in the old tree (the new side maps back by the rename map). A `use` item has an identity only if it has one segment (`use two;`, `pub(crate) use two;`): such a line can name a macro in textual scope. For each pair of items that the two sides of one container have in a different order, where one of the two can give a macro:
+**The order check.** Each module item has an identity: the path of its tree item in the old tree (the new side maps back by the rename map). [R56.5-6] A `use` item has an identity only if it has one segment (`use two;`, `pub(crate) use two;`): such a line can name a macro in textual scope. For each pair of items that the two sides of one container have in a different order, where one of the two can give a macro:
 
 - The item with no pair of equal lines in the line diff is the item at a new place. If the two have none, the item that cannot give a macro is the item at a new place.
-- A definition at a new place gets a fact that names the definition and the items between the two places:
+- [R56.5-3] A definition at a new place gets a fact that names the definition and the items between the two places:
 
       moved `depot::two!` (it can give a macro) past 2 items: `depot::a`, `depot::b`; a macro has a textual scope: a macro call in these items can have a new meaning [macro]
 
-- An item at a new place across a definition gets a fact that names the item and the definition:
+- [R56.5-4] An item at a new place across a definition gets a fact that names the item and the definition:
 
       moved `depot::c` past 1 item that can give a macro: `depot::two!`; a macro has a textual scope: a macro call in `depot::c` can have a new meaning [macro]
 
-- The fact names 6 items at most, then "N more". Its position has the open lines of the item. If the item also has an edit, the edit keeps its fact, and the position has the changed lines of the item. The fact has the item as its anchor, thus the gap list has it: the agent can state its effect.
+- The fact names 6 items at most, then "N more". Its position has the open lines of the item. [R56.5-5] If the item also has an edit, the edit keeps its fact, and the position has the changed lines of the item. The fact has the item as its anchor, thus the gap list has it: the agent can state its effect.
 - A new order of two items that cannot give a macro is a layout change, as before.
 
 **Decided by Claude.**
@@ -5929,6 +5896,7 @@ The positive case: the condition of the rule holds, and the test sees the result
 3. [R57.6-3] The test fails for a marker with an identity that the design does not have.
 4. [R57.6-4] The test fails for an identity that is in the design two times, or that is not in the section of its number.
 5. [R57.6-5] The test fails for a subsection of the sections 48 to 57 that has no identity and no line that starts with "Rule index: no rule: CAUSE" or "Rule index: not indexed: CAUSE".
+6. [R57.6-6] The lock (batch 9t2, Decided by Claude). The test fails for a subsection of the sections 48 to 57 that has the line "Rule index: not indexed: CAUSE", unless the list `STAY_NOT_INDEXED` of `crates/semilla/tests/rules.rs` names the subsection. The list gives the cause of each entry. The test also fails for an entry of the list that has no such line in the design. The list of today has one entry: 48.1 (57.9).
 
 The test also fails for a marker that is not above a `#[test]` line, for a cause of less than three words, and for a rule that has a negative test and the text "no negative case".
 
@@ -5941,7 +5909,7 @@ The test also fails for a marker that is not above a `#[test]` line, for a cause
 
 A change of a rule keeps the identity, and the tests and the expected texts change with it.
 
-**The scope.** The index has rules of the sections 44.1 (the six core rules) and 48 to 57. The six core rules are in the index because the rules of 48 to 56 depend on them. No other section before 48 is in the index. The index of this batch is not complete (57.9): a subsection with the line "Rule index: not indexed" has rules with no identity, and a subsection with an identity can have more rules with no identity.
+**The scope.** The index has rules of the sections 44.1 (the six core rules) and 48 to 57. The six core rules are in the index because the rules of 48 to 56 depend on them. No other section before 48 is in the index. After batch 9t2, one subsection has the line "Rule index: not indexed" (48.1), and the lock (check 6) keeps this state. A subsection with an identity can have more rules with no identity (57.9).
 
 ### 57.7 The decisions of Claude
 
@@ -5962,6 +5930,15 @@ Each item is "Decided by Claude".
 - *The forms of the identity, of the markers, and of the lines "Rule index"* (57.6), and the checks 4 and 5 of 57.6.
 - *The subset of the index* (57.9).
 
+Batch 9t2 (each item is "Decided by Claude"):
+
+- *A sentence that only points to a rule of a different place, or that says it again, gets no second identity.* Examples: 48.3 items 2 and 3 (R48.2-1, R49.3-5), 51.4 decision 11, 54.15 bullet 3, 57.2 rule 4 (R51.3-4), the properties 1, 2, and 4 of 57.4.
+- *A rule with no test and no small example stays with no identity*, and 57.9 lists it with the cause. An identity with a marker that is not honest is worse than no identity.
+- *The new cases are in the group `rules`.* An existing case gets marker lines only. An existing test gets new asserts where a marker needs them, and it loses no assert.
+- *The lock* (check 6 of 57.6): the list `STAY_NOT_INDEXED` is in the test file, with a cause of three words or more for each entry. An entry with no line in the design is also a problem, thus the list cannot have old entries.
+- *48.1 stays "not indexed"*: two of its items do not agree with R49.3-5 and with the output of the compiled mode (57.9). The user decides the text of 48.1.
+- *The order of part B*: the sections 55 to 57 first, then 54.4 and 54.5. The batch stopped there (57.9).
+
 ### 57.8 The results
 
 Rule index: no rule: the subsection has the results of a measure.
@@ -5973,11 +5950,41 @@ Rule index: no rule: the subsection has the results of a measure.
 - Part E: before the correction, 8 of 288 runs of the test under load failed. After it, 0 of 576.
 - `cargo test --workspace`: 901 tests in 116 seconds and 114 seconds (two runs) before, 909 tests in 128 seconds (134 seconds in the run that builds the changed test crates) after.
 
+**Batch 9t2.**
+
+- The rule index: 231 rules with an identity (100 before), 11 of them with no negative case and a cause (9 before). The index has 306 markers of the positive case and 245 markers of the negative case; 157 tests and 87 cases have a marker (101 tests and 72 cases before). 1 subsection tells "not indexed" (48.1; 21 before), and 35 tell "no rule" (32 before).
+- The 131 new identities: 81 in 17 subsections of part A, 49 in part B (55.1: 2, 55.2: 7, 55.3: 13, 55.5: 4, 55.8: 2, 56.1: 4, 56.2: 1, 56.3: 5, 56.5: 4, 54.4: 6, 54.5: 1), and R57.6-6 for the lock.
+- The case set: 385 cases (14 new cases in the group `rules`), 2262 starts of the binary, about 14 seconds on 12 processors. The target stays 60 seconds or less.
+- `cargo test --workspace`: 919 tests in 128 seconds, and in 141 seconds in the run that builds the changed test crates (909 tests in 128 seconds before).
+- The batch changes no source of the product: it changes test modules, marker lines, cases, and this document.
+- The check of the coordinator: 16 changes of the product in a copy of the tree, for 15 rules of the batch (R51.4-5, R53.3-4, R53.3-10, R53.3-11, R53.4-9, R53.6-2, R53.6-5, R54.4-4, R54.4-7, R54.6-2, R54.13-3, R54.15-4, R54.16-3, R54.20-2, R56.3-5). For each rule, a marked test or a marked case fails.
+- The check found one weak marker (R53.4-1). The test now has an assert for the lines "could not compile" and an assert for the negative case.
+- The check found one test that depends on the path of the tree: `two_versions_of_a_two_crate_workspace` selected a test unit by the order of two file names. The file name has a hash, and the hash depends on the path. The test now selects the unit by its root.
+
 ### 57.9 The limits and the open questions
 
 Rule index: no rule: the subsection has limits and open questions.
 
-- **The index is not complete.** The sections 48 to 56 have some hundreds of sentences that are rules. This batch gave an identity to 78 of them, and to the six core rules of 44.1: the core rules, the soundness rules of 49.3, and the rules of each batch 9 that decide a fact, a result, or a check. Each other subsection with rules has the line "Rule index: not indexed". The index test prints the list of these subsections. A later batch gives identities to their rules with the procedure of 57.6.
+- **The state after batch 9t2.** Batch 9t gave an identity to 100 rules. Batch 9t2 read each subsection that was "not indexed" (part A), and the subsections 55.1 to 57.5, 54.4, and 54.5 (part B). Part B is not done for the other subsections of section 54 and for the subsections of the sections 48 to 53 that had an identity before batch 9t2. Known rules with no identity there: 53.1 rules 1, 5, 6, 9, and 10; 53.2 items 2 to 4; 50.3 rules 3 and 5; 52.2 E2 to E4; bullets of 48.2 and 48.4.
+- **Rules that the product does not keep** (batch 9t2; each one has no identity):
+  1. 48.1 item 4: "Semilla gives no compare result to one edit." In the compiled mode (`--compiled`), each fact line has a compare result. Example of today: "renamed `demo::scale` → `demo::multiply` [rename · code equal]", and "[semantics · code different]" on a fact of a changed body. The default mode has no compare result (R49.3-5, R50.1-1).
+- **Texts of the design that do not agree** (batch 9t2; the user decides which text stays):
+  1. 48.1 item 2 ("The compare result belongs to the step: `code equal` or `code different`") and R49.3-5 ("A step has no result `code equal` or `code different`").
+  2. 51.4 decision 10 and 51.6 did not agree with R55.5-3 (the fact of a comment line). Corrected after the batch: the two old texts now have the note "Replaced". The later rule stays.
+  3. 51.4 decision 8 and the row "cut mark `…`" of 50.4 did not agree with 54.7 (R54.7-1: the full text, a decision of the user). Corrected after the batch: the two old texts now have the note "Replaced".
+  4. 50.4 named the test `a_fact_with_a_cut_text_has_the_full_text`. Corrected after the batch: the row now names the test of today, `a_fact_with_a_long_text_has_the_full_text`.
+  5. 50.4 names cases (`add_param_calls`, `p4_fold_sites`, `rn_local`, `p4_macro_call`, `c_comment`) that are not in `crates/semilla/tests/cases/`. They are names of the case folders of the batches 9a to 9a3, which are not in the repository.
+  6. 54.15: the text gave the limit of 1 000 000 cells for the two texts. The product applies the limit to the part between the equal start lines and the equal end lines. Corrected after the batch (decided by Claude): the text of R54.15-4 now tells the form of the product.
+- **Rules with no identity in a subsection that the batch read**, with the cause:
+  - *No test, and the batch found no small example:* 51.4 decision 2; 53.3 (the result file of a tree that passes; "Each of the two commands has each missing reason"; the text "cannot find a toolchain"; the other causes of "cannot run"); 53.4 (the base result file is used again; the target list of a second cargo process); 53.5 bullet 4 (a pinned tool chain); 53.6 (the field in the hash and in the git note; "The record is not an input of the step check"; a record of batch 9a4); 54.6 (the order in a group); 54.16 (the limits of 200 characters, 4 names, and 3 patterns); 54.19 (the limit for `rename` and `move` with two candidates); 54.20 (a build script; the library of a package that is not a member); 56.5 (6 items at most, then the count).
+  - *No test renders the output:* the local UI lines of 54.5, 54.12, 55.2, and 55.3; 55.4 (the short `status`, the Markdown review, and the local UI print only the `!` lines).
+  - *A test of the positive case only:* 55.5 (the delimiter line, a line that waits, the item pair); 56.1 (a build script keeps its `file` fact); 56.2 rules 3 and 5; 56.4 (the short text has no cause lines); 56.5 (the anchor of the gap list); 54.4 (the new facts go after the stored facts); 54.5 (the order, the count line of `status` and `tag`).
+  - *The text does not agree with a different text* (list above): 50.4 rows "cut mark" and "MIR proof"; 51.4 decisions 8 and 10; the items of 48.1.
+  - *A definition, not a rule:* 55.3 rule 1; the table of the paths of 56.2.
+- The tests of the build check (53.3 to 53.6) and of the compiled check (49.4, 53.5) are existing tests of `e2e.rs` with new markers and new asserts. No rule of the batch needs the variable `SEMILLA_MIR_DRIVER` from the outside: the helpers of `e2e.rs` set it.
+- Open question: 48.1. Do the items 2 and 4 stay for the compiled mode only, or does the product change? The subsection gets its identities after this decision.
+- R54.13-3 has a second place in the product: the line `phase1_ok` of `summary_line` (`app.rs`). A change of that line makes no test fail: the plan route shows `result: rejected` with and without it. The first place (`phase1_ok` of `main.rs`) has its test.
+- Open question: one test of `e2e.rs` has the markers of up to 8 rules (`a_tag_groups_the_facts_of_a_step_and_changes_no_fact`). Each rule has its assert, but a failure does not name the rule. A split of such a test costs a build of a fixture for each new test.
 - A subsection with an identity can have more rules with no identity. The index test cannot find such a rule: it does not read the meaning of a sentence.
 - A marker says that a test checks a rule. The index test does not prove that the asserts of the test check the rule. A reviewer of a new marker reads the test.
 - No case of the set has a flagged line (`! cover`), and no case has a fact "in part" in a tag. The unit tests of 55.3 and 55.4 check these two forms.

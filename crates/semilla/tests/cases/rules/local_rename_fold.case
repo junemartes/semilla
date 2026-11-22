@@ -1,0 +1,85 @@
+note: design 50.4: the fold of a renamed local has only the sites that are equal after the map.
+note: the edit `2` to `3` is in the expression of a site. It is not an edit of the fold: it has its own fact.
+rule+: R50.4-8
+rule-: R50.4-8
+exit: 0
+must_match: `depot::sum`: renamed local `part` → `base`, 3 edit\(s\)
+must_match: ◆ f[0-9]+ derived: changed literal `2` → `3` at `depot::sum/
+must_not_match: 4 edit\(s\)
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub fn sum(c: &Cart) -> u32 {
+    let part = c.total;
+    let more = part + 1;
+    more + part * 2
+}
+=== new src/lib.rs
+pub struct Cart { pub total: u32, pub items: Vec<u32> }
+impl Cart {
+    pub fn total(&self) -> u32 { self.total }
+    pub fn count(&self) -> usize { self.items.len() }
+}
+pub fn a(c: &Cart) -> u32 { c.total + 1 }
+pub fn b(c: &Cart) -> u32 { c.total * 2 }
+pub fn both(c: &Cart, d: &Cart) -> u32 { wrap(c.total + 1) + d.total }
+pub fn wrap(x: u32) -> u32 { x }
+pub fn wrap2(x: u32) -> u32 { x }
+pub fn limit() -> u32 { 10 }
+pub fn uses_limit() -> u32 { limit() + limit() }
+/// Gives three.
+pub fn idle() -> u32 { 3 }
+pub enum Mode { Idle, Busy }
+pub fn mode_name(m: &Mode) -> &'static str { match m { Mode::Idle => "idle", Mode::Busy => "busy" } }
+pub mod conf { pub fn depth() -> u32 { 4 } }
+#[cfg(test)]
+mod tests { use super::*; #[test] fn t_limit() { assert_eq!(limit(), 10); } }
+pub fn sum(c: &Cart) -> u32 {
+    let base = c.total;
+    let more = base + 1;
+    more + base * 3
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `3` (f2)
+      in: depot::sum
+      lines: src/lib.rs:23, src/lib.rs:-23
+      to state it: --change 'depot::sum=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::sum=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename]
+  ◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics]
+  cover: each of the 6 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: `depot::sum`: renamed local `part` → `base`, 3 edit(s) [rename]
+    lines: src/lib.rs:21-23, src/lib.rs:-21-23
+◆ f2 derived: changed literal `2` → `3` at `depot::sum/tail/rhs/rhs` [semantics]
+    lines: src/lib.rs:23, src/lib.rs:-23
