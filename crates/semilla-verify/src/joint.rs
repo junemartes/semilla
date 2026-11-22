@@ -63,14 +63,25 @@ pub(crate) struct Seen {
 pub(crate) type Bodies = [BTreeMap<String, Seen>; 2];
 
 /// The rule of the build configuration, with a list of the units of each body.
+///
+/// Batch 9b3, G6: the opaque inputs are made at the first use. They are a function of the two
+/// trees only, and their construction reads each item. A check with no compiled body (the
+/// syntax tree model, design 50) does not use them, and the search for a name map runs one
+/// check for each map.
 pub(crate) struct Recorder<'a> {
-    pub(crate) opaque: crate::opaque::Opaque<'a>,
+    sides: [&'a semilla_syntax::Workspace; 2],
+    opaque: std::cell::OnceCell<crate::opaque::Opaque<'a>>,
     bodies: RefCell<Bodies>,
 }
 
 impl<'a> Recorder<'a> {
-    pub(crate) fn new(opaque: crate::opaque::Opaque<'a>) -> Recorder<'a> {
-        Recorder { opaque, bodies: RefCell::default() }
+    pub(crate) fn new(before: &'a semilla_syntax::Workspace, after: &'a semilla_syntax::Workspace) -> Recorder<'a> {
+        Recorder { sides: [before, after], opaque: std::cell::OnceCell::new(), bodies: RefCell::default() }
+    }
+
+    /// The opaque inputs of the step.
+    pub(crate) fn opaque(&self) -> &crate::opaque::Opaque<'a> {
+        self.opaque.get_or_init(|| crate::opaque::Opaque::new(self.sides[0], self.sides[1]))
     }
 
     pub(crate) fn bodies(self) -> Bodies {
@@ -80,19 +91,19 @@ impl<'a> Recorder<'a> {
 
 impl crate::OpaqueInputs for Recorder<'_> {
     fn note(&self, after: bool, name: &str, span: Option<&(String, usize)>, types: &[String]) {
-        self.opaque.note(after, name, span, types)
+        self.opaque().note(after, name, span, types)
     }
 
     fn names(&self, after: bool, name: &str, span: Option<&(String, usize)>, names: &[crate::ExpandedName]) {
-        crate::OpaqueInputs::names(&self.opaque, after, name, span, names)
+        crate::OpaqueInputs::names(self.opaque(), after, name, span, names)
     }
 
     fn callee(&self, after: bool, name: &str, span: Option<&(String, usize)>, types: &[String]) -> bool {
-        crate::OpaqueInputs::callee(&self.opaque, after, name, span, types)
+        crate::OpaqueInputs::callee(self.opaque(), after, name, span, types)
     }
 
     fn layout(&self, after: bool, name: &str, span: Option<&(String, usize)>, types: &[String]) -> bool {
-        crate::OpaqueInputs::layout(&self.opaque, after, name, span, types)
+        crate::OpaqueInputs::layout(self.opaque(), after, name, span, types)
     }
 
     fn body(&self, after: bool, name: &str, span: Option<&(String, usize)>, config: usize, target: &str) {

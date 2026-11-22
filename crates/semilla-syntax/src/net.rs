@@ -11,7 +11,9 @@
 //! - The body of a function is not in the net. The statement diff compares it.
 //! - A token of a nested item (a method, a field, a variant) belongs to the nested item.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use crate::tt::{Delimiter, TokenStream, TokenTree};
 
@@ -31,18 +33,76 @@ struct Token {
 
 /// The tokens of the files of one side. A file that is not Rust text has no tokens.
 #[derive(Default)]
-pub(crate) struct Files(BTreeMap<String, Vec<Token>>);
+pub(crate) struct Files {
+    tokens: BTreeMap<String, Rc<FileTokens>>,
+    /// The span of each item of each file. `None` before the first use.
+    spans: Option<BTreeMap<String, Vec<(Span, String)>>>,
+}
+
+/// The place of the start and the place after the end.
+type Span = ((usize, usize), (usize, usize));
+
+/// The tokens of one file. `sorted`: the tokens are in the order of their places, thus a
+/// binary search finds the tokens of a span.
+struct FileTokens {
+    list: Vec<Token>,
+    sorted: bool,
+}
 
 impl Files {
-    fn tokens(&mut self, workspace: &Workspace, file: &str) -> &[Token] {
-        self.0.entry(file.to_string()).or_insert_with(|| {
-            let mut out = Vec::new();
-            if let Some(stream) = workspace.rust_files.get(file).and_then(|text| TokenStream::with_places(text).ok()) {
-                flatten(stream, &mut out);
-            }
-            out
-        })
+    /// The tokens of a file whose start is in `start..end`.
+    fn tokens(&mut self, workspace: &Workspace, file: &str, start: (usize, usize), end: (usize, usize)) -> impl Iterator<Item = &Token> {
+        let tokens = self.tokens.entry(file.to_string()).or_insert_with(|| file_tokens(workspace.rust_files.get(file).map(|text| text.as_str()).unwrap_or("")));
+        let range = match tokens.sorted {
+            true => tokens.list.partition_point(|token| token.at < start)..tokens.list.partition_point(|token| token.at < end),
+            false => 0..tokens.list.len(),
+        };
+        tokens.list[range].iter().filter(move |token| token.at >= start && token.at < end)
     }
+
+    /// The span and the path of each item of a file.
+    fn spans(&mut self, workspace: &Workspace, file: &str) -> &[(Span, String)] {
+        let spans = self.spans.get_or_insert_with(|| {
+            let mut map: BTreeMap<String, Vec<(Span, String)>> = BTreeMap::new();
+            for item in workspace.items.values() {
+                map.entry(item.file.clone()).or_default().push((span(item), item.path.clone()));
+            }
+            map
+        });
+        spans.get(file).map(|list| list.as_slice()).unwrap_or(&[])
+    }
+}
+
+thread_local! {
+    /// The tokens of the last texts (batch 9b3, G6). The rename search does the diff of the same
+    /// two trees one time for each map. The tokens are a function of the text only.
+    static LAST_TOKENS: RefCell<(usize, HashMap<String, Rc<FileTokens>>)> = RefCell::new((0, HashMap::new()));
+}
+
+/// The limit of the kept texts, in bytes.
+const KEPT_BYTES: usize = 8 << 20;
+
+/// The tokens of a file text. A text that is not Rust text has no tokens.
+fn file_tokens(text: &str) -> Rc<FileTokens> {
+    if let Some(found) = LAST_TOKENS.with(|last| last.borrow().1.get(text).cloned()) {
+        return found;
+    }
+    let mut list = Vec::new();
+    if let Ok(stream) = TokenStream::with_places(text) {
+        flatten(stream, &mut list);
+    }
+    let sorted = list.windows(2).all(|pair| pair[0].at <= pair[1].at);
+    let tokens = Rc::new(FileTokens { list, sorted });
+    LAST_TOKENS.with(|last| {
+        let (bytes, kept) = &mut *last.borrow_mut();
+        if *bytes + text.len() > KEPT_BYTES {
+            kept.clear();
+            *bytes = 0;
+        }
+        *bytes += text.len();
+        kept.insert(text.to_string(), tokens.clone());
+    });
+    tokens
 }
 
 fn is_doc_text(tree: Option<&TokenTree>) -> bool {
@@ -95,22 +155,15 @@ fn flatten(stream: TokenStream, out: &mut Vec<Token>) {
     }
 }
 
-fn span(item: &Item) -> ((usize, usize), (usize, usize)) {
+fn span(item: &Item) -> Span {
     ((item.line_start, item.col_start), (item.line_end, item.col_end))
 }
 
 /// The tokens of an item that belong to no nested item and to no function body.
 fn own_tokens(files: &mut Files, workspace: &Workspace, item: &Item) -> Vec<Token> {
     let (start, end) = span(item);
-    let nested: Vec<((usize, usize), (usize, usize))> = workspace
-        .items
-        .values()
-        .filter(|other| other.file == item.file && other.path != item.path)
-        .map(span)
-        .filter(|(from, to)| *from >= start && *to <= end && (*from, *to) != (start, end))
-        .collect();
-    let tokens = files.tokens(workspace, &item.file);
-    let mut out: Vec<Token> = tokens.iter().filter(|token| token.at >= start && token.at < end && !nested.iter().any(|(from, to)| token.at >= *from && token.at < *to)).cloned().collect();
+    let nested: Vec<Span> = files.spans(workspace, &item.file).iter().filter(|(_, path)| *path != item.path).map(|(span, _)| *span).filter(|(from, to)| *from >= start && *to <= end && (*from, *to) != (start, end)).collect();
+    let mut out: Vec<Token> = files.tokens(workspace, &item.file, start, end).filter(|token| !nested.iter().any(|(from, to)| token.at >= *from && token.at < *to)).cloned().collect();
     // The body of a function and the content of an inline module: the last brace group, which
     // ends at the end of the item.
     let has_block = (item.kind == ItemKind::Fn && item.body.is_some()) || item.kind == ItemKind::Mod;
@@ -145,7 +198,7 @@ fn shown(files: &mut Files, workspace: &Workspace, item: &Item, own: &[Token]) -
     let mut out: Vec<Token> = Vec::new();
     let mut next = 0;
     let mut cut = false;
-    for token in files.tokens(workspace, &item.file).iter().filter(|token| token.at >= start && token.at < end) {
+    for token in files.tokens(workspace, &item.file, start, end) {
         if own.get(next).is_some_and(|own| own.at == token.at) {
             out.push(own[next].clone());
             next += 1;
@@ -269,13 +322,15 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     }
     let mut old = own_tokens(&mut files.0, before_ws, before);
     let mut new = own_tokens(&mut files.1, after_ws, after);
-    let (old_shown, new_shown) = (shown(&mut files.0, before_ws, before, &old), shown(&mut files.1, after_ws, after, &new));
+    // The display text of each side needs the own tokens before a change. Most pairs have no
+    // net fact, thus the display text comes only at the end.
+    let mut popped: Option<(bool, Token)> = None;
     // A function with a body on one side only (design 37.1): the body edit of the pair has
     // the body. The `;` of the side with no body is the place of the body.
     if before.kind == ItemKind::Fn && before.body.is_some() != after.body.is_some() {
         let no_body = if before.body.is_some() { &mut new } else { &mut old };
         if no_body.last().is_some_and(|last| last.text == ";") {
-            no_body.pop();
+            popped = no_body.pop().map(|token| (before.body.is_some(), token));
         }
     }
     if old.is_empty() || new.is_empty() {
@@ -362,6 +417,8 @@ fn general(files: &mut (Files, Files), before_ws: &Workspace, after_ws: &Workspa
     if !order && renamed == old_texts && explained(&compact(&join(&old)), &compact(&join(&new)), pair_edits) {
         return None;
     }
+    let full = |own: &[Token], is_new: bool| -> Vec<Token> { own.iter().cloned().chain(popped.iter().filter(|(side, _)| *side == is_new).map(|(_, token)| token.clone())).collect() };
+    let (old_shown, new_shown) = (shown(&mut files.0, before_ws, before, &full(&old, false)), shown(&mut files.1, after_ws, after, &full(&new, true)));
     Some(text_edit(before, after, old_shown, new_shown, new.get(head).map(|token| token.at.0).unwrap_or(after.line_start)))
 }
 
@@ -414,4 +471,23 @@ fn explained(old: &str, new: &str, edits: &[Edit]) -> bool {
         search(old, new, texts, index + 1, budget)
     }
     search(old, new, &texts, 0, &mut 4000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Batch 9b3, G6: an equal text gets the kept tokens. The negative test: a different text
+    /// gets its own tokens.
+    #[test]
+    fn the_kept_tokens_are_the_tokens_of_their_text() {
+        let texts = |tokens: &FileTokens| tokens.list.iter().map(|token| token.text.clone()).collect::<Vec<_>>();
+        let first = file_tokens("fn a() -> u32 { 1 }");
+        assert!(Rc::ptr_eq(&first, &file_tokens("fn a() -> u32 { 1 }")) && first.sorted);
+        assert_eq!(texts(&first), ["fn", "a", "(", ")", "-", ">", "u32", "{", "1", "}"]);
+        let second = file_tokens("fn a() -> u32 { 2 }");
+        assert!(!Rc::ptr_eq(&first, &second) && texts(&second)[8] == "2");
+        // A text that is not Rust text has no tokens.
+        assert!(file_tokens("fn a( {").list.is_empty());
+    }
 }

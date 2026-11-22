@@ -916,7 +916,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let body_renames = checks::body_renames_read(&renames.items, input.before, input.after, [read(0), read(1)]);
     let settled = loop {
         let truths = bodies.truths(step).unwrap_or_default();
-        let cover = cfgcond::Cover::new(&[(input.before, &truths[0]), (input.after, &truths[1])]);
+        let cover = cfgcond::Cover::cached(&[(input.before, &truths[0]), (input.after, &truths[1])]);
         let atoms = cover.atoms();
         match &scope {
             Some(scope) => scope.set(cover),
@@ -925,7 +925,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         // One run of the body check with a part of the rule on again (`cfgcond::Mode`).
         let run = |mode: &cfgcond::Mode| -> anyhow::Result<(Vec<BodyComparison>, joint::Bodies)> {
             cfgcond::with_mode(mode, || {
-                let opaque = joint::Recorder::new(opaque::Opaque::new(input.before, input.after));
+                let opaque = joint::Recorder::new(input.before, input.after);
                 let mut bodies = bodies.compare_with(step, &body_renames, &added, &opaque)?;
                 if matches!(mode, cfgcond::Mode::Plain) {
                     *raw.borrow_mut() = bodies.iter().map(|body| (body.name.clone(), body.status.clone())).collect();
@@ -939,7 +939,10 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
                 }
                 // The code that a `cfg` attribute selects is not in the MIR (batch 5k, A1).
                 srcconfig::apply(&mut bodies, input.before, input.after, &renames.items);
-                opaque.opaque.apply(&mut bodies, &renames.items);
+                // With no body, the opaque inputs have no use (batch 9b3, G6).
+                if !bodies.is_empty() {
+                    opaque.opaque().apply(&mut bodies, &renames.items);
+                }
                 Ok((bodies, opaque.bodies()))
             })
         };

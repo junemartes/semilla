@@ -755,6 +755,12 @@ fn glob_prefixes(tree: &semilla_syntax::rs::UseTree, prefix: &mut Vec<String>, o
     }
 }
 
+/// The count of the places of a token text that have one of the names and that are no
+/// declaration.
+pub(crate) fn name_places(text: &str, names: &[&str]) -> usize {
+    places(text, &|word: &str| names.contains(&word)).iter().filter(|place| place.kind != PlaceKind::Decl).count()
+}
+
 /// The count of each key of the places of an item, for the words `wanted`.
 fn key_counts(item: &Item, wanted: &dyn Fn(&str) -> bool) -> BTreeMap<String, usize> {
     let mut out = BTreeMap::new();
@@ -764,6 +770,11 @@ fn key_counts(item: &Item, wanted: &dyn Fn(&str) -> bool) -> BTreeMap<String, us
         }
     }
     out
+}
+
+/// The kind and the name of a key of a place: the key with no path before the name.
+fn loose_key(key: &str) -> (String, String) {
+    (key.split(':').next().unwrap_or_default().to_string(), key.rsplit(':').next().unwrap_or_default().to_string())
 }
 
 /// Makes the site table of a rename map (design section 51). Each rule is an entry of
@@ -781,6 +792,7 @@ pub fn resolve(renames: &mut Renames, before: &Workspace, after: &Workspace) {
     }
     let mut sites: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut counts: BTreeMap<String, SiteCount> = BTreeMap::new();
+    let mut followed: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     if rules.is_empty() {
         renames.sites = Some(sites);
         return;
@@ -816,6 +828,8 @@ pub fn resolve(renames: &mut Renames, before: &Workspace, after: &Workspace) {
         // The decision of each key: the new name, and the rules of the count.
         let mut decided: BTreeMap<String, (Option<String>, Vec<usize>, bool)> = BTreeMap::new();
         let mut open: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+        // The kind and the name of each place of the new item with a new name (design 54.17).
+        let mut new_places: Option<BTreeSet<(String, String)>> = None;
         for (text, member) in item_texts {
             for place in places(text, &wanted_old) {
                 let Some(list) = rules.get(&place.name) else { continue };
@@ -868,6 +882,15 @@ pub fn resolve(renames: &mut Renames, before: &Workspace, after: &Workspace) {
                             } else {
                                 count.by_name += 1;
                             }
+                            // A reference follows the rename if the new item has the new name
+                            // at a place of the same kind. The path before the name can have a
+                            // new name too, so the compare does not use it.
+                            if place.kind != PlaceKind::Decl {
+                                let found = new_places.get_or_insert_with(|| after_item.map(|item| key_counts(item, &wanted_new)).unwrap_or_default().keys().map(|key| loose_key(key)).collect());
+                                if found.contains(&(loose_key(&key).0, new.clone())) {
+                                    *followed.entry(list[index].old_path.clone()).or_default().entry(item.path.clone()).or_default() += 1;
+                                }
+                            }
                         }
                     }
                     None if !indexes.is_empty() => {
@@ -891,6 +914,7 @@ pub fn resolve(renames: &mut Renames, before: &Workspace, after: &Workspace) {
     }
     renames.sites = Some(sites);
     renames.counts = counts;
+    renames.followed = followed;
 }
 
 /// The line of a rename fact with the count of its by-name sites (rule R3), or `None` if the

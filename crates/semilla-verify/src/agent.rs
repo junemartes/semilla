@@ -379,8 +379,11 @@ struct Target {
     file: Option<String>,
     /// The item is only in the new tree, or only in the old tree.
     one_side: Option<&'static str>,
-    /// The path in the old tree, for the sites of a rename.
-    old: Option<String>,
+    /// The paths in the old tree, for the sites of a rename.
+    old: Vec<String>,
+    /// A text for the result line. The path names two items or more that a path cannot tell
+    /// apart (design 54.19), or it names a file that Semilla does not parse (design 54.20).
+    mark: Option<String>,
 }
 
 struct Check<'a> {
@@ -399,6 +402,10 @@ struct Check<'a> {
 
 /// The lines for a path that does not name one item of a tree: the candidates in the order of
 /// the parts that agree, and the macro calls that can make the item.
+///
+/// The note of a macro call prints only if no item candidate has the name that the input of
+/// the call has (design 54.21): with such a candidate, the item is in the syntax tree. The
+/// note prints one time for each macro name, with the count of the calls.
 fn candidate_lines(query: &str, trees: &[&Index]) -> Vec<String> {
     let mut near: Vec<(usize, String)> = Vec::new();
     for tree in trees {
@@ -410,21 +417,35 @@ fn candidate_lines(query: &str, trees: &[&Index]) -> Vec<String> {
         }
     }
     near.sort_by(|a, b| b.0.cmp(&a.0));
+    let labels: Vec<String> = near.into_iter().map(|(_, label)| label).collect();
     let mut lines = Vec::new();
-    if !near.is_empty() {
-        lines.push(format!("candidates: {}", crate::paths::list(&near.into_iter().map(|(_, label)| label).collect::<Vec<_>>())));
+    if !labels.is_empty() {
+        lines.push(format!("candidates: {}", crate::paths::list(&labels)));
     }
-    let mut makers: Vec<(&str, String)> = Vec::new();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let has = |label: &String, name: &str| label.match_indices(name).any(|(at, _)| !label[..at].chars().last().is_some_and(word) && !label[at + name.len()..].chars().next().is_some_and(word));
+    // The calls of each macro name: the first call, the name in its input, and the count.
+    let mut makers: Vec<(String, &str, String, usize)> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
     for tree in trees {
-        for maker in tree.makers(query) {
-            if !makers.contains(&maker) {
-                makers.push(maker);
+        for (call, name) in tree.makers(query) {
+            if seen.contains(&call) || labels.iter().any(|label| has(label, &name)) {
+                continue;
+            }
+            seen.push(call);
+            let mac = crate::paths::no_twin(call.rsplit("::").next().unwrap_or(call));
+            match makers.iter_mut().find(|(other, ..)| *other == mac) {
+                Some(group) => group.3 += 1,
+                None => makers.push((mac, call, name, 1)),
             }
         }
     }
-    for (call, name) in makers.iter().take(3) {
+    for (mac, call, name, count) in makers.iter().take(3) {
         let module = call.rsplit_once("::").map(|(module, _)| module).unwrap_or(call);
-        lines.push(format!("an item that a macro call makes has no path in the syntax tree. The input of the macro call `{call}` has `{name}`: give the macro call `{call}` or its module `{module}`"));
+        lines.push(match count {
+            1 => format!("an item that a macro call makes has no path in the syntax tree. The input of the macro call `{call}` has `{name}`: give the macro call `{call}` or its module `{module}`"),
+            _ => format!("an item that a macro call makes has no path in the syntax tree. The input of {count} calls of the macro `{mac}` has `{name}`: give one macro call (the first is `{call}`) or its module `{module}`"),
+        });
     }
     lines
 }
@@ -462,6 +483,53 @@ impl<'a> Check<'a> {
         !unit.items.is_empty() && unit.items.iter().all(|item| old(item) && new(item))
     }
 
+    /// The target for a file of the old tree or of the new tree.
+    fn file_target(&self, file: &str) -> Target {
+        let mut scope = BTreeSet::new();
+        for ws in [self.before, self.after] {
+            scope.extend(ws.items.values().filter(|item| item.file == file).map(|item| item.path.clone()));
+        }
+        let one_side = match (self.before.files.contains_key(file), self.after.files.contains_key(file)) {
+            (false, true) => Some("added"),
+            (true, false) => Some("removed"),
+            _ => None,
+        };
+        Target { name: file.to_string(), scope, file: Some(file.to_string()), one_side, old: Vec::new(), mark: None }
+    }
+
+    /// The file of a target that Semilla does not parse (design 54.20). The first segment of
+    /// the path is the name of the target: the path names the file, because the file has no
+    /// item in the syntax tree. `None`: no such target has the name.
+    fn target_file(&self, query: &str, name: &str) -> Option<Result<Target, Vec<String>>> {
+        let first = name.split("::").next()?.trim();
+        let mut files: BTreeMap<&str, &semilla_syntax::CodeFile> = BTreeMap::new();
+        for ws in [self.before, self.after] {
+            for (file, code) in &ws.code_files {
+                if !code.is_build_script() && code.target.replace('-', "_") == first {
+                    files.insert(file, code);
+                }
+            }
+        }
+        // A target with two files or more: the path names the one file that the step changes.
+        let changed: Vec<&str> = files.keys().copied().filter(|file| self.units.iter().any(|unit| unit.file.as_deref() == Some(*file))).collect();
+        let (file, code) = match (files.len(), &changed[..]) {
+            (0, _) => return None,
+            (1, _) => files.iter().next()?,
+            (_, [file]) => files.get_key_value(file)?,
+            (count, _) => {
+                let role = files.values().next()?.role();
+                let list: Vec<String> = files.keys().map(|file| file.to_string()).collect();
+                return Some(Err(vec![
+                    format!("`{query}` starts with the name of {role}. Semilla does not parse the {count} files of this target, and the step changes {} of them: give the path of the file", changed.len()),
+                    format!("candidates: {}", crate::paths::list(&list)),
+                ]));
+            }
+        };
+        let mut target = self.file_target(file);
+        target.mark = Some(format!("Semilla does not parse `{file}`, a file of {}: the fact covers the full file", code.role()));
+        Some(Ok(target))
+    }
+
     /// Resolves the loose path of a `change` item. The error has the lines for the agent.
     fn resolve(&self, query: &str) -> Result<Target, Vec<String>> {
         let name = plain(query);
@@ -479,16 +547,7 @@ impl<'a> Check<'a> {
         }
         let file = files.iter().find(|path| path.as_str() == file).or(files.iter().next()).map(|path| path.as_str()).unwrap_or(file);
         if self.before.files.contains_key(file) || self.after.files.contains_key(file) {
-            let mut scope = BTreeSet::new();
-            for ws in [self.before, self.after] {
-                scope.extend(ws.items.values().filter(|item| item.file == file).map(|item| item.path.clone()));
-            }
-            let one_side = match (self.before.files.contains_key(file), self.after.files.contains_key(file)) {
-                (false, true) => Some("added"),
-                (true, false) => Some("removed"),
-                _ => None,
-            };
-            return Ok(Target { name: file.to_string(), scope, file: Some(file.to_string()), one_side, old: None });
+            return Ok(self.file_target(file));
         }
         // Each item of the two trees. An item with a rename or a move is one item with two paths.
         let new_of = |old: &str| self.renames.items.get(old).cloned();
@@ -522,16 +581,26 @@ impl<'a> Check<'a> {
             (Some(old), None) => format!("`{}` (removed)", self.old_paths().label(old)),
             (None, None) => String::new(),
         };
+        let same_form = || {
+            let form = |(old, new): &(Option<String>, Option<String>)| new.as_ref().and_then(|path| self.new_paths().normal(path)).or_else(|| old.as_ref().and_then(|path| self.old_paths().normal(path)));
+            let first = form(&found[0]);
+            first.is_some() && found.iter().all(|pair| form(pair) == first)
+        };
         match found.len() {
             0 => {
+                if let Some(target) = self.target_file(query, &name) {
+                    return target;
+                }
                 let mut lines = vec![format!("`{query}` names no item, no module, and no file of the old tree or the new tree")];
                 lines.extend(candidate_lines(&name, &[self.new_paths(), self.old_paths()]));
                 Err(lines)
             }
-            1 => {
-                let (old, new) = found.remove(0);
+            // One item. Or items that a path cannot tell apart (design 54.19): each
+            // candidate has the same path with no twin mark. The path names each of them, as
+            // a module names each item in it.
+            count if count == 1 || same_form() => {
                 let mut scope = BTreeSet::new();
-                for (ws, path) in [(self.before, &old), (self.after, &new)] {
+                for (ws, path) in found.iter().flat_map(|(old, new)| [(self.before, old), (self.after, new)]) {
                     let Some(root) = path.as_ref().and_then(|path| ws.items.get(path)) else { continue };
                     for item in ws.items.values() {
                         let inside = item.path == root.path
@@ -542,12 +611,17 @@ impl<'a> Check<'a> {
                         }
                     }
                 }
-                let one_side = match (&old, &new) {
-                    (None, _) => Some("added"),
-                    (_, None) => Some("removed"),
-                    _ => None,
+                let one_side = if found.iter().all(|(old, _)| old.is_none()) {
+                    Some("added")
+                } else if found.iter().all(|(_, new)| new.is_none()) {
+                    Some("removed")
+                } else {
+                    None
                 };
-                Ok(Target { name: new.clone().or(old.clone()).unwrap_or_default(), scope, file: None, one_side, old })
+                let (old, new) = &found[0];
+                let name = new.clone().or(old.clone()).unwrap_or_default();
+                let name = if count == 1 { name } else { crate::paths::no_twin(&name) };
+                Ok(Target { name, scope, file: None, one_side, old: found.iter().filter_map(|(old, _)| old.clone()).collect(), mark: (count > 1).then(|| format!("{count} items with this path")) })
             }
             count => {
                 // The best candidate first: the item with the most parts that agree.
@@ -823,6 +897,9 @@ impl<'a> Check<'a> {
     fn change(&self, items: &[String], result: &mut AgentFact) -> Vec<usize> {
         let mut covered = Vec::new();
         let mut held = 0;
+        // The marks of the paths: items that a path cannot tell apart (design 54.19), and a
+        // file that Semilla does not parse (design 54.20).
+        let mut marks: Vec<String> = Vec::new();
         for query in items {
             let target = match self.resolve(query) {
                 Ok(target) => target,
@@ -831,6 +908,9 @@ impl<'a> Check<'a> {
                     continue;
                 }
             };
+            if let Some(mark) = &target.mark {
+                marks.push(if items.len() == 1 { mark.clone() } else { format!("`{}`: {mark}", plain(query)) });
+            }
             let units = self.units_of(&target);
             let behavior: Vec<usize> = units.iter().copied().filter(|&unit| self.facts[self.units[unit].fact].category.can_change_behavior()).collect();
             let sided = |category: Category| units.iter().any(|&unit| self.facts[self.units[unit].fact].category == category);
@@ -844,7 +924,7 @@ impl<'a> Check<'a> {
             } else {
                 let mut facts: Vec<usize> = units.iter().map(|&unit| self.units[unit].fact).collect();
                 facts.dedup();
-                let sites = target.old.as_ref().and_then(|old| self.renames.sites.as_ref().and_then(|sites| sites.get(old))).map(|sites| sites.len()).unwrap_or(0);
+                let sites: usize = target.old.iter().filter_map(|old| self.renames.sites.as_ref().and_then(|sites| sites.get(old))).map(|sites| sites.len()).sum();
                 if facts.is_empty() && sites == 0 {
                     result.notes.push(format!("Semilla sees no edit in `{}`", target.name));
                 } else {
@@ -871,6 +951,9 @@ impl<'a> Check<'a> {
         };
         if covered.is_empty() && result.holds {
             result.result = "holds: no reject".to_string();
+        }
+        if !marks.is_empty() {
+            result.result.push_str(&format!(" ({})", marks.join("; ")));
         }
         covered
     }

@@ -6,8 +6,10 @@
 //! - The parts of the path that the agent gives must agree with the last parts of the path of
 //!   the item.
 //! - `<TYPE as TRAIT>` and `<impl TRAIT for TYPE>` are the same part.
-//! - A path in a part (`TYPE`, `TRAIT`) agrees if its last segments agree. The module path of
-//!   the type can be before the `<…>` or in it.
+//! - A path in a part (`TYPE`, `TRAIT`) agrees if the two paths name the same item of the
+//!   workspace (design 54.18). The name lookup of the rename map gives the item (`crate`,
+//!   `self`, `super`, `use` lines, re-exports). With no answer of the lookup, the path agrees
+//!   if its last segments agree. The module path of the type can be before the `<…>` or in it.
 //! - Generic arguments are optional. If the two sides give them, they must be equal.
 //! - White space and lifetimes are not important.
 //!
@@ -25,6 +27,9 @@ pub(crate) struct Name {
     segments: Vec<String>,
     /// The generic arguments at the end, with no white space.
     arguments: Option<String>,
+    /// The words `crate` and `self` at the start of the path. They are no segments for the
+    /// compare. The name lookup needs them.
+    start: Vec<String>,
 }
 
 impl Name {
@@ -157,14 +162,15 @@ fn name_of(text: &str) -> Name {
     };
     let is_path = !head.is_empty() && head.split("::").all(|segment| !segment.is_empty() && segment.chars().all(word));
     if !is_path {
-        return Name { segments: vec![text.to_string()], arguments: None };
+        return Name { segments: vec![text.to_string()], arguments: None, start: Vec::new() };
     }
     let mut segments: Vec<String> = head.split("::").map(str::to_string).collect();
     // `crate::money::Price` and `self::Price`: the start names no module of its own.
+    let mut start = Vec::new();
     while segments.len() > 1 && matches!(segments[0].as_str(), "crate" | "self") {
-        segments.remove(0);
+        start.push(segments.remove(0));
     }
-    Name { segments, arguments }
+    Name { segments, arguments, start }
 }
 
 /// `TYPE as TRAIT`, or `TYPE`.
@@ -291,12 +297,30 @@ fn bare(name: &str) -> &str {
     name.strip_prefix('.').unwrap_or(name)
 }
 
+/// The text of a path with no twin mark (`#0`, `#1`).
+pub(crate) fn no_twin(path: &str) -> String {
+    let mut out = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '#' && chars.peek().is_some_and(char::is_ascii_digit) {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// One item of a tree with the parts of its path.
 struct Entry<'a> {
     item: &'a Item,
     parts: Vec<Part>,
     /// The path with the generic arguments of the header of its `impl` block, if it has some.
     label: String,
+    /// The `impl` block of the item, for an item with a part `<…>`.
+    block: Option<&'a Item>,
 }
 
 /// The items of one tree, each with the parts of its path.
@@ -305,6 +329,9 @@ pub(crate) struct Index<'a> {
     /// The paths of the types and the traits of the tree, by the last name.
     types: BTreeMap<String, Vec<Vec<String>>>,
     workspace: &'a Workspace,
+    /// The answers of the name lookup: the path of an item (empty for a path from a crate
+    /// root) and the segments, with the item that the path names there.
+    lookups: std::cell::RefCell<BTreeMap<(String, Vec<String>), Option<String>>>,
 }
 
 impl<'a> Index<'a> {
@@ -326,6 +353,7 @@ impl<'a> Index<'a> {
                 }
             }
             let mut label = item.path.clone();
+            let mut own_block = None;
             if let Some(at) = parts.iter().position(|part| matches!(part, Part::Impl { .. })) {
                 let block = if item.kind == ItemKind::Impl {
                     Some(item)
@@ -333,6 +361,7 @@ impl<'a> Index<'a> {
                     let inside = |block: &&&Item| block.line_start <= item.line_start && block.line_end >= item.line_end;
                     blocks.get(item.file.as_str()).and_then(|list| list.iter().filter(inside).min_by_key(|block| block.line_end - block.line_start)).copied()
                 };
+                own_block = block;
                 let found = block.and_then(|block| header(&block.display.signature).or_else(|| header(&block.signature)));
                 let count = parts.len();
                 if let (Some((head_ty, head_tr)), Part::Impl { ty, tr, block, twin }) = (found, &mut parts[at]) {
@@ -361,9 +390,9 @@ impl<'a> Index<'a> {
                     }
                 }
             }
-            entries.push(Entry { item, parts, label });
+            entries.push(Entry { item, parts, label, block: own_block });
         }
-        Index { entries, types, workspace }
+        Index { entries, types, workspace, lookups: Default::default() }
     }
 
     /// The path of an item for a message: with the generic arguments of its `impl` block.
@@ -371,10 +400,74 @@ impl<'a> Index<'a> {
         self.entries.iter().find(|entry| entry.item.path == path).map(|entry| entry.label.clone()).unwrap_or_else(|| path.to_string())
     }
 
+    /// The parts of the path of an item with no twin mark (`#0`, `#1`), and with the generic
+    /// arguments of its `impl` block (design 54.19). Two items with equal parts are items
+    /// that a path cannot tell apart.
+    pub(crate) fn normal(&self, path: &str) -> Option<Vec<Part>> {
+        let entry = self.entries.iter().find(|entry| entry.item.path == path)?;
+        let mut parts = entry.parts.clone();
+        for part in &mut parts {
+            match part {
+                Part::Plain { twin, .. } | Part::Impl { twin, .. } => *twin = None,
+            }
+        }
+        Some(parts)
+    }
+
+    /// The item of the workspace that a path names in an `impl` block. `root`: the path
+    /// starts at a crate root. `None`: the name lookup gives no answer.
+    fn lookup(&self, block: &Item, segments: &[String], root: bool) -> Option<String> {
+        if root && !self.workspace.crates.iter().any(|krate| Some(&krate.name) == segments.first()) {
+            return None;
+        }
+        let key = (if root { String::new() } else { block.path.clone() }, segments.to_vec());
+        if let Some(known) = self.lookups.borrow().get(&key) {
+            return known.clone();
+        }
+        let path: Vec<&str> = root.then_some(semilla_syntax::sites::ROOT).into_iter().chain(segments.iter().map(String::as_str)).collect();
+        let found = crate::sites::path_item(self.workspace, &block.path, &path);
+        self.lookups.borrow_mut().insert(key, found.clone());
+        found
+    }
+
+    /// The answer of the name lookup to "do the two paths name the same item?" (design
+    /// 54.18). `item`: the path in the header of the `impl` block. `None`: the lookup gives
+    /// no item for the path of the block.
+    fn same_item(&self, query: &Name, item: &Name, block: Option<&Item>) -> Option<bool> {
+        let block = block?;
+        let written: Vec<String> = item.start.iter().chain(&item.segments).cloned().collect();
+        let found = self.lookup(block, &written, false)?;
+        // A query that starts with `crate` or `self` is a path in the module of the block.
+        let local = || {
+            let asked: Vec<String> = query.start.iter().chain(&query.segments).cloned().collect();
+            (!query.start.is_empty()).then(|| self.lookup(block, &asked, false)).flatten()
+        };
+        Some(match self.lookup(block, &query.segments, true).or_else(local) {
+            Some(wanted) => wanted == found,
+            // The query does not start at a crate root. It agrees if it is the end of the
+            // path of the item, or the end of the text of the header.
+            None => {
+                let full: Vec<String> = found.split("::").map(str::to_string).collect();
+                ends_agree(&query.segments, &full) && query.segments.len() <= full.len() || ends_agree(&query.segments, &item.segments) && query.segments.len() <= item.segments.len()
+            }
+        })
+    }
+
+    /// True if the trait of the query agrees with the trait of a part of the item.
+    fn trait_agrees(&self, query: &Name, item: &Name, block: Option<&Item>) -> bool {
+        arguments_agree(&query.arguments, &item.arguments) && self.same_item(query, item, block).unwrap_or_else(|| ends_agree(&query.segments, &item.segments))
+    }
+
     /// True if the type of the query agrees with the type of a part of the item. `module`: the
-    /// plain names of the path before the part.
-    fn type_agrees(&self, query: &Name, item: &Name, module: &[String]) -> bool {
-        if !arguments_agree(&query.arguments, &item.arguments) || !ends_agree(&query.segments, &item.segments) {
+    /// plain names of the path before the part. `block`: the `impl` block of the item.
+    fn type_agrees(&self, query: &Name, item: &Name, module: &[String], block: Option<&Item>) -> bool {
+        if !arguments_agree(&query.arguments, &item.arguments) {
+            return false;
+        }
+        if let Some(same) = self.same_item(query, item, block) {
+            return same;
+        }
+        if !ends_agree(&query.segments, &item.segments) {
             return false;
         }
         if query.segments.len() <= item.segments.len() {
@@ -397,18 +490,18 @@ impl<'a> Index<'a> {
     }
 
     /// True if one part of the query agrees with one part of the item.
-    fn part_agrees(&self, query: &Part, item: &Part, module: &[String]) -> bool {
+    fn part_agrees(&self, query: &Part, item: &Part, module: &[String], block: Option<&Item>) -> bool {
         match (query, item) {
             (Part::Plain { name, arguments, twin }, Part::Plain { name: other, arguments: other_arguments, twin: other_twin }) => bare(name) == bare(other) && arguments_agree(arguments, other_arguments) && twin_agrees(twin, other_twin),
             // `Price::fmt` for `<Price as Display>::fmt`.
             (Part::Plain { name, arguments, twin }, Part::Impl { ty, block: false, twin: other_twin, .. }) => name == ty.last() && arguments_agree(arguments, &ty.arguments) && twin_agrees(twin, other_twin),
-            (Part::Impl { ty, tr, block, twin }, Part::Impl { ty: other_ty, tr: other_tr, block: other_block, twin: other_twin }) => {
+            (Part::Impl { ty, tr, block: block_only, twin }, Part::Impl { ty: other_ty, tr: other_tr, block: other_block, twin: other_twin }) => {
                 let traits = match (tr, other_tr) {
-                    (Some(a), Some(b)) => ends_agree(&a.segments, &b.segments) && arguments_agree(&a.arguments, &b.arguments),
+                    (Some(a), Some(b)) => self.trait_agrees(a, b, block),
                     (None, None) => true,
                     _ => false,
                 };
-                (!*block || *other_block) && traits && self.type_agrees(ty, other_ty, module) && twin_agrees(twin, other_twin)
+                (!*block_only || *other_block) && traits && self.type_agrees(ty, other_ty, module, block) && twin_agrees(twin, other_twin)
             }
             // `<Price>::new` for `Price::new`.
             (Part::Impl { ty, tr: None, block: false, twin }, Part::Plain { name, arguments, twin: other_twin }) => {
@@ -432,7 +525,7 @@ impl<'a> Index<'a> {
             return false;
         }
         let shift = entry.parts.len() - query.len();
-        query.iter().enumerate().all(|(index, part)| self.part_agrees(part, &entry.parts[shift + index], &Self::module(&entry.parts, shift + index)))
+        query.iter().enumerate().all(|(index, part)| self.part_agrees(part, &entry.parts[shift + index], &Self::module(&entry.parts, shift + index), entry.block))
     }
 
     /// The count of the parts of the query that agree with the item, for the order of the
@@ -444,12 +537,12 @@ impl<'a> Index<'a> {
             let module = Self::module(&entry.parts, at);
             score += match (part, &entry.parts[at]) {
                 (Part::Impl { ty, tr, .. }, Part::Impl { ty: other_ty, tr: other_tr, .. }) => {
-                    let traits = tr.as_ref().zip(other_tr.as_ref()).is_some_and(|(a, b)| ends_agree(&a.segments, &b.segments) && arguments_agree(&a.arguments, &b.arguments));
-                    usize::from(self.type_agrees(ty, other_ty, &module)) + usize::from(traits)
+                    let traits = tr.as_ref().zip(other_tr.as_ref()).is_some_and(|(a, b)| self.trait_agrees(a, b, entry.block));
+                    usize::from(self.type_agrees(ty, other_ty, &module, entry.block)) + usize::from(traits)
                 }
                 (Part::Impl { ty, .. }, Part::Plain { name, .. }) => usize::from(ty.last() == name),
                 (Part::Plain { name, .. }, Part::Impl { ty, .. }) => usize::from(name == ty.last()),
-                (part, other) => usize::from(self.part_agrees(part, other, &module)),
+                (part, other) => usize::from(self.part_agrees(part, other, &module, entry.block)),
             };
         }
         score

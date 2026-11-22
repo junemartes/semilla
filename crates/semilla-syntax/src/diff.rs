@@ -197,6 +197,11 @@ pub struct Renames {
     pub sites: Option<BTreeMap<String, BTreeMap<String, String>>>,
     /// The count of the sites of each renamed item (the key is the old path).
     pub counts: BTreeMap<String, SiteCount>,
+    /// The references that can follow a rename (design 54.17). The first key is the old path
+    /// of the renamed item. The second key is an item of the "before" side. The value is the
+    /// count of its sites (no declaration) whose new item has the new name at a place of the
+    /// same kind.
+    pub followed: BTreeMap<String, BTreeMap<String, usize>>,
 }
 
 /// The count of the places of one renamed item, by class (design 51.2).

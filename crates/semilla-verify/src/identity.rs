@@ -471,7 +471,13 @@ fn attempt(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, p
         next.push(pair.clone());
         next.sort_by_key(|pair| depth(&pair.old));
         match check_map(input, bodies, exprs, &next) {
-            Ok((next_claims, result)) => (map, claims, outcome) = (next, next_claims, Some(result)),
+            Ok((next_claims, result)) => {
+                if !evidence(input, &next, &result, pair) {
+                    let word = if pair.op == "rename" { "rename" } else { "move" };
+                    return Err((index, format!("{NO_EVIDENCE_START} {word}, and the declarations are not similar. A stated {word} needs one of the two")));
+                }
+                (map, claims, outcome) = (next, next_claims, Some(result))
+            }
             Err(cause) => return Err((index, format!("the check of the pair does not pass: {cause}"))),
         }
     }
@@ -489,6 +495,41 @@ fn attempt(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, p
         }
     }
     Ok((convert(input, &map, &claims, outcome), map))
+}
+
+/// The start of the cause of a stated pair with no evidence (design 54.17).
+pub(crate) const NO_EVIDENCE_START: &str = "no reference follows the";
+
+/// True if the step has evidence for a stated pair (design 54.17). A stated pair does not
+/// have the limits of the search, so each removed item and each added item of one kind can
+/// pass the check of the map. The evidence is one of these:
+/// - the two declarations pass the similar score of the search;
+/// - a reference follows a rename: a site of the site table that no edit has, or a site in
+///   an edit whose new text has the new name;
+/// - a reference follows a move: a forced edit that the check of the pair explains (a `use`
+///   line, a path).
+fn evidence(input: &StepInput, map: &[Candidate], outcome: &StepOutcome, pair: &Candidate) -> bool {
+    if similarity(&input.before.items[&pair.old], &input.after.items[&pair.new]) >= crate::PAIR_THRESHOLD {
+        return true;
+    }
+    // The sites that do not follow: the places with the name in the old text of each edit of
+    // the item whose new text does not have the new name. A site follows if the item has more
+    // sites than these.
+    let (old_name, new_name) = (name(&pair.old), name(&pair.new));
+    let lost = |item: &str| -> usize {
+        let edits = outcome.edits.iter().filter(|edit| edit.before.as_ref().is_some_and(|at| at.item == item));
+        let open = edits.filter(|edit| !edit.text_after.as_deref().is_some_and(|text| crate::sites::name_places(text, &[new_name]) > 0));
+        open.filter_map(|edit| edit.text_before.as_deref()).map(|text| crate::sites::name_places(text, &[old_name, new_name])).sum()
+    };
+    if outcome.renames.followed.get(&pair.old).is_some_and(|items| items.iter().any(|(item, count)| *count > lost(item))) {
+        return true;
+    }
+    let Some(claim) = map.iter().position(|other| other == pair).map(|at| input.step.claims.len() + at) else { return false };
+    outcome.edits.iter().zip(&outcome.owners).any(|(edit, owner)| {
+        let is_use = edit.attr_before.as_deref() == Some("use") || edit.attr_after.as_deref() == Some("use");
+        let is_path = edit.kind == EditKind::Replaced && edit.node_before == Some("path") && edit.node_after == Some("path");
+        *owner == Some(claim) && (is_use || is_path)
+    })
 }
 
 /// The notes for the limits of the search, for the items that are not in a map.

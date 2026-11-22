@@ -5117,11 +5117,11 @@ Agents wrote facts for six real change sets before the options existed. 9 of 26 
 **The rule.** Semilla compares a path of the agent with the path of each item in a normal form, part by part, from the last part.
 
 - A part is a name (`money`, `fmt`, `Price.0`) or an impl part. `<impl TRAIT for TYPE>` and `<TYPE as TRAIT>` are the same impl part. `<impl TYPE>` and the type name are the same part.
-- A path in an impl part (`TYPE`, `TRAIT`) agrees if its last segments agree: `core::fmt::Display`, `fmt::Display`, and `Display` agree. The module path of the type can be before the `<…>` or in it (`<shop::money::Price as Display>::fmt` and `shop::money::<Price as Display>::fmt`).
+- A path in an impl part (`TYPE`, `TRAIT`) agrees if the two paths name the same item of the workspace (batch 9b3, 54.18). If the name lookup gives no answer, it agrees if its last segments agree: `core::fmt::Display`, `fmt::Display`, and `Display` agree. The module path of the type can be before the `<…>` or in it (`<shop::money::Price as Display>::fmt` and `shop::money::<Price as Display>::fmt`).
 - Generic arguments are optional. `Scale` agrees with `Scale<u64>`. `Scale<u32>` does not agree with `Scale<u64>`.
 - White space is not important (`[T; N]` and `[T;N]`).
 - The path of the agent can start at each part (`fmt` is a path, and so is `money::<Price as Display>::fmt`). The twin number of Semilla (`#0`) is optional.
-- The result is a set of items. One item: the path is resolved. No item, or two items or more: the fact is false, as in batch 9b, with the candidates.
+- The result is a set of items. One item: the path is resolved. No item, or two items or more: the fact is false, as in batch 9b, with the candidates. Batch 9b3 adds two cases: items that a path cannot tell apart (54.19), and a file that Semilla does not parse (54.20).
 
 **The candidates.** Semilla orders them by the count of the parts that agree (best first). It prints at most 8, then a count. Each candidate has the generic arguments of its trait and its type, because the path of Semilla for two impls of one generic trait differs only in the twin number:
 
@@ -5131,12 +5131,12 @@ Agents wrote facts for six real change sets before the options existed. 9 of 26 
       candidates: `shop::money::<Price as Scale<u64>>::scale#0`, `shop::money::<Price as Scale<u32>>::scale#1`
 ```
 
-**An item that a macro call makes** has no path in the syntax tree. If the input of a macro call has the name of the type or of the trait, the message names the macro call and its module: "an item that a macro call makes has no path in the syntax tree. The input of the macro call `shop::money::unit!#0` has `Coin`: give the macro call `shop::money::unit!#0` or its module `shop::money`".
+**An item that a macro call makes** has no path in the syntax tree. If the input of a macro call has the name of the type or of the trait, the message names the macro call and its module: "an item that a macro call makes has no path in the syntax tree. The input of the macro call `shop::money::unit!#0` has `Coin`: give the macro call `shop::money::unit!#0` or its module `shop::money`". Batch 9b3 limits the note (54.21).
 
 Decided by Claude:
 
 1. **A field and a method with one name.** `Cart.total` is the field and `Cart::total` is the method. If the mark of the last part selects one item, that item is the result. If not, the two marks agree (`Cart::total` finds the field of a type with no such method).
-2. **A trait path agrees by its last segments only.** `<Price as other::Display>::fmt` does not agree with `fmt::Display`. But `Display` agrees with each trait that has this last name. Semilla does not resolve the imports for a path of the agent.
+2. **A trait path agrees by its last segments only.** `<Price as other::Display>::fmt` does not agree with `fmt::Display`. But `Display` agrees with each trait that has this last name. Semilla does not resolve the imports for a path of the agent. (Batch 9b3 replaces this decision for a type and a trait of the workspace: 54.18.)
 3. **Soundness.** The rule selects the items of a fact of the agent. It hides no edit: a wider match can only give more candidates (a reject), and the check of the fact (54.2, 54.3) does not change.
 
 Limits: a type with a `+` (`dyn A + 'a`) and a turbofish in a path of the agent (`Name::<T>`) get a simple normal form. A candidate shows the generic arguments only if Semilla can align its parts with the `impl` header.
@@ -5148,7 +5148,7 @@ Limits: a type with a `+` (`dyn A + 'a`) and a turbofish in a path of the agent 
 **A stated pair.** `--same 'rename OLD NEW'` and `--same 'move FROM TO'` give a candidate pair if each path names one item and the pair has a form that the rename rule has.
 
 - Semilla first runs its own search with no stated pair. Then it adds each stated pair that is not in the map, the outer items first, and it runs **the same check** (`verify_core` with the claims of the map: each reference maps, each site is exact). The limits of the search (`MAX_GROUP`, `MAX_MAPS`, the name threshold) do not apply to a stated pair, because the agent gives the pair. This is the reduced search space.
-- If the check passes, the rename fact (or the move fact) exists with the origin `stated`.
+- If the check passes and the step has evidence for the pair (batch 9b3, 54.17), the rename fact (or the move fact) exists with the origin `stated`.
 - If the pair is no candidate or the check does not pass, the fact is false, as in batch 9b, and the first note gives the cause: "the stated pair is no fact: …" (for the check: "the check of the pair does not pass: …" with the cause of the rename rule).
 - **A site that is not exact does not reject the pair** (50.2, as for a pair that Semilla finds alone). A site that did not follow the rename, or a site with one more edit, keeps its own `[semantics]` fact with the origin `derived`, and the gap list names it. Thus the first place that is not exact is a fact line and a gap line, not a cause in the reject.
 - **A stated pair never makes the check weaker.** The check of 50.2 keeps each difference that the map does not explain as its own fact. A body edit of a renamed function, a new parameter, and an edit at a call site are facts with the category of the edit, and they are in the gap list.
@@ -5238,3 +5238,105 @@ Soundness: Semilla prints an option only after the check of that option passes o
 Decided by Claude: the rule covers `rewrite`, `rename`, and `move`. A false `change` fact already shows what Semilla sees in the item (54.2), and the gap list gives the `change` option that holds. A printed pattern is 200 characters or less.
 
 Limit: a statement that a statement of a different kind replaces (a tail expression that becomes a `let`) is a removed statement and an added statement. It is no site of a pattern, as in batch 9b.
+
+### 54.17 Batch 9b3: a stated pair needs evidence (G1)
+
+**The defect.** The check of 54.11 keeps each difference as its own fact. So a pair of two items with nothing in common passed: `limit() -> u32` removed, `cap(x: u64, y: &str) -> String` added, each call `limit()` replaced by `7`, and `--same 'rename limit cap'` gave "holds". No edit was hidden, but the rename fact was not true.
+
+**The rule.** A stated pair is a fact only if the step has evidence for it. One of the two is sufficient:
+
+1. **A reference follows the map.** One reference site or more has the old name in the old tree and the new name at the same place in the new tree. The rename fact covers such a site. The site table (51) counts these sites for each pair (`Renames.followed`).
+2. **The declarations are similar.** The two items pass the similar score of the search (`PAIR_THRESHOLD`, 0.7).
+
+With no evidence the fact is false. The message shows what Semilla sees for the two items:
+
+```text
+  ✗ a1 same: rename limit cap (false: Semilla derives no rename `limit` → `cap` from the syntax tree)
+      the stated pair is no fact: no reference follows the rename, and the declarations are not similar. A stated rename needs one of the two
+      Semilla sees: f2 removed `depot::limit` (the public API changes: a different crate can no longer use the item) [removed]
+      Semilla sees: f3 added `depot::cap` (the public API changes: a different crate can now use the item) [added]
+```
+
+The same rule applies to `move`. A pair that Semilla derives alone does not change: the search has its own score.
+
+Decided by Claude:
+
+1. **A site in an edit.** A call `limit()` that becomes `cap(1, "a")` is one edit with new arguments. It follows the rename if the new text of the edit has the new name. A statement that is removed and a statement that is added are no reference that follows.
+2. **The evidence of a move.** A move does not change the name. The reference evidence is a `use` line or a path that the check of the pair explains (`a::base` → `b::base`).
+3. **Soundness.** The rule can only make a fact false. It hides no edit. With a false fact, the two items stay `removed` and `added`.
+
+Limit: a move whose only reference is a call with new arguments, and whose declarations are not similar, is false. The agent can state the edit with `--change`.
+
+### 54.18 Batch 9b3: a type path and a trait path name an item (G2)
+
+**The defect.** The path of Semilla has the text of the `impl` header: `shop::unix::<crate::Price as Convert>::conv`. The agent writes the path of the compiler: `<shop::money::Price as shop::Convert>::conv`. The type `Price` is in `shop::money`, and the crate root has `pub use money::Price;`. The compare by the last segments gave "names no item".
+
+**The rule.** A type part or a trait part agrees if the two paths name the same item of the workspace. Semilla uses the name lookup of the site table (51): `crate`, `self`, `super`, the `use` lines, the glob imports, and the re-exports.
+
+- Semilla resolves the path of the header in the module of the `impl` block.
+- A path of the agent that starts with a crate name is a path from that crate root. A path that starts with `crate` or `self` is a path in the module of the block.
+- The two paths agree if they give one item. `shop::Price` (the re-export) and `shop::money::Price` are one item.
+- A path of the agent with no such start (`Price`, `money::Price`) agrees if it is the end of the path of the item, or the end of the text of the header.
+- If the lookup gives no answer for the path of the header (a type of a different crate, a generic parameter, `[T; N]`), the rule of 54.10 applies: the last segments.
+
+Thus two types with one name are different: `<shop::stock::Price as Convert>::conv` selects the impl for `stock::Price`, and `<shop::nomod::Price as Convert>::conv` names no item.
+
+Decided by Claude: the rule of the fourth list item (a short path agrees by the end of the item path or by the end of the header text). Soundness: the rule only selects the items of a fact of the agent. The check of the fact does not change.
+
+### 54.19 Batch 9b3: items that a path cannot tell apart (G3)
+
+Two `impl` blocks with different `#[cfg]` conditions can have the same header. The paths of Semilla differ only in the twin mark (`…::scale#0`, `…::scale#1`). The agent cannot know the mark.
+
+**The rule.** If each candidate of a path has the same path with no twin mark (and with the generic arguments of its `impl` header), the path names each of them, as a module names each item in it. The result line names the count:
+
+```text
+  ✓ a1 change: `<Price as Scale<u8>>::scale` "…" (holds: the behavior of existing code can change in each item (2 items with this path))
+```
+
+- A path with a twin mark (`scale#0`) selects one item.
+- Candidates that differ in a part that the agent can write (generic arguments, a module) stay a reject with the candidates (54.10).
+- The check is the check of a module: one item or more must have an edit that can change the behavior. An edit in each item is below the fact.
+
+Limit (decided by Claude): the rule is for the `ITEM` of a `change` fact. A `rename` or a `move` of such items needs one pair for each item, so `OLD` with two candidates stays a reject. The candidates show the twin marks.
+
+### 54.20 Batch 9b3: a path that starts with the name of a target (G5)
+
+Semilla does not parse each file with Rust code into items: the files of a package of the tree that is not a workspace member, for example. A changed file of this kind is a `[file]` fact ("this file is code of the bench target `speed` of the package in …"). The agent writes the path of the compiler: `speed::run`.
+
+**The rule.** If a path names no item, and its first segment is the name of a target whose files Semilla does not parse, the path names the file. The result line says so:
+
+```text
+  ✓ a1 change: `speed::run` "…" (holds: the behavior of existing code can change in each item (Semilla does not parse `tools/probe/benches/speed.rs`, a file of the bench target `speed` of the package in `tools/probe` (not a workspace member): the fact covers the full file))
+```
+
+- A target with two files or more: the path names the one file of the target that the step changes. If the step changes two files or more, the fact is false, and the message gives the files: "give the path of the file".
+- If Semilla parses the file of the target (each target of a workspace member), the path resolves to the item as before: `load::run` names `shop::load::run`.
+- A build script is not in the rule: it has its own category and its own reason.
+
+Decided by Claude: the rule applies to each target kind that the loader does not parse, and thus also to the library of a package that is not a member. Soundness: the fact covers the `[file]` fact, the same as a fact with the file path.
+
+### 54.21 Batch 9b3: the note of a macro call (G4)
+
+The note of 54.10 printed also when the candidates had the item. Now the note prints only if no item candidate has the name that the input of the macro call has. It prints one time for each macro name, with the count of the calls: "The input of 2 calls of the macro `unit!` has `Coin`: give one macro call (the first is `shop::unit!#0`) or its module `shop`".
+
+Decided by Claude: "no item candidate" means "no candidate with that name". The candidate list has each item with the last name of the path (`scale`). So the plain rule "no candidate" removes the note also for `<Coin as Scale>::scale`, where no item has `Coin` and the macro call is the answer.
+
+### 54.22 Batch 9b3: the time of the children search (G6)
+
+**The cause.** The search of 54.11 checks each tied child map with one full run of the check (`verify_core`). One run had three costs that do not depend on the map: the opaque table of the two trees, the net check of the diff (it made the tokens of each changed file again, it searched all items for each item, and it made a display text for each token), and the cover of the `cfg` conditions.
+
+**The change.** No result changes.
+
+- The opaque table of a step is made only if a body needs it.
+- The net check keeps the tokens of a file text (a memo with the text as the key, 8 MB of texts at most). It finds the tokens of an item with a binary search. It makes the display text only for a difference.
+- The cover of the `cfg` conditions keeps the result of the last equal input (the Rust files and the checked configurations).
+
+**The numbers** (seconds for one step, the `socket2` fixture with an enum of 12 unit variants; batch 9b / batch 9b2 / batch 9b3):
+
+| Step | 9b | 9b2 | 9b3 |
+|------|----|-----|-----|
+| 4 renamed variants (24 tied child maps) | 0.79 | 5.4 | 0.75 |
+| 2 renamed variants | 0.78 | 1.15 | 0.43 |
+| A renamed enum, no child candidate | 0.78 | 0.77 | 0.41 |
+
+The fact lines are equal to batch 9b2 in each case. Decided by Claude: each memo has the content as its key, not an address, so a memo cannot give the result of a different input.

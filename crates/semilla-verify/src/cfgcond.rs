@@ -299,6 +299,20 @@ impl Cover {
         cover
     }
 
+    /// The result of `new`. The rename search checks the same two trees one time for each
+    /// map (batch 9b3, G6): the result is a function of the Rust files and of the checked
+    /// configurations only, thus an equal input gets the result of the last call.
+    pub(crate) fn cached(sides: &[(&Workspace, &[ConfigTruth])]) -> Cover {
+        let equal = |last: &Vec<CoverInput>| last.len() == sides.len() && last.iter().zip(sides).all(|((files, truth), (workspace, now))| *files == workspace.rust_files && truth.as_slice() == *now);
+        if let Some(found) = LAST_COVER.with(|last| last.borrow().as_ref().filter(|(input, _)| equal(input)).map(|(_, cover)| cover.clone())) {
+            return found;
+        }
+        let cover = Cover::new(sides);
+        let input = sides.iter().map(|(workspace, truth)| (workspace.rust_files.clone(), truth.to_vec())).collect();
+        LAST_COVER.with(|last| *last.borrow_mut() = Some((input, cover.clone())));
+        cover
+    }
+
     /// The state of a condition at a place. `file`: the file of the place, if the caller
     /// knows it. With no file, the condition must be covered at each place of the trees.
     fn covers(&self, condition: TokenStream, file: Option<&str>, mode: &Mode) -> bool {
@@ -362,7 +376,12 @@ pub(crate) fn own_conditions(attr: &str) -> Vec<Pred> {
     out
 }
 
+/// The input of `Cover::new` for one tree: the Rust files and the checked configurations.
+type CoverInput = (BTreeMap<String, String>, Vec<ConfigTruth>);
+
 thread_local! {
+    /// The input and the result of the last call of `Cover::cached`.
+    static LAST_COVER: RefCell<Option<(Vec<CoverInput>, Cover)>> = const { RefCell::new(None) };
     /// The conditions of the step that the verifier checks now.
     static COVER: RefCell<Option<Rc<Cover>>> = const { RefCell::new(None) };
     /// The file of the attribute that the verifier reads now.
@@ -457,6 +476,27 @@ mod tests {
             workspace.rust_files.insert(file.to_string(), text.to_string());
         }
         workspace
+    }
+
+    /// Batch 9b3, G6: an equal input gets the result of the last call. The negative tests:
+    /// a different file text and a different configuration list get a new result.
+    #[test]
+    fn the_cached_cover_is_the_cover_of_its_input() {
+        let ws = workspace(&[(LIB, "#[cfg(debug_assertions)] fn a() {}")]);
+        let both = [truth("dev", &["debug_assertions"]), truth("release", &[])];
+        let state = |cover: &Cover| (cover.covered.clone(), cover.not_covered.clone());
+        for _ in 0..2 {
+            assert_eq!(state(&Cover::cached(&[(&ws, &both)])), state(&Cover::new(&[(&ws, &both)])));
+        }
+        assert!(Cover::cached(&[(&ws, &both)]).covered.contains("debug_assertions"));
+        // Negative: one configuration only. The condition is not covered.
+        assert!(Cover::cached(&[(&ws, &both[..1])]).covered.is_empty());
+        // Negative: a different text of the same file.
+        let other = workspace(&[(LIB, "#[cfg(unix)] fn a() {}")]);
+        let cover = Cover::cached(&[(&other, &both)]);
+        assert_eq!(state(&cover), state(&Cover::new(&[(&other, &both)])));
+        assert!(cover.covered.is_empty() && cover.not_covered.contains("unix"));
+        assert!(Cover::cached(&[(&ws, &both)]).covered.contains("debug_assertions"));
     }
 
     #[test]

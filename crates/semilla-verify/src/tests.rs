@@ -9258,3 +9258,265 @@ fn the_gap_line_of_a_long_text_is_short() {
     let short = report.gaps.iter().find(|gap| !gap.text.starts_with("changed item")).expect("the gap of the literal");
     assert!(short.text.contains("`1` → `2`"), "{short:#?}");
 }
+
+const STORE: &str = "pub fn limit() -> u32 {\n    10\n}\npub fn first() -> u32 {\n    limit() + 1\n}\npub fn second() -> u32 {\n    limit() * 2\n}\npub mod a {\n    pub fn base() -> u32 {\n        3\n    }\n}\npub mod b {\n    pub fn other() -> u32 {\n        4\n    }\n}\npub fn third() -> u32 {\n    a::base() + 1\n}\n";
+
+const STORE_CAP: &str = "pub fn cap(x: u64, y: &str) -> String {\n    format!(\"{x}{y}\")\n}";
+
+/// The fact `a1` of a step of `STORE` with one `same` fact.
+fn store_fact(after: &str, same: &str) -> semilla_core::report::AgentFact {
+    agent_fact(&run_agent(STORE, after, &[same], &[]), "a1").clone()
+}
+
+/// Design 54.17 (batch 9b3, G1): a stated rename needs evidence. A reference that follows
+/// the rename is evidence. The negative tests: with no reference of the new name the fact is
+/// false, and a deleted statement with the old name is no reference that follows.
+#[test]
+fn a_stated_rename_needs_a_reference_that_follows_or_similar_declarations() {
+    let same = "rename limit cap";
+    let cap = STORE.replace("pub fn limit() -> u32 {\n    10\n}", STORE_CAP);
+    // Negative: each call becomes a literal, and the declarations are not similar.
+    let fact = store_fact(&cap.replace("limit()", "7"), same);
+    assert!(!fact.holds && fact.result == "false: Semilla derives no rename `limit` → `cap` from the syntax tree", "{fact:#?}");
+    assert!(fact.notes.contains(&"the stated pair is no fact: no reference follows the rename, and the declarations are not similar. A stated rename needs one of the two".to_string()), "{fact:#?}");
+    // The message shows the two items as Semilla sees them.
+    assert!(fact.notes.iter().any(|note| note.starts_with("Semilla sees: ") && note.contains("removed `demo::limit`")) && fact.notes.iter().any(|note| note.starts_with("Semilla sees: ") && note.contains("added `demo::cap`")), "{fact:#?}");
+    // Negative: a removed statement and an added statement. The old reference has no new text.
+    let fact = store_fact(&cap.replace("limit() + 1", "let size = cap(1, \"a\").len();\n    size as u32").replace("limit()", "7"), same);
+    assert!(!fact.holds && fact.notes.iter().any(|note| note.contains(identity::NO_EVIDENCE_START)), "{fact:#?}");
+    // A reference follows exactly: no edit has the site.
+    let exact = STORE.replace("pub fn limit() -> u32 {\n    10\n}", "pub fn cap() -> u32 {\n    let base = 4;\n    base * 2 + 2\n}").replace("limit() + 1", "cap() + 1").replace("limit()", "7");
+    let fact = store_fact(&exact, same);
+    assert!(fact.holds && fact.result == "holds: Semilla derives the rename from the syntax tree", "{fact:#?}");
+    // A reference follows in an edit: the call gets the new name and new arguments.
+    let fact = store_fact(&cap.replace("limit() + 1", "cap(1, \"a\").len() as u32 + 1").replace("limit()", "7"), same);
+    assert!(fact.holds, "{fact:#?}");
+    // Similar declarations are evidence with no reference.
+    let fact = store_fact(&STORE.replace("pub fn limit()", "pub fn cap()").replace("limit()", "7"), same);
+    assert!(fact.holds, "{fact:#?}");
+    // No edit of the author hides: each call that does not follow keeps its fact.
+    let report = run_agent(STORE, &exact, &[same], &[]);
+    let lines = fact_lines(&report);
+    assert!(lines.iter().any(|line| line.contains("`limit()` → `7`") && line.ends_with("[semantics]")), "{lines:#?}");
+}
+
+/// Design 54.17 (batch 9b3, G1): a stated move needs evidence. A path that follows the move
+/// is evidence, and similar declarations are evidence. The negative test: no reference and
+/// declarations that are not similar give a false fact with the two items.
+#[test]
+fn a_stated_move_needs_a_reference_that_follows_or_similar_declarations() {
+    let same = "move a::base b::base";
+    let gone = STORE.replace("    pub fn base() -> u32 {\n        3\n    }\n", "");
+    let other = "    pub fn other() -> u32 {\n        4\n    }\n";
+    let moved = gone.replace(other, &format!("{other}    pub fn base(x: u64, y: &str) -> String {{\n        format!(\"{{x}}{{y}}\")\n    }}\n"));
+    // Negative: the call becomes a literal, and the declarations are not similar.
+    let fact = store_fact(&moved.replace("a::base() + 1", "8"), same);
+    assert!(!fact.holds && fact.result == "false: Semilla derives no move `a::base` → `b::base` from the syntax tree", "{fact:#?}");
+    assert!(fact.notes.contains(&"the stated pair is no fact: no reference follows the move, and the declarations are not similar. A stated move needs one of the two".to_string()), "{fact:#?}");
+    assert!(fact.notes.iter().any(|note| note.contains("removed `demo::a::base`")) && fact.notes.iter().any(|note| note.contains("added `demo::b::base`")), "{fact:#?}");
+    // A path follows the move.
+    let fact = store_fact(&moved.replace("a::base() + 1", "b::base() + 1"), same);
+    assert!(fact.holds && fact.result == "holds: Semilla derives the move from the syntax tree", "{fact:#?}");
+    // Similar declarations are evidence with no reference.
+    let fact = store_fact(&gone.replace(other, &format!("{other}    pub fn base() -> u32 {{\n        3\n    }}\n")).replace("a::base() + 1", "8"), same);
+    assert!(fact.holds, "{fact:#?}");
+}
+
+const SHOP_PATHS: [(&str, &str); 6] = [
+    ("Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    ("src/lib.rs", "pub mod money;\npub mod stock;\npub mod unix;\npub mod win;\npub use money::Price;\n\npub trait Convert {\n    fn conv(&self) -> u64;\n}\n"),
+    ("src/money.rs", "pub struct Price(pub u64);\n"),
+    ("src/stock.rs", "pub struct Price(pub u32);\n\npub trait Convert {\n    fn conv(&self) -> u64;\n}\n"),
+    ("src/unix.rs", "use crate::Convert;\n\nimpl Convert for crate::Price {\n    fn conv(&self) -> u64 {\n        self.0\n    }\n}\n\nimpl Convert for crate::stock::Price {\n    fn conv(&self) -> u64 {\n        self.0 as u64\n    }\n}\n"),
+    ("src/win.rs", "use crate::money::Price;\n\nimpl crate::stock::Convert for Price {\n    fn conv(&self) -> u64 {\n        self.0 + 1\n    }\n}\n"),
+];
+
+/// Design 54.18 (batch 9b3, G2): a type part or a trait part agrees if the two paths name
+/// the same item of the workspace. The negative tests: two types with one name and one impl
+/// each (the path selects the correct one), a module that has no such type, and a trait with
+/// the same name in a different module.
+#[test]
+fn a_type_path_agrees_if_it_names_the_same_item() {
+    let (_dir, ws) = load_files(&SHOP_PATHS);
+    let index = crate::paths::Index::new(&ws);
+    let (money, stock, win) = ("shop::unix::<crate::Price as Convert>::conv", "shop::unix::<crate::stock::Price as Convert>::conv", "shop::win::<Price as crate::stock::Convert>::conv");
+    for path in [money, stock, win] {
+        assert!(ws.items.contains_key(path), "{path}: {:#?}", ws.items.keys().collect::<Vec<_>>());
+    }
+    // The re-export `shop::Price` and the item `shop::money::Price` are one item.
+    for query in ["<shop::money::Price as shop::Convert>::conv", "<shop::Price as shop::Convert>::conv", "<crate::Price as crate::Convert>::conv", "shop::unix::<impl shop::Convert for shop::money::Price>::conv"] {
+        assert_eq!(index.find(query), [money], "{query}");
+    }
+    // The second type with the name: the path selects its impl.
+    for query in ["<shop::stock::Price as shop::Convert>::conv", "<stock::Price as crate::Convert>::conv", "unix::<stock::Price as Convert>::conv"] {
+        assert_eq!(index.find(query), [stock], "{query}");
+    }
+    // A `use` line gives the type of the block in `win`. The trait path selects the block.
+    assert_eq!(index.find("<shop::money::Price as shop::stock::Convert>::conv"), [win]);
+    assert_eq!(index.find("<money::Price as stock::Convert>::conv"), [win]);
+    // A path with no module of the type and no module of the trait names each impl.
+    assert_eq!(index.find("<Price as Convert>::conv").len(), 3);
+    assert_eq!(index.find("<shop::money::Price as Convert>::conv"), [money, win]);
+    // A path that starts with `crate` is a path in the crate of the block.
+    assert_eq!(index.find("<crate::Price as Convert>::conv"), [money, win]);
+    // Negative.
+    for query in ["<shop::nomod::Price as shop::Convert>::conv", "<nomod::Price as Convert>::conv", "<shop::stock::Price as shop::stock::Convert>::conv", "<shop::money::Price as shop::money::Convert>::conv", "<shop::money::Price as shop::Other>::conv", "win::<shop::stock::Price as Convert>::conv"] {
+        assert!(index.find(query).is_empty(), "{query}: {:?}", index.find(query));
+    }
+    // A fact of the agent with the long path names the item.
+    let mut after = SHOP_PATHS;
+    let unix = SHOP_PATHS[4].1.replace("        self.0\n", "        self.0 + 2\n");
+    after[4].1 = &unix;
+    let report = run_agent_files(&SHOP_PATHS, &after, &[], &["<shop::money::Price as shop::Convert>::conv=the value is larger"]);
+    assert!(report.accepted() && report.gaps.is_empty(), "{:#?}", report.agent_facts);
+    assert_eq!(agent_fact(&report, "a1").places, ["shop::unix::<crate::Price as Convert>::conv/tail"]);
+    // Negative: the path of the other type does not name the changed item. The gap stays.
+    let report = run_agent_files(&SHOP_PATHS, &after, &[], &["<shop::stock::Price as shop::Convert>::conv=the value is larger"]);
+    assert!(!agent_fact(&report, "a1").holds && !report.gaps.is_empty(), "{:#?}", report.agent_facts);
+}
+
+const CFG_TWINS: [(&str, &str); 2] = [
+    ("Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    (
+        "src/lib.rs",
+        "pub struct Price(pub u64);\n\npub trait Scale<T> {\n    fn scale(&self, by: T) -> u64;\n}\n\n#[cfg(target_pointer_width = \"32\")]\nimpl Scale<u8> for Price {\n    fn scale(&self, by: u8) -> u64 {\n        self.0 * by as u64\n    }\n}\n\n#[cfg(target_pointer_width = \"64\")]\nimpl Scale<u8> for Price {\n    fn scale(&self, by: u8) -> u64 {\n        self.0 * by as u64 * 2\n    }\n}\n\nimpl Scale<u16> for Price {\n    fn scale(&self, by: u16) -> u64 {\n        self.0 * by as u64 * 3\n    }\n}\n",
+    ),
+];
+
+/// Design 54.19 (batch 9b3, G3): items that a path cannot tell apart. Each candidate has the
+/// same path with no twin mark: the path names each of them. The negative tests: a path with
+/// a twin mark selects one, and candidates that differ in generic arguments stay a reject.
+#[test]
+fn a_path_names_each_item_that_it_cannot_tell_apart() {
+    let (first, second) = ("shop::<Price as Scale>::scale#0", "shop::<Price as Scale>::scale#1");
+    let mut after = CFG_TWINS;
+    // An edit in the second block only.
+    let one = CFG_TWINS[1].1.replace("by as u64 * 2\n", "by as u64 * 4\n");
+    after[1].1 = &one;
+    let report = run_agent_files(&CFG_TWINS, &after, &[], &["<Price as Scale<u8>>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(report.accepted() && report.gaps.is_empty() && fact.holds, "{:#?}", report.agent_facts);
+    assert_eq!(fact.result, "holds: the behavior of existing code can change in each item (2 items with this path)");
+    assert!(fact.places.len() == 1 && fact.places[0].starts_with(second), "{fact:#?}");
+    // The same for the path of the `impl` block.
+    let report = run_agent_files(&CFG_TWINS, &after, &[], &["shop::<impl Scale<u8> for Price>=the scale is larger"]);
+    assert!(report.accepted() && agent_fact(&report, "a1").result.ends_with("(2 items with this path)"), "{:#?}", report.agent_facts);
+    // An edit in the two blocks: the one fact covers the two items.
+    let both = one.replace("self.0 * by as u64\n", "self.0 * by as u64 + 1\n");
+    after[1].1 = &both;
+    let report = run_agent_files(&CFG_TWINS, &after, &[], &["<Price as Scale<u8>>::scale=the scale is larger"]);
+    assert!(report.accepted() && report.gaps.is_empty(), "{:#?}", report.agent_facts);
+    let places = &agent_fact(&report, "a1").places;
+    assert!(places.len() == 2 && places[0].starts_with(first) && places[1].starts_with(second), "{places:#?}");
+    // Negative: a path with a twin mark selects one item. The edit of the other item is a gap.
+    let report = run_agent_files(&CFG_TWINS, &after, &[], &["<Price as Scale<u8>>::scale#0=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(fact.holds && !fact.result.contains("items with this path") && !report.gaps.is_empty(), "{:#?} {:#?}", report.agent_facts, report.gaps);
+    assert!(fact.places.len() == 1 && fact.places[0].starts_with(first), "{fact:#?}");
+    // Negative: the candidates differ in the generic arguments. The agent can write them.
+    let report = run_agent_files(&CFG_TWINS, &after, &[], &["<Price as Scale>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!report.accepted() && !fact.holds, "{fact:#?}");
+    assert_eq!(fact.notes[0], "`<Price as Scale>::scale` names 3 items: give more of the path", "{fact:#?}");
+    // Negative: no edit in the two items. The fact is false, as for one item.
+    let other = CFG_TWINS[1].1.replace("by as u64 * 3\n", "by as u64 * 5\n");
+    after[1].1 = &other;
+    let report = run_agent_files(&CFG_TWINS, &after, &[], &["<Price as Scale<u8>>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && !report.accepted() && fact.notes.iter().any(|note| note == "Semilla sees no edit in `shop::<Price as Scale>::scale`"), "{fact:#?}");
+}
+
+const TARGET_FILES: [(&str, &str); 8] = [
+    ("Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    ("src/lib.rs", "pub fn total(a: u64, b: u64) -> u64 {\n    a + b\n}\n"),
+    ("benches/load.rs", "fn run() -> u64 {\n    shop::total(1, 2)\n}\n\nfn main() {\n    run();\n}\n"),
+    ("tools/probe/Cargo.toml", "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    ("tools/probe/src/lib.rs", "pub fn probe() -> u64 {\n    1\n}\n"),
+    ("tools/probe/benches/speed.rs", "fn run() -> u64 {\n    probe::probe() + 1\n}\n\nfn main() {\n    run();\n}\n"),
+    ("tools/probe/tests/api.rs", "mod part;\n\n#[test]\nfn api() {\n    assert_eq!(part::value(), 1);\n}\n"),
+    ("tools/probe/tests/part.rs", "pub fn value() -> u64 {\n    1\n}\n"),
+];
+
+/// Design 54.20 (batch 9b3, G5): a path that starts with the name of a target whose file
+/// Semilla does not parse names the file. The negative tests: a target that Semilla parses
+/// (the path names the item), a target with two changed files, and a name of no target.
+#[test]
+fn a_path_that_starts_with_a_target_name_names_the_file_that_semilla_does_not_parse() {
+    let edit = |at: usize, from: &str, to: &str| TARGET_FILES[at].1.replace(from, to);
+    let speed = edit(5, "probe::probe() + 1", "probe::probe() + 2");
+    let mut after = TARGET_FILES;
+    after[5].1 = &speed;
+    let plain = run_agent_files(&TARGET_FILES, &after, &[], &[]);
+    let lines = fact_lines(&plain);
+    assert!(lines.iter().any(|line| line.starts_with("tools/probe/benches/speed.rs: changed [")), "{lines:#?}");
+    // The path of an item in the bench target: the fact covers the full file.
+    let report = run_agent_files(&TARGET_FILES, &after, &[], &["speed::run=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(fact.holds && fact.facts.len() == 1, "{:#?}", report.agent_facts);
+    assert_eq!(fact.result, "holds: the behavior of existing code can change in each item (Semilla does not parse `tools/probe/benches/speed.rs`, a file of the bench target `speed` of the package in `tools/probe` (not a workspace member): the fact covers the full file)");
+    assert_eq!(fact_lines(&report), lines);
+    // The same result as the fact with the path of the file.
+    let by_file = run_agent_files(&TARGET_FILES, &after, &[], &["tools/probe/benches/speed.rs=the value is larger"]);
+    assert_eq!(agent_fact(&by_file, "a1").facts, fact.facts);
+    // Negative: the name of no target. No candidate is a file.
+    let report = run_agent_files(&TARGET_FILES, &after, &[], &["slow::run=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds && fact.notes[0].starts_with("`slow::run` names no item"), "{fact:#?}");
+    // Negative: Semilla parses the bench target of a member. The path names the item.
+    let load = edit(2, "shop::total(1, 2)", "shop::total(1, 3)");
+    let mut after = TARGET_FILES;
+    after[2].1 = &load;
+    let report = run_agent_files(&TARGET_FILES, &after, &[], &["load::run=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(fact.holds && fact.facts.len() == 1 && fact.result == "holds: the behavior of existing code can change in each item", "{:#?}", report.agent_facts);
+    assert!(fact.places.iter().all(|place| place.starts_with("shop::load::run")), "{fact:#?}");
+    // Negative: the fact for the other item of the parsed target is false.
+    let report = run_agent_files(&TARGET_FILES, &after, &[], &["load::main=the value is larger"]);
+    assert!(!agent_fact(&report, "a1").holds && agent_fact(&report, "a1").facts.is_empty(), "{:#?}", report.agent_facts);
+    // A target with two files: the path names the one file that the step changes.
+    let part = edit(7, "    1\n", "    2\n");
+    let mut after = TARGET_FILES;
+    after[7].1 = &part;
+    let report = run_agent_files(&TARGET_FILES, &after, &[], &["api::part::value=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(fact.holds && fact.facts.len() == 1 && fact.result.contains("Semilla does not parse `tools/probe/tests/part.rs`, a file of the test target `api`"), "{:#?}", report.agent_facts);
+    // Negative: the step changes the two files. The path does not select one.
+    let api = edit(6, "part::value(), 1", "part::value(), 2");
+    after[6].1 = &api;
+    let report = run_agent_files(&TARGET_FILES, &after, &[], &["api::part::value=the value is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert!(!fact.holds, "{:#?}", report.agent_facts);
+    assert_eq!(fact.notes, ["`api::part::value` starts with the name of the test target `api` of the package in `tools/probe` (not a workspace member). Semilla does not parse the 2 files of this target, and the step changes 2 of them: give the path of the file", "candidates: `tools/probe/tests/api.rs`, `tools/probe/tests/part.rs`"]);
+}
+
+const MACRO_ITEMS: [(&str, &str); 2] = [
+    ("Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    (
+        "src/lib.rs",
+        "pub struct Price(pub u64);\npub struct Coin(pub u64);\n\npub trait Scale<T> {\n    fn scale(&self, by: T) -> u64;\n}\n\nimpl Scale<u64> for Price {\n    fn scale(&self, by: u64) -> u64 {\n        self.0 * by\n    }\n}\n\nmacro_rules! unit {\n    ($t:ident, $by:ty) => {\n        impl Scale<$by> for $t {\n            fn scale(&self, _by: $by) -> u64 {\n                1\n            }\n        }\n    };\n}\nunit!(Coin, u8);\nunit!(Coin, u16);\nunit!(Price, u8);\n",
+    ),
+];
+
+/// Design 54.21 (batch 9b3, G4): the note of a macro call prints only if no item candidate
+/// has the name that the input of the call has. It prints one time for each macro name, with
+/// the count of the calls.
+#[test]
+fn the_note_of_a_macro_call_prints_only_with_no_item_candidate() {
+    let mut after = MACRO_ITEMS;
+    let lib = MACRO_ITEMS[1].1.replace("self.0 * by\n", "self.0 * by + 1\n");
+    after[1].1 = &lib;
+    let macro_notes = |query: &str| -> Vec<String> {
+        let report = run_agent_files(&MACRO_ITEMS, &after, &[], &[&format!("{query}=the scale is larger")]);
+        let fact = agent_fact(&report, "a1");
+        assert!(!fact.holds && fact.notes[0].starts_with(&format!("`{query}` names no item")), "{fact:#?}");
+        fact.notes.iter().filter(|note| note.contains("macro call")).cloned().collect()
+    };
+    // No item has `Coin`: one note for the two calls of the macro, with the count.
+    assert_eq!(macro_notes("<Coin as Scale<u8>>::scale"), ["an item that a macro call makes has no path in the syntax tree. The input of 2 calls of the macro `unit!` has `Coin`: give one macro call (the first is `shop::unit!#0`) or its module `shop`"]);
+    // Negative: an item candidate has `Price`. The note of the call `unit!(Price, u8)` does not print.
+    let report = run_agent_files(&MACRO_ITEMS, &after, &[], &["<Price as Scale<u16>>::scale=the scale is larger"]);
+    let fact = agent_fact(&report, "a1");
+    assert_eq!(fact.notes, ["`<Price as Scale<u16>>::scale` names no item, no module, and no file of the old tree or the new tree", "candidates: `shop::<Price as Scale<u64>>::scale`, `shop::Scale::scale`"], "{fact:#?}");
+    // Negative: no call has the name. No note.
+    assert!(macro_notes("<Dime as Other>::scale").is_empty());
+}
