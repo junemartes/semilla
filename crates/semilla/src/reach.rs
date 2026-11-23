@@ -63,6 +63,94 @@ fn trait_method(record: &semilla_normal::BodyRecord) -> Option<String> {
     Some(format!("{}::{method}", record.impl_of[1]))
 }
 
+/// The names with records in two files or more in one tree (two targets with one crate name,
+/// R61.14-1): each file is a source body, and a node of the walk (R61.16-1). A node of such a
+/// name is the name, the mark `SOURCE`, and the file; a node of each other name is the name.
+struct Sources {
+    names: BTreeSet<String>,
+    /// The source file of each target of each name (the old and the new names): the file of the
+    /// first record of the target with a span, as in the compare.
+    files: BTreeMap<(String, String), String>,
+}
+
+/// The mark between the name and the file in a node of a source body.
+const SOURCE: char = '\u{1}';
+
+impl Sources {
+    /// The names of the new namespace with records in two files in one side.
+    fn new(sides: [&EquivSide; 2], rename: &dyn Fn(&str) -> String) -> Sources {
+        let mut names = BTreeSet::new();
+        let mut files: BTreeMap<(String, String), String> = BTreeMap::new();
+        for (index, side) in sides.iter().enumerate() {
+            for (name, list) in &side.records {
+                let mut targets: BTreeMap<&str, &str> = BTreeMap::new();
+                for record in list {
+                    if let Some(file) = file_of(record) {
+                        targets.entry(record.target.as_str()).or_insert(file);
+                    }
+                }
+                if targets.values().collect::<BTreeSet<_>>().len() > 1 {
+                    names.insert(if index == 0 { rename(name) } else { name.to_string() });
+                    for (target, file) in targets {
+                        files.insert((name.to_string(), target.to_string()), file.to_string());
+                    }
+                }
+            }
+        }
+        // A name with two files in one side only: the files of the targets of the other side.
+        for (index, side) in sides.iter().enumerate() {
+            for (name, list) in &side.records {
+                if !names.contains(&if index == 0 { rename(name) } else { name.to_string() }) {
+                    continue;
+                }
+                for record in list {
+                    if let Some(file) = file_of(record) {
+                        files.entry((name.to_string(), record.target.clone())).or_insert_with(|| file.to_string());
+                    }
+                }
+            }
+        }
+        Sources { names, files }
+    }
+
+    /// The source file of a record: the file of its target.
+    fn file(&self, record: &semilla_normal::BodyRecord) -> String {
+        self.files.get(&(record.name.clone(), record.target.clone())).cloned().or_else(|| file_of(record).map(str::to_string)).unwrap_or_default()
+    }
+
+    /// The node of a record with the name `name` (in the new namespace).
+    fn node(&self, name: &str, record: &semilla_normal::BodyRecord) -> String {
+        if self.names.contains(name) { format!("{name}{SOURCE}{}", self.file(record)) } else { name.to_string() }
+    }
+
+    /// The nodes of a callee `raw` (`name` in the new namespace) of a record of `side` in
+    /// `target`: the body of the target, else each source body of the name.
+    fn callee(&self, side: &EquivSide, raw: &str, name: &str, target: &str) -> Vec<String> {
+        if !self.names.contains(name) {
+            return vec![name.to_string()];
+        }
+        let list = side.records.get(raw).map(Vec::as_slice).unwrap_or_default();
+        let own: BTreeSet<String> = list.iter().filter(|record| record.target == target).map(|record| self.node(name, record)).collect();
+        let found = if own.is_empty() { list.iter().map(|record| self.node(name, record)).collect() } else { own };
+        if found.is_empty() { vec![name.to_string()] } else { found.into_iter().collect() }
+    }
+}
+
+/// The source file of a record.
+fn file_of(record: &semilla_normal::BodyRecord) -> Option<&str> {
+    record.span.as_ref().map(|span| span.file.as_str())
+}
+
+/// The name of a node (R61.16-1).
+fn name_of(node: &str) -> &str {
+    node.split(SOURCE).next().unwrap_or(node)
+}
+
+/// The file of a node of a source body.
+fn node_file(node: &str) -> Option<&str> {
+    node.split_once(SOURCE).map(|(_, file)| file)
+}
+
 /// The names of the bodies of one side, in the namespace of the new tree.
 struct Graph {
     /// callee → callers.
@@ -74,20 +162,29 @@ struct Graph {
 }
 
 impl Graph {
-    fn new(sides: [&EquivSide; 2], rename: &dyn Fn(&str) -> String) -> Graph {
+    /// The graph of the source bodies (R61.16-1): a name of `sources` is one node for each file.
+    /// A call in a record goes to the body of the callee in the target of the record, else to
+    /// each source body of the callee.
+    fn new(sides: [&EquivSide; 2], rename: &dyn Fn(&str) -> String, sources: &Sources) -> Graph {
         let mut graph = Graph { callers: BTreeMap::new(), callees: BTreeMap::new(), trait_of: BTreeMap::new() };
         for (index, side) in sides.iter().enumerate() {
             let map = |name: &str| if index == 0 { rename(name) } else { name.to_string() };
             for (name, list) in &side.records {
-                let caller = map(name);
                 for record in list {
+                    let caller = sources.node(&map(name), record);
                     for callee in &record.callees {
-                        graph.add(map(callee), caller.clone());
+                        for node in sources.callee(side, callee, &map(callee), &record.target) {
+                            graph.add(node, caller.clone());
+                        }
                     }
                     // A generic body calls the callee that its instance resolves.
                     for instance in &record.inst {
                         for (_, resolved) in &instance.c {
-                            graph.add(map(resolved), map(&instance.g));
+                            for node in sources.callee(side, resolved, &map(resolved), &record.target) {
+                                for generic in sources.callee(side, &instance.g, &map(&instance.g), &record.target) {
+                                    graph.add(node.clone(), generic);
+                                }
+                            }
                         }
                     }
                     if let Some(method) = trait_method(record) {
@@ -113,6 +210,11 @@ impl Graph {
         let mut out = self.callers.get(name).cloned().unwrap_or_default();
         if let Some(method) = self.trait_of.get(name) {
             out.extend(self.callers.get(method).cloned().unwrap_or_default());
+            // A trait method of two source bodies: the callers of each one.
+            let prefix = format!("{method}{SOURCE}");
+            for (_, callers) in self.callers.range(prefix.clone()..).take_while(|(callee, _)| callee.starts_with(&prefix)) {
+                out.extend(callers.iter().cloned());
+            }
         }
         out.remove(name);
         out
@@ -127,7 +229,7 @@ impl Graph {
                 out.insert(callee.clone());
             }
             for (method, of) in &self.trait_of {
-                if of == callee && set.contains(method) {
+                if of == name_of(callee) && set.contains(method) {
                     out.insert(method.clone());
                 }
             }
@@ -169,6 +271,33 @@ fn start_set(old: &EquivSide, new: &EquivSide, renames: &[(String, String)], ren
     start
 }
 
+/// The nodes of the start set (R61.16-1): a name of `sources` gives the node of each file whose
+/// records differ (the texts or the constant values); if no file differs, each node of the name.
+fn start_nodes(start: &BTreeSet<String>, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], rename: &dyn Fn(&str) -> String, sources: &Sources) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for name in start {
+        if !sources.names.contains(name) {
+            out.insert(name.clone());
+            continue;
+        }
+        type Content = BTreeSet<(String, Vec<(String, String)>)>;
+        let by_file = |list: Option<&Vec<&semilla_normal::BodyRecord>>, map: &dyn Fn(&str) -> String| -> BTreeMap<String, Content> {
+            let mut files: BTreeMap<String, Content> = BTreeMap::new();
+            for record in list.into_iter().flatten() {
+                files.entry(sources.file(record)).or_default().insert((map(&record.text), record.cv.clone()));
+            }
+            files
+        };
+        let identity = |text: &str| text.to_string();
+        let (before, after) = (by_file(old.records.get(rename_back(name, renames).as_str()), rename), by_file(new.records.get(name.as_str()), &identity));
+        let files: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+        let changed: Vec<&String> = files.iter().copied().filter(|file| before.get(*file) != after.get(*file)).collect();
+        let chosen = if changed.is_empty() { files.into_iter().collect() } else { changed };
+        out.extend(chosen.into_iter().map(|file| format!("{name}{SOURCE}{file}")));
+    }
+    out
+}
+
 /// The old name of a new name (the rename map of the step backward).
 fn rename_back(name: &str, renames: &[(String, String)]) -> String {
     if renames.is_empty() {
@@ -179,11 +308,14 @@ fn rename_back(name: &str, renames: &[(String, String)]) -> String {
 }
 
 impl NormalOracle {
-    /// The walk of one configuration (design 61.10, part A).
+    /// The walk of one configuration (design 61.10, part A). The nodes of the walk are the
+    /// source bodies (R61.16-1): a name with records in two files is a node for each file, so a
+    /// change of one of them reaches only the callers of that one.
     pub(super) fn reach_config(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], started: std::time::Instant, limit: std::time::Duration) -> ConfigReach {
         let rename = |text: &str| if renames.is_empty() { text.to_string() } else { semilla_normal::paths::rename(text, renames) };
-        let start = start_set(old, new, renames, &rename);
-        let graph = Graph::new([old, new], &rename);
+        let sources = Sources::new([old, new], &rename);
+        let start = start_nodes(&start_set(old, new, renames, &rename), old, new, renames, &rename, &sources);
+        let graph = Graph::new([old, new], &rename, &sources);
         // The full reverse closure, with the depth and the first parent of each body.
         let mut depth: BTreeMap<String, usize> = BTreeMap::new();
         let mut parent: BTreeMap<String, String> = BTreeMap::new();
@@ -207,19 +339,29 @@ impl NormalOracle {
         }
         let closure: Vec<String> = depth.keys().filter(|name| !start.contains(*name)).cloned().collect();
         // Each body of the closure is in the set to inline until the walk proves it equivalent.
+        // The set has nodes; the check reads the names of the nodes, also the old names. A name
+        // stays in the set while one of its nodes is in it.
         let mut must: BTreeSet<String> = start.iter().cloned().collect();
         must.extend(closure.iter().cloned());
-        for name in start.iter().chain(&closure) {
-            let back = rename_back(name, renames);
-            if back != *name {
-                must.insert(back);
+        let names = |nodes: &BTreeSet<String>| -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            for node in nodes {
+                let name = name_of(node);
+                out.insert(name.to_string());
+                let back = rename_back(name, renames);
+                if back != name {
+                    out.insert(back);
+                }
             }
-        }
+            out
+        };
         let mut out = ConfigReach { trait_methods: graph.trait_of.clone(), ..ConfigReach::default() };
         // The order of the checks: a body after its callees in the closure; in a cycle, the
         // body nearest to the start set first.
         let mut pending: BTreeSet<String> = closure.iter().cloned().collect();
         let mut proved: BTreeSet<String> = BTreeSet::new();
+        // The checked nodes that are not equivalent.
+        let mut open: BTreeSet<String> = BTreeSet::new();
         let (mut deep, mut over_count, mut over_time) = (0usize, 0usize, 0usize);
         let mut checked = 0usize;
         while !pending.is_empty() {
@@ -230,16 +372,16 @@ impl NormalOracle {
             }
             ready.sort_by_key(|name| (depth[name], name.clone()));
             // The checks of one round run in parallel; each sees the set of the round before.
-            let snapshot: Arc<BTreeSet<String>> = Arc::new(must.clone());
+            let snapshot: Arc<BTreeSet<String>> = Arc::new(names(&must));
+            let nodes = must.clone();
             let mut jobs: Vec<(String, Vec<String>)> = Vec::new();
             for name in &ready {
                 pending.remove(name);
-                let through = graph.callees_in(name, &snapshot);
+                let through = graph.callees_in(name, &nodes);
                 if through.is_empty() {
                     // Each changed callee is proved equivalent: the change does not reach it.
                     proved.insert(name.clone());
                     must.remove(name);
-                    must.remove(&rename_back(name, renames));
                     continue;
                 }
                 if depth[name] > MAX_DEPTH {
@@ -257,18 +399,26 @@ impl NormalOracle {
                 checked += 1;
                 jobs.push((name.clone(), through));
             }
-            let results = self.reach_checks(solver, old, new, renames, &snapshot, &jobs);
+            let results = self.reach_checks(solver, old, new, renames, &snapshot, &jobs, &sources);
             for ((name, through), verdict) in jobs.into_iter().zip(results) {
                 if matches!(verdict, Verdict::Equivalent(_)) {
                     proved.insert(name.clone());
                     must.remove(&name);
-                    must.remove(&rename_back(&name, renames));
+                } else {
+                    open.insert(name.clone());
                 }
                 let mut chain = vec![name.clone()];
                 while let Some(next) = parent.get(chain.last().map(String::as_str).unwrap_or_default()) {
                     chain.push(next.clone());
                 }
-                out.bodies.push((name, through, chain, verdict));
+                let chain: Vec<String> = chain.iter().map(|node| name_of(node).to_string()).collect();
+                let mut shown: Vec<String> = Vec::new();
+                for node in &through {
+                    if !shown.iter().any(|known| known == name_of(node)) {
+                        shown.push(name_of(node).to_string());
+                    }
+                }
+                out.bodies.push((name_of(&name).to_string(), shown, chain, verdict));
             }
         }
         if deep > 0 {
@@ -282,28 +432,28 @@ impl NormalOracle {
         }
         // The bodies that each changed body reaches: a chain of reached bodies that are not
         // equivalent.
-        let open: BTreeSet<&str> = out.bodies.iter().filter(|(_, _, _, verdict)| !matches!(verdict, Verdict::Equivalent(_))).map(|(name, _, _, _)| name.as_str()).collect();
         for name in &start {
             let mut seen: BTreeSet<String> = BTreeSet::new();
             let mut todo = vec![name.clone()];
             while let Some(next) = todo.pop() {
                 for caller in graph.callers_of(&next) {
-                    if open.contains(caller.as_str()) && seen.insert(caller.clone()) {
+                    if open.contains(&caller) && seen.insert(caller.clone()) {
                         todo.push(caller);
                     }
                 }
             }
             if !seen.is_empty() {
-                out.from.insert(name.clone(), seen);
+                out.from.entry(name_of(name).to_string()).or_default().extend(seen.iter().map(|node| name_of(node).to_string()));
             }
         }
-        out.must_inline = Arc::new(must);
+        out.must_inline = Arc::new(names(&must));
         out
     }
 
     /// The checks of one round of the walk, in up to 8 threads: each caller with each body of
     /// `must` inlined, and no proof by an equal MIR text.
-    fn reach_checks(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, jobs: &[(String, Vec<String>)]) -> Vec<Verdict> {
+    #[allow(clippy::too_many_arguments)]
+    fn reach_checks(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, jobs: &[(String, Vec<String>)], sources: &Sources) -> Vec<Verdict> {
         let next = std::sync::atomic::AtomicUsize::new(0);
         let results: std::sync::Mutex<Vec<(usize, Verdict)>> = std::sync::Mutex::new(Vec::new());
         let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(1, 8).min(jobs.len().max(1));
@@ -312,7 +462,7 @@ impl NormalOracle {
                 scope.spawn(|| loop {
                     let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some((name, _)) = jobs.get(at) else { break };
-                    let verdict = self.reach_one(solver, old, new, renames, must, name);
+                    let verdict = self.reach_one(solver, old, new, renames, must, name, sources);
                     results.lock().unwrap_or_else(|error| error.into_inner()).push((at, verdict));
                 });
             }
@@ -325,14 +475,17 @@ impl NormalOracle {
     /// The check of one reached caller. A name with more than one source body (two packages
     /// with a target of one kind and one name, R61.14-1) has a check for each: the name is
     /// equivalent only if each one is, and a difference of one is the result.
-    fn reach_one(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, name: &str) -> Verdict {
-        let bodies = new.bodies(name);
+    #[allow(clippy::too_many_arguments)]
+    fn reach_one(&self, solver: &semilla_smt::Solver, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], must: &Arc<BTreeSet<String>>, node: &str, sources: &Sources) -> Verdict {
+        // A node of a source body (R61.16-1): only the records of its file.
+        let name = name_of(node);
+        let bodies: Vec<&semilla_normal::BodyRecord> = new.bodies(name).into_iter().filter(|record| node_file(node).is_none_or(|file| sources.file(record) == file)).collect();
         if bodies.is_empty() {
             return Verdict::NotDecided("the new tree has no record of the body".into());
         }
         let mut result: Option<Verdict> = None;
         for b in bodies {
-            let verdict = match old.find(&rename_back(name, renames), &b.target) {
+            let verdict = match old.find(&rename_back(name, renames), &b.target, &b.unit) {
                 None => Verdict::NotDecided("the old tree has no record of the body".into()),
                 Some(a) => match self.check_pair(solver, a, b, old, new, renames, true, must, false) {
                     Some(answer) => answer.verdict,

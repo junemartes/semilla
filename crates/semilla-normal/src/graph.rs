@@ -112,6 +112,10 @@ pub struct GraphPair {
     pub old_key: Option<(String, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_key: Option<(String, String)>,
+    /// True if a side has two records of the body in targets of one name with different texts
+    /// (R61.16-2): no pair, and no graph. The pair is "not compared".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_compared: bool,
 }
 
 /// Writes a shared graph (for `BodyRecord::graph`).

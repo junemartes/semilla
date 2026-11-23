@@ -1,0 +1,94 @@
+note: the same two targets; the step changes only the `hash` of the test: in each configuration (also in those with no bench), the records of the test go to the body of the test, with no point of `benches/probe.rs` (design 61.16)
+rule+: R61.16-1
+option: --compiled
+must_match: probe::hash \(tests/probe\.rs:1\): same structure: 1 changed condition; different
+must_not_match: benches/probe\.rs
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fast = []
+small = []
+
+[[bench]]
+name = "probe"
+required-features = ["fast"]
+=== both src/lib.rs
+#[cfg(feature = "fast")]
+pub fn speed() -> u32 {
+    2
+}
+
+#[cfg(not(feature = "fast"))]
+pub fn speed() -> u32 {
+    1
+}
+
+#[cfg(feature = "small")]
+pub fn size() -> u32 {
+    1
+}
+
+pub fn price(x: u32) -> u32 {
+    x + 1
+}
+=== both benches/probe.rs
+pub fn hash(x: u64) -> u64 {
+    x.wrapping_mul(31) ^ 7
+}
+
+#[test]
+fn bench_hash() {
+    assert!(hash(1) > 0);
+}
+=== old tests/probe.rs
+pub fn hash(x: u64) -> u64 {
+    if x > 10 {
+        x + 1
+    } else {
+        x * 3
+    }
+}
+
+#[test]
+fn test_hash() {
+    assert!(hash(2) > 0);
+}
+=== new tests/probe.rs
+pub fn hash(x: u64) -> u64 {
+    if x > 12 {
+        x + 1
+    } else {
+        x * 3
+    }
+}
+
+#[test]
+fn test_hash() {
+    assert!(hash(2) > 0);
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  tests and benches, filled in by Semilla:
+  ◆ f1 derived: change condition `10` → `12` (effect hint: narrow, example: x = 12) at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
+      affected bodies: shop (test "probe")::hash
+      control flow: ~ branch `x > 10` → `x > 12` (tests/probe.rs:-2, tests/probe.rs:2)
+      equivalence: different: for x = 11: before returns 12, after returns 33
+      reaches: 2 bodies, no public function: probe::test_hash, probe::test_hash::{closure#0} (semilla status --verbose)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    probe::hash (tests/probe.rs:1): same structure: 1 changed condition; different (for x = 11: before returns 12, after returns 33)
+    reached bodies: 2
+      probe::test_hash (tests/probe.rs:9): reached through probe::hash, probe::test_hash::{closure#0}, not decided (a closure value: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
+      probe::test_hash::{closure#0} (tests/probe.rs:9): reached through probe::test_hash, not decided (a closure value: fn test_hash() { assert!(hash(2) > 0); } (tests/probe.rs:-10))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: change condition `10` → `12` (effect hint: narrow, example: x = 12) at `shop (test "probe")::hash/S0/cond/rhs` [semantics · code different]
+    lines: tests/probe.rs:2, tests/probe.rs:-2

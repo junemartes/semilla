@@ -1,0 +1,92 @@
+note: a bench and a test with one crate name `probe` (the bench needs the feature `fast`), each with its own `fn hash`; the step changes only the `hash` of the bench: its line has its own graph change only, with no point of `tests/probe.rs`, and the walk reaches only the callers of the bench (design 61.16)
+rule+: R61.16-1
+option: --compiled
+must_match: probe::hash \(benches/probe\.rs:1\): graph changes
+must_not_match: tests/probe\.rs
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fast = []
+small = []
+
+[[bench]]
+name = "probe"
+required-features = ["fast"]
+=== both src/lib.rs
+#[cfg(feature = "fast")]
+pub fn speed() -> u32 {
+    2
+}
+
+#[cfg(not(feature = "fast"))]
+pub fn speed() -> u32 {
+    1
+}
+
+#[cfg(feature = "small")]
+pub fn size() -> u32 {
+    1
+}
+
+pub fn price(x: u32) -> u32 {
+    x + 1
+}
+=== old benches/probe.rs
+pub fn hash(x: u64) -> u64 {
+    x.wrapping_mul(31) ^ 7
+}
+
+#[test]
+fn bench_hash() {
+    assert!(hash(1) > 0);
+}
+=== new benches/probe.rs
+pub fn hash(x: u64) -> u64 {
+    if x == 0 {
+        return 1;
+    }
+    x.wrapping_mul(31) ^ 7
+}
+
+#[test]
+fn bench_hash() {
+    assert!(hash(1) > 0);
+}
+=== both tests/probe.rs
+pub fn hash(x: u64) -> u64 {
+    if x > 10 {
+        x + 1
+    } else {
+        x * 3
+    }
+}
+
+#[test]
+fn test_hash() {
+    assert!(hash(2) > 0);
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  tests and benches, filled in by Semilla:
+  ◆ f1 derived: added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different]
+      affected bodies: shop (bench "probe")::hash
+      control flow: + branch `x == 0` (benches/probe.rs:2): false → call `num::<impl u64>::wrapping_mul`, true → return
+      control flow: + arrow entry (benches/probe.rs:1) → branch `x == 0` (benches/probe.rs:2)
+      equivalence: different: for x = 0: before returns 7, after returns 1
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    probe::hash (benches/probe.rs:1): graph changes: +1 branch, +3 arrows, −1 arrow; different (for x = 0: before returns 7, after returns 1)
+    reached bodies: 1
+      probe::bench_hash::{closure#0} (benches/probe.rs:8): reached through probe::bench_hash, not decided (a closure value: fn bench_hash() { assert!(hash(1) > 0); } (benches/probe.rs:-6))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added early exit `if x == 0 { return 1; }` at `shop (bench "probe")::hash/S0` [semantics · code different]
+    lines: benches/probe.rs:2-4

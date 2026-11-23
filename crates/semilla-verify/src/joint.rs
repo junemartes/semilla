@@ -503,26 +503,42 @@ impl Joint<'_> {
         // two places, and each twin has its own result (batch 7b, part 4).
         type Key = (String, Option<(String, usize)>);
         let key = |body: &BodyComparison| -> Key { (body.name.clone(), body.span.clone()) };
-        let by_name = |bodies: Vec<BodyComparison>| -> BTreeMap<Key, BodyComparison> { bodies.into_iter().map(|body| (key(&body), body)).collect() };
+        // Two bodies of one run with one key (R61.16-2): the check does not choose one of them.
+        // The key has no result (`None`), so no result of the run is equal to it.
+        let by_name = |bodies: Vec<BodyComparison>| -> BTreeMap<Key, Option<BodyComparison>> {
+            let mut map: BTreeMap<Key, Option<BodyComparison>> = BTreeMap::new();
+            for body in bodies {
+                match map.entry(key(&body)) {
+                    std::collections::btree_map::Entry::Occupied(mut known) => {
+                        known.insert(None);
+                    }
+                    std::collections::btree_map::Entry::Vacant(free) => {
+                        free.insert(Some(body));
+                    }
+                }
+            }
+            map
+        };
+        let result = |map: &BTreeMap<Key, Option<BodyComparison>>, body: &BodyComparison| -> Option<BodyComparison> { map.get(&key(body)).cloned().flatten() };
         let strict = by_name(run(&Mode::Strict)?);
         let proved = |body: &BodyComparison| property || matches!(body.status, BodyStatus::Equal { .. });
-        let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| proved(body) && strict.get(&key(body)) != Some(body)).map(|(at, _)| at).collect();
+        let open: Vec<usize> = plain.iter().enumerate().filter(|(_, body)| proved(body) && result(&strict, body).as_ref() != Some(*body)).map(|(at, _)| at).collect();
         if open.is_empty() {
             return Ok((plain, Vec::new()));
         }
-        let mut single: Vec<(&String, BTreeMap<Key, BodyComparison>)> = Vec::new();
+        let mut single: Vec<(&String, BTreeMap<Key, Option<BodyComparison>>)> = Vec::new();
         for atom in atoms {
             single.push((atom, by_name(run(&Mode::Without(atom.clone()))?)));
         }
-        let mut groups: BTreeMap<(BTreeSet<String>, BTreeSet<String>), Option<BTreeMap<Key, BodyComparison>>> = BTreeMap::new();
+        let mut groups: BTreeMap<(BTreeSet<String>, BTreeSet<String>), Option<BTreeMap<Key, Option<BodyComparison>>>> = BTreeMap::new();
         let mut out = plain;
         let mut wanted: Vec<Selection> = Vec::new();
         for at in open {
             let body = &out[at];
-            let used: BTreeSet<String> = single.iter().filter(|(_, result)| result.get(&key(body)) != Some(body)).map(|(atom, _)| (*atom).clone()).collect();
+            let used: BTreeSet<String> = single.iter().filter(|(_, found)| result(found, body).as_ref() != Some(body)).map(|(atom, _)| (*atom).clone()).collect();
             let mut only = |atoms: &BTreeSet<String>, files: &BTreeSet<String>| {
-                let result = groups.entry((atoms.clone(), files.clone())).or_insert_with(|| run(&Mode::Only(atoms.clone(), files.clone())).ok().map(by_name));
-                result.as_ref().is_some_and(|result| result.get(&key(body)) == Some(body))
+                let found = groups.entry((atoms.clone(), files.clone())).or_insert_with(|| run(&Mode::Only(atoms.clone(), files.clone())).ok().map(by_name));
+                found.as_ref().is_some_and(|found| result(found, body).as_ref() == Some(body))
             };
             let trees = [body.status != BodyStatus::AfterOnly, body.status != BodyStatus::BeforeOnly];
             let mut missing = Vec::new();
@@ -533,8 +549,8 @@ impl Joint<'_> {
                 }
             }
             let text = self.text(&body.name, &gap, added);
-            let mut body = match strict.get(&key(body)) {
-                Some(body) => body.clone(),
+            let mut body = match result(&strict, body) {
+                Some(body) => body,
                 None => BodyComparison { status: BodyStatus::Different { cfg_changed: true }, ..body.clone() },
             };
             body.config.push(text);
@@ -797,6 +813,38 @@ mod tests {
         assert!(runs.borrow().is_empty());
         assert_eq!(joint.settle(stopped.clone(), &set(&["fa"]), false, &[], &run).unwrap().0, stopped);
         assert_eq!(*runs.borrow(), [Mode::Strict]);
+    }
+
+    /// Design 61.16 (R61.16-2): two bodies of one run with one key (the name and the place).
+    /// The check does not choose one of them: no body gets the result of the other one, and
+    /// neither keeps an equal status. The negative case: two keys keep the plain results.
+    // rule+ R61.16-2
+    // rule- R61.16-2
+    #[test]
+    fn two_bodies_with_one_key_never_get_the_result_of_the_other() {
+        let (_dir, ws) = load("fa = []\nfb = []\n");
+        let equal = BodyStatus::Equal { level: "n0".to_string(), proof: Vec::new() };
+        let body = |line: usize, range: (usize, usize)| BodyComparison { graphs: Vec::new(), name: BODY.to_string(), status: equal.clone(), config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: Some((LIB.to_string(), line)), range: Some(range), elements: None };
+        let list: &[&[&str]] = &[&[], &["fa", "fb"], &["fa"], &["fb"]];
+        let truths = [truths(list), truths(list)];
+        let bodies = bodies(list.len());
+        let joint = Joint { sides: [&ws, &ws], truths: &truths, bodies: &bodies, renames: &BTreeMap::new() };
+        let settle = |plain: Vec<BodyComparison>| {
+            let runs = RefCell::new(0);
+            let run = |_: &Mode| -> anyhow::Result<Vec<BodyComparison>> {
+                *runs.borrow_mut() += 1;
+                Ok(plain.clone())
+            };
+            let out = joint.settle(plain.clone(), &set(&["fa", "fb"]), false, &[], &run).unwrap().0;
+            (out, runs.into_inner())
+        };
+        let (out, _) = settle(vec![body(4, (1, 2)), body(4, (3, 4))]);
+        assert_eq!(out.iter().map(|body| body.range).collect::<Vec<_>>(), [Some((1, 2)), Some((3, 4))], "{out:?}");
+        assert!(out.iter().all(|body| !matches!(body.status, BodyStatus::Equal { .. })), "{out:?}");
+        // The negative case: two places, two keys: the plain results stand after the strict run.
+        let plain = vec![body(4, (1, 2)), body(9, (3, 4))];
+        let (out, runs) = settle(plain.clone());
+        assert_eq!((out, runs), (plain, 1));
     }
 
     #[test]

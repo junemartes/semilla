@@ -1,0 +1,102 @@
+note: the same two targets; the step changes only `price` of the library: each `probe::hash` has no line, and the library body and its test build stay one body with one line (design 61.16)
+rule-: R61.16-1
+option: --compiled
+must_match: shop::price \(src/lib\.rs:16\)
+must_not_match: probe::hash
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fast = []
+small = []
+
+[[bench]]
+name = "probe"
+required-features = ["fast"]
+=== old src/lib.rs
+#[cfg(feature = "fast")]
+pub fn speed() -> u32 {
+    2
+}
+
+#[cfg(not(feature = "fast"))]
+pub fn speed() -> u32 {
+    1
+}
+
+#[cfg(feature = "small")]
+pub fn size() -> u32 {
+    1
+}
+
+pub fn price(x: u32) -> u32 {
+    x + 1
+}
+=== new src/lib.rs
+#[cfg(feature = "fast")]
+pub fn speed() -> u32 {
+    2
+}
+
+#[cfg(not(feature = "fast"))]
+pub fn speed() -> u32 {
+    1
+}
+
+#[cfg(feature = "small")]
+pub fn size() -> u32 {
+    1
+}
+
+pub fn price(x: u32) -> u32 {
+    x + 2
+}
+=== both benches/probe.rs
+pub fn hash(x: u64) -> u64 {
+    x.wrapping_mul(31) ^ 7
+}
+
+#[test]
+fn bench_hash() {
+    assert!(hash(1) > 0);
+}
+=== both tests/probe.rs
+pub fn hash(x: u64) -> u64 {
+    if x > 10 {
+        x + 1
+    } else {
+        x * 3
+    }
+}
+
+#[test]
+fn test_hash() {
+    assert!(hash(2) > 0);
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: shop::price
+      lines: src/lib.rs:17, src/lib.rs:-17
+      to state it: --change 'shop::price=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `shop::price/tail/rhs` [semantics · code different]
+      affected bodies: shop::price
+      control flow: ~ check `overflow: x + 1` → `overflow: x + 2` (src/lib.rs:-17, src/lib.rs:17)
+      equivalence: different: for x = 0: before returns 1, after returns 2
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (src/lib.rs:16): same structure: 1 changed check (in dev, dev, all features; 1 more result(s) in other configurations: semilla status --verbose); different (for x = 0: before returns 1, after returns 2)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `shop::price/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:17, src/lib.rs:-17

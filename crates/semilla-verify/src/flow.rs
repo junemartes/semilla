@@ -151,6 +151,9 @@ pub struct FlowGraph {
     pub key: Option<(String, String)>,
 }
 
+/// The cause of a pair of graphs that is not compared (R61.16-2).
+pub const NOT_COMPARED: &str = "two records of one body in one configuration";
+
 /// One side of a pair of graphs.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FlowSide {
@@ -158,6 +161,9 @@ pub enum FlowSide {
     NoBody,
     /// The record has no graph (an old record, a failure of the driver).
     NoGraph,
+    /// The side has two records of the body in one configuration with different texts, and no
+    /// pair of them (R61.16-2): Semilla does not choose one.
+    NotCompared,
     Graph(FlowGraph),
 }
 
@@ -1163,6 +1169,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                         }
                     }
                     (FlowSide::NoBody, FlowSide::NoBody) => continue,
+                    (FlowSide::NotCompared, _) | (_, FlowSide::NotCompared) => Outcome { word: "not compared".into(), summary: NOT_COMPARED.into(), elements: Vec::new(), configs: Vec::new(), rank: FlowResult::Changes, chart: None },
                     // Two records with no graph (the main function of a test harness, a
                     // constant of the build configuration) and an equal MIR text: the body
                     // needs no line, as a body with the same graph. With a different text, the

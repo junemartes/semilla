@@ -8553,3 +8553,37 @@ fn an_mcp_step_and_a_plan_step_with_no_key_have_no_fact_of_the_agent() {
     assert!(session_steps(repo)[0].get("agent").is_none(), "{:?}", session_steps(repo));
     assert!(session_steps(repo)[0].get("tags").is_none(), "{:?}", session_steps(repo));
 }
+
+/// Design 61.16 (R61.16-1): a bench and a test with one crate name (`probe`), each with its own
+/// `fn hash`. The bench needs the feature `fast`, so the configurations with no feature compile
+/// only the test. A step that changes only the library opens no body of the joint check of the
+/// build configuration: the check runs the body compare two times (the plain run and the strict
+/// run), with no run for each atom. Before, the records of the test in the configurations with
+/// no bench went to the body of the bench, the two runs gave different graphs, and the check
+/// ran once more for each atom.
+// rule+ R61.16-1
+#[test]
+fn a_body_name_of_two_targets_opens_no_body_of_the_joint_check() {
+    let status = Command::new("cargo").current_dir(workspace_root()).args(["build", "-q", "-p", "semilla-mir"]).status().unwrap();
+    assert!(status.success(), "build the MIR driver");
+    let dir = common::TestDir::new();
+    let repo = &dir.path().join("repo");
+    write(repo, ".gitignore", "/target\n/.semilla/\n");
+    write(repo, "Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nfast = []\nsmall = []\n\n[[bench]]\nname = \"probe\"\nrequired-features = [\"fast\"]\n");
+    let lib = "#[cfg(feature = \"fast\")]\npub fn speed() -> u32 {\n    2\n}\n\n#[cfg(not(feature = \"fast\"))]\npub fn speed() -> u32 {\n    1\n}\n\n#[cfg(feature = \"small\")]\npub fn size() -> u32 {\n    1\n}\n\npub fn price(x: u32) -> u32 {\n    x + 1\n}\n";
+    write(repo, "src/lib.rs", lib);
+    write(repo, "benches/probe.rs", "pub fn hash(x: u64) -> u64 {\n    x.wrapping_mul(31) ^ 7\n}\n\n#[test]\nfn bench_hash() {\n    assert!(hash(1) > 0);\n}\n");
+    write(repo, "tests/probe.rs", "pub fn hash(x: u64) -> u64 {\n    if x > 10 {\n        x + 1\n    } else {\n        x * 3\n    }\n}\n\n#[test]\nfn test_hash() {\n    assert!(hash(2) > 0);\n}\n");
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit_all(repo, "base");
+    write(repo, "src/lib.rs", &lib.replace("x + 1", "x + 2"));
+    let output = semilla_env(repo, &["step", "probe"], &[("SEMILLA_TIMING", "1")]);
+    let (out, err) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{out}\n{err}");
+    assert!(out.contains("    shop::price (src/lib.rs:16): ") && !out.contains("probe::hash"), "{out}");
+    // The builds of the first step: one for each configuration and tree.
+    let configs = err.lines().filter(|line| line.starts_with("[timing] cargo check n0")).count() / 2;
+    assert!(configs >= 2, "{err}");
+    let runs = err.lines().find_map(|line| line.strip_prefix("[timing] total of give the records to the build configuration rules (")).and_then(|rest| rest.split(' ').next()).and_then(|count| count.parse::<usize>().ok());
+    assert_eq!(runs, Some(2 * configs), "two runs of the body compare (plain and strict) in each of {configs} configurations\n{err}");
+}

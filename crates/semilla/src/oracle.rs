@@ -115,6 +115,8 @@ struct Sides {
     inputs: [Vec<RecordInputs>; 2],
     /// The result of [`Sides::names_with_two_places`].
     two_places: Vec<String>,
+    /// The result of [`Sides::names_with_two_files`].
+    two_files: Vec<String>,
 }
 
 /// The span and the expanded names of one record.
@@ -145,8 +147,9 @@ impl Sides {
                 })
                 .collect()
         });
-        let mut sides = Sides { before, after, inputs, two_places: Vec::new() };
+        let mut sides = Sides { before, after, inputs, two_places: Vec::new(), two_files: Vec::new() };
         sides.two_places = sides.names_with_two_places();
+        sides.two_files = sides.names_with_two_files();
         sides
     }
 
@@ -171,6 +174,24 @@ impl Sides {
             }
         }
         found
+    }
+
+    /// The body names whose targets have two source files or more in one tree of this
+    /// configuration: each file is a source body of its own (R61.14-1). The file of a target is
+    /// the file of its first N0 record with a span, as in the compare (`semilla-normal`): the
+    /// records of one target can have spans in two files (a closure from a macro of a
+    /// dependency). A body that moves to a different file has one file in each tree, so it is not
+    /// in the list.
+    fn names_with_two_files(&self) -> Vec<String> {
+        let mut found = std::collections::BTreeSet::new();
+        for side in [&self.before, &self.after] {
+            for (name, files) in target_files(side) {
+                if files.values().collect::<std::collections::BTreeSet<_>>().len() > 1 {
+                    found.insert(name.to_string());
+                }
+            }
+        }
+        found.into_iter().collect()
     }
 }
 
@@ -770,17 +791,52 @@ struct SetState {
 }
 
 impl SetState {
-    /// The span of each body: the "after" records win (the name is the "after" name).
+    /// The span of each body: the "after" records win (the name is the "after" name), and the
+    /// span of a changed target wins over each other span (batch 5n, A4). A name with two spans
+    /// in one tree gets the first span in the order of the places, so the span does not depend
+    /// on the order of the record files (R61.16-2).
     fn spans(&self, spans: &mut BTreeMap<String, (String, usize)>) {
-        for record in [&self.sides.before, &self.sides.after].iter().flat_map(|levels| levels.values().flatten()) {
-            if let Some(span) = &record.span {
-                spans.insert(record.name.clone(), (span.file.clone(), span.line_start));
+        let mut found: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        for levels in [&self.sides.after, &self.sides.before] {
+            let side = first_places(levels.values().flatten().filter_map(|record| record.span.as_ref().map(|span| (record.name.as_str(), (span.file.clone(), span.line_start)))));
+            for (name, place) in side {
+                found.entry(name.to_string()).or_insert(place);
             }
         }
         if let (Some(old), Some(new)) = (self.sides.before.get("n0"), self.sides.after.get("n0")) {
-            spans.extend(changed_target_spans(old, new));
+            let changed = changed_target_spans(old, new);
+            found.extend(first_places(changed.iter().map(|(name, place)| (name.as_str(), place.clone()))).into_iter().map(|(name, place)| (name.to_string(), place)));
+        }
+        spans.extend(found);
+    }
+}
+
+/// The source file of each target of each name in the N0 records of a tree: the file of the
+/// first record of the target with a span (as `Group::files` of `semilla-normal`).
+fn target_files(levels: &semilla_normal::Levels) -> BTreeMap<&str, BTreeMap<&str, &str>> {
+    let mut found: BTreeMap<&str, BTreeMap<&str, &str>> = BTreeMap::new();
+    for record in levels.get("n0").into_iter().flatten() {
+        if let Some(span) = &record.span {
+            found.entry(record.name.as_str()).or_default().entry(record.target.as_str()).or_insert(span.file.as_str());
         }
     }
+    found
+}
+
+/// The first place of each name in the order of the places (R61.16-2): the result does not
+/// depend on the order of the input.
+fn first_places<'a>(places: impl Iterator<Item = (&'a str, (String, usize))>) -> BTreeMap<&'a str, (String, usize)> {
+    let mut first: BTreeMap<&str, (String, usize)> = BTreeMap::new();
+    for (name, place) in places {
+        match first.get_mut(name) {
+            Some(known) if place < *known => *known = place,
+            Some(_) => {}
+            None => {
+                first.insert(name, place);
+            }
+        }
+    }
+    first
 }
 
 /// The span of each body name that is in more than one target, from the target whose N0 text
@@ -878,6 +934,7 @@ fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair) -> semilla_
     use semilla_verify::flow::{FlowSide, GraphPair};
     let side = |exists: bool, graph: &Option<std::sync::Arc<semilla_normal::graph::RecordGraph>>, key: &Option<(String, String)>| match (exists, graph) {
         (false, _) => FlowSide::NoBody,
+        (true, _) if pair.not_compared => FlowSide::NotCompared,
         (true, None) => FlowSide::NoGraph,
         (true, Some(graph)) => FlowSide::Graph(semilla_verify::flow::FlowGraph { key: key.clone(), ..flow_graph(graph) }),
     };
@@ -944,17 +1001,42 @@ impl<'a> EquivSide<'a> {
         EquivSide { records: map }
     }
 
-    /// The record of a name: the one of the target, else the first if each record of the name
-    /// is one source body (one file). Two packages can each have a target with one kind and one
-    /// name, and then one name is two source bodies (R61.14-1): no record of the other one.
-    pub(crate) fn find(&self, name: &str, target: &str) -> Option<&'a semilla_normal::BodyRecord> {
+    /// The record of a name for a target (R61.16-2): the first record of the target; else the
+    /// one target with the name of the target without the hash (a target with a new hash); else
+    /// the one library target (each other target of a package links to it); else a record only
+    /// if each record of the name has one file, one text, and one form. In the second and the
+    /// third rule, a target whose unit has the build settings `unit` of the record that asks
+    /// wins (cargo can build a library two times: with `panic="unwind"` and `panic="abort"`). Two packages can each
+    /// have a target with one kind and one name, and then one name is two source bodies
+    /// (R61.14-1): no record of the other one. The result does not depend on the order of the
+    /// records.
+    pub(crate) fn find(&self, name: &str, target: &str, unit: &str) -> Option<&'a semilla_normal::BodyRecord> {
         let list = self.records.get(name)?;
         if let Some(found) = list.iter().find(|record| record.target == target) {
             return Some(found);
         }
-        let file = |record: &semilla_normal::BodyRecord| record.span.as_ref().map(|span| span.file.clone());
+        let one_target = |keep: &dyn Fn(&str) -> bool| -> Option<&'a semilla_normal::BodyRecord> {
+            let targets: std::collections::BTreeSet<&str> = list.iter().map(|record| record.target.as_str()).filter(|found| keep(found)).collect();
+            let [only] = targets.into_iter().collect::<Vec<_>>()[..] else { return None };
+            list.iter().find(|record| record.target == only).copied()
+        };
+        let stem = semilla_normal::target_stem(target);
+        let units: BTreeMap<&str, &str> = list.iter().map(|record| (record.target.as_str(), record.unit.as_str())).collect();
+        let same_unit = |found: &str| !unit.is_empty() && units.get(found) == Some(&unit);
+        let rules: [&dyn Fn(&str) -> bool; 4] = [
+            &|found| semilla_normal::target_stem(found) == stem && same_unit(found),
+            &|found| semilla_normal::target_stem(found) == stem,
+            &|found| semilla_normal::target_stem(found).ends_with(".lib") && same_unit(found),
+            &|found| semilla_normal::target_stem(found).ends_with(".lib"),
+        ];
+        for rule in rules {
+            if let Some(found) = one_target(rule) {
+                return Some(found);
+            }
+        }
         let first = list.first()?;
-        list.iter().all(|record| file(record) == file(first)).then_some(*first)
+        let file = |record: &semilla_normal::BodyRecord| record.span.as_ref().map(|span| span.file.clone());
+        list.iter().all(|record| file(record) == file(first) && record.text == first.text && record.q == first.q).then_some(*first)
     }
 
     /// The records of a name, one for each source body and text (R61.14-1): a lib and its test
@@ -1050,8 +1132,8 @@ impl NormalOracle {
     /// the bodies to inline and the trait methods of the impl methods.
     #[allow(clippy::too_many_arguments)]
     fn equivalence_one(&self, solver: &semilla_smt::Solver, query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, reach: &reach::ConfigReach) -> Option<semilla_verify::equiv::Answer> {
-        let a = old.find(&query.old.0, &query.old.1)?;
-        let b = new.find(&query.new.0, &query.new.1)?;
+        let a = old.find(&query.old.0, &query.old.1, "")?;
+        let b = new.find(&query.new.0, &query.new.1, &a.unit)?;
         let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
         let callees = changed_callees(a, b, &reach.must_inline, &reach.trait_methods, &rename_text);
         // An equal MIR text at N0 is a proof with no solver only if no callee changes: else the
@@ -1086,7 +1168,7 @@ impl NormalOracle {
                 at += 1;
                 for callee in &current.callees {
                     if changed.contains(callee)
-                        && let Some(found) = side.find(callee, &record.target)
+                        && let Some(found) = side.find(callee, &record.target, &record.unit)
                         && !list.iter().any(|known| std::ptr::eq(*known, found))
                     {
                         list.push(found);
@@ -1099,8 +1181,8 @@ impl NormalOracle {
         let std_b = with_changed(new, b);
         let target_a = a.target.clone();
         let target_b = b.target.clone();
-        let workspace_a = |name: &str| old.find(name, &target_a).and_then(record_form);
-        let workspace_b = |name: &str| new.find(name, &target_b).and_then(record_form);
+        let workspace_a = |name: &str| old.find(name, &target_a, &a.unit).and_then(record_form);
+        let workspace_b = |name: &str| new.find(name, &target_b, &b.unit).and_then(record_form);
         let rename_a = |text: &str| rename_text(text);
         let same = |text: &str| text.to_string();
         let is_changed = |name: &str| changed.contains(name);
@@ -1423,7 +1505,12 @@ impl BodyOracle for NormalOracle {
                 for unit in self.units(tree, config).into_iter().flatten() {
                     for (own, named) in unit.defs.iter().flat_map(|defs| defs.entries()) {
                         let def = map.entry(own.path).or_default();
-                        def.place = def.place.take().or(place(own.place));
+                        // A path of two targets (two units): the first place in the order of the
+                        // places, not of the units (R61.16-2).
+                        def.place = match (def.place.take(), place(own.place)) {
+                            (Some(known), Some(found)) => Some(known.min(found)),
+                            (known, found) => known.or(found),
+                        };
                         for (symbol, flag) in named {
                             let entry = (semilla_verify::Sym { path: symbol.path, place: place(symbol.place) }, flag);
                             if !def.named.contains(&entry) {
@@ -1498,15 +1585,46 @@ impl BodyOracle for NormalOracle {
                 }
             }
         }
+        // The names with N0 records in two files in one tree of a checked configuration: each
+        // file is a source body (R61.14-1). In each configuration, each comparison of such a name
+        // has the key of the file of its records, also in a configuration that compiles only one
+        // of them (R61.16-1). Before, such a comparison had the name as its key and the span of
+        // the name, so the records of one file went to the body of the other file.
+        let two_files: std::collections::BTreeSet<String> = prepared.iter().flat_map(|(state, _)| state.sides.two_files.iter().cloned()).collect();
+        // The keys of a name of `two_files` with no source file: no span (see `key_of`).
+        let mut no_file: std::collections::BTreeSet<BodyKey> = std::collections::BTreeSet::new();
         for (state, own) in prepared {
             // The place of each source body of a name with more than one (R61.14-1): the span
-            // of its record in its file; the "after" records win.
+            // of its record in its file; the "after" records win, then the first place.
             let mut source_places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
-            for levels in [&state.sides.before, &state.sides.after] {
-                for record in levels.get("n0").into_iter().flatten() {
-                    if let Some(span) = &record.span {
-                        source_places.insert((record.name.as_str(), span.file.as_str()), (span.file.clone(), span.line_start));
+            // The one file of the records of each name of `two_files` in this configuration:
+            // the "after" records win. `None`: the records of a tree are in two files.
+            let mut one_file: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+            for levels in [&state.sides.after, &state.sides.before] {
+                let records: Vec<&semilla_normal::BodyRecord> = levels.get("n0").into_iter().flatten().collect();
+                let mut places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
+                let mut files: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+                for (name, targets) in target_files(levels) {
+                    if two_files.contains(name) {
+                        files.insert(name, targets.into_values().collect());
                     }
+                }
+                for record in &records {
+                    let Some(span) = &record.span else { continue };
+                    let place = (span.file.clone(), span.line_start);
+                    match places.get_mut(&(record.name.as_str(), span.file.as_str())) {
+                        Some(known) if place < *known => *known = place,
+                        Some(_) => {}
+                        None => {
+                            places.insert((record.name.as_str(), span.file.as_str()), place);
+                        }
+                    }
+                }
+                for (key, place) in places {
+                    source_places.entry(key).or_insert(place);
+                }
+                for (name, files) in files {
+                    one_file.entry(name).or_insert_with(|| if files.len() == 1 { files.first().copied() } else { None });
                 }
             }
             let key_of = |comparison: &semilla_normal::BodyComparison| -> BodyKey {
@@ -1514,11 +1632,21 @@ impl BodyOracle for NormalOracle {
                 if let Some(file) = &comparison.place {
                     return (name.clone(), source_places.get(&(name.as_str(), file.as_str())).cloned().or_else(|| Some((file.clone(), 0))));
                 }
+                if two_files.contains(name) {
+                    // A comparison of a name with two source bodies that is not split: its
+                    // records are in one file in this configuration. Records in two files of
+                    // one tree with no split (records with no target) give no source body.
+                    let file = one_file.get(name.as_str()).copied().flatten();
+                    return (name.clone(), file.and_then(|file| source_places.get(&(name.as_str(), file)).cloned()));
+                }
                 (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() })
             };
             let name = state.config.name();
             for comparison in &state.comparisons {
                 let key = key_of(comparison);
+                if key.1.is_none() && two_files.contains(&key.0) {
+                    no_file.insert(key.clone());
+                }
                 if !comparison.graphs.is_empty() {
                     graphs.entry(key.clone()).or_default().extend(comparison.graphs.iter().map(|pair| graph_pair(&name, pair)));
                 }
@@ -1565,8 +1693,11 @@ impl BodyOracle for NormalOracle {
                 let config = config.remove(&key).into_iter().flatten().collect();
                 let found = elements.remove(&key).flatten().filter(|_| matches!(status, BodyStatus::Different { .. })).map(mir_diff);
                 let graphs = graphs.remove(&key).unwrap_or_default();
+                // A name with two source bodies gets no span by its name only (R61.16-1): the span
+                // of the name can be the span of the other body.
+                let by_name = !no_file.contains(&key);
                 let (name, place) = key;
-                let span = place.or_else(|| spans.get(&name).cloned());
+                let span = place.or_else(|| spans.get(&name).filter(|_| by_name).cloned());
                 let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
                 BodyComparison { graphs, span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
             })
@@ -1914,6 +2045,54 @@ mod tests {
 
     fn equal(level: &str) -> BodyStatus {
         BodyStatus::Equal { level: level.into(), proof: Vec::new() }
+    }
+
+    /// Design 61.16 (R61.16-2): the record of a name for a target with no record of the name.
+    /// The choice does not depend on the order of the records, and two source bodies (two files)
+    /// or two texts give no record. The negative case: the record of the target itself, and
+    /// one text in one file.
+    // rule+ R61.16-2
+    // rule- R61.16-2
+    #[test]
+    fn the_record_of_a_name_for_a_target_does_not_depend_on_the_order() {
+        let record = |name: &str, target: &str, file: &str, text: &str| {
+            let line = serde_json::json!({ "name": name, "level": "n0", "text": text, "target": target, "span": { "file": file, "line_start": 1, "line_end": 3 } });
+            semilla_normal::parse_records(&line.to_string()).unwrap().remove(0)
+        };
+        let mut records = vec![
+            record("k::f", "k.test.2222222222222222", "src/lib.rs", "b"),
+            record("k::f", "k.lib.1111111111111111", "src/lib.rs", "a"),
+            record("p::h", "p.test.3333333333333333", "tests/p.rs", "c"),
+            record("p::h", "p.test.4444444444444444", "benches/p.rs", "d"),
+            record("q::g", "q.bin.5555555555555555", "src/main.rs", "e"),
+            record("q::g", "q.test.6666666666666666", "src/main.rs", "e"),
+            semilla_normal::BodyRecord { unit: "panic=\"unwind\"".into(), ..record("w::f", "w.lib.7777777777777777", "src/lib.rs", "unwind continue") },
+            semilla_normal::BodyRecord { unit: "panic=\"abort\"".into(), ..record("w::f", "w.lib.8888888888888888", "src/lib.rs", "unwind unreachable") },
+        ];
+        for _ in 0..2 {
+            let side = EquivSide::new(&records);
+            let text = |name: &str, target: &str| side.find(name, target, "").map(|record| record.text.clone());
+            // Two builds of one library: the build with the settings of the record that asks.
+            assert_eq!(side.find("w::f", "w.lib.9999999999999999", "panic=\"abort\"").map(|record| record.text.as_str()), Some("unwind unreachable"));
+            assert_eq!(side.find("w::f", "z.test.9999999999999999", "panic=\"unwind\"").map(|record| record.text.as_str()), Some("unwind continue"));
+            assert_eq!(text("w::f", "w.lib.9999999999999999"), None);
+            // The record of the target.
+            assert_eq!(text("k::f", "k.test.2222222222222222").as_deref(), Some("b"));
+            // A new hash: the one target with the same name without the hash.
+            assert_eq!(text("k::f", "k.test.9999999999999999").as_deref(), Some("b"));
+            // A target of a different crate links to the library.
+            assert_eq!(text("k::f", "z.test.9999999999999999").as_deref(), Some("a"));
+            // Two source bodies, or two targets of one name without the hash: no record.
+            assert_eq!(text("p::h", "z.test.9999999999999999"), None);
+            assert_eq!(text("p::h", "p.test.9999999999999999"), None);
+            // The negative case: one file and one text.
+            assert_eq!(text("q::g", "z.test.9999999999999999").as_deref(), Some("e"));
+            records.reverse();
+        }
+        // The span of a name with two places in one tree: the first place, in each order.
+        let places = [("a", ("x.rs".to_string(), 9)), ("a", ("x.rs".to_string(), 2)), ("b", ("y.rs".to_string(), 1))];
+        assert_eq!(first_places(places.iter().cloned()), first_places(places.iter().rev().cloned()));
+        assert_eq!(first_places(places.iter().cloned())["a"], ("x.rs".to_string(), 2));
     }
 
     // Batch 5n, A4: the binary and a bench have the crate name `demo`, and each has a `main`.

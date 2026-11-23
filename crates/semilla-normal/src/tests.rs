@@ -36,6 +36,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         cv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
+        unit: String::new(),
     }
 }
 
@@ -813,4 +814,42 @@ fn a_body_name_of_two_source_files_gives_one_comparison_for_each() {
     let results = compare_with(&one("a", "a"), &one("a", "b"), &no_renames(), &[], &Marks::default(), &Marks::default());
     assert_eq!(results.len(), 1, "{results:?}");
     assert!(results[0].place.is_none() && matches!(results[0].status, BodyStatus::Different { .. }), "{results:?}");
+}
+
+/// Design 61.16 (R61.16-2): the graph pairs of a body do not depend on the hash in the target
+/// names (it depends on the folders of the build). Two targets of one name without the hash
+/// pair in the order of their texts. Two such targets with different texts on one side, and
+/// new hashes on the other side, give one pair that is not compared: Semilla does not choose
+/// one of them. The negative case: equal texts on each side give a pair for each target.
+// rule+ R61.16-2
+// rule- R61.16-2
+#[test]
+fn the_graph_pairs_of_a_body_do_not_depend_on_the_hash_of_a_target() {
+    let side = |targets: [(&str, &str); 2]| levels(targets.iter().map(|(target, text)| at_file(in_target(record("k::f", "n0", text, &[]), target), "src/lib.rs")).collect());
+    let texts = |results: &[BodyComparison], one: [(&str, &str); 2]| -> Vec<String> {
+        let map: BTreeMap<&str, &str> = one.into_iter().collect();
+        results[0].graphs.iter().map(|pair| pair.old_key.as_ref().map(|(_, target)| map[target.as_str()].to_string()).unwrap_or_default()).collect()
+    };
+    let (h1, h2) = ("k.lib.1111111111111111", "k.lib.2222222222222222");
+    for one in [[(h1, "a"), (h2, "b")], [(h1, "b"), (h2, "a")]] {
+        let results = compare_with(&side(one), &side(one), &no_renames(), &[], &Marks::default(), &Marks::default());
+        assert_eq!(texts(&results, one), ["a", "b"], "{results:?}");
+    }
+    let (h3, h4) = ("k.lib.3333333333333333", "k.lib.4444444444444444");
+    let results = compare_with(&side([(h1, "a"), (h2, "b")]), &side([(h3, "a"), (h4, "b")]), &no_renames(), &[], &Marks::default(), &Marks::default());
+    assert_eq!(results[0].graphs.len(), 1, "{results:?}");
+    assert!(results[0].graphs[0].not_compared && results[0].graphs[0].old_key.is_none(), "{results:?}");
+    // The negative cases: one text on each side; the build settings of the units (a library
+    // with `panic="unwind"` and with `panic="abort"`) pair the targets; a body of one side only
+    // has a pair with one side for each target.
+    let results = compare_with(&side([(h1, "a"), (h2, "a")]), &side([(h3, "a"), (h4, "a")]), &no_renames(), &[], &Marks::default(), &Marks::default());
+    assert_eq!(results[0].graphs.len(), 2, "{results:?}");
+    assert!(results[0].graphs.iter().all(|pair| !pair.not_compared && pair.old_key.is_some() && pair.new_key.is_some()), "{results:?}");
+    let units = |targets: [(&str, &str, &str); 2]| levels(targets.iter().map(|(target, text, unit)| BodyRecord { unit: unit.to_string(), ..at_file(in_target(record("k::f", "n0", text, &[]), target), "src/lib.rs") }).collect());
+    let results = compare_with(&units([(h1, "a", "panic=\"abort\""), (h2, "b", "panic=\"unwind\"")]), &units([(h3, "b2", "panic=\"unwind\""), (h4, "a2", "panic=\"abort\"")]), &no_renames(), &[], &Marks::default(), &Marks::default());
+    let keys: Vec<(String, String)> = results[0].graphs.iter().map(|pair| (pair.old_key.clone().unwrap_or_default().1, pair.new_key.clone().unwrap_or_default().1)).collect();
+    assert_eq!(keys, [(h1.to_string(), h4.to_string()), (h2.to_string(), h3.to_string())], "{results:?}");
+    let results = compare_with(&side([(h1, "a"), (h2, "b")]), &levels(Vec::new()), &no_renames(), &[], &Marks::default(), &Marks::default());
+    assert_eq!(results[0].graphs.len(), 2, "{results:?}");
+    assert!(results[0].graphs.iter().all(|pair| !pair.not_compared && pair.old_key.is_some() && !pair.new_body), "{results:?}");
 }

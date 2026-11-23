@@ -180,6 +180,12 @@ pub struct BodyRecord {
     /// B3; only at N0).
     #[serde(rename = "dyn", default, skip_serializing_if = "Vec::is_empty")]
     pub dyn_casts: Vec<(String, String)>,
+    /// The build settings of the unit of the record with no feature (R61.16-2): the `cfg`
+    /// names of its unit record that do not start with `feature=`, joined. Two units of one
+    /// target name (a library that cargo builds with `panic="unwind"` and with
+    /// `panic="abort"`) have different settings. `read_records` sets it; empty if not known.
+    #[serde(skip)]
+    pub unit: String,
 }
 
 /// One instance of a generic body (design 61, part B).
@@ -407,9 +413,22 @@ pub fn read_records(dir: &Path) -> Result<Vec<BodyRecord>> {
     for file in files {
         let text = std::fs::read_to_string(&file)
             .with_context(|| format!("cannot read {}", file.display()))?;
-        records.extend(parse_records(&text).with_context(|| format!("in {}", file.display()))?);
+        let unit = unit_settings(&text);
+        let mut found = parse_records(&text).with_context(|| format!("in {}", file.display()))?;
+        for record in found.iter_mut() {
+            record.unit.clone_from(&unit);
+        }
+        records.extend(found);
     }
     Ok(records)
+}
+
+/// The build settings of the unit record of a record file with no feature (see
+/// [`BodyRecord::unit`]). Empty if the file has no unit record.
+fn unit_settings(text: &str) -> String {
+    let Some(line) = text.lines().find(|line| line.starts_with(UNIT_LINE)) else { return String::new() };
+    let Ok(unit) = serde_json::from_str::<UnitLine>(line) else { return String::new() };
+    unit.unit.cfg.iter().filter(|name| !name.starts_with("feature=")).cloned().collect::<Vec<_>>().join(",")
 }
 
 /// Reads the unit record of each `*.jsonl` file in a folder (in name order). `None`: a file has
@@ -893,6 +912,8 @@ struct Group {
     graphs: BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>,
     /// The source file of the N0 record of each target (design 61.14, R61.14-1).
     files: BTreeMap<String, String>,
+    /// The build settings of the unit of each target, with no feature (R61.16-2).
+    units: BTreeMap<String, String>,
 }
 
 /// Normalizes the `TestDesc` const of a `#[test]` function `name`:
@@ -1116,6 +1137,7 @@ impl Group {
             if let Some(span) = &record.span {
                 self.files.entry(target.clone()).or_insert_with(|| span.file.clone());
             }
+            self.units.entry(target.clone()).or_insert_with(|| record.unit.clone());
             self.elements.entry(target.clone()).or_default().push(record.elements.clone());
             self.graphs.entry(target.clone()).or_default().push(record.graph.as_ref().map(|found| graph::renamed(found, renames)));
         }
@@ -1154,6 +1176,7 @@ impl Group {
             elements: keep(&self.elements, targets),
             graphs: keep(&self.graphs, targets),
             files: keep(&self.files, targets),
+            units: keep(&self.units, targets),
         }
     }
 
@@ -1420,26 +1443,80 @@ fn element_diff(before: &impl Groups, after: &impl Groups, name: &str) -> Option
 /// The graphs of a body on the two sides (design 60), for each pair of targets. The targets
 /// pair as in [`element_diff`]. A target with no partner gives a pair with one side. A target
 /// with more than one record takes the graph of its first record.
+///
+/// R61.16-2: no pair depends on the order of the targets (the hash in a target name depends
+/// on the folders of the build). The pairs are in the order of the target names without the
+/// hash, then of the texts. Two targets of one name without the hash on one side pair by the
+/// build settings of their units, else only if the texts of each side are equal; else the name
+/// gives one pair that is not compared.
 fn graph_pairs(old: Option<&Group>, new: Option<&Group>, names: [&str; 2]) -> Vec<graph::GraphPair> {
     let first = |group: Option<&Group>, target: &String| -> Option<std::sync::Arc<graph::RecordGraph>> { group?.graphs.get(target)?.first()?.clone() };
     let empty = BTreeMap::new();
     let (a, b) = (old.map_or(&empty, |group| &group.graphs), new.map_or(&empty, |group| &group.graphs));
-    let mut pairs: Vec<(Option<&String>, Option<&String>)> = Vec::new();
+    fn texts<'g>(group: Option<&'g Group>, target: Option<&String>, none: &'g BTreeSet<String>) -> &'g BTreeSet<String> {
+        target.and_then(|target| group?.texts.get(target)).unwrap_or(none)
+    }
+    let none = BTreeSet::new();
+    // `None` in a pair of targets: a pair that is not compared.
+    let mut pairs: Vec<Option<(Option<&String>, Option<&String>)>> = Vec::new();
+    let mut open: Vec<(bool, bool)> = Vec::new();
     if a.keys().eq(b.keys()) {
-        pairs.extend(a.keys().zip(b.keys()).map(|(x, y)| (Some(x), Some(y))));
+        pairs.extend(a.keys().zip(b.keys()).map(|(x, y)| Some((Some(x), Some(y)))));
     } else if a.len() == 1 && b.len() == 1 {
-        pairs.push((a.keys().next(), b.keys().next()));
+        pairs.push(Some((a.keys().next(), b.keys().next())));
     } else {
-        let stems = |map: &BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>| -> BTreeMap<String, String> { map.keys().map(|target| (target_stem(target).to_string(), target.clone())).collect() };
+        let stems = |map: &'_ BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>| -> BTreeMap<String, Vec<String>> {
+            let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for target in map.keys() {
+                found.entry(target_stem(target).to_string()).or_default().push(target.clone());
+            }
+            found
+        };
         let (x, y) = (stems(a), stems(b));
         let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
         for key in keys {
-            let left = x.get(key).and_then(|target| a.get_key_value(target)).map(|(target, _)| target);
-            let right = y.get(key).and_then(|target| b.get_key_value(target)).map(|(target, _)| target);
-            pairs.push((left, right));
+            let left: Vec<&String> = x.get(key).into_iter().flatten().filter_map(|target| a.get_key_value(target).map(|(target, _)| target)).collect();
+            let right: Vec<&String> = y.get(key).into_iter().flatten().filter_map(|target| b.get_key_value(target).map(|(target, _)| target)).collect();
+            if left.len() <= 1 && right.len() <= 1 {
+                pairs.push(Some((left.first().copied(), right.first().copied())));
+                continue;
+            }
+            // Two targets of one name without the hash. A side with no target: no choice, a
+            // pair with one side for each target. Else the targets pair by the build settings
+            // of their units (a library with `panic="unwind"` and with `panic="abort"`), if
+            // each side has the same distinct settings; else only if each target of a side has
+            // the same texts, so that each pair has the same content.
+            if left.is_empty() || right.is_empty() {
+                pairs.extend(left.iter().map(|x| Some((Some(*x), None))).chain(right.iter().map(|y| Some((None, Some(*y))))));
+                continue;
+            }
+            let settings = |group: Option<&Group>, list: &[&String]| -> Option<BTreeMap<String, String>> {
+                let map: BTreeMap<String, String> = list.iter().filter_map(|target| Some((group?.units.get(*target)?.clone(), (*target).clone()))).collect();
+                (map.len() == list.len() && !map.contains_key("")).then_some(map)
+            };
+            let one_text = |group: Option<&Group>, list: &[&String]| list.windows(2).all(|two| texts(group, Some(two[0]), &none) == texts(group, Some(two[1]), &none));
+            if let (Some(x), Some(y)) = (settings(old, &left), settings(new, &right))
+                && x.keys().eq(y.keys())
+            {
+                for (unit, target) in &x {
+                    let left = left.iter().copied().find(|found| *found == target);
+                    let right = y.get(unit).and_then(|target| right.iter().copied().find(|found| *found == target));
+                    pairs.push(Some((left, right)));
+                }
+            } else if left.len() == right.len() && one_text(old, &left) && one_text(new, &right) {
+                pairs.extend(left.iter().zip(&right).map(|(x, y)| Some((Some(*x), Some(*y)))));
+            } else {
+                pairs.push(None);
+                open.push((!left.is_empty(), !right.is_empty()));
+            }
         }
     }
-    pairs
+    let mut found: Vec<(Option<&String>, Option<&String>)> = pairs.iter().flatten().copied().collect();
+    found.sort_by(|(a, b), (c, d)| {
+        let stems = |x: &Option<&String>, y: &Option<&String>| (x.map(|target| target_stem(target).to_string()), y.map(|target| target_stem(target).to_string()));
+        stems(a, b).cmp(&stems(c, d)).then_with(|| (texts(old, *a, &none), texts(new, *b, &none)).cmp(&(texts(old, *c, &none), texts(new, *d, &none))))
+    });
+    let mut out: Vec<graph::GraphPair> = found
         .into_iter()
         .map(|(left, right)| graph::GraphPair {
             old_body: left.is_some(),
@@ -1448,8 +1525,11 @@ fn graph_pairs(old: Option<&Group>, new: Option<&Group>, names: [&str; 2]) -> Ve
             new: right.and_then(|target| first(new, target)),
             old_key: left.map(|target| (names[0].to_string(), target.clone())),
             new_key: right.map(|target| (names[1].to_string(), target.clone())),
+            not_compared: false,
         })
-        .collect()
+        .collect();
+    out.extend(open.into_iter().map(|(old_body, new_body)| graph::GraphPair { old_body, new_body, not_compared: true, ..graph::GraphPair::default() }));
+    out
 }
 
 /// True if the texts of one body are the same on both sides, by target.
@@ -1490,7 +1570,7 @@ fn same_bodies(
 
 /// The name of a target without its hash: `depot.test` for `depot.test.480693c09eb877f6`. A name
 /// with no hash at its end stays as it is.
-fn target_stem(target: &str) -> &str {
+pub fn target_stem(target: &str) -> &str {
     match target.rsplit_once('.') {
         Some((stem, hash)) if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) => stem,
         _ => target,
