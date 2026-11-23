@@ -34,9 +34,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: − call `Option::<u32>::unwrap_or` (src/lib.rs:-2): return → return
       control flow: + arrow entry (src/lib.rs:1) → try `a?` (src/lib.rs:2)
       control flow: … 1 more (semilla status --verbose)
+      equivalence: not decided: the discriminant of a value that is not a modeled enum
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::add (src/lib.rs:1): graph changes: +1 try, −1 call, +3 arrows, −2 arrows
+    depot::add (src/lib.rs:1): graph changes: +1 try, −1 call, +3 arrows, −2 arrows; not decided (the discriminant of a value that is not a modeled enum)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

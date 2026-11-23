@@ -1,0 +1,204 @@
+note: the driver builds a dyn call, an intrinsic call, a projection of a generic parameter, a generic impl with an associated type, and an async fn (design 61.9, part 0)
+rule+: R61.9-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+use std::future::Future;
+
+pub trait Speak {
+    fn speak(&self) -> u32 {
+        1
+    }
+    fn loud(&self) -> u32 {
+        self.speak() + 1
+    }
+}
+
+pub struct Dog;
+
+impl Speak for Dog {}
+
+pub trait Make {
+    type Out;
+    fn make(&self) -> Self::Out;
+}
+
+impl Make for Dog {
+    type Out = u32;
+    fn make(&self) -> u32 {
+        3
+    }
+}
+
+pub struct Wrap<T: Make> {
+    pub inner: Option<<T as Make>::Out>,
+    pub base: T,
+}
+
+pub struct Pair<T>(pub T, pub T);
+
+impl<T: Copy> Iterator for Pair<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        Some(self.0)
+    }
+}
+
+pub fn talk(s: &dyn Speak) -> u32 {
+    s.loud() + 1
+}
+
+pub fn bits(x: u32) -> u32 {
+    x.count_ones() + 1
+}
+
+pub fn copy_one(a: &[u8; 4], b: &mut [u8; 4]) -> u8 {
+    unsafe { std::ptr::copy(a.as_ptr(), b.as_mut_ptr(), 1) }
+    b[0] + 1 as u8
+}
+
+pub fn first<I: Iterator>(mut it: I) -> (Option<I::Item>, u32) {
+    (it.next(), 1)
+}
+
+pub fn wrap<T: Make>(base: T) -> (Wrap<T>, u32) {
+    let inner = Some(base.make());
+    (Wrap { inner, base }, 1)
+}
+
+pub fn use_all() -> u32 {
+    let (w, k) = wrap(Dog);
+    first(Pair(1u32, 2)).0.unwrap_or(0) + w.inner.unwrap_or(0) + talk(&Dog) + k
+}
+
+pub async fn later(x: u32) -> u32 {
+    x + 1
+}
+
+pub fn run_later() -> impl Future<Output = u32> {
+    later(1)
+}
+=== new src/lib.rs
+use std::future::Future;
+
+pub trait Speak {
+    fn speak(&self) -> u32 {
+        1
+    }
+    fn loud(&self) -> u32 {
+        self.speak() + 1
+    }
+}
+
+pub struct Dog;
+
+impl Speak for Dog {}
+
+pub trait Make {
+    type Out;
+    fn make(&self) -> Self::Out;
+}
+
+impl Make for Dog {
+    type Out = u32;
+    fn make(&self) -> u32 {
+        3
+    }
+}
+
+pub struct Wrap<T: Make> {
+    pub inner: Option<<T as Make>::Out>,
+    pub base: T,
+}
+
+pub struct Pair<T>(pub T, pub T);
+
+impl<T: Copy> Iterator for Pair<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        Some(self.0)
+    }
+}
+
+pub fn talk(s: &dyn Speak) -> u32 {
+    s.loud() + 2
+}
+
+pub fn bits(x: u32) -> u32 {
+    x.count_ones() + 2
+}
+
+pub fn copy_one(a: &[u8; 4], b: &mut [u8; 4]) -> u8 {
+    unsafe { std::ptr::copy(a.as_ptr(), b.as_mut_ptr(), 1) }
+    b[0] + 2 as u8
+}
+
+pub fn first<I: Iterator>(mut it: I) -> (Option<I::Item>, u32) {
+    (it.next(), 2)
+}
+
+pub fn wrap<T: Make>(base: T) -> (Wrap<T>, u32) {
+    let inner = Some(base.make());
+    (Wrap { inner, base }, 2)
+}
+
+pub fn use_all() -> u32 {
+    let (w, k) = wrap(Dog);
+    first(Pair(1u32, 2)).0.unwrap_or(0) + w.inner.unwrap_or(0) + talk(&Dog) + k
+}
+
+pub async fn later(x: u32) -> u32 {
+    x + 2
+}
+
+pub fn run_later() -> impl Future<Output = u32> {
+    later(2)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 7 item(s) with 7 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 7 places: changed literal `1` → `2` (f1)
+      in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap
+      lines: src/lib.rs:43, src/lib.rs:47, src/lib.rs:52, src/lib.rs:56, src/lib.rs:61, src/lib.rs:70, src/lib.rs:74, src/lib.rs:-43, src/lib.rs:-47, src/lib.rs:-52, src/lib.rs:-56, src/lib.rs:-61, src/lib.rs:-70, src/lib.rs:-74
+      to state it: --same 'rewrite 1 => 2'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite 1 => 2'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: 7 site(s): changed literal `1` → `2` [semantics · code different]
+      in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, and 1 more
+      affected bodies: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap
+      control flow: ~ check `overflow: x.count_ones() + 1` → `overflow: x.count_ones() + 2` (src/lib.rs:-47, src/lib.rs:47)
+      control flow: ~ check `overflow: b[0] + 1 as u8` → `overflow: b[0] + 2 as u8` (src/lib.rs:-52, src/lib.rs:52)
+      control flow: ~ check `overflow: s.loud() + 1` → `overflow: s.loud() + 2` (src/lib.rs:-43, src/lib.rs:43)
+      equivalence: `shop::bits`: not decided: the difference depends on the result of a call or on a value that the check does not model
+      equivalence: `shop::copy_one`: not decided: a cast (PointerCoercion(Unsize)): a (src/lib.rs:-51)
+      equivalence: `shop::first`: different: for it = a value: before returns (a value, 1), after returns (a value, 2)
+      equivalence: `shop::later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
+      equivalence: `shop::run_later`: not decided: a coroutine value: { x + 1 } (src/lib.rs:-69)
+      equivalence: `shop::talk`: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      equivalence: `shop::wrap`: not decided: a value of a type that the compiler does not normalize here: Some(base.make()) (src/lib.rs:-60)
+      reaches: 1 public function: shop::use_all (semilla status --verbose)
+  cover: each of the 14 changed line(s) is in a fact
+  control flow: 8 bodies
+    shop::bits (src/lib.rs:46): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the difference depends on the result of a call or on a value that the check does not model)
+    shop::copy_one (src/lib.rs:50): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (a cast (PointerCoercion(Unsize)): a (src/lib.rs:-51))
+    shop::first (src/lib.rs:55): same graph (the edit keeps the control flow); different (for it = a value: before returns (a value, 1), after returns (a value, 2))
+    shop::later (src/lib.rs:69): same graph; not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
+    shop::later::{closure#0} { x + 2 } (src/lib.rs:69): graph not shown: coroutine: the MIR of the driver is the state machine of the coroutine, not the source
+    shop::run_later (src/lib.rs:73): same graph (the edit keeps the control flow); not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
+    shop::talk (src/lib.rs:42): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
+    shop::wrap (src/lib.rs:59): same graph (the edit keeps the control flow); not decided (a value of a type that the compiler does not normalize here: Some(base.make()) (src/lib.rs:-60))
+    reached bodies: 2
+      shop::later (src/lib.rs:69): reached through shop::later::{closure#0}, not decided (a coroutine value: { x + 1 } (src/lib.rs:-69))
+      shop::use_all (src/lib.rs:64): reached through shop::first, shop::talk, shop::wrap, not decided (a cast (PointerCoercion(Unsize)): &Dog (src/lib.rs:-66))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: 7 site(s): changed literal `1` → `2` [semantics · code different]
+    lines: src/lib.rs:43, src/lib.rs:47, src/lib.rs:52, src/lib.rs:56, src/lib.rs:61, src/lib.rs:70, src/lib.rs:74, src/lib.rs:-43, src/lib.rs:-47, src/lib.rs:-52, src/lib.rs:-56, src/lib.rs:-61, src/lib.rs:-70, src/lib.rs:-74

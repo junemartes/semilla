@@ -1,0 +1,58 @@
+note: an extracted function with a changed bound is different, with an input
+different: changed call
+rule+: R61.4-2
+rule+: R61.4-6
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn cost(w: u32) -> u32 {
+    let base = if w > 10 { 15 } else { 5 };
+    base + 1
+}
+=== new src/lib.rs
+fn ship(w: u32) -> u32 {
+    if w > 20 { 15 } else { 5 }
+}
+
+pub fn cost(w: u32) -> u32 {
+    let base = ship(w);
+    base + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` (f1)
+      in: shop::cost
+      lines: src/lib.rs:6, src/lib.rs:-2
+      to state it: --change 'shop::cost=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::cost=TEXT'
+  new and removed items, filled in by Semilla:
+  ◆ f2 derived: added `shop::ship` [added · code different]
+      affected bodies: shop::ship
+      control flow: + graph of `shop::ship`: 3 points, 3 arrows (semilla status --verbose)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
+      affected bodies: shop::cost
+      control flow: + call `ship` (src/lib.rs:6): return → check `overflow: base + 1`
+      control flow: − branch `w > 10` (src/lib.rs:-2): false → check `overflow: base + 1`, true → check `overflow: base + 1`
+      control flow: + arrow entry (src/lib.rs:5) → call `ship` (src/lib.rs:6)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: different: for w = 16: before returns 16, after returns 6
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::cost (src/lib.rs:5): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for w = 16: before returns 16, after returns 6)
+    shop::ship (src/lib.rs:1): graph added: 3 points, 3 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 derived: added `shop::ship` [added · code different]
+    lines: src/lib.rs:1-4
+◆ f1 derived: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` at `shop::cost/S0/init` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-2

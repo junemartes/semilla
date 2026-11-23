@@ -869,6 +869,16 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
                 let line = format!("      control flow: {line}");
                 put(&if names { line } else { fit_line(&line) });
             }
+            // The equivalence of the body (design 61, E1).
+            for line in flow.equivalence.get(&fact.id).into_iter().flatten() {
+                let line = format!("      equivalence: {line}");
+                put(&if names { line } else { fit_line(&line) });
+            }
+            // The callers that the change of the body reaches (design 61.10, A5).
+            if let Some((line, _)) = flow.reaches.get(&fact.id) {
+                let line = format!("      reaches: {line}");
+                put(&if names { line } else { fit_line(&line) });
+            }
         }
         None => {
             if let Some(branches) = &fact.branches {

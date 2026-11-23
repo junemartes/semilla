@@ -1,0 +1,51 @@
+note: a call that the step replaces with the body of the callee is equivalent
+rule+: R61.4-4
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+fn half(x: u32) -> u32 {
+    x / 2
+}
+
+pub fn price(x: u32) -> u32 {
+    half(x) + 3
+}
+=== new src/lib.rs
+fn half(x: u32) -> u32 {
+    x / 2
+}
+
+pub fn price(x: u32) -> u32 {
+    x / 2 + 3
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `half(x)` → `x / 2` (f1)
+      in: shop::price
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: --change 'shop::price=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
+      affected bodies: shop::price
+      control flow: − call `half` (src/lib.rs:-6): return → check `overflow: half(x) + 3`
+      control flow: ~ check `overflow: half(x) + 3` → `overflow: x / 2 + 3` (src/lib.rs:-6, src/lib.rs:6)
+      control flow: + arrow entry (src/lib.rs:5) → check `overflow: x / 2 + 3` (src/lib.rs:6)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: equivalent (proved by SMT after inlining `shop::half`)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (src/lib.rs:5): graph changes: −1 call, 1 changed check, +1 arrow, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `shop::half`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `half(x)` → `x / 2` at `shop::price/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6

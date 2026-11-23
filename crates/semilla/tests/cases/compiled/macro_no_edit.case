@@ -46,7 +46,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: depot::limit
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    depot::limit (src/lib.rs:12): graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body
+    depot::limit (src/lib.rs:12): graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; equivalent (proved by SMT)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -40,13 +40,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different]
       affected bodies: depot::fetch
+      equivalence: not decided: a coroutine value: { n + 1 } (src/lib.rs:-1)
   ◆ f2 derived: the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
       affected bodies: depot::fetch
       note: lines before the step 1
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
-    depot::fetch (src/lib.rs:1): same graph
+    depot::fetch (src/lib.rs:1): same graph; not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))
     depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 } (src/lib.rs:1): graph not shown: coroutine: the MIR of the driver is the state machine of the coroutine, not the source
+    reached bodies: 1
+      depot::fetch (src/lib.rs:1): reached through depot::fetch::{closure#0}, not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -28,9 +28,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `1` → `2` at `depot::mask/tail/rhs` [semantics · code different]
       affected bodies: depot::mask
+      equivalence: different: for v = 0: before returns 1, after returns 2
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::mask (src/lib.rs:1): same graph (the edit keeps the control flow)
+    depot::mask (src/lib.rs:1): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

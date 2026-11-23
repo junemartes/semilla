@@ -1,0 +1,46 @@
+note: two edits that cancel: each one alone is different, and the body is equivalent
+different: changed literal
+rule+: R61.5-1
+rule-: R61.5-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn mask(x: u32) -> u32 {
+    (x ^ 5) ^ 3
+}
+=== new src/lib.rs
+pub fn mask(x: u32) -> u32 {
+    (x ^ 6) ^ 0
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::mask
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::mask=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::mask=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `5` → `6` at `shop::mask/tail/lhs/rhs` [semantics · code different]
+      affected bodies: shop::mask (with 1 other edit of this body)
+      equivalence: different alone: for x = 0: before returns 6, after returns 5; the body: equivalent (proved by SMT)
+  ◆ f2 derived: changed literal `3` → `0` at `shop::mask/tail/rhs` [semantics · code different]
+      affected bodies: shop::mask (with 1 other edit of this body)
+      equivalence: different alone: for x = 0: before returns 6, after returns 5; the body: equivalent (proved by SMT)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::mask (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `5` → `6` at `shop::mask/tail/lhs/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f2 derived: changed literal `3` → `0` at `shop::mask/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

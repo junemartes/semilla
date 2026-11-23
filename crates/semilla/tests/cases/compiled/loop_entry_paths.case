@@ -1,0 +1,74 @@
+note: the start value of a loop differs on one path only: the check of the entry states needs each path, not only the first one
+rule-: R61.11-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn acc_a(n: u32, c: bool) -> u32 {
+    let mut i: u32 = 0;
+    let mut sum: u32 = if c { 0 } else { 5 };
+    while i < n {
+        sum = sum.wrapping_add(i);
+        i += 1;
+    }
+    sum
+}
+
+pub fn acc_b(n: u32, c: bool) -> u32 {
+    let mut i: u32 = 0;
+    let mut sum: u32 = if c { 5 } else { 0 };
+    while i < n {
+        sum = sum.wrapping_add(i);
+        i += 1;
+    }
+    sum
+}
+=== new src/lib.rs
+pub fn acc_a(n: u32, c: bool) -> u32 {
+    let mut i: u32 = 0;
+    let mut sum: u32 = if c { 0 } else { 6 };
+    while i < n {
+        sum = sum.wrapping_add(i);
+        i += 1;
+    }
+    sum
+}
+
+pub fn acc_b(n: u32, c: bool) -> u32 {
+    let mut i: u32 = 0;
+    let mut sum: u32 = if c { 6 } else { 0 };
+    while i < n {
+        sum = sum.wrapping_add(i);
+        i += 1;
+    }
+    sum
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: changed literal `5` → `6` (f1)
+      in: shop::acc_a, shop::acc_b
+      lines: src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13
+      to state it: --same 'rewrite 5 => 6'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite 5 => 6'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: 2 site(s): changed literal `5` → `6` [semantics · code different]
+      in: shop::acc_a, shop::acc_b
+      affected bodies: shop::acc_a, shop::acc_b
+      equivalence: `shop::acc_a`: different: for n = 1, c = false (a bounded run of at most 4 loop iterations): before returns 5, after returns 6
+      equivalence: `shop::acc_b`: different: for n = 1, c = true (a bounded run of at most 4 loop iterations): before returns 5, after returns 6
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::acc_a (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1, c = false (a bounded run of at most 4 loop iterations): before returns 5, after returns 6)
+    shop::acc_b (src/lib.rs:11): same graph (the edit keeps the control flow); different (for n = 1, c = true (a bounded run of at most 4 loop iterations): before returns 5, after returns 6)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: 2 site(s): changed literal `5` → `6` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:13, src/lib.rs:-3, src/lib.rs:-13

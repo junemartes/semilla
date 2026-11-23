@@ -33,17 +33,21 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#0}> (trait default)` (src/lib.rs:2): return → call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)`
       control flow: + call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:2): return → call `slice::<impl [u32]>::iter`
       control flow: … 2 more (semilla status --verbose)
+      equivalence: `shop::grow`: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2)
+      equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: a field of a value that the check does not model: k (src/lib.rs:3)
   ◆ f2 derived: changed if: `x.wrapping_add(1)` → `if *x > k { 0 } else { x.wrapping_add(k) }` at `shop::grow/tail/recv/args[0]/body` [semantics · code different]
       affected bodies: shop::grow (with 1 other edit of this body)
       control flow: − arrow entry (src/lib.rs:-1) → call `slice::<impl [u32]>::iter` (src/lib.rs:-2)
       control flow: + branch `*x > k` (src/lib.rs:3): false → call `num::<impl u32>::wrapping_add`, true → return
       control flow: + arrow entry (src/lib.rs:3) → branch `*x > k` (src/lib.rs:3)
       control flow: … 1 more (semilla status --verbose)
+      equivalence: `shop::grow`: not decided alone: the variant with only this edit does not compile; the body: not decided: a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2)
+      equivalence: `shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a…`: not decided alone: the variant with only this edit does not compile; the body: not decided: a field of a value that the check does not model: k (src/lib.rs:3)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::grow (src/lib.rs:1): graph changes: +3 calls, +4 arrows, −1 arrow
+    shop::grow (src/lib.rs:1): graph changes: +3 calls, +4 arrows, −1 arrow; not decided (a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2))
     shop::grow::{closure#0} |x| x.wrapping_mul(3) (src/lib.rs:2): graph added: 3 points, 2 arrows
-    shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a… (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow
+    shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a… (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow; not decided (a field of a value that the check does not model: k (src/lib.rs:3))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

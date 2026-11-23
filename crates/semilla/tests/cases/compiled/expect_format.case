@@ -31,21 +31,24 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different]
       affected bodies: shop::first
       control flow: ~ call `Option::<u32>::unwrap_or` → `Option::<u32>::expect` (src/lib.rs:-1, src/lib.rs:1)
+      equivalence: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer): "none" (src/lib.rs:1)
   ◆ f2 derived: deleted statement `String::new()` at `shop::show/tail` [semantics · code different]
       affected bodies: shop::show (with 1 other edit of this body)
       control flow: ~ call `String::new` → `format` (src/lib.rs:-2, src/lib.rs:2)
       control flow: − arrow entry (src/lib.rs:-2) → call `String::new` (src/lib.rs:-2)
       control flow: − arrow call `String::new` (src/lib.rs:-2) → return (src/lib.rs:-2) (return)
+      equivalence: not decided: an array
   ◆ f3 derived: added macro statement `format!("{x}")` at `shop::show/tail` [semantics · code different]
       affected bodies: shop::show (with 1 other edit of this body)
       control flow: + construct `{x}` (src/lib.rs:2): return → call `format`
       control flow: + call `must_use::<String>` (src/lib.rs:2): return → return
       control flow: ~ call `String::new` → `format` (src/lib.rs:-2, src/lib.rs:2)
       control flow: … 2 more (semilla status --verbose)
+      equivalence: not decided: an array
   cover: each of the 4 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::first (src/lib.rs:1): same structure: 1 changed call target
-    shop::show (src/lib.rs:2): graph changes: +1 call, +1 construct, 1 changed call target, +4 arrows, −2 arrows
+    shop::first (src/lib.rs:1): same structure: 1 changed call target; not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): "none" (src/lib.rs:1))
+    shop::show (src/lib.rs:2): graph changes: +1 call, +1 construct, 1 changed call target, +4 arrows, −2 arrows; not decided (an array)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

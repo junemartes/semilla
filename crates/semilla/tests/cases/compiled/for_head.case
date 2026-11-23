@@ -40,9 +40,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: ~ for `v.iter()` → `v.iter().rev()` (src/lib.rs:-3, src/lib.rs:3)
       control flow: + arrow call `slice::<impl [u32]>::iter` (src/lib.rs:3) → call `<Iter<'_, u32> as Iterator>::rev (trait default)` (src/lib.rs:3) (return)
       control flow: … 1 more (semilla status --verbose)
+      equivalence: not decided: a call that returns a reference (to a value): v.iter() (src/lib.rs:-3)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::sum (src/lib.rs:1): graph changes: +1 call, 1 changed `for` point, +2 arrows, −1 arrow
+    depot::sum (src/lib.rs:1): graph changes: +1 call, 1 changed `for` point, +2 arrows, −1 arrow; not decided (a call that returns a reference (to a value): v.iter() (src/lib.rs:-3))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

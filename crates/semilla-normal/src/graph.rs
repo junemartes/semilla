@@ -48,6 +48,10 @@ pub struct RecordPoint {
     /// of a macro), each text one time, in order (design 60, R60.2-11).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub x: Vec<String>,
+    /// The value key of a check or a branch: the operation and each operand as a value (design
+    /// 61, A1). Two points with equal keys do the same operation on the same values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v: Option<String>,
 }
 
 /// The counts of the parts of a body that are not in the graph.
@@ -61,6 +65,12 @@ pub struct GraphCounts {
     pub drops: usize,
     #[serde(default)]
     pub unreachable: usize,
+    /// The checks whose condition is a known value (design 61, A1): not points.
+    #[serde(default)]
+    pub folded_checks: usize,
+    /// The branches on a known value: the walk follows one arrow.
+    #[serde(default)]
+    pub folded_branches: usize,
 }
 
 impl RecordGraph {
@@ -74,7 +84,7 @@ impl RecordGraph {
             && !other.co
             && self.a == other.a
             && self.p.len() == other.p.len()
-            && self.p.iter().zip(&other.p).all(|(a, b)| a.k == b.k && a.t == b.t && a.m == b.m && a.x == b.x)
+            && self.p.iter().zip(&other.p).all(|(a, b)| a.k == b.k && (a.t == b.t || (a.v.is_some() && a.v == b.v)) && a.m == b.m && a.x == b.x)
     }
 
     /// The place of a range of a point: the file, the start, and the end.
@@ -96,6 +106,12 @@ pub struct GraphPair {
     pub old: Option<std::sync::Arc<RecordGraph>>,
     #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "serialize_shared", deserialize_with = "deserialize_shared")]
     pub new: Option<std::sync::Arc<RecordGraph>>,
+    /// The name and the target of the record of each side (for the equivalence check, design
+    /// 61).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_key: Option<(String, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_key: Option<(String, String)>,
 }
 
 /// Writes a shared graph (for `BodyRecord::graph`).
@@ -106,6 +122,16 @@ pub fn serialize_shared<S: serde::Serializer>(value: &Option<std::sync::Arc<Reco
 /// Reads a shared graph (for `BodyRecord::graph`).
 pub fn deserialize_shared<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<std::sync::Arc<RecordGraph>>, D::Error> {
     Ok(Option::<RecordGraph>::deserialize(deserializer)?.map(std::sync::Arc::new))
+}
+
+/// Writes a shared text (for `BodyRecord::q`).
+pub fn serialize_text<S: serde::Serializer>(value: &Option<std::sync::Arc<String>>, serializer: S) -> Result<S::Ok, S::Error> {
+    value.as_deref().serialize(serializer)
+}
+
+/// Reads a shared text (for `BodyRecord::q`).
+pub fn deserialize_text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<std::sync::Arc<String>>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.map(std::sync::Arc::new))
 }
 
 /// The graph with the rename map on the text of each call (a renamed callee is the same
@@ -143,7 +169,7 @@ mod tests {
     use super::*;
 
     fn point(kind: &str, text: &str, at: i64) -> RecordPoint {
-        RecordPoint { k: kind.into(), t: text.into(), m: None, r: Some([0, at, at + 1]), c: None, x: Vec::new() }
+        RecordPoint { k: kind.into(), t: text.into(), m: None, r: Some([0, at, at + 1]), c: None, x: Vec::new(), v: None }
     }
 
     // rule+ R60.3-7

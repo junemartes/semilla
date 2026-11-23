@@ -23,9 +23,10 @@ build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
+      equivalence: equivalent (proved by equal MIR)
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
-    depot::tax (src/lib.rs:1): same graph (the edit keeps the control flow)
+    depot::tax (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

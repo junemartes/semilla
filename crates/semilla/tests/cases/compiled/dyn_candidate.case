@@ -1,0 +1,62 @@
+note: a new conversion to `dyn Speak` is a new candidate of each call through `dyn Speak`
+rule+: R61.3-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Speak { fn speak(&self) -> u32; }
+
+pub struct Dog;
+pub struct Cat;
+
+impl Speak for Dog { fn speak(&self) -> u32 { 1 } }
+impl Speak for Cat { fn speak(&self) -> u32 { 2 } }
+
+pub fn talk(s: &dyn Speak) -> u32 { s.speak() }
+
+pub fn all() -> u32 { talk(&Dog) }
+=== new src/lib.rs
+pub trait Speak { fn speak(&self) -> u32; }
+
+pub struct Dog;
+pub struct Cat;
+
+impl Speak for Dog { fn speak(&self) -> u32 { 1 } }
+impl Speak for Cat { fn speak(&self) -> u32 { 2 } }
+
+pub fn talk(s: &dyn Speak) -> u32 { s.speak() }
+
+pub fn all() -> u32 { talk(&Dog).wrapping_add(talk(&Cat)) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed method_call: `talk(&Dog)` → `talk(&Dog).wrapping_add(talk(&Cat))` (f1)
+      in: shop::all
+      lines: src/lib.rs:11, src/lib.rs:-11
+      to state it: --change 'shop::all=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::all=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed method_call: `talk(&Dog)` → `talk(&Dog).wrapping_add(talk(&Cat))` at `shop::all/tail` [semantics · code different]
+      affected bodies: shop::all
+      control flow: + call `talk` (src/lib.rs:11): return → call `num::<impl u32>::wrapping_add`
+      control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:11): return → return
+      control flow: + arrow call `talk` (src/lib.rs:11) → call `talk` (src/lib.rs:11) (return)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: not decided: a cast (PointerCoercion(Unsize)): &Dog (src/lib.rs:-11)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::all (src/lib.rs:11): graph changes: +2 calls, +3 arrows, −1 arrow; not decided (a cast (PointerCoercion(Unsize)): &Dog (src/lib.rs:-11))
+    dyn shop::Speak (no place): the candidates of a call through `dyn shop::Speak`: +`shop::Cat`
+    reached bodies: 1
+      shop::talk (src/lib.rs:9): equivalent (proved after inlining <shop::Cat as shop::Speak>::speak)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed method_call: `talk(&Dog)` → `talk(&Dog).wrapping_add(talk(&Cat))` at `shop::all/tail` [semantics · code different]
+    lines: src/lib.rs:11, src/lib.rs:-11

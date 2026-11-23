@@ -41,14 +41,16 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different]
       affected bodies: shop::make, shop::total (with 1 other edit of this body)
       through: `shop::make` (1 body)
+      equivalence: equivalent alone (proved by equal MIR); the body: not decided: the return type changes
       ! public API: the compare does not cover the code of a different crate
   other facts, filled in by Semilla:
   ◆ f2 derived: changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different]
       affected bodies: shop::make (with 1 other edit of this body)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the return type changes
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::make (src/lib.rs:7): same graph (the edit keeps the control flow)
-    shop::total (src/lib.rs:9): same structure: 1 changed call target; no edit in the body
+    shop::make (src/lib.rs:7): same graph (the edit keeps the control flow); not decided (the return type changes)
+    shop::total (src/lib.rs:9): same structure: 1 changed call target; no edit in the body; different (for each input: before returns 5, after returns 20)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

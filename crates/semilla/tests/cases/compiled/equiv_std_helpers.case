@@ -1,0 +1,270 @@
+note: small helpers of the standard library: the check inlines the body of the helper or models its intrinsic, and each rewrite is equivalent
+rule+: R61.12-4
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn lo(a: u32, b: u32) -> u32 {
+    a.min(b)
+}
+
+pub fn hi(a: u32, b: u32) -> u32 {
+    a.max(b)
+}
+
+pub fn sat(a: u32, b: u32) -> u32 {
+    a.saturating_add(b)
+}
+
+pub fn sat_sub(a: u32, b: u32) -> u32 {
+    a.saturating_sub(b)
+}
+
+pub fn chk(a: u32, b: u32) -> Option<u32> {
+    a.checked_add(b)
+}
+
+pub fn wrap(a: u32, b: u32) -> u32 {
+    a.wrapping_sub(b)
+}
+
+pub fn diff(a: u32, b: u32) -> u32 {
+    a.abs_diff(b)
+}
+
+pub fn fit(a: u32) -> u32 {
+    a.clamp(10, 20)
+}
+
+pub fn has(o: Option<u32>) -> bool {
+    o.is_some()
+}
+
+pub fn or_zero(o: Option<u32>) -> u32 {
+    o.unwrap_or(0)
+}
+=== new src/lib.rs
+pub fn lo(a: u32, b: u32) -> u32 {
+    if a <= b { a } else { b }
+}
+
+pub fn hi(a: u32, b: u32) -> u32 {
+    if a >= b { a } else { b }
+}
+
+pub fn sat(a: u32, b: u32) -> u32 {
+    match a.checked_add(b) { Some(v) => v, None => u32::MAX }
+}
+
+pub fn sat_sub(a: u32, b: u32) -> u32 {
+    if a > b { a - b } else { 0 }
+}
+
+pub fn chk(a: u32, b: u32) -> Option<u32> {
+    let (v, o) = a.overflowing_add(b);
+    if o { None } else { Some(v) }
+}
+
+pub fn wrap(a: u32, b: u32) -> u32 {
+    a.wrapping_add(b.wrapping_neg())
+}
+
+pub fn diff(a: u32, b: u32) -> u32 {
+    if a > b { a - b } else { b - a }
+}
+
+pub fn fit(a: u32) -> u32 {
+    if a < 10 { 10 } else if a > 20 { 20 } else { a }
+}
+
+pub fn has(o: Option<u32>) -> bool {
+    !o.is_none()
+}
+
+pub fn or_zero(o: Option<u32>) -> u32 {
+    match o { Some(v) => v, None => 0 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 10 item(s) with 19 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f1, f2, f3)
+      in: shop::chk
+      lines: src/lib.rs:18-19, src/lib.rs:-18
+      to state it: --change 'shop::chk=TEXT'
+  ? 2 places: 2 different edits (f4, f5)
+      in: shop::diff
+      lines: src/lib.rs:27, src/lib.rs:-26
+      to state it: --change 'shop::diff=TEXT'
+  ? 2 places: 2 different edits (f6, f7)
+      in: shop::fit
+      lines: src/lib.rs:31, src/lib.rs:-30
+      to state it: --change 'shop::fit=TEXT'
+  ? 2 places: 2 different edits (f9, f10)
+      in: shop::hi
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: --change 'shop::hi=TEXT'
+  ? 2 places: 2 different edits (f11, f12)
+      in: shop::lo
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::lo=TEXT'
+  and 5 more line(s) with 8 place(s): `semilla status --verbose` shows each line
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::chk=TEXT' --change 'shop::diff=TEXT' --change 'shop::fit=TEXT' --change 'shop::hi=TEXT' --change 'shop::lo=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
+      affected bodies: shop::chk (with 2 other edits of this body)
+      control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+  ◆ f2 derived: added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
+      affected bodies: shop::chk (with 2 other edits of this body)
+      control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+  ◆ f3 derived: added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
+      affected bodies: shop::chk (with 2 other edits of this body)
+      control flow: + branch `o` (src/lib.rs:19): false → return, true → return
+      control flow: + arrow call `num::<impl u32>::overflowing_add` (src/lib.rs:18) → branch `o` (src/lib.rs:19) (return)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+  ◆ f4 derived: deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
+      affected bodies: shop::diff (with 1 other edit of this body)
+      control flow: − call `num::<impl u32>::abs_diff` (src/lib.rs:-26): return → return
+      control flow: − arrow entry (src/lib.rs:-25) → call `num::<impl u32>::abs_diff` (src/lib.rs:-26)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
+  ◆ f5 derived: added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different]
+      affected bodies: shop::diff (with 1 other edit of this body)
+      control flow: + branch `a > b` (src/lib.rs:27): false → check `overflow: b - a`, true → check `overflow: a - b`
+      control flow: + check `overflow: b - a` (src/lib.rs:27): ok → return, fail → panic `overflow`
+      control flow: + check `overflow: a - b` (src/lib.rs:27): ok → return, fail → panic `overflow`
+      control flow: … 2 more (semilla status --verbose)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
+  ◆ f6 derived: deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different]
+      affected bodies: shop::fit (with 1 other edit of this body)
+      control flow: − call `impls::<impl Ord for u32>::clamp` (src/lib.rs:-30): return → return
+      control flow: − arrow entry (src/lib.rs:-29) → call `impls::<impl Ord for u32>::clamp` (src/lib.rs:-30)
+      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
+  ◆ f7 derived: added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different]
+      affected bodies: shop::fit (with 1 other edit of this body)
+      control flow: + branch `a < 10` (src/lib.rs:31): false → branch `a > 20`, true → return
+      control flow: + branch `a > 20` (src/lib.rs:31): false → return, true → return
+      control flow: + arrow entry (src/lib.rs:30) → branch `a < 10` (src/lib.rs:31)
+      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
+  ◆ f8 derived: changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different]
+      affected bodies: shop::has
+      control flow: ~ call `Option::<u32>::is_some` → `Option::<u32>::is_none` (src/lib.rs:-34, src/lib.rs:35)
+      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::is_none`, `std::option::Option::<u32>::is_some`)
+  ◆ f9 derived: deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different]
+      affected bodies: shop::hi (with 1 other edit of this body)
+      control flow: − call `impls::<impl Ord for u32>::max` (src/lib.rs:-6): return → return
+      control flow: − arrow entry (src/lib.rs:-5) → call `impls::<impl Ord for u32>::max` (src/lib.rs:-6)
+      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
+  ◆ f10 derived: added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different]
+      affected bodies: shop::hi (with 1 other edit of this body)
+      control flow: + branch `a >= b` (src/lib.rs:6): false → return, true → return
+      control flow: + arrow entry (src/lib.rs:5) → branch `a >= b` (src/lib.rs:6)
+      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
+  ◆ f11 derived: deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different]
+      affected bodies: shop::lo (with 1 other edit of this body)
+      control flow: − call `impls::<impl Ord for u32>::min` (src/lib.rs:-2): return → return
+      control flow: − arrow entry (src/lib.rs:-1) → call `impls::<impl Ord for u32>::min` (src/lib.rs:-2)
+      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
+  ◆ f12 derived: added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different]
+      affected bodies: shop::lo (with 1 other edit of this body)
+      control flow: + branch `a <= b` (src/lib.rs:2): false → return, true → return
+      control flow: + arrow entry (src/lib.rs:1) → branch `a <= b` (src/lib.rs:2)
+      equivalence: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
+  ◆ f13 derived: deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different]
+      affected bodies: shop::or_zero (with 1 other edit of this body)
+      control flow: − call `Option::<u32>::unwrap_or` (src/lib.rs:-38): return → return
+      control flow: − arrow entry (src/lib.rs:-37) → call `Option::<u32>::unwrap_or` (src/lib.rs:-38)
+      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+  ◆ f14 derived: added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different]
+      affected bodies: shop::or_zero (with 1 other edit of this body)
+      control flow: + branch `o` (src/lib.rs:39): std::option::Option::None → return, std::option::Option::Some → return
+      control flow: + arrow entry (src/lib.rs:38) → branch `o` (src/lib.rs:39)
+      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+  ◆ f15 derived: deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
+      affected bodies: shop::sat (with 1 other edit of this body)
+      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
+  ◆ f16 derived: added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
+      affected bodies: shop::sat (with 1 other edit of this body)
+      control flow: + branch `a.checked_add(b)` (src/lib.rs:10): std::option::Option::None → return, std::option::Option::Some → return
+      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10)
+      control flow: + arrow call `num::<impl u32>::checked_add` (src/lib.rs:10) → branch `a.checked_add(b)` (src/lib.rs:10) (return)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
+  ◆ f17 derived: deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different]
+      affected bodies: shop::sat_sub (with 1 other edit of this body)
+      control flow: − call `num::<impl u32>::saturating_sub` (src/lib.rs:-14): return → return
+      control flow: − arrow entry (src/lib.rs:-13) → call `num::<impl u32>::saturating_sub` (src/lib.rs:-14)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
+  ◆ f18 derived: added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different]
+      affected bodies: shop::sat_sub (with 1 other edit of this body)
+      control flow: + branch `a > b` (src/lib.rs:14): false → return, true → check `overflow: a - b`
+      control flow: + check `overflow: a - b` (src/lib.rs:14): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:14)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
+  ◆ f19 derived: changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
+      affected bodies: shop::wrap
+      control flow: + call `num::<impl u32>::wrapping_neg` (src/lib.rs:23): return → call `num::<impl u32>::wrapping_add`
+      control flow: ~ call `num::<impl u32>::wrapping_sub` → `num::<impl u32>::wrapping_add` (src/lib.rs:-22, src/lib.rs:23)
+      control flow: + arrow entry (src/lib.rs:22) → call `num::<impl u32>::wrapping_neg` (src/lib.rs:23)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_neg`, `core::num::<impl u32>::wrapping_sub`)
+  cover: each of the 21 changed line(s) is in a fact
+  control flow: 10 bodies
+    shop::chk (src/lib.rs:17): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+    shop::diff (src/lib.rs:26): graph changes: +1 branch, +2 checks, +2 panics, −1 call, +7 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `core::num::<impl u32>::abs_diff`)
+    shop::fit (src/lib.rs:30): graph changes: +2 branches, −1 call, +5 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::clamp`)
+    shop::has (src/lib.rs:34): same structure: 1 changed call target; equivalent (proved by SMT after inlining `std::option::Option::<u32>::is_none`, `std::option::Option::<u32>::is_some`)
+    shop::hi (src/lib.rs:5): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::max`)
+    shop::lo (src/lib.rs:1): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for u32>::min`)
+    shop::or_zero (src/lib.rs:38): graph changes: +1 branch, −1 call, +3 arrows, −2 arrows; equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+    shop::sat (src/lib.rs:9): graph changes: +1 branch, 1 changed call target, +3 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
+    shop::sat_sub (src/lib.rs:13): graph changes: +1 branch, +1 check, +1 panic, −1 call, +5 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `core::num::<impl u32>::saturating_sub`)
+    shop::wrap (src/lib.rs:22): graph changes: +1 call, 1 changed call target, +2 arrows, −1 arrow; equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_neg`, `core::num::<impl u32>::wrapping_sub`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
+    lines: src/lib.rs:-18
+◆ f2 derived: added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
+    lines: src/lib.rs:18
+◆ f3 derived: added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
+    lines: src/lib.rs:19
+◆ f4 derived: deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
+    lines: src/lib.rs:-26
+◆ f5 derived: added `if` `if a > b { a - b } else { b - a }` at `shop::diff/S0` [semantics · code different]
+    lines: src/lib.rs:27
+◆ f6 derived: deleted statement `a.clamp(10, 20)` at `shop::fit/tail` [semantics · code different]
+    lines: src/lib.rs:-30
+◆ f7 derived: added `if` `if a < 10 { 10 } else if a > 20 { 20 } else { a }` at `shop::fit/S0` [semantics · code different]
+    lines: src/lib.rs:31
+◆ f8 derived: changed expression `o.is_some()` → `!o.is_none()` at `shop::has/tail` [semantics · code different]
+    lines: src/lib.rs:35, src/lib.rs:-34
+◆ f9 derived: deleted statement `a.max(b)` at `shop::hi/tail` [semantics · code different]
+    lines: src/lib.rs:-6
+◆ f10 derived: added `if` `if a >= b { a } else { b }` at `shop::hi/S0` [semantics · code different]
+    lines: src/lib.rs:6
+◆ f11 derived: deleted statement `a.min(b)` at `shop::lo/tail` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f12 derived: added `if` `if a <= b { a } else { b }` at `shop::lo/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f13 derived: deleted statement `o.unwrap_or(0)` at `shop::or_zero/tail` [semantics · code different]
+    lines: src/lib.rs:-38
+◆ f14 derived: added `match` `match o { Some(v) => v, None => 0 }` at `shop::or_zero/S0` [semantics · code different]
+    lines: src/lib.rs:39
+◆ f15 derived: deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
+    lines: src/lib.rs:-10
+◆ f16 derived: added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
+    lines: src/lib.rs:10
+◆ f17 derived: deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different]
+    lines: src/lib.rs:-14
+◆ f18 derived: added `if` `if a > b { a - b } else { 0 }` at `shop::sat_sub/S0` [semantics · code different]
+    lines: src/lib.rs:14
+◆ f19 derived: changed method_call: `a.wrapping_sub(b)` → `a.wrapping_add(b.wrapping_neg())` at `shop::wrap/tail` [semantics · code different]
+    lines: src/lib.rs:23, src/lib.rs:-22

@@ -16,6 +16,7 @@ pub mod cfgcond;
 mod comments;
 pub mod checks;
 pub mod edits;
+pub mod equiv;
 pub mod facts;
 pub mod files;
 pub mod flow;
@@ -434,6 +435,31 @@ pub trait BodyOracle {
     fn set_selections(&self, _step: &Step, _selections: &[Selection]) -> anyhow::Result<bool> {
         Ok(false)
     }
+
+    /// The equivalence check of two versions of each body (design 61, part C): one answer for
+    /// each query, `None` if the oracle cannot check it. `renames` is the rename map of the step
+    /// (old path to new path).
+    fn equivalence(&self, _step: &Step, _renames: &BTreeMap<String, String>, queries: &[equiv::Query]) -> Vec<Option<equiv::Answer>> {
+        vec![None; queries.len()]
+    }
+
+    /// The time budget of the equivalence check of a step in seconds (design 61.14, R61.14-6),
+    /// for the line of a check that the budget stopped. `None`: no budget.
+    fn equivalence_budget(&self, _step: &Step) -> Option<u64> {
+        None
+    }
+
+    /// The changed instances of the generic bodies and the changed candidates of the `dyn`
+    /// calls (design 61, part B). Empty: no data.
+    fn instances(&self, _step: &Step, _renames: &BTreeMap<String, String>) -> Vec<equiv::InstanceLine> {
+        Vec::new()
+    }
+
+    /// The walk of the reverse call graph from the changed bodies of the step (design 61.10,
+    /// part A): each reached caller with its result in each configuration. `None`: no data.
+    fn reach(&self, _step: &Step, _renames: &BTreeMap<String, String>) -> Option<equiv::ReachReport> {
+        None
+    }
 }
 
 /// A feature selection that Semilla adds for a proof (batch 5u, part C): a build with these
@@ -602,7 +628,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         kind_reasons(input, &mut plain.report);
         no_compare_result(input.step, &mut plain.report);
         positions::assign(input, &mut plain);
-        flow::apply(input, &mut plain);
+        flow::apply(input, bodies, &mut plain);
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
         agent::apply(input, &mut plain);
@@ -619,7 +645,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     kind_reasons(input, &mut outcome.report);
     no_compare_result(input.step, &mut outcome.report);
     positions::assign(input, &mut outcome);
-    flow::apply(input, &mut outcome);
+    flow::apply(input, bodies, &mut outcome);
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
     agent::apply(input, &mut outcome);

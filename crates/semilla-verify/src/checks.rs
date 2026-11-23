@@ -322,11 +322,14 @@ pub fn find_item_by(name: &str, span: Option<&(String, usize)>, workspace: &Work
 /// [`find_item_by`] with a read of each item of the workspace. This is the rule; the index must
 /// give the same answer.
 pub(crate) fn find_scan(name: &str, span: Option<&(String, usize)>, workspace: &Workspace) -> Option<String> {
+    // The file of the span itself wins over a file that only ends with it (R61.14-2).
+    let exact = span.is_some_and(|(file, _)| workspace.items.values().any(|item| item.file == *file && matches!(item.kind, semilla_syntax::ItemKind::Fn | semilla_syntax::ItemKind::Const | semilla_syntax::ItemKind::Static)));
+    let same_file = |file: &str, item_file: &str| if exact { item_file == file } else { file.ends_with(item_file) || item_file.ends_with(file) };
     if let Some((file, line)) = span {
         let found = workspace
             .items
             .values()
-            .filter(|item| item.kind == semilla_syntax::ItemKind::Fn && (file.ends_with(&item.file) || item.file.ends_with(file.as_str())) && item.line_start <= *line && *line <= item.line_end)
+            .filter(|item| item.kind == semilla_syntax::ItemKind::Fn && same_file(file, &item.file) && item.line_start <= *line && *line <= item.line_end)
             .min_by_key(|item| item.line_end - item.line_start);
         if let Some(item) = found {
             return Some(item.path.clone());
@@ -344,7 +347,7 @@ pub(crate) fn find_scan(name: &str, span: Option<&(String, usize)>, workspace: &
     let short = name.rsplit("::").next()?;
     let found = workspace.items.values().filter(|item| {
         matches!(item.kind, semilla_syntax::ItemKind::Const | semilla_syntax::ItemKind::Static)
-            && (file.ends_with(&item.file) || item.file.ends_with(file.as_str()))
+            && same_file(file, &item.file)
             && item.line_start <= *line
             && *line <= item.line_end
             && item.path.rsplit("::").next() == Some(short)
@@ -356,8 +359,11 @@ pub(crate) fn find_scan(name: &str, span: Option<&(String, usize)>, workspace: &
 pub(crate) fn find_indexed(name: &str, span: Option<&(String, usize)>, workspace: &Workspace, index: &BTreeMap<String, Vec<semilla_syntax::BodyItem>>) -> Option<String> {
     use semilla_syntax::{BodyItem, ItemKind};
     // The items at the line of the span, in each file that the file of the span can be.
+    // The file of the span itself wins: `lexer-core/tests/lib.rs` also ends with the file
+    // `tests/lib.rs` of a different package (R61.14-2).
     fn at_line<'a>(index: &'a BTreeMap<String, Vec<BodyItem>>, file: &'a str, line: usize) -> impl Iterator<Item = &'a BodyItem> {
-        let files = index.iter().filter(move |(item_file, _)| file.ends_with(item_file.as_str()) || item_file.ends_with(file));
+        let exact = index.contains_key(file);
+        let files = index.iter().filter(move |(item_file, _)| if exact { item_file.as_str() == file } else { file.ends_with(item_file.as_str()) || item_file.ends_with(file) });
         files.flat_map(|(_, items)| items).filter(move |item| item.line_start <= line && line <= item.line_end)
     }
     if let Some((file, line)) = span

@@ -1227,6 +1227,14 @@ fn outside_files(text: &str) -> Option<String> {
 /// Runs the cargo command of a check build, and returns its standard output.
 ///
 /// The command runs with a new environment (part A of batch 5v) and in the sandbox (design 27).
+/// The text of an internal compiler error in the output of a build.
+const ICE_TEXT: &str = "internal compiler error";
+
+/// Runs the check build with the driver. If the driver stops the compiler with an internal
+/// compiler error, the build runs one more time with no forms of the equivalence check
+/// (`SEMILLA_MIR_FORMS=off`): an extraction of Semilla never changes the result of a build
+/// (design 61.9, part 0). Each body of a crate that the second run builds then has the mark
+/// "no form: …". If the second build fails too, the error of the second build is the result.
 #[allow(clippy::too_many_arguments)]
 fn run_check_command(
     workspace: &Path,
@@ -1237,6 +1245,26 @@ fn run_check_command(
     mode: Mode,
     config: &Configuration,
     trait_table: bool,
+) -> Result<String> {
+    match run_check_once(workspace, level, out, target_dir, nonce, mode, config, trait_table, true) {
+        Err(error) if level == "n0" && error.downcast_ref::<FailedBuild>().is_some_and(|failed| failed.text.contains(ICE_TEXT) || failed.stdout.contains(ICE_TEXT)) => {
+            run_check_once(workspace, level, out, target_dir, nonce, mode, config, trait_table, false)
+        }
+        other => other,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_check_once(
+    workspace: &Path,
+    level: &str,
+    out: &Path,
+    target_dir: &Path,
+    nonce: &str,
+    mode: Mode,
+    config: &Configuration,
+    trait_table: bool,
+    forms: bool,
 ) -> Result<String> {
     if !matches!(level, "n0" | "n2" | "n3") {
         bail!("unknown level {level:?}: use n0, n2, or n3");
@@ -1268,6 +1296,11 @@ fn run_check_command(
     // of a tree depend only on the tree and on the settings in `settings_key`.
     build_environment(&mut command, &root, Some(&temporary));
     command.env("RUSTC_WORKSPACE_WRAPPER", &driver).env("SEMILLA_MIR_LEVEL", level).env("SEMILLA_MIR_OUT", &out).env("SEMILLA_MIR_RUN", nonce);
+    // No file of an internal compiler error in the tree.
+    command.env("RUSTC_ICE", "0");
+    if !forms {
+        command.env("SEMILLA_MIR_FORMS", "off");
+    }
     if trait_table {
         command.env("SEMILLA_TRAIT_TABLE", &out);
     }

@@ -6623,6 +6623,34 @@ fn a_rename_key_with_a_twin_number_gets_the_name_of_the_body() {
     assert_eq!(checks::no_twin_numbers("a::use#0x::b#"), "a::use#0x::b#");
 }
 
+/// Design 61.14 (R61.14-2): the file of a span wins over a file that only ends with it. Two
+/// packages have the file `tests/lib.rs`: the span `core/tests/lib.rs` gives the item of its own
+/// file. A span with no file of the workspace still finds the item by the end of its path.
+// rule+ R61.14-2
+// rule- R61.14-2
+#[test]
+fn the_file_of_a_span_wins_over_a_file_that_ends_with_it() {
+    let files = [
+        ("Cargo.toml", "[package]\nname = \"lexer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\nmembers = [\"core\"]\n\n[[test]]\nname = \"integration\"\npath = \"tests/lib.rs\"\n"),
+        ("src/lib.rs", "pub fn size() -> usize {\n    1\n}\n"),
+        ("tests/lib.rs", "fn suite() -> usize {\n    1\n}\n"),
+        ("core/Cargo.toml", "[package]\nname = \"core-x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[test]]\nname = \"integration\"\npath = \"tests/lib.rs\"\n"),
+        ("core/src/lib.rs", "pub fn count() -> usize {\n    1\n}\n"),
+        ("core/tests/lib.rs", "fn suite() -> usize {\n    2\n}\n"),
+    ];
+    let (_dir, workspace) = load_files(&files);
+    let index = &workspace.body_items().expect("the items did not change").by_file;
+    let span = |file: &str| Some((file.to_string(), 2));
+    let own = crate::checks::find_item_by("integration::suite::DATA", span("core/tests/lib.rs").as_ref(), &workspace);
+    assert_eq!(own.as_deref(), Some("core_x (test \"integration\")::suite"), "{:?}", workspace.items.keys().collect::<Vec<_>>());
+    assert_eq!(crate::checks::find_scan("integration::suite::DATA", span("core/tests/lib.rs").as_ref(), &workspace), own);
+    assert_eq!(crate::checks::find_indexed("integration::suite::DATA", span("core/tests/lib.rs").as_ref(), &workspace, index), own);
+    // The negative case: an absolute path ends with a file of the workspace.
+    let found = crate::checks::find_scan("x", span("/abs/repo/core/tests/lib.rs").as_ref(), &workspace);
+    assert_eq!(found.as_deref(), Some("core_x (test \"integration\")::suite"));
+    assert_eq!(crate::checks::find_indexed("x", span("/abs/repo/core/tests/lib.rs").as_ref(), &workspace, index), found);
+}
+
 /// Batch 7c, part 6.1 (design 37.20): the index of the items by file gives the answer of the
 /// full search for each name and each line. The fixture has a nested function, two files with
 /// an equal last name, two functions on one line, and a constant of a bench target.

@@ -32,11 +32,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different]
       affected bodies: shop::keep
+      equivalence: `shop::keep`: not decided: a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2)
+      equivalence: `shop::keep::{closure#0} |x| x.wrapping_add(1)`: equivalent (proved by equal MIR)
+      equivalence: `shop::keep::{closure#1} |x| x.wrapping_mul(2)`: equivalent (proved by equal MIR)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::keep (src/lib.rs:1): same graph (the edit keeps the control flow)
-    shop::keep::{closure#0} |x| x.wrapping_add(1) (src/lib.rs:2): same graph (the edit keeps the control flow)
-    shop::keep::{closure#1} |x| x.wrapping_mul(2) (src/lib.rs:3): same graph (the edit keeps the control flow)
+    shop::keep (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a closure value: |x| x.wrapping_add(1) (src/lib.rs:-2))
+    shop::keep::{closure#0} |x| x.wrapping_add(1) (src/lib.rs:2): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    shop::keep::{closure#1} |x| x.wrapping_mul(2) (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

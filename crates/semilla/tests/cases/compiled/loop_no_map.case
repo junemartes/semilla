@@ -1,0 +1,68 @@
+note: a loop whose head locals do not map (the new loop counts down): not decided
+rule+: R61.11-2
+rule-: R61.11-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn steps(n: u32) -> u32 {
+    let mut i: u32 = 0;
+    let mut k: u32 = 0;
+    while i < n {
+        k = k.wrapping_add(2);
+        i += 1;
+    }
+    k
+}
+=== new src/lib.rs
+pub fn steps(n: u32) -> u32 {
+    let mut left: u32 = n;
+    let mut k: u32 = 0;
+    while left > 0 {
+        k = k.wrapping_add(2);
+        left -= 1;
+    }
+    k
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f2, f3, f4)
+      in: shop::steps
+      lines: src/lib.rs:2, src/lib.rs:4, src/lib.rs:6, src/lib.rs:-2, src/lib.rs:-4, src/lib.rs:-6
+      to state it: --change 'shop::steps=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::steps=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed expression `0` → `n` at `shop::steps/S0/init` [semantics · code different]
+      affected bodies: shop::steps (with 2 other edits of this body)
+      equivalence: different alone: for n = 1 (a bounded run of at most 4 loop iterations): before returns 2, after returns 0; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+  ◆ f3 derived: change condition `i < n` → `left > 0` at `shop::steps/S2/cond` [semantics · code different]
+      affected bodies: shop::steps (with 2 other edits of this body)
+      control flow: ~ branch `i < n` → `left > 0` (src/lib.rs:-4, src/lib.rs:4)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+  ◆ f4 derived: changed expression `i += 1` → `left -= 1` at `shop::steps/S2/body/S1` [semantics · code different]
+      affected bodies: shop::steps (with 2 other edits of this body)
+      control flow: ~ check `overflow: i += 1` → `overflow: left -= 1` (src/lib.rs:-6, src/lib.rs:6)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+  ◆ f1 derived: `shop::steps`: renamed local `i` → `left`, 1 edit(s) [rename · code equal]
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    shop::steps (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 derived: changed expression `0` → `n` at `shop::steps/S0/init` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f3 derived: change condition `i < n` → `left > 0` at `shop::steps/S2/cond` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4
+◆ f4 derived: changed expression `i += 1` → `left -= 1` at `shop::steps/S2/body/S1` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f1 derived: `shop::steps`: renamed local `i` → `left`, 1 edit(s) [rename · code equal]
+    lines: src/lib.rs:2, src/lib.rs:-2

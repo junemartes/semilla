@@ -241,7 +241,47 @@ pub struct FlowReport {
     /// a line `… N more`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub facts: std::collections::BTreeMap<String, Vec<String>>,
+    /// The `equivalence:` lines of each fact, by the id of the fact (design 61, E1).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub equivalence: std::collections::BTreeMap<String, Vec<String>>,
+    /// The bodies that a change of the step reaches through the reverse call graph (design
+    /// 61.10, part A): each caller with its result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reached: Vec<ReachedBody>,
+    /// The limits that stopped the walk (`the walk stopped at depth 4: 31 more callers not
+    /// checked`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reach_stops: Vec<String>,
+    /// The line of the budget of the equivalence check (design 61.14, R61.14-6): `the
+    /// equivalence check stopped after 60 s: 41 bodies not checked; semilla status --verbose`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equivalence_stop: Option<String>,
+    /// The `reaches:` line of each fact whose body is in the start set of the walk, by the id
+    /// of the fact, and the reached public functions of the fact (name and place) for the
+    /// Markdown review.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub reaches: std::collections::BTreeMap<String, (String, Vec<(String, String)>)>,
 }
+
+/// One body that the walk of the reverse call graph reached (design 61.10, part A).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReachedBody {
+    /// The MIR name of the body.
+    pub name: String,
+    /// The place of the body: `FILE:LINE`, or `no place`.
+    pub place: String,
+    /// The result: `different through shop::tier: …`, `equivalent (proved after inlining
+    /// shop::tier)`, or `reached through shop::tier, not decided (…)`.
+    pub text: String,
+    /// The chain from the body to a changed body of the step (`shop::bill → shop::cost →
+    /// shop::tier`).
+    pub chain: String,
+    /// The fold key of the step section: the result with no input and no outcome.
+    pub key: String,
+}
+
+/// The most bodies of one fold line of the reached bodies in the step section.
+pub const REACH_FOLD_NAMES: usize = 3;
 
 /// The result of one body in the control flow section of a step (design 60, C2).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1253,13 +1293,49 @@ pub fn comments_shown<'a>(facts: &[&'a Fact]) -> Vec<Vec<&'a RelatedComment>> {
     facts.iter().map(|fact| fact.comments.iter().filter(|comment| known.insert(comment.key())).collect()).collect()
 }
 
+/// The part `reached bodies:` of the control flow section (design 61.10, A5). The short form
+/// folds the bodies with an equal result key: one line for each key, with the first
+/// [`REACH_FOLD_NAMES`] names; a key of one body has its full line. `full` gives each body
+/// with its chain.
+fn reach_lines(flow: &FlowReport, full: bool) -> Vec<String> {
+    if flow.reached.is_empty() && flow.reach_stops.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!("  reached bodies: {}", flow.reached.len())];
+    if full {
+        for body in &flow.reached {
+            out.push(format!("    {} ({}): {}", body.name, body.place, body.text));
+            out.push(format!("        chain: {}", body.chain));
+        }
+    } else {
+        let mut keys: Vec<(&str, Vec<&ReachedBody>)> = Vec::new();
+        for body in &flow.reached {
+            match keys.iter_mut().find(|(key, _)| *key == body.key) {
+                Some((_, list)) => list.push(body),
+                None => keys.push((body.key.as_str(), vec![body])),
+            }
+        }
+        for (key, list) in keys {
+            if list.len() == 1 {
+                out.push(format!("    {} ({}): {}", list[0].name, list[0].place, list[0].text));
+                continue;
+            }
+            let names: Vec<&str> = list.iter().take(REACH_FOLD_NAMES).map(|body| body.name.as_str()).collect();
+            let more = if list.len() > REACH_FOLD_NAMES { format!(", and {} more", list.len() - REACH_FOLD_NAMES) } else { String::new() };
+            out.push(format!("    {} bodies: {key}: {}{more} (semilla status --verbose)", list.len(), names.join(", ")));
+        }
+    }
+    out.extend(flow.reach_stops.iter().map(|stop| format!("    {stop}")));
+    out
+}
+
 impl StepReport {
     /// The control flow section of the step (design 60, C2): `control flow: N bodies`, and one
     /// line for each body. `full` adds the full diff of each body (C3). A step with no graph
     /// data, or with no body with a result, has no section.
     pub fn flow_lines(&self, full: bool) -> Vec<String> {
         // Decided by Claude: a step with no body with a result has no section.
-        let Some(flow) = self.flow.as_ref().filter(|flow| !flow.bodies.is_empty()) else { return Vec::new() };
+        let Some(flow) = self.flow.as_ref().filter(|flow| !flow.bodies.is_empty() || !flow.reached.is_empty()) else { return Vec::new() };
         let count = flow.bodies.len();
         let mut out = vec![format!("control flow: {count} bod{}", if count == 1 { "y" } else { "ies" })];
         for body in &flow.bodies {
@@ -1268,6 +1344,8 @@ impl StepReport {
                 out.extend(body.details.iter().map(|line| format!("      {line}")));
             }
         }
+        out.extend(flow.equivalence_stop.iter().map(|line| format!("  {line}")));
+        out.extend(reach_lines(flow, full));
         out
     }
 

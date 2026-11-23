@@ -1,0 +1,47 @@
+note: a match on an `Option` replaced by `unwrap_or` is equivalent after the inline step of the standard library
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn get(x: Option<u32>) -> u32 {
+    match x { Some(v) => v, None => 0 }
+}
+=== new src/lib.rs
+pub fn get(x: Option<u32>) -> u32 {
+    x.unwrap_or(0)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::get
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::get=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::get=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `match x { Some(v) => v, None => 0 }` at `shop::get/S0` [semantics · code different]
+      affected bodies: shop::get (with 1 other edit of this body)
+      control flow: − branch `x` (src/lib.rs:-2): std::option::Option::None → return, std::option::Option::Some → return
+      control flow: − arrow entry (src/lib.rs:-1) → branch `x` (src/lib.rs:-2)
+      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+  ◆ f2 derived: added statement `x.unwrap_or(0)` at `shop::get/tail` [semantics · code different]
+      affected bodies: shop::get (with 1 other edit of this body)
+      control flow: + call `Option::<u32>::unwrap_or` (src/lib.rs:2): return → return
+      control flow: + arrow entry (src/lib.rs:1) → call `Option::<u32>::unwrap_or` (src/lib.rs:2)
+      equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::get (src/lib.rs:1): graph changes: +1 call, −1 branch, +2 arrows, −3 arrows; equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: deleted statement `match x { Some(v) => v, None => 0 }` at `shop::get/S0` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f2 derived: added statement `x.unwrap_or(0)` at `shop::get/tail` [semantics · code different]
+    lines: src/lib.rs:2

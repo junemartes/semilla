@@ -161,6 +161,37 @@ pub struct BodyRecord {
     /// The control flow graph of the body (design 60; only at N0). Shared, as `elements`.
     #[serde(rename = "g", default, skip_serializing_if = "Option::is_none", serialize_with = "graph::serialize_shared", deserialize_with = "graph::deserialize_shared")]
     pub graph: Option<std::sync::Arc<graph::RecordGraph>>,
+    /// The body in the form of the equivalence check (design 61; only at N0). Shared, as
+    /// `elements`. The check of `semilla-smt` reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "graph::serialize_text", deserialize_with = "graph::deserialize_text")]
+    pub q: Option<std::sync::Arc<String>>,
+    /// The forms of the small callees of the standard library, by the callee text (design 61,
+    /// C3; only at N0).
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "graph::serialize_text", deserialize_with = "graph::deserialize_text")]
+    pub qx: Option<std::sync::Arc<String>>,
+    /// The values of the constant items that the body reads: the path and the value (design
+    /// 61, A2; only at N0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cv: Vec<(String, String)>,
+    /// The instances of the generic bodies that this body makes (design 61, part B; only at N0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inst: Vec<InstanceUse>,
+    /// The conversions to `dyn Trait` in the body: the trait and the source type (design 61,
+    /// B3; only at N0).
+    #[serde(rename = "dyn", default, skip_serializing_if = "Vec::is_empty")]
+    pub dyn_casts: Vec<(String, String)>,
+}
+
+/// One instance of a generic body (design 61, part B).
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct InstanceUse {
+    /// The name of the generic body.
+    pub g: String,
+    /// The text of the instance (the path with each generic argument).
+    pub t: String,
+    /// Each call that the instance resolves: the text in the generic body and the callee.
+    #[serde(default)]
+    pub c: Vec<(String, String)>,
 }
 
 /// One name of the expanded code of an item, with its form and its count.
@@ -236,6 +267,11 @@ pub struct BodyComparison {
     /// 60).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphs: Vec<graph::GraphPair>,
+    /// The source file of the body, for a name with more than one source body (design 61.14,
+    /// R61.14-1): each source body of the name has its own comparison. `None`: the name is one
+    /// source body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
 }
 
 /// The record of one compile unit, from the compiler (batch 5t, part A). The driver writes it
@@ -501,26 +537,62 @@ pub fn compare_with(
         let sides = [before.config.get(name), after.config.get(name)];
         sides.into_iter().flatten().flatten().cloned().collect::<BTreeSet<String>>().into_iter().collect()
     };
+    // A name with more than one source body: one comparison for each source body (R61.14-1).
+    let split = |name: &String, original: &String, results: &mut Vec<BodyComparison>| -> bool {
+        let bodies = if use_targets { source_bodies(&before, &after, name) } else { Vec::new() };
+        let declared = added.iter().any(|new| name == new || is_child(name, new));
+        for (file, targets) in &bodies {
+            let (old, new) = (Only::new(&before, name, targets), Only::new(&after, name, targets));
+            let place = Some(file.clone());
+            let (old_group, new_group) = (old.groups.get("n0"), new.groups.get("n0"));
+            match (old_group.is_some(), new_group.is_some()) {
+                (true, true) => {
+                    let status = stopped(name, ladder(&old, &new, name));
+                    let elements = if matches!(status, BodyStatus::Different { .. }) { element_diff(&old, &new, name) } else { None };
+                    let graphs = graph_pairs(old_group, new_group, [original, name]);
+                    results.push(BodyComparison { name: name.clone(), status, config: config(name), elements, graphs, place });
+                }
+                (true, false) => {
+                    let graphs = graph_pairs(old_group, None, [original, name]);
+                    results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None, graphs, place });
+                }
+                (false, true) if !declared => {
+                    let graphs = graph_pairs(None, new_group, [name, name]);
+                    results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None, graphs, place });
+                }
+                _ => {}
+            }
+        }
+        !bodies.is_empty()
+    };
     for (name, original) in &before.names {
-        if !after.names.contains_key(name) {
-            let graphs = graph_pairs(before.group("n0", name), None);
-            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None, graphs });
+        if after.names.contains_key(name) {
+            matched.insert(name.clone());
+        }
+        if split(name, original, &mut results) {
             continue;
         }
-        matched.insert(name.clone());
+        if !after.names.contains_key(name) {
+            let graphs = graph_pairs(before.group("n0", name), None, [original, name]);
+            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None, graphs, place: None });
+            continue;
+        }
         let status = stopped(name, ladder(&before, &after, name));
         let elements = if matches!(status, BodyStatus::Different { .. }) { element_diff(&before, &after, name) } else { None };
-        let graphs = graph_pairs(before.group("n0", name), after.group("n0", name));
-        results.push(BodyComparison { name: name.clone(), status, config: config(name), elements, graphs });
+        let graphs = graph_pairs(before.group("n0", name), after.group("n0", name), [original, name]);
+        results.push(BodyComparison { name: name.clone(), status, config: config(name), elements, graphs, place: None });
     }
     for name in after.names.keys() {
         let declared = added.iter().any(|new| name == new || is_child(name, new));
         if !matched.contains(name) && !declared {
-            let graphs = graph_pairs(None, after.group("n0", name));
-            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None, graphs });
+            if split(name, name, &mut results) {
+                continue;
+            }
+            let graphs = graph_pairs(None, after.group("n0", name), [name, name]);
+            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None, graphs, place: None });
         }
     }
-    results.sort_by(|a, b| a.name.cmp(&b.name));
+    results.sort_by(|a, b| (&a.name, &a.place).cmp(&(&b.name, &b.place)));
     results
 }
 
@@ -819,6 +891,8 @@ struct Group {
     /// The control flow graph of each record, by target (at N0), with the rename map on the
     /// call texts (design 60).
     graphs: BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>,
+    /// The source file of the N0 record of each target (design 61.14, R61.14-1).
+    files: BTreeMap<String, String>,
 }
 
 /// Normalizes the `TestDesc` const of a `#[test]` function `name`:
@@ -1039,6 +1113,9 @@ impl Group {
         // targets of a switch, and of the entries of a discriminant table.
         let renamed = if renamed != record.text { sort_variant_lists(&sort_aggregates(&renamed)) } else { renamed };
         if record.level == "n0" {
+            if let Some(span) = &record.span {
+                self.files.entry(target.clone()).or_insert_with(|| span.file.clone());
+            }
             self.elements.entry(target.clone()).or_default().push(record.elements.clone());
             self.graphs.entry(target.clone()).or_default().push(record.graph.as_ref().map(|found| graph::renamed(found, renames)));
         }
@@ -1059,6 +1136,98 @@ impl Group {
     /// All distinct texts of all targets.
     fn all_texts(&self) -> BTreeSet<&String> {
         self.texts.values().flatten().collect()
+    }
+
+    /// The group with only the records of some targets (design 61.14, R61.14-1). The callees
+    /// and the shapes stay the sets of each target.
+    fn only(&self, targets: &BTreeSet<String>) -> Group {
+        fn keep<T: Clone>(map: &BTreeMap<String, T>, targets: &BTreeSet<String>) -> BTreeMap<String, T> {
+            map.iter().filter(|(target, _)| targets.contains(*target)).map(|(target, value)| (target.clone(), value.clone())).collect()
+        }
+        Group {
+            raw: self.raw.as_ref().map(|raw| keep(raw, targets)),
+            texts: keep(&self.texts, targets),
+            callees: self.callees.clone(),
+            shapes: self.shapes.clone(),
+            terms: keep(&self.terms, targets),
+            from_n2: self.from_n2,
+            elements: keep(&self.elements, targets),
+            graphs: keep(&self.graphs, targets),
+            files: keep(&self.files, targets),
+        }
+    }
+
+    /// True if the group has no record.
+    fn is_empty(&self) -> bool {
+        self.texts.is_empty()
+    }
+}
+
+/// The source bodies of a name (design 61.14, R61.14-1): the targets of the name by the source
+/// file of their N0 records, on the two sides. Two packages can each have a target with one
+/// kind and one name (a test target `integration` in each package), so one body name can be
+/// two source bodies. A lib and its test build have one file, so they stay one body. Empty if
+/// no tree has the name in two files.
+fn source_bodies(before: &Side, after: &Side, name: &str) -> Vec<(String, BTreeSet<String>)> {
+    let mut files: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut seen: BTreeSet<&String> = BTreeSet::new();
+    for side in [after, before] {
+        for (target, file) in side.group("n0", name).map(|group| &group.files).into_iter().flatten() {
+            if seen.insert(target) {
+                files.entry(file.clone()).or_default().insert(target.clone());
+            }
+        }
+    }
+    // Only a name with two source bodies in one tree: a body that moves to a different file
+    // (a move to another crate) is one body with a new file.
+    let one_tree = [before, after].iter().any(|side| side.group("n0", name).is_some_and(|group| group.files.values().collect::<BTreeSet<_>>().len() > 1));
+    if files.len() < 2 || !one_tree {
+        return Vec::new();
+    }
+    // A target with no N0 file (an N2 or N3 record only) has no source body: no split.
+    let all: BTreeSet<&String> = [before, after].iter().flat_map(|side| ["n0", "n2", "n3"].map(|level| side.group(level, name))).flatten().flat_map(|group| group.texts.keys()).collect();
+    if all.iter().any(|target| !seen.contains(*target)) {
+        return Vec::new();
+    }
+    files.into_iter().collect()
+}
+
+/// A view of one side with the records of a name restricted to some targets.
+struct Only<'a> {
+    side: &'a Side,
+    name: &'a str,
+    /// The groups of the name at each level, restricted to the targets.
+    groups: BTreeMap<String, Group>,
+}
+
+impl<'a> Only<'a> {
+    fn new(side: &'a Side, name: &'a str, targets: &BTreeSet<String>) -> Only<'a> {
+        let groups = ["n0", "n2", "n3"].iter().filter_map(|level| Some((level.to_string(), side.group(level, name)?.only(targets)))).filter(|(_, group)| !group.is_empty()).collect();
+        Only { side, name, groups }
+    }
+}
+
+/// The groups of one side, for the compare of one body.
+trait Groups {
+    fn group(&self, level: &str, name: &str) -> Option<&Group>;
+    fn hashed_texts(&self, level: &str, group: &Group) -> BTreeMap<String, BTreeSet<String>>;
+}
+
+impl Groups for Side {
+    fn group(&self, level: &str, name: &str) -> Option<&Group> {
+        Side::group(self, level, name)
+    }
+    fn hashed_texts(&self, level: &str, group: &Group) -> BTreeMap<String, BTreeSet<String>> {
+        Side::hashed_texts(self, level, group)
+    }
+}
+
+impl Groups for Only<'_> {
+    fn group(&self, level: &str, name: &str) -> Option<&Group> {
+        if name == self.name { self.groups.get(level) } else { self.side.group(level, name) }
+    }
+    fn hashed_texts(&self, level: &str, group: &Group) -> BTreeMap<String, BTreeSet<String>> {
+        self.side.hashed_texts(level, group)
     }
 }
 
@@ -1174,7 +1343,7 @@ impl Side {
 }
 
 /// Tries the levels in order for one body, and stops at the first equal level.
-fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
+fn ladder(before: &impl Groups, after: &impl Groups, name: &str) -> BodyStatus {
     let equal =
         |level: &str, proof: Vec<String>| BodyStatus::Equal { level: level.to_string(), proof };
 
@@ -1203,7 +1372,7 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
         }
     }
 
-    let shapes = |side: &Side| {
+    let shapes = |side: &dyn Groups| {
         ["n0", "n2", "n3"]
             .iter()
             .find_map(|level| side.group(level, name))
@@ -1215,7 +1384,7 @@ fn ladder(before: &Side, after: &Side, name: &str) -> BodyStatus {
 /// The elements that differ in a changed body (design 40.3), over each target. The targets
 /// pair by their name, or by their name without the hash, or as the one target of each side.
 /// `None` if a target has no partner, a target has two texts, or a record has no element data.
-fn element_diff(before: &Side, after: &Side, name: &str) -> Option<elements::ElementDiff> {
+fn element_diff(before: &impl Groups, after: &impl Groups, name: &str) -> Option<elements::ElementDiff> {
     let (old, new) = (before.group("n0", name)?, after.group("n0", name)?);
     let pairs: Vec<(&String, &String)> = if old.elements.keys().eq(new.elements.keys()) {
         old.elements.keys().zip(new.elements.keys()).collect()
@@ -1251,7 +1420,7 @@ fn element_diff(before: &Side, after: &Side, name: &str) -> Option<elements::Ele
 /// The graphs of a body on the two sides (design 60), for each pair of targets. The targets
 /// pair as in [`element_diff`]. A target with no partner gives a pair with one side. A target
 /// with more than one record takes the graph of its first record.
-fn graph_pairs(old: Option<&Group>, new: Option<&Group>) -> Vec<graph::GraphPair> {
+fn graph_pairs(old: Option<&Group>, new: Option<&Group>, names: [&str; 2]) -> Vec<graph::GraphPair> {
     let first = |group: Option<&Group>, target: &String| -> Option<std::sync::Arc<graph::RecordGraph>> { group?.graphs.get(target)?.first()?.clone() };
     let empty = BTreeMap::new();
     let (a, b) = (old.map_or(&empty, |group| &group.graphs), new.map_or(&empty, |group| &group.graphs));
@@ -1277,6 +1446,8 @@ fn graph_pairs(old: Option<&Group>, new: Option<&Group>) -> Vec<graph::GraphPair
             new_body: right.is_some(),
             old: left.and_then(|target| first(old, target)),
             new: right.and_then(|target| first(new, target)),
+            old_key: left.map(|target| (names[0].to_string(), target.clone())),
+            new_key: right.map(|target| (names[1].to_string(), target.clone())),
         })
         .collect()
 }

@@ -1,5 +1,7 @@
 note: a call through `dyn` has the text of its operand and the mark `dyn`
 rule+: R60.2-9
+rule-: R61.3-3
+rule-: R61.4-2
 option: --compiled
 === both Cargo.toml
 [package]
@@ -36,13 +38,15 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `7` at `depot::talk/tail` [semantics · code different]
       affected bodies: depot::talk (with 1 other edit of this body)
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
   ◆ f2 derived: added statement `s.speak()` at `depot::talk/tail` [semantics · code different]
       affected bodies: depot::talk (with 1 other edit of this body)
       control flow: + call `s.speak` [dyn] (src/lib.rs:6): return → return
       control flow: + arrow entry (src/lib.rs:5) → call `s.speak` [dyn] (src/lib.rs:6)
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::talk (src/lib.rs:5): graph changes: +1 call, +2 arrows, −1 arrow
+    depot::talk (src/lib.rs:5): graph changes: +1 call, +2 arrows, −1 arrow; not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

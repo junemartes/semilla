@@ -188,6 +188,22 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     fn set_selections(&self, step: &Step, selections: &[semilla_verify::Selection]) -> Result<bool> {
         if self.off(step) { Ok(false) } else { self.inner.set_selections(step, selections) }
     }
+
+    fn equivalence(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::equiv::Query]) -> Vec<Option<semilla_verify::equiv::Answer>> {
+        if self.off(step) { vec![None; queries.len()] } else { self.inner.equivalence(step, renames, queries) }
+    }
+
+    fn instances(&self, step: &Step, renames: &BTreeMap<String, String>) -> Vec<semilla_verify::equiv::InstanceLine> {
+        if self.off(step) { Vec::new() } else { self.inner.instances(step, renames) }
+    }
+
+    fn equivalence_budget(&self, step: &Step) -> Option<u64> {
+        if self.off(step) { None } else { self.inner.equivalence_budget(step) }
+    }
+
+    fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
+        if self.off(step) { None } else { self.inner.reach(step, renames) }
+    }
 }
 
 /// Puts the mark on each node of the change tree with the result `code equal` whose step used

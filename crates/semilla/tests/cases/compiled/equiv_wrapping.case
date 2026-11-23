@@ -1,0 +1,43 @@
+note: `x.wrapping_add(1)` → `x + 1` is equivalent in release and different in dev (the overflow check)
+rule+: R61.4-5
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn next(x: u32) -> u32 {
+    x.wrapping_add(1)
+}
+=== new src/lib.rs
+pub fn next(x: u32) -> u32 {
+    x + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `x.wrapping_add(1)` → `x + 1` (f1)
+      in: shop::next
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::next=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::next=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `x.wrapping_add(1)` → `x + 1` at `shop::next/tail` [semantics · code different]
+      affected bodies: shop::next
+      control flow: + check `overflow: x + 1` (src/lib.rs:2): ok → return, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:2)
+      control flow: − call `num::<impl u32>::wrapping_add` (src/lib.rs:-2): return → return
+      control flow: … 2 more (semilla status --verbose)
+      equivalence: different in dev: for x = 4294967295: before returns 0, after panics (overflow add); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::next (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose); different in dev (for x = 4294967295: before returns 0, after panics (overflow add)); equivalent in release (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `x.wrapping_add(1)` → `x + 1` at `shop::next/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

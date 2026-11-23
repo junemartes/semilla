@@ -31,6 +31,11 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         names: Vec::new(),
         elements: None,
         graph: None,
+        q: None,
+        qx: None,
+        cv: Vec::new(),
+        inst: Vec::new(),
+        dyn_casts: Vec::new(),
     }
 }
 
@@ -773,4 +778,39 @@ fn a_rename_in_an_impl_with_new_parameter_names_is_equal() {
     let before = levels(vec![record("k::W::<T>::get", "n0", both, &[]), record("k::twice", "n0", &call("get"), &["k::W::<T>::get"])]);
     let results = compare(&before, &after(&both.replace('T', "U")), &renames, &[]);
     assert!(matches!(status_of(&results, "k::W::<U>::value"), BodyStatus::Different { .. } | BodyStatus::BeforeOnly | BodyStatus::AfterOnly), "{results:?}");
+}
+
+fn at_file(mut record: BodyRecord, file: &str) -> BodyRecord {
+    record.span = Some(SpanInfo { file: file.to_string(), line_start: 1, line_end: 3, range: None });
+    record
+}
+
+/// Design 61.14 (R61.14-1): two packages each have a test target `integration`, so one body
+/// name is two source bodies. Each one has its own comparison with its file: a change of one
+/// never gives the other a status. A lib and its test build (one file) stay one body.
+// rule+ R61.14-1
+// rule- R61.14-1
+#[test]
+fn a_body_name_of_two_source_files_gives_one_comparison_for_each() {
+    let side = |a: &str, b: &str| {
+        levels(vec![
+            at_file(in_target(record("integration::suite", "n0", a, &[]), "integration.test.1111111111111111"), "tests/lib.rs"),
+            at_file(in_target(record("integration::suite", "n0", b, &[]), "integration.test.2222222222222222"), "core/tests/lib.rs"),
+        ])
+    };
+    let results = compare_with(&side("a", "b"), &side("a", "c"), &no_renames(), &[], &Marks::default(), &Marks::default());
+    let found: Vec<(Option<&str>, bool)> = results.iter().map(|result| (result.place.as_deref(), matches!(result.status, BodyStatus::Equal { .. }))).collect();
+    assert_eq!(found, [(Some("core/tests/lib.rs"), false), (Some("tests/lib.rs"), true)], "{results:?}");
+    // Each source body has the graphs of its own target only.
+    assert!(results.iter().all(|result| result.graphs.len() == 1), "{results:?}");
+    // The negative case: a lib and its test build have one file, so they are one body.
+    let one = |a: &str, b: &str| {
+        levels(vec![
+            at_file(in_target(record("k::f", "n0", a, &[]), "k.lib.1111111111111111"), "src/lib.rs"),
+            at_file(in_target(record("k::f", "n0", b, &[]), "k.test.2222222222222222"), "src/lib.rs"),
+        ])
+    };
+    let results = compare_with(&one("a", "a"), &one("a", "b"), &no_renames(), &[], &Marks::default(), &Marks::default());
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].place.is_none() && matches!(results[0].status, BodyStatus::Different { .. }), "{results:?}");
 }

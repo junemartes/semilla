@@ -10,6 +10,9 @@ use semilla_verify::{BodyComparison, BodyOracle, BodyStatus, EffectCheck, ExprOr
 
 use crate::git::Repo;
 
+#[path = "reach.rs"]
+pub(crate) mod reach;
+
 /// Runs the MIR driver on the snapshots, and compares the bodies with the normal forms.
 ///
 /// Each level has one fixed build folder. Semilla updates it to each tree by delta, so cargo
@@ -79,6 +82,19 @@ pub struct Added {
     /// The rename map with the moved closures, by the record set, the rename map, and the
     /// added items (design 37.20).
     moved: Vec<(SidesKey, BTreeMap<String, String>, Vec<String>, BTreeMap<String, String>)>,
+    /// The variant trees of the equivalence check of one fact (design 61, part D): each has the
+    /// build code of the base, because the two trees of its step have it.
+    variants: std::collections::BTreeSet<String>,
+    /// The walk of the reverse call graph of each configuration of a step (design 61.10, part
+    /// A), by the two trees of the step.
+    reached: BTreeMap<(String, String), std::sync::Arc<Vec<(String, reach::ConfigReach)>>>,
+    /// The first use of each step in this oracle, and the time budget of its equivalence check
+    /// (R61.14-5), by the two trees of the step.
+    step_started: BTreeMap<(String, String), std::time::Instant>,
+    budgets: BTreeMap<(String, String), std::time::Duration>,
+    /// The time of the last build of each level and configuration (the name of the build
+    /// folder), in this process.
+    builds: BTreeMap<String, std::time::Duration>,
 }
 
 /// The key of a record set: the two trees of a step, and the configuration.
@@ -433,7 +449,7 @@ impl NormalOracle {
     /// The shared folders (`shared/<key>`) serve only a tree with the build code of the base.
     /// The key is the digest of that build code. A tree with no state is never built.
     pub fn root(&self, tree: &str) -> Result<(std::path::PathBuf, bool)> {
-        if self.code.clean.contains(tree) {
+        if self.code.clean.contains(tree) || self.added.lock().unwrap_or_else(|error| error.into_inner()).variants.contains(tree) {
             let key = if self.code.shared.is_empty() { format!("tree-{}", self.code.base) } else { self.code.shared.clone() };
             return Ok((folder_set(&self.repo, false, &key), false));
         }
@@ -509,8 +525,11 @@ impl NormalOracle {
             }
         };
         crate::timing(&format!("cargo check {name} of tree {}", &tree[..8.min(tree.len())]), started);
+        let took = started.elapsed();
+        self.added.lock().unwrap_or_else(|error| error.into_inner()).builds.insert(name.clone(), took);
         remove_cache(&cache);
         std::fs::create_dir_all(&cache)?;
+        std::fs::write(cache.join(BUILD_TIME_FILE), format!("{:.3}\n", took.as_secs_f64()))?;
         // The cache gets only the record file of each unit of this build (design 28.8). Each
         // other file of the records folder stays out, and the result names it. A program of
         // the build decides the name: each hidden character becomes an escape.
@@ -857,26 +876,27 @@ fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirD
 /// bodies through the tree compare, not by their names (R60.3-9).
 fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair) -> semilla_verify::flow::GraphPair {
     use semilla_verify::flow::{FlowSide, GraphPair};
-    let side = |exists: bool, graph: &Option<std::sync::Arc<semilla_normal::graph::RecordGraph>>| match (exists, graph) {
+    let side = |exists: bool, graph: &Option<std::sync::Arc<semilla_normal::graph::RecordGraph>>, key: &Option<(String, String)>| match (exists, graph) {
         (false, _) => FlowSide::NoBody,
         (true, None) => FlowSide::NoGraph,
-        (true, Some(graph)) => FlowSide::Graph(flow_graph(graph)),
+        (true, Some(graph)) => FlowSide::Graph(semilla_verify::flow::FlowGraph { key: key.clone(), ..flow_graph(graph) }),
     };
     let same = matches!((&pair.old, &pair.new), (Some(old), Some(new)) if old.same_shape(new));
-    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old), new: side(pair.new_body, &pair.new) }
+    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old, &pair.old_key), new: side(pair.new_body, &pair.new, &pair.new_key) }
 }
 
 /// A graph of a record in the form of the verifier.
 fn flow_graph(graph: &semilla_normal::graph::RecordGraph) -> semilla_verify::flow::FlowGraph {
     let place = |range: &Option<[i64; 3]>| graph.place(range).map(|place| (place.file, place.start, place.end));
     semilla_verify::flow::FlowGraph {
-        points: graph.p.iter().map(|point| semilla_verify::flow::FlowPoint { kind: point.k.clone(), text: point.t.clone(), mark: point.m.clone(), tokens: place(&point.r), call: place(&point.c), calls: point.x.clone() }).collect(),
+        points: graph.p.iter().map(|point| semilla_verify::flow::FlowPoint { kind: point.k.clone(), text: point.t.clone(), mark: point.m.clone(), tokens: place(&point.r), call: place(&point.c), calls: point.x.clone(), value: point.v.clone() }).collect(),
         arrows: graph.a.iter().filter(|(a, b, _)| (*a as usize) < graph.p.len() && (*b as usize) < graph.p.len()).map(|(a, b, label)| (*a as usize, *b as usize, label.clone())).collect(),
         unwind: graph.n.unwind,
         cleanup: graph.n.cleanup,
         drops: graph.n.drops,
         unreachable: graph.n.unreachable,
         coroutine: graph.co,
+        key: None,
     }
 }
 
@@ -893,9 +913,505 @@ impl semilla_verify::OpaqueInputs for AllOpaque {
     }
 }
 
+/// The key of the variant of a query: the configuration and the files.
+fn query_key(query: &semilla_verify::equiv::Query, files: &BTreeMap<String, String>) -> (String, BTreeMap<String, String>) {
+    (query.config.clone(), files.clone())
+}
+
+/// The time limit of one solver query of the equivalence check (design 61, C8).
+pub(crate) const EQUIV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// The budget of the equivalence check of one step: the most solver queries, and the most time.
+const EQUIV_QUERIES: usize = 400;
+/// The time budget of the check of a step (R61.14-5): a quarter of the time of the step before
+/// the check (the builds), at least `EQUIV_TIME_MIN`, at most `EQUIV_TIME`. It includes the walk
+/// and the builds of the variants.
+const EQUIV_TIME: std::time::Duration = std::time::Duration::from_secs(60);
+const EQUIV_TIME_MIN: std::time::Duration = std::time::Duration::from_secs(10);
+/// The file of the time of the build of a record folder, in seconds (R61.14-5).
+const BUILD_TIME_FILE: &str = ".seconds";
+
+/// The N0 records of one side of a configuration, for the equivalence check: by name.
+pub(crate) struct EquivSide<'a> {
+    pub(crate) records: BTreeMap<&'a str, Vec<&'a semilla_normal::BodyRecord>>,
+}
+
+impl<'a> EquivSide<'a> {
+    pub(crate) fn new(records: &'a [semilla_normal::BodyRecord]) -> Self {
+        let mut map: BTreeMap<&str, Vec<&semilla_normal::BodyRecord>> = BTreeMap::new();
+        for record in records {
+            map.entry(record.name.as_str()).or_default().push(record);
+        }
+        EquivSide { records: map }
+    }
+
+    /// The record of a name: the one of the target, else the first if each record of the name
+    /// is one source body (one file). Two packages can each have a target with one kind and one
+    /// name, and then one name is two source bodies (R61.14-1): no record of the other one.
+    pub(crate) fn find(&self, name: &str, target: &str) -> Option<&'a semilla_normal::BodyRecord> {
+        let list = self.records.get(name)?;
+        if let Some(found) = list.iter().find(|record| record.target == target) {
+            return Some(found);
+        }
+        let file = |record: &semilla_normal::BodyRecord| record.span.as_ref().map(|span| span.file.clone());
+        let first = list.first()?;
+        list.iter().all(|record| file(record) == file(first)).then_some(*first)
+    }
+
+    /// The records of a name, one for each source body and text (R61.14-1): a lib and its test
+    /// build with one text give one record.
+    pub(crate) fn bodies(&self, name: &str) -> Vec<&'a semilla_normal::BodyRecord> {
+        let mut out: Vec<&semilla_normal::BodyRecord> = Vec::new();
+        for record in self.records.get(name).into_iter().flatten() {
+            let file = record.span.as_ref().map(|span| &span.file);
+            if !out.iter().any(|known| known.span.as_ref().map(|span| &span.file) == file && known.text == record.text && known.q == record.q) {
+                out.push(record);
+            }
+        }
+        out
+    }
+}
+
+/// The form of a record (`q`), if the record has one.
+pub(crate) fn record_form(record: &semilla_normal::BodyRecord) -> Option<std::sync::Arc<semilla_smt::mir::Ir>> {
+    let text = record.q.as_ref()?;
+    Some(std::sync::Arc::new(serde_json::from_str(text).unwrap_or_else(|error| semilla_smt::mir::Ir { u: Some(format!("the form cannot be read: {error}")), ..Default::default() })))
+}
+
+/// The forms of the small callees of the standard library of a record (`qx`).
+pub(crate) fn std_forms(records: &[&semilla_normal::BodyRecord]) -> BTreeMap<String, std::sync::Arc<semilla_smt::mir::Ir>> {
+    let mut found = BTreeMap::new();
+    for record in records {
+        let Some(text) = record.qx.as_deref() else { continue };
+        let Ok(map) = serde_json::from_str::<BTreeMap<String, semilla_smt::mir::Ir>>(text) else { continue };
+        for (text, form) in map {
+            found.entry(text).or_insert_with(|| std::sync::Arc::new(form));
+        }
+    }
+    found
+}
+
+/// The changed bodies of a pair of record sets: a different text, or a body of one side only
+/// (the old name and the new name of each).
+pub(crate) fn changed_names(old: &EquivSide, new: &EquivSide, renames: &[(String, String)]) -> std::collections::BTreeSet<String> {
+    let rename_text = |text: &str| if renames.is_empty() { text.to_string() } else { semilla_normal::paths::rename(text, renames) };
+    let mut changed = std::collections::BTreeSet::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (name, list) in &old.records {
+        let renamed_name = rename_text(name);
+        seen.insert(renamed_name.clone());
+        let texts: std::collections::BTreeSet<String> = list.iter().map(|record| rename_text(&record.text)).collect();
+        let other = new.records.get(renamed_name.as_str());
+        if other.is_none_or(|other| other.iter().map(|record| record.text.clone()).collect::<std::collections::BTreeSet<_>>() != texts) {
+            changed.insert(name.to_string());
+            changed.insert(renamed_name);
+        }
+    }
+    for name in new.records.keys() {
+        if !seen.contains(*name) {
+            changed.insert(name.to_string());
+        }
+    }
+    changed
+}
+
+/// The changed callees of a pair of records (design 61.10, defect 1): each callee of the two
+/// bodies that is in the set to inline, also through an instance and through the trait method
+/// of a changed impl method.
+fn changed_callees(a: &semilla_normal::BodyRecord, b: &semilla_normal::BodyRecord, changed: &std::collections::BTreeSet<String>, trait_methods: &BTreeMap<String, String>, rename: &dyn Fn(&str) -> String) -> Vec<String> {
+    let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut note = |callee: String| {
+        if changed.contains(&callee) {
+            found.insert(callee.clone());
+        }
+        for (method, of) in trait_methods {
+            if *of == callee && changed.contains(method) {
+                found.insert(method.clone());
+            }
+        }
+    };
+    for (record, old) in [(a, true), (b, false)] {
+        let map = |text: &str| if old { rename(text) } else { text.to_string() };
+        for callee in &record.callees {
+            note(map(callee));
+        }
+        for instance in &record.inst {
+            note(map(&instance.g));
+            for (_, resolved) in &instance.c {
+                note(map(resolved));
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+
+impl NormalOracle {
+    /// Checks one query of the equivalence check (design 61). `old` and `new` are the records of
+    /// the two sides of the configuration. `reach` is the walk of the configuration: the set of
+    /// the bodies to inline and the trait methods of the impl methods.
+    #[allow(clippy::too_many_arguments)]
+    fn equivalence_one(&self, solver: &semilla_smt::Solver, query: &semilla_verify::equiv::Query, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, reach: &reach::ConfigReach) -> Option<semilla_verify::equiv::Answer> {
+        let a = old.find(&query.old.0, &query.old.1)?;
+        let b = new.find(&query.new.0, &query.new.1)?;
+        let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
+        let callees = changed_callees(a, b, &reach.must_inline, &reach.trait_methods, &rename_text);
+        // An equal MIR text at N0 is a proof with no solver only if no callee changes: else the
+        // body-local result has its own name, and the check inlines each changed callee.
+        let mut answer = self.check_pair(solver, a, b, old, new, renames, renamed, &reach.must_inline, callees.is_empty())?;
+        if !callees.is_empty() && rename_text(&a.text) == b.text {
+            answer.local = Some(format!("same body code; changed callee: {}", callees.join(", ")));
+        }
+        Some(answer)
+    }
+
+    /// Checks two records with each body of `changed` inlined. `equal_proof`: an equal MIR text
+    /// at N0 is a proof (only for a body with no changed callee).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_pair(&self, solver: &semilla_smt::Solver, a: &semilla_normal::BodyRecord, b: &semilla_normal::BodyRecord, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, changed: &std::sync::Arc<std::collections::BTreeSet<String>>, equal_proof: bool) -> Option<semilla_verify::equiv::Answer> {
+        use semilla_verify::equiv::{Answer, Verdict};
+        let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
+        if equal_proof && rename_text(&a.text) == b.text {
+            return Some(Answer { verdict: Verdict::Equivalent("equal MIR".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+        }
+        let (Some(form_a), Some(form_b)) = (record_form(a), record_form(b)) else {
+            return Some(Answer { verdict: Verdict::NotDecided("a record has no form (an old record)".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+        };
+        let changed_names: Vec<String> = changed.iter().cloned().collect();
+        // The forms of the standard library and of the instances: of the body and of each
+        // changed body that the check can inline (each changed callee, to the inline depth).
+        let with_changed = |side: &EquivSide<'_>, record: &semilla_normal::BodyRecord| -> BTreeMap<String, std::sync::Arc<semilla_smt::mir::Ir>> {
+            let mut list = vec![record];
+            let mut at = 0;
+            while at < list.len() && list.len() < 32 {
+                let current = list[at];
+                at += 1;
+                for callee in &current.callees {
+                    if changed.contains(callee)
+                        && let Some(found) = side.find(callee, &record.target)
+                        && !list.iter().any(|known| std::ptr::eq(*known, found))
+                    {
+                        list.push(found);
+                    }
+                }
+            }
+            std_forms(&list)
+        };
+        let std_a = with_changed(old, a);
+        let std_b = with_changed(new, b);
+        let target_a = a.target.clone();
+        let target_b = b.target.clone();
+        let workspace_a = |name: &str| old.find(name, &target_a).and_then(record_form);
+        let workspace_b = |name: &str| new.find(name, &target_b).and_then(record_form);
+        let rename_a = |text: &str| rename_text(text);
+        let same = |text: &str| text.to_string();
+        let is_changed = |name: &str| changed.contains(name);
+        let step = semilla_smt::mir::Step { changed: &is_changed, changed_names: &changed_names };
+        let side_a = semilla_smt::mir::Side { ir: form_a, workspace: &workspace_a, std: &std_a, rename: &rename_a };
+        let side_b = semilla_smt::mir::Side { ir: form_b, workspace: &workspace_b, std: &std_b, rename: &same };
+        let checked = semilla_smt::mir::check_bodies(solver, &side_a, &side_b, &step);
+        let verdict = match checked.verdict {
+            semilla_smt::mir::Verdict::Equivalent { method } => Verdict::Equivalent(method),
+            semilla_smt::mir::Verdict::Different { input, before, after } => Verdict::Different { input, before, after },
+            semilla_smt::mir::Verdict::NotDecided { cause } => Verdict::NotDecided(cause),
+        };
+        Some(Answer { verdict, inlined: checked.inlined, queries: checked.queries, millis: checked.millis, local: None })
+    }
+
+    /// The time budget of the equivalence check of a step (R61.14-5), fixed at its first use: a
+    /// quarter of the time since the first use of the step in this oracle (its builds), at least
+    /// `EQUIV_TIME_MIN` and at most `EQUIV_TIME`.
+    fn equivalence_time(&self, step: &Step) -> std::time::Duration {
+        let key = (step.tree_before.clone(), step.tree_after.clone());
+        let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(found) = state.budgets.get(&key) {
+            return *found;
+        }
+        let before = state.step_started.get(&key).map(|started| started.elapsed()).unwrap_or_default();
+        // `SEMILLA_EQUIV_BUDGET=SECONDS` sets the budget (for a test of the budget).
+        let fixed = std::env::var("SEMILLA_EQUIV_BUDGET").ok().and_then(|text| text.trim().parse::<u64>().ok()).map(std::time::Duration::from_secs);
+        let budget = fixed.unwrap_or_else(|| (before / 4).clamp(EQUIV_TIME_MIN, EQUIV_TIME));
+        state.budgets.insert(key, budget);
+        budget
+    }
+
+    /// The time of the last N0 build of a configuration: in this process, else the time of the
+    /// build of the records of the tree (zero if no time is known).
+    fn last_build_time(&self, tree: &str, config: &Configuration) -> std::time::Duration {
+        let name = format!("n0{}", config.suffix());
+        if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).builds.get(&name) {
+            return *found;
+        }
+        let Ok((_, cache, _, _)) = self.cache_folder(tree, "n0", config) else { return std::time::Duration::ZERO };
+        std::fs::read_to_string(cache.join(BUILD_TIME_FILE)).ok().and_then(|text| text.trim().parse::<f64>().ok()).map(std::time::Duration::from_secs_f64).unwrap_or_default()
+    }
+
+    /// The walk of each checked configuration of a step, one time for the step (design 61.10,
+    /// part A), in the time `limit`.
+    fn reach_all(&self, step: &Step, renames: &BTreeMap<String, String>, limit: std::time::Duration) -> Option<std::sync::Arc<Vec<(String, reach::ConfigReach)>>> {
+        let key = (step.tree_before.clone(), step.tree_after.clone());
+        if let Some(found) = self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.get(&key).cloned() {
+            return Some(found);
+        }
+        let solver = semilla_smt::Solver::find_for(&crate::store::tool_dirs(&self.repo.root), Some(&self.repo.root)).ok()?.with_timeout(EQUIV_TIMEOUT);
+        let checked = self.checked(step).ok()?;
+        let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+        let started = std::time::Instant::now();
+        let mut out = Vec::new();
+        for config in &checked {
+            let Ok(sides) = self.sides(step, config) else { continue };
+            let empty = Vec::new();
+            let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
+            let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
+            out.push((config.name(), self.reach_config(&solver, &old, &new, &renames, started, limit)));
+        }
+        let found = std::sync::Arc::new(out);
+        self.added.lock().unwrap_or_else(|error| error.into_inner()).reached.insert(key, found.clone());
+        Some(found)
+    }
+}
+
 impl BodyOracle for NormalOracle {
     fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> Result<Vec<BodyComparison>> {
         self.compare_with(step, renames, added, &AllOpaque)
+    }
+
+    fn instances(&self, step: &Step, renames: &BTreeMap<String, String>) -> Vec<semilla_verify::equiv::InstanceLine> {
+        use semilla_verify::equiv::{InstanceLine, type_names};
+        let Ok(checked) = self.checked(step) else { return Vec::new() };
+        let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+        let rename = |text: &str| semilla_normal::paths::rename(text, &renames);
+        let mut out: Vec<InstanceLine> = Vec::new();
+        let mut push = |line: InstanceLine| {
+            if !out.iter().any(|known| known.text == line.text) {
+                out.push(line);
+            }
+        };
+        let short = |text: &str| text.rsplit_once("::<").map_or(text.to_string(), |(path, args)| format!("{}::<{args}", path.rsplit("::").next().unwrap_or(path)));
+        for config in &checked {
+            let Ok(sides) = self.sides(step, config) else { continue };
+            let empty = Vec::new();
+            let (old, new) = (sides.before.get("n0").unwrap_or(&empty), sides.after.get("n0").unwrap_or(&empty));
+            // The instances by the root, the generic body (the names of the new tree), and the
+            // source body of the root: its file, if the root name has more than one source
+            // body (two packages can each have a target with one kind and one name, R61.14-1).
+            type Instances = BTreeMap<(String, String, String), BTreeMap<String, Vec<(String, String)>>>;
+            let collect = |records: &[semilla_normal::BodyRecord], map: &dyn Fn(&str) -> String| -> Instances {
+                let file_of = |record: &semilla_normal::BodyRecord| record.span.as_ref().map(|span| span.file.clone()).unwrap_or_default();
+                let mut files: BTreeMap<&str, std::collections::BTreeSet<String>> = BTreeMap::new();
+                for record in records.iter().filter(|record| !record.inst.is_empty()) {
+                    files.entry(record.name.as_str()).or_default().insert(file_of(record));
+                }
+                let mut found: Instances = BTreeMap::new();
+                for record in records {
+                    let file = if files.get(record.name.as_str()).is_some_and(|set| set.len() > 1) { file_of(record) } else { String::new() };
+                    for instance in &record.inst {
+                        found.entry((map(&record.name), file.clone(), map(&instance.g))).or_default().insert(map(&instance.t), instance.c.iter().map(|(a, b)| (map(a), map(b))).collect());
+                    }
+                }
+                found
+            };
+            let (a, b) = (collect(old, &rename), collect(new, &|text: &str| text.to_string()));
+            let keys: std::collections::BTreeSet<&(String, String, String)> = a.keys().chain(b.keys()).collect();
+            let empty_map = BTreeMap::new();
+            for key in keys {
+                let (x, y) = (a.get(key).unwrap_or(&empty_map), b.get(key).unwrap_or(&empty_map));
+                let generic = &key.2;
+                // An instance on the two sides with a changed resolved callee.
+                for (text, calls) in y {
+                    if let Some(before) = x.get(text)
+                        && before != calls
+                    {
+                        for (call, target) in calls.iter().filter(|call| !before.contains(call)) {
+                            let was = before.iter().find(|(other, _)| other == call).map(|(_, target)| format!(" (before: `{target}`)")).unwrap_or_default();
+                            push(InstanceLine { body: generic.clone(), text: format!("instance {}: call `{call}` resolves to `{target}`{was}", short(text)), names: [type_names(&before.iter().map(|(_, b)| b.as_str()).collect::<Vec<_>>().join(" ")), type_names(target)] });
+                        }
+                    }
+                }
+                let removed: Vec<&String> = x.keys().filter(|text| !y.contains_key(*text)).collect();
+                let added: Vec<&String> = y.keys().filter(|text| !x.contains_key(*text)).collect();
+                if removed.len() == 1 && added.len() == 1 {
+                    // The instance of one root changes: name the old instance.
+                    let (was, now) = (removed[0], added[0]);
+                    let names = [type_names(was).into_iter().filter(|name| !type_names(now).contains(name)).collect(), type_names(now).into_iter().filter(|name| !type_names(was).contains(name)).collect()];
+                    let calls = &y[now];
+                    if calls.is_empty() {
+                        push(InstanceLine { body: generic.clone(), text: format!("instance {} (before: the instance {})", short(now), short(was)), names: names.clone() });
+                    }
+                    for (call, target) in calls {
+                        push(InstanceLine { body: generic.clone(), text: format!("instance {}: call `{call}` resolves to `{target}` (before: the instance {})", short(now), short(was)), names: names.clone() });
+                    }
+                } else {
+                    for text in removed {
+                        push(InstanceLine { body: generic.clone(), text: format!("− instance {}", short(text)), names: [type_names(text), Vec::new()] });
+                    }
+                    for text in added {
+                        push(InstanceLine { body: generic.clone(), text: format!("+ instance {}", short(text)), names: [Vec::new(), type_names(text)] });
+                    }
+                }
+            }
+            // The candidates of the `dyn` calls (B3): the types that the workspace converts to
+            // `dyn Trait`.
+            let casts = |records: &[semilla_normal::BodyRecord], map: &dyn Fn(&str) -> String| -> BTreeMap<String, std::collections::BTreeSet<String>> {
+                let mut found: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+                for record in records {
+                    for (name, ty) in &record.dyn_casts {
+                        found.entry(map(name)).or_default().insert(map(ty));
+                    }
+                }
+                found
+            };
+            let (a, b) = (casts(old, &rename), casts(new, &|text: &str| text.to_string()));
+            let traits: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+            let none = std::collections::BTreeSet::new();
+            for name in traits {
+                let (x, y) = (a.get(name).unwrap_or(&none), b.get(name).unwrap_or(&none));
+                if x == y {
+                    continue;
+                }
+                let mut parts: Vec<String> = y.difference(x).map(|ty| format!("+`{ty}`")).collect();
+                parts.extend(x.difference(y).map(|ty| format!("−`{ty}`")));
+                let names = [x.difference(y).flat_map(|ty| type_names(ty)).collect(), y.difference(x).flat_map(|ty| type_names(ty)).collect()];
+                push(InstanceLine { body: format!("dyn {name}"), text: format!("the candidates of a call through `dyn {name}`: {}", parts.join(", ")), names });
+            }
+        }
+        out
+    }
+
+    fn equivalence(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::equiv::Query]) -> Vec<Option<semilla_verify::equiv::Answer>> {
+        use semilla_verify::equiv::{Answer, Verdict};
+        let Ok(solver) = semilla_smt::Solver::find_for(&crate::store::tool_dirs(&self.repo.root), Some(&self.repo.root)) else {
+            return queries.iter().map(|_| Some(Answer { verdict: Verdict::NotDecided("no SMT solver".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None })).collect();
+        };
+        let solver = solver.with_timeout(EQUIV_TIMEOUT);
+        let Ok(checked) = self.checked(step) else { return vec![None; queries.len()] };
+        let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+        // One time budget for the check of the step: the walk, the checks, and the builds of
+        // the variants (R61.14-5).
+        let budget = self.equivalence_time(step);
+        let started = std::time::Instant::now();
+        let used = std::sync::atomic::AtomicUsize::new(0);
+        let budget_of = |answer: Option<Answer>| -> Option<Answer> {
+            let answer = answer?;
+            used.fetch_add(answer.queries, std::sync::atomic::Ordering::Relaxed);
+            Some(answer)
+        };
+        let over = || used.load(std::sync::atomic::Ordering::Relaxed) > EQUIV_QUERIES || started.elapsed() > budget;
+        let spent = || Some(Answer { verdict: Verdict::NotChecked(semilla_verify::equiv::BUDGET_CAUSE.into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+        let mut answers: Vec<Option<Answer>> = vec![None; queries.len()];
+        // The walk of each configuration (design 61.10): the bodies that each check must inline.
+        // It needs no build, so it runs first, in the budget.
+        let walks = self.reach_all(step, &renames.iter().cloned().collect(), budget.min(reach::MAX_TIME));
+        crate::timing("the walk of the equivalence check", started);
+        let walk_of = |config: &str| walks.as_ref().and_then(|walks| walks.iter().find(|(name, _)| name == config).map(|(_, reach)| reach.clone()));
+        let threads = std::thread::available_parallelism().map(|count| count.get()).unwrap_or(4).clamp(1, 8);
+        // Runs the checks of some queries in up to 8 threads. `variant`: the records of the
+        // variant tree of the queries.
+        let run = |jobs: &[usize], variant: Option<&[semilla_normal::BodyRecord]>| -> Vec<(usize, Option<Answer>)> {
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let results: std::sync::Mutex<Vec<(usize, Option<Answer>)>> = std::sync::Mutex::new(Vec::new());
+            // The changed bodies of the variant (one variant tree for each call).
+            let changed: std::sync::OnceLock<reach::ConfigReach> = std::sync::OnceLock::new();
+            std::thread::scope(|scope| {
+                for _ in 0..threads.min(jobs.len().max(1)) {
+                    scope.spawn(|| loop {
+                        let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(index) = jobs.get(at).copied() else { break };
+                        let query = &queries[index];
+                        let answer = if over() {
+                            spent()
+                        } else {
+                            let config = checked.iter().find(|config| config.name() == query.config);
+                            let sides = config.and_then(|config| self.sides(step, config).ok());
+                            sides.and_then(|sides| {
+                                let empty = Vec::new();
+                                let old = EquivSide::new(sides.before.get("n0").unwrap_or(&empty));
+                                match variant {
+                                    None => {
+                                        let new = EquivSide::new(sides.after.get("n0").unwrap_or(&empty));
+                                        let walk = walk_of(&query.config).unwrap_or_else(|| reach::ConfigReach { must_inline: std::sync::Arc::new(changed_names(&old, &new, &renames)), ..Default::default() });
+                                        budget_of(self.equivalence_one(&solver, query, &old, &new, &renames, true, &walk))
+                                    }
+                                    Some(records) => {
+                                        let new = EquivSide::new(records);
+                                        let walk = changed.get_or_init(|| reach::ConfigReach { must_inline: std::sync::Arc::new(changed_names(&old, &new, &[])), ..Default::default() });
+                                        budget_of(self.equivalence_one(&solver, query, &old, &new, &[], false, walk))
+                                    }
+                                }
+                            })
+                        };
+                        results.lock().unwrap_or_else(|error| error.into_inner()).push((index, answer));
+                    });
+                }
+            });
+            results.into_inner().unwrap_or_else(|error| error.into_inner())
+        };
+        // The order of the value (R61.14-5): first each check that needs no build (each body of
+        // the step), then the variants of the facts, one build at a time.
+        // The bodies in the first configuration come first: a stop of the budget leaves a result
+        // of each body in at least one configuration when it can.
+        let rank = |config: &str| checked.iter().position(|known| known.name() == config).unwrap_or(usize::MAX);
+        let mut plain: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.is_none()).collect();
+        plain.sort_by_key(|index| (rank(&queries[*index].config), *index));
+        for (index, answer) in run(&plain, None) {
+            answers[index] = answer;
+        }
+        crate::timing(&format!("the walk and {} body checks of the equivalence check", plain.len()), started);
+        let mut keys: Vec<(String, BTreeMap<String, String>)> = Vec::new();
+        for query in queries {
+            if let Some(files) = &query.variant {
+                let key = (query.config.clone(), files.clone());
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        // A variant changes only files of the step. With the build code of the base in the two
+        // trees of the step, the variant has it too, and it builds in the delta build folder of
+        // the configuration: only the changed crates compile again (R61.14-5).
+        let clean = self.code.clean.contains(&step.tree_before) && self.code.clean.contains(&step.tree_after);
+        for key in keys {
+            let jobs: Vec<usize> = (0..queries.len()).filter(|index| queries[*index].variant.as_ref().is_some_and(|files| query_key(&queries[*index], files) == key)).collect();
+            let config = checked.iter().find(|config| config.name() == key.0);
+            // A build starts only if the rest of the budget is larger than the time of the
+            // last build of the configuration.
+            let last = config.map(|config| self.last_build_time(&step.tree_after, config)).unwrap_or_default();
+            if over() || budget.saturating_sub(started.elapsed()) <= last {
+                for index in jobs {
+                    answers[index] = spent();
+                }
+                continue;
+            }
+            let found = config.filter(|_| clean).and_then(|config| {
+                let files: BTreeMap<String, Option<String>> = key.1.iter().map(|(path, text)| (path.clone(), Some(text.clone()))).collect();
+                let tree = self.repo.tree_with(&step.tree_before, &files).ok()?;
+                self.added.lock().unwrap_or_else(|error| error.into_inner()).variants.insert(tree.clone());
+                self.records_with(&tree, "n0", config).ok()
+            });
+            match found {
+                Some(records) => {
+                    for (index, answer) in run(&jobs, Some(&records)) {
+                        answers[index] = answer;
+                    }
+                }
+                None => {
+                    for index in jobs {
+                        answers[index] = Some(Answer { verdict: Verdict::NotDecided("the variant with only this edit does not compile".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
+                    }
+                }
+            }
+        }
+        crate::timing(&format!("the equivalence check ({} queries, a budget of {} s)", queries.len(), budget.as_secs()), started);
+        answers
+    }
+
+    fn equivalence_budget(&self, step: &Step) -> Option<u64> {
+        Some(self.equivalence_time(step).as_secs())
+    }
+
+    fn reach(&self, step: &Step, renames: &BTreeMap<String, String>) -> Option<semilla_verify::equiv::ReachReport> {
+        let renames: Vec<(String, String)> = renames.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+        let limit = self.equivalence_time(step).min(reach::MAX_TIME);
+        let walks = self.reach_all(step, &renames.into_iter().collect(), limit)?;
+        Some(reach::report(&walks))
     }
 
     fn defs(&self, step: &Step) -> Result<[semilla_verify::DefMap; 2]> {
@@ -983,17 +1499,33 @@ impl BodyOracle for NormalOracle {
             }
         }
         for (state, own) in prepared {
-            let key_of = |name: &String| -> BodyKey { (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() }) };
+            // The place of each source body of a name with more than one (R61.14-1): the span
+            // of its record in its file; the "after" records win.
+            let mut source_places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
+            for levels in [&state.sides.before, &state.sides.after] {
+                for record in levels.get("n0").into_iter().flatten() {
+                    if let Some(span) = &record.span {
+                        source_places.insert((record.name.as_str(), span.file.as_str()), (span.file.clone(), span.line_start));
+                    }
+                }
+            }
+            let key_of = |comparison: &semilla_normal::BodyComparison| -> BodyKey {
+                let name = &comparison.name;
+                if let Some(file) = &comparison.place {
+                    return (name.clone(), source_places.get(&(name.as_str(), file.as_str())).cloned().or_else(|| Some((file.clone(), 0))));
+                }
+                (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() })
+            };
             let name = state.config.name();
-            for comparison in state.comparisons {
-                let key = key_of(&comparison.name);
+            for comparison in &state.comparisons {
+                let key = key_of(comparison);
                 if !comparison.graphs.is_empty() {
                     graphs.entry(key.clone()).or_default().extend(comparison.graphs.iter().map(|pair| graph_pair(&name, pair)));
                 }
                 if !comparison.config.is_empty() {
                     config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
                 }
-                let status = match comparison.status {
+                let status = match comparison.status.clone() {
                     semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
                     semilla_normal::BodyStatus::Different { cfg_changed } => BodyStatus::Different { cfg_changed },
                     semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
@@ -1150,6 +1682,7 @@ impl NormalOracle {
         // part C). An added configuration is a configuration of the list as each other one.
         let (extra, hint) = {
             let mut state = self.added.lock().unwrap_or_else(|error| error.into_inner());
+            state.step_started.entry(key.clone()).or_insert_with(std::time::Instant::now);
             let extra = state.selections.get(&key).cloned().unwrap_or_default();
             if let Some((_, _, checked, log)) = state.memo.iter().find(|(step, list, _, _)| *step == key && *list == extra) {
                 if let Ok(mut all) = self.log.lock() {

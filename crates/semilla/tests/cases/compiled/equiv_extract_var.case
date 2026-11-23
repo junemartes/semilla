@@ -1,0 +1,34 @@
+rule-: R61.10-1
+note: a statement taken out into a variable is equivalent
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(n: u32, p: u32) -> u32 {
+    n * p + 1
+}
+=== new src/lib.rs
+pub fn total(n: u32, p: u32) -> u32 {
+    let sum = n * p;
+    sum + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
+      control flow: ~ check `overflow: n * p + 1` → `overflow: sum + 1` (src/lib.rs:-2, src/lib.rs:3)
+      equivalence: equivalent (proved by equal MIR)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    shop::total (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by equal MIR)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: extracted variable `sum` = `n * p` (1 use) at `shop::total/S0` [move · code equal]
+    lines: src/lib.rs:2-3, src/lib.rs:-2

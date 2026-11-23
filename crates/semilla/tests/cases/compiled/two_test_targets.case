@@ -1,0 +1,111 @@
+note: two packages, each with a test target `integration`; a macro of each target reads the file that the step changes: each source body has its own fact and its own check (design 61.14)
+rule+: R61.14-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "lexer"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["lexer-core"]
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+=== both src/lib.rs
+pub fn size(text: &[u8]) -> usize {
+    text.len()
+}
+=== both tests/lib.rs
+fn suite() -> usize {
+    let mut total = 0;
+    macro_rules! load {
+        ($name:literal) => {{
+            const DATA: &[u8] = include_bytes!(concat!("../testdata/", $name, ".txt"));
+            total += lexer::size(DATA);
+        }};
+    }
+    load!("anchored");
+    load!("regression");
+    total
+}
+
+#[test]
+fn plain() {
+    assert!(suite() > 0);
+}
+=== both lexer-core/Cargo.toml
+[package]
+name = "lexer-core"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+=== both lexer-core/src/lib.rs
+pub fn count(text: &[u8]) -> usize {
+    text.iter().filter(|b| **b == b'\n').count()
+}
+=== both lexer-core/tests/lib.rs
+fn suite() -> usize {
+    let mut total = 0;
+    macro_rules! load {
+        ($name:literal) => {{
+            const DATA: &[u8] = include_bytes!(concat!("../../testdata/", $name, ".txt"));
+            total += lexer_core::count(DATA);
+        }};
+    }
+    load!("anchored");
+    load!("regression");
+    total
+}
+
+#[test]
+fn regression() {
+    assert!(suite() > 0);
+}
+=== both testdata/anchored.txt
+a
+=== old testdata/regression.txt
+one
+=== new testdata/regression.txt
+one
+two
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  tests and benches, filled in by Semilla:
+  ◆ f2 derived: indirect change, cause not known: `lexer_core (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
+      affected bodies: lexer_core (test "integration")::suite
+      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'lexer_core (test "integration")::suite=…'
+  ◆ f3 derived: indirect change, cause not known: `lexer (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
+      affected bodies: lexer (test "integration")::suite
+  ◆ f4 derived: the compiled code of `lexer (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
+      affected bodies: lexer (test "integration")::suite
+      note: lines 10
+      ✗ spotlight of f3, f4: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'lexer (test "integration")::suite=…'
+  ◆ f5 derived: the compiled code of `lexer_core (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
+      affected bodies: lexer_core (test "integration")::suite
+      note: lines 10
+      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'lexer_core (test "integration")::suite=…'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: testdata/regression.txt: changed [file · no code]
+  cover: each of the 1 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'kind:indirect-change=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'kind:indirect-change=the reason of the test' --compiled
+◆ f2 derived: indirect change, cause not known: `lexer_core (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
+    no position
+◆ f3 derived: indirect change, cause not known: `lexer (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
+    no position
+◆ f4 derived: the compiled code of `lexer (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
+    no position
+◆ f5 derived: the compiled code of `lexer_core (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
+    no position
+◆ f1 derived: testdata/regression.txt: changed [file · no code]
+    lines: testdata/regression.txt:2

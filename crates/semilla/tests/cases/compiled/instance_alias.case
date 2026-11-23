@@ -1,0 +1,62 @@
+note: a changed type alias changes the instance of a generic body: the line names the resolved callee and the old instance
+rule+: R61.3-1
+rule+: R61.3-2
+rule+: R61.4-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Tax { fn rate(&self) -> u32; }
+
+#[derive(Default)]
+pub struct Food;
+#[derive(Default)]
+pub struct Fuel;
+
+impl Tax for Food { fn rate(&self) -> u32 { 5 } }
+impl Tax for Fuel { fn rate(&self) -> u32 { 20 } }
+
+pub fn charge<T: Tax>(t: &T, n: u32) -> u32 { t.rate().wrapping_mul(n) }
+
+pub type Item = Food;
+
+pub fn bill(n: u32) -> u32 { charge(&Item::default(), n) }
+=== new src/lib.rs
+pub trait Tax { fn rate(&self) -> u32; }
+
+#[derive(Default)]
+pub struct Food;
+#[derive(Default)]
+pub struct Fuel;
+
+impl Tax for Food { fn rate(&self) -> u32 { 5 } }
+impl Tax for Fuel { fn rate(&self) -> u32 { 20 } }
+
+pub fn charge<T: Tax>(t: &T, n: u32) -> u32 { t.rate().wrapping_mul(n) }
+
+pub type Item = Fuel;
+
+pub fn bill(n: u32) -> u32 { charge(&Item::default(), n) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type of `shop::Item`: `type Item = Food;` → `type Item = Fuel;` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: shop::bill
+      through: `shop::Item` (1 body)
+      control flow: instance charge::<shop::Fuel>: call `<T as shop::Tax>::rate` resolves to `<shop::Fuel as shop::Tax>::rate` (before: the instance charge::<shop::Food>)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::bill (src/lib.rs:15): same structure: 2 changed call targets; no edit in the body; different (for n = 1: before returns 5, after returns 20)
+    shop::charge (no place): instance charge::<shop::Fuel>: call `<T as shop::Tax>::rate` resolves to `<shop::Fuel as shop::Tax>::rate` (before: the instance charge::<shop::Food>)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: type of `shop::Item`: `type Item = Food;` → `type Item = Fuel;` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:13, src/lib.rs:-13

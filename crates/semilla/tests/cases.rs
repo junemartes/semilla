@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence"];
 
 /// The line diff command of design 55.8. The test has its own copy of the options: it does not
 /// read them from the product.
@@ -32,6 +32,9 @@ struct Case {
     exit: Option<i32>,
     must_match: Vec<String>,
     must_not_match: Vec<String>,
+    /// The texts of the facts whose edit changes the outcome (design 61, property 10): such a
+    /// fact never gets "equivalent".
+    different: Vec<String>,
     same_facts: bool,
     /// The known failures: the name of the check and the cause.
     known: Vec<(String, String)>,
@@ -67,7 +70,7 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
 
 impl Case {
     fn parse(id: &str, file: &Path, text: &str) -> Result<Case, String> {
-        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), same_facts: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
+        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
         const EXPECTED: &str = "=== expected\n";
         let (head, expected) = match text.find(&format!("\n{EXPECTED}")) {
             Some(at) => (&text[..at + 1], Some(text[at + 1 + EXPECTED.len()..].to_string())),
@@ -121,6 +124,7 @@ impl Case {
                     "exit" => case.exit = Some(value.parse().map_err(|_| format!("`{value}` is not an exit code"))?),
                     "must_match" => case.must_match.push(value.to_string()),
                     "must_not_match" => case.must_not_match.push(value.to_string()),
+                    "different" => case.different.push(value.to_string()),
                     "same_facts_as_no_option" if value == "yes" => case.same_facts = true,
                     "known_failure" => {
                         let (check, cause) = value.split_once(": ").ok_or(format!("the known failure `{value}` has no cause"))?;
@@ -504,6 +508,77 @@ fn blocks(text: &str, starts: &dyn Fn(&str) -> bool) -> Vec<Block> {
     out
 }
 
+/// Property 10 (design 61, R61.4-6): each fact whose head has a text of `different` has an
+/// `equivalence:` line, and its own result does not start with "equivalent".
+fn equivalence_problems(output: &str, different: &[String]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for text in different {
+        let found: Vec<Block> = facts(output).into_iter().filter(|fact| fact.head.contains(text.as_str())).collect();
+        if found.is_empty() {
+            problems.push(format!("no fact has the text `{text}`"));
+        }
+        for fact in found {
+            let lines: Vec<&String> = fact.subs.iter().filter(|sub| sub.starts_with("equivalence: ")).collect();
+            if lines.is_empty() {
+                problems.push(format!("the fact has no equivalence line: {}", fact.head));
+            }
+            for line in lines {
+                let own = line.trim_start_matches("equivalence: ").split("; the body:").next().unwrap_or_default();
+                if own.starts_with("equivalent") || own.split("; ").any(|part| part.starts_with("`") && part.contains(": equivalent")) {
+                    problems.push(format!("the case marks the fact different, and it gets `{line}`: {}", fact.head));
+                }
+            }
+        }
+    }
+    problems
+}
+
+/// Property 11 (design 61.10, R61.10-2): "equivalent" is a statement about the program. Each
+/// line of the part `reached bodies:` is a result of the walk (`different through`,
+/// `equivalent (proved after inlining`, `reached through`), a fold line, or a limit of the walk;
+/// and a body of that part never has the result "equivalent (proved by equal MIR)" in the step
+/// section (it has a changed callee).
+fn reach_problems(output: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let lines: Vec<&str> = output.lines().collect();
+    let Some(start) = lines.iter().position(|line| line.trim_start().starts_with("reached bodies: ")) else { return problems };
+    let indent = lines[start].len() - lines[start].trim_start().len();
+    let mut reached: Vec<String> = Vec::new();
+    for line in &lines[start + 1..] {
+        let depth = line.len() - line.trim_start().len();
+        if depth <= indent || line.trim().is_empty() {
+            break;
+        }
+        let text = line.trim();
+        if text.starts_with("chain: ") || text.starts_with("the walk stopped") {
+            continue;
+        }
+        let result = text.split_once("): ").map(|(name, rest)| {
+            reached.push(name.split(" (").next().unwrap_or_default().to_string());
+            rest
+        });
+        let fold = text.contains(" bodies: ") && text.split(' ').next().is_some_and(|count| count.parse::<usize>().is_ok());
+        let result = if fold { text.split_once(" bodies: ").map(|(_, rest)| rest) } else { result };
+        let Some(result) = result else {
+            problems.push(format!("a line of the reached bodies has no result: {text}"));
+            continue;
+        };
+        let known = result.starts_with("different through ") || result.starts_with("reached through ") || (result.starts_with("equivalent") && result.contains("(proved after inlining "));
+        if !known {
+            problems.push(format!("a reached body has a result that is not a result of the walk: {text}"));
+        }
+    }
+    for line in &lines[..start] {
+        let text = line.trim();
+        for name in &reached {
+            if text.starts_with(&format!("{name} (")) && text.contains("equivalent (proved by equal MIR)") {
+                problems.push(format!("a reached body has the result of an equal MIR text in the step section: {text}"));
+            }
+        }
+    }
+    problems
+}
+
 /// The facts of an output: each line `◆ fN KIND: TEXT [category]` with its sub lines.
 fn facts(text: &str) -> Vec<Block> {
     blocks(text, &|line| line.starts_with("◆ "))
@@ -828,6 +903,10 @@ fn flow_problems(text: &str) -> Vec<String> {
     };
     while index < lines.len() && lines[index].starts_with("    ") {
         let line = lines[index];
+        // The part of the reached bodies (design 61.10) has its own property (11).
+        if line.trim_start().starts_with("reached bodies: ") && !line.starts_with("     ") {
+            break;
+        }
         if !line.starts_with("     ") {
             bodies += 1;
         } else if line.starts_with("        ") && !line.starts_with("         ") {
@@ -1045,6 +1124,17 @@ fn check(case: &Case) -> Result<Outcome, String> {
                 work.fail(check, format!("the output {} `{pattern}`", if want { "has no match of" } else { "has a match of" }));
             }
         }
+    }
+
+    // Property 10: a fact that the case marks `different` never gets "equivalent" (design 61,
+    // R61.4-6). Its own result is the text before "; the body:".
+    for problem in equivalence_problems(&output, &case.different) {
+        work.fail("equivalence", problem);
+    }
+
+    // Property 11: a reached caller never shows a plain "equivalent" (design 61.10, R61.10-2).
+    for problem in reach_problems(&output) {
+        work.fail("reach", problem);
     }
 
     // Property 2: no fact has an old text that is equal to its new text.

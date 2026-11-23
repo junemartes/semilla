@@ -190,6 +190,7 @@ pub fn render_markdown(data: &UiData, full: bool) -> String {
     }
     md_flows(&mut out, &model, full);
     md_control_flow(&mut out, &model);
+    md_reached(&mut out, &model);
     if full {
         md_sources(&mut out, &model);
     } else {
@@ -1436,6 +1437,14 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             for line in flow.and_then(|flow| flow.facts.get(&fact.id)).into_iter().flatten() {
                 text.push_str(&format!("; control flow: {line}"));
             }
+            for line in flow.and_then(|flow| flow.equivalence.get(&fact.id)).into_iter().flatten() {
+                text.push_str(&format!("; equivalence: {line}"));
+            }
+            // The callers that the change reaches (design 61.10, A5); the section "Reached
+            // callers" has the links.
+            if let Some((line, _)) = flow.and_then(|flow| flow.reaches.get(&fact.id)) {
+                text.push_str(&format!("; reaches: {line}"));
+            }
             let diff = if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) };
             // The blocks of the fact text have the full text of each side: no second diff.
             (view.step, fact.id.as_str(), text, if blocks.is_empty() { diff } else { Some(blocks.join("\n")) })
@@ -2018,6 +2027,30 @@ fn md_control_flow(out: &mut String, model: &Model) {
             None => {}
         }
     }
+}
+
+/// The reached public functions of each fact (design 61.10, A5): a section with a list for
+/// each fact whose body is in the start set of the walk, with a link to each function.
+fn md_reached(out: &mut String, model: &Model) {
+    let mut items: Vec<(usize, &String, &Vec<(String, String)>)> = Vec::new();
+    for step in &model.report().steps {
+        for (id, (_, links)) in step.flow.iter().flat_map(|flow| flow.reaches.iter()) {
+            if !links.is_empty() {
+                items.push((step.step, id, links));
+            }
+        }
+    }
+    if items.is_empty() {
+        return;
+    }
+    out.push_str("## Reached callers
+
+");
+    for (step, id, links) in items {
+        let list: Vec<String> = links.iter().map(|(name, place)| format!("{} ({})", code(name), line_link(place))).collect();
+        let _ = writeln!(out, "- step {step}, {id}: {}", list.join(", "));
+    }
+    out.push('\n');
 }
 
 /// A link to a line of the repository: `src/lib.rs:12` → `[src/lib.rs:12](src/lib.rs#L12)`. A

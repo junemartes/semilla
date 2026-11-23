@@ -40,6 +40,8 @@ pub struct FlowPoint {
     /// The callees of the parts of a point with more than one terminator (a construct, the
     /// panic of a macro), each text one time, in order (R60.2-11).
     pub calls: Vec<String>,
+    /// The value key of a check or a branch (design 61, A1).
+    pub value: Option<String>,
 }
 
 impl FlowPoint {
@@ -81,8 +83,10 @@ impl FlowPoint {
     }
 
     /// True if two points have the same text, the same mark, and the same callees.
+    /// True if two points have the same text, mark, and callees. Two texts with equal value
+    /// keys (design 61, A1: the same operation on the same values) are the same text.
     pub fn same_text(&self, other: &FlowPoint) -> bool {
-        self.text == other.text && self.mark == other.mark && self.calls == other.calls
+        (self.text == other.text || (self.value.is_some() && self.value == other.value)) && self.mark == other.mark && self.calls == other.calls
     }
 }
 
@@ -143,6 +147,8 @@ pub struct FlowGraph {
     pub unreachable: usize,
     /// True for a coroutine body: the driver shows no graph.
     pub coroutine: bool,
+    /// The name and the target of the record (for the equivalence check, design 61).
+    pub key: Option<(String, String)>,
 }
 
 /// One side of a pair of graphs.
@@ -635,6 +641,13 @@ struct Outcome {
 
 /// The result of one body over its configurations.
 struct BodyResult {
+    /// The new item and the old item (for the facts of the body, design 61).
+    item: Option<String>,
+    old_item: Option<String>,
+    /// The record keys of each configuration and pair of targets with a graph on each side.
+    pairs: Vec<(String, (String, String), (String, String))>,
+    /// True if the MIR texts are equal at `n0` (design 61: a proof with no solver).
+    equal: bool,
     name: String,
     /// The name in the output (a nested body has its short source text).
     shown: String,
@@ -1055,10 +1068,18 @@ fn nested_names(text: &str, names: &BTreeMap<String, String>) -> String {
 /// Adds the control flow lines of a step with the compiled check (design 60, part C): the
 /// `control flow:` lines of each fact, the step section, and the full diff of each body for
 /// `status --verbose`.
-pub(crate) fn apply(input: &crate::StepInput, outcome: &mut crate::StepOutcome) {
+pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcome: &mut crate::StepOutcome) {
     if !outcome.bodies.iter().any(|body| !body.graphs.is_empty()) {
         return;
     }
+    apply_graphs(input, oracle, outcome);
+    // The changed instances of the generic bodies (design 61, part B).
+    let renames: BTreeMap<String, String> = outcome.renames.items.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+    let lines = oracle.instances(input.step, &renames);
+    crate::equiv::instance_lines(outcome, lines);
+}
+
+fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcome: &mut crate::StepOutcome) {
     let (before, after) = (input.before, input.after);
     let index = crate::checks::BodyIndex::new(&outcome.bodies, after, before);
     let reverse: BTreeMap<&String, &String> = outcome.renames.items.iter().map(|(old, new)| (new, old)).collect();
@@ -1149,7 +1170,20 @@ pub(crate) fn apply(input: &crate::StepInput, outcome: &mut crate::StepOutcome) 
             continue;
         }
         outcomes.sort_by(|a, b| b.rank.cmp(&a.rank).then(b.configs.len().cmp(&a.configs.len())));
-        results.push(BodyResult { name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes });
+        // The pairs for the equivalence check (design 61): two records with a graph that is not
+        // a coroutine graph.
+        let mut pairs = Vec::new();
+        for pair in &body.graphs {
+            if let (FlowSide::Graph(old), FlowSide::Graph(new)) = (&pair.old, &pair.new)
+                && !old.coroutine
+                && !new.coroutine
+                && let (Some(a), Some(b)) = (&old.key, &new.key)
+            {
+                pairs.push((pair.config.clone(), a.clone(), b.clone()));
+            }
+        }
+        let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0");
+        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes });
     }
     let mut report = FlowReport::default();
     let all_configs: BTreeSet<&String> = results.iter().flat_map(|result| result.outcomes.iter().flat_map(|known| known.configs.iter())).collect();
@@ -1227,6 +1261,16 @@ pub(crate) fn apply(input: &crate::StepInput, outcome: &mut crate::StepOutcome) 
         report.facts.insert(fact.id.clone(), found);
     }
     outcome.report.flow = Some(report);
+    // The equivalence of the two versions of each body (design 61).
+    let checks: Vec<crate::equiv::BodyCheck> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, result)| !result.pairs.is_empty())
+        .map(|(index, result)| crate::equiv::BodyCheck { index, item: result.item.clone(), old_item: result.old_item.clone(), name: result.name.clone(), shown: result.shown.clone(), pairs: result.pairs.clone(), equal: result.equal })
+        .collect();
+    if !checks.is_empty() {
+        crate::equiv::apply(input, oracle, outcome, &checks);
+    }
 }
 
 /// True if each fact that holds a place of a point pair is a fact of the category `rename`,
@@ -1256,7 +1300,7 @@ mod tests {
 
     /// A point at a place of `src/lib.rs`.
     fn point(kind: &str, text: &str, at: usize) -> FlowPoint {
-        FlowPoint { kind: kind.into(), text: text.into(), mark: None, tokens: Some(("src/lib.rs".into(), at, at + 1)), call: None, calls: Vec::new() }
+        FlowPoint { kind: kind.into(), text: text.into(), mark: None, tokens: Some(("src/lib.rs".into(), at, at + 1)), call: None, calls: Vec::new(), value: None }
     }
 
     fn graph(points: Vec<FlowPoint>, arrows: &[(usize, usize, &str)]) -> FlowGraph {

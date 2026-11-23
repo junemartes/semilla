@@ -1,0 +1,50 @@
+note: an extracted variable in a loop body: the inductive check proves the two loops equivalent
+rule+: R61.11-1
+rule+: R61.11-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn total(n: u32, p: u32) -> u32 {
+    let mut i = 0;
+    let mut sum: u32 = 0;
+    while i < n {
+        sum = sum.wrapping_add(i.wrapping_mul(p)).wrapping_add(i.wrapping_mul(p));
+        i += 1;
+    }
+    sum
+}
+=== new src/lib.rs
+pub fn total(n: u32, p: u32) -> u32 {
+    let mut i = 0;
+    let mut sum: u32 = 0;
+    while i < n {
+        let part = i.wrapping_mul(p);
+        sum = sum.wrapping_add(part).wrapping_add(part);
+        i += 1;
+    }
+    sum
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: extracted variable `part` = `i.wrapping_mul(p)` (2 uses) at `shop::total/S2/body/S0` [move · code different]
+      ! the compiled code changes: shop::total
+      control flow: − call `num::<impl u32>::wrapping_mul` (src/lib.rs:-5): return → call `num::<impl u32>::wrapping_add`
+      control flow: + arrow call `num::<impl u32>::wrapping_add` (src/lib.rs:6) → call `num::<impl u32>::wrapping_add` (src/lib.rs:6) (return)
+      control flow: − arrow call `num::<impl u32>::wrapping_add` (src/lib.rs:-5) → call `num::<impl u32>::wrapping_mul` (src/lib.rs:-5) (return)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_mul`, by induction over the loop)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    shop::total (src/lib.rs:1): graph changes: −1 call, +1 arrow, −2 arrows; equivalent (proved by SMT after inlining `core::num::<impl u32>::wrapping_add`, `core::num::<impl u32>::wrapping_mul`, by induction over the loop)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: extracted variable `part` = `i.wrapping_mul(p)` (2 uses) at `shop::total/S2/body/S0` [move · code different]
+    lines: src/lib.rs:5-6, src/lib.rs:-5

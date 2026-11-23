@@ -1,0 +1,100 @@
+note: a raw pointer deref of a generic container with an associated type in a field: the `dev` build has the alignment check casts, and the layout note of the cast normalizes the field type (design 61.14, defect 3)
+rule+: R61.14-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "store"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+use std::collections::HashMap;
+use std::hash::{BuildHasher, Hash};
+
+pub trait Data {
+    type Id: Hash + Eq + Clone;
+    fn id(&self) -> Self::Id;
+}
+
+pub struct Slot<D: Data> {
+    pub id: D::Id,
+    pub data: D,
+}
+
+pub struct DataContainer<Id, D: Data<Id = Id>, S = std::collections::hash_map::RandomState> {
+    map: HashMap<Id, Slot<D>, S>,
+    count: usize,
+}
+
+impl<Id: Hash + Eq + Clone, D: Data<Id = Id>, S: BuildHasher> DataContainer<Id, D, S> {
+    pub fn get(&self, id: &Id) -> Option<&D> {
+        let slot = self.map.get(id)? as *const Slot<D>;
+        let slot = unsafe { &*slot };
+        Some(&slot.data)
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn next(n: usize) -> usize {
+        n + 1
+    }
+}
+=== new src/lib.rs
+use std::collections::HashMap;
+use std::hash::{BuildHasher, Hash};
+
+pub trait Data {
+    type Id: Hash + Eq + Clone;
+    fn id(&self) -> Self::Id;
+}
+
+pub struct Slot<D: Data> {
+    pub id: D::Id,
+    pub data: D,
+}
+
+pub struct DataContainer<Id, D: Data<Id = Id>, S = std::collections::hash_map::RandomState> {
+    map: HashMap<Id, Slot<D>, S>,
+    count: usize,
+}
+
+impl<Id: Hash + Eq + Clone, D: Data<Id = Id>, S: BuildHasher> DataContainer<Id, D, S> {
+    pub fn get(&self, id: &Id) -> Option<&D> {
+        let slot = self.map.get(id)? as *const Slot<D>;
+        let slot = unsafe { &*slot };
+        Some(&slot.data)
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn next(n: usize) -> usize {
+        n + 2
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: store::DataContainer::next
+      lines: src/lib.rs:31, src/lib.rs:-31
+      to state it: --change 'store::DataContainer::next=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'store::DataContainer::next=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `store::DataContainer::next/tail/rhs` [semantics · code different]
+      affected bodies: store::DataContainer::next
+      control flow: ~ check `overflow: n + 1` → `overflow: n + 2` (src/lib.rs:-31, src/lib.rs:31)
+      equivalence: different: for n = 0: before returns 1, after returns 2
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    store::DataContainer::<Id, D, S>::next (src/lib.rs:30): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 0: before returns 1, after returns 2)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `store::DataContainer::next/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:31, src/lib.rs:-31

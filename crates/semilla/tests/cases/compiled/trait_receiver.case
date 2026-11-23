@@ -42,9 +42,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed path `Food` → `Fuel` at `shop::price/S0/init` [semantics · code different]
       affected bodies: shop::price
+      equivalence: different: for each input: before returns 5, after returns 20
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    shop::price (src/lib.rs:7): same structure: 1 changed call target
+    shop::price (src/lib.rs:7): same structure: 1 changed call target; different (for each input: before returns 5, after returns 20)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

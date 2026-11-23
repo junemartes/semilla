@@ -1,0 +1,62 @@
+note: the tree before the step has a feature whose code does not build: one line names the configurations that are not checked and the cause (design 61.14, defect 4)
+rule+: R61.14-4
+option: --compiled
+=== new Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+nightly = []
+=== new src/lib.rs
+pub fn price(n: u32) -> u32 {
+    n + 1
+}
+=== old src/lib.rs
+#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]
+
+pub fn price(n: u32) -> u32 {
+    n + 2
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  ! configurations `dev, all features`, `release, all features` are not checked: it does not build before the step: error[E0635]: unknown feature `no_such_feature_of_semilla`
+
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `1` (f3)
+      in: shop::price
+      lines: src/lib.rs:2, src/lib.rs:-4
+      to state it: --change 'shop::price=TEXT'
+  to state them, add these options to the command of the step: --change 'shop::price=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f3 derived: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
+      affected bodies: shop::price
+      control flow: ~ check `overflow: n + 2` → `overflow: n + 1` (src/lib.rs:-4, src/lib.rs:2)
+      equivalence: different: for n = 0: before returns 2, after returns 1
+  ◆ f1 derived: attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]
+      ✗ spotlight: a changed `cfg` attribute (`cfg_attr`); it needs a reason: --reason 'shop=…'
+  ◆ f2 derived: Cargo.toml: features.nightly removed ([]) [manifest · no code]
+      ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:features.nightly=…'
+  cover: each of the 7 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (src/lib.rs:1): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 0: before returns 2, after returns 1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: cfg attribute: shop
+  ! spotlight: features: Cargo.toml (the key of the reason: `Cargo.toml:features.nightly`)
+run again: semilla step 'the change' --reason 'shop=<why>' --reason 'Cargo.toml:features.nightly=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop=the reason of the test' --reason 'Cargo.toml:features.nightly=the reason of the test' --compiled --change 'shop::price=the text of the test'
+◆ f3 stated: changed literal `2` → `1` at `shop::price/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-4
+◆ f1 derived: attributes of `shop`: removed `#![cfg_attr(feature = "nightly", feature(no_such_feature_of_semilla))]` [attribute · code equal]
+    lines: src/lib.rs:-1-2
+◆ f2 derived: Cargo.toml: features.nightly removed ([]) [manifest · no code]
+    lines: Cargo.toml:-5-7

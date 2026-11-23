@@ -76,6 +76,11 @@ pub struct Point {
     /// panic of a macro): each text one time, in order (design 60, R60.2-11).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub x: Vec<String>,
+    /// The value key of a check or a branch (design 61, A1): the operation and each operand as
+    /// a value (a constant, or a parameter that the body never writes). Two points with equal
+    /// keys do the same operation on the same values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<String>,
     /// The span of the terminator of the point (not in the record).
     #[serde(skip)]
     pub s: Option<Span>,
@@ -96,6 +101,13 @@ pub struct Counts {
     /// The arrows to an `unreachable` terminator.
     #[serde(skip_serializing_if = "is_zero")]
     pub unreachable: usize,
+    /// The checks whose condition is a known value: they can never fail, so they are not points
+    /// (design 61, A1).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub folded_checks: usize,
+    /// The branches on a known value: the walk follows the one arrow that the value selects.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub folded_branches: usize,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -137,7 +149,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
         graph.co = true;
         // Only the entry, for its place: a nested body pairs through the node of its place
         // (R60.3-9).
-        let mut entry = Point { k: "entry".into(), t: String::new(), m: None, r: None, c: None, x: Vec::new(), s: None };
+        let mut entry = Point { k: "entry".into(), t: String::new(), m: None, r: None, c: None, x: Vec::new(), v: None, s: None };
         if let Some((tokens, call)) = crate::guarded(|| body_place(tcx, body, &mut graph.f)) {
             entry.r = tokens;
             entry.c = call;
@@ -149,13 +161,14 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
     let typing = local.map(|local| rustc_middle::ty::TypingEnv::post_analysis(tcx, local.to_def_id()));
     let roles = &hir.roles;
     let discriminants = discriminant_tables(body);
+    let consts = crate::consts::Consts::new(body, item);
     let blocks = body.blocks.len();
     // The raw form of each block, and the desugaring expansion of each raw point.
     let mut raws: Vec<Raw> = Vec::with_capacity(blocks);
     let mut groups: Vec<Option<(rustc_span::ExpnId, Span, rustc_span::DesugaringKind)>> = Vec::with_capacity(blocks);
     for block in &body.blocks {
         let span = rustc_public::rustc_internal::internal(tcx, block.terminator.source_info.span);
-        let raw = raw_block(tcx, typing, body, &block.terminator.kind, span, &discriminants, &hir.lets, &mut graph);
+        let raw = raw_block(tcx, typing, body, &block.terminator.kind, span, &discriminants, &hir.lets, &consts, &mut graph);
         let group = match (&raw, span.desugaring_kind()) {
             (Raw::Point(..), Some(kind)) => Some((span.ctxt().outer_expn(), span.ctxt().outer_expn_data().call_site, kind)),
             _ => None,
@@ -199,7 +212,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
     graph.n.cleanup = state.iter().filter(|seen| **seen == 0).count();
     // The point of each raw point: a group of one desugaring expansion is one point.
     let mut point_of: Vec<Option<usize>> = vec![None; blocks];
-    let mut points: Vec<Point> = vec![Point { k: "entry".into(), t: String::new(), m: None, r: None, c: None, x: Vec::new(), s: None }];
+    let mut points: Vec<Point> = vec![Point { k: "entry".into(), t: String::new(), m: None, r: None, c: None, x: Vec::new(), v: None, s: None }];
     if let Some((tokens, call)) = crate::guarded(|| body_place(tcx, body, &mut graph.f)) {
         points[0].r = tokens;
         points[0].c = call;
@@ -216,7 +229,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
                 let id = *group_point.entry(expn).or_insert_with(|| {
                     let (tokens, call) = place(tcx, call_site, &mut graph.f);
                     let text = point_text(tcx, call_site, &head_span(tcx, &body.blocks, &groups, expn));
-                    points.push(Point { k: construct_name(kind).to_string(), t: text, m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), s: Some(call_site) });
+                    points.push(Point { k: construct_name(kind).to_string(), t: text, m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: Some(call_site) });
                     group_of_point.insert(points.len() - 1, (expn, false));
                     points.len() - 1
                 });
@@ -249,7 +262,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
         let span = back_edge_span(tcx, body, index, &state, &successors);
         let (tokens, call) = span.map(|span| place(tcx, span, &mut graph.f)).unwrap_or((None, None));
         let text = span.and_then(|span| tcx.sess.source_map().span_to_snippet(span).ok()).map(|text| loop_keyword(&text)).unwrap_or_default();
-        points.push(Point { k: "loop".into(), t: text, m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), s: span });
+        points.push(Point { k: "loop".into(), t: text, m: None, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: span });
         loop_of[index] = Some(points.len() - 1);
     }
     // The point that a block leads to: its loop point, its own point, or the point after a chain
@@ -333,7 +346,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
                 },
                 Target::Fail => {
                     let fail = *fail_of.entry(index).or_insert_with(|| {
-                        points.push(Point { k: "panic".into(), t: check_kind(&point.t), m: None, r: point.r, c: point.c, x: Vec::new(), s: point.s });
+                        points.push(Point { k: "panic".into(), t: check_kind(&point.t), m: None, r: point.r, c: point.c, x: Vec::new(), v: None, s: point.s });
                         points.len() - 1
                     });
                     push(&mut arrows, from, fail, label.clone());
@@ -407,7 +420,7 @@ fn build_with(tcx: rustc_middle::ty::TyCtxt<'_>, body: &Body, item: Option<rustc
                 match target {
                     Target::Fail => {
                         let fail = *fail_of.entry(block).or_insert_with(|| {
-                            points.push(Point { k: "panic".into(), t: check_kind(&raw.t), m: None, r: points[*point].r, c: points[*point].c, x: Vec::new(), s: raw.s });
+                            points.push(Point { k: "panic".into(), t: check_kind(&raw.t), m: None, r: points[*point].r, c: points[*point].c, x: Vec::new(), v: None, s: raw.s });
                             points.len() - 1
                         });
                         push(&mut arrows, *point, fail, label);
@@ -546,7 +559,7 @@ fn merge_macro_exits(tcx: rustc_middle::ty::TyCtxt<'_>, points: Vec<Point>, arro
             Some((expn, call)) => {
                 let id = *merged.entry(expn).or_insert_with(|| {
                     let range = crate::spans::range(tcx, call, files).map(array);
-                    kept.push(Point { k: "panic".into(), t: snippet(tcx, call), m: None, r: range, c: range, x: Vec::new(), s: Some(call) });
+                    kept.push(Point { k: "panic".into(), t: snippet(tcx, call), m: None, r: range, c: range, x: Vec::new(), v: None, s: Some(call) });
                     kept.len() - 1
                 });
                 if matches!(point.k.as_str(), "call" | "panic") {
@@ -597,10 +610,11 @@ fn add_callee(list: &mut Vec<String>, point: &Point) {
 }
 
 /// The raw form of a block.
-fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_middle::ty::TypingEnv<'tcx>>, body: &Body, kind: &TerminatorKind, span: Span, discriminants: &HashMap<usize, Vec<(u128, String)>>, lets: &HashMap<Span, String>, graph: &mut Graph) -> Raw {
+#[allow(clippy::too_many_arguments)]
+fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_middle::ty::TypingEnv<'tcx>>, body: &Body, kind: &TerminatorKind, span: Span, discriminants: &HashMap<usize, Vec<(u128, String)>>, lets: &HashMap<Span, String>, consts: &crate::consts::Consts, graph: &mut Graph) -> Raw {
     let point = |k: &str, t: String, m: Option<&'static str>, graph: &mut Graph| {
         let (tokens, call) = place(tcx, span, &mut graph.f);
-        Point { k: k.to_string(), t, m, r: tokens.map(array), c: call.map(array), x: Vec::new(), s: Some(span) }
+        Point { k: k.to_string(), t, m, r: tokens.map(array), c: call.map(array), x: Vec::new(), v: None, s: Some(span) }
     };
     match kind {
         TerminatorKind::Goto { target } => Raw::Pass(*target),
@@ -608,16 +622,42 @@ fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_mid
         TerminatorKind::Resume | TerminatorKind::Abort | TerminatorKind::Unreachable => Raw::End,
         TerminatorKind::Return => Raw::Point(point("return", String::new(), None, graph), Vec::new()),
         TerminatorKind::SwitchInt { discr, targets } => {
+            // A branch on a known value follows the one arrow that the value selects (design
+            // 61, A1).
+            if let Some(crate::consts::Val::Bits { v, .. }) = consts.operand(discr) {
+                graph.n.folded_branches += 1;
+                return Raw::Pass(targets.branches().find(|(value, _)| *value == v).map(|(_, target)| target).unwrap_or(targets.otherwise()));
+            }
             let text = lets.get(&span).cloned().unwrap_or_else(|| condition_text(tcx, span));
             let labels = switch_labels(body, discr, targets.branches().map(|(value, _)| value).collect(), discriminants);
             let mut edges: Vec<(String, Target)> = targets.branches().zip(labels.0).map(|((_, target), label)| (label, Target::Block(target))).collect();
             edges.push((labels.1, Target::Block(targets.otherwise())));
-            Raw::Point(point("branch", text, None, graph), edges)
+            let mut found = point("branch", text, None, graph);
+            found.v = consts.switch_key(body, discr);
+            Raw::Point(found, edges)
         }
-        TerminatorKind::Assert { msg, target, .. } => {
+        TerminatorKind::Assert { cond, expected, msg, target, .. } => {
+            // A check whose condition is a known value that passes can never fail: it is not a
+            // point, and its panic is not a point (design 61, A1). A check that always fails
+            // stays a point.
+            if let Some(crate::consts::Val::Bits { v, .. }) = consts.operand(cond)
+                && (v == 1) == *expected
+            {
+                graph.n.folded_checks += 1;
+                return Raw::Pass(*target);
+            }
             let snippet = snippet(tcx, span);
             let text = if snippet.is_empty() { assert_kind(msg).to_string() } else { format!("{}: {snippet}", assert_kind(msg)) };
-            Raw::Point(point("check", text, None, graph), vec![("ok".into(), Target::Block(*target)), ("fail".into(), Target::Fail)])
+            let mut found = point("check", text, None, graph);
+            found.v = match msg {
+                AssertMessage::Overflow(op, left, right) => consts.key(&format!("{op:?}"), &[left, right]),
+                AssertMessage::OverflowNeg(value) => consts.key("Neg", &[value]),
+                AssertMessage::DivisionByZero(value) => consts.key("DivZero", &[value]),
+                AssertMessage::RemainderByZero(value) => consts.key("RemZero", &[value]),
+                AssertMessage::BoundsCheck { len, index } => consts.key("Bounds", &[len, index]),
+                _ => None,
+            };
+            Raw::Point(found, vec![("ok".into(), Target::Block(*target)), ("fail".into(), Target::Fail)])
         }
         TerminatorKind::Call { func, target, .. } => {
             if crate::is_opaque_wrap(func) {
@@ -645,7 +685,7 @@ fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_mid
 /// trait has the mark `(trait default)`. A call that stays generic keeps the parameter
 /// (`<T as shop::Tax>::rate`). A call that the MIR does not resolve gets the source text of the
 /// operand and a mark.
-fn callee_text<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_middle::ty::TypingEnv<'tcx>>, body: &Body, func: &Operand, span: Span) -> (String, Option<&'static str>) {
+pub(crate) fn callee_text<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_middle::ty::TypingEnv<'tcx>>, body: &Body, func: &Operand, span: Span) -> (String, Option<&'static str>) {
     use rustc_public::ty::AssocContainer;
     let operand = || operand_text(&snippet(tcx, span));
     let Ok(ty) = func.ty(body.locals()) else { return (operand(), Some("pointer")) };
@@ -795,14 +835,14 @@ fn macro_call(span: Span) -> (Span, Option<Span>) {
 }
 
 /// The two ranges of a span (design 40.1): its tokens, and its outermost macro call.
-fn place(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, files: &mut Vec<String>) -> (Option<Range>, Option<Range>) {
+pub(crate) fn place(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, files: &mut Vec<String>) -> (Option<Range>, Option<Range>) {
     let tokens = crate::spans::range(tcx, span, files);
     let (_, call) = macro_call(span);
     let call = call.and_then(|call| crate::spans::range(tcx, call.source_callsite(), files));
     (tokens, call)
 }
 
-fn array(range: Range) -> [i64; 3] {
+pub(crate) fn array(range: Range) -> [i64; 3] {
     [range.0, range.1, range.2]
 }
 

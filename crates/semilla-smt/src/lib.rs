@@ -65,6 +65,7 @@ use serde::{Deserialize, Serialize};
 pub use semilla_core::report::Effect;
 
 pub mod build;
+pub mod mir;
 mod encode;
 mod lower;
 mod solver;

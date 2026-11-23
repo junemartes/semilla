@@ -47,9 +47,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed path `price` → `cost` at `depot::total/S0/init/callee` [semantics · code different]
       affected bodies: depot::total
       control flow: ~ call `price` → `cost` (src/lib.rs:-10, src/lib.rs:10)
+      equivalence: different: for q = 0: before returns 3, after returns 4
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::total (src/lib.rs:9): same structure: 1 changed call target
+    depot::total (src/lib.rs:9): same structure: 1 changed call target; different (for q = 0: before returns 3, after returns 4)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

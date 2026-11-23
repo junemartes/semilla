@@ -1,0 +1,68 @@
+note: the walk stops at its depth limit and tells the count of the callers that it did not check; no such caller gets a result
+rule+: R61.10-7
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn tier(k: u8) -> u32 {
+    match k {
+        0 => 2,
+        1 => 4,
+        _ => 8,
+    }
+}
+
+pub fn c1(k: u8) -> u32 { tier(k).wrapping_add(1) }
+pub fn c2(k: u8) -> u32 { c1(k).wrapping_add(1) }
+pub fn c3(k: u8) -> u32 { c2(k).wrapping_add(1) }
+pub fn c4(k: u8) -> u32 { c3(k).wrapping_add(1) }
+pub fn c5(k: u8) -> u32 { c4(k).wrapping_add(1) }
+pub fn c6(k: u8) -> u32 { c5(k).wrapping_add(1) }
+=== new src/lib.rs
+pub fn tier(k: u8) -> u32 {
+    match k {
+        0 => 2,
+        1 => 5,
+        _ => 8,
+    }
+}
+
+pub fn c1(k: u8) -> u32 { tier(k).wrapping_add(1) }
+pub fn c2(k: u8) -> u32 { c1(k).wrapping_add(1) }
+pub fn c3(k: u8) -> u32 { c2(k).wrapping_add(1) }
+pub fn c4(k: u8) -> u32 { c3(k).wrapping_add(1) }
+pub fn c5(k: u8) -> u32 { c4(k).wrapping_add(1) }
+pub fn c6(k: u8) -> u32 { c5(k).wrapping_add(1) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `4` → `5` (f1)
+      in: shop::tier
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: --change 'shop::tier=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::tier=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
+      affected bodies: shop::tier
+      equivalence: different: for k = 1: before returns 4, after returns 5
+      reaches: 4 public functions: shop::c1, shop::c2, shop::c3, and 1 more (semilla status --verbose)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::tier (src/lib.rs:1): same graph (the edit keeps the control flow); different (for k = 1: before returns 4, after returns 5)
+    reached bodies: 4
+      shop::c1 (src/lib.rs:9): different through shop::tier: for k = 1: before returns 5, after returns 6
+      shop::c2 (src/lib.rs:10): different through shop::c1: for k = 1: before returns 6, after returns 7
+      shop::c3 (src/lib.rs:11): different through shop::c2: for k = 1: before returns 7, after returns 8
+      shop::c4 (src/lib.rs:12): reached through shop::c3, not decided (the callee `shop::tier` changes in the step, and the inline step is too deep: tier(k) (src/lib.rs:-9))
+      the walk stopped at depth 4: 2 more caller(s) not checked
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `4` → `5` at `shop::tier/S0/arm[1].body` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4

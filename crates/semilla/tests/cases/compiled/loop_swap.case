@@ -1,0 +1,52 @@
+note: two swapped statements in a loop body: the bodies differ, and a bounded run finds a real input
+rule-: R61.11-1
+rule+: R61.11-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn last(n: u32) -> u32 {
+    let mut i = 0;
+    let mut seen: u32 = 0;
+    while i < n {
+        seen = i;
+        i += 1;
+    }
+    seen
+}
+=== new src/lib.rs
+pub fn last(n: u32) -> u32 {
+    let mut i = 0;
+    let mut seen: u32 = 0;
+    while i < n {
+        i += 1;
+        seen = i;
+    }
+    seen
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: moved statement, see f1 (f1)
+      in: shop::last
+      lines: src/lib.rs:6, src/lib.rs:-5
+      to state it: --change 'shop::last=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::last=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved statement `seen = i` from `shop::last/S2/body/S0` to `shop::last/S2/body/S1` [semantics · code different]
+      affected bodies: shop::last
+      equivalence: different: for n = 1 (a bounded run of at most 4 loop iterations): before returns 0, after returns 1
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::last (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1 (a bounded run of at most 4 loop iterations): before returns 0, after returns 1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: moved statement `seen = i` from `shop::last/S2/body/S0` to `shop::last/S2/body/S1` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-5

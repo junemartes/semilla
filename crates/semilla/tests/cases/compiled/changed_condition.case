@@ -1,6 +1,7 @@
 note: a changed condition keeps the structure: `same structure: 1 changed condition`
 rule+: R60.3-4
 rule-: R60.3-8
+rule-: R61.2-2
 option: --compiled
 === both Cargo.toml
 [package]
@@ -30,9 +31,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) at `depot::tax/S0/cond` [semantics · code different]
       affected bodies: depot::tax
       control flow: ~ branch `v > 3` → `v >= 3` (src/lib.rs:-2, src/lib.rs:2)
+      equivalence: different: for v = 3: before returns 3, after returns 1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
-    depot::tax (src/lib.rs:1): same structure: 1 changed condition
+    depot::tax (src/lib.rs:1): same structure: 1 changed condition; different (for v = 3: before returns 3, after returns 1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

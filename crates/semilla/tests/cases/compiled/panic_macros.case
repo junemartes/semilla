@@ -46,30 +46,34 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `panic!("too big")` (src/lib.rs:1)
       control flow: + arrow entry (src/lib.rs:1) → branch `x > 9` (src/lib.rs:1)
       control flow: … 4 more (semilla status --verbose)
+      equivalence: not decided: a raw pointer
   ◆ f2 derived: added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different]
       affected bodies: shop::b
       control flow: + branch `assert_eq!(x, y)` (src/lib.rs:2): false → panic `assert_eq!(x, y)`, true → return
       control flow: + panic `assert_eq!(x, y)` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:2) → branch `assert_eq!(x, y)` (src/lib.rs:2)
+      equivalence: not decided: a value of a type that the check does not model
   ◆ f3 derived: added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different]
       affected bodies: shop::c
       control flow: + branch `x > 9` (src/lib.rs:3): false → return, true → panic `unreachable!()`
       control flow: + panic `unreachable!()` (src/lib.rs:3)
       control flow: + arrow entry (src/lib.rs:3) → branch `x > 9` (src/lib.rs:3)
+      equivalence: different: for x = 10: before returns 9, after panics (`core::panicking::unreachable_default_msg`)
   ◆ f4 derived: added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different]
       affected bodies: shop::d
       control flow: + branch `x > 9` (src/lib.rs:4): false → return, true → panic `todo!()`
       control flow: + panic `todo!()` (src/lib.rs:4)
       control flow: + arrow entry (src/lib.rs:4) → branch `x > 9` (src/lib.rs:4)
+      equivalence: different: for x = 10: before returns 14, after panics (`core::panicking::todo_default_msg`)
   ◆ f5 derived: the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
       affected bodies: shop::b
       note: lines 2
   cover: each of the 8 changed line(s) is in a fact
   control flow: 4 bodies
-    shop::a (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
-    shop::b (src/lib.rs:2): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
-    shop::c (src/lib.rs:3): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
-    shop::d (src/lib.rs:4): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
+    shop::a (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; not decided (a raw pointer)
+    shop::b (src/lib.rs:2): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; not decided (a value of a type that the check does not model)
+    shop::c (src/lib.rs:3): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; different (for x = 10: before returns 9, after panics (`core::panicking::unreachable_default_msg`))
+    shop::d (src/lib.rs:4): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; different (for x = 10: before returns 14, after panics (`core::panicking::todo_default_msg`))
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -2098,7 +2098,9 @@ fn a_member_edit_that_changes_the_indexes_is_not_a_neutral_rewrite() {
     // and a link adds the order as a second cause (the signature of `weight` names `Kind`).
     assert!(order.contains("the discriminant values") && order.ends_with("code different]"), "{out}");
     assert!(!out.contains("code equal"), "{out}");
-    assert!(out.contains("affected bodies: shop_core::members::weight") && !out.contains("shop_core::members::small"), "the caller with no edit is equal by name: {out}");
+    // The caller with no edit is equal by name: it is not an affected body (design 61.10: it
+    // can be a reached body of the walk).
+    assert!(out.contains("affected bodies: shop_core::members::weight") && !out.lines().any(|line| line.contains("affected bodies:") && line.contains("shop_core::members::small")), "the caller with no edit is equal by name: {out}");
 }
 
 #[test]
@@ -3031,8 +3033,9 @@ fn each_command_runs_changed_build_code_and_marks_each_proof() {
     }
     let md_text = &texts[0].1;
     assert!(md_text.contains("\\! build code changed in step 1 (crates/shop-core/build.rs). The check ran it in the sandbox.") && md_text.contains("result: **accepted**"), "{md_text}");
-    assert!(md_text.contains(&format!("3 edit(s) \\[rename · code equal\\] {MARK_1}\n")) && md_text.contains(&format!("- verified (proof mir) {MARK_1} · ")), "{md_text}");
-    assert!(md_text.contains("3 edit(s) \\[rename · code equal\\]\n") && md_text.contains("- verified (proof mir) · "), "{md_text}");
+    // R61.6-1: the Markdown review has the equivalence of each fact at the end of its item.
+    assert!(md_text.contains(&format!("3 edit(s) \\[rename · code equal\\] {MARK_1}; equivalence: equivalent (proved by equal MIR)\n")) && md_text.contains(&format!("- verified (proof mir) {MARK_1} · ")), "{md_text}");
+    assert!(md_text.contains("3 edit(s) \\[rename · code equal\\]; equivalence: equivalent (proved by equal MIR)\n") && md_text.contains("- verified (proof mir) · "), "{md_text}");
     assert!(texts[1].1.contains(&format!("(1 code equal (1 {})   step 3", &MARK_1[1..])) && texts[1].1.contains(&format!("[rename · code equal] {MARK_1}   step 3")), "{}", texts[1].1);
 
     // The data of the UI.
@@ -5033,7 +5036,9 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     // has the result of the first twin, and the second twin gives no indirect change.
     let out = run(repo, &["step", "probe"], 0);
     assert!(out.contains("Semilla added the configurations `dev, features fast`, `release, features fast`"), "{out}");
-    assert!(out.contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`"), "{out}");
+    // R61.4-5: the equivalence of each configuration, the worst first.
+    assert!(out.contains("at `shop_core::cut#0/tail/operand` [semantics · code different]\n      affected bodies: shop_core::cut#0\n      equivalence: different in dev, features fast, release, features fast: for a = "), "{out}");
+    assert!(out.contains("; equivalent in dev, all features, release, all features (proved by equal MIR)\n      note: the compiled code is equal in `dev, all features`, `release, all features`; different in `dev, features fast`, `release, features fast`"), "{out}");
     assert!(!out.contains("code equal]") && !out.contains("indirect change") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
 
@@ -6508,14 +6513,65 @@ fn each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_synta
     assert!(out.contains("step 0: MIR map: 0 map error(s); 2 edit(s) own a changed MIR element; 1 edit(s) with equal code in a changed body; 0 edit(s) with the doubt rule"), "{out}");
 }
 
+/// Design 61.10: a change reaches the callers of the changed body. The fact of the changed body
+/// has the line `reaches:`, the step section has the part `reached bodies:`, `status --verbose`
+/// has the chain of each body, and the Markdown review has a link for each reached public
+/// function.
+// rule+ R61.10-6
+#[test]
+fn a_change_reaches_the_callers_of_its_body_in_each_view() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn cost(k: u8, n: u32) -> u32 {\n    n.wrapping_mul(tier(k))\n}\n\npub fn quote(k: u8, n: u32) -> u32 {\n    cost(k, n).wrapping_add(1)\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "tier");
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5"));
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains("      reaches: 2 public functions: shop_core::cost, shop_core::quote (semilla status --verbose)\n"), "{out}");
+    assert!(out.contains("    reached bodies: 2\n      shop_core::cost (crates/shop-core/src/lib.rs:11): different through shop_core::tier: for k = 1, n = 1: before returns 4, after returns 5\n"), "{out}");
+    assert!(out.contains("      shop_core::quote (crates/shop-core/src/lib.rs:15): different through shop_core::cost: for k = 1, n = 1: before returns 5, after returns 6\n"), "{out}");
+    let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert!(verbose.contains("          chain: shop_core::quote → shop_core::cost → shop_core::tier\n"), "{verbose}");
+    let md = dir.path().join("review.md");
+    run(repo, &["review", "--md", md.to_str().unwrap(), "--wait", "600"], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains("; reaches: 2 public functions: "), "{text}");
+    assert!(text.contains("## Reached callers\n\n- step 0, f1: `shop_core::cost` ([crates/shop-core/src/lib.rs:11](crates/shop-core/src/lib.rs#L11)), `shop_core::quote` ([crates/shop-core/src/lib.rs:15](crates/shop-core/src/lib.rs#L15))\n"), "{text}");
+}
+
+/// Design 61.14 (R61.14-5, R61.14-6): the equivalence check of a step has one time budget, with
+/// the walk and the builds of the variants. With a budget of 0 s, no check runs: each fact line
+/// is short, and the step section has one line for the budget. With the normal budget, the same
+/// step gets its results and no line of the budget.
+// rule+ R61.14-5 R61.14-6
+// rule- R61.14-5 R61.14-6
+#[test]
+fn the_budget_of_the_equivalence_check_stops_each_check_with_one_line_for_the_step() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let base = "pub mod cart;\n\npub fn tier(k: u8) -> u32 {\n    match k {\n        0 => 2,\n        1 => 4,\n        _ => 8,\n    }\n}\n\npub fn cost(k: u8, n: u32) -> u32 {\n    n.wrapping_mul(tier(k)).wrapping_add(1)\n}\n";
+    write(repo, "crates/shop-core/src/lib.rs", base);
+    commit_all(repo, "tier");
+    write(repo, "crates/shop-core/src/lib.rs", &base.replace("1 => 4", "1 => 5").replace("wrapping_add(1)", "wrapping_add(2)"));
+    let (code, out) = run_env(repo, &["step", "probe"], &[("SEMILLA_EQUIV_BUDGET", "0")]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("      equivalence: not checked (the budget of the step)\n"), "{out}");
+    assert!(out.contains("  the equivalence check stopped after 0 s: 2 bodies not checked; semilla status --verbose\n"), "{out}");
+    assert!(!out.contains("equivalence: different") && !out.contains("not decided (the budget"), "{out}");
+    run(repo, &["undo"], 0);
+    let out = run(repo, &["step", "probe"], 0);
+    assert!(out.contains("      equivalence: different: for k = 1: before returns 4, after returns 5\n"), "{out}");
+    assert!(!out.contains("not checked") && !out.contains("the equivalence check stopped"), "{out}");
+}
+
 /// Design 60: the control flow graph of each body with `--compiled`. One step has a body of
 /// each result: `graph changes` (an early exit), `same structure` (a changed condition), `same
 /// graph` (a changed literal with no check), and a body with no edit whose graph changes (a
 /// changed macro).
 const FLOW_BASE: &str = "pub mod cart;\n\npub enum Error {\n    Empty,\n}\n\nmacro_rules! guard {\n    ($v:expr) => {\n        if $v > 9 {\n            return 0;\n        }\n    };\n}\n\npub fn price(qty: u32) -> u32 {\n    qty * 3\n}\n\npub fn order(qty: u32) -> Result<u32, Error> {\n    let total = price(qty);\n    Ok(total)\n}\n\npub fn tax(v: u32) -> u32 {\n    if v > 3 { v / 2 } else { v }\n}\n\npub fn mask(v: u32) -> u32 {\n    v ^ 1\n}\n\npub fn limit(v: u32) -> u32 {\n    guard!(v);\n    v\n}\n";
 
-// rule+ R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-3 R60.4-4 R60.4-5
-// rule- R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-4 R60.4-5
+// rule+ R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-3 R60.4-4 R60.4-5 R61.6-3
+// rule- R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-4 R60.4-5 R61.6-3
 #[test]
 fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_changed_graph() {
     let dir = setup();
@@ -6543,10 +6599,11 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     // changed graph has its line; a body with no edit and the same graph has none.
     assert!(out.contains("  control flow: 5 bodies\n"), "{out}");
     assert!(out.contains("    shop_core::limit (crates/shop-core/src/lib.rs:"), "{out}");
-    assert!(out.contains("graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body"), "{out}");
-    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow)\n"), "{out}");
-    assert!(out.contains("    shop_core::order (crates/shop-core/src/lib.rs:22): graph changes: +1 branch, +3 arrows, −1 arrow\n"), "{out}");
-    assert!(out.contains("    shop_core::tax (crates/shop-core/src/lib.rs:30): same structure: 1 changed condition\n"), "{out}");
+    // R61.6-2: the line of each body ends with its equivalence.
+    assert!(out.contains("graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; equivalent (proved by SMT)"), "{out}");
+    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow); different (for v = 0: before returns 1, after returns 2)\n"), "{out}");
+    assert!(out.contains("    shop_core::order (crates/shop-core/src/lib.rs:22): graph changes: +1 branch, +3 arrows, −1 arrow; different (for qty = 0: before returns Ok(0), after returns Err(Empty))\n"), "{out}");
+    assert!(out.contains("    shop_core::tax (crates/shop-core/src/lib.rs:30): same structure: 1 changed condition; different (for v = 3: before returns 3, after returns 1)\n"), "{out}");
     // R60.3-5: a new body has its full graph, not a diff.
     assert!(out.contains("    shop_core::twice (crates/shop-core/src/lib.rs:"), "{out}");
     assert!(out.contains("graph added: 2 points, 1 arrow"), "{out}");
@@ -6557,6 +6614,9 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     // A branch from the body of a macro definition has the text of the macro call first.
     assert!(verbose.contains("          + branch `guard!(v): $v == 5` (crates/shop-core/src/lib.rs:43)\n"), "{verbose}");
     assert!(verbose.contains("          ~ branch `v > 3` → `v >= 3` (crates/shop-core/src/lib.rs:-25, crates/shop-core/src/lib.rs:31)\n"), "{verbose}");
+    // R61.6-3: `status --verbose` has the method, the inlined callees, the query count, and
+    // the time of each check.
+    assert!(verbose.contains("      equivalence (in dev): equivalent (proved by SMT); no callee inlined; ") && verbose.contains(" solver quer"), "{verbose}");
     // R60.4-4: the Markdown review has a section for each body whose graph changes, with the
     // list and a flowchart. The negative case: a body with the same structure has no section.
     let md = dir.path().join("review.md");
@@ -6572,6 +6632,8 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     let (code, plain) = run_env(repo, &["step", "probe"], &[("SEMILLA_COMPILED", "0")]);
     assert_eq!(code, 0, "{plain}");
     assert!(!plain.contains("control flow") && plain.contains("added early exit `if qty == 0 { return Err(Error::Empty); }`"), "{plain}");
+    // R61.6-3, the negative case: the default mode has no equivalence line.
+    assert!(!plain.contains("equivalence"), "{plain}");
 }
 
 /// The six forms of fix round 1, D1 (design 40.3): one small edit, and unchanged code around

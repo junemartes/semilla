@@ -53,9 +53,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       affected bodies: shop::cost
       control flow: + call `cost_of` (src/lib.rs:7): return → return
       control flow: + arrow branch `s` (src/lib.rs:6) → call `cost_of` (src/lib.rs:7) (shop::Shape::Box)
+      equivalence: different: for s = Box: before returns 0, after returns 14
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    shop::cost (src/lib.rs:5): graph changes: +1 call, +3 arrows, −1 arrow
+    shop::cost (src/lib.rs:5): graph changes: +1 call, +3 arrows, −1 arrow; different (for s = Box: before returns 0, after returns 14)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

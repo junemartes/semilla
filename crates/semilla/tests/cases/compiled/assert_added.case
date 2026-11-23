@@ -29,12 +29,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: added macro statement `assert!(q > 0, "no zero");` at `depot::half/S0` [semantics · code different]
       affected bodies: depot::half
-      control flow: + branch `q > 0` (src/lib.rs:2): false → panic `assert!(q > 0, "no zero")`, true → check `division by zero: q / 2`
+      control flow: + branch `q > 0` (src/lib.rs:2): false → panic `assert!(q > 0, "no zero")`, true → return
       control flow: + panic `assert!(q > 0, "no zero")` (src/lib.rs:2)
       control flow: + arrow entry (src/lib.rs:1) → branch `q > 0` (src/lib.rs:2)
+      equivalence: not decided: a raw pointer
   cover: each of the 1 changed line(s) is in a fact
   control flow: 1 body
-    depot::half (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
+    depot::half (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; not decided (a raw pointer)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

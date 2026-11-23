@@ -40,14 +40,18 @@ extern crate rustc_span;
 extern crate rustc_trait_selection;
 
 mod config;
+mod consts;
 mod graph;
 mod harness;
 mod inline;
+mod instances;
+mod ir;
 mod made;
 mod normalize;
 mod print;
 mod reach;
 mod rival;
+mod safe;
 mod spans;
 mod symbols;
 mod term;
@@ -228,6 +232,25 @@ struct BodyRecord {
     /// The control flow graph of the body (see `graph.rs`, design 60). At n0 only.
     #[serde(rename = "g", skip_serializing_if = "Option::is_none")]
     graph: Option<graph::Graph>,
+    /// The body in the form of the equivalence check (see `ir.rs`, design 61), as a JSON text:
+    /// a reader of the record copies the text and reads it only for a body that it checks. At
+    /// n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    q: Option<String>,
+    /// The forms of the small callees of the standard library and of the instances of the
+    /// generic functions of the workspace (design 61, C3), as a JSON text. At n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qx: Option<String>,
+    /// The values of the constant items that the body reads (design 61, A2). At n0 only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cv: Vec<(String, String)>,
+    /// The instances of the generic bodies that this body makes (design 61, part B). At n0
+    /// only, for a body with no generic parameter.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    inst: Vec<instances::InstanceRecord>,
+    /// The conversions to `dyn Trait` in the body: the trait and the source type (design 61, B3).
+    #[serde(rename = "dyn", skip_serializing_if = "Vec::is_empty")]
+    dyn_casts: Vec<(String, String)>,
 }
 
 /// One name of the expanded code, with its count (see `config::NameUse`).
@@ -727,6 +750,7 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
                     let mut found = record(name.clone(), body, level, target, &[], &generics_text(*item), Some(item.def_id()));
                     if level == Level::N0 {
                         add_reach(&mut found, *item, body);
+                        add_forms(&mut found, *item, body);
                         found.live_callees = guarded(|| reach::live_callees(item.def_id(), body, &by_def)).flatten();
                         if let Some((sure, ends)) = guarded(|| reach::sure_callees(item.def_id(), body, &by_def)).flatten() {
                             found.sure_callees = Some(sure);
@@ -816,6 +840,37 @@ fn collect_bodies(level: Level, target: &str) -> Vec<BodyRecord> {
         })
         .chain(literal)
         .collect()
+}
+
+/// True if the build asks for no forms of the equivalence check (`SEMILLA_MIR_FORMS=off`): the
+/// second build after an internal compiler error (design 61.9, part 0).
+fn forms_off() -> bool {
+    std::env::var("SEMILLA_MIR_FORMS").is_ok_and(|value| value == "off")
+}
+
+/// Adds the data of the equivalence check to the record of a body (design 61, parts B and C):
+/// the form, the forms of the callees, the constant values, the instances, and the `dyn`
+/// conversions. Each extraction step runs in a guard. A failed step gives the form the mark
+/// "no form: <cause>" (the check then says "not decided: Semilla has no form of this body"),
+/// and the other data of the step stays empty. The steps ask the compiler only for data that
+/// exists for the item (`safe.rs`), so a step never stops the build.
+fn add_forms(found: &mut BodyRecord, item: CrateItem, body: &Body) {
+    if forms_off() {
+        let cause = safe::no_form("the driver stopped the compiler with an internal compiler error, so Semilla built the crate again with no forms");
+        found.q = serde_json::to_string(&ir::Ir { u: Some(cause), ..ir::Ir::default() }).ok();
+        return;
+    }
+    let form = guarded(|| ir::build(body, Some(item.def_id()))).unwrap_or_else(|| ir::Ir { u: Some(safe::no_form("the driver failed to read the body")), ..ir::Ir::default() });
+    match guarded(|| ir::std_callees(&form, body)) {
+        Some(callees) => found.qx = (!callees.is_empty()).then(|| serde_json::to_string(&callees).unwrap_or_default()),
+        None => found.qx = None,
+    }
+    found.q = serde_json::to_string(&form).ok();
+    found.cv = guarded(|| ir::const_values(item)).unwrap_or_default();
+    if !item.requires_monomorphization() {
+        found.inst = guarded(|| instances::of(body)).unwrap_or_default();
+    }
+    found.dyn_casts = guarded(|| instances::dyn_casts(body)).unwrap_or_default();
 }
 
 /// For the item that `#[test]` makes for a test function (the test descriptor): the path
@@ -928,6 +983,11 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         config: Vec::new(),
         elements: None,
         graph: None,
+        q: None,
+        qx: None,
+        cv: Vec::new(),
+        inst: Vec::new(),
+        dyn_casts: Vec::new(),
     }
 }
 
@@ -1079,6 +1139,11 @@ fn record(
         elements: if level == Level::N0 { guarded(|| spans::elements(&canonical, item, Some((body, &order)))) } else { None },
         // The graph comes from the MIR before the N0 rules (design 60, reading 2).
         graph: if level == Level::N0 { guarded(|| graph::build(body, item)) } else { None },
+        q: None,
+        qx: None,
+        cv: Vec::new(),
+        inst: Vec::new(),
+        dyn_casts: Vec::new(),
     }
 }
 

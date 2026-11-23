@@ -1145,9 +1145,10 @@ fn local_adts(ty: Ty, found: &mut Vec<Ty>, seen: &mut BTreeSet<String>) -> bool 
             }
             if def.krate().is_local {
                 for variant in def.variants_iter() {
-                    for field in variant.fields() {
-                        use rustc_public::CrateDefType;
-                        if !local_adts(field.ty_with_args(&args), found, seen) {
+                    for index in 0..variant.fields().len() {
+                        // No type: a field that the compiler cannot give (an opaque layout).
+                        let Some(field) = crate::safe::field_ty_with_args(def, variant.idx(), index, &args) else { return false };
+                        if !local_adts(field, found, seen) {
                             return false;
                         }
                     }
@@ -1221,11 +1222,10 @@ fn layout_note(ty: Ty) -> String {
 /// prints the member paths and the discriminant values. Each local ADT in a member type gets its
 /// own text (`local_adts`). The text is the same in each build of the same declaration.
 fn declared_layout(def: &AdtDef, args: &GenericArgs) -> String {
-    use rustc_public::CrateDefType;
     let types: Vec<String> = def
         .variants_iter()
         .map(|variant| {
-            let fields: Vec<String> = variant.fields().iter().map(|field| field.ty_with_args(args).to_string()).collect();
+            let fields: Vec<String> = (0..variant.fields().len()).map(|index| crate::safe::field_ty_with_args(*def, variant.idx(), index, args).map_or_else(|| unique("field"), |ty| ty.to_string())).collect();
             format!("({})", fields.join(", "))
         })
         .collect();

@@ -1,0 +1,49 @@
+note: a loop gives not decided with its cause
+rule+: R61.4-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn sum(n: u32) -> u32 {
+    let mut s = 0u32;
+    let mut i = 0;
+    while i < n { s = s.wrapping_add(i); i += 1; }
+    s
+}
+=== new src/lib.rs
+pub fn sum(n: u32) -> u32 {
+    let mut s = 0u32;
+    let mut i = 0;
+    while i < n { s = s.wrapping_add(i * 1); i += 1; }
+    s
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `i` → `i * 1` (f1)
+      in: shop::sum
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: --change 'shop::sum=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::sum=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different]
+      affected bodies: shop::sum
+      control flow: + check `overflow: i * 1` (src/lib.rs:4): ok → call `num::<impl u32>::wrapping_add`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:4)
+      control flow: + arrow branch `i < n` (src/lib.rs:4) → check `overflow: i * 1` (src/lib.rs:4) (true)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: equivalent (proved by SMT, by induction over the loop)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::sum (src/lib.rs:1): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT, by induction over the loop)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `i` → `i * 1` at `shop::sum/S2/body/S0/rhs/args[0]` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4
