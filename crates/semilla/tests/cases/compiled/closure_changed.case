@@ -1,0 +1,53 @@
+note: a closure that changes and a new closure before it: the changed closure pairs with its old body, and the new closure is a new graph
+rule+: R60.3-9
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn grow(v: &[u32]) -> u32 {
+    v.iter().map(|x| x.wrapping_add(1)).sum()
+}
+=== new src/lib.rs
+pub fn grow(v: &[u32]) -> u32 {
+    let k: u32 = v.iter().map(|x| x.wrapping_mul(3)).sum();
+    v.iter().map(|x| if *x > k { 0 } else { x.wrapping_add(k) }).sum()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::grow
+      lines: src/lib.rs:2-3, src/lib.rs:-2
+      to state it: --change 'shop::grow=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::grow=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added `let` `let k: u32 = v.iter().map(|x| x.wrapping_mul(3)).sum();` at `shop::grow/S0` [semantics · code different]
+      affected bodies: shop::grow (with 1 other edit of this body)
+      control flow: + call `slice::<impl [u32]>::iter` (src/lib.rs:2): return → call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#0}> (trait default)`
+      control flow: + call `<Iter<'_, u32> as Iterator>::map::<u32, {closure#0}> (trait default)` (src/lib.rs:2): return → call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)`
+      control flow: + call `<Map<Iter<'_, u32>, {closure#0}> as Iterator>::sum::<u32> (trait default)` (src/lib.rs:2): return → call `slice::<impl [u32]>::iter`
+      control flow: … 2 more (semilla status --verbose)
+  ◆ f2 derived: changed if: `x.wrapping_add(1)` → `if *x > k { 0 } else { x.wrapping_add(k) }` at `shop::grow/tail/recv/args[0]/body` [semantics · code different]
+      affected bodies: shop::grow (with 1 other edit of this body)
+      control flow: − arrow entry (src/lib.rs:-1) → call `slice::<impl [u32]>::iter` (src/lib.rs:-2)
+      control flow: + branch `*x > k` (src/lib.rs:3): false → call `num::<impl u32>::wrapping_add`, true → return
+      control flow: + arrow entry (src/lib.rs:3) → branch `*x > k` (src/lib.rs:3)
+      control flow: … 1 more (semilla status --verbose)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 3 bodies
+    shop::grow (src/lib.rs:1): graph changes: +3 calls, +4 arrows, −1 arrow
+    shop::grow::{closure#0} |x| x.wrapping_mul(3) (src/lib.rs:2): graph added: 3 points, 2 arrows
+    shop::grow::{closure#1} |x| if *x > k { 0 } else { x.wrapping_a… (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `let` `let k: u32 = v.iter().map(|x| x.wrapping_mul(3)).sum();` at `shop::grow/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f2 derived: changed if: `x.wrapping_add(1)` → `if *x > k { 0 } else { x.wrapping_add(k) }` at `shop::grow/tail/recv/args[0]/body` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-2

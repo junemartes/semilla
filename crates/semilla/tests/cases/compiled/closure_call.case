@@ -1,0 +1,51 @@
+note: a call of a closure has the text of its operand and the mark `closure`
+rule+: R60.2-9
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn apply(v: u32) -> u32 {
+    v ^ 1
+}
+=== new src/lib.rs
+pub fn apply(v: u32) -> u32 {
+    let f = |x: u32| x ^ 1;
+    f(v)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f1, f2, f3)
+      in: depot::apply
+      lines: src/lib.rs:2-3, src/lib.rs:-2
+      to state it: --change 'depot::apply=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::apply=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different]
+      affected bodies: depot::apply (with 2 other edits of this body)
+  ◆ f2 derived: added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different]
+      affected bodies: depot::apply (with 2 other edits of this body)
+      control flow: + graph of `depot::apply::{closure#0} |x: u32| x ^ 1`: 2 points, 1 arrow (semilla status --verbose)
+  ◆ f3 derived: added statement `f(v)` at `depot::apply/tail` [semantics · code different]
+      affected bodies: depot::apply (with 2 other edits of this body)
+      control flow: + call `f` [closure] (src/lib.rs:3): return → return
+      control flow: + arrow entry (src/lib.rs:1) → call `f` [closure] (src/lib.rs:3)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::apply (src/lib.rs:1): graph changes: +1 call, +2 arrows, −1 arrow
+    depot::apply::{closure#0} |x: u32| x ^ 1 (src/lib.rs:2): graph added: 2 points, 1 arrow
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f2 derived: added `let` `let f = |x: u32| x ^ 1;` at `depot::apply/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f3 derived: added statement `f(v)` at `depot::apply/tail` [semantics · code different]
+    lines: src/lib.rs:3

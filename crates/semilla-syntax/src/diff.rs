@@ -161,6 +161,10 @@ pub struct NodePair {
     /// True if the own tokens of the two nodes (the tokens that are in no child) are equal, in
     /// order (design 52.1). A token with no meaning (design 52.2) is not in the own tokens.
     pub own_equal: bool,
+    /// True for a pair only for the control flow graph (design 60, R60.3-10): the pair of an
+    /// arm of two `match` nodes that the compare replaces. The positions of the facts do not
+    /// read it.
+    pub graph_only: bool,
 }
 
 impl Edit {
@@ -993,7 +997,67 @@ impl Context<'_> {
             let tidy = |text: String| if block { text.split(' ').filter(|word| *word != crate::tree::CHILD_MARK).collect::<Vec<_>>().join(" ") } else { text };
             tidy(before.own_text(&[])) == tidy(after.own_text(&[]))
         };
-        self.pairs.push(NodePair { ranges: [(before.start, before.end), (after.start, after.end)], kinds: [before.kind, after.kind], equal, own_equal });
+        self.pairs.push(NodePair { ranges: [(before.start, before.end), (after.start, after.end)], kinds: [before.kind, after.kind], equal, own_equal, graph_only: false });
+    }
+
+    /// Keeps the node pairs of the arms of two `match` nodes that the compare replaces (design
+    /// 60, R60.3-10). The pairs are only for the control flow graph: they give no edit, and the
+    /// positions of the facts do not read them. The arms with equal parts pair in order (a
+    /// longest common subsequence); then, between two such arms, the arms with an equal
+    /// pattern and an equal guard pair in order. Each part of a pair of arms (the pattern, the
+    /// guard, the body) is a pair; the scrutinee is a pair too.
+    fn arm_pairs(&mut self, before: &Node, after: &Node) {
+        // The parts of each arm, by the index in the role `arm[N].part`.
+        fn arms(node: &Node) -> (Option<&Node>, Vec<Vec<(&str, &Node)>>) {
+            let mut scrutinee = None;
+            let mut out: Vec<Vec<(&str, &Node)>> = Vec::new();
+            for child in &node.children {
+                let Some(rest) = child.role.strip_prefix("arm[") else {
+                    if child.role == "scrutinee" {
+                        scrutinee = Some(child);
+                    }
+                    continue;
+                };
+                let Some((index, part)) = rest.split_once("].") else { continue };
+                let Ok(index) = index.parse::<usize>() else { continue };
+                while out.len() <= index {
+                    out.push(Vec::new());
+                }
+                out[index].push((part, child));
+            }
+            (scrutinee, out)
+        }
+        let (old_scrutinee, old) = arms(before);
+        let (new_scrutinee, new) = arms(after);
+        let keep = |a: &Node, b: &Node, pairs: &mut Vec<NodePair>| {
+            if a.start.0 > 0 && b.start.0 > 0 {
+                let equal = a.text == b.text;
+                pairs.push(NodePair { ranges: [(a.start, a.end), (b.start, b.end)], kinds: [a.kind, b.kind], equal, own_equal: equal, graph_only: true });
+            }
+        };
+        if let (Some(a), Some(b)) = (old_scrutinee, new_scrutinee) {
+            keep(a, b, &mut self.pairs);
+        }
+        let texts = |arm: &Vec<(&str, &Node)>| arm.iter().map(|(part, node)| (part.to_string(), node.text.clone())).collect::<Vec<_>>();
+        let head = |arm: &Vec<(&str, &Node)>| arm.iter().filter(|(part, _)| *part != "body").map(|(part, node)| (part.to_string(), node.text.clone())).collect::<Vec<_>>();
+        let (old_texts, new_texts): (Vec<_>, Vec<_>) = (old.iter().map(texts).collect(), new.iter().map(texts).collect());
+        let equal = lcs(&old_texts, &new_texts, |a, b| a == b);
+        let mut paired: Vec<(usize, usize)> = equal.clone();
+        let (mut i, mut j) = (0, 0);
+        for (pi, pj) in equal.into_iter().chain(std::iter::once((old.len(), new.len()))) {
+            let (old_heads, new_heads): (Vec<_>, Vec<_>) = (old[i..pi].iter().map(head).collect(), new[j..pj].iter().map(head).collect());
+            paired.extend(lcs(&old_heads, &new_heads, |a, b| !a.is_empty() && a == b).into_iter().map(|(a, b)| (i + a, j + b)));
+            i = pi + 1;
+            j = pj + 1;
+        }
+        paired.sort();
+        for (a, b) in paired {
+            for (part, node) in &old[a] {
+                if let Some((_, other)) = new[b].iter().find(|(other_part, _)| other_part == part) {
+                    keep(node, other, &mut self.pairs);
+                }
+            }
+        }
     }
 
     /// True if a node did not change: the text is equal, or the text with the renames is equal.
@@ -1461,6 +1525,9 @@ impl Context<'_> {
         let leaf = before.children.is_empty() && after.children.is_empty();
         if before.kind != after.kind || roles(before) != roles(after) || leaf {
             self.edit(EditKind::Replaced, Some((before, before_path)), Some((after, after_path)));
+            if before.kind == "match" && after.kind == "match" {
+                self.arm_pairs(before, after);
+            }
             return;
         }
         let edits_before = self.edits.len();

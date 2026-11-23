@@ -742,6 +742,9 @@ struct Shared<'a> {
     bodies: BTreeMap<String, Vec<&'a str>>,
     /// The content change of a file with two facts or more: the facts, in the order of the list.
     diffs: BTreeMap<(&'a str, &'a str), Vec<&'a str>>,
+    /// The control flow graph diff of the step (design 60). With it, the `control flow:` lines
+    /// replace the `branches:` line of each fact.
+    flow: Option<&'a semilla_core::report::FlowReport>,
 }
 
 impl<'a> Shared<'a> {
@@ -857,9 +860,21 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
         let more = if fact.through.len() > THROUGH_LIMIT { format!(", and {} more", fact.through.len() - THROUGH_LIMIT) } else { String::new() };
         put(&format!("      through: {}{more}", list.join(", ")));
     }
-    // The branch mark (design 40.4): the line asks for no reason.
-    if let Some(branches) = &fact.branches {
-        put(&format!("      branches: {branches}"));
+    // The branch mark (design 40.4): the line asks for no reason. With the graph of each body
+    // (design 60, C1), the `control flow:` lines replace it.
+    match shared.flow {
+        Some(flow) => {
+            // Design 38.5: a long line has a cut; `status --verbose` shows the full line.
+            for line in flow.facts.get(&fact.id).into_iter().flatten() {
+                let line = format!("      control flow: {line}");
+                put(&if names { line } else { fit_line(&line) });
+            }
+        }
+        None => {
+            if let Some(branches) = &fact.branches {
+                put(&format!("      branches: {branches}"));
+            }
+        }
     }
     // A public API change (design 36.3): the line asks for no reason. The line is about the
     // compare, so a fact with no compare result (design 50) does not have it: the fact text
@@ -1009,7 +1024,8 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<B
     // last fact of the run, with the fact numbers. The texts of such a run do not share.
     let runs = spotlight_runs(&order, names, &|fact| place_of(fact));
     let alone: Vec<&semilla_core::report::Fact> = order.iter().enumerate().filter(|(index, _)| runs[*index].is_none()).map(|(_, fact)| *fact).collect();
-    let shared = Shared::new(&alone, names);
+    let mut shared = Shared::new(&alone, names);
+    shared.flow = step.flow.as_ref();
     // Design 28.3: the build code changes of the step come first, with the diff. The manifest
     // facts of the change are with the other manifest facts: one line names them here.
     if facts.iter().any(|fact| fact.build_code_change) {
@@ -1291,6 +1307,11 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
             for line in step.equal_token_lines() {
                 text::put_line(&mut out, &format!("  {line}"));
             }
+        }
+        // Design 60, C2 and C3: the result of the graph of each body; `status --verbose` adds
+        // the full diff.
+        for line in step.flow_lines(names) {
+            put(&mut out, &format!("  {line}"));
         }
         // Design 55.1: the command that gives the hunks of the step.
         for line in step.hunk_lines(names) {

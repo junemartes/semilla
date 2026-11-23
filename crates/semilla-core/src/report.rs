@@ -225,6 +225,79 @@ pub struct StepReport {
     /// Empty: the step has no tree identifier.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diff_trees: Vec<String>,
+    /// The control flow graph diff of the step (design 60): only with the compiled check and a
+    /// driver that writes the graphs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<FlowReport>,
+}
+
+/// The control flow graph diff of a step (design 60, part C).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowReport {
+    /// Each body with a result: a body with an edit, and a body whose graph changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bodies: Vec<FlowBody>,
+    /// The `control flow:` lines of each fact, by the id of the fact (at most three lines and
+    /// a line `… N more`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub facts: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// The result of one body in the control flow section of a step (design 60, C2).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowBody {
+    /// The MIR name of the body.
+    pub name: String,
+    /// The place of the body: `FILE:LINE`.
+    pub place: String,
+    /// The line of the step section after the place: the result and its summary.
+    pub line: String,
+    /// The full diff for `status --verbose`: a line for each result and a line for each
+    /// changed point and each arrow that is not shared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<String>,
+    /// The changed part of the graph for the flowchart of the Markdown review (design 60, C4):
+    /// only for a body whose graph changes, with at most [`FLOW_CHART_POINTS`] points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<FlowChart>,
+    /// The diff list of the Markdown review: each changed point and each arrow that is not
+    /// shared, with the place of its first point (`FILE:LINE`, `FILE:-LINE` on the old side).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list: Vec<(String, String)>,
+}
+
+/// The most points of the flowchart of one body (design 60, C4). A larger changed part has
+/// only the list.
+pub const FLOW_CHART_POINTS: usize = 40;
+
+/// The changed part of the graph of a body: the changed points, the ends of the arrows that are
+/// not shared, and the points next to them (design 60, C4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowChart {
+    pub nodes: Vec<FlowChartNode>,
+    pub edges: Vec<FlowChartEdge>,
+}
+
+/// A point of a flowchart.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowChartNode {
+    pub id: String,
+    /// The kind and the text of the point.
+    pub label: String,
+    /// `added`, `removed`, `changed`, or `kept`.
+    pub mark: String,
+    /// The place: `FILE:LINE`, or `FILE:-LINE` for a point of the old graph.
+    pub place: String,
+}
+
+/// An arrow of a flowchart.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowChartEdge {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+    /// `added`, `removed`, or `kept`.
+    pub mark: String,
 }
 
 /// The line diff command of a step (design 55.8). The two last arguments are the old tree and
@@ -1181,6 +1254,23 @@ pub fn comments_shown<'a>(facts: &[&'a Fact]) -> Vec<Vec<&'a RelatedComment>> {
 }
 
 impl StepReport {
+    /// The control flow section of the step (design 60, C2): `control flow: N bodies`, and one
+    /// line for each body. `full` adds the full diff of each body (C3). A step with no graph
+    /// data, or with no body with a result, has no section.
+    pub fn flow_lines(&self, full: bool) -> Vec<String> {
+        // Decided by Claude: a step with no body with a result has no section.
+        let Some(flow) = self.flow.as_ref().filter(|flow| !flow.bodies.is_empty()) else { return Vec::new() };
+        let count = flow.bodies.len();
+        let mut out = vec![format!("control flow: {count} bod{}", if count == 1 { "y" } else { "ies" })];
+        for body in &flow.bodies {
+            out.push(format!("  {} ({}): {}", body.name, body.place, body.line));
+            if full {
+                out.extend(body.details.iter().map(|line| format!("      {line}")));
+            }
+        }
+        out
+    }
+
     /// The count of the comments of the changed items that have no edit in this step (design
     /// 58.8): the count of the comment lines of the output with that mark. A comment of two
     /// facts counts one time.

@@ -1,0 +1,40 @@
+note: a changed condition keeps the structure: `same structure: 1 changed condition`
+rule+: R60.3-4
+rule-: R60.3-8
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn tax(v: u32) -> u32 {
+    if v > 3 { v / 2 } else { v }
+}
+=== new src/lib.rs
+pub fn tax(v: u32) -> u32 {
+    if v >= 3 { v / 2 } else { v }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) (f1)
+      in: depot::tax
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'depot::tax=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::tax=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) at `depot::tax/S0/cond` [semantics · code different]
+      affected bodies: depot::tax
+      control flow: ~ branch `v > 3` → `v >= 3` (src/lib.rs:-2, src/lib.rs:2)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::tax (src/lib.rs:1): same structure: 1 changed condition
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed operator `v > 3` → `v >= 3` (effect hint: widen, example: v = 3) at `depot::tax/S0/cond` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

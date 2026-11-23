@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn a_proof_with_a_gap_gets_the_strict_result_and_the_gap_text() {
         let (_dir, ws) = load("fa = []\nfb = []\n");
-        let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None, range: None, elements: None };
+        let body = |name: &str, status: BodyStatus| BodyComparison { graphs: Vec::new(), name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None, range: None, elements: None };
         let equal = |level: &str| BodyStatus::Equal { level: level.to_string(), proof: Vec::new() };
         let plain = vec![body(BODY, equal("n3")), body("demo::top", equal("n0"))];
         let stopped = vec![body(BODY, BodyStatus::Different { cfg_changed: false }), body("demo::top", equal("n0"))];
@@ -788,7 +788,7 @@ mod tests {
         // Batch 5u, part B: the body is not equal in the plain run. The rule changes only the
         // flag of the status. The list has a gap for the two atoms.
         let (_dir, ws) = load("fa = []\nfb = []\n");
-        let body = |status: BodyStatus| BodyComparison { name: BODY.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None, range: None, elements: None };
+        let body = |status: BodyStatus| BodyComparison { graphs: Vec::new(), name: BODY.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None, range: None, elements: None };
         let list: &[&[&str]] = &[&[], &["fa", "fb"]];
         let truths = [truths(list), truths(list)];
         let bodies = bodies(list.len());
@@ -850,7 +850,7 @@ mod tests {
         // Batch 5u, part C: the list of the selections for the caller, and the text of a gap
         // that stays with the added configuration.
         let (_dir, ws) = load("fa = []\nfb = []\n");
-        let body = |name: &str, status: BodyStatus| BodyComparison { name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None, range: None, elements: None };
+        let body = |name: &str, status: BodyStatus| BodyComparison { graphs: Vec::new(), name: name.to_string(), status, config: Vec::new(), differs_in: Vec::new(), equal_in: Vec::new(), stopped: Vec::new(), span: None, range: None, elements: None };
         let equal = BodyStatus::Equal { level: "n3".to_string(), proof: Vec::new() };
         let plain = vec![body(BODY, equal)];
         let stopped = vec![body(BODY, BodyStatus::Different { cfg_changed: false })];

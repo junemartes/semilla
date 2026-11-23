@@ -852,6 +852,34 @@ fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirD
     semilla_verify::MirDiff { old: diff.old.into_iter().map(element).collect(), new: diff.new.into_iter().map(element).collect(), other: diff.other, pairs, no_symbols: diff.no_symbols, evaluated: diff.evaluated, own: diff.own.into_iter().map(|(side, own)| (side, symbol(own))).collect() }
 }
 
+/// The graphs of a body in one configuration, in the form of the verifier (design 60). The
+/// sides keep their data also for two graphs with the same shape: the verifier pairs the nested
+/// bodies through the tree compare, not by their names (R60.3-9).
+fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair) -> semilla_verify::flow::GraphPair {
+    use semilla_verify::flow::{FlowSide, GraphPair};
+    let side = |exists: bool, graph: &Option<std::sync::Arc<semilla_normal::graph::RecordGraph>>| match (exists, graph) {
+        (false, _) => FlowSide::NoBody,
+        (true, None) => FlowSide::NoGraph,
+        (true, Some(graph)) => FlowSide::Graph(flow_graph(graph)),
+    };
+    let same = matches!((&pair.old, &pair.new), (Some(old), Some(new)) if old.same_shape(new));
+    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old), new: side(pair.new_body, &pair.new) }
+}
+
+/// A graph of a record in the form of the verifier.
+fn flow_graph(graph: &semilla_normal::graph::RecordGraph) -> semilla_verify::flow::FlowGraph {
+    let place = |range: &Option<[i64; 3]>| graph.place(range).map(|place| (place.file, place.start, place.end));
+    semilla_verify::flow::FlowGraph {
+        points: graph.p.iter().map(|point| semilla_verify::flow::FlowPoint { kind: point.k.clone(), text: point.t.clone(), mark: point.m.clone(), tokens: place(&point.r), call: place(&point.c), calls: point.x.clone() }).collect(),
+        arrows: graph.a.iter().filter(|(a, b, _)| (*a as usize) < graph.p.len() && (*b as usize) < graph.p.len()).map(|(a, b, label)| (*a as usize, *b as usize, label.clone())).collect(),
+        unwind: graph.n.unwind,
+        cleanup: graph.n.cleanup,
+        drops: graph.n.drops,
+        unreachable: graph.n.unreachable,
+        coroutine: graph.co,
+    }
+}
+
 /// The answer with no syntax tree: each input is opaque.
 struct AllOpaque;
 
@@ -941,6 +969,8 @@ impl BodyOracle for NormalOracle {
         // The MIR elements that differ, over the configurations (design 40.3). `None`: a
         // configuration has no element data for a changed body.
         let mut elements: BTreeMap<BodyKey, Option<semilla_normal::elements::ElementDiff>> = BTreeMap::new();
+        // The control flow graphs of each body, for each configuration (design 60).
+        let mut graphs: BTreeMap<BodyKey, Vec<semilla_verify::flow::GraphPair>> = BTreeMap::new();
         // The byte range of each body by its name and place (design 40.2): the "after" records win.
         let mut ranges: BTreeMap<(String, (String, usize)), (usize, usize)> = BTreeMap::new();
         for (state, _) in &prepared {
@@ -957,6 +987,9 @@ impl BodyOracle for NormalOracle {
             let name = state.config.name();
             for comparison in state.comparisons {
                 let key = key_of(&comparison.name);
+                if !comparison.graphs.is_empty() {
+                    graphs.entry(key.clone()).or_default().extend(comparison.graphs.iter().map(|pair| graph_pair(&name, pair)));
+                }
                 if !comparison.config.is_empty() {
                     config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
                 }
@@ -999,10 +1032,11 @@ impl BodyOracle for NormalOracle {
                 let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
                 let config = config.remove(&key).into_iter().flatten().collect();
                 let found = elements.remove(&key).flatten().filter(|_| matches!(status, BodyStatus::Different { .. })).map(mir_diff);
+                let graphs = graphs.remove(&key).unwrap_or_default();
                 let (name, place) = key;
                 let span = place.or_else(|| spans.get(&name).cloned());
                 let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
-                BodyComparison { span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
+                BodyComparison { graphs, span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
             })
             .collect())
     }

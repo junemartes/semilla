@@ -1,0 +1,85 @@
+note: the points of `panic!`, `assert_eq!`, `unreachable!`, and `todo!` that lead only to a panic are one `panic` point with the text of the macro call
+rule+: R60.2-12
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn a(x: u32) -> u32 { x ^ 1 }
+pub fn b(x: u32, y: u32) -> u32 { x ^ y }
+pub fn c(x: u32) -> u32 { x ^ 3 }
+pub fn d(x: u32) -> u32 { x ^ 4 }
+=== new src/lib.rs
+pub fn a(x: u32) -> u32 { if x > 9 { panic!("too big"); } x ^ 1 }
+pub fn b(x: u32, y: u32) -> u32 { assert_eq!(x, y); x ^ y }
+pub fn c(x: u32) -> u32 { if x > 9 { unreachable!() } x ^ 3 }
+pub fn d(x: u32) -> u32 { if x > 9 { todo!() } x ^ 4 }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 4 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: added `if` `if x > 9 { panic!("too big"); }` (f1)
+      in: shop::a
+      lines: src/lib.rs:1, src/lib.rs:-1-4
+      to state it: --change 'shop::a=TEXT'
+  ? 1 place: added macro statement `assert_eq!(x, y);` (f2)
+      in: shop::b
+      lines: src/lib.rs:2
+      to state it: --change 'shop::b=TEXT'
+  ? 1 place: added `if` `if x > 9 { unreachable!() }` (f3)
+      in: shop::c
+      lines: src/lib.rs:3
+      to state it: --change 'shop::c=TEXT'
+  ? 1 place: added `if` `if x > 9 { todo!() }` (f4)
+      in: shop::d
+      lines: src/lib.rs:4
+      to state it: --change 'shop::d=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::a=TEXT' --change 'shop::b=TEXT' --change 'shop::c=TEXT' --change 'shop::d=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different]
+      affected bodies: shop::a
+      control flow: + branch `x > 9` (src/lib.rs:1): false → return, true → panic `panic!("too big")`
+      control flow: + panic `panic!("too big")` (src/lib.rs:1)
+      control flow: + arrow entry (src/lib.rs:1) → branch `x > 9` (src/lib.rs:1)
+      control flow: … 4 more (semilla status --verbose)
+  ◆ f2 derived: added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different]
+      affected bodies: shop::b
+      control flow: + branch `assert_eq!(x, y)` (src/lib.rs:2): false → panic `assert_eq!(x, y)`, true → return
+      control flow: + panic `assert_eq!(x, y)` (src/lib.rs:2)
+      control flow: + arrow entry (src/lib.rs:2) → branch `assert_eq!(x, y)` (src/lib.rs:2)
+  ◆ f3 derived: added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different]
+      affected bodies: shop::c
+      control flow: + branch `x > 9` (src/lib.rs:3): false → return, true → panic `unreachable!()`
+      control flow: + panic `unreachable!()` (src/lib.rs:3)
+      control flow: + arrow entry (src/lib.rs:3) → branch `x > 9` (src/lib.rs:3)
+  ◆ f4 derived: added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different]
+      affected bodies: shop::d
+      control flow: + branch `x > 9` (src/lib.rs:4): false → return, true → panic `todo!()`
+      control flow: + panic `todo!()` (src/lib.rs:4)
+      control flow: + arrow entry (src/lib.rs:4) → branch `x > 9` (src/lib.rs:4)
+  ◆ f5 derived: the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
+      affected bodies: shop::b
+      note: lines 2
+  cover: each of the 8 changed line(s) is in a fact
+  control flow: 4 bodies
+    shop::a (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
+    shop::b (src/lib.rs:2): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
+    shop::c (src/lib.rs:3): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
+    shop::d (src/lib.rs:4): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1-4
+◆ f2 derived: added macro statement `assert_eq!(x, y);` at `shop::b/S0` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f3 derived: added `if` `if x > 9 { unreachable!() }` at `shop::c/S0` [semantics · code different]
+    lines: src/lib.rs:3
+◆ f4 derived: added `if` `if x > 9 { todo!() }` at `shop::d/S0` [semantics · code different]
+    lines: src/lib.rs:4
+◆ f5 derived: the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
+    no position

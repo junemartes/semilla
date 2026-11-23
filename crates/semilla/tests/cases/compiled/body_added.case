@@ -1,0 +1,38 @@
+note: a new body has its full graph in `status --verbose`, and one line under its fact
+rule+: R60.3-5
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn one() -> u32 {
+    1
+}
+=== new src/lib.rs
+pub fn one() -> u32 {
+    1
+}
+
+pub fn two(v: u32) -> u32 {
+    if v > 2 { one() } else { 2 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added `depot::two` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: depot::two
+      control flow: + graph of `depot::two`: 4 points, 4 arrows (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::two (src/lib.rs:5): graph added: 4 points, 4 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `depot::two` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:4-7

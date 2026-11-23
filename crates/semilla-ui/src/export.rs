@@ -189,6 +189,7 @@ pub fn render_markdown(data: &UiData, full: bool) -> String {
         out.push('\n');
     }
     md_flows(&mut out, &model, full);
+    md_control_flow(&mut out, &model);
     if full {
         md_sources(&mut out, &model);
     } else {
@@ -1406,8 +1407,12 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
                 let count = if full || fact.equal_sites.len() <= semilla_core::report::LIST_LIMIT { String::new() } else { format!("{} ", fact.equal_sites.len()) };
                 text.push_str(&format!("; {count}{}{}{}", semilla_core::report::EQUAL_SITES, fact.part_mark(), list(&fact.equal_sites)));
             }
-            // The branch mark (design 40.4).
-            if let Some(branches) = &fact.branches {
+            // The branch mark (design 40.4). With the graph data of the step (design 60, C1),
+            // the lines `control flow:` of the fact replace it, at the end of the item.
+            let flow = model.report().steps.iter().find(|step| step.step == view.step).and_then(|step| step.flow.as_ref());
+            if flow.is_none()
+                && let Some(branches) = &fact.branches
+            {
                 text.push_str(&format!("; branches: {branches}"));
             }
             // A public API change (design 36.3). No line for a fact with no compare (design 50).
@@ -1427,6 +1432,9 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             }
             if let Some(why) = &fact.spotlight_why {
                 text.push_str(&format!("; spotlight: {why}; {}: {}", fact.reason_label(), fact.reason.as_deref().map(text::quoted).unwrap_or_else(|| "MISSING".into())));
+            }
+            for line in flow.and_then(|flow| flow.facts.get(&fact.id)).into_iter().flatten() {
+                text.push_str(&format!("; control flow: {line}"));
             }
             let diff = if full { fact.content.clone() } else { model.fact_diff(view).or_else(|| fact.content.clone().filter(|_| fact.build_code_change)) };
             // The blocks of the fact text have the full text of each side: no second diff.
@@ -1972,6 +1980,87 @@ fn md_flows(out: &mut String, model: &Model, full: bool) {
         out.push_str(&fence("mermaid", &mermaid_text(flow), ""));
         out.push('\n');
     }
+}
+
+/// The control flow changes of the compiled check (design 60, C4): a section for each body
+/// whose graph changes, with the diff list and a flowchart of the changed part. A link goes to
+/// the line in the repository (relative to its root). A changed part with more than
+/// [`semilla_core::report::FLOW_CHART_POINTS`] points has only the list.
+fn md_control_flow(out: &mut String, model: &Model) {
+    fn changed(line: &str) -> bool {
+        line.starts_with("graph changes") || line.starts_with("graph added") || line.starts_with("graph removed")
+    }
+    let mut bodies: Vec<(usize, &semilla_core::report::FlowBody)> = Vec::new();
+    for step in &model.report().steps {
+        for body in step.flow.iter().flat_map(|flow| flow.bodies.iter()).filter(|body| changed(&body.line)) {
+            bodies.push((step.step, body));
+        }
+    }
+    if bodies.is_empty() {
+        return;
+    }
+    out.push_str("## Control flow changes\n\n");
+    for (step, body) in bodies {
+        let _ = writeln!(out, "### {} (step {step})\n", code(&body.name));
+        let _ = writeln!(out, "{}\n", md(&format!("{} ({})", body.line, body.place)));
+        for (place, text) in &body.list {
+            let _ = writeln!(out, "- {}: {}", line_link(place), md_with_code(text));
+        }
+        out.push('\n');
+        match &body.chart {
+            Some(chart) => {
+                out.push_str(&fence("mermaid", &flow_chart(chart), ""));
+                out.push('\n');
+            }
+            None if !body.list.is_empty() => {
+                let _ = writeln!(out, "{}\n", md(&format!("The changed part has more than {} points: the list only.", semilla_core::report::FLOW_CHART_POINTS)));
+            }
+            None => {}
+        }
+    }
+}
+
+/// A link to a line of the repository: `src/lib.rs:12` → `[src/lib.rs:12](src/lib.rs#L12)`. A
+/// line of the old tree (`src/lib.rs:-12`) has no link: the repository has the new tree.
+fn line_link(place: &str) -> String {
+    match place.rsplit_once(':') {
+        Some((file, line)) if !line.starts_with('-') && line.bytes().all(|b| b.is_ascii_digit()) && !line.is_empty() => format!("[{}]({file}#L{line})", md(place)),
+        _ => code(place),
+    }
+}
+
+/// The Mermaid text of a flowchart (design 60, C4). An added element has the mark `+` and a
+/// green class; a removed element has the mark `−`, a red class, and a dashed line.
+fn flow_chart(chart: &semilla_core::report::FlowChart) -> String {
+    let escape = |text: &str| text.replace('"', "#quot;").replace('<', "#lt;").replace('>', "#gt;").replace('|', "#124;").replace('`', "'");
+    let mut lines = vec!["flowchart TD".to_string()];
+    for node in &chart.nodes {
+        let sign = match node.mark.as_str() {
+            "added" => "+ ",
+            "removed" => "− ",
+            "changed" => "~ ",
+            _ => "",
+        };
+        lines.push(format!("  {}[\"{sign}{}<br/>{}\"]:::{}", node.id, escape(&node.label), escape(&node.place), node.mark));
+    }
+    for edge in &chart.edges {
+        let (arrow, sign) = match edge.mark.as_str() {
+            "added" => ("==>", "+ "),
+            "removed" => ("-.->", "− "),
+            _ => ("-->", ""),
+        };
+        let label = format!("{sign}{}", edge.label);
+        if label.is_empty() {
+            lines.push(format!("  {} {arrow} {}", edge.from, edge.to));
+        } else {
+            lines.push(format!("  {} {arrow}|\"{}\"| {}", edge.from, escape(&label), edge.to));
+        }
+    }
+    lines.push("  classDef added fill:#d8f5d8,stroke:#2e7d32,color:#1a1a1a".to_string());
+    lines.push("  classDef removed fill:#f9dada,stroke:#c62828,stroke-dasharray: 5 5,color:#1a1a1a".to_string());
+    lines.push("  classDef changed fill:#fff3c4,stroke:#b28704,color:#1a1a1a".to_string());
+    lines.push("  classDef kept fill:#eeeeee,stroke:#757575,color:#1a1a1a".to_string());
+    lines.join("\n")
 }
 
 fn md_sources(out: &mut String, model: &Model) {

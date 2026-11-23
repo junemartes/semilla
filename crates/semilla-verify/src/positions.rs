@@ -783,7 +783,8 @@ fn equal_token<'w>(side: usize, file: &str, token: &LineToken, indexes: &[ItemIn
     }
     let Some(pairs) = node_pairs.get(&old_item.path) else { return false };
     for (depth, node) in chain.iter().enumerate().rev() {
-        let Some(pair) = pairs.iter().find(|pair| pair.ranges[side] == (node.start, node.end) && pair.kinds[side] == node.kind) else { continue };
+        // A pair only for the control flow graph (R60.3-10) does not count here.
+        let Some(pair) = pairs.iter().find(|pair| !pair.graph_only && pair.ranges[side] == (node.start, node.end) && pair.kinds[side] == node.kind) else { continue };
         return pair.equal || (depth + 1 == chain.len() && pair.own_equal);
     }
     false
@@ -1885,7 +1886,7 @@ mod tests {
         let head = shape.tokens.iter().find(|token| token.start.0 == 1 && token.text == "u32").unwrap();
         assert!(!equal_token(OLD, "src/lib.rs", head, &indexes, &maps.pairs, &renamed_item));
         // A rename map makes no token equal here: the compare of the pair is strict.
-        let renamed = semilla_syntax::NodePair { ranges: [((3, 8), (3, 9)), ((2, 6), (2, 7))], kinds: ["path", "path"], equal: false, own_equal: false };
+        let renamed = semilla_syntax::NodePair { ranges: [((3, 8), (3, 9)), ((2, 6), (2, 7))], kinds: ["path", "path"], equal: false, own_equal: false, graph_only: false };
         let strict: BTreeMap<String, Vec<semilla_syntax::NodePair>> = [("depot::f".to_string(), vec![renamed])].into_iter().collect();
         assert!(!equal_token(OLD, "src/lib.rs", shape.tokens.iter().find(|token| token.start.0 == 3 && token.text == "a").unwrap(), &indexes, &strict, &partner));
         // The own tokens of a pair count only for the lowest node of the token. A token in a
@@ -1905,6 +1906,33 @@ mod tests {
         let field_shape = cover::shape(field_old, semilla_syntax::rs::Edition::Edition2021);
         let field_type = field_shape.tokens.iter().find(|token| token.start.0 == 2 && token.text == "u32").unwrap();
         assert!(!equal_token(OLD, "src/lib.rs", field_type, &field_indexes, &BTreeMap::new(), &field_pair));
+    }
+
+    /// The tree compare keeps a pair of each arm of a replaced `match` for the control flow
+    /// graph (design 60, R60.3-10): the arms with equal parts, then the arms with an equal
+    /// pattern. The positions of the facts do not read these pairs.
+    // rule+ R60.3-10
+    // rule- R60.3-10
+    #[test]
+    fn the_arms_of_a_replaced_match_pair_only_for_the_graph() {
+        let old_text = "pub enum S { A, B, C }\npub fn f(s: S) -> u32 {\n    match s {\n        S::A => g(1),\n        S::B => g(2),\n    }\n}\nfn g(a: u32) -> u32 { a }\n";
+        let new_text = "pub enum S { A, B, C }\npub fn f(s: S) -> u32 {\n    match s {\n        S::C => g(9),\n        S::A => g(1),\n        S::B => g(3),\n    }\n}\nfn g(a: u32) -> u32 { a }\n";
+        let ((_old_dir, old), (_new_dir, new)) = (tree(old_text), tree(new_text));
+        let (_, maps) = semilla_syntax::diff_maps(&old, &new, &semilla_syntax::Renames::default());
+        let arms: Vec<&semilla_syntax::NodePair> = maps.pairs["depot::f"].iter().filter(|pair| pair.graph_only).collect();
+        let lines = |pair: &semilla_syntax::NodePair| (pair.ranges[OLD].0.0, pair.ranges[NEW].0.0, pair.equal);
+        let found: Vec<(usize, usize, bool)> = arms.iter().map(|pair| lines(pair)).collect();
+        // The scrutinee; the arm `S::A` (equal parts); the arm `S::B` (an equal pattern, a new
+        // body `g(2)` → `g(3)`).
+        assert!(found.contains(&(3, 3, true)) && found.contains(&(4, 5, true)) && found.contains(&(5, 6, true)) && found.contains(&(5, 6, false)), "{found:?}");
+        // The negative cases: the new arm `S::C` has no pair, and a token of an equal arm is
+        // not an equal token for the positions of the facts.
+        assert!(!found.iter().any(|(_, line, _)| *line == 4), "{found:?}");
+        let indexes = [ItemIndex::new(&old), ItemIndex::new(&new)];
+        let partner = |side: usize, item: &Item| -> Option<&Item> { [&new, &old][side].items.get(&item.path) };
+        let shape = cover::shape(old_text, semilla_syntax::rs::Edition::Edition2021);
+        let token = shape.tokens.iter().find(|token| token.start.0 == 4 && token.text == "1").unwrap();
+        assert!(!equal_token(OLD, "src/lib.rs", token, &indexes, &maps.pairs, &partner));
     }
 
     fn pairs(a: &str, b: &str) -> Vec<(usize, usize)> {

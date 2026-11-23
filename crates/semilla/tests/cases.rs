@@ -784,6 +784,70 @@ fn equal_token_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTr
     problems
 }
 
+/// The problems of the control flow section of `status --verbose` (design 60, R60.4-6): the
+/// count of the bodies, and for each result of a body, the counts of its summary and the lines
+/// of its points and arrows (`+ KIND …`, `− KIND …`, `~ KIND …`, `+ arrow …`, `− arrow …`).
+fn flow_problems(text: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|line| line.starts_with("  control flow: ") && line.ends_with(['y', 's'])) else { return problems };
+    let count: usize = lines[start].trim_start_matches("  control flow: ").split(' ').next().and_then(|word| word.parse().ok()).unwrap_or(usize::MAX);
+    let mut bodies = 0;
+    let mut index = start + 1;
+    // The counts of one result: points added, removed, changed, arrows added, removed.
+    let check = |head: &str, elements: &[&str], problems: &mut Vec<String>| {
+        let summary = head.split_once(": ").map_or("", |(_, rest)| rest.split(" (in ").next().unwrap_or(""));
+        let mut want = [0usize; 5];
+        let word = head.split([':', '(']).next().unwrap_or("").trim();
+        for part in summary.split(", ") {
+            let number = |text: &str| text.split(' ').next().and_then(|word| word.parse::<usize>().ok());
+            if word == "graph added" || word == "graph removed" {
+                let offset = if word == "graph added" { 0 } else { 1 };
+                if let Some(value) = number(part) {
+                    if part.contains("point") { want[offset] = value } else if part.contains("arrow") { want[3 + offset] = value }
+                }
+                continue;
+            }
+            let arrow = part.ends_with("arrow") || part.ends_with("arrows");
+            if let Some(rest) = part.strip_prefix('+') {
+                want[if arrow { 3 } else { 0 }] += number(rest).unwrap_or(0);
+            } else if let Some(rest) = part.strip_prefix('−') {
+                want[if arrow { 4 } else { 1 }] += number(rest).unwrap_or(0);
+            } else if part.contains(" changed ") {
+                want[2] += number(part).unwrap_or(0);
+            }
+        }
+        let mut have = [0usize; 5];
+        for element in elements {
+            let slot = if element.starts_with("+ arrow ") { 3 } else if element.starts_with("− arrow ") { 4 } else if element.starts_with("+ ") { 0 } else if element.starts_with("− ") { 1 } else if element.starts_with("~ ") { 2 } else { continue };
+            have[slot] += 1;
+        }
+        if want != have {
+            problems.push(format!("the result `{head}` counts {want:?} (added, removed, changed points, added, removed arrows), and its lines give {have:?}"));
+        }
+    };
+    while index < lines.len() && lines[index].starts_with("    ") {
+        let line = lines[index];
+        if !line.starts_with("     ") {
+            bodies += 1;
+        } else if line.starts_with("        ") && !line.starts_with("         ") {
+            let head = line.trim();
+            let mut elements = Vec::new();
+            let mut next = index + 1;
+            while next < lines.len() && lines[next].starts_with("          ") {
+                elements.push(lines[next].trim());
+                next += 1;
+            }
+            check(head, &elements, &mut problems);
+        }
+        index += 1;
+    }
+    if bodies != count {
+        problems.push(format!("the section counts {count} bodies, and it has {bodies} body lines"));
+    }
+    problems
+}
+
 fn empty_change(line: &str) -> Option<String> {
     const ARROW: &str = "` → `";
     line.match_indices(ARROW).find_map(|(at, _)| {
@@ -1236,6 +1300,11 @@ fn check(case: &Case) -> Result<Outcome, String> {
         for problem in equal_token_problems(&status.stdout, &case.old, &case.new) {
             work.fail("equal_tokens", format!("`status --verbose`: {problem}"));
         }
+        // Property 9: each changed point and each arrow that is not shared of the graph of a
+        // body is in a line of `status --verbose` (design 60, R60.4-6).
+        for problem in flow_problems(&status.stdout) {
+            work.fail("control_flow", format!("`status --verbose`: {problem}"));
+        }
         for comment in facts(&run.all()).iter().flat_map(|fact| comment_subs(&fact.subs).1) {
             let lines = std::iter::once(&comment.head).chain(comment.text.iter().flatten());
             for line in lines.filter(|line| !markdown.contains(no_escape(line).trim())) {
@@ -1268,7 +1337,7 @@ fn load_cases() -> Vec<Case> {
 }
 
 /// The runner of the case set (design 57.3, 57.4).
-// rule+ R44.1-1 R51.3-4 R55-1 R55.2-1 R55.3-4 R55.4-1 R55.4-3 R55.8-1 R57.4-1 R57.4-2 R57.4-3 R57.4-4
+// rule+ R44.1-1 R51.3-4 R55-1 R55.2-1 R55.3-4 R55.4-1 R55.4-3 R55.8-1 R57.4-1 R57.4-2 R57.4-3 R57.4-4 R60.4-6
 // rule- R57.4-2
 #[test]
 fn each_case_gives_its_expected_text_and_keeps_the_properties() {
@@ -1420,6 +1489,16 @@ fn the_eighth_property_finds_a_token_that_the_other_item_does_not_have() {
 /// that shows two times, and a count line that does not agree give a problem each.
 // rule+ R58.11-1
 // rule- R58.11-1
+// rule- R60.4-6
+#[test]
+fn the_ninth_property_finds_a_changed_point_with_no_line() {
+    let good = "step 0\n  control flow: 1 body\n    demo::f (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow\n        graph changes: +1 branch, +3 arrows, −1 arrow\n          + branch `x > 3` (src/lib.rs:4)\n          + arrow entry (src/lib.rs:3) → branch `x > 3` (src/lib.rs:4)\n          + arrow branch `x > 3` (src/lib.rs:4) → return (src/lib.rs:6) (true)\n          + arrow branch `x > 3` (src/lib.rs:4) → call `demo::g` (src/lib.rs:5) (false)\n          − arrow entry (src/lib.rs:-3) → call `demo::g` (src/lib.rs:-4)\n";
+    assert!(flow_problems(good).is_empty(), "{:?}", flow_problems(good));
+    // The negative case: a line of an arrow is missing, and the count of the bodies is wrong.
+    let bad = good.replace("          − arrow entry (src/lib.rs:-3) → call `demo::g` (src/lib.rs:-4)\n", "").replace("1 body", "2 bodies");
+    assert_eq!(flow_problems(&bad).len(), 2, "{:?}", flow_problems(&bad));
+}
+
 #[test]
 fn the_seventh_property_finds_a_false_mark_no_edit() {
     let tree = |text: &str| -> BTreeMap<String, Vec<u8>> { [("src/lib.rs".to_string(), text.as_bytes().to_vec())].into_iter().collect() };

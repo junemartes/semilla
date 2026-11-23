@@ -1,0 +1,42 @@
+note: a wrapping add removes the overflow check and its panic, and adds a call
+rule+: R60.2-8
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn add(a: u32, b: u32) -> u32 {
+    a + b
+}
+=== new src/lib.rs
+pub fn add(a: u32, b: u32) -> u32 {
+    a.wrapping_add(b)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed method_call: `a + b` → `a.wrapping_add(b)` (f1)
+      in: depot::add
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'depot::add=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::add=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+      affected bodies: depot::add
+      control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:2): return → return
+      control flow: − check `overflow: a + b` (src/lib.rs:-2): ok → return, fail → panic `overflow`
+      control flow: − panic `overflow` (src/lib.rs:-2)
+      control flow: … 2 more (semilla status --verbose)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::add (src/lib.rs:1): graph changes: +1 call, −1 check, −1 panic, +2 arrows, −3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed method_call: `a + b` → `a.wrapping_add(b)` at `depot::add/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

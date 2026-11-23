@@ -18,6 +18,7 @@ pub mod checks;
 pub mod edits;
 pub mod facts;
 pub mod files;
+pub mod flow;
 pub mod hints;
 pub mod identity;
 mod inner;
@@ -89,6 +90,9 @@ pub struct BodyComparison {
     /// The MIR elements that differ, for a body that is `Different` (design 40.3). `None`: no
     /// element data, and each edit of the body keeps the rule of design 38 (the doubt rule).
     pub elements: Option<MirDiff>,
+    /// The control flow graphs of the body on the two sides, for each checked configuration
+    /// and each pair of targets (design 60). Empty: no graph data.
+    pub graphs: Vec<flow::GraphPair>,
 }
 
 /// A source range of a MIR element: the file and the byte range in the file as written.
@@ -598,6 +602,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         kind_reasons(input, &mut plain.report);
         no_compare_result(input.step, &mut plain.report);
         positions::assign(input, &mut plain);
+        flow::apply(input, &mut plain);
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
         agent::apply(input, &mut plain);
@@ -614,6 +619,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     kind_reasons(input, &mut outcome.report);
     no_compare_result(input.step, &mut outcome.report);
     positions::assign(input, &mut outcome);
+    flow::apply(input, &mut outcome);
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
     agent::apply(input, &mut outcome);

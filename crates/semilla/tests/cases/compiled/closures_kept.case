@@ -1,0 +1,44 @@
+note: two closures with no change keep their pair and their graph: no line for them
+rule-: R60.3-9
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn keep(v: &[u32]) -> u32 {
+    let a: u32 = v.iter().map(|x| x.wrapping_add(1)).sum();
+    let b: u32 = v.iter().map(|x| x.wrapping_mul(2)).sum();
+    a ^ b
+}
+=== new src/lib.rs
+pub fn keep(v: &[u32]) -> u32 {
+    let a: u32 = v.iter().map(|x| x.wrapping_add(1)).sum();
+    let b: u32 = v.iter().map(|x| x.wrapping_mul(2)).sum();
+    a | b
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed operator `a ^ b` → `a | b` (f1)
+      in: shop::keep
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: --change 'shop::keep=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::keep=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different]
+      affected bodies: shop::keep
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 3 bodies
+    shop::keep (src/lib.rs:1): same graph (the edit keeps the control flow)
+    shop::keep::{closure#0} |x| x.wrapping_add(1) (src/lib.rs:2): same graph (the edit keeps the control flow)
+    shop::keep::{closure#1} |x| x.wrapping_mul(2) (src/lib.rs:3): same graph (the edit keeps the control flow)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed operator `a ^ b` → `a | b` at `shop::keep/tail` [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4

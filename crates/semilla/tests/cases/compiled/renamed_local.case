@@ -1,0 +1,33 @@
+note: a rename of a local in a condition keeps the graph: the changed text is a rename, and the body is `same graph`
+rule+: R60.3-8
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn tax(v: u32) -> u32 {
+    let w = v ^ 5;
+    if w > 3 { w / 2 } else { w }
+}
+=== new src/lib.rs
+pub fn tax(v: u32) -> u32 {
+    let level = v ^ 5;
+    if level > 3 { level / 2 } else { level }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    depot::tax (src/lib.rs:1): same graph (the edit keeps the control flow)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: `depot::tax`: renamed local `w` → `level`, 4 edit(s) [rename · code equal]
+    lines: src/lib.rs:2-3, src/lib.rs:-2-3

@@ -1,0 +1,57 @@
+note: a new callee in the same statement is a changed call target: the tree compare pairs the two calls
+rule+: R60.3-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn price(q: u32) -> u32 {
+    q ^ 3
+}
+
+pub fn cost(q: u32) -> u32 {
+    q ^ 4
+}
+
+pub fn total(q: u32) -> u32 {
+    let t = price(q);
+    t
+}
+=== new src/lib.rs
+pub fn price(q: u32) -> u32 {
+    q ^ 3
+}
+
+pub fn cost(q: u32) -> u32 {
+    q ^ 4
+}
+
+pub fn total(q: u32) -> u32 {
+    let t = cost(q);
+    t
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed path `price` → `cost` (f1)
+      in: depot::total
+      lines: src/lib.rs:10, src/lib.rs:-10
+      to state it: --change 'depot::total=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::total=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed path `price` → `cost` at `depot::total/S0/init/callee` [semantics · code different]
+      affected bodies: depot::total
+      control flow: ~ call `price` → `cost` (src/lib.rs:-10, src/lib.rs:10)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    depot::total (src/lib.rs:9): same structure: 1 changed call target
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed path `price` → `cost` at `depot::total/S0/init/callee` [semantics · code different]
+    lines: src/lib.rs:10, src/lib.rs:-10

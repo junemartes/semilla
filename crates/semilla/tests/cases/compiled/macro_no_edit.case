@@ -1,0 +1,54 @@
+note: a changed macro changes the graph of a body with no edit: the line ends with `no edit in the body`
+rule+: R60.3-6
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! guard {
+    ($v:expr) => {
+        if $v > 9 {
+            return 0;
+        }
+    };
+}
+
+pub fn limit(v: u32) -> u32 {
+    guard!(v);
+    v
+}
+=== new src/lib.rs
+macro_rules! guard {
+    ($v:expr) => {
+        if $v > 9 {
+            return 0;
+        }
+        if $v == 5 {
+            return 5;
+        }
+    };
+}
+
+pub fn limit(v: u32) -> u32 {
+    guard!(v);
+    v
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
+        [1] macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } if $v == 5 { return 5; } }; }
+      affected bodies: depot::limit
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::limit (src/lib.rs:12): graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
+    lines: src/lib.rs:6-8

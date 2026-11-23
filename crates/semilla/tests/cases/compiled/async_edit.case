@@ -1,0 +1,56 @@
+note: an edit in an `async` body: the coroutine has no graph, so the step says `graph not shown: coroutine` and never `same graph`; an `async` body with no edit and an equal MIR text has no line
+rule+: R60.2-5
+rule-: R60.2-5
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub async fn fetch(n: u32) -> u32 {
+    n + 1
+}
+
+pub async fn keep(n: u32) -> u32 {
+    n * 2
+}
+=== new src/lib.rs
+pub async fn fetch(n: u32) -> u32 {
+    if n == 0 {
+        return 0;
+    }
+    n + 1
+}
+
+pub async fn keep(n: u32) -> u32 {
+    n * 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: added early exit `if n == 0 { return 0; }` (f1)
+      in: depot::fetch
+      lines: src/lib.rs:2-4
+      to state it: --change 'depot::fetch=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::fetch=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different]
+      affected bodies: depot::fetch
+  ◆ f2 derived: the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
+      affected bodies: depot::fetch
+      note: lines before the step 1
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    depot::fetch (src/lib.rs:1): same graph
+    depot::fetch::{closure#0} { if n == 0 { return 0; } n + 1 } (src/lib.rs:1): graph not shown: coroutine: the MIR of the driver is the state machine of the coroutine, not the source
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added early exit `if n == 0 { return 0; }` at `depot::fetch/S0` [semantics · code different]
+    lines: src/lib.rs:2-4
+◆ f2 derived: the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
+    no position

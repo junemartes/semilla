@@ -1,0 +1,59 @@
+note: a new `break` in a `loop` is a new branch and a new arrow out of the loop
+rule+: R60.2-7
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn find(v: &[u32]) -> usize {
+    let mut i = 0;
+    loop {
+        if v[i] == 7 {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+=== new src/lib.rs
+pub fn find(v: &[u32]) -> usize {
+    let mut i = 0;
+    loop {
+        if v[i] == 7 {
+            break;
+        }
+        if v[i] == 9 {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: added early exit `if v[i] == 9 { break; }` (f1)
+      in: depot::find
+      lines: src/lib.rs:7-9
+      to state it: --change 'depot::find=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::find=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added early exit `if v[i] == 9 { break; }` at `depot::find/S1/body/S1` [semantics · code different]
+      affected bodies: depot::find
+      control flow: + check `bounds: v[i]` (src/lib.rs:7): ok → branch `v[i] == 9`, fail → panic `bounds`
+      control flow: + branch `v[i] == 9` (src/lib.rs:7): false → check `overflow: i += 1`, true → return
+      control flow: + panic `bounds` (src/lib.rs:7)
+      control flow: … 1 more (semilla status --verbose)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    depot::find (src/lib.rs:1): graph changes: +1 branch, +1 check, +1 panic, +5 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added early exit `if v[i] == 9 { break; }` at `depot::find/S1/body/S1` [semantics · code different]
+    lines: src/lib.rs:7-9

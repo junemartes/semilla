@@ -1,0 +1,55 @@
+note: a call in a generic body stays generic: the text keeps the parameter, so a new impl body does not change it
+rule-: R60.2-11
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Tax { fn rate(&self) -> u32; }
+pub struct Food;
+impl Tax for Food { fn rate(&self) -> u32 { 5 } }
+
+pub fn rated<T: Tax>(t: &T) -> u32 {
+    t.rate() ^ 1
+}
+=== new src/lib.rs
+pub trait Tax { fn rate(&self) -> u32; }
+pub struct Food;
+impl Tax for Food { fn rate(&self) -> u32 { 6 } }
+
+pub fn rated<T: Tax>(t: &T) -> u32 {
+    t.rate() ^ 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `5` → `6` (f1)
+      in: shop::<Food as Tax>::rate
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: --change 'shop::<Food as Tax>::rate=TEXT'
+  ? 1 place: changed literal `1` → `2` (f2)
+      in: shop::rated
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: --change 'shop::rated=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Food as Tax>::rate=TEXT' --change 'shop::rated=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
+      affected bodies: shop::<Food as Tax>::rate
+  ◆ f2 derived: changed literal `1` → `2` at `shop::rated/tail/rhs` [semantics · code different]
+      affected bodies: shop::rated
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    <shop::Food as shop::Tax>::rate (src/lib.rs:3): same graph (the edit keeps the control flow)
+    shop::rated (src/lib.rs:5): same graph (the edit keeps the control flow)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f2 derived: changed literal `1` → `2` at `shop::rated/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6

@@ -5998,7 +5998,8 @@ fn an_anchor_of_a_trait_impl_accepts_the_forms_of_the_source() {
     assert!(out.contains("c1 verified"), "{out}");
     let out = run(repo, &["status", "--verbose"], 0);
     assert!(out.contains("trait impl `<Weight as From<Grams>>#0` added") && out.contains("trait impl `<Weight as From<Kilos>>#1` added"), "{out}");
-    let grams = out.lines().skip_while(|line| !line.contains("trait impl `<Weight as From<Grams>>#0` added")).take(4).collect::<Vec<_>>().join("\n");
+    // Design 60: the fact has a line `control flow:` before its note.
+    let grams = out.lines().skip_while(|line| !line.contains("trait impl `<Weight as From<Grams>>#0` added")).take(5).collect::<Vec<_>>().join("\n");
     assert!(grams.contains("the scale gives grams"), "{out}");
     assert_eq!(out.matches("the scale gives grams").count(), 1, "{out}");
 }
@@ -6499,10 +6500,78 @@ fn each_edit_of_a_body_gets_its_own_compare_result_and_a_category_from_its_synta
     // The same edits keep their categories and their results. The new branch has the mark.
     assert!(out.contains(call) && out.contains(literal), "{out}");
     assert!(out.contains("added early exit `if n > 9 { return 0; }` at `shop_core::count/S1` [semantics · code different]"), "{out}");
-    assert!(out.contains("branches: the compiled code of this edit changes its branches (0 → 1 branch point(s), 0 → 2 targets)"), "{out}");
+    // Design 60: the line `control flow:` replaces the branch mark of design 40.4.
+    assert!(out.contains("control flow: + branch `n > 9` (crates/shop-core/src/lib.rs:5): false → check `overflow: n + 2`, true → return\n"), "{out}");
+    assert!(!out.contains("branches: "), "{out}");
     assert!(!out.contains("[indirect"), "{out}");
     let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
     assert!(out.contains("step 0: MIR map: 0 map error(s); 2 edit(s) own a changed MIR element; 1 edit(s) with equal code in a changed body; 0 edit(s) with the doubt rule"), "{out}");
+}
+
+/// Design 60: the control flow graph of each body with `--compiled`. One step has a body of
+/// each result: `graph changes` (an early exit), `same structure` (a changed condition), `same
+/// graph` (a changed literal with no check), and a body with no edit whose graph changes (a
+/// changed macro).
+const FLOW_BASE: &str = "pub mod cart;\n\npub enum Error {\n    Empty,\n}\n\nmacro_rules! guard {\n    ($v:expr) => {\n        if $v > 9 {\n            return 0;\n        }\n    };\n}\n\npub fn price(qty: u32) -> u32 {\n    qty * 3\n}\n\npub fn order(qty: u32) -> Result<u32, Error> {\n    let total = price(qty);\n    Ok(total)\n}\n\npub fn tax(v: u32) -> u32 {\n    if v > 3 { v / 2 } else { v }\n}\n\npub fn mask(v: u32) -> u32 {\n    v ^ 1\n}\n\npub fn limit(v: u32) -> u32 {\n    guard!(v);\n    v\n}\n";
+
+// rule+ R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-3 R60.4-4 R60.4-5
+// rule- R60.3-5 R60.3-6 R60.4-1 R60.4-2 R60.4-4 R60.4-5
+#[test]
+fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_changed_graph() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", FLOW_BASE);
+    commit_all(repo, "flow");
+    let edited = FLOW_BASE
+        .replace("    let total = price(qty);\n", "    if qty == 0 {\n        return Err(Error::Empty);\n    }\n    let total = price(qty);\n")
+        .replace("if v > 3", "if v >= 3")
+        .replace("v ^ 1", "v ^ 2")
+        .replace("            return 0;\n        }\n", "            return 0;\n        }\n        if $v == 5 {\n            return 5;\n        }\n")
+        .replace("pub fn limit", "pub fn twice(v: u32) -> u32 {\n    v ^ 3\n}\n\npub fn limit");
+    write(repo, "crates/shop-core/src/lib.rs", &edited);
+    let out = run(repo, &["step", "probe"], 0);
+    // R60.4-1: the line of the fact, with the changed point and its arrows. It replaces the
+    // line `branches:` of design 40.4. R60.4-7: a callee has its short form in a fact line
+    // (`price`), and its full form in `status --verbose` (`shop_core::price`, below).
+    assert!(out.contains("added early exit `if qty == 0 { return Err(Error::Empty); }` at `shop_core::order/S0` [semantics · code different]\n      affected bodies: shop_core::order\n      control flow: + branch `qty == 0` (crates/shop-core/src/lib.rs:23): false → call `price`, true → return\n"), "{out}");
+    assert!(!out.contains("branches: "), "{out}");
+    // R60.4-1, the negative case: a fact with no changed point and no changed arrow at its
+    // lines has no line.
+    let mask = out.lines().skip_while(|line| !line.contains("changed literal `1` → `2` at `shop_core::mask")).skip(1).take_while(|line| !line.contains('◆')).collect::<Vec<_>>().join("\n");
+    assert!(!mask.contains("control flow:"), "{mask}");
+    // R60.4-2 and R60.3-6: one line for each body with a result. A body with no edit and a
+    // changed graph has its line; a body with no edit and the same graph has none.
+    assert!(out.contains("  control flow: 5 bodies\n"), "{out}");
+    assert!(out.contains("    shop_core::limit (crates/shop-core/src/lib.rs:"), "{out}");
+    assert!(out.contains("graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body"), "{out}");
+    assert!(out.contains("    shop_core::mask (crates/shop-core/src/lib.rs:34): same graph (the edit keeps the control flow)\n"), "{out}");
+    assert!(out.contains("    shop_core::order (crates/shop-core/src/lib.rs:22): graph changes: +1 branch, +3 arrows, −1 arrow\n"), "{out}");
+    assert!(out.contains("    shop_core::tax (crates/shop-core/src/lib.rs:30): same structure: 1 changed condition\n"), "{out}");
+    // R60.3-5: a new body has its full graph, not a diff.
+    assert!(out.contains("    shop_core::twice (crates/shop-core/src/lib.rs:"), "{out}");
+    assert!(out.contains("graph added: 2 points, 1 arrow"), "{out}");
+    assert!(!out.contains("shop_core::price ("), "{out}");
+    // R60.4-3: `status --verbose` has each changed point and each arrow that is not shared.
+    let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert!(verbose.contains("          − arrow entry (crates/shop-core/src/lib.rs:-19) → call `shop_core::price` (crates/shop-core/src/lib.rs:-20)\n"), "{verbose}");
+    // A branch from the body of a macro definition has the text of the macro call first.
+    assert!(verbose.contains("          + branch `guard!(v): $v == 5` (crates/shop-core/src/lib.rs:43)\n"), "{verbose}");
+    assert!(verbose.contains("          ~ branch `v > 3` → `v >= 3` (crates/shop-core/src/lib.rs:-25, crates/shop-core/src/lib.rs:31)\n"), "{verbose}");
+    // R60.4-4: the Markdown review has a section for each body whose graph changes, with the
+    // list and a flowchart. The negative case: a body with the same structure has no section.
+    let md = dir.path().join("review.md");
+    run(repo, &["review", "--md", md.to_str().unwrap(), "--wait", "600"], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains("## Control flow changes\n\n### `shop_core::limit` (step 0)\n") && text.contains("### `shop_core::order` (step 0)\n"), "{text}");
+    assert!(text.contains("- [crates/shop-core/src/lib.rs:23](crates/shop-core/src/lib.rs#L23): \\+ branch `qty == 0`"), "{text}");
+    assert!(text.contains("```mermaid\nflowchart TD\n") && text.contains("-.->"), "{text}");
+    assert!(!text.contains("### `shop_core::tax` (step 0)"), "{text}");
+    // R60.4-5: the default mode (no compiled check) has no line of the graph. The negative
+    // case is the step above.
+    run(repo, &["undo"], 0);
+    let (code, plain) = run_env(repo, &["step", "probe"], &[("SEMILLA_COMPILED", "0")]);
+    assert_eq!(code, 0, "{plain}");
+    assert!(!plain.contains("control flow") && plain.contains("added early exit `if qty == 0 { return Err(Error::Empty); }`"), "{plain}");
 }
 
 /// The six forms of fix round 1, D1 (design 40.3): one small edit, and unchanged code around

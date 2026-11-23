@@ -30,6 +30,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         adts: Vec::new(),
         names: Vec::new(),
         elements: None,
+        graph: None,
     }
 }
 

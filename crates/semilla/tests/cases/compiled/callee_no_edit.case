@@ -1,0 +1,58 @@
+note: a new return type of a callee changes the call target of a body with no edit: the line ends with `no edit in the body`
+rule+: R60.2-11
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Tax { fn rate(&self) -> u32; }
+pub struct Food;
+pub struct Fuel;
+impl Tax for Food { fn rate(&self) -> u32 { 5 } }
+impl Tax for Fuel { fn rate(&self) -> u32 { 20 } }
+
+pub fn make() -> Food { Food }
+
+pub fn total() -> u32 { make().rate() }
+=== new src/lib.rs
+pub trait Tax { fn rate(&self) -> u32; }
+pub struct Food;
+pub struct Fuel;
+impl Tax for Food { fn rate(&self) -> u32 { 5 } }
+impl Tax for Fuel { fn rate(&self) -> u32 { 20 } }
+
+pub fn make() -> Fuel { Fuel }
+
+pub fn total() -> u32 { make().rate() }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed path `Food` → `Fuel` (f2)
+      in: shop::make
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::make=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::make=TEXT'
+  declarations, filled in by Semilla:
+  ◆ f1 derived: return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: shop::make, shop::total (with 1 other edit of this body)
+      through: `shop::make` (1 body)
+      ! public API: the compare does not cover the code of a different crate
+  other facts, filled in by Semilla:
+  ◆ f2 derived: changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different]
+      affected bodies: shop::make (with 1 other edit of this body)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::make (src/lib.rs:7): same graph (the edit keeps the control flow)
+    shop::total (src/lib.rs:9): same structure: 1 changed call target; no edit in the body
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7
+◆ f2 derived: changed path `Food` → `Fuel` at `shop::make/tail` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7

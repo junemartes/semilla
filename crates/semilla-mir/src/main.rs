@@ -40,6 +40,7 @@ extern crate rustc_span;
 extern crate rustc_trait_selection;
 
 mod config;
+mod graph;
 mod harness;
 mod inline;
 mod made;
@@ -224,6 +225,9 @@ struct BodyRecord {
     /// The source range of each MIR element of the canonical body (see `spans.rs`). At n0 only.
     #[serde(rename = "el", skip_serializing_if = "Option::is_none")]
     elements: Option<spans::Elements>,
+    /// The control flow graph of the body (see `graph.rs`, design 60). At n0 only.
+    #[serde(rename = "g", skip_serializing_if = "Option::is_none")]
+    graph: Option<graph::Graph>,
 }
 
 /// One name of the expanded code, with its count (see `config::NameUse`).
@@ -881,6 +885,7 @@ fn harness_record(name: String, body: &Body, level: Level, target: &str) -> Body
     // The span of generated code has no line of the user.
     found.span = None;
     found.elements = None;
+    found.graph = None;
     found
 }
 
@@ -922,6 +927,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         const_types: Vec::new(),
         config: Vec::new(),
         elements: None,
+        graph: None,
     }
 }
 
@@ -1071,6 +1077,8 @@ fn record(
         const_types: Vec::new(),
         config: printed.config,
         elements: if level == Level::N0 { guarded(|| spans::elements(&canonical, item, Some((body, &order)))) } else { None },
+        // The graph comes from the MIR before the N0 rules (design 60, reading 2).
+        graph: if level == Level::N0 { guarded(|| graph::build(body, item)) } else { None },
     }
 }
 

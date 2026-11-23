@@ -19,6 +19,7 @@
 
 pub mod cargo;
 pub mod elements;
+pub mod graph;
 pub mod hash;
 pub mod paths;
 pub mod sandbox;
@@ -157,6 +158,9 @@ pub struct BodyRecord {
     /// The data is shared: a record in memory is cloned for each read of its cache folder.
     #[serde(rename = "el", default, skip_serializing_if = "Option::is_none", serialize_with = "elements::serialize_shared", deserialize_with = "elements::deserialize_shared")]
     pub elements: Option<std::sync::Arc<elements::RecordElements>>,
+    /// The control flow graph of the body (design 60; only at N0). Shared, as `elements`.
+    #[serde(rename = "g", default, skip_serializing_if = "Option::is_none", serialize_with = "graph::serialize_shared", deserialize_with = "graph::deserialize_shared")]
+    pub graph: Option<std::sync::Arc<graph::RecordGraph>>,
 }
 
 /// One name of the expanded code of an item, with its form and its count.
@@ -228,6 +232,10 @@ pub struct BodyComparison {
     /// element ranges on the two sides. `None`: no element data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<elements::ElementDiff>,
+    /// The control flow graphs of the body on the two sides, for each pair of targets (design
+    /// 60).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graphs: Vec<graph::GraphPair>,
 }
 
 /// The record of one compile unit, from the compiler (batch 5t, part A). The driver writes it
@@ -495,18 +503,21 @@ pub fn compare_with(
     };
     for (name, original) in &before.names {
         if !after.names.contains_key(name) {
-            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None });
+            let graphs = graph_pairs(before.group("n0", name), None);
+            results.push(BodyComparison { name: original.clone(), status: BodyStatus::BeforeOnly, config: config(name), elements: None, graphs });
             continue;
         }
         matched.insert(name.clone());
         let status = stopped(name, ladder(&before, &after, name));
         let elements = if matches!(status, BodyStatus::Different { .. }) { element_diff(&before, &after, name) } else { None };
-        results.push(BodyComparison { name: name.clone(), status, config: config(name), elements });
+        let graphs = graph_pairs(before.group("n0", name), after.group("n0", name));
+        results.push(BodyComparison { name: name.clone(), status, config: config(name), elements, graphs });
     }
     for name in after.names.keys() {
         let declared = added.iter().any(|new| name == new || is_child(name, new));
         if !matched.contains(name) && !declared {
-            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None });
+            let graphs = graph_pairs(None, after.group("n0", name));
+            results.push(BodyComparison { name: name.clone(), status: BodyStatus::AfterOnly, config: config(name), elements: None, graphs });
         }
     }
     results.sort_by(|a, b| a.name.cmp(&b.name));
@@ -805,6 +816,9 @@ struct Group {
     /// The element ranges of each record, by target (at N0). The text of a target is the one
     /// text of `texts`.
     elements: BTreeMap<String, Vec<Option<std::sync::Arc<elements::RecordElements>>>>,
+    /// The control flow graph of each record, by target (at N0), with the rename map on the
+    /// call texts (design 60).
+    graphs: BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>,
 }
 
 /// Normalizes the `TestDesc` const of a `#[test]` function `name`:
@@ -1026,6 +1040,7 @@ impl Group {
         let renamed = if renamed != record.text { sort_variant_lists(&sort_aggregates(&renamed)) } else { renamed };
         if record.level == "n0" {
             self.elements.entry(target.clone()).or_default().push(record.elements.clone());
+            self.graphs.entry(target.clone()).or_default().push(record.graph.as_ref().map(|found| graph::renamed(found, renames)));
         }
         self.texts.entry(target.clone()).or_default().insert(renamed);
         self.callees.extend(record.callees.iter().map(|callee| paths::rename(callee, renames)));
@@ -1231,6 +1246,39 @@ fn element_diff(before: &Side, after: &Side, name: &str) -> Option<elements::Ele
         }
     }
     Some(out)
+}
+
+/// The graphs of a body on the two sides (design 60), for each pair of targets. The targets
+/// pair as in [`element_diff`]. A target with no partner gives a pair with one side. A target
+/// with more than one record takes the graph of its first record.
+fn graph_pairs(old: Option<&Group>, new: Option<&Group>) -> Vec<graph::GraphPair> {
+    let first = |group: Option<&Group>, target: &String| -> Option<std::sync::Arc<graph::RecordGraph>> { group?.graphs.get(target)?.first()?.clone() };
+    let empty = BTreeMap::new();
+    let (a, b) = (old.map_or(&empty, |group| &group.graphs), new.map_or(&empty, |group| &group.graphs));
+    let mut pairs: Vec<(Option<&String>, Option<&String>)> = Vec::new();
+    if a.keys().eq(b.keys()) {
+        pairs.extend(a.keys().zip(b.keys()).map(|(x, y)| (Some(x), Some(y))));
+    } else if a.len() == 1 && b.len() == 1 {
+        pairs.push((a.keys().next(), b.keys().next()));
+    } else {
+        let stems = |map: &BTreeMap<String, Vec<Option<std::sync::Arc<graph::RecordGraph>>>>| -> BTreeMap<String, String> { map.keys().map(|target| (target_stem(target).to_string(), target.clone())).collect() };
+        let (x, y) = (stems(a), stems(b));
+        let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+        for key in keys {
+            let left = x.get(key).and_then(|target| a.get_key_value(target)).map(|(target, _)| target);
+            let right = y.get(key).and_then(|target| b.get_key_value(target)).map(|(target, _)| target);
+            pairs.push((left, right));
+        }
+    }
+    pairs
+        .into_iter()
+        .map(|(left, right)| graph::GraphPair {
+            old_body: left.is_some(),
+            new_body: right.is_some(),
+            old: left.and_then(|target| first(old, target)),
+            new: right.and_then(|target| first(new, target)),
+        })
+        .collect()
 }
 
 /// True if the texts of one body are the same on both sides, by target.

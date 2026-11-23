@@ -1,0 +1,67 @@
+note: a new arm of a `match` on an enum gives a new arrow with the variant path
+rule+: R60.2-3
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub enum Shape {
+    Dot,
+    Line,
+    Box,
+}
+
+pub fn cost(s: &Shape) -> u32 {
+    match s {
+        Shape::Dot => 1,
+        _ => cost_of(2),
+    }
+}
+
+fn cost_of(v: u32) -> u32 {
+    v
+}
+=== new src/lib.rs
+pub enum Shape {
+    Dot,
+    Line,
+    Box,
+}
+
+pub fn cost(s: &Shape) -> u32 {
+    match s {
+        Shape::Dot => 1,
+        Shape::Line => cost_of(3),
+        _ => cost_of(2),
+    }
+}
+
+fn cost_of(v: u32) -> u32 {
+    v
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: added match arm `Shape::Line => cost_of(3),` (f1)
+      in: depot::cost
+      lines: src/lib.rs:10
+      to state it: --change 'depot::cost=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::cost=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added match arm `Shape::Line => cost_of(3),` at `depot::cost/S0` [semantics · code different]
+      affected bodies: depot::cost
+      control flow: + call `cost_of` (src/lib.rs:10): return → return
+      control flow: + arrow branch `s` (src/lib.rs:8) → call `cost_of` (src/lib.rs:10) (depot::Shape::Line)
+  cover: each of the 1 changed line(s) is in a fact
+  control flow: 1 body
+    depot::cost (src/lib.rs:7): graph changes: +1 call, +3 arrows, −1 arrow
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added match arm `Shape::Line => cost_of(3),` at `depot::cost/S0` [semantics · code different]
+    lines: src/lib.rs:10
