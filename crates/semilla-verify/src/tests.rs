@@ -6624,31 +6624,43 @@ fn a_rename_key_with_a_twin_number_gets_the_name_of_the_body() {
 }
 
 /// Design 61.14 (R61.14-2): the file of a span wins over a file that only ends with it. Two
-/// packages have the file `tests/lib.rs`: the span `core/tests/lib.rs` gives the item of its own
-/// file. A span with no file of the workspace still finds the item by the end of its path.
+/// packages have the file `tests/lib.rs`: the span `zeta/tests/lib.rs` gives the item of its own
+/// file. The wrong item comes first in each order that a search can use: it is smaller (line 1
+/// to 2), its path is first (`alpha` before `zeta_x`), and its file is first (`tests/lib.rs`
+/// before `zeta/tests/lib.rs`). So only the rule gives the right item. A span with no file of the
+/// workspace still finds the item by the end of its path (line 3: only one item has it).
 // rule+ R61.14-2
 // rule- R61.14-2
 #[test]
 fn the_file_of_a_span_wins_over_a_file_that_ends_with_it() {
     let files = [
-        ("Cargo.toml", "[package]\nname = \"lexer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\nmembers = [\"core\"]\n\n[[test]]\nname = \"integration\"\npath = \"tests/lib.rs\"\n"),
+        ("Cargo.toml", "[package]\nname = \"alpha\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\nmembers = [\"zeta\"]\n\n[[test]]\nname = \"integration\"\npath = \"tests/lib.rs\"\n"),
         ("src/lib.rs", "pub fn size() -> usize {\n    1\n}\n"),
-        ("tests/lib.rs", "fn suite() -> usize {\n    1\n}\n"),
-        ("core/Cargo.toml", "[package]\nname = \"core-x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[test]]\nname = \"integration\"\npath = \"tests/lib.rs\"\n"),
-        ("core/src/lib.rs", "pub fn count() -> usize {\n    1\n}\n"),
-        ("core/tests/lib.rs", "fn suite() -> usize {\n    2\n}\n"),
+        ("tests/lib.rs", "fn suite() -> usize {\n    1 }\n"),
+        ("zeta/Cargo.toml", "[package]\nname = \"zeta-x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[test]]\nname = \"integration\"\npath = \"tests/lib.rs\"\n"),
+        ("zeta/src/lib.rs", "pub fn count() -> usize {\n    1\n}\n"),
+        ("zeta/tests/lib.rs", "fn suite() -> usize {\n    2\n}\n"),
     ];
     let (_dir, workspace) = load_files(&files);
     let index = &workspace.body_items().expect("the items did not change").by_file;
-    let span = |file: &str| Some((file.to_string(), 2));
-    let own = crate::checks::find_item_by("integration::suite::DATA", span("core/tests/lib.rs").as_ref(), &workspace);
-    assert_eq!(own.as_deref(), Some("core_x (test \"integration\")::suite"), "{:?}", workspace.items.keys().collect::<Vec<_>>());
-    assert_eq!(crate::checks::find_scan("integration::suite::DATA", span("core/tests/lib.rs").as_ref(), &workspace), own);
-    assert_eq!(crate::checks::find_indexed("integration::suite::DATA", span("core/tests/lib.rs").as_ref(), &workspace, index), own);
+    let span = |file: &str, line: usize| Some((file.to_string(), line));
+    let right = Some("zeta_x (test \"integration\")::suite".to_string());
+    let wrong = Some("alpha (test \"integration\")::suite".to_string());
+    let names = || workspace.items.keys().cloned().collect::<Vec<_>>();
+    // Each line of the span is in the two items.
+    for line in [1, 2] {
+        let own = crate::checks::find_item_by("integration::suite::DATA", span("zeta/tests/lib.rs", line).as_ref(), &workspace);
+        assert_eq!(own, right, "{:?}", names());
+        assert_eq!(crate::checks::find_scan("integration::suite::DATA", span("zeta/tests/lib.rs", line).as_ref(), &workspace), right);
+        assert_eq!(crate::checks::find_indexed("integration::suite::DATA", span("zeta/tests/lib.rs", line).as_ref(), &workspace, index), right);
+        // The file `tests/lib.rs` gives its own item.
+        assert_eq!(crate::checks::find_scan("integration::suite::DATA", span("tests/lib.rs", line).as_ref(), &workspace), wrong);
+        assert_eq!(crate::checks::find_indexed("integration::suite::DATA", span("tests/lib.rs", line).as_ref(), &workspace, index), wrong);
+    }
     // The negative case: an absolute path ends with a file of the workspace.
-    let found = crate::checks::find_scan("x", span("/abs/repo/core/tests/lib.rs").as_ref(), &workspace);
-    assert_eq!(found.as_deref(), Some("core_x (test \"integration\")::suite"));
-    assert_eq!(crate::checks::find_indexed("x", span("/abs/repo/core/tests/lib.rs").as_ref(), &workspace, index), found);
+    let found = crate::checks::find_scan("x", span("/abs/repo/zeta/tests/lib.rs", 3).as_ref(), &workspace);
+    assert_eq!(found, right);
+    assert_eq!(crate::checks::find_indexed("x", span("/abs/repo/zeta/tests/lib.rs", 3).as_ref(), &workspace, index), found);
 }
 
 /// Batch 7c, part 6.1 (design 37.20): the index of the items by file gives the answer of the

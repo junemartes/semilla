@@ -1,0 +1,58 @@
+note: a visibility edit and a doc edit of a static item are not edits of its bodies: a body with the same graph gets no line
+rule-: R61.15-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+const ON: bool = true;
+const N: i32 = 7;
+
+static T: usize = {
+    let d = [0u8; if ON {
+        N as usize
+    } else {
+        1
+    }];
+    d.len()
+};
+
+pub fn width() -> usize {
+    T
+}
+=== new src/lib.rs
+const ON: bool = true;
+const N: i32 = 7;
+
+/// The width of the table.
+pub(crate) static T: usize = {
+    let d = [0u8; if ON {
+        N as usize
+    } else {
+        1
+    }];
+    d.len()
+};
+
+pub fn width() -> usize {
+    T
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: visibility of `shop::T`: `private` → `pub(crate)` [visibility · code equal]
+      docs of `shop::T`, added in this step: see f2
+  ◆ f2 derived: added docs `/// The width of the table.` [docs · no code]
+  cover: each of the 3 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: visibility of `shop::T`: `private` → `pub(crate)` [visibility · code equal]
+    lines: src/lib.rs:5
+◆ f2 derived: added docs `/// The width of the table.` [docs · no code]
+    lines: src/lib.rs:4, src/lib.rs:-4

@@ -1426,6 +1426,11 @@ impl Hard {
 }
 
 /// The opaque inputs of a step.
+///
+/// A clone made before the first `note` is equal to a new construction (R61.15-2): the
+/// construction is a function of the two workspaces and of the answers of the rule of the build
+/// configuration that it reads (`joint::OpaqueBases`).
+#[derive(Clone)]
 pub(crate) struct Opaque<'a> {
     sides: [&'a Workspace; 2],
     /// The hard names, each with its causes.
@@ -1512,7 +1517,7 @@ pub(crate) struct Opaque<'a> {
 
 /// The trait facts of the workspace that the build configuration can change (batch 5q). A
 /// call with a rival is an input of the configuration only if a fact of its kind exists.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Facts {
     /// A trait fact can change: a trait `impl` under `cfg`, a `derive` in a `cfg_attr`, a
     /// `use` under `cfg`, a trait under `cfg` or with a `cfg` in it, an item macro with

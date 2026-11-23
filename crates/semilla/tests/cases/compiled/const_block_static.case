@@ -1,0 +1,60 @@
+note: a const block in the value of a static item is a nested body: it gets its line in the step section
+rule+: R61.15-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+const ON: bool = true;
+const N: i32 = 7;
+const M: i32 = 6;
+
+pub static T: usize = {
+    let d = [0u8; if ON {
+        N as usize
+    } else {
+        1
+    }];
+    d.len()
+};
+=== new src/lib.rs
+const ON: bool = true;
+const N: i32 = 7;
+const M: i32 = 6;
+
+pub static T: usize = {
+    let d = [0u8; if ON {
+        M as usize + 1
+    } else {
+        1
+    }];
+    d.len()
+};
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::T
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::T=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::T=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::T` changed: `{ let d = [0u8; if ON { N as usize } else { 1 }]; d.len() }` → `{ let d = [0u8; if ON { M as usize + 1 } else { 1 }]; d.len() }` (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::T
+      equivalence: `shop::T`: equivalent (proved by equal MIR)
+      equivalence: `shop::T::{constant#0} if ON { M as usize + 1 } else { 1 }`: equivalent (proved by SMT)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::T (src/lib.rs:5): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    shop::T::{constant#0} if ON { M as usize + 1 } else { 1 } (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::T` changed: `{ let d = [0u8; if ON { N as usize } else { 1 }]; d.len() }` → `{ let d = [0u8; if ON { M as usize + 1 } else { 1 }]; d.len() }` (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7

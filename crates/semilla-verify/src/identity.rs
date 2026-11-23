@@ -373,7 +373,7 @@ pub(crate) fn pair_diff_result(report: &semilla_core::StepReport, fact_of: &[Opt
 /// owner, the similar score, two maps with one score). The check is the same check: each
 /// difference that the map does not explain keeps its own fact. A stated pair that does not
 /// pass gives its cause, and the result is the result with no such pair.
-pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, plain: StepOutcome) -> StepOutcome {
+pub(crate) fn derive<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, plain: StepOutcome, bases: &crate::joint::OpaqueBases<'a>) -> StepOutcome {
     let (mut stated, mut causes) = crate::agent::stated_pairs(input);
     // The order of the options is not important: the pairs have the order of their paths.
     stated.sort_by(|a, b| (&a.1.old, &a.1.new).cmp(&(&b.1.old, &b.1.new)));
@@ -382,13 +382,13 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
         stated.clear();
     }
     if stated.is_empty() {
-        let (mut outcome, _) = attempt(input, bodies, exprs, plain, &[]).unwrap_or_else(|_| unreachable!("no stated pair"));
+        let (mut outcome, _) = attempt(input, bodies, exprs, plain, &[], bases).unwrap_or_else(|_| unreachable!("no stated pair"));
         outcome.stated_causes = causes;
         return outcome;
     }
     // The map that Semilla derives alone. A stated pair is a candidate only for two items that
     // this map does not have: a stated pair cannot replace a pair that Semilla derives.
-    let (own, own_map) = attempt(input, bodies, exprs, plain.clone(), &[]).unwrap_or_else(|_| unreachable!("no stated pair"));
+    let (own, own_map) = attempt(input, bodies, exprs, plain.clone(), &[], bases).unwrap_or_else(|_| unreachable!("no stated pair"));
     stated.retain(|(option, pair)| match own_map.iter().find(|other| (other.old == pair.old) != (other.new == pair.new)) {
         Some(other) => {
             causes.insert(*option, format!("Semilla derives `{}` → `{}` from the syntax tree, and an item is in one pair only", other.old, other.new));
@@ -404,7 +404,7 @@ pub fn derive(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle
             return outcome;
         }
         let pairs: Vec<Candidate> = stated.iter().map(|(_, pair)| pair.clone()).collect();
-        match attempt(input, bodies, exprs, plain.clone(), &pairs) {
+        match attempt(input, bodies, exprs, plain.clone(), &pairs, bases) {
             Ok((mut outcome, _)) => {
                 outcome.stated_causes = causes;
                 return outcome;
@@ -439,8 +439,8 @@ fn depth(path: &str) -> usize {
 
 /// One try of the derivation with the stated pairs. `Err`: the index of the stated pair that
 /// does not pass, and the cause.
-fn attempt(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, plain: StepOutcome, stated: &[Candidate]) -> Result<(StepOutcome, Vec<Candidate>), (usize, String)> {
-    let (mut map, mut claims, mut outcome, plain) = match search(input, bodies, exprs, plain, stated) {
+fn attempt<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, plain: StepOutcome, stated: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> Result<(StepOutcome, Vec<Candidate>), (usize, String)> {
+    let (mut map, mut claims, mut outcome, plain) = match search(input, bodies, exprs, plain, stated, bases) {
         Ok((map, claims, outcome)) => (map, claims, Some(outcome), None),
         Err(plain) => (Vec::new(), Vec::new(), None, Some(plain)),
     };
@@ -470,7 +470,7 @@ fn attempt(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, p
         let mut next = map.clone();
         next.push(pair.clone());
         next.sort_by_key(|pair| depth(&pair.old));
-        match check_map(input, bodies, exprs, &next) {
+        match check_map(input, bodies, exprs, &next, bases) {
             Ok((next_claims, result)) => {
                 if !evidence(input, &next, &result, pair) {
                     let word = if pair.op == "rename" { "rename" } else { "move" };
@@ -482,7 +482,7 @@ fn attempt(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, p
         }
     }
     let Some(outcome) = outcome else { return Ok((plain.expect("the plain outcome"), Vec::new())) };
-    let (map, claims, mut outcome) = with_children(input, bodies, exprs, map, claims, outcome);
+    let (map, claims, mut outcome) = with_children(input, bodies, exprs, map, claims, outcome, bases);
     // The notes of the search for the pairs that are not in the map.
     // A note of a limit stays only if the limit applies to the items that are not in the map.
     if let Some(plain) = plain {
@@ -544,7 +544,7 @@ fn limit_notes(before: &Workspace, after: &Workspace, map: &[Candidate]) -> Vec<
 /// and the plain outcome has the notes. A candidate with an item of a stated pair is not in
 /// the search.
 #[allow(clippy::type_complexity)]
-fn search(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut plain: StepOutcome, stated: &[Candidate]) -> Result<(Vec<Candidate>, Vec<Claim>, StepOutcome), StepOutcome> {
+fn search<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut plain: StepOutcome, stated: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> Result<(Vec<Candidate>, Vec<Claim>, StepOutcome), StepOutcome> {
     let (pairs, notes) = candidates_without(input.before, input.after, stated);
     plain.report.notes.extend(notes);
     if pairs.is_empty() {
@@ -576,7 +576,7 @@ fn search(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mu
         let mut step = input.step.clone();
         let claims = claims_of(map);
         step.claims.extend(claims.iter().cloned());
-        let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true);
+        let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true, bases);
         match passes(&outcome, &claims) {
             Ok(()) => passed.push((*score, map.clone(), claims, outcome)),
             Err(reason) => failures.push((map.clone(), reason, outcome)),
@@ -693,7 +693,7 @@ fn children(before: &Workspace, after: &Workspace, map: &[Candidate]) -> Vec<Can
 /// Adds the pairs of [`children`] to a map that passes the check (batch 9b2, F2). The larger
 /// map must pass the same check. If it does not pass, or if two maps are equal, the map stays
 /// as it is: the children show as removed and added, as before this rule.
-fn with_children(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut map: Vec<Candidate>, mut claims: Vec<Claim>, mut outcome: StepOutcome) -> (Vec<Candidate>, Vec<Claim>, StepOutcome) {
+fn with_children<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, mut map: Vec<Candidate>, mut claims: Vec<Claim>, mut outcome: StepOutcome, bases: &crate::joint::OpaqueBases<'a>) -> (Vec<Candidate>, Vec<Claim>, StepOutcome) {
     loop {
         let pairs = children(input.before, input.after, &map);
         if pairs.is_empty() {
@@ -709,7 +709,7 @@ fn with_children(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOra
                 break;
             }
             let next: Vec<Candidate> = map.iter().chain(child).cloned().collect();
-            if let Ok((next_claims, result)) = check_map(input, bodies, exprs, &next) {
+            if let Ok((next_claims, result)) = check_map(input, bodies, exprs, &next, bases) {
                 passed.push((*score, next, next_claims, result));
             }
         }
@@ -729,11 +729,11 @@ fn with_children(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOra
 }
 
 /// Runs the check of a step with the claims of one map. `Err` has the cause.
-fn check_map(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, map: &[Candidate]) -> Result<(Vec<Claim>, StepOutcome), String> {
+fn check_map<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, map: &[Candidate], bases: &crate::joint::OpaqueBases<'a>) -> Result<(Vec<Claim>, StepOutcome), String> {
     let mut step = input.step.clone();
     let claims = claims_of(map);
     step.claims.extend(claims.iter().cloned());
-    let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true);
+    let outcome = crate::verify_core(&StepInput { step: &step, before: input.before, after: input.after }, bodies, exprs, true, true, bases);
     passes(&outcome, &claims).map(|()| (claims, outcome))
 }
 

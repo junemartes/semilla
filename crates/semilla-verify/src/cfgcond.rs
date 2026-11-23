@@ -388,6 +388,44 @@ thread_local! {
     static FILE: RefCell<Option<String>> = const { RefCell::new(None) };
     /// The part of the rule that is on again.
     static MODE: RefCell<Mode> = const { RefCell::new(Mode::Plain) };
+    /// The answers of `covered` in the run of `logged` (R61.15-2).
+    static LOG: RefCell<Option<Vec<Query>>> = const { RefCell::new(None) };
+}
+
+/// One answer of `covered` (R61.15-2): the condition, the file of its place, and the answer.
+#[derive(Clone)]
+pub(crate) struct Query {
+    condition: TokenStream,
+    file: Option<String>,
+    answer: bool,
+}
+
+/// Runs `run` and gives each answer of `covered` in it (R61.15-2). A value that `run` makes
+/// from fixed inputs and these answers only is the same value in each later run where
+/// [`same_answers`] is true.
+pub(crate) fn logged<R>(run: impl FnOnce() -> R) -> (R, Vec<Query>) {
+    let outer = LOG.with(|log| log.borrow_mut().replace(Vec::new()));
+    let result = run();
+    let found = LOG.with(|log| std::mem::replace(&mut *log.borrow_mut(), outer)).unwrap_or_default();
+    // A log around this log gets the answers too.
+    LOG.with(|log| {
+        if let Some(outer) = log.borrow_mut().as_mut() {
+            outer.extend(found.iter().cloned());
+        }
+    });
+    (result, found)
+}
+
+/// True if each query of a log gives the same answer now, with the `Cover` and the mode of this
+/// thread (R61.15-2).
+pub(crate) fn same_answers(queries: &[Query]) -> bool {
+    queries.iter().all(|query| answer(query.condition.clone(), query.file.as_deref()) == query.answer)
+}
+
+/// The answer of `covered` for a condition at a place, with no log.
+fn answer(condition: TokenStream, file: Option<&str>) -> bool {
+    let Some(cover) = current() else { return false };
+    MODE.with(|mode| cover.covers(condition, file, &mode.borrow()))
 }
 
 /// The time in which `covered` uses a `Cover`. The end of the scope removes it.
@@ -443,9 +481,18 @@ pub(crate) fn with_mode<R>(mode: &Mode, run: impl FnOnce() -> R) -> R {
 /// True if the checked configurations cover the condition (the tokens between the
 /// parentheses of `cfg(…)`). With no `Scope`, no condition is covered.
 pub(crate) fn covered(condition: TokenStream) -> bool {
-    let Some(cover) = current() else { return false };
     let file = FILE.with(|file| file.borrow().clone());
-    MODE.with(|mode| cover.covers(condition, file.as_deref(), &mode.borrow()))
+    let logging = LOG.with(|log| log.borrow().is_some());
+    if !logging {
+        return answer(condition, file.as_deref());
+    }
+    let found = answer(condition.clone(), file.as_deref());
+    LOG.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.push(Query { condition, file, answer: found });
+        }
+    });
+    found
 }
 
 /// True for the text of a call `cfg!(P)` with a covered condition.

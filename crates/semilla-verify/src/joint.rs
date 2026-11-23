@@ -68,20 +68,60 @@ pub(crate) type Bodies = [BTreeMap<String, Seen>; 2];
 /// trees only, and their construction reads each item. A check with no compiled body (the
 /// syntax tree model, design 50) does not use them, and the search for a name map runs one
 /// check for each map.
-pub(crate) struct Recorder<'a> {
-    sides: [&'a semilla_syntax::Workspace; 2],
+pub(crate) struct Recorder<'a, 'b> {
     opaque: std::cell::OnceCell<crate::opaque::Opaque<'a>>,
     bodies: RefCell<Bodies>,
+    bases: &'b OpaqueBases<'a>,
 }
 
-impl<'a> Recorder<'a> {
-    pub(crate) fn new(before: &'a semilla_syntax::Workspace, after: &'a semilla_syntax::Workspace) -> Recorder<'a> {
-        Recorder { sides: [before, after], opaque: std::cell::OnceCell::new(), bodies: RefCell::default() }
+/// The opaque inputs that the runs of one check made (R61.15-2). The construction of the
+/// opaque inputs reads each item of the two trees, and one check runs the body compare one time
+/// for each part of the rule (`cfgcond::Mode`) and for each new feature selection. The
+/// construction is a function of the two trees and of the answers of the rule of the build
+/// configuration that it reads (`cfgcond::covered`). So a run gets a clone of an earlier
+/// construction (made before its first `note`) only if each of these answers is the same in
+/// the run; else it makes its own.
+pub(crate) struct OpaqueBases<'a> {
+    sides: [&'a semilla_syntax::Workspace; 2],
+    made: RefCell<Vec<(Vec<crate::cfgcond::Query>, crate::opaque::Opaque<'a>)>>,
+}
+
+impl<'a> OpaqueBases<'a> {
+    pub(crate) fn new(before: &'a semilla_syntax::Workspace, after: &'a semilla_syntax::Workspace) -> OpaqueBases<'a> {
+        OpaqueBases { sides: [before, after], made: RefCell::new(Vec::new()) }
+    }
+
+    /// True if the opaque inputs are for these two trees (the same two workspaces).
+    pub(crate) fn fits(&self, before: &semilla_syntax::Workspace, after: &semilla_syntax::Workspace) -> bool {
+        std::ptr::eq(self.sides[0], before) && std::ptr::eq(self.sides[1], after)
+    }
+
+    /// The opaque inputs for the rule of this thread now: a clone of an earlier construction
+    /// with the same answers, or a new construction.
+    pub(crate) fn get(&self) -> crate::opaque::Opaque<'a> {
+        if let Some((_, base)) = self.made.borrow().iter().find(|(queries, _)| crate::cfgcond::same_answers(queries)) {
+            return base.clone();
+        }
+        let (made, queries) = crate::cfgcond::logged(|| crate::opaque::Opaque::new(self.sides[0], self.sides[1]));
+        self.made.borrow_mut().push((queries, made.clone()));
+        made
+    }
+
+    /// The count of the constructions (for a test).
+    #[cfg(test)]
+    pub(crate) fn made(&self) -> usize {
+        self.made.borrow().len()
+    }
+}
+
+impl<'a, 'b> Recorder<'a, 'b> {
+    pub(crate) fn new(bases: &'b OpaqueBases<'a>) -> Recorder<'a, 'b> {
+        Recorder { opaque: std::cell::OnceCell::new(), bodies: RefCell::default(), bases }
     }
 
     /// The opaque inputs of the step.
     pub(crate) fn opaque(&self) -> &crate::opaque::Opaque<'a> {
-        self.opaque.get_or_init(|| crate::opaque::Opaque::new(self.sides[0], self.sides[1]))
+        self.opaque.get_or_init(|| self.bases.get())
     }
 
     pub(crate) fn bodies(self) -> Bodies {
@@ -89,7 +129,7 @@ impl<'a> Recorder<'a> {
     }
 }
 
-impl crate::OpaqueInputs for Recorder<'_> {
+impl crate::OpaqueInputs for Recorder<'_, '_> {
     fn note(&self, after: bool, name: &str, span: Option<&(String, usize)>, types: &[String]) {
         self.opaque().note(after, name, span, types)
     }
@@ -874,5 +914,53 @@ mod tests {
         assert_eq!(wanted, [pick("fb")]);
         assert_eq!(out[0].status, BodyStatus::Different { cfg_changed: false });
         assert_eq!(out[0].config, ["not checked together: `feature = \"fa\"` on with `feature = \"fb\"` off. Semilla added the configuration `dev, features fa` for this state. The configuration does not build before the step, or it does not give this state"]);
+    }
+
+    /// Design 61.15 (R61.15-2): the runs of one check share the construction of the opaque
+    /// inputs when each answer of the rule that it read is the same. A clone gives the answers
+    /// of a new construction. A run with a different answer (a part of the rule on again for an
+    /// atom that the construction read) makes its own construction.
+    // rule+ R61.15-2
+    // rule- R61.15-2
+    #[test]
+    fn the_runs_of_a_check_share_the_opaque_inputs_only_with_the_same_answers() {
+        use crate::OpaqueInputs;
+        let source = "#[cfg(feature = \"fa\")]\npub fn cut(a: u64) -> u64 {\n    a\n}\npub fn top() -> u64 {\n    1\n}\n";
+        let (_dir, ws) = load_source("fa = []\n", source);
+        let truths = truths(&[&["fa"], &[]]);
+        let _scope = crate::cfgcond::enter(crate::cfgcond::Cover::new(&[(&ws, &truths), (&ws, &truths)]));
+        let bases = OpaqueBases::new(&ws, &ws);
+        let span = Some(("src/lib.rs".to_string(), 2));
+        let types = vec!["cfg demo::cut".to_string()];
+        // The answers of a run: the opaque inputs of the body `demo::top`, for the two sides.
+        let answers = |opaque: &dyn OpaqueInputs| [false, true].map(|after| (opaque.callee(after, "demo::cut", span.as_ref(), &types), opaque.layout(after, "demo::cut", span.as_ref(), &types)));
+        let first = Recorder::new(&bases);
+        let plain = answers(&first);
+        assert_eq!(bases.made(), 1);
+        // The same mode: a clone, with the answers of a new construction.
+        let second = Recorder::new(&bases);
+        assert_eq!(answers(&second), plain);
+        assert_eq!(bases.made(), 1);
+        assert_eq!(answers(&crate::opaque::Opaque::new(&ws, &ws)), plain);
+        // A part of the rule for an atom that the construction did not read: the same answers.
+        crate::cfgcond::with_mode(&crate::cfgcond::Mode::Without("feature=\"zz\"".to_string()), || {
+            let _ = answers(&Recorder::new(&bases));
+        });
+        assert_eq!(bases.made(), 1);
+        // The negative case: the atom of the condition of `demo::cut` gives a different answer.
+        crate::cfgcond::with_mode(&crate::cfgcond::Mode::Without("feature=\"fa\"".to_string()), || {
+            let run = Recorder::new(&bases);
+            assert_eq!(answers(&run), answers(&crate::opaque::Opaque::new(&ws, &ws)));
+        });
+        assert_eq!(bases.made(), 2);
+        // No condition is covered: the answers of the run without `fa` (the key is the answers,
+        // not the mode).
+        crate::cfgcond::with_mode(&crate::cfgcond::Mode::Strict, || {
+            assert_eq!(answers(&Recorder::new(&bases)), answers(&crate::opaque::Opaque::new(&ws, &ws)));
+        });
+        assert_eq!(bases.made(), 2);
+        // Two other workspaces do not fit the opaque inputs of the check.
+        let (_other, ws2) = load_source("fa = []\n", source);
+        assert!(bases.fits(&ws, &ws) && !bases.fits(&ws2, &ws2));
     }
 }

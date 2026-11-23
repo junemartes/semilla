@@ -1,0 +1,71 @@
+note: an associated constant has its body in its declaration: an edit of its value gets its line and its equivalence result
+rule+: R61.15-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+const N: i32 = 7;
+const M: i32 = 6;
+
+pub struct S;
+impl S {
+    pub const A: u32 = N as u32;
+    pub const B: u32 = N as u32;
+}
+
+pub fn get() -> u32 {
+    S::A + S::B
+}
+=== new src/lib.rs
+const N: i32 = 7;
+const M: i32 = 6;
+
+pub struct S;
+impl S {
+    pub const A: u32 = (M + 1) as u32;
+    pub const B: u32 = M as u32;
+}
+
+pub fn get() -> u32 {
+    S::A + S::B
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::S::A
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: --change 'shop::S::A=TEXT'
+  ? 1 place: value of, see f2 (f2)
+      in: shop::S::B
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::S::B=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::S::A=TEXT' --change 'shop::S::B=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::S::A, shop::get
+      through: `shop::S::A` (1 body)
+      equivalence: equivalent (proved by SMT)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::S::B, shop::get
+      through: `shop::S::B` (1 body)
+      equivalence: different: for each input: before returns 7, after returns 6
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::S::A (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+    shop::S::B (src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns 7, after returns 6)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f2 derived: value of `shop::S::B` changed: N as u32 → M as u32 (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7

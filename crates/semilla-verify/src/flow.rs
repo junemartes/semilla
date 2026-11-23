@@ -605,7 +605,19 @@ impl Holder<'_> {
     }
 }
 
+/// True if the item has no body node on each side that has it: a `const`, a `static`, an
+/// associated constant, a type with a constant in its declaration. Its MIR bodies are parts of
+/// its declaration (R61.15-1).
+fn no_body_node(item: &str, old_item: &str, sides: [&Workspace; 2]) -> bool {
+    let found = [sides[0].items.get(old_item), sides[1].items.get(item)];
+    found.iter().any(Option::is_some) && found.iter().flatten().all(|found| found.body.is_none())
+}
+
 /// True if an edit of the step is in the body of an item, on one side.
+///
+/// An item with no body node (a `const`, a `static`, an associated constant) has its MIR bodies
+/// in its declaration: each edit of the item, except a doc, a comment, an attribute, and the
+/// visibility, is an edit of each of its bodies (R61.15-1).
 fn edit_in_body(edits: &[semilla_syntax::Edit], item: &str, old_item: &str, sides: [&Workspace; 2]) -> bool {
     use semilla_syntax::EditKind;
     edits.iter().any(|edit| {
@@ -619,7 +631,8 @@ fn edit_in_body(edits: &[semilla_syntax::Edit], item: &str, old_item: &str, side
                 return true;
             }
             let Some(found) = sides[side].items.get(path) else { return false };
-            let Some(body) = &found.body else { return false };
+            // The declaration of an item with no body node holds its bodies (R61.15-1).
+            let Some(body) = &found.body else { return edit.kind != EditKind::Visibility };
             match semilla_syntax::resolve(sides[side], anchor) {
                 Some(semilla_syntax::Resolved::Node(_, node)) => body.start <= node.start && node.end <= body.end,
                 _ => false,
@@ -917,7 +930,13 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
             }
         }
         // An item with no edit in its body and no node pair: the bodies pair in source order.
-        if pairs.is_empty() && !edit {
+        // An item with no body node (a `const`, a `static`) has no node pair: its bodies also
+        // pair in source order, as before R61.15-1.
+        let no_node = match (&item, &old_item) {
+            (Some(item), Some(old)) => no_body_node(item, old, sides),
+            _ => false,
+        };
+        if pairs.is_empty() && (!edit || no_node) {
             for kind in lists[0].iter().map(|found| found.kind.clone()).collect::<BTreeSet<_>>() {
                 let open = |side: usize, partner: &[Vec<Option<usize>>; 2]| -> Vec<usize> { (0..lists[side].len()).filter(|at| partner[side][*at].is_none() && lists[side][*at].kind == kind).collect() };
                 let (old, new) = (open(0, &partner), open(1, &partner));

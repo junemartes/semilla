@@ -553,11 +553,12 @@ impl ExprOracle for NoOracle {
     }
 }
 
-/// The inputs of one step check.
-pub struct StepInput<'a> {
-    pub step: &'a Step,
-    pub before: &'a Workspace,
-    pub after: &'a Workspace,
+/// The inputs of one step check. The two workspaces can live longer than the step: a check of
+/// a changed step (the rename search) uses the workspaces of the check (R61.15-2).
+pub struct StepInput<'s, 'w> {
+    pub step: &'s Step,
+    pub before: &'w Workspace,
+    pub after: &'w Workspace,
 }
 
 /// Everything the verifier computed for one step. The views use it too.
@@ -619,7 +620,9 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     }
     impl_names(&mut step, input.before, input.after);
     let input = &StepInput { step: &step, before: input.before, after: input.after };
-    let mut plain = verify_core(input, bodies, exprs, derive_edits, false);
+    // The opaque inputs of each check of this step, also of the rename search (R61.15-2).
+    let bases = joint::OpaqueBases::new(input.before, input.after);
+    let mut plain = verify_core(input, bodies, exprs, derive_edits, false, &bases);
     if !derive_edits || input.step.claims.iter().any(is_identity) {
         if derive_edits {
             identity_api_facts(input, &mut plain);
@@ -636,7 +639,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         comments::apply(input, &mut plain);
         return plain;
     }
-    let mut outcome = identity::derive(input, bodies, exprs, plain);
+    let mut outcome = identity::derive(input, bodies, exprs, plain, &bases);
     // The search for an identity does more checks, and each check sets its own list of added
     // configurations. The oracle must have the list of this result: the output shows it.
     let _ = bodies.set_selections(input.step, &outcome.selections);
@@ -987,7 +990,7 @@ fn kind_reasons(input: &StepInput, report: &mut StepReport) {
 
 /// The check of one step. `derived_identity` is true when the identity claims of the step come
 /// from the candidate search (design 24.2, rule 4), not from the agent.
-pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, derived_identity: bool) -> StepOutcome {
+pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool, derived_identity: bool, shared: &joint::OpaqueBases<'a>) -> StepOutcome {
     let step = input.step;
     let oracle = bodies;
     let mut report = StepReport { step: step.index, intent: step.intent.clone(), ..Default::default() };
@@ -1029,6 +1032,15 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
     let read_files: Vec<BTreeSet<String>> = bodies.truths(step).unwrap_or_default().iter().map(|side| side.iter().filter(|config| config.known).flat_map(|config| config.units.iter().flat_map(|unit| unit.files.iter().cloned())).collect()).collect();
     let read = |side: usize| read_files.get(side).filter(|files| !files.is_empty());
     let body_renames = checks::body_renames_read(&renames.items, input.before, input.after, [read(0), read(1)]);
+    // The opaque inputs of the runs of this check (R61.15-2): those of the step, if they are
+    // for the two trees of this input.
+    let own;
+    let bases = if shared.fits(input.before, input.after) {
+        shared
+    } else {
+        own = joint::OpaqueBases::new(input.before, input.after);
+        &own
+    };
     let settled = loop {
         let truths = bodies.truths(step).unwrap_or_default();
         let cover = cfgcond::Cover::cached(&[(input.before, &truths[0]), (input.after, &truths[1])]);
@@ -1040,7 +1052,7 @@ pub(crate) fn verify_core(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dy
         // One run of the body check with a part of the rule on again (`cfgcond::Mode`).
         let run = |mode: &cfgcond::Mode| -> anyhow::Result<(Vec<BodyComparison>, joint::Bodies)> {
             cfgcond::with_mode(mode, || {
-                let opaque = joint::Recorder::new(input.before, input.after);
+                let opaque = joint::Recorder::new(&bases);
                 let mut bodies = bodies.compare_with(step, &body_renames, &added, &opaque)?;
                 if matches!(mode, cfgcond::Mode::Plain) {
                     *raw.borrow_mut() = bodies.iter().map(|body| (body.name.clone(), body.status.clone())).collect();
