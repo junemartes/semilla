@@ -80,6 +80,14 @@ pub enum IrTy {
     Ref(bool, u32),
     /// A type that the check does not model: the name, and true if a value needs a drop.
     Opaque { n: String, d: bool },
+    /// A sequence of scalars (design 64, part C): a `Vec` (`k` = "v"), a slice ("s"), or an
+    /// array ("a", with its length `n`). `e` is the type of an element.
+    Seq {
+        e: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        n: Option<u64>,
+        k: String,
+    },
 }
 
 #[derive(Serialize, Clone)]
@@ -104,6 +112,10 @@ pub enum IrProj {
     F(usize),
     /// A downcast to a variant.
     V(usize),
+    /// An index with a local (design 64, part C).
+    I(usize),
+    /// An index with a constant: the offset, and true if it counts from the end.
+    K(u64, bool),
     /// A projection that the check does not model.
     U(String),
 }
@@ -131,6 +143,9 @@ pub enum IrConst {
     /// A value of an ADT with scalar fields: the type, the variant, and each field (the bits
     /// and the type). Design 61.12, C4: `const Option::<u32>::None`.
     A(u32, usize, Vec<(String, u32)>),
+    /// A reference to an array of scalars (design 64, part C): the type of an element and the
+    /// bits of each element.
+    S(u32, Vec<String>),
     /// A constant that the check does not model.
     U(String),
 }
@@ -155,6 +170,8 @@ pub enum IrRvalue {
 pub enum IrAgg {
     T,
     A(u32, usize),
+    /// An array of scalars: the type of an element (design 64, part C).
+    S(u32),
 }
 
 /// A place in the source: the tokens and the outermost macro call (as in the graph).
@@ -211,6 +228,14 @@ pub struct IrCallee {
     /// callee has the parameters, so the inline step takes the form of the instance (`qx`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub g: bool,
+    /// The effect summary of the call (design 64, part B). No summary: the call reads and writes
+    /// the world.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub e: Option<crate::effects::IrEff>,
+    /// The operation of the sequence model of a callee of the standard library (design 64,
+    /// part C): `vec_push`, `slice_get`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -316,6 +341,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             TyKind::RigidTy(RigidTy::Tuple(items)) if items.is_empty() => IrTy::Unit,
             TyKind::RigidTy(RigidTy::Tuple(items)) => IrTy::Tuple(items.iter().map(|item| self.ty(*item, depth + 1)).collect()),
             TyKind::RigidTy(RigidTy::Ref(_, inner, mutability)) => IrTy::Ref(matches!(mutability, rustc_public::mir::Mutability::Mut), self.ty(inner, depth + 1)),
+            // A sequence of scalars (design 64, part C).
+            TyKind::RigidTy(RigidTy::Slice(item)) if crate::effects::is_scalar(item) => IrTy::Seq { e: self.ty(item, depth + 1), n: None, k: "s".into() },
+            TyKind::RigidTy(RigidTy::Array(item, length)) if crate::effects::is_scalar(item) && length.eval_target_usize().is_ok() => {
+                IrTy::Seq { e: self.ty(item, depth + 1), n: length.eval_target_usize().ok(), k: "a".into() }
+            }
+            TyKind::RigidTy(RigidTy::Adt(def, args)) if crate::effects::scalar_vec(def, &args).is_some() => {
+                let item = crate::effects::scalar_vec(def, &args).unwrap();
+                IrTy::Seq { e: self.ty(item, depth + 1), n: None, k: "v".into() }
+            }
             TyKind::RigidTy(RigidTy::Adt(def, args)) if self.modeled(def) => {
                 let enum_like = def.kind() == AdtKind::Enum;
                 let mut variants = Vec::new();
@@ -389,7 +423,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 ProjectionElem::Deref => IrProj::D,
                 ProjectionElem::Field(index, _) => IrProj::F(*index),
                 ProjectionElem::Downcast(variant) => IrProj::V(variant.to_index()),
-                ProjectionElem::Index(_) | ProjectionElem::ConstantIndex { .. } => IrProj::U("an index".into()),
+                ProjectionElem::Index(local) => IrProj::I(*local),
+                ProjectionElem::ConstantIndex { offset, from_end, .. } => IrProj::K(*offset, *from_end),
                 ProjectionElem::Subslice { .. } => IrProj::U("a subslice".into()),
                 ProjectionElem::OpaqueCast(_) => IrProj::U("an opaque cast".into()),
             })
@@ -422,6 +457,9 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         if let Some(found) = self.adt_constant(constant) {
             return found;
         }
+        if let Some(found) = self.array_constant(constant) {
+            return found;
+        }
         let id = self.ty(ty, 0);
         match constant.kind() {
             ConstantKind::ZeroSized => IrConst::Z(id),
@@ -440,6 +478,42 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             }
             _ => IrConst::U("a constant that the compiler does not evaluate here".into()),
         }
+    }
+
+    /// A constant reference to an array of scalars (`&[1, 2]`, design 64, part C): the bits of
+    /// each element, from the bytes of the allocation that the reference points to.
+    fn array_constant(&mut self, constant: &rustc_public::ty::MirConst) -> Option<IrConst> {
+        let TyKind::RigidTy(RigidTy::Ref(_, inner, _)) = constant.ty().kind() else { return None };
+        let TyKind::RigidTy(RigidTy::Array(item, length)) = inner.kind() else { return None };
+        if !crate::effects::is_scalar(item) {
+            return None;
+        }
+        let length = length.eval_target_usize().ok()? as usize;
+        let ConstantKind::Allocated(alloc) = constant.kind() else { return None };
+        let [(0, provenance)] = alloc.provenance.ptrs.as_slice() else { return None };
+        let rustc_public::mir::alloc::GlobalAlloc::Memory(target) = rustc_public::mir::alloc::GlobalAlloc::from(provenance.0) else { return None };
+        let (width, _) = match item.kind() {
+            TyKind::RigidTy(RigidTy::Bool) => (8, false),
+            TyKind::RigidTy(RigidTy::Char) => (32, false),
+            _ => crate::consts::int_of(item)?,
+        };
+        let size = (width as usize).div_ceil(8);
+        if target.bytes.len() != size * length || !target.provenance.ptrs.is_empty() || length > 64 {
+            return None;
+        }
+        let little = self.tcx.data_layout.endian == rustc_abi::Endian::Little;
+        let mut values = Vec::new();
+        for chunk in target.bytes.chunks(size) {
+            let bytes: Vec<u8> = chunk.iter().copied().collect::<Option<Vec<u8>>>()?;
+            let mut value: u128 = 0;
+            for (index, byte) in bytes.iter().enumerate() {
+                let shift = if little { index } else { size - 1 - index };
+                value |= u128::from(*byte) << (8 * shift);
+            }
+            values.push(value.to_string());
+        }
+        let id = self.ty(item, 0);
+        Some(IrConst::S(id, values))
     }
 
     /// The value of a constant of a modeled ADT whose fields are scalars, from the evaluated
@@ -483,12 +557,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             Rvalue::UnaryOp(op, value) => match op {
                 UnOp::Not => IrRvalue::Un("not".into(), self.operand(value)),
                 UnOp::Neg => IrRvalue::Un("neg".into(), self.operand(value)),
-                UnOp::PtrMetadata => IrRvalue::U("the length of a slice (the metadata of a pointer)".into()),
+                // The length of a slice (design 64, part C): the check knows it for a sequence.
+                UnOp::PtrMetadata => IrRvalue::Un("meta".into(), self.operand(value)),
             },
             Rvalue::Cast(CastKind::IntToInt, value, to) => {
                 let to = self.ty(*to, 0);
                 IrRvalue::Cast(self.operand(value), to)
             }
+            // An array as a slice (design 64, part C): the same sequence.
+            Rvalue::Cast(CastKind::PointerCoercion(rustc_public::mir::PointerCoercion::Unsize), value, to) if crate::effects::scalar_slice_ref(*to) => IrRvalue::Use(self.operand(value)),
             Rvalue::Cast(kind, _, _) => IrRvalue::U(format!("a cast ({})", crate::print::cast_kind_text(kind))),
             Rvalue::Aggregate(kind, operands) => match kind {
                 AggregateKind::Tuple => IrRvalue::Agg(IrAgg::T, operands.iter().map(|operand| self.operand(operand)).collect()),
@@ -502,6 +579,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 AggregateKind::Adt(..) => IrRvalue::U("a value of a type that the check does not model".into()),
                 AggregateKind::Closure(..) | AggregateKind::CoroutineClosure(..) => IrRvalue::U("a closure value".into()),
                 AggregateKind::Coroutine(..) => IrRvalue::U("a coroutine value".into()),
+                AggregateKind::Array(item) if crate::effects::is_scalar(*item) => {
+                    let item = self.ty(*item, 0);
+                    IrRvalue::Agg(IrAgg::S(item), operands.iter().map(|operand| self.operand(operand)).collect())
+                }
                 AggregateKind::Array(_) => IrRvalue::U("an array".into()),
                 AggregateKind::RawPtr(..) => IrRvalue::U("a raw pointer".into()),
             },
@@ -509,8 +590,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             Rvalue::Reborrow(_, mutability, place) => IrRvalue::Ref(matches!(mutability, rustc_public::mir::Mutability::Mut), self.place(place)),
             Rvalue::Discriminant(place) => IrRvalue::Disc(self.place(place)),
             Rvalue::AddressOf(..) => IrRvalue::U("a raw pointer".into()),
-            Rvalue::Len(_) => IrRvalue::U("the length of a slice".into()),
-            Rvalue::Repeat(..) => IrRvalue::U("an array".into()),
+            Rvalue::Len(place) => IrRvalue::Un("len".into(), IrOp::C(self.place(place))),
+            // An array of one value (design 64, part C), up to 64 elements.
+            Rvalue::Repeat(operand, count) => match (operand.ty(self.body.locals()), count.eval_target_usize()) {
+                (Ok(item), Ok(count)) if crate::effects::is_scalar(item) && count <= 64 => {
+                    let item = self.ty(item, 0);
+                    IrRvalue::Agg(IrAgg::S(item), vec![self.operand(operand); count as usize])
+                }
+                _ => IrRvalue::U("an array".into()),
+            },
             Rvalue::ThreadLocalRef(_) => IrRvalue::U("a thread local".into()),
         }
     }
@@ -581,11 +669,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     // The opaque wrap of the driver (`black_box`) is the identity.
                     let value = args.first().map(|arg| self.operand(arg));
                     return match (value, target) {
-                        (Some(value), Some(target)) => IrTermKind::Call(IrCallee { p: "black_box".into(), w: None, k: Some("black_box".into()), m: None, g: false }, vec![value], self.place(destination), Some(*target), IrUnwind::Drops(Vec::new())),
+                        (Some(value), Some(target)) => IrTermKind::Call(IrCallee { p: "black_box".into(), w: None, k: Some("black_box".into()), m: None, g: false, e: Some(crate::effects::IrEff::default()), s: None }, vec![value], self.place(destination), Some(*target), IrUnwind::Drops(Vec::new())),
                         _ => IrTermKind::U("an opaque wrap".into()),
                     };
                 }
-                let callee = self.callee(func, self.span_of(kind));
+                let mut callee = self.callee(func, self.span_of(kind));
+                callee.e = crate::guarded(|| crate::effects::of_call(self.body, func, args));
+                callee.s = crate::guarded(|| crate::effects::seq_model(func, self.body)).flatten();
                 let uw = self.unwind(Some(unwind));
                 let args = args.iter().map(|arg| self.operand(arg)).collect();
                 IrTermKind::Call(callee, args, self.place(destination), *target, uw)
@@ -603,7 +693,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     fn callee(&mut self, func: &Operand, span: rustc_span::Span) -> IrCallee {
         let typing = self.item.and_then(|item| rustc_public::rustc_internal::internal(self.tcx, item).as_local()).map(|local| rustc_middle::ty::TypingEnv::post_analysis(self.tcx, local.to_def_id()));
         let (text, mark) = crate::graph::callee_text(self.tcx, typing.or(Some(self.typing)), self.body, func, span);
-        let mut callee = IrCallee { p: text, w: None, k: None, m: mark.map(str::to_string), g: false };
+        let mut callee = IrCallee { p: text, w: None, k: None, m: mark.map(str::to_string), g: false, e: None, s: None };
         let Ok(ty) = func.ty(self.body.locals()) else { return callee };
         let TyKind::RigidTy(RigidTy::FnDef(def, args)) = ty.kind() else { return callee };
         if mark.is_some() {

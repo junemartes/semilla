@@ -91,14 +91,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics · code different]
       affected bodies: shop::Cart::double
-      equivalence: different in dev: for self = &Cart { 52428800 }: before returns 104857600, after returns 209715200; different in release: for self = &Cart { 1074790399 }: before returns 2149580798, after returns 4194300
+      equivalence: different: for self = &Cart { 1 }: before returns 2, after returns 4
       expansion: `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics] (also the change of f2, f3)
   ◆ f2 derived: changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics · code different]
       affected bodies: shop::Cart::half
-      equivalence: different: for self = &Cart { 3543347978 }: before returns 1771673989, after returns 1181115992
+      equivalence: different: for self = &Cart { 9 }: before returns 4, after returns 3
   ◆ f3 derived: changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics · code different]
       affected bodies: shop::Cart::total
-      equivalence: different in dev: for self = &Cart { 1610612735 }: before returns 1610612736, after returns 1610612737; different in release: for self = &Cart { 0 }: before returns 1, after returns 2
+      equivalence: different: for self = &Cart { 0 }: before returns 1, after returns 2
   ◆ f4 derived: the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
       affected bodies: shop::Cart::double
       note: lines 5
@@ -110,9 +110,9 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: lines 5
   cover: each of the 6 changed line(s) is in a fact
   control flow: 3 bodies
-    shop::Cart::double (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different in dev (for self = &Cart { 52428800 }: before returns 104857600, after returns 209715200); different in release (for self = &Cart { 1074790399 }: before returns 2149580798, after returns 4194300)
-    shop::Cart::half (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 3543347978 }: before returns 1771673989, after returns 1181115992)
-    shop::Cart::total (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different in dev (for self = &Cart { 1610612735 }: before returns 1610612736, after returns 1610612737); different in release (for self = &Cart { 0 }: before returns 1, after returns 2)
+    shop::Cart::double (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 1 }: before returns 2, after returns 4)
+    shop::Cart::half (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 9 }: before returns 4, after returns 3)
+    shop::Cart::total (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 0 }: before returns 1, after returns 2)
   expansions: 1 changed
     `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: `attribute macro depot_macros::helper` (depot_macros/src/lib.rs:4): changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics]; the input of the call changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`

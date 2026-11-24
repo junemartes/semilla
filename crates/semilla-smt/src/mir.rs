@@ -28,11 +28,16 @@
 //! - A part that the check does not model (a float operation, a raw pointer, an index, a loop,
 //!   a closure value, inline assembly) on a path gives "not decided" with its cause. The check
 //!   never skips a part.
-//! - A call that the check does not inline is an effect. The k-th effect of the two sides has a
-//!   result that is a function of the callee, of k, and of the arguments: when the two sides
-//!   make the same calls in the same order with equal arguments, each call has the same history
-//!   and gives the same result. A call can write through each `&mut` argument: the target then
-//!   gets a new value that is a function of the call.
+//! - A call that the check does not inline has the effect summary of the driver (design 64). A
+//!   call with no effect is a value: a function of the callee and of its inputs (each argument
+//!   and the value behind each reference in it). A call with an effect on the world (or with no
+//!   summary) is in the list of the effects: the k-th effect of the two sides has a result that
+//!   is a function of the callee, of k, and of the inputs, so the two sides must make these calls
+//!   in the same order. A call writes through each `&mut` argument: the target gets a new value
+//!   that is a function of the call. A call or a drop that can stop (a panic, a loop) gives a
+//!   second path that stops at it.
+//! - A `Vec`, a slice, or an array of scalars is a sequence of the solver with a length of 64
+//!   bits, and the check models the main operations of `Vec` and slices with their panics.
 //! - A callee that the step changes must be inlined: else the result is "not decided".
 //! - The check assumes no undefined behavior, as the compiler does: an `unreachable` terminator
 //!   ends no path, and an unchecked operation wraps.
@@ -91,6 +96,14 @@ pub enum IrTy {
         n: String,
         d: bool,
     },
+    /// A sequence of scalars (design 64, part C): a `Vec` (`k` = "v"), a slice ("s"), or an
+    /// array ("a", with its length `n`). `e` is the type of an element.
+    Seq {
+        e: u32,
+        #[serde(default)]
+        n: Option<u64>,
+        k: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -112,6 +125,10 @@ pub enum IrProj {
     D,
     F(usize),
     V(usize),
+    /// An index with a local (design 64, part C).
+    I(usize),
+    /// An index with a constant: the offset, and true if it counts from the end.
+    K(u64, bool),
     U(String),
 }
 
@@ -133,6 +150,9 @@ pub enum IrConst {
     /// A value of an ADT with scalar fields: the type, the variant, and each field (design
     /// 61.12, C4).
     A(u32, usize, Vec<(String, u32)>),
+    /// A reference to an array of scalars (design 64, part C): the type of an element and the
+    /// bits of each element.
+    S(u32, Vec<String>),
     U(String),
 }
 
@@ -153,6 +173,8 @@ pub enum IrRvalue {
 pub enum IrAgg {
     T,
     A(u32, usize),
+    /// An array of scalars: the type of an element (design 64, part C).
+    S(u32),
 }
 
 /// A place in the source: `[file, start, end]` (an index into `f`).
@@ -203,6 +225,24 @@ pub struct IrCallee {
     /// the instance (`std`, by the callee text), never the generic form.
     #[serde(default)]
     pub g: bool,
+    /// The effect summary of the call (design 64, part B). No summary: the call reads and writes
+    /// the world.
+    #[serde(default)]
+    pub e: Option<IrEff>,
+    /// The operation of the sequence model (design 64, part C): `vec_push`, `slice_get`.
+    #[serde(default)]
+    pub s: Option<String>,
+}
+
+/// The effect summary of a call from the driver (design 64, part B).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct IrEff {
+    /// The cause of an effect on the world (no cause: no such effect).
+    #[serde(default)]
+    pub w: Option<String>,
+    /// True if the call can stop with no return value (a panic, a loop).
+    #[serde(default)]
+    pub p: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -402,6 +442,8 @@ enum V {
     Ptr(Loc),
     /// A value of a type that the check does not model.
     Opq(T),
+    /// A sequence of scalars (design 64, part C): a term of the sort `(Seq E)`, and its length.
+    Seq(Sq),
     /// No value (not written, or moved).
     Undef,
 }
@@ -413,10 +455,123 @@ struct Loc {
     path: Vec<Step2>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Step2 {
     Field(usize),
     Variant(usize),
+    /// An element of a sequence: the index (a term of 64 bits).
+    Elem(T),
+}
+
+/// The sort of an element of a sequence (design 64, part C).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SeqE {
+    Bv(u32),
+    Bool,
+}
+
+impl SeqE {
+    fn of(ty: &Ty) -> Option<SeqE> {
+        match ty.get()? {
+            IrTy::Int(w, _) => Some(SeqE::Bv(*w)),
+            IrTy::Char => Some(SeqE::Bv(32)),
+            IrTy::Bool => Some(SeqE::Bool),
+            _ => None,
+        }
+    }
+
+    fn elem_sort(self) -> String {
+        match self {
+            SeqE::Bv(w) => sort_of_bv(w),
+            SeqE::Bool => "Bool".into(),
+        }
+    }
+
+    fn sort(self) -> String {
+        format!("(Seq {})", self.elem_sort())
+    }
+
+    fn value(self, term: T) -> V {
+        match self {
+            SeqE::Bv(w) => V::Bv(term, w),
+            SeqE::Bool => V::Bool(term),
+        }
+    }
+
+    fn term(self, value: &V) -> Result<T, Stop> {
+        match (self, value) {
+            (SeqE::Bv(w), V::Bv(term, v)) if w == *v => Ok(term.clone()),
+            (SeqE::Bool, V::Bool(term)) => Ok(term.clone()),
+            _ => Err(Stop("an element of a sequence that the check does not model".into())),
+        }
+    }
+
+    fn empty(self) -> T {
+        t(format!("(as seq.empty {})", self.sort()))
+    }
+}
+
+/// A sequence value: the term of the sort `(Seq E)`, the sort of an element, and the length as a
+/// term of 64 bits (`usize`). The length is a separate term: each compare of a length or an
+/// index stays in bit vectors (the solver is slow with `int2bv`). Each value keeps
+/// `(seq.len s) = (bv2nat n)`: an input and a call result assert it, and each operation keeps it.
+#[derive(Clone, Debug, PartialEq)]
+struct Sq {
+    s: T,
+    e: SeqE,
+    n: T,
+}
+
+/// An index of 64 bits as an integer term.
+fn nat(i: &T) -> T {
+    app("bv2nat", &[i])
+}
+
+impl Sq {
+    fn empty(e: SeqE) -> Sq {
+        Sq { s: e.empty(), e, n: bv_lit(0, 64) }
+    }
+
+    /// True if an index of 64 bits is in the sequence.
+    fn has(&self, i: &T) -> T {
+        app("bvult", &[i, &self.n])
+    }
+
+    fn is_empty(&self) -> T {
+        eq_t(&self.n, &bv_lit(0, 64))
+    }
+
+    fn at(&self, i: &T) -> V {
+        self.e.value(app("seq.nth", &[&self.s, &nat(i)]))
+    }
+
+    /// The first `k` elements (`k` at most the length).
+    fn prefix(&self, k: &T) -> Sq {
+        Sq { s: app("seq.extract", &[&self.s, &t("0"), &nat(k)]), e: self.e, n: k.clone() }
+    }
+
+    /// The elements from the index `k` (`k` at most the length).
+    fn suffix(&self, k: &T) -> Sq {
+        Sq { s: app("seq.extract", &[&self.s, &nat(k), &app("seq.len", &[&self.s])]), e: self.e, n: app("bvsub", &[&self.n, k]) }
+    }
+
+    fn then(&self, other: &Sq) -> Sq {
+        Sq { s: app("seq.++", &[&self.s, &other.s]), e: self.e, n: app("bvadd", &[&self.n, &other.n]) }
+    }
+
+    fn unit(e: SeqE, x: &T) -> Sq {
+        Sq { s: app("seq.unit", &[x]), e, n: bv_lit(1, 64) }
+    }
+
+    /// The sequence with the element at the index `i` replaced (`i` in the sequence).
+    fn update(&self, i: &T, x: &T) -> Sq {
+        let after = app("bvadd", &[i, &bv_lit(1, 64)]);
+        Sq { n: self.n.clone(), ..self.prefix(i).then(&Sq::unit(self.e, x)).then(&self.suffix(&after)) }
+    }
+
+    fn choose(c: &T, a: &Sq, b: &Sq) -> Sq {
+        Sq { s: ite(c, &a.s, &b.s), e: a.e, n: ite(c, &a.n, &b.n) }
+    }
 }
 
 /// The width of the discriminant of an enum type and the discriminant of each variant.
@@ -462,6 +617,9 @@ struct Decls {
     consts: Vec<String>,
     /// The slot and the name (`*x`) of the target of each `&mut` parameter.
     mut_names: Vec<(usize, String)>,
+    /// The symbol of each sequence input (design 64, part C): a small model has short
+    /// sequences.
+    seqs: Vec<(String, SeqE)>,
 }
 
 impl Decls {
@@ -523,6 +681,8 @@ struct Effect {
 struct PathOut {
     pc: T,
     effects: Vec<Effect>,
+    /// The calls with an order (`State::calls`): the callee and a key of its inputs.
+    calls: Vec<(String, String)>,
     exit: Exit,
     /// The values behind the `&mut` parameters at the exit, and the values that the cleanup path
     /// of a panic drops.
@@ -553,6 +713,10 @@ struct State {
     frames: Vec<Frame>,
     pc: Vec<T>,
     effects: Vec<Effect>,
+    /// Each call with an order (an effect on the world, a write, or a stop with no return value),
+    /// and each drop of a value with a destructor, in order: the cause "the order of the calls
+    /// changes" (design 64).
+    calls: Vec<(String, String)>,
     /// The visits of each block of each frame: a second visit on one path is a loop.
     visits: Vec<(usize, usize)>,
     /// The number of the next frame.
@@ -599,11 +763,16 @@ impl<'a, 'b> Run<'a, 'b> {
         let mut value = state.slots.get(loc.slot).cloned().ok_or_else(|| Stop("a place with no slot".into()))?;
         let mut variant: Option<usize> = None;
         for step in &loc.path {
-            match (*step, value) {
+            match (step.clone(), value) {
                 (Step2::Variant(v), current) => {
                     variant = Some(v);
                     value = current;
                 }
+                (Step2::Elem(i), V::Seq(sq)) => {
+                    value = sq.at(&i);
+                    variant = None;
+                }
+                (Step2::Elem(_), _) => return Err(Stop("an index".into())),
                 (Step2::Field(i), V::Tup(items)) => {
                     value = items.get(i).cloned().ok_or_else(|| Stop("a field that the value does not have".into()))?;
                     variant = None;
@@ -637,6 +806,20 @@ impl<'a, 'b> Run<'a, 'b> {
                 },
                 IrProj::F(i) => loc.path.push(Step2::Field(*i)),
                 IrProj::V(v) => loc.path.push(Step2::Variant(*v)),
+                IrProj::I(local) => {
+                    let index = self.read(state, &Loc { slot: frame.base + local, path: Vec::new() })?;
+                    let V::Bv(index, 64) = index else { return Err(Stop("an index".into())) };
+                    loc.path.push(Step2::Elem(index));
+                }
+                IrProj::K(offset, from_end) => {
+                    let index = if *from_end {
+                        let V::Seq(sq) = self.read(state, &loc)? else { return Err(Stop("an index".into())) };
+                        app("bvsub", &[&sq.n, &bv_lit(u128::from(*offset), 64)])
+                    } else {
+                        bv_lit(u128::from(*offset), 64)
+                    };
+                    loc.path.push(Step2::Elem(index));
+                }
                 IrProj::U(cause) => return Err(Stop(cause.clone())),
             }
         }
@@ -655,6 +838,13 @@ impl<'a, 'b> Run<'a, 'b> {
                     _ => return None,
                 },
                 IrProj::V(v) => variant = Some(*v),
+                IrProj::I(_) | IrProj::K(..) => match ty.get()? {
+                    IrTy::Seq { e, .. } => {
+                        ty = ty.at(*e);
+                        variant = None;
+                    }
+                    _ => return None,
+                },
                 IrProj::F(i) => {
                     let next = match ty.get()? {
                         IrTy::Tuple(items) => *items.get(*i)?,
@@ -692,6 +882,18 @@ impl<'a, 'b> Run<'a, 'b> {
                 {
                     state.slots.push(value);
                     state.types.push(Some(Ty { ir: ir.clone(), id: *inner }));
+                    return Ok(V::Ptr(Loc { slot: state.slots.len() - 1, path: Vec::new() }));
+                }
+                // A constant reference to an array of scalars: a new place with the sequence.
+                if let IrConst::S(item, values) = constant {
+                    let e = SeqE::of(&Ty { ir: ir.clone(), id: *item }).ok_or_else(|| Stop("an array".into()))?;
+                    let mut sq = Sq::empty(e);
+                    for value in values {
+                        let element = self.constant(&ir, &IrConst::I(value.clone(), *item))?;
+                        sq = sq.then(&Sq::unit(e, &e.term(&element)?));
+                    }
+                    state.slots.push(V::Seq(sq));
+                    state.types.push(None);
                     return Ok(V::Ptr(Loc { slot: state.slots.len() - 1, path: Vec::new() }));
                 }
                 self.constant(&ir, constant)
@@ -742,6 +944,7 @@ impl<'a, 'b> Run<'a, 'b> {
                     _ => Err(Stop("a constant of a type that the check does not model".into())),
                 }
             }
+            IrConst::S(..) => Err(Stop("an array".into())),
             IrConst::U(cause) => Err(Stop(cause.clone())),
         }
     }
@@ -777,7 +980,7 @@ impl<'a, 'b> Run<'a, 'b> {
                     }
                     if cause.starts_with(CUT) {
                         let cut = CutState { slots: state.slots.clone(), types: state.types.clone() };
-                        self.outs.push(PathOut { pc, effects: state.effects.clone(), exit: Exit::Cut, after: Vec::new(), cut: Some(Arc::new(cut)) });
+                        self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Cut, after: Vec::new(), cut: Some(Arc::new(cut)) });
                     } else if cause.starts_with(BOUND) {
                         self.dropped += 1;
                     } else {
@@ -889,6 +1092,21 @@ impl<'a, 'b> Run<'a, 'b> {
                 };
                 checked(op, &x, &y, signed)
             }
+            // The length of a sequence (design 64, part C): through a reference (the metadata
+            // of a pointer) or of a place.
+            IrRvalue::Un(op, a) if op == "meta" || op == "len" => {
+                let a = self.operand(state, a)?;
+                let target = match (op.as_str(), a) {
+                    ("meta", V::Ptr(loc)) => self.read(state, &loc)?,
+                    ("len", value) => value,
+                    _ => V::Undef,
+                };
+                match target {
+                    V::Seq(sq) => Ok(V::Bv(sq.n, 64)),
+                    _ if op == "meta" => Err(Stop("the length of a slice (the metadata of a pointer)".into())),
+                    _ => Err(Stop("the length of a slice".into())),
+                }
+            }
             IrRvalue::Un(op, a) => {
                 let a = self.operand(state, a)?;
                 match (op.as_str(), a) {
@@ -912,6 +1130,24 @@ impl<'a, 'b> Run<'a, 'b> {
                 }
                 match kind {
                     IrAgg::T => Ok(V::Tup(values)),
+                    IrAgg::S(item) => {
+                        let ir = state.frames.last().unwrap().ir.clone();
+                        let e = SeqE::of(&Ty { ir, id: *item }).ok_or_else(|| Stop("an array".into()))?;
+                        let mut terms = Vec::new();
+                        for value in &values {
+                            terms.push(app("seq.unit", &[&e.term(value)?]));
+                        }
+                        let n = bv_lit(terms.len() as u128, 64);
+                        Ok(V::Seq(Sq {
+                            s: match terms.len() {
+                                0 => e.empty(),
+                                1 => terms.remove(0),
+                                _ => app("seq.++", &terms.iter().collect::<Vec<_>>()),
+                            },
+                            e,
+                            n,
+                        }))
+                    }
                     IrAgg::A(ty_id, variant) => {
                         let ir = state.frames.last().unwrap().ir.clone();
                         match ir.t.get(*ty_id as usize) {
@@ -1009,7 +1245,7 @@ impl<'a, 'b> Run<'a, 'b> {
                 match frame.ret {
                     None => {
                         let after = self.muts.iter().map(|slot| state.slots[*slot].clone()).collect();
-                        self.outs.push(PathOut { pc: and(&state.pc), effects: state.effects.clone(), exit: Exit::Return(value), after, cut: None });
+                        self.outs.push(PathOut { pc: and(&state.pc), effects: state.effects.clone(), calls: state.calls.clone(), exit: Exit::Return(value), after, cut: None });
                         Ok(Next::Done)
                     }
                     Some((dest, target, _)) => {
@@ -1044,10 +1280,30 @@ impl<'a, 'b> Run<'a, 'b> {
             IrTermKind::Drop(place, target, ty, unwind) => {
                 let loc = self.loc(state, place)?;
                 let value = self.read(state, &loc)?;
+                // A sequence of scalars only frees its memory: the check does not model an
+                // allocation (design 64, part A).
+                if matches!(value, V::Seq(_)) {
+                    self.write(state, &loc, V::Undef)?;
+                    self.jump(state, *target)?;
+                    return Ok(Next::Continue);
+                }
                 let drops = self.unwind_values(state, unwind)?;
                 let mut args = vec![value];
                 args.extend(drops);
-                state.effects.push(Effect { callee: format!("drop {}", (self.side.rename)(ty)), args });
+                let name = format!("drop {}", (self.side.rename)(ty));
+                state.calls.push((name.clone(), flatten(&args[0]).into_iter().map(|(_, term)| term.s).collect::<Vec<_>>().join(";")));
+                let index = state.effects.len();
+                state.effects.push(Effect { callee: name.clone(), args: args.clone() });
+                // A destructor can panic: a second path stops at the drop (R64.2-3), so a write
+                // cannot move across it.
+                let flat: Vec<T> = args.iter().flat_map(flatten).map(|(_, term)| term).collect();
+                let sorts: Vec<String> = args.iter().flat_map(flatten).map(|(sort, _)| sort).collect();
+                let condition = self.result_value(&Ty { ir: Arc::new(Ir { t: vec![IrTy::Bool], ..Ir::default() }), id: 0 }, &format!("s_{}_{index}", sym_name(&name)), &flat, &sorts, 0)?;
+                let V::Bool(condition) = condition else { return Err(Stop("a condition with no `bool` value".into())) };
+                let mut stopped = state.clone();
+                stopped.pc.push(condition.clone());
+                self.panic(&mut stopped, format!("call `{name}`"), args, unwind)?;
+                state.pc.push(tx(not(&condition).s, true));
                 self.write(state, &loc, V::Undef)?;
                 self.jump(state, *target)?;
                 Ok(Next::Continue)
@@ -1103,7 +1359,7 @@ impl<'a, 'b> Run<'a, 'b> {
         };
         let exit = if drops.last() == Some(&V::Opq(t("abort"))) { Exit::Abort } else { Exit::Panic { kind, args } };
         after.extend(drops);
-        self.outs.push(PathOut { pc, effects: state.effects.clone(), exit, after, cut: None });
+        self.outs.push(PathOut { pc, effects: state.effects.clone(), calls: state.calls.clone(), exit, after, cut: None });
         Ok(())
     }
 
@@ -1126,6 +1382,10 @@ impl<'a, 'b> Run<'a, 'b> {
                 }
                 None => Err(Stop("an intrinsic that never returns".into())),
             };
+        }
+        // An operation of the sequence model (design 64, part C).
+        if let Some(model) = &callee.s {
+            return self.seq_call(state, model, &values, &dest_loc, dest_ty.as_ref(), target, unwind);
         }
         // The inline step.
         let depth = state.frames.len();
@@ -1187,21 +1447,42 @@ impl<'a, 'b> Run<'a, 'b> {
         {
             return Err(Stop(format!("the impl `{name}` of the trait method changes in the step")));
         }
-        // An effect.
+        // A call that the check does not inline: an effect, or a value (design 64, parts A and B).
         if values.iter().any(contains_mut_ref_inside) {
             return Err(Stop("a reference inside an argument of a call".into()));
         }
         let renamed = (self.side.rename)(&callee.p);
-        let mut effect_args = values.clone();
-        let drops = self.unwind_values(state, unwind)?;
-        effect_args.extend(drops);
+        // The inputs of the call: each argument, and the value behind each reference in it
+        // (the read set of the call).
+        let mut deep: Vec<V> = values.clone();
+        for value in &values {
+            self.behind(state, value, &mut deep, 0)?;
+        }
+        let world = match &callee.e {
+            Some(summary) => summary.w.clone(),
+            None => Some("no effect summary".to_string()),
+        };
+        let stops = callee.e.as_ref().is_none_or(|summary| summary.p);
         let index = state.effects.len();
-        state.effects.push(Effect { callee: renamed.clone(), args: effect_args.clone() });
+        let mut effect_args = deep.clone();
+        let key = if world.is_some() {
+            // An effect on the world: the k-th effect of the two sides has a result that is a
+            // function of the callee, of k, and of the inputs. The two sides must make the same
+            // calls of this kind in the same order.
+            let drops = self.unwind_values(state, unwind)?;
+            effect_args.extend(drops);
+            state.effects.push(Effect { callee: renamed.clone(), args: effect_args.clone() });
+            format!("{}_{index}", sym_name(&renamed))
+        } else {
+            // A value: an uninterpreted function of the callee and of its inputs, the same on
+            // the two sides and at each place of the call (R64.2-1).
+            format!("{}_v", sym_name(&renamed))
+        };
         self.calls += 1;
         let flat: Vec<T> = effect_args.iter().flat_map(flatten).map(|(_, term)| term).collect();
         let sorts: Vec<String> = effect_args.iter().flat_map(flatten).map(|(sort, _)| sort).collect();
-        let key = format!("{}_{index}", sym_name(&renamed));
-        // A call can write through each `&mut` argument.
+        // The places that the call writes: the target of each `&mut` argument (R64.3-2).
+        let mut writes: Vec<(usize, Ty, Loc)> = Vec::new();
         for (position, arg) in args.iter().enumerate() {
             let Some(arg_ty) = (match arg {
                 IrOp::C(place) | IrOp::M(place) => self.place_ty(state, place),
@@ -1209,15 +1490,39 @@ impl<'a, 'b> Run<'a, 'b> {
             }) else { continue };
             let Some(IrTy::Ref(true, inner)) = arg_ty.get().cloned() else { continue };
             let Some(V::Ptr(target_loc)) = values.get(position).cloned() else { continue };
-            let inner_ty = arg_ty.at(inner);
+            writes.push((position, arg_ty.at(inner), target_loc));
+        }
+        if world.is_some() || !writes.is_empty() || stops {
+            // The key: the direct values of the arguments (a value behind a reference can be
+            // the write of an earlier call, so it differs in another order).
+            state.calls.push((renamed.clone(), values.iter().flat_map(flatten).map(|(_, term)| term.s).collect::<Vec<_>>().join(";")));
+        }
+        // A call that can stop (a panic, a loop, an exit): a second path stops at the call. Its
+        // condition and its payload are functions of the inputs (and of the history of the
+        // effects on the world for such a call). A write of an earlier call is visible at the
+        // stop, so a call that can stop has an order with each call that writes (R64.2-3).
+        if stops && target.is_some() {
+            let condition = self.result_value(&Ty { ir: Arc::new(Ir { t: vec![IrTy::Bool], ..Ir::default() }), id: 0 }, &format!("s_{key}"), &flat, &sorts, 0)?;
+            let V::Bool(condition) = condition else { return Err(Stop("a condition with no `bool` value".into())) };
+            let mut stopped = state.clone();
+            stopped.pc.push(condition.clone());
+            self.panic(&mut stopped, format!("call `{renamed}`"), deep.clone(), unwind)?;
+            // The path on which the call returns keeps the reading of design 61.4: a model of
+            // it is exact if its other parts are exact. The path that stops is never exact (the
+            // check does not know if the callee stops for this input).
+            state.pc.push(tx(not(&condition).s, true));
+        }
+        for (position, inner_ty, target_loc) in writes {
             let new = self.result_value(&inner_ty, &format!("w{position}_{key}"), &flat, &sorts, 0)?;
             self.write(state, &target_loc, new)?;
         }
         match target {
             None => {
                 let mut probe = state.clone();
-                probe.effects.pop();
-                self.panic(&mut probe, format!("call `{renamed}`"), values, unwind)?;
+                if world.is_some() {
+                    probe.effects.pop();
+                }
+                self.panic(&mut probe, format!("call `{renamed}`"), deep, unwind)?;
                 Ok(Next::Done)
             }
             Some(target) => {
@@ -1229,6 +1534,182 @@ impl<'a, 'b> Run<'a, 'b> {
                 self.jump(state, target)?;
                 Ok(Next::Continue)
             }
+        }
+    }
+
+    /// An operation of the sequence model of `Vec` and slices (design 64, part C), with its
+    /// panics. A `Vec` and the slice of its elements are one sequence: `deref` gives the same
+    /// place.
+    #[allow(clippy::too_many_arguments)]
+    fn seq_call(&mut self, state: &mut State, model: &str, args: &[V], dest: &Loc, dest_ty: Option<&Ty>, target: Option<usize>, unwind: &IrUnwind) -> Result<Next, Stop> {
+        let Some(target) = target else { return Err(Stop(format!("the sequence operation `{model}` never returns"))) };
+        let no_value = || Stop(format!("the sequence operation `{model}` on a value that the check does not model"));
+        let behind = |run: &Self, state: &State, at: usize| -> Result<(Loc, Sq), Stop> {
+            let Some(V::Ptr(loc)) = args.get(at) else { return Err(no_value()) };
+            match run.read(state, loc)? {
+                V::Seq(sq) => Ok((loc.clone(), sq)),
+                _ => Err(no_value()),
+            }
+        };
+        let number = |at: usize| -> Result<T, Stop> {
+            match args.get(at) {
+                Some(V::Bv(term, 64)) => Ok(term.clone()),
+                _ => Err(no_value()),
+            }
+        };
+        let elem_of_dest = || -> Result<SeqE, Stop> {
+            match dest_ty.and_then(|ty| ty.get().cloned().map(|found| (ty, found))) {
+                Some((ty, IrTy::Seq { e, .. })) => SeqE::of(&ty.at(e)).ok_or_else(no_value),
+                _ => Err(no_value()),
+            }
+        };
+        // An `Option` of the destination type: `Some(value)` if `some` holds, else `None`.
+        let option = |some: &T, value: V| -> Result<V, Stop> {
+            let Some(ty) = dest_ty else { return Err(no_value()) };
+            let Some(IrTy::Adt { e: true, v, vn, d, dt, .. }) = ty.get() else { return Err(no_value()) };
+            let (w, ds) = discriminants(&ty.ir, d, *dt);
+            let index = |name: &str| vn.iter().position(|found| found == name);
+            let (Some(none), Some(yes)) = (index("None"), index("Some")) else { return Err(no_value()) };
+            let mut fields: Vec<Vec<V>> = v.iter().map(|fields| vec![V::Undef; fields.len()]).collect();
+            fields[yes] = vec![value];
+            let d = ite(some, &bv_lit(ds[yes], w), &bv_lit(ds[none], w));
+            Ok(V::Enum { d, w, ds, f: fields })
+        };
+        let with_elem = |loc: &Loc, index: T| -> V {
+            let mut found = loc.clone();
+            found.path.push(Step2::Elem(index));
+            V::Ptr(found)
+        };
+        let one = bv_lit(1, 64);
+        let mut checks: Vec<(T, String, Vec<V>)> = Vec::new();
+        let mut write: Option<(Loc, V)> = None;
+        let result = match model {
+            "vec_new" => V::Seq(Sq::empty(elem_of_dest()?)),
+            "vec_with_capacity" => {
+                let e = elem_of_dest()?;
+                let size = match e {
+                    SeqE::Bv(w) => u128::from(w.div_ceil(8)),
+                    SeqE::Bool => 1,
+                };
+                let most = (i64::MAX as u128) / size;
+                checks.push((app("bvugt", &[&number(0)?, &bv_lit(most, 64)]), "capacity overflow".into(), Vec::new()));
+                V::Seq(Sq::empty(e))
+            }
+            "vec_push" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let x = sq.e.term(args.get(1).ok_or_else(no_value)?)?;
+                write = Some((loc, V::Seq(sq.then(&Sq::unit(sq.e, &x)))));
+                V::Unit
+            }
+            "vec_pop" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let some = not(&sq.is_empty());
+                let last = app("bvsub", &[&sq.n, &one]);
+                write = Some((loc, V::Seq(Sq::choose(&some, &sq.prefix(&last), &sq))));
+                option(&some, sq.at(&last))?
+            }
+            "vec_len" | "slice_len" => V::Bv(behind(self, state, 0)?.1.n, 64),
+            "vec_is_empty" | "slice_is_empty" => V::Bool(behind(self, state, 0)?.1.is_empty()),
+            "vec_clear" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                write = Some((loc, V::Seq(Sq::empty(sq.e))));
+                V::Unit
+            }
+            "vec_truncate" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let k = number(1)?;
+                write = Some((loc, V::Seq(Sq::choose(&sq.has(&k), &sq.prefix(&k), &sq))));
+                V::Unit
+            }
+            "vec_insert" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let i = number(1)?;
+                let x = sq.e.term(args.get(2).ok_or_else(no_value)?)?;
+                checks.push((app("bvugt", &[&i, &sq.n]), "insertion index".into(), vec![V::Bv(i.clone(), 64), V::Bv(sq.n.clone(), 64)]));
+                write = Some((loc, V::Seq(sq.prefix(&i).then(&Sq::unit(sq.e, &x)).then(&sq.suffix(&i)))));
+                V::Unit
+            }
+            "vec_remove" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let i = number(1)?;
+                checks.push((not(&sq.has(&i)), "removal index".into(), vec![V::Bv(i.clone(), 64), V::Bv(sq.n.clone(), 64)]));
+                let after = app("bvadd", &[&i, &one]);
+                write = Some((loc, V::Seq(sq.prefix(&i).then(&sq.suffix(&after)))));
+                sq.at(&i)
+            }
+            "vec_extend_from_slice" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let (_, more) = behind(self, state, 1)?;
+                if sq.e != more.e {
+                    return Err(no_value());
+                }
+                write = Some((loc, V::Seq(sq.then(&more))));
+                V::Unit
+            }
+            "vec_deref" => {
+                behind(self, state, 0)?;
+                args[0].clone()
+            }
+            "vec_index" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let i = number(1)?;
+                checks.push((not(&sq.has(&i)), "bounds".into(), Vec::new()));
+                with_elem(&loc, i)
+            }
+            "slice_swap" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let (a, b) = (number(1)?, number(2)?);
+                checks.push((not(&sq.has(&a)), "bounds".into(), Vec::new()));
+                checks.push((not(&sq.has(&b)), "bounds".into(), Vec::new()));
+                let (x, y) = (sq.e.term(&sq.at(&a))?, sq.e.term(&sq.at(&b))?);
+                write = Some((loc, V::Seq(sq.update(&a, &y).update(&b, &x))));
+                V::Unit
+            }
+            "slice_get" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let i = number(1)?;
+                option(&sq.has(&i), with_elem(&loc, i))?
+            }
+            "slice_first" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                option(&not(&sq.is_empty()), with_elem(&loc, bv_lit(0, 64)))?
+            }
+            "slice_last" => {
+                let (loc, sq) = behind(self, state, 0)?;
+                let last = app("bvsub", &[&sq.n, &one]);
+                option(&not(&sq.is_empty()), with_elem(&loc, last))?
+            }
+            _ => return Err(Stop(format!("the sequence operation `{model}` that the check does not model"))),
+        };
+        for (condition, kind, panic_args) in checks {
+            let mut failed = state.clone();
+            failed.pc.push(condition.clone());
+            self.panic(&mut failed, kind, panic_args, unwind)?;
+            state.pc.push(not(&condition));
+        }
+        if let Some((loc, value)) = write {
+            self.write(state, &loc, value)?;
+        }
+        self.write(state, dest, result)?;
+        self.jump(state, target)?;
+        Ok(Next::Continue)
+    }
+
+    /// The values behind each reference in a value, in a fixed order (the read set of a call:
+    /// a call can read each place that a reference of its arguments reaches).
+    fn behind(&self, state: &State, value: &V, out: &mut Vec<V>, depth: usize) -> Result<(), Stop> {
+        match value {
+            V::Ptr(loc) => {
+                if depth > 4 {
+                    return Err(Stop("a chain of references in an argument of a call".into()));
+                }
+                let target = self.read(state, loc)?;
+                out.push(target.clone());
+                self.behind(state, &target, out, depth + 1)
+            }
+            V::Tup(items) => items.iter().try_for_each(|item| self.behind(state, item, out, depth)),
+            V::Enum { f, .. } => f.iter().flatten().try_for_each(|item| self.behind(state, item, out, depth)),
+            _ => Ok(()),
         }
     }
 
@@ -1293,6 +1774,22 @@ impl<'a, 'b> Run<'a, 'b> {
                 self.decls.declare("Opq", "(declare-sort Opq 0)".into());
                 V::Opq(apply(self.decls, "Opq".into()))
             }
+            Some(IrTy::Seq { e, n: fixed, .. }) => {
+                let e = SeqE::of(&ty.at(e)).ok_or_else(|| Stop("a call result of a sequence that the check does not model".into()))?;
+                let seq = apply(self.decls, e.sort());
+                let n = match fixed {
+                    Some(fixed) => bv_lit(u128::from(fixed), 64),
+                    None => {
+                        let name = format!("{name}n");
+                        let symbol = format!("{name}_{}", "BitVec64");
+                        let signature = sorts.join(" ");
+                        self.decls.declare(&format!("{symbol}|{signature}"), format!("(declare-fun |{symbol}| ({signature}) (_ BitVec 64))"));
+                        if args.is_empty() { tx(format!("|{symbol}|"), false) } else { tx(format!("(|{symbol}| {})", args.iter().map(|arg| arg.s.as_str()).collect::<Vec<_>>().join(" ")), false) }
+                    }
+                };
+                self.decls.assume.push(format!("(and (= (seq.len {}) (bv2nat {})) (bvule {} {}))", seq.s, n.s, n.s, bv_lit(i64::MAX as u128, 64).s));
+                V::Seq(Sq { s: seq, e, n })
+            }
             None => return Err(Stop("a call result with no type".into())),
         })
     }
@@ -1325,6 +1822,15 @@ fn write_path(slot: &mut V, path: &[Step2], new: V, ty: Option<&Ty>) -> Result<(
         return Ok(());
     };
     match first {
+        Step2::Elem(i) => {
+            let V::Seq(sq) = slot else { return Err(Stop("an index".into())) };
+            if !rest.is_empty() {
+                return Err(Stop("a field of an element of a sequence".into()));
+            }
+            let x = sq.e.term(&new)?;
+            *slot = V::Seq(sq.update(i, &x));
+            Ok(())
+        }
         Step2::Variant(v) => {
             if *slot == V::Undef {
                 *slot = shape(ty).ok_or_else(|| Stop("a write into a value with no shape".into()))?;
@@ -1401,6 +1907,7 @@ fn flatten(value: &V) -> Vec<(String, T)> {
         }
         V::Ptr(_) => Vec::new(),
         V::Opq(term) => vec![("Opq".into(), term.clone())],
+        V::Seq(sq) => vec![(sq.e.sort(), sq.s.clone())],
     }
 }
 
@@ -1671,6 +2178,14 @@ fn intrinsic(name: &str, args: &[V], dest: Option<&Ty>) -> Result<Option<V>, Sto
         }
         ("likely" | "unlikely", [value]) => value.clone(),
         ("cold_path", []) => V::Unit,
+        // A rotate (design 64): the amount is taken modulo the width, as the intrinsic does.
+        ("rotate_left" | "rotate_right", [V::Bv(x, w), V::Bv(n, v)]) if w.is_power_of_two() => {
+            let amount = if v > w { app(&format!("(_ extract {} 0)", w - 1), &[n]) } else if v < w { app(&format!("(_ zero_extend {})", w - v), &[n]) } else { n.clone() };
+            let r = app("bvand", &[&amount, &bv_lit(u128::from(*w) - 1, *w)]);
+            let back = app("bvsub", &[&bv_lit(u128::from(*w), *w), &r]);
+            let (first, second) = if name == "rotate_left" { ("bvshl", "bvlshr") } else { ("bvlshr", "bvshl") };
+            V::Bv(app("bvor", &[&app(first, &[x, &r]), &app(second, &[x, &back])]), *w)
+        }
         _ => return Ok(None),
     }))
 }
@@ -1767,6 +2282,24 @@ fn input(decls: &mut Decls, ty: &Ty, name: &str, slots: &mut Vec<V>, types: &mut
             decls.declare(&symbol, format!("(declare-const {symbol} Opq)"));
             V::Opq(tx(symbol, false))
         }
+        // A sequence (design 64, part C): a `Vec` or a slice has at most `isize::MAX` elements;
+        // an array has its length.
+        Some(IrTy::Seq { e, n, .. }) => {
+            let e = SeqE::of(&ty.at(e)).ok_or_else(|| Stop("an input of a sequence that the check does not model".into()))?;
+            decls.declare(&symbol, format!("(declare-const {symbol} {})", e.sort()));
+            let length = match n {
+                Some(n) => bv_lit(u128::from(n), 64),
+                None => {
+                    let length = format!("|in {name}.len|");
+                    decls.declare(&length, format!("(declare-const {length} (_ BitVec 64))"));
+                    decls.assume.push(format!("(bvule {length} {})", bv_lit(i64::MAX as u128, 64).s));
+                    t(length)
+                }
+            };
+            decls.assume.push(format!("(= (seq.len {symbol}) (bv2nat {}))", length.s));
+            decls.seqs.push((symbol.clone(), e));
+            V::Seq(Sq { s: t(symbol), e, n: length })
+        }
         None => return Err(Stop("an input with no type".into())),
     })
 }
@@ -1783,6 +2316,7 @@ fn same_type(a: &Ty, b: &Ty, depth: usize, rename: &dyn Fn(&str) -> String) -> b
             rename(nx) == *ny && ex == ey && dx == dy && x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p.len() == q.len() && p.iter().zip(q).all(|(r, s)| same_type(&a.at(*r), &b.at(*s), depth + 1, rename)))
         }
         (Some(IrTy::Ref(m, x)), Some(IrTy::Ref(n, y))) => m == n && same_type(&a.at(*x), &b.at(*y), depth + 1, rename),
+        (Some(IrTy::Seq { e: x, n: m, k: p }), Some(IrTy::Seq { e: y, n, k: q })) => m == n && p == q && same_type(&a.at(*x), &b.at(*y), depth + 1, rename),
         (Some(IrTy::Opaque { n: x, .. }), Some(IrTy::Opaque { n: y, .. })) => without_place(&rename(x)) == without_place(y),
         (Some(x), Some(y)) => x == y,
         _ => false,
@@ -1817,9 +2351,8 @@ fn without_place(text: &str) -> String {
 /// The callees whose calls change their order (design 61.12, C3): the two lists have the same
 /// calls (the callee and the count of each), in a different order. The callees in the old
 /// order, each one time.
-fn call_order(old: &[Effect], new: &[Effect]) -> Option<Vec<String>> {
-    let names = |list: &[Effect]| list.iter().map(|effect| effect.callee.clone()).collect::<Vec<_>>();
-    let (a, b) = (names(old), names(new));
+fn call_order(old: &[(String, String)], new: &[(String, String)]) -> Option<Vec<String>> {
+    let (a, b) = (old.to_vec(), new.to_vec());
     let (mut sa, mut sb) = (a.clone(), b.clone());
     sa.sort();
     sb.sort();
@@ -1828,7 +2361,7 @@ fn call_order(old: &[Effect], new: &[Effect]) -> Option<Vec<String>> {
     }
     let mut moved: Vec<String> = Vec::new();
     for (x, y) in a.iter().zip(&b) {
-        for name in [x, y] {
+        for (name, _) in [x, y] {
             if x != y && !moved.contains(name) {
                 moved.push(name.clone());
             }
@@ -2040,7 +2573,7 @@ fn fresh_state(side: &Side, cut: &CutState, head: usize, base: usize, map: &[(us
     }
     types.truncate(slots.len());
     // The locals of the top frame follow the input slots (`base`).
-    let mut state = State { slots, types, frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), visits: vec![(0, head)], serial: 1_000_000 };
+    let mut state = State { slots, types, frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: vec![(0, head)], serial: 1_000_000 };
     state.frames.push(Frame { ir: side.ir.clone(), base, block: head, stmt: 0, ret: None, name: String::new(), id: 0 });
     Ok(state)
 }
@@ -2122,6 +2655,7 @@ fn differ(a: &V, b: &V) -> T {
         (V::Bv(x, w), V::Bv(y, v)) if w == v => not(&eq_t(x, y)),
         (V::Bool(x), V::Bool(y)) => not(&eq_t(x, y)),
         (V::Opq(x), V::Opq(y)) => not(&eq_t(x, y)),
+        (V::Seq(x), V::Seq(y)) if x.e == y.e => not(&eq_t(&x.s, &y.s)),
         (V::Unit, V::Unit) | (V::Undef, V::Undef) => t("false"),
         (V::Tup(x), V::Tup(y)) if x.len() == y.len() => or(&x.iter().zip(y).map(|(p, q)| differ(p, q)).collect::<Vec<_>>()),
         (V::Enum { d: dx, w: wx, ds, f: fx }, V::Enum { d: dy, w: wy, f: fy, .. }) if wx == wy && fx.len() == fy.len() => {
@@ -2157,8 +2691,13 @@ fn outcome_differs(a: &PathOut, b: &PathOut) -> T {
     let mut parts = Vec::new();
     for (x, y) in a.effects.iter().zip(&b.effects) {
         for (p, q) in x.args.iter().zip(&y.args) {
-            // Different arguments of a call: the callee can ignore them.
+            // Different arguments of a call: the callee can ignore them. Two arguments that are
+            // equal for each input give no part (design 64: the call is the same on the two
+            // sides).
             let d = differ(p, q);
+            if lit_bool(&d) == Some(false) {
+                continue;
+            }
             parts.push(tx(d.s, false));
         }
     }
@@ -2202,7 +2741,7 @@ fn run_side(side: &Side, step: &Step, inline_all: bool, decls: &mut Decls, input
 /// The start state of a side: the shared input slots, then the locals of the body.
 fn start_state(side: &Side, inputs: &[V], slots: &[V], types: &[Option<Ty>]) -> State {
     let ir = side.ir.clone();
-    let mut state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), visits: Vec::new(), serial: 0 };
+    let mut state = State { slots: slots.to_vec(), types: types.to_vec(), frames: Vec::new(), pc: Vec::new(), effects: Vec::new(), calls: Vec::new(), visits: Vec::new(), serial: 0 };
     let base = state.slots.len();
     for ty in &ir.l {
         state.slots.push(V::Undef);
@@ -2276,7 +2815,51 @@ fn value_text(value: &V, ty: Option<&Ty>, model: &BTreeMap<String, String>) -> S
         V::Ptr(_) => "a reference".into(),
         V::Opq(_) => "a value".into(),
         V::Undef => "no value".into(),
+        V::Seq(Sq { s: term, e, .. }) => {
+            let item = match ty.and_then(|ty| ty.get()) {
+                Some(IrTy::Seq { e, .. }) => ty.map(|ty| ty.at(*e)),
+                _ => None,
+            };
+            match model.get(&term.s) {
+                Some(raw) => {
+                    let parts: Vec<String> = seq_units(raw).iter().map(|unit| {
+                        let value = e.value(t(unit.clone()));
+                        let mut known = BTreeMap::new();
+                        known.insert(unit.clone(), unit.clone());
+                        value_text(&value, item.as_ref(), &known)
+                    }).collect();
+                    format!("[{}]", parts.join(", "))
+                }
+                None => "?".into(),
+            }
+        }
     }
+}
+
+/// The elements of a sequence value of a model: `(seq.++ (seq.unit #x00000001) (seq.unit
+/// #x00000002))` gives `#x00000001` and `#x00000002`; `(as seq.empty …)` gives none.
+fn seq_units(raw: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = raw;
+    while let Some(at) = rest.find("(seq.unit ") {
+        rest = &rest[at + "(seq.unit ".len()..];
+        let mut depth = 0usize;
+        let mut end = rest.len();
+        for (index, c) in rest.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = index;
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        found.push(rest[..end].trim().to_string());
+        rest = &rest[end..];
+    }
+    found
 }
 
 fn short_type(text: &str) -> String {
@@ -2480,23 +3063,54 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
         Answer::Sat(model) => {
             let mut model: BTreeMap<String, String> = model.into_iter().collect();
             // A small input if one exists (an input with small numbers is easier to read).
+            // The numbers of the inputs, and of the target of each reference input.
+            let targets: Vec<V> = decls.inputs.iter().filter_map(|(_, value, _)| if let V::Ptr(loc) = value { slots.get(loc.slot).cloned() } else { None }).collect();
             let numbers: Vec<(String, u32)> = decls
                 .inputs
                 .iter()
-                .flat_map(|(_, value, _)| flatten(value))
+                .map(|(_, value, _)| value)
+                .chain(targets.iter())
+                .flat_map(flatten)
                 .filter_map(|(sort, term)| {
                     let w: u32 = sort.strip_prefix("(_ BitVec ")?.trim_end_matches(')').parse().ok()?;
                     (w > 8 && !term.s.ends_with(".d|")).then_some((term.s, w))
                 })
                 .collect();
-            let upto = |bound: u128| -> Vec<String> { numbers.iter().map(|(term, w)| format!("(bvule {term} {})", bv_lit(bound, *w).s)).collect() };
-            let (one, ten, positive) = (upto(1), upto(10), upto(1000));
-            let small: Vec<String> = numbers.iter().map(|(term, w)| format!("(or (bvule {term} {}) (bvuge {term} {}))", bv_lit(1000, *w).s, bv_lit(u128::MAX - 999, *w).s)).collect();
+            // A sequence input has at most 2, 3, or 4 elements in the three narrow tries (design
+            // 64, part C: a short list is easier to read).
+            // A sequence input has at most `most` elements, each at most `bound` (design 64,
+            // part C: a short list with small numbers is easier to read).
+            let short = |most: usize, bound: u128| -> Vec<String> {
+                let mut list = Vec::new();
+                for (symbol, e) in &decls.seqs {
+                    list.push(format!("(<= (seq.len {symbol}) {most})"));
+                    if let SeqE::Bv(w) = e {
+                        for index in 0..most {
+                            list.push(format!("(=> (< {index} (seq.len {symbol})) (bvule (seq.nth {symbol} {index}) {}))", bv_lit(bound, *w).s));
+                        }
+                    }
+                }
+                list
+            };
+            let upto = |bound: u128, most: usize| -> Vec<String> {
+                let mut list: Vec<String> = numbers.iter().map(|(term, w)| format!("(bvule {term} {})", bv_lit(bound, *w).s)).collect();
+                list.extend(short(most, bound));
+                list
+            };
+            let mut tries = vec![upto(1, 2), upto(10, 3), upto(1000, 4)];
+            if !decls.seqs.is_empty() {
+                // The shortest sequences first.
+                tries.insert(0, upto(1, 1));
+                tries.insert(0, upto(1, 0));
+            }
+            let mut small: Vec<String> = numbers.iter().map(|(term, w)| format!("(or (bvule {term} {}) (bvuge {term} {}))", bv_lit(1000, *w).s, bv_lit(u128::MAX - 999, *w).s)).collect();
+            small.extend(short(4, 1000));
+            tries.push(small.clone());
             if !small.is_empty() {
                 // First the smallest numbers that are not negative (at most 1, 10, 1000), then
                 // small numbers of each sign (Decided by Claude, 61.10: a small input is easier
                 // to read).
-                for list in [&one, &ten, &positive, &small] {
+                for list in &tries {
                     let narrow = format!("{body}(assert (and {}))\n", list.join(" "));
                     *queries += 1;
                     if let Ok((_, Answer::Sat(found))) = solver.check(&narrow, &symbols) {
@@ -2514,7 +3128,16 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
             // only the modeled inputs.
             if !(x.pc.x && y.pc.x && differs[i][j].x) {
                 // The same calls in a different order (design 61.12, C3).
-                if let Some(moved) = call_order(&x.effects, &y.effects) {
+                // The pair of the model first, then each pair of paths that return (the model can
+                // select a pair of paths that stop at different calls).
+                let returns = |paths: &[PathOut]| paths.iter().filter(|out| matches!(out.exit, Exit::Return(_))).map(|out| out.calls.clone()).collect::<Vec<_>>();
+                let others = returns(&a.outs).into_iter().flat_map(|p| returns(&b.outs).into_iter().map(move |q| (p.clone(), q)));
+                let names = |list: &[(String, String)]| list.iter().map(|(name, _)| (name.clone(), String::new())).collect::<Vec<_>>();
+                let pairs: Vec<(Vec<(String, String)>, Vec<(String, String)>)> = std::iter::once((x.calls.clone(), y.calls.clone())).chain(others).collect();
+                // The names first (two calls that read each other's write have other inputs on
+                // the two sides), then the names with the inputs (one callee with other inputs).
+                let by_name = pairs.iter().find_map(|(p, q)| call_order(&names(p), &names(q)));
+                if let Some(moved) = by_name.or_else(|| pairs.iter().find_map(|(p, q)| call_order(p, q))) {
                     return (Verdict::NotDecided { cause: format!("the order of the calls changes: {}", moved.join(", ")) }, inlined);
                 }
                 let cause = if inline_all { "the difference depends on the result of a call or on a value that the check does not model" } else { "the difference depends on the result of a call or on a value that the check does not model (no callee inlined)" };
@@ -2534,6 +3157,11 @@ fn decide(solver: &Solver, old: &Side, new: &Side, inline_all: bool, queries: &m
             for line in &decls.lines {
                 fixed.push_str(line);
                 fixed.push('\n');
+            }
+            // The assumptions fix the parts of an input that the model does not give (the length
+            // of a sequence, design 64).
+            for line in &decls.assume {
+                fixed.push_str(&format!("(assert {line})\n"));
             }
             for symbol in &symbols {
                 // A value of an opaque sort (`Opaque!val!0`) has no text for an assertion.
@@ -2633,12 +3261,31 @@ mod tests {
     }
 
     // rule- R61.12-3
+    // rule- R64.3-3
     #[test]
     fn the_order_of_the_calls_needs_the_same_calls() {
-        let call = |name: &str| Effect { callee: name.into(), args: Vec::new() };
+        let call = |name: &str| (name.to_string(), String::new());
         assert_eq!(call_order(&[call("a"), call("b")], &[call("b"), call("a")]), Some(vec!["a".to_string(), "b".to_string()]));
         assert_eq!(call_order(&[call("a"), call("b")], &[call("a"), call("c")]), None);
         assert_eq!(call_order(&[call("a")], &[call("a")]), None);
+        // One callee with other inputs in another order (design 64): the key of the inputs.
+        let with = |name: &str, key: &str| (name.to_string(), key.to_string());
+        assert_eq!(call_order(&[with("a", "1"), with("a", "2")], &[with("a", "2"), with("a", "1")]), Some(vec!["a".to_string()]));
+        assert_eq!(call_order(&[with("a", "1"), with("a", "2")], &[with("a", "1"), with("a", "3")]), None);
+    }
+
+    // rule- R64.4-2
+    #[test]
+    fn a_sequence_value_of_a_model_is_a_list() {
+        assert_eq!(seq_units("(seq.++ (seq.unit #x00000001) (seq.unit (_ bv2 32)))"), ["#x00000001", "(_ bv2 32)"]);
+        assert!(seq_units("(as seq.empty (Seq (_ BitVec 32)))").is_empty());
+        let mut model = BTreeMap::new();
+        model.insert("s".to_string(), "(seq.++ (seq.unit #x00000002) (seq.unit #x00000001))".to_string());
+        let ty = Ty { ir: Arc::new(Ir { t: vec![IrTy::Seq { e: 1, n: None, k: "v".into() }, IrTy::Int(32, false)], ..Ir::default() }), id: 0 };
+        let value = V::Seq(Sq { s: t("s"), e: SeqE::Bv(32), n: t("n") });
+        assert_eq!(value_text(&value, Some(&ty), &model), "[2, 1]");
+        model.insert("s".to_string(), "(as seq.empty (Seq (_ BitVec 32)))".to_string());
+        assert_eq!(value_text(&value, Some(&ty), &model), "[]");
     }
 
     // rule- R61.12-4

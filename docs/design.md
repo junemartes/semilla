@@ -7076,3 +7076,126 @@ On held-out pull requests, the section `expansions:` of 10c showed calls in file
 - A call that moves and whose code has the place gets no owner: the edit that moves it (an edit above it in the file) is not a cause by these rules.
 - A macro whose code is only `line!()` (`macro_rules! here { () => { line!() }; }`) has no record: the literal of `line!()` has the span of the call and no syntax context of `here!`, so the walk does not see that `here!` made it. A doc line that moves the call gives the body the fact "the compiled code of `depot::f` changes with no edit at its place: `here!()`" with a spotlight (the case `compiled/expand_moved_only_line`; the same in 10c). A macro with one more node of its own (`($v, line!())`) has a record and the line of R63.9-8.
 - A changed file name with `file!()` is a move only if the file of the call changes; no case of the set has it.
+
+## 64. Batch 10o: effects and order (a call is a value unless it has an effect; read and write sets; a model of `Vec`)
+
+### 64.1 The decision of the user
+
+Rule index: no rule: the subsection has the decision of the user and the general rules.
+
+The user approved the batch on 2026-11-23: "Sounds good let's do that". The goal of Semilla: "a complete semantic diff with as much information as possible, for fast human review".
+
+An agent often moves statements and calls. Before this batch, the check gave "not decided: the order of the calls changes" for each pair of calls in another order, also for two calls with no effect (`x.wrapping_mul(3)` and `y.rotate_left(2)`). It had no model of the memory that a call reads or writes, and no model of `Vec`. Each "not decided" that can be a proof or a sure difference costs the reviewer time.
+
+**The general rules (they keep the rules of 61).**
+
+- "Equivalent" is a proof. A proof never comes from a missing effect or a missing alias. When the check cannot know the effects of a call, the call reads and writes the world.
+- "Different" needs an exact model: an input that the check verified on the two versions (R61.4-2).
+- A proof holds for each checked configuration (dev and release give different panics for overflow).
+- The default mode (no `--compiled`) gives the same output as before. The case set shows it.
+
+### 64.2 A call is a value unless it can have an effect (part A)
+
+Rule index: the identities are below.
+
+The driver gives each call of a form an effect summary (`e` of the callee, `semilla-mir/src/effects.rs`, part B). The check (`semilla-smt/src/mir.rs`, `Run::call`) uses it for each call that it does not inline.
+
+1. [R64.2-1] **A call with no effect is a value.** Its result is an uninterpreted function of the callee and of its inputs: the same function on the two sides and at each place of the call (the name of the function has no index). It writes nothing and it is not in the list of the effects. So two such calls in another order give the same outcome if their arguments are equal. Cases (`tests/effects.rs`): `pure_pair` (`mix(x)` and `fold(y)` in another order), `io_pure`, `exit_pure`, `pointer_call` (a call with no effect moves across a call of a function pointer): equivalent. The negative case: each call with an effect of R64.2-2 keeps its order.
+2. [R64.2-2] **The effects.** A call has an order if it can have one of these effects. Each one is a positive case of `tests/effects.rs` ("not decided: the order of the calls changes" or "different"); the negative case of each one is the same move of a call with no effect (equivalent).
+   - a write through a `&mut` argument (also `&mut self`): the target gets a new value, a function of the call (`one_mut`, `one_mut_loop`);
+   - interior mutability: an argument with a shared reference to a type that is not `Freeze` (the answer of the compiler, also in a field, an element, a type argument, or a capture) gives the world (`two_cells`; `cells`: a callee that only takes `&Cell<u32>`);
+   - a static that can change (`static mut`, a static of a type that is not `Freeze`, a thread local) gives the world (`static_mut`, `static_twice`); a static that cannot change is a constant (`static_table`: equivalent);
+   - a write or a read through a raw pointer, and a raw pointer that the body makes (an address), give the world (`raw`);
+   - an unknown callee: a `dyn` call, a function pointer, a trait method on a type parameter, a callee with no MIR, a callee past the depth limit (`dyn_call`, `io`: `println!` reaches a callee with no MIR);
+   - a `&mut` reference inside a value of an argument (a capture of a closure, a field of a type that the check does not model) gives the world: the check cannot see its target (`bump_with`: the form has the cause; a `&mut` argument at the top, as in `two_muts`, does not);
+   - input and output and a process exit: a callee with no MIR, so the world (`io`, `exit_io`);
+   - a drop of a value with a destructor: a world effect with a stop (`scope_drop`); the drop of a `Vec` of integers only frees memory (`free_drop`: equivalent);
+   - a stop: a panic or a loop (R64.2-3).
+3. [R64.2-3] **A call that can stop has a second path.** A call whose summary says "can stop" (an `assert`, a panic of the standard library, a loop, a recursive call; each world effect too) gives a path that stops at the call. Its condition and its payload are functions of the inputs (and of the history of the world effects for a world call). The stop path is never exact; the path on which the call returns keeps the reading of 61.4 (its model is exact if the other parts are exact). So two calls that can stop keep their order (`two_panics`), and a write cannot move across a call that can stop (`panic_and_write`). The negative case: `panic_and_pure` (a pure call moves across a call that can stop: equivalent), and `after_stop` (a difference after a call that can stop is still exact: "different: for x = 0").
+4. [R64.2-4] **The read set of a call.** The inputs of a call are its arguments and the value behind each reference in them (also through a field, an `Option`, and a chain of at most 5 references). This holds for a value and for a world effect. `behind_ref` (`peek(&v)` with `v = x` → `v = x + 1`) is not equivalent. The negative case: `read_other` (a call that reads `*b` moves across a call that writes `*a`: equivalent).
+
+**A defect of 61.4 (soundness, fixed here).** Before this batch, the value behind a reference argument was not an input of the result of a call: `let v = 1; g(&v)` → `let v = 2; g(&v)` gave "equivalent" in the first try (the result was a function of the index of the call only). R64.2-4 fixes it; `behind_ref` is the test.
+
+**Decided by Claude.**
+
+- An allocation is not an effect: the check does not model it. A drop of a `Vec`, a `String`, or a `Box` of a type with no destructor only frees memory (no effect in a summary), and a drop of a sequence value (part C) is no effect in the check.
+- A process exit and an abort are world effects with a stop. The values behind the `&mut` parameters at an exit are a part of the outcome, as at a panic (61.4). This is conservative: after an exit no code can read them.
+- A function of the standard library with no MIR, the return type `!`, and `#[track_caller]` is a panic helper (`core::option::unwrap_failed`): it can stop, and it has no other effect. An exit or an abort of the standard library has no such attribute.
+
+### 64.3 Read and write sets (part B)
+
+Rule index: the identities are below.
+
+1. [R64.3-1] **The effect summary of a call** (`semilla-mir/src/effects.rs`). The driver walks the MIR of the resolved instance of the callee and of each body that it calls, to the depth 4 (the callee is depth 1). The summary is the union of the parts: the world (with its cause) and the stop. Each part that the walk does not know gives the world: a callee with no MIR, an unresolved call, a callee past the depth limit, an intrinsic outside the list of pure intrinsics. A call that the MIR of a body of another crate makes is in the summary only if the compiler has the MIR of that crate (a generic or `#[inline]` function); else it is a callee with no MIR. An operation of the sequence model (part C) writes only through its `&mut` argument. The summary of an instance is kept for the run of the driver; a summary that uses an open instance of a cycle is not kept. The cases of R64.2-2 are the positive cases (each part gives the world); the negative cases are the workspace functions with an empty summary (`mix`, `fold`: `pure_pair` is equivalent).
+2. [R64.3-2] **Two calls commute if their sets do not overlap.** A call writes the target of each `&mut` argument (two distinct `&mut` places do not alias by the Rust rules: two `&mut` parameters are two inputs). It reads its read set (R64.2-4). A world call reads and writes the world (each place that the check does not see: a static, a place behind a raw pointer, a place with interior mutability) and the targets of its own `&mut` arguments; it cannot reach a `&mut` place that it does not get (the Rust rule). The world effects are a chain (the k-th world call has a result that is a function of k and of its inputs), and the two sides must make them in the same order. Each `&mut` target and the world chain are the memory state: the outcome compares each output and each final state. So two calls on two `&mut` places commute (`two_muts`, `read_other`: equivalent); two calls on one place do not (`one_mut`: "different: for a = &…"; `read_same`: "different: for a = &0"). A `Cell` behind two `&` is the world (`two_cells`). An `unsafe` raw pointer is the world (`raw`).
+3. [R64.3-3] **The cause names the calls whose order changes.** For a model that is not exact, the cause "the order of the calls changes: A, B" names the calls with an order (a world effect, a write, or a stop) of the selected pair of paths, else of a pair of paths that return: first by the callee names, then by the callee and the direct values of the arguments (one callee with other arguments: `two_cells` gives `shop::touch`). The negative case: a different set of calls has no such cause (a unit test).
+
+**Decided by Claude.**
+
+- The depth limit is 4. Cause: the MIR of the standard library is deep (the code of `fmt`), and each level costs the body of an instance in the driver.
+- A raw pointer that a body makes (`&raw`, a cast to a raw pointer, an address) gives the world, also with no deref. Cause: the address can be a value of the result, and the check does not model addresses. This makes most functions of the standard library that use raw pointers world effects (`Vec::push`, `slice::iter`); part C models the operations of `Vec`.
+- A jump back to a block (a loop) gives a stop: the call can run forever.
+- The second try (inline each callee with a form) now also has the forms of the standard library of each callee of the body, not only of the changed callees (`oracle.rs`, `check_pair`): a callee that the second try inlines needs them.
+
+### 64.4 A sequence model of `Vec` and slices (part C)
+
+Rule index: the identities are below.
+
+1. [R64.4-1] **The sequence model.** A `Vec<T>` of the global allocator, a slice `[T]`, and an array `[T; N]` with a scalar `T` (an integer, `bool`, `char`) is a Z3 sequence of `T` with a length of 64 bits (`IrTy::Seq`). The length is a separate term, so each compare of a length or an index stays in bit vectors; each sequence keeps `(seq.len s) = (bv2nat n)`. A `&mut Vec` argument is one place (R64.3-2), and `deref` gives the same place (a `Vec` and its slice are one sequence). The operations with their panics: `Vec::new`, `with_capacity` (the capacity is not visible; "capacity overflow" for more than `isize::MAX` bytes), `push`, `pop` (`None` on an empty vector, no panic), `len`, `is_empty`, `clear`, `truncate`, `insert` ("insertion index" past the length), `remove` ("removal index"), `extend_from_slice` (also of a constant array `&[1, 2]`), `<[T]>::swap`, `get`, `first`, `last` (an `Option` of a reference to the element), indexing with `[]` of a `Vec` and of a slice or an array (the bounds check panics: "bounds"), `len` of a slice, an array value (`[1, 2, 3]`, `[0; 4]` up to 64 elements), and a constant index. Each operation has a positive case (equivalent) and a negative case (different) in `tests/effects.rs`: `push_two` (two `push` on one vector: "different: for v = &[]: … [1, 2] … [2, 1]"), `push_same` (equal values: equivalent), `push_pair` (two vectors: equivalent), `len_other` and `len_same`, `make` and `make_n`, `pop_one` and `pop_more`, `empty` and `empty_wrong`, `clear_all` and `clear_wrong`, `insert_end` and `insert_one`, `remove_first` and `remove_guard`, `swap_two` and `swap_wrong`, `get_or` and `get_wrong`, `first_or` and `last_or`, `index_vec` and `index_guard`, `extend_two` and `extend_wrong`, `extend_slice`, `slice_at`, `array_at`, `pick`.
+2. [R64.4-2] **A value of the model is a list.** A sequence in a model is shown as a list of its elements: "before returns () with `*v` = [1, 2], after returns () with `*v` = [2, 1]". The search for a small input tries the shortest sequences first (0, 1, then at most 2, 3, 4 elements) with small elements. The negative case: an empty sequence is `[]` (a unit test).
+3. [R64.4-3] **A sequence of other elements stays opaque.** A `Vec` of a type that is not a scalar keeps the rules of 61.4: `Vec<(u32, u32)>::push` is a world effect (`pairs`: "not decided: the order of the calls changes"). The negative case: a `Vec<u32>` is in the model (`push_two`).
+
+**Decided by Claude.**
+
+- `iter().sum()` is not in the model: it needs a model of the iterator (a loop over a reference that a call returns). `total` stays "not decided".
+- An allocation always succeeds (it is not modeled), so `push` and `insert` have no capacity panic: an existing vector has at most `isize::MAX` bytes, and a real machine cannot have a vector near that size.
+- The panic of an index of a `Vec` has the kind "bounds", as the bounds check of a slice index: the two messages of the standard library are equal.
+
+### 64.5 A body that reads a changed constant (part D)
+
+Rule index: the identities are below.
+
+1. [R64.5-1] **A body that reads a changed constant has a line.** A body whose text and graph do not change, but that reads a constant item with a changed value (the values `cv` of its two records), gets a line in the step section: "shop::price (src/lib.rs:4): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6)". Case `compiled/const_value_reader` (`price` is different, `cap` is equivalent). The negative case: `fee` reads a constant with no change, and it has no line.
+2. [R64.5-2; no negative case: an equal text with equal values stays a proof by R61.4-1, which its own cases test] **An equal text is a proof only with equal constant values.** The text of a body names a constant by its path. So an equal N0 text with a different value of a constant that the body reads is no proof: the check runs the solver (`cap`: "equivalent (proved by SMT)").
+
+The values of a path are a set: a constant of a generic item can have one value for each type (`SizedTypeProperties::SIZE` has 4 and 8 in a body of `compiled/expand_pair_nested_test`; the set does not change, so the body has no line). This answers the open question of 61.15: `shop::get` of `compiled/const_assoc_value` (it reads `S::B`, 7 → 6) now has the line "same graph; reads a changed constant: `shop::S::B` (7 → 6); different (for each input: before returns 14, after returns 13)".
+
+### 64.6 A test of R61.16-1 (part E)
+
+Rule index: no rule: the subsection adds a test of the rule R61.16-1.
+
+The part "a name with two source bodies gets no span by its name only" (`by_name`) had no test that fails when only this part is off. The merge of the configurations is now a function (`merge_prepared`, `oracle.rs`), and the unit test `a_name_with_records_in_two_files_and_no_split_gets_no_span_by_its_name` gives it one name with records in two files in one tree of one configuration (a bench and a test, each a crate `probe`) and one comparison with no split. With `by_name` always true, the test fails: the span is `benches/probe.rs:1`, the place of one of the two bodies.
+
+### 64.7 The results, the limits, and the open questions
+
+Rule index: no rule: the subsection has the results, the limits, and the open questions.
+
+**The measure.** The seven pull requests of the training set, `semilla step "the change" --compiled` in a clone of each one (`git reset --soft old` with the tree of `new`), an empty cache, `SEMILLA_NO_CHECK`, the release binaries of 10c2 and of this batch one after the other. The counts are the results of the step section (the body lines and the reached bodies): equivalent, different, not decided.
+
+| PR | Time 10c2 → 10o | Equivalent, different, not decided (10c2 → 10o) |
+|---|---|---|
+| bitflags #465 | 19.9 → 19.5 s | 0, 0, 0 → 0, 0, 0 |
+| hashbrown #693 | 25.5 → 25.9 s | 20, 0, 75 → 20, 0, 75 |
+| indexmap #424 | 51.8 → 52.1 s | 12, 0, 113 → 12, 0, 113 |
+| itertools #1086 | 46.2 → 48.0 s | 0, 0, 0 → 0, 0, 0 |
+| num-traits #334 | 28.1 → 28.8 s | 16, 0, 30 → 16, 0, 30 |
+| uuid #932 | 59.3 → 57.7 s | 19, 0, 124 → 19, 0, 124 |
+| winnow #891 | 227.8 → 227.7 s | 14, 0, 79 → 15, 0, 78 |
+
+- One new proof, no new difference: `winnow`: the reached body `<&[u8] as winnow::stream::Compare<u8>>::compare` was "not decided (a call that returns a reference)"; now it is "equivalent (proved after inlining …)": `self.first()` is in the sequence model. Each other result keeps its kind. The pull requests have few moved calls and no reorder of a `Vec` of integers.
+- The causes of "not decided" that change: the check now goes further and stops at a later part. `uuid`: one body (`visit_seq`, 10 fact lines) "an array: [0; 16]" → "a call that returns a reference (to a value): bytes.iter_mut().enumerate()" (the array is in the model now). `hashbrown`: `RawTable::reserve` "a cleanup path with a call: unlikely(…)" → "a cleanup path with a call: self.reserve_rehash(…)", `RawTable::shrink_to` "a cleanup path with a call: usize::max(…)" → "a constant that the compiler does not evaluate here: Self::TABLE_LAYOUT" (the second try now has the forms of the standard library of each callee), `into_allocation` in the release configurations, and one reached test closure "an array" → "a field of a value that the check does not model". `indexmap`: one "not checked alone (the budget of the step)" is now a result of a variant (the budget is a time).
+- `winnow`: 12 causes of "not decided" change, each to a later part of the same body ("a cleanup path with a call: pub T" → "a call that returns a reference (to an opaque value): pub T" in 8 test bodies; "to an opaque value" → "to a value" in 2 bodies and in a fold of the reached bodies).
+- The time of a step is 0.97 to 1.04 times the time of 10c2. The effect summaries of the driver and the forms of the callees for the second try cost little.
+
+**The limits.**
+
+- The summary of a function of another crate of the workspace needs its MIR: a function that is not generic and not `#[inline]` is a callee with no MIR (the world).
+- Most functions of the standard library use raw pointers, so they are world effects (`HashMap::insert`, `slice::iter`). Only the operations of part C are in the model.
+- Z3 is slow with some sequence formulas (a `remove`, then a `push` and a `pop` of one vector): a timeout gives "not decided".
+- The first try does not inline a callee of the standard library: its result is a value (R64.2-1), so a difference that depends on it is not exact. The second try inlines it, but it can stop at a different part of another callee.
+- The rule of interior mutability (`Freeze`) and the rule of raw pointers cover each other: in the mutation check, the raw pointer rule off gives no failed test (each raw deref in `dev` has a cast for the null check).
+
+**Open questions.**
+
+- Should the first try inline the small callees of the standard library (as the second try does)? It gives more exact differences, and the method text of more proofs changes.
+- Should the check model addresses, so that a raw pointer that a body makes is not the world?

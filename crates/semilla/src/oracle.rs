@@ -956,7 +956,7 @@ fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirD
 /// The graphs of a body in one configuration, in the form of the verifier (design 60). The
 /// sides keep their data also for two graphs with the same shape: the verifier pairs the nested
 /// bodies through the tree compare, not by their names (R60.3-9).
-fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair) -> semilla_verify::flow::GraphPair {
+fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair, consts: Vec<(String, String, String)>) -> semilla_verify::flow::GraphPair {
     use semilla_verify::flow::{FlowSide, GraphPair};
     let side = |exists: bool, graph: &Option<std::sync::Arc<semilla_normal::graph::RecordGraph>>, key: &Option<(String, String)>| match (exists, graph) {
         (false, _) => FlowSide::NoBody,
@@ -965,7 +965,196 @@ fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair) -> semilla_
         (true, Some(graph)) => FlowSide::Graph(semilla_verify::flow::FlowGraph { key: key.clone(), ..flow_graph(graph) }),
     };
     let same = matches!((&pair.old, &pair.new), (Some(old), Some(new)) if old.same_shape(new));
-    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old, &pair.old_key), new: side(pair.new_body, &pair.new, &pair.new_key) }
+    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old, &pair.old_key), new: side(pair.new_body, &pair.new, &pair.new_key), consts }
+}
+
+/// The constant items that two records read with a different value (design 64, part D): the
+/// path, the old value, and the new value. A path that only one record reads is not in the
+/// list (the text of the body then changes).
+fn changed_consts(old: Option<&Vec<(String, String)>>, new: Option<&Vec<(String, String)>>) -> Vec<(String, String, String)> {
+    let (Some(old), Some(new)) = (old, new) else { return Vec::new() };
+    // The values of each path: a constant of a generic item can have one value for each type
+    // (`SizedTypeProperties::SIZE`), so the set of the values is the compare.
+    let values = |list: &Vec<(String, String)>| {
+        let mut found: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+        for (path, value) in list {
+            found.entry(path.clone()).or_default().insert(value.clone());
+        }
+        found
+    };
+    let (before, after) = (values(old), values(new));
+    let mut found = Vec::new();
+    for (path, now) in &after {
+        if let Some(was) = before.get(path)
+            && was != now
+        {
+            let text = |set: &std::collections::BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(", ");
+            found.push((path.clone(), text(was), text(now)));
+        }
+    }
+    found
+}
+
+/// The key of a body: its name and its place (see `compare_with`).
+type BodyKey = (String, Option<(String, usize)>);
+
+/// The comparisons of the checked configurations as one list for the verifier: one comparison
+/// for each body key, with the status, the graphs, the span, and the elements over the
+/// configurations. `prepared` has the state of each configuration and its spans; `many` has
+/// the names with two places in one configuration.
+fn merge_prepared(prepared: Vec<(SetState, BTreeMap<String, (String, usize)>)>, many: std::collections::BTreeSet<String>) -> Vec<BodyComparison> {
+    let mut spans: BTreeMap<String, (String, usize)> = BTreeMap::new();
+    let mut combined: BTreeMap<BodyKey, BodyStatus> = BTreeMap::new();
+    // The configurations of each body: those that compile it, and those where it is not equal.
+    let mut compiled: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
+    let mut differs: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
+    let mut config: BTreeMap<BodyKey, std::collections::BTreeSet<String>> = BTreeMap::new();
+    // The MIR elements that differ, over the configurations (design 40.3). `None`: a
+    // configuration has no element data for a changed body.
+    let mut elements: BTreeMap<BodyKey, Option<semilla_normal::elements::ElementDiff>> = BTreeMap::new();
+    // The control flow graphs of each body, for each configuration (design 60).
+    let mut graphs: BTreeMap<BodyKey, Vec<semilla_verify::flow::GraphPair>> = BTreeMap::new();
+    // The byte range of each body by its name and place (design 40.2): the "after" records win.
+    let mut ranges: BTreeMap<(String, (String, usize)), (usize, usize)> = BTreeMap::new();
+    for (state, _) in &prepared {
+        for levels in [&state.sides.before, &state.sides.after] {
+            for record in levels.get("n0").into_iter().flatten() {
+                if let Some((span, range)) = record.span.as_ref().and_then(|span| Some((span, span.range?))) {
+                    ranges.insert((record.name.clone(), (span.file.clone(), span.line_start)), range);
+                }
+            }
+        }
+    }
+    // The names with N0 records in two files in one tree of a checked configuration: each
+    // file is a source body (R61.14-1). In each configuration, each comparison of such a name
+    // has the key of the file of its records, also in a configuration that compiles only one
+    // of them (R61.16-1). Before, such a comparison had the name as its key and the span of
+    // the name, so the records of one file went to the body of the other file.
+    let two_files: std::collections::BTreeSet<String> = prepared.iter().flat_map(|(state, _)| state.sides.two_files.iter().cloned()).collect();
+    // The keys of a name of `two_files` with no source file: no span (see `key_of`).
+    let mut no_file: std::collections::BTreeSet<BodyKey> = std::collections::BTreeSet::new();
+    for (state, own) in prepared {
+        // The place of each source body of a name with more than one (R61.14-1): the span
+        // of its record in its file; the "after" records win, then the first place.
+        let mut source_places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
+        // The one file of the records of each name of `two_files` in this configuration:
+        // the "after" records win. `None`: the records of a tree are in two files.
+        let mut one_file: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+        for levels in [&state.sides.after, &state.sides.before] {
+            let records: Vec<&semilla_normal::BodyRecord> = levels.get("n0").into_iter().flatten().collect();
+            let mut places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
+            let mut files: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+            for (name, targets) in target_files(levels) {
+                if two_files.contains(name) {
+                    files.insert(name, targets.into_values().collect());
+                }
+            }
+            for record in &records {
+                let Some(span) = &record.span else { continue };
+                let place = (span.file.clone(), span.line_start);
+                match places.get_mut(&(record.name.as_str(), span.file.as_str())) {
+                    Some(known) if place < *known => *known = place,
+                    Some(_) => {}
+                    None => {
+                        places.insert((record.name.as_str(), span.file.as_str()), place);
+                    }
+                }
+            }
+            for (key, place) in places {
+                source_places.entry(key).or_insert(place);
+            }
+            for (name, files) in files {
+                one_file.entry(name).or_insert_with(|| if files.len() == 1 { files.first().copied() } else { None });
+            }
+        }
+        let key_of = |comparison: &semilla_normal::BodyComparison| -> BodyKey {
+            let name = &comparison.name;
+            if let Some(file) = &comparison.place {
+                return (name.clone(), source_places.get(&(name.as_str(), file.as_str())).cloned().or_else(|| Some((file.clone(), 0))));
+            }
+            if two_files.contains(name) {
+                // A comparison of a name with two source bodies that is not split: its
+                // records are in one file in this configuration. Records in two files of
+                // one tree with no split (records with no target) give no source body.
+                let file = one_file.get(name.as_str()).copied().flatten();
+                return (name.clone(), file.and_then(|file| source_places.get(&(name.as_str(), file)).cloned()));
+            }
+            (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() })
+        };
+        let name = state.config.name();
+        // The N0 record of each name and target of each side (design 64, part D).
+        let by_key = |levels: &'_ BTreeMap<String, Vec<semilla_normal::BodyRecord>>| -> std::collections::HashMap<(String, String), usize> {
+            levels.get("n0").into_iter().flatten().enumerate().map(|(index, record)| ((record.name.clone(), record.target.clone()), index)).collect()
+        };
+        let (before_keys, after_keys) = (by_key(&state.sides.before), by_key(&state.sides.after));
+        let record_of = |levels: &'_ BTreeMap<String, Vec<semilla_normal::BodyRecord>>, keys: &std::collections::HashMap<(String, String), usize>, key: &Option<(String, String)>| -> Option<Vec<(String, String)>> {
+            let index = *keys.get(key.as_ref()?)?;
+            // Only the constant values: the rest of a record is large.
+            Some(levels.get("n0")?.get(index)?.cv.clone())
+        };
+        for comparison in &state.comparisons {
+            let key = key_of(comparison);
+            if key.1.is_none() && two_files.contains(&key.0) {
+                no_file.insert(key.clone());
+            }
+            if !comparison.graphs.is_empty() {
+                graphs.entry(key.clone()).or_default().extend(comparison.graphs.iter().map(|pair| {
+                    let consts = changed_consts(record_of(&state.sides.before, &before_keys, &pair.old_key).as_ref(), record_of(&state.sides.after, &after_keys, &pair.new_key).as_ref());
+                    graph_pair(&name, pair, consts)
+                }));
+            }
+            if !comparison.config.is_empty() {
+                config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
+            }
+            let status = match comparison.status.clone() {
+                semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
+                semilla_normal::BodyStatus::Different { cfg_changed } => BodyStatus::Different { cfg_changed },
+                semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
+                semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
+            };
+            let found = match &status {
+                BodyStatus::Equal { .. } => Some(semilla_normal::elements::ElementDiff::default()),
+                BodyStatus::Different { .. } => comparison.elements.clone(),
+                _ => None,
+            };
+            let entry = elements.entry(key.clone()).or_insert_with(|| Some(semilla_normal::elements::ElementDiff::default()));
+            match (entry.as_mut(), found) {
+                (Some(known), Some(found)) => known.merge(found),
+                _ => *entry = None,
+            }
+            compiled.entry(key.clone()).or_default().push(name.clone());
+            if !matches!(status, BodyStatus::Equal { .. }) {
+                differs.entry(key.clone()).or_default().push(name.clone());
+            }
+            let merged = match combined.remove(&key) {
+                Some(old) => combine(old, status),
+                None => status,
+            };
+            combined.insert(key, merged);
+        }
+        spans.extend(own);
+    }
+    combined
+        .into_iter()
+        .map(|(key, status)| {
+            // The output names the configurations if the body is equal in one or more of
+            // them, and not equal in one or more (batch 5u, part A). The combined status is
+            // not `Equal`, so the note cannot make a fact neutral.
+            let all = compiled.remove(&key).unwrap_or_default();
+            let differs_in = differs.remove(&key).filter(|list| list.len() < all.len()).unwrap_or_default();
+            let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
+            let config = config.remove(&key).into_iter().flatten().collect();
+            let found = elements.remove(&key).flatten().filter(|_| matches!(status, BodyStatus::Different { .. })).map(mir_diff);
+            let graphs = graphs.remove(&key).unwrap_or_default();
+            // A name with two source bodies gets no span by its name only (R61.16-1): the span
+            // of the name can be the span of the other body.
+            let by_name = !no_file.contains(&key);
+            let (name, place) = key;
+            let span = place.or_else(|| spans.get(&name).filter(|_| by_name).cloned());
+            let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
+            BodyComparison { graphs, span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
+        })
+        .collect()
 }
 
 /// A graph of a record in the form of the verifier.
@@ -1177,7 +1366,9 @@ impl NormalOracle {
     pub(crate) fn check_pair(&self, solver: &semilla_smt::Solver, a: &semilla_normal::BodyRecord, b: &semilla_normal::BodyRecord, old: &EquivSide, new: &EquivSide, renames: &[(String, String)], renamed: bool, changed: &std::sync::Arc<std::collections::BTreeSet<String>>, equal_proof: bool) -> Option<semilla_verify::equiv::Answer> {
         use semilla_verify::equiv::{Answer, Verdict};
         let rename_text = |text: &str| if renamed { semilla_normal::paths::rename(text, renames) } else { text.to_string() };
-        if equal_proof && rename_text(&a.text) == b.text {
+        // An equal text is a proof only if each constant item that the two texts name by its
+        // path has the same values (design 64, part D, R64.5-2).
+        if equal_proof && rename_text(&a.text) == b.text && changed_consts(Some(&a.cv), Some(&b.cv)).is_empty() {
             return Some(Answer { verdict: Verdict::Equivalent("equal MIR".into()), inlined: Vec::new(), queries: 0, millis: 0, local: None });
         }
         let (Some(form_a), Some(form_b)) = (record_form(a), record_form(b)) else {
@@ -1192,9 +1383,11 @@ impl NormalOracle {
             while at < list.len() && list.len() < 32 {
                 let current = list[at];
                 at += 1;
+                // The callees of the body, changed or not: the second try of the check inlines
+                // each callee with a form, and the callees of the standard library of an
+                // inlined body need their forms too (design 64).
                 for callee in &current.callees {
-                    if changed.contains(callee)
-                        && let Some(found) = side.find(callee, &record.target, &record.unit)
+                    if let Some(found) = side.find(callee, &record.target, &record.unit)
                         && !list.iter().any(|known| std::ptr::eq(*known, found))
                     {
                         list.push(found);
@@ -1565,7 +1758,6 @@ impl BodyOracle for NormalOracle {
         // definition (design 35.8, batch 7b, part 4.4). A name with two places in one
         // configuration (two targets with one crate name) keeps the name as its key: the span
         // of the changed target is then the place of the body (batch 5n, A4).
-        type BodyKey = (String, Option<(String, usize)>);
         let mut many: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let mut prepared = Vec::new();
         for mut state in states {
@@ -1589,145 +1781,7 @@ impl BodyOracle for NormalOracle {
             many.extend(state.sides.two_places.iter().cloned());
             prepared.push((state, own));
         }
-        let mut spans: BTreeMap<String, (String, usize)> = BTreeMap::new();
-        let mut combined: BTreeMap<BodyKey, BodyStatus> = BTreeMap::new();
-        // The configurations of each body: those that compile it, and those where it is not equal.
-        let mut compiled: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
-        let mut differs: BTreeMap<BodyKey, Vec<String>> = BTreeMap::new();
-        let mut config: BTreeMap<BodyKey, std::collections::BTreeSet<String>> = BTreeMap::new();
-        // The MIR elements that differ, over the configurations (design 40.3). `None`: a
-        // configuration has no element data for a changed body.
-        let mut elements: BTreeMap<BodyKey, Option<semilla_normal::elements::ElementDiff>> = BTreeMap::new();
-        // The control flow graphs of each body, for each configuration (design 60).
-        let mut graphs: BTreeMap<BodyKey, Vec<semilla_verify::flow::GraphPair>> = BTreeMap::new();
-        // The byte range of each body by its name and place (design 40.2): the "after" records win.
-        let mut ranges: BTreeMap<(String, (String, usize)), (usize, usize)> = BTreeMap::new();
-        for (state, _) in &prepared {
-            for levels in [&state.sides.before, &state.sides.after] {
-                for record in levels.get("n0").into_iter().flatten() {
-                    if let Some((span, range)) = record.span.as_ref().and_then(|span| Some((span, span.range?))) {
-                        ranges.insert((record.name.clone(), (span.file.clone(), span.line_start)), range);
-                    }
-                }
-            }
-        }
-        // The names with N0 records in two files in one tree of a checked configuration: each
-        // file is a source body (R61.14-1). In each configuration, each comparison of such a name
-        // has the key of the file of its records, also in a configuration that compiles only one
-        // of them (R61.16-1). Before, such a comparison had the name as its key and the span of
-        // the name, so the records of one file went to the body of the other file.
-        let two_files: std::collections::BTreeSet<String> = prepared.iter().flat_map(|(state, _)| state.sides.two_files.iter().cloned()).collect();
-        // The keys of a name of `two_files` with no source file: no span (see `key_of`).
-        let mut no_file: std::collections::BTreeSet<BodyKey> = std::collections::BTreeSet::new();
-        for (state, own) in prepared {
-            // The place of each source body of a name with more than one (R61.14-1): the span
-            // of its record in its file; the "after" records win, then the first place.
-            let mut source_places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
-            // The one file of the records of each name of `two_files` in this configuration:
-            // the "after" records win. `None`: the records of a tree are in two files.
-            let mut one_file: BTreeMap<&str, Option<&str>> = BTreeMap::new();
-            for levels in [&state.sides.after, &state.sides.before] {
-                let records: Vec<&semilla_normal::BodyRecord> = levels.get("n0").into_iter().flatten().collect();
-                let mut places: BTreeMap<(&str, &str), (String, usize)> = BTreeMap::new();
-                let mut files: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
-                for (name, targets) in target_files(levels) {
-                    if two_files.contains(name) {
-                        files.insert(name, targets.into_values().collect());
-                    }
-                }
-                for record in &records {
-                    let Some(span) = &record.span else { continue };
-                    let place = (span.file.clone(), span.line_start);
-                    match places.get_mut(&(record.name.as_str(), span.file.as_str())) {
-                        Some(known) if place < *known => *known = place,
-                        Some(_) => {}
-                        None => {
-                            places.insert((record.name.as_str(), span.file.as_str()), place);
-                        }
-                    }
-                }
-                for (key, place) in places {
-                    source_places.entry(key).or_insert(place);
-                }
-                for (name, files) in files {
-                    one_file.entry(name).or_insert_with(|| if files.len() == 1 { files.first().copied() } else { None });
-                }
-            }
-            let key_of = |comparison: &semilla_normal::BodyComparison| -> BodyKey {
-                let name = &comparison.name;
-                if let Some(file) = &comparison.place {
-                    return (name.clone(), source_places.get(&(name.as_str(), file.as_str())).cloned().or_else(|| Some((file.clone(), 0))));
-                }
-                if two_files.contains(name) {
-                    // A comparison of a name with two source bodies that is not split: its
-                    // records are in one file in this configuration. Records in two files of
-                    // one tree with no split (records with no target) give no source body.
-                    let file = one_file.get(name.as_str()).copied().flatten();
-                    return (name.clone(), file.and_then(|file| source_places.get(&(name.as_str(), file)).cloned()));
-                }
-                (name.clone(), if many.contains(name) { None } else { own.get(name).cloned() })
-            };
-            let name = state.config.name();
-            for comparison in &state.comparisons {
-                let key = key_of(comparison);
-                if key.1.is_none() && two_files.contains(&key.0) {
-                    no_file.insert(key.clone());
-                }
-                if !comparison.graphs.is_empty() {
-                    graphs.entry(key.clone()).or_default().extend(comparison.graphs.iter().map(|pair| graph_pair(&name, pair)));
-                }
-                if !comparison.config.is_empty() {
-                    config.entry(key.clone()).or_default().extend(comparison.config.iter().cloned());
-                }
-                let status = match comparison.status.clone() {
-                    semilla_normal::BodyStatus::Equal { level, proof } => BodyStatus::Equal { level, proof },
-                    semilla_normal::BodyStatus::Different { cfg_changed } => BodyStatus::Different { cfg_changed },
-                    semilla_normal::BodyStatus::BeforeOnly => BodyStatus::BeforeOnly,
-                    semilla_normal::BodyStatus::AfterOnly => BodyStatus::AfterOnly,
-                };
-                let found = match &status {
-                    BodyStatus::Equal { .. } => Some(semilla_normal::elements::ElementDiff::default()),
-                    BodyStatus::Different { .. } => comparison.elements.clone(),
-                    _ => None,
-                };
-                let entry = elements.entry(key.clone()).or_insert_with(|| Some(semilla_normal::elements::ElementDiff::default()));
-                match (entry.as_mut(), found) {
-                    (Some(known), Some(found)) => known.merge(found),
-                    _ => *entry = None,
-                }
-                compiled.entry(key.clone()).or_default().push(name.clone());
-                if !matches!(status, BodyStatus::Equal { .. }) {
-                    differs.entry(key.clone()).or_default().push(name.clone());
-                }
-                let merged = match combined.remove(&key) {
-                    Some(old) => combine(old, status),
-                    None => status,
-                };
-                combined.insert(key, merged);
-            }
-            spans.extend(own);
-        }
-        Ok(combined
-            .into_iter()
-            .map(|(key, status)| {
-                // The output names the configurations if the body is equal in one or more of
-                // them, and not equal in one or more (batch 5u, part A). The combined status is
-                // not `Equal`, so the note cannot make a fact neutral.
-                let all = compiled.remove(&key).unwrap_or_default();
-                let differs_in = differs.remove(&key).filter(|list| list.len() < all.len()).unwrap_or_default();
-                let equal_in = if differs_in.is_empty() { Vec::new() } else { all.into_iter().filter(|config| !differs_in.contains(config)).collect() };
-                let config = config.remove(&key).into_iter().flatten().collect();
-                let found = elements.remove(&key).flatten().filter(|_| matches!(status, BodyStatus::Different { .. })).map(mir_diff);
-                let graphs = graphs.remove(&key).unwrap_or_default();
-                // A name with two source bodies gets no span by its name only (R61.16-1): the span
-                // of the name can be the span of the other body.
-                let by_name = !no_file.contains(&key);
-                let (name, place) = key;
-                let span = place.or_else(|| spans.get(&name).filter(|_| by_name).cloned());
-                let range = span.as_ref().and_then(|span| ranges.get(&(name.clone(), span.clone())).copied());
-                BodyComparison { graphs, span, status, config, differs_in, equal_in, stopped: Vec::new(), name, range, elements: found }
-            })
-            .collect())
+        Ok(merge_prepared(prepared, many))
     }
 
     fn truths(&self, step: &Step) -> Result<[Vec<semilla_verify::ConfigTruth>; 2]> {
@@ -2161,6 +2215,40 @@ mod tests {
         let new = vec![record("demo.bin.1", "src/main.rs", "a2", "demo::main"), record("demo.bench.2", "benches/demo.rs", "b", "demo::main"), record("demo.bin.1", "src/main.rs", "c2", "demo::only")];
         assert_eq!(changed_target_spans(&old, &new), [("demo::main".to_string(), ("src/main.rs".to_string(), 3))]);
         assert!(changed_target_spans(&old, &old).is_empty());
+    }
+
+    // Batch 10o, part E (R61.16-1, `by_name` of `merge_prepared`): one body name has records
+    // in two files in one tree of one configuration (a bench and a test, each a crate `probe`)
+    // and one comparison with no split and no file. Its span is not the span of the name: that
+    // span is the place of one of the two bodies. A name with one file keeps the span of the
+    // name. With `by_name` always true, the first assert fails.
+    // rule+ R61.16-1
+    // rule- R61.16-1
+    #[test]
+    fn a_name_with_records_in_two_files_and_no_split_gets_no_span_by_its_name() {
+        let record = |target: &str, file: &str, name: &str, text: &str| serde_json::json!({ "name": name, "level": "n0", "text": text, "target": target, "span": { "file": file, "line_start": 1, "line_end": 3 } }).to_string();
+        let before = [record("probe.bench.1", "benches/probe.rs", "probe::hash", "a"), record("probe.test.2", "tests/probe.rs", "probe::hash", "b"), record("probe.test.2", "tests/probe.rs", "probe::only", "c")];
+        let after = [record("probe.bench.1", "benches/probe.rs", "probe::hash", "a2"), record("probe.test.2", "tests/probe.rs", "probe::hash", "b"), record("probe.test.2", "tests/probe.rs", "probe::only", "c2")];
+        let levels = |lines: &[String]| semilla_normal::Levels::from([("n0".to_string(), semilla_normal::parse_records(&lines.join("\n")).unwrap())]);
+        let sides = Sides::new(levels(&before), levels(&after));
+        assert_eq!(sides.two_files, ["probe::hash"]);
+        let comparison = |name: &str| semilla_normal::BodyComparison { name: name.to_string(), status: semilla_normal::BodyStatus::Different { cfg_changed: false }, config: Vec::new(), elements: None, graphs: Vec::new(), place: None };
+        let state = SetState {
+            config: Configuration::DEV,
+            renames: BTreeMap::new(),
+            sides: std::sync::Arc::new(sides),
+            before_marks: semilla_normal::Marks::default(),
+            after_marks: semilla_normal::Marks::default(),
+            comparisons: vec![comparison("probe::hash"), comparison("probe::only")],
+            done: None,
+        };
+        let mut own = BTreeMap::new();
+        state.spans(&mut own);
+        assert!(own.contains_key("probe::hash"), "{own:?}");
+        let merged = merge_prepared(vec![(state, own)], std::collections::BTreeSet::new());
+        let span = |name: &str| merged.iter().find(|found| found.name == name).map(|found| found.span.clone());
+        assert_eq!(span("probe::hash"), Some(None));
+        assert_eq!(span("probe::only"), Some(Some(("tests/probe.rs".to_string(), 1))));
     }
 
     // Batch 5s, A5: the status of a body over two configurations, for each pair of states.

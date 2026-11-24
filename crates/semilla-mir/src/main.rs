@@ -41,6 +41,7 @@ extern crate rustc_trait_selection;
 
 mod config;
 mod consts;
+mod effects;
 mod expand;
 mod graph;
 mod harness;

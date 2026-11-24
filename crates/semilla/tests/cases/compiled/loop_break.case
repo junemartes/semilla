@@ -49,10 +49,10 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + branch `v[i] == 9` (src/lib.rs:7): false → check `overflow: i += 1`, true → return
       control flow: + panic `bounds` (src/lib.rs:7)
       control flow: … 1 more (semilla status --verbose)
-      equivalence: not decided: the length of a slice (the metadata of a pointer): v[i] (src/lib.rs:-4)
+      equivalence: different: for v = &[9] (a bounded run of at most 4 loop iterations): before panics (bounds), after returns 0
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    depot::find (src/lib.rs:1): graph changes: +1 branch, +1 check, +1 panic, +5 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the length of a slice (the metadata of a pointer): v[i] (src/lib.rs:-4))
+    depot::find (src/lib.rs:1): graph changes: +1 branch, +1 check, +1 panic, +5 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for v = &[9] (a bounded run of at most 4 loop iterations): before panics (bounds), after returns 0)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

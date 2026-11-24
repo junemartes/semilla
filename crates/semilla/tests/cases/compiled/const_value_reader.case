@@ -1,0 +1,65 @@
+note: a body whose text does not change and that reads a constant with a changed value gets a line in the step section with its result (`price` is different, `cap` is equivalent); a body that reads no changed constant (`fee`) gets no line
+rule+: R64.5-1
+rule-: R64.5-1
+rule+: R64.5-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub const RATE: u32 = 7;
+pub const FEE: u32 = 2;
+
+pub fn price(n: u32) -> u32 {
+    n.wrapping_mul(RATE)
+}
+
+pub fn fee(n: u32) -> u32 {
+    n.wrapping_add(FEE)
+}
+
+pub fn cap(n: u32) -> u32 {
+    if RATE > 5 { n } else { 0 }
+}
+=== new src/lib.rs
+pub const RATE: u32 = 6;
+pub const FEE: u32 = 2;
+
+pub fn price(n: u32) -> u32 {
+    n.wrapping_mul(RATE)
+}
+
+pub fn fee(n: u32) -> u32 {
+    n.wrapping_add(FEE)
+}
+
+pub fn cap(n: u32) -> u32 {
+    if RATE > 5 { n } else { 0 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::RATE
+      lines: src/lib.rs:1, src/lib.rs:-1
+      to state it: --change 'shop::RATE=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::RATE=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::cap, shop::price
+      through: `shop::RATE` (2 bodies)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::cap (src/lib.rs:12): same graph; reads a changed constant: `shop::RATE` (7 → 6); equivalent (proved by SMT)
+    shop::price (src/lib.rs:4): same graph; reads a changed constant: `shop::RATE` (7 → 6); different (for n = 1: before returns 7, after returns 6)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::RATE` changed: 7 → 6 (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

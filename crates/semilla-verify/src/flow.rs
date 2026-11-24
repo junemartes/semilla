@@ -188,6 +188,9 @@ pub struct GraphPair {
     pub same: bool,
     pub old: FlowSide,
     pub new: FlowSide,
+    /// Each constant item that the two records read with a different value: the path, the old
+    /// value, and the new value (design 64, part D).
+    pub consts: Vec<(String, String, String)>,
 }
 
 /// The result of a body (design 60, B4).
@@ -674,6 +677,8 @@ struct BodyResult {
     edit: bool,
     /// The distinct outcomes, the worst first.
     outcomes: Vec<Outcome>,
+    /// The constants that the body reads with a changed value (design 64, part D).
+    consts: Vec<(String, String, String)>,
 }
 
 /// The changed part of a diff for the flowchart (design 60, C4): the changed points, the ends
@@ -998,7 +1003,7 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
                 for at in 0..x.len().max(y.len()) {
                     let old = x.get(at).map_or(FlowSide::NoBody, |side| (*side).clone());
                     let new = y.get(at).map_or(FlowSide::NoBody, |side| (*side).clone());
-                    found.push(GraphPair { config: config.clone(), same: false, old, new });
+                    found.push(GraphPair { config: config.clone(), same: false, old, new, consts: Vec::new() });
                 }
             }
             found
@@ -1191,8 +1196,18 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         if outcomes.is_empty() {
             continue;
         }
-        // A body with no edit and the same graph needs no line (design 60, B6).
-        if !edit && outcomes.iter().all(|known| known.rank == FlowResult::Same) {
+        // The constants that the body reads with a changed value (design 64, part D).
+        let mut consts: Vec<(String, String, String)> = Vec::new();
+        for pair in &body.graphs {
+            for found in &pair.consts {
+                if !consts.contains(found) {
+                    consts.push(found.clone());
+                }
+            }
+        }
+        // A body with no edit and the same graph needs no line (design 60, B6), except a body
+        // that reads a changed constant: its result can change (R64.5-1).
+        if !edit && consts.is_empty() && outcomes.iter().all(|known| known.rank == FlowResult::Same) {
             continue;
         }
         outcomes.sort_by(|a, b| b.rank.cmp(&a.rank).then(b.configs.len().cmp(&a.configs.len())));
@@ -1208,8 +1223,8 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                 pairs.push((pair.config.clone(), a.clone(), b.clone()));
             }
         }
-        let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0");
-        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes });
+        let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0") && consts.is_empty();
+        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts });
     }
     let mut report = FlowReport::default();
     let all_configs: BTreeSet<&String> = results.iter().flat_map(|result| result.outcomes.iter().flat_map(|known| known.configs.iter())).collect();
@@ -1230,6 +1245,10 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         }
         if !result.edit && first.rank != FlowResult::Same {
             line.push_str("; no edit in the body");
+        }
+        if !result.edit && !result.consts.is_empty() {
+            let list: Vec<String> = result.consts.iter().map(|(path, old, new)| format!("`{path}` ({old} → {new})")).collect();
+            line.push_str(&format!("; reads a changed constant: {}", list.join(", ")));
         }
         let mut details = Vec::new();
         for known in &result.outcomes {
