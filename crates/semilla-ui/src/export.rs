@@ -190,6 +190,7 @@ pub fn render_markdown(data: &UiData, full: bool) -> String {
     }
     md_flows(&mut out, &model, full);
     md_control_flow(&mut out, &model);
+    md_expansions(&mut out, &model);
     md_reached(&mut out, &model);
     if full {
         md_sources(&mut out, &model);
@@ -1440,6 +1441,11 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             for line in flow.and_then(|flow| flow.equivalence.get(&fact.id)).into_iter().flatten() {
                 text.push_str(&format!("; equivalence: {line}"));
             }
+            // The changed expansions that the fact owns (design 63); the section "Macro
+            // expansions" has the diff of each one.
+            for line in flow.and_then(|flow| flow.expansion_lines.get(&fact.id)).into_iter().flatten() {
+                text.push_str(&format!("; expansion: {line}"));
+            }
             // The callers that the change reaches (design 61.10, A5); the section "Reached
             // callers" has the links.
             if let Some((line, _)) = flow.and_then(|flow| flow.reaches.get(&fact.id)) {
@@ -2026,6 +2032,61 @@ fn md_control_flow(out: &mut String, model: &Model) {
             }
             None => {}
         }
+    }
+}
+
+/// The most calls with a diff in the section "Macro expansions" (design 63, R63.5-3). The
+/// other calls have one line each.
+const EXPANSION_PARTS: usize = 20;
+
+/// The section "Macro expansions" (design 63, R63.5-3): a part for each changed expansion with
+/// the call (a link), the definition, and the diff of the expanded code. Calls with an equal
+/// change fold into one part with the list of the calls. A long diff has a cut and points to
+/// `semilla expand`.
+fn md_expansions(out: &mut String, model: &Model) {
+    let mut parts: Vec<(usize, &str, Vec<&semilla_core::report::ExpansionSite>)> = Vec::new();
+    for step in &model.report().steps {
+        for site in step.flow.iter().flat_map(|flow| flow.expansions.iter()) {
+            match parts.iter_mut().find(|(known, key, list)| *known == step.step && *key == site.key && list[0].diff == site.diff) {
+                Some((_, _, list)) => list.push(site),
+                None => parts.push((step.step, site.key.as_str(), vec![site])),
+            }
+        }
+    }
+    if parts.is_empty() {
+        return;
+    }
+    out.push_str("## Macro expansions\n\n");
+    for (index, (step, _, list)) in parts.iter().enumerate() {
+        let first = list[0];
+        let calls: Vec<String> = list.iter().map(|site| format!("{} at {} ({})", md_with_code(&site.call), code(&site.at), line_link(&site.place))).collect();
+        if index >= EXPANSION_PARTS {
+            let _ = writeln!(out, "- step {step}: {}: {}", calls.join(", "), md(&first.result));
+            continue;
+        }
+        let title = if list.len() == 1 { calls[0].clone() } else { format!("{} calls of {}", list.len(), md_with_code(&first.definition)) };
+        let _ = writeln!(out, "### {title} (step {step})\n");
+        if list.len() > 1 {
+            for call in &calls {
+                let _ = writeln!(out, "- {call}");
+            }
+            out.push('\n');
+        }
+        let _ = writeln!(out, "{}\n", md_with_code(&format!("{}; definition: {}", first.result, first.definition)));
+        for fact in &first.facts {
+            let _ = writeln!(out, "- {}", md_with_code(fact));
+        }
+        if !first.cause.is_empty() {
+            let _ = writeln!(out, "- cause: {}", md_with_code(&first.cause));
+        }
+        out.push('\n');
+        if !first.diff.is_empty() {
+            out.push_str(&fence("diff", &first.diff.join("\n"), ""));
+            out.push('\n');
+        }
+    }
+    if parts.len() > EXPANSION_PARTS {
+        let _ = writeln!(out, "{}\n", md(&format!("The parts after the first {EXPANSION_PARTS} have no diff: `semilla expand PLACE` prints each one.")));
     }
 }
 

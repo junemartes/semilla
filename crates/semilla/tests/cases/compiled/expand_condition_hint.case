@@ -1,0 +1,35 @@
+note: a changed condition in a macro arm gives the fact of the normal compare with its effect hint
+rule+: R63.3-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }
+
+pub fn f(v: u32) -> u32 { clamp!(v) }
+=== new src/lib.rs
+macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }
+
+pub fn f(v: u32) -> u32 { clamp!(v) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `clamp`: `macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }` → `macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }` [declaration · code different]
+      affected bodies: shop::f
+      expansion: `clamp!(v)` at `shop::f/tail` (src/lib.rs:3): expansion changed: changed operator `v > 10` → `v >= 10` (effect hint: widen, example: v = 10) at `expansion/S0/cond` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:3): same structure: 1 changed condition; no edit in the body; equivalent (proved by SMT); the expansion of `clamp!(v)` changes (semilla expand src/lib.rs:3)
+  expansions: 1 changed
+    `clamp!(v)` at `shop::f/tail` (src/lib.rs:3): expansion changed: `macro_rules! clamp` (src/lib.rs:1): changed operator `v > 10` → `v >= 10` (effect hint: widen, example: v = 10) at `expansion/S0/cond` [semantics]; from `macro_rules! clamp` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `clamp`: `macro_rules! clamp { ($v:expr) => { if $v > 10 { 10 } else { $v } } }` → `macro_rules! clamp { ($v:expr) => { if $v >= 10 { 10 } else { $v } } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

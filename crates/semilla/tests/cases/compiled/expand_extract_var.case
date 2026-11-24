@@ -1,0 +1,35 @@
+note: an extracted variable in a macro arm gives the fact `extracted variable` of the normal compare in the expansion
+rule+: R63.3-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }
+
+pub fn f(n: u32) -> u32 { cost!(n) }
+=== new src/lib.rs
+macro_rules! cost { ($n:expr) => {{ let base = $n * 3; let total = base + 1; total }} }
+
+pub fn f(n: u32) -> u32 { cost!(n) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
+        [1] macro_rules! cost { ($n:expr) => {{ let base = $n * 3; let total = base + 1; total }} }
+      expansion: `cost!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: extracted variable `base` = `n * 3` (1 use) at `expansion/S0/body/S0` [move]
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::f (src/lib.rs:3): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; equivalent (proved by equal MIR); the expansion of `cost!(n)` changes (semilla expand src/lib.rs:3)
+  expansions: 1 changed
+    `cost!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: `macro_rules! cost` (src/lib.rs:1): extracted variable `base` = `n * 3` (1 use) at `expansion/S0/body/S0` [move]; from `macro_rules! cost` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `cost`: `macro_rules! cost { ($n:expr) => {{ let total = $n * 3 + 1; total }} }` → [1] [declaration · code equal]
+    lines: src/lib.rs:1, src/lib.rs:-1

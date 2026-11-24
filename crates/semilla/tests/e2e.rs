@@ -6618,8 +6618,9 @@ fn the_compiled_check_gives_the_control_flow_of_each_body_with_an_edit_or_a_chan
     // R60.4-3: `status --verbose` has each changed point and each arrow that is not shared.
     let verbose = run(repo, &["status", "--verbose", "--wait", "600"], 0);
     assert!(verbose.contains("          − arrow entry (crates/shop-core/src/lib.rs:-19) → call `shop_core::price` (crates/shop-core/src/lib.rs:-20)\n"), "{verbose}");
-    // A branch from the body of a macro definition has the text of the macro call first.
-    assert!(verbose.contains("          + branch `guard!(v): $v == 5` (crates/shop-core/src/lib.rs:43)\n"), "{verbose}");
+    // A branch from the body of a macro definition has the text of the macro call first, then
+    // the expanded text (R63.2-5: no metavariable).
+    assert!(verbose.contains("          + branch `guard!(v): v == 5` (crates/shop-core/src/lib.rs:43)\n"), "{verbose}");
     assert!(verbose.contains("          ~ branch `v > 3` → `v >= 3` (crates/shop-core/src/lib.rs:-25, crates/shop-core/src/lib.rs:31)\n"), "{verbose}");
     // R61.6-3: `status --verbose` has the method, the inlined callees, the query count, and
     // the time of each check.
@@ -8593,4 +8594,62 @@ fn a_body_name_of_two_targets_opens_no_body_of_the_joint_check() {
     assert!(configs >= 2, "{err}");
     let runs = err.lines().find_map(|line| line.strip_prefix("[timing] total of give the records to the build configuration rules (")).and_then(|rest| rest.split(' ').next()).and_then(|count| count.parse::<usize>().ok());
     assert_eq!(runs, Some(2 * configs), "two runs of the body compare (plain and strict) in each of {configs} configurations\n{err}");
+}
+
+/// The crate of the expansion test (design 63): a nested macro, a derive, and a macro that the
+/// step does not change.
+const EXPAND_BASE: &str = "pub mod cart;
+
+macro_rules! base { ($v:expr) => { $v + 10 } }
+macro_rules! fee { ($v:expr) => { base!($v) * 2 } }
+
+pub fn price(v: u32) -> u32 { fee!(v) }
+
+#[derive(PartialEq)]
+pub struct Point { pub x: i32 }
+";
+
+// rule+ R63.4-1 R63.4-2 R63.3-7 R63.3-9
+// rule- R63.4-1 R63.4-2
+#[test]
+fn a_changed_expansion_has_its_facts_a_command_to_expand_it_and_a_section_of_the_review() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "crates/shop-core/src/lib.rs", EXPAND_BASE);
+    commit_all(repo, "expand");
+    // R63.4-2, the negative case: a step with no changed expansion has no section.
+    write(repo, "crates/shop-core/src/lib.rs", &EXPAND_BASE.replace("pub fn price", "/// The price.\npub fn price"));
+    run(repo, &["step", "docs"], 0);
+    let md = dir.path().join("review-docs.md");
+    run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    assert!(!std::fs::read_to_string(&md).unwrap().contains("## Macro expansions"));
+    // The command reads the working tree against `HEAD` before a step: it builds the records.
+    write(repo, "crates/shop-core/src/lib.rs", &EXPAND_BASE.replace("/// The price.\n", "").replace("+ 10", "+ 12").replace("pub x: i32 }", "pub x: i32, pub y: i32 }"));
+    let expanded = run(repo, &["expand", "base!"], 0);
+    assert!(expanded.contains("`fee!(v)` at `shop_core::price/tail` (crates/shop-core/src/lib.rs:6): expansion changed\n  definition: `macro_rules! fee` (crates/shop-core/src/lib.rs:4); uses: `base!` (crates/shop-core/src/lib.rs:3)\n  --- before\n  +++ after\n  - (v + 10) * 2\n  + (v + 12) * 2\n"), "{expanded}");
+    run(repo, &["step", "probe"], 0);
+    // The step owns the two changes: the line of the definition, and the line of the field.
+    let out = run(repo, &["status", "--verbose", "--wait", "600"], 0);
+    assert!(out.contains("expansion: `fee!(v)` at `shop_core::price/tail` (crates/shop-core/src/lib.rs:6): expansion changed: changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]"), "{out}");
+    assert!(out.contains("expansion: derived `PartialEq` of `shop_core::Point`: expansion changed: changed expression `self.x == other.x` → `self.x == other.x && self.y == other.y`"), "{out}");
+    // R63.3-7: `status --verbose` lists each call with its result, its facts, and its cause.
+    assert!(out.contains("  expansions: 2 changed\n"), "{out}");
+    assert!(out.contains("      cause: from `macro_rules! base` (crates/shop-core/src/lib.rs:3)\n"), "{out}");
+    // R63.3-9: the line of the body that holds the call, with its graph and its equivalence.
+    assert!(out.contains("      body: shop_core::price (crates/shop-core/src/lib.rs:6): same structure: 2 changed checks"), "{out}");
+    // R63.4-1: a stored step, one side, a place by line, and a place by item.
+    let after = run(repo, &["expand", "crates/shop-core/src/lib.rs:6", "--step", "1", "--after"], 0);
+    assert!(after.contains("  (v + 12) * 2\n") && !after.contains("(v + 10)"), "{after}");
+    let before = run(repo, &["expand", "shop_core::Point", "--step", "1", "--before"], 0);
+    assert!(before.contains("derive `PartialEq` at `shop_core::Point`") && before.contains("self.x == other.x }\n") && !before.contains("other.y"), "{before}");
+    // R63.4-1, the negative case: a place with no macro call is an error.
+    let output = semilla(repo, &["expand", "nothing!", "--step", "1"]);
+    assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("no macro call with an expansion matches `nothing!`"));
+    // R63.4-2: the review has the section with the call, a link, the definition, and the diff.
+    let md = dir.path().join("review.md");
+    run(repo, &["review", "--md", md.to_str().unwrap()], 0);
+    let text = std::fs::read_to_string(&md).unwrap();
+    assert!(text.contains("## Macro expansions\n\n### `fee!(v)` at `shop_core::price/tail` ([crates/shop-core/src/lib.rs:6](crates/shop-core/src/lib.rs#L6)) (step 1)\n"), "{text}");
+    assert!(text.contains("```diff\n- (v + 10) * 2\n+ (v + 12) * 2\n```"), "{text}");
+    assert!(text.contains("; expansion: `fee!(v)` at"), "{text}");
 }

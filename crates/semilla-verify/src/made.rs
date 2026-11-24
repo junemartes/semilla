@@ -30,6 +30,9 @@ pub struct MadeItem {
     pub test: bool,
     /// True if a different crate can reach the item, by the compiler.
     pub public: bool,
+    /// For an associated item that a macro call in an impl or a trait makes: the self type or
+    /// the trait (batch 10c, R63.4-2). The label of the item has it: `pub fn Cart::total`.
+    pub owner: String,
 }
 
 /// The expanded code of one tree, in each checked configuration.
@@ -191,6 +194,7 @@ fn shown(item: &MadeItem) -> Option<Shown> {
     let mut inner_attrs: Vec<(String, String)> = Vec::new();
     let label = match &parsed {
         ast::Item::Fn(value) if item.test => name(value),
+        ast::Item::Fn(value) if !item.owner.is_empty() => format!("{}fn {}::{}", vis(value.visibility()), item.owner, name(value)),
         ast::Item::Fn(value) => format!("{}fn {}", vis(value.visibility()), name(value)),
         ast::Item::Impl(value) => {
             if let Some(path) = value.trait_() {
@@ -231,7 +235,16 @@ fn shown(item: &MadeItem) -> Option<Shown> {
     let texts: Vec<String> = if derived { Vec::new() } else { attrs.into_iter().chain(inner_attrs).map(|(_, text)| text).collect() };
     let attributes = if item.test { Vec::new() } else { crate::facts::new_attributes(&texts) };
     let has_unsafe = !derived && text.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == "unsafe");
-    Some(Shown { label, key: (item.module.clone(), item.text.clone()), public: item.public, attributes, has_unsafe, implicit })
+    let label = match parsed {
+        ast::Item::Fn(_) | ast::Item::Impl(_) => label,
+        _ if !item.owner.is_empty() => match label.rsplit_once(' ') {
+            Some((head, name)) => format!("{head} {}::{name}", item.owner),
+            None => label,
+        },
+        _ => label,
+    };
+    let module = if item.owner.is_empty() { item.module.clone() } else { format!("{}::{}", item.module, item.owner) };
+    Some(Shown { label, key: (module, item.text.clone()), public: item.public, attributes, has_unsafe, implicit })
 }
 
 /// The items that a macro call makes, in the order of the place and then of the text (the same

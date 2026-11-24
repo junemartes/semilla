@@ -44,9 +44,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed macro `guard`: `macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } }; }` → [1] [declaration · code different]
         [1] macro_rules! guard { ($v:expr) => { if $v > 9 { return 0; } if $v == 5 { return 5; } }; }
       affected bodies: depot::limit
+      expansion: `guard!(v)` at `depot::limit/S0` (src/lib.rs:13): expansion changed: added early exit `if v == 5 { return 5; }` at `expansion/S1` [semantics]
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
-    depot::limit (src/lib.rs:12): graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; equivalent (proved by SMT)
+    depot::limit (src/lib.rs:12): graph changes: +1 branch, +3 arrows, −1 arrow; no edit in the body; equivalent (proved by SMT); the expansion of `guard!(v)` changes (semilla expand src/lib.rs:13)
+  expansions: 1 changed
+    `guard!(v)` at `depot::limit/S0` (src/lib.rs:13): expansion changed: `macro_rules! guard` (src/lib.rs:1): added early exit `if v == 5 { return 5; }` at `expansion/S1` [semantics]; from `macro_rules! guard` (src/lib.rs:1)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

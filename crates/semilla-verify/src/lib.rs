@@ -17,6 +17,7 @@ mod comments;
 pub mod checks;
 pub mod edits;
 pub mod equiv;
+pub mod expand;
 pub mod facts;
 pub mod files;
 pub mod flow;
@@ -460,6 +461,12 @@ pub trait BodyOracle {
     fn reach(&self, _step: &Step, _renames: &BTreeMap<String, String>) -> Option<equiv::ReachReport> {
         None
     }
+
+    /// The expansion of each macro call in each compiled target of each checked configuration
+    /// of the tree before the step and of the tree after it (design 63). `None`: no data.
+    fn expansions(&self, _step: &Step) -> Option<[Vec<expand::ExpansionUnit>; 2]> {
+        None
+    }
 }
 
 /// A feature selection that Semilla adds for a proof (batch 5u, part C): a build with these
@@ -632,6 +639,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         no_compare_result(input.step, &mut plain.report);
         positions::assign(input, &mut plain);
         flow::apply(input, bodies, &mut plain);
+        expand::apply(input, bodies, exprs, &mut plain);
         macro_module_spotlight(input, &mut plain.report);
         twin_notes(twin_moves, &mut plain.report);
         agent::apply(input, &mut plain);
@@ -649,6 +657,7 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
     no_compare_result(input.step, &mut outcome.report);
     positions::assign(input, &mut outcome);
     flow::apply(input, bodies, &mut outcome);
+    expand::apply(input, bodies, exprs, &mut outcome);
     macro_module_spotlight(input, &mut outcome.report);
     twin_notes(twin_moves, &mut outcome.report);
     agent::apply(input, &mut outcome);

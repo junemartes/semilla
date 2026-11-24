@@ -1,0 +1,31 @@
+note: defect 4 of batch 10c: a renamed metavariable gives an equal expansion: no changed check, and the fact of the definition has the proof line
+rule+: R63.2-5 R63.3-6
+rule-: R63.2-5 R63.3-1
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! add { ($x:expr, $y:expr) => { $x + $y } }
+
+pub fn sum(a: &[u32], b: u32) -> u32 { add!(a[0], b) }
+=== new src/lib.rs
+macro_rules! add { ($left:expr, $right:expr) => { $left + $right } }
+
+pub fn sum(a: &[u32], b: u32) -> u32 { add!(a[0], b) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `add`: `macro_rules! add { ($x:expr, $y:expr) => { $x + $y } }` → `macro_rules! add { ($left:expr, $right:expr) => { $left + $right } }` [declaration · code equal]
+      expansion: the call that uses `add!` has an equal expansion
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `add`: `macro_rules! add { ($x:expr, $y:expr) => { $x + $y } }` → `macro_rules! add { ($left:expr, $right:expr) => { $left + $right } }` [declaration · code equal]
+    lines: src/lib.rs:1, src/lib.rs:-1

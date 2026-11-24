@@ -876,6 +876,11 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
                 let line = format!("      equivalence: {line}");
                 put(&if names { line } else { fit_line(&line) });
             }
+            // The changed expansions that the fact owns (design 63, R63.3-3).
+            for line in flow.expansion_lines.get(&fact.id).into_iter().flatten() {
+                let line = format!("      expansion: {line}");
+                put(&if names { line } else { fit_line(&line) });
+            }
             // The callers that the change of the body reaches (design 61.10, A5).
             if let Some((line, _)) = flow.reaches.get(&fact.id) {
                 let line = format!("      reaches: {line}");
@@ -1326,6 +1331,10 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
         // Design 60, C2 and C3: the result of the graph of each body; `status --verbose` adds
         // the full diff.
         for line in step.flow_lines(names) {
+            put(&mut out, &format!("  {line}"));
+        }
+        // Design 63: the changed expansions of the macro calls.
+        for line in step.expansion_section(names) {
             put(&mut out, &format!("  {line}"));
         }
         // Design 55.1: the command that gives the hunks of the step.

@@ -265,6 +265,54 @@ pub struct FlowReport {
     /// Markdown review.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub reaches: std::collections::BTreeMap<String, (String, Vec<(String, String)>)>,
+    /// The `expansion:` lines of each fact, by the id of the fact (design 63, R63.3-3): the
+    /// changed expansions that the fact owns, folded, at most three lines and a line `… N more`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub expansion_lines: std::collections::BTreeMap<String, Vec<String>>,
+    /// Each macro call whose expansion the step changes, adds, or removes (design 63).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expansions: Vec<ExpansionSite>,
+    /// The count of the macro calls with an equal expansion (design 63).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub expansions_equal: usize,
+}
+
+/// One macro call whose expansion the step changes (design 63, part B).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpansionSite {
+    /// The source text of the call: `fee!(v)`, or the name of a derive.
+    pub call: String,
+    /// The place of the call in the syntax tree: `shop::price/tail`.
+    pub at: String,
+    /// `FILE:LINE` of the call (a line `-N` is in the old tree).
+    pub place: String,
+    /// The definition: `macro_rules! fee` (src/lib.rs:2), or `derive PartialEq` (crate core).
+    pub definition: String,
+    /// `expansion changed`, `expansion added`, or `expansion removed`.
+    pub result: String,
+    /// The checked configurations with this result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configs: Vec<String>,
+    /// The facts of the normal compare of the two expansions, each with its category.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<String>,
+    /// The cause: the changed definitions of the chain, or the changed input.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cause: String,
+    /// The ids of the facts that own the change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owners: Vec<String>,
+    /// The line diff of the expanded code (`- `, `+ `, and `  ` lines), with a limit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff: Vec<String>,
+    /// The key of the fold: equal keys are one line in the short views.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    /// The line of the control flow section of each body at the call (the body that holds the
+    /// call, and each body that the expansion makes): its graph result and its equivalence
+    /// (design 61). The compiled check of the expanded code is the check of these bodies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bodies: Vec<String>,
 }
 
 /// One body that the walk of the reverse call graph reached (design 61.10, part A).
@@ -1350,6 +1398,58 @@ impl StepReport {
         }
         out.extend(flow.equivalence_stop.iter().map(|line| format!("  {line}")));
         out.extend(reach_lines(flow, full));
+        out
+    }
+
+    /// The expansion section of the step (design 63, R63.3-5): `expansions: N changed`, and a
+    /// line for each call (equal changes fold into one line in the short form). `full` gives
+    /// each call with its configurations and each fact of its compare.
+    pub fn expansion_section(&self, full: bool) -> Vec<String> {
+        let Some(flow) = self.flow.as_ref().filter(|flow| !flow.expansions.is_empty()) else { return Vec::new() };
+        let count = |word: &str| flow.expansions.iter().filter(|site| site.result == word).count();
+        let mut parts = Vec::new();
+        for (word, label) in [("expansion changed", "changed"), ("expansion added", "added"), ("expansion removed", "removed")] {
+            let n = count(word);
+            if n > 0 {
+                parts.push(format!("{n} {label}"));
+            }
+        }
+        if flow.expansions_equal > 0 {
+            parts.push(format!("{} equal", flow.expansions_equal));
+        }
+        let mut out = vec![format!("expansions: {}", parts.join(", "))];
+        if full {
+            for site in &flow.expansions {
+                let configs = if site.configs.is_empty() { String::new() } else { format!(" (in {})", site.configs.join(", ")) };
+                out.push(format!("  {} at `{}` ({}): {}{configs}; {}", site.call, site.at, site.place, site.result, site.definition));
+                for fact in &site.facts {
+                    out.push(format!("      {fact}"));
+                }
+                if !site.cause.is_empty() {
+                    out.push(format!("      cause: {}", site.cause));
+                }
+                for body in &site.bodies {
+                    out.push(format!("      body: {body}"));
+                }
+            }
+            return out;
+        }
+        let mut keys: Vec<(&str, Vec<&ExpansionSite>)> = Vec::new();
+        for site in &flow.expansions {
+            match keys.iter_mut().find(|(key, _)| *key == site.key) {
+                Some((_, list)) => list.push(site),
+                None => keys.push((site.key.as_str(), vec![site])),
+            }
+        }
+        for (key, list) in keys {
+            if list.len() == 1 {
+                out.push(format!("  {} at `{}` ({}): {key}", list[0].call, list[0].at, list[0].place));
+                continue;
+            }
+            let names: Vec<String> = list.iter().take(REACH_FOLD_NAMES).map(|site| format!("`{}`", site.at)).collect();
+            let more = if list.len() > REACH_FOLD_NAMES { format!(", and {} more", list.len() - REACH_FOLD_NAMES) } else { String::new() };
+            out.push(format!("  {} calls: {key}: {}{more} (semilla status --verbose)", list.len(), names.join(", ")));
+        }
         out
     }
 

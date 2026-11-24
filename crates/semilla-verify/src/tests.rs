@@ -5543,7 +5543,7 @@ fn made_data(source: &str, calls: &[MadeCall]) -> crate::made::Made {
         let line = source[..at].matches('\n').count() + 1;
         let col = source[..at].rsplit('\n').next().unwrap().chars().count();
         for (text, public) in *items {
-            made.items.push(crate::made::MadeItem { file: "src/lib.rs".into(), line, col, module: module.to_string(), text: text.to_string(), test: text.starts_with("#[test]"), public: *public });
+            made.items.push(crate::made::MadeItem { file: "src/lib.rs".into(), line, col, module: module.to_string(), text: text.to_string(), test: text.starts_with("#[test]"), public: *public, owner: String::new() });
         }
         for body in *bodies {
             made.sites.insert(body.to_string(), ("src/lib.rs".into(), line, col));

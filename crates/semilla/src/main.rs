@@ -312,6 +312,29 @@ enum Command {
         #[arg(long)]
         set: Option<PathBuf>,
     },
+    /// Print the expansion of each macro call at a place, before and after the step, with a
+    /// line diff (design 63): `semilla expand src/lib.rs:4`, `semilla expand shop::price`,
+    /// `semilla expand base!` (each call of the macro, also through a different macro).
+    ///
+    /// The default step is the working tree against `HEAD`. The command builds the compiled
+    /// records only if the cache has no record of the two trees.
+    Expand {
+        /// `FILE:LINE` (`FILE:-LINE` for a line of the old tree), an item path, or a macro name
+        /// with `!`.
+        place: String,
+        /// A stored step of the session.
+        #[arg(long)]
+        step: Option<usize>,
+        /// Print each line (no cut).
+        #[arg(long)]
+        full: bool,
+        /// Print only the expansion before the step.
+        #[arg(long, conflicts_with = "after")]
+        before: bool,
+        /// Print only the expansion after the step.
+        #[arg(long)]
+        after: bool,
+    },
     /// Build the index of the working tree in `.semilla/index.json`.
     Index,
     /// Remove each entry of the build code cache that no stored step uses, and the folder of
@@ -796,6 +819,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Index => println!("{}", app.index()?),
+        Command::Expand { place, step, full, before, after } => {
+            let sides = if before { semilla_verify::expand::Sides::Before } else if after { semilla_verify::expand::Sides::After } else { semilla_verify::expand::Sides::Both };
+            print!("{}", app.expand(&place, step, full, sides)?);
+        }
         Command::Cache { clean: false } => println!("Run `semilla cache --clean`: it removes each entry of the build code cache that no stored step uses, and the folder of the build check."),
         Command::Cache { clean: true } => {
             // A background check can build in an entry now. The clean waits for its end.

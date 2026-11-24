@@ -1,0 +1,35 @@
+note: a moved statement in a macro arm gives the move fact of the normal compare in the expansion
+rule+: R63.3-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! log2 { ($a:expr, $b:expr) => { $a.push(1); $b.push(2); $a.push(3); } }
+
+pub fn f(a: &mut Vec<u32>, b: &mut Vec<u32>) { log2!(a, b); }
+=== new src/lib.rs
+macro_rules! log2 { ($a:expr, $b:expr) => { $b.push(2); $a.push(1); $a.push(3); } }
+
+pub fn f(a: &mut Vec<u32>, b: &mut Vec<u32>) { log2!(a, b); }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `log2`: [1] → [2] [declaration · code different]
+        [1] macro_rules! log2 { ($a:expr, $b:expr) => { $a.push(1); $b.push(2); $a.push(3); } }
+        [2] macro_rules! log2 { ($a:expr, $b:expr) => { $b.push(2); $a.push(1); $a.push(3); } }
+      affected bodies: shop::f
+      expansion: `log2!(a, b)` at `shop::f/S0` (src/lib.rs:3): expansion changed: moved statement `a.push(1)` from `expansion/S0` to `expansion/S1` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `log2!(a, b)` at `shop::f/S0` (src/lib.rs:3): expansion changed: `macro_rules! log2` (src/lib.rs:1): moved statement `a.push(1)` from `expansion/S0` to `expansion/S1` [semantics]; from `macro_rules! log2` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `log2`: [1] → [2] [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

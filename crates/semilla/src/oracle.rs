@@ -1772,9 +1772,31 @@ impl BodyOracle for NormalOracle {
             sides[index % 2].sites.extend(made.sites);
         }
         Ok(Some(sides.map(|side| semilla_verify::made::Made {
-            items: side.items.into_iter().map(|item| semilla_verify::made::MadeItem { file: item.file, line: item.line, col: item.col, module: item.module, text: item.text, test: item.test, public: item.public }).collect(),
+            items: side.items.into_iter().map(|item| semilla_verify::made::MadeItem { file: item.file, line: item.line, col: item.col, module: item.module, text: item.text, test: item.test, public: item.public, owner: item.owner }).collect(),
             sites: side.sites,
         })))
+    }
+
+    fn expansions(&self, step: &Step) -> Option<[Vec<semilla_verify::expand::ExpansionUnit>; 2]> {
+        // The unit records of the N0 build of each checked configuration have the expansion of
+        // each macro call (design 63). Each cache folder has its own thread.
+        let checked = self.checked(step).ok()?;
+        let folders: Vec<(&Configuration, &String)> = checked.iter().flat_map(|config| [(config, &step.tree_before), (config, &step.tree_after)]).collect();
+        let read = |config: &Configuration, tree: &str| -> Option<Vec<semilla_verify::expand::ExpansionUnit>> {
+            self.records_or_build(tree, "n0", config, false).ok()?;
+            let (_, cache, _, _) = self.cache_folder(tree, "n0", config).ok()?;
+            let units = semilla_normal::read_expansions(&cache)?;
+            Some(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: config.name(), target: unit.target, package: unit.package, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect() }).collect())
+        };
+        let results: Vec<Option<Vec<semilla_verify::expand::ExpansionUnit>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = folders.iter().map(|(config, tree)| scope.spawn(|| read(config, tree))).collect();
+            handles.into_iter().map(|handle| handle.join().ok().flatten()).collect()
+        });
+        let mut sides: [Vec<semilla_verify::expand::ExpansionUnit>; 2] = Default::default();
+        for (index, result) in results.into_iter().enumerate() {
+            sides[index % 2].extend(result?);
+        }
+        Some(sides)
     }
 
     fn facts(&self, step: &Step) -> Result<Option<Vec<semilla_verify::BodyFacts>>> {

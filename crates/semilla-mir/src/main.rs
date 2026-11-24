@@ -41,6 +41,7 @@ extern crate rustc_trait_selection;
 
 mod config;
 mod consts;
+mod expand;
 mod graph;
 mod harness;
 mod inline;
@@ -478,7 +479,7 @@ fn run_compiler(level: Level, rustc_args: &[String], output: Output) -> ExitCode
     // Keep the values of the build that cargo asked for (from the profile of the tree).
     full_args.extend(inherited_checks(rustc_args));
 
-    let mut callbacks = Callbacks { level, output, error: None, made: None };
+    let mut callbacks = Callbacks { level, output, error: None, made: None, expansions: None };
     let result = rustc_driver::catch_fatal_errors(|| {
         rustc_driver::compiler_entrypoint(&full_args, &mut callbacks)
     });
@@ -499,6 +500,9 @@ struct Callbacks {
     /// The items after the macro expansion (batch 6b, part 2). `None`: the driver cannot list
     /// them.
     made: Option<Vec<(Option<rustc_span::def_id::LocalDefId>, made::MadeItem)>>,
+    /// The expansion of each macro call (batch 10c, design 63). `None`: the driver cannot read
+    /// them.
+    expansions: Option<Vec<expand::Expansion>>,
 }
 
 impl rustc_driver::Callbacks for Callbacks {
@@ -525,6 +529,7 @@ impl rustc_driver::Callbacks for Callbacks {
         // The list is large, and Semilla reads it only from the N0 records.
         if self.level == Level::N0 {
             self.made = guarded(|| made::collect(tcx));
+            self.expansions = guarded(|| expand::collect(tcx));
         }
         Compilation::Continue
     }
@@ -556,6 +561,7 @@ impl rustc_driver::Callbacks for Callbacks {
         let mut text = String::new();
         let mut unit = UnitLine { unit: unit_record(tcx, &target) };
         unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
+        unit.unit.expansions = self.expansions.take();
         if level == Level::N0 {
             unit.unit.defs = rustc_middle::ty::print::with_resolve_crate_name!(rustc_middle::ty::print::with_no_trimmed_paths!(guarded(|| symbols::defs(tcx))));
         }
@@ -606,6 +612,9 @@ struct UnitRecord {
     /// Each item of the expanded code, with the place of the macro call that makes it (batch
     /// 6b, part 2). `None`: the driver cannot list the items.
     made: Option<Vec<made::MadeItem>>,
+    /// The expansion of each macro call (batch 10c, design 63). At n0 only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expansions: Option<Vec<expand::Expansion>>,
     /// The definitions of the crate and the symbols that each one names (design 44). At n0 only.
     #[serde(skip_serializing_if = "Option::is_none")]
     defs: Option<symbols::Defs>,
@@ -670,6 +679,7 @@ fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
         root,
         triple: tcx.sess.opts.target_triple.to_string(),
         made: None,
+        expansions: None,
         defs: None,
     }
 }

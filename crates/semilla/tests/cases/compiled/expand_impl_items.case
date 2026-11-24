@@ -1,0 +1,46 @@
+note: defect 2 of batch 10c: a macro call in an impl block makes a method of the impl; the fact lists it, and the method of the impl itself is not in the list
+rule+: R63.2-6 R63.3-1
+rule-: R63.2-6
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! field_get { ($name:ident, $f:ident) => { pub fn $name(&self) -> u32 { self.$f } } }
+
+pub struct Cart { sum: u32 }
+
+impl Cart {
+    pub fn new() -> Self { Cart { sum: 0 } }
+}
+=== new src/lib.rs
+macro_rules! field_get { ($name:ident, $f:ident) => { pub fn $name(&self) -> u32 { self.$f } } }
+
+pub struct Cart { sum: u32 }
+
+impl Cart {
+    pub fn new() -> Self { Cart { sum: 0 } }
+    field_get!(total, sum);
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added macro call `field_get!(total, sum)` (makes: `pub fn Cart::total`) [added · code different]
+      affected bodies: shop::Cart::total
+      control flow: + graph of `shop::Cart::total`: 2 points, 1 arrow (semilla status --verbose)
+      expansion: `field_get!(total, sum)` at `shop::Cart::field_get!#0` (src/lib.rs:7): expansion added: makes `shop::Cart::total`
+  cover: each of the 1 changed line(s) is in a fact
+  control flow: 1 body
+    shop::Cart::total (src/lib.rs:1): graph added: 2 points, 1 arrow; no edit in the body
+  expansions: 1 added
+    `field_get!(total, sum)` at `shop::Cart::field_get!#0` (src/lib.rs:7): expansion added: `macro_rules! field_get` (src/lib.rs:1): makes `shop::Cart::total`; the step adds the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added macro call `field_get!(total, sum)` (makes: `pub fn Cart::total`) [added · code different]
+    lines: src/lib.rs:7

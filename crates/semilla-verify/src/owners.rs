@@ -1012,6 +1012,7 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
     // 3. A changed `macro_rules!` macro or a changed proc macro (a function of a proc-macro
     //    crate) that the body expands: `name!(…)`, or an attribute `#[name]` of the item.
     let attrs: Vec<&str> = item.map(|item| item.attrs.iter().flat_map(|attr| crate::hints::words(attr)).collect()).unwrap_or_default();
+    let chain = std::cell::OnceCell::new();
     for (index, edit) in input.edits.iter().enumerate() {
         let Some(macro_path) = edit.item() else { continue };
         let found = [input.after, input.before].iter().find_map(|ws| ws.items.get(macro_path).filter(|it| it.kind == ItemKind::Macro || (it.kind == ItemKind::Fn && it.attrs.iter().any(|attr| attr.contains("proc_macro")))));
@@ -1021,7 +1022,10 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
         }
         let short = macro_path.rsplit("::").next().unwrap_or(macro_path).trim_end_matches('!');
         let attribute = macro_item.kind == ItemKind::Fn && attrs.contains(&short);
-        if (words.contains(&short) && text_has_bang(text, short)) || attribute {
+        // A macro reaches each call site of each macro whose expansion calls it (R63.3-1):
+        // `price` calls `fee!`, the definition of `fee!` calls `base!`, so a changed `base!`
+        // owns the change of `price`.
+        if (words.contains(&short) && text_has_bang(text, short)) || attribute || chain.get_or_init(|| macro_chain(input, text)).contains(short) {
             return Some(owner_of_edit(input, index));
         }
     }
@@ -1163,6 +1167,31 @@ fn build_inputs(input: &Input, report: &StepReport) -> Vec<(usize, Option<BTreeS
         }
     }
     out
+}
+
+/// The names of the `macro_rules!` macros of the workspace that a text calls, also through the
+/// definitions of the macros that it calls, at each depth (R63.3-1). The definitions of the two
+/// trees count: a call that only one version of a definition has is a call of the step.
+pub(crate) fn macro_chain(input: &Input, text: &str) -> BTreeSet<String> {
+    let definitions: Vec<(String, &str)> = [input.before, input.after]
+        .iter()
+        .flat_map(|ws| ws.items.values())
+        .filter(|item| is_macro_definition(item))
+        .filter_map(|item| Some((item.path.rsplit("::").next()?.split('!').next()?.to_string(), item.text.as_str())))
+        .collect();
+    let mut found: BTreeSet<String> = definitions.iter().filter(|(name, _)| text_has_bang(text, name)).map(|(name, _)| name.clone()).collect();
+    let mut queue: Vec<String> = found.iter().cloned().collect();
+    while let Some(name) = queue.pop() {
+        for (_, body) in definitions.iter().filter(|(other, _)| *other == name) {
+            for (inner, _) in &definitions {
+                if !found.contains(inner) && text_has_bang(body, inner) {
+                    found.insert(inner.clone());
+                    queue.push(inner.clone());
+                }
+            }
+        }
+    }
+    found
 }
 
 /// True if the name is followed by `!` in the text (a macro call).

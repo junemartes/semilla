@@ -646,7 +646,7 @@ fn raw_block<'tcx>(tcx: rustc_middle::ty::TyCtxt<'tcx>, typing: Option<rustc_mid
                 graph.n.folded_checks += 1;
                 return Raw::Pass(*target);
             }
-            let snippet = snippet(tcx, span);
+            let snippet = source_text(tcx, span);
             let text = if snippet.is_empty() { assert_kind(msg).to_string() } else { format!("{}: {snippet}", assert_kind(msg)) };
             let mut found = point("check", text, None, graph);
             found.v = match msg {
@@ -802,10 +802,23 @@ fn point_text(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span, head: &Span) -> Str
     let call = call.map(|call| call.source_callsite()).filter(|call| crate::spans::range(tcx, *call, &mut files).is_some());
     let in_workspace = crate::spans::range(tcx, *head, &mut files).is_some();
     match call {
-        Some(call) if in_workspace && !call.contains(*head) => format!("{}: {}", snippet(tcx, call), snippet(tcx, *head)),
+        Some(call) if in_workspace && !call.contains(*head) => format!("{}: {}", snippet(tcx, call), source_text(tcx, *head)),
         Some(call) if !in_workspace => snippet(tcx, call),
-        _ => snippet(tcx, *head),
+        _ => source_text(tcx, *head),
     }
+}
+
+/// The text of a span for a point (R63.1-5): the text of the expanded code if the span is from
+/// the expansion of a macro with a record (`a[0] + b` for `$x + $y`), else the source text. A
+/// renamed metavariable of a definition then does not change the text, and a changed
+/// definition or input does.
+fn source_text(tcx: rustc_middle::ty::TyCtxt<'_>, span: Span) -> String {
+    if span.from_expansion()
+        && let Some(text) = crate::expand::text_of(span)
+    {
+        return text;
+    }
+    snippet(tcx, span)
 }
 
 /// The source text of a span on one line: each run of white space is one space.

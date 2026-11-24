@@ -197,6 +197,10 @@ impl semilla_verify::BodyOracle for Guard<'_> {
         if self.off(step) { Vec::new() } else { self.inner.instances(step, renames) }
     }
 
+    fn expansions(&self, step: &Step) -> Option<[Vec<semilla_verify::expand::ExpansionUnit>; 2]> {
+        if self.off(step) { None } else { self.inner.expansions(step) }
+    }
+
     fn equivalence_budget(&self, step: &Step) -> Option<u64> {
         if self.off(step) { None } else { self.inner.equivalence_budget(step) }
     }
@@ -1602,6 +1606,29 @@ impl App {
 
     /// Builds the index of the working tree: the workspace graph, the items, and the MIR content
     /// hash of each body. Writes `.semilla/index.json` and returns a summary.
+    /// The text of `semilla expand` (design 63, R63.5-1): the expansion of each macro call at a
+    /// place, before and after a step. The default step is the working tree against `HEAD`. The
+    /// records come from the cache of the compiled check; a build runs only if the cache has no
+    /// record of a tree.
+    pub fn expand(&mut self, place: &str, step: Option<usize>, full: bool, sides: semilla_verify::expand::Sides) -> Result<String> {
+        let (before, after) = match step {
+            Some(index) => {
+                let set = self.current_changeset()?;
+                let step = set.steps.get(index).with_context(|| format!("the session has no step {index}"))?;
+                (step.tree_before.clone(), step.tree_after.clone())
+            }
+            None => (self.repo.commit_tree("HEAD")?, self.repo.write_tree()?),
+        };
+        let step = Step { index: 0, intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step.clone()], ..Default::default() };
+        let code = self.build_code(&set)?;
+        self.set_compiled(true);
+        let oracle = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: self.config_log.clone(), added: Default::default(), after_commit: false };
+        let units = semilla_verify::BodyOracle::expansions(&oracle, &step).context("the compiled build of the two trees gives no expansion records")?;
+        let trees = [self.workspace(&before)?, self.workspace(&after)?];
+        semilla_verify::expand::view(place, [&units[0], &units[1]], [&trees[0], &trees[1]], full, sides).map_err(|error| anyhow::anyhow!(error))
+    }
+
     pub fn index(&mut self) -> Result<String> {
         // The body hashes come from a build: cargo gives the targets.
         self.set_compiled(!self.no_bodies);

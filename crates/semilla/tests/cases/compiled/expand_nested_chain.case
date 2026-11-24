@@ -1,0 +1,38 @@
+note: defect 1 of batch 10c: a changed macro that only a different macro calls owns the change of each call site of that macro; its fact is `code different` with a line for the changed expansion
+rule+: R63.3-1 R63.3-3 R63.3-4
+rule-: R63.3-6
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! base { ($v:expr) => { $v + 10 } }
+macro_rules! fee { ($v:expr) => { base!($v) * 2 } }
+
+pub fn price(v: u32) -> u32 { fee!(v) }
+=== new src/lib.rs
+macro_rules! base { ($v:expr) => { $v + 12 } }
+macro_rules! fee { ($v:expr) => { base!($v) * 2 } }
+
+pub fn price(v: u32) -> u32 { fee!(v) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration · code different]
+      affected bodies: shop::price
+      expansion: `fee!(v)` at `shop::price/tail` (src/lib.rs:4): expansion changed: changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (src/lib.rs:4): same structure: 2 changed checks (in dev; 1 more result(s) in other configurations: semilla status --verbose); no edit in the body; different (for v = 0: before returns 20, after returns 24); the expansion of `fee!(v)` changes (semilla expand src/lib.rs:4)
+  expansions: 1 changed
+    `fee!(v)` at `shop::price/tail` (src/lib.rs:4): expansion changed: `macro_rules! fee` (src/lib.rs:2): changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]; from `macro_rules! base` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

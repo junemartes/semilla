@@ -1,0 +1,32 @@
+note: a renamed local in a macro arm gives the rename fact of the normal compare in the expansion
+rule+: R63.3-2
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! twice { ($n:expr) => {{ let value = $n; value + value }} }
+
+pub fn f(n: u32) -> u32 { twice!(n) }
+=== new src/lib.rs
+macro_rules! twice { ($n:expr) => {{ let amount = $n; amount + amount }} }
+
+pub fn f(n: u32) -> u32 { twice!(n) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `twice`: `macro_rules! twice { ($n:expr) => {{ let value = $n; value + value }} }` → `macro_rules! twice { ($n:expr) => {{ let amount = $n; amount + amount }} }` [declaration · code equal]
+      expansion: `twice!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: `expansion`: renamed local `value` → `amount`, 3 edit(s) [rename]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `twice!(n)` at `shop::f/tail` (src/lib.rs:3): expansion changed: `macro_rules! twice` (src/lib.rs:1): `expansion`: renamed local `value` → `amount`, 3 edit(s) [rename]; from `macro_rules! twice` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `twice`: `macro_rules! twice { ($n:expr) => {{ let value = $n; value + value }} }` → `macro_rules! twice { ($n:expr) => {{ let amount = $n; amount + amount }} }` [declaration · code equal]
+    lines: src/lib.rs:1, src/lib.rs:-1

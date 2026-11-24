@@ -337,6 +337,10 @@ pub struct MadeItem {
     /// True if a different crate can reach the item, by the compiler.
     #[serde(default)]
     pub public: bool,
+    /// For an associated item that a macro call in an impl or a trait makes: the self type or
+    /// the trait (batch 10c).
+    #[serde(default)]
+    pub owner: String,
 }
 
 /// The expanded code of the units of one tree (batch 6b, part 2).
@@ -384,6 +388,51 @@ pub fn read_made(dir: &Path, made: &mut Made) -> bool {
         }
     }
     true
+}
+
+/// The expansions of one compiled target (batch 10c, design 63): the target name of the unit
+/// record, and each expansion as a JSON value in the form of the driver.
+#[derive(Clone, Debug, Default)]
+pub struct UnitExpansions {
+    pub target: String,
+    /// The package of the target (two packages can have a test target with one name).
+    pub package: String,
+    pub list: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ExpansionUnit {
+    #[serde(default)]
+    target: String,
+    #[serde(default)]
+    package: String,
+    expansions: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+struct ExpansionLine {
+    unit: ExpansionUnit,
+}
+
+/// Reads the expansion of each macro call from the unit record of each `*.jsonl` file of an N0
+/// folder (batch 10c). The unit record is the first line, so the read stops there. `None`: a
+/// file has no expansion list (a record of an earlier driver), so the expansions are not known.
+pub fn read_expansions(dir: &Path) -> Option<Vec<UnitExpansions>> {
+    use std::io::BufRead as _;
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut files: Vec<_> = entries.filter_map(|entry| entry.ok().map(|entry| entry.path())).filter(|path| path.extension().is_some_and(|extension| extension == "jsonl")).collect();
+    files.sort();
+    let mut out = Vec::new();
+    for file in files {
+        let reader = std::io::BufReader::new(std::fs::File::open(&file).ok()?);
+        let line = reader.lines().next()?.ok()?;
+        if !line.starts_with(UNIT_LINE) {
+            return None;
+        }
+        let unit = serde_json::from_str::<ExpansionLine>(&line).ok()?.unit;
+        out.push(UnitExpansions { target: unit.target, package: unit.package, list: unit.expansions? });
+    }
+    Some(out)
 }
 
 /// The start of the line of a unit record.
