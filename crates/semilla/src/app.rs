@@ -127,7 +127,7 @@ pub struct App {
     cargo: bool,
     /// The base trees that a commit gives: the tree of the parent of a commit that this process
     /// checked against its note. The build code of such a tree is trusted.
-    trusted_bases: std::cell::RefCell<BTreeSet<String>>,
+    pub(crate) trusted_bases: std::cell::RefCell<BTreeSet<String>>,
 }
 
 /// True if a step of the change set has the compiled check (design 50).
@@ -355,6 +355,102 @@ enum CommitCheck {
     DataOnly,
 }
 
+/// The lines of a change set of a tag after the commit for a reviewer (design 62, R62.10-1):
+/// the header, and the line of a merge commit. A change set of the agent has none.
+pub(crate) fn after_commit_lines(set: &ChangeSet) -> Vec<String> {
+    let Some(after) = &set.after_commit else { return Vec::new() };
+    let mut lines = vec![semilla_core::report::AFTER_COMMIT_HEADER.to_string()];
+    if after.merge {
+        lines.push("a merge commit: compared with the first parent".to_string());
+    }
+    if let Some(error) = &after.compiled_error {
+        lines.push(format!("! the compiled check stops, so the step has the facts of the syntax tree only: {}", semilla_core::text::inline(error)));
+    }
+    lines
+}
+
+/// A change set of one step of `set`: the set that the check of one step uses.
+fn one_step_set(set: &ChangeSet, index: usize) -> Result<ChangeSet> {
+    let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
+    Ok(ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), after_commit: set.after_commit.clone(), ..Default::default() })
+}
+
+/// The open items of a change set of a tag after the commit (design 62, R62.5-4), by kind.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OpenItems {
+    pub spotlights: usize,
+    pub failed_builds: usize,
+    pub builds_not_run: usize,
+    pub configs: usize,
+    pub errors: usize,
+    pub uncovered: usize,
+}
+
+impl OpenItems {
+    /// The open items of a report. `set` gives the stored build check of each step, and the
+    /// configurations that did not build when the report has no data of the configurations.
+    pub fn of(report: &Report, set: &ChangeSet) -> OpenItems {
+        let steps: BTreeSet<usize> = report.steps.iter().map(|step| step.step).collect();
+        let records = set.steps.iter().filter(|step| steps.contains(&step.index)).filter_map(|step| step.build_check.as_ref());
+        let after_side = |cause: &str| cause.starts_with(crate::oracle::AFTER_SIDE) || cause.starts_with(crate::oracle::BOTH_SIDES);
+        let configs = match &report.configs {
+            Some(note) => note.not_checked.iter().filter(|gap| after_side(&gap.cause)).map(|gap| gap.name.clone()).collect::<BTreeSet<_>>().len(),
+            None => set.after_commit.iter().flat_map(|after| &after.failed_configs).filter(|config| after_side(&config.cause)).count(),
+        };
+        let mut items = OpenItems { configs, ..Default::default() };
+        for record in records {
+            match record {
+                semilla_core::BuildCheck::Fails { .. } => items.failed_builds += 1,
+                semilla_core::BuildCheck::CannotRun { .. } => items.builds_not_run += 1,
+                _ => {}
+            }
+        }
+        items.errors += set.after_commit.iter().filter(|after| after.compiled_error.is_some()).count();
+        for step in &report.steps {
+            items.spotlights += step.facts.iter().filter(|fact| fact.spotlight && fact.reason.is_none()).count();
+            items.errors += step.errors.len();
+            items.uncovered += step.uncovered.len();
+        }
+        items
+    }
+
+    /// Adds the items of a different commit (a range, design 62).
+    pub fn add(&mut self, other: &OpenItems) {
+        self.spotlights += other.spotlights;
+        self.failed_builds += other.failed_builds;
+        self.builds_not_run += other.builds_not_run;
+        self.configs += other.configs;
+        self.errors += other.errors;
+        self.uncovered += other.uncovered;
+    }
+
+    /// One text for each kind with an item: `2 open spotlights`.
+    pub fn texts(&self) -> Vec<String> {
+        let count = |count: usize, one: &str, many: &str| (count > 0).then(|| format!("{count} {}", if count == 1 { one } else { many }));
+        [
+            count(self.spotlights, "open spotlight", "open spotlights"),
+            count(self.failed_builds, "build check that fails", "build checks that fail"),
+            count(self.builds_not_run, "build check that cannot run", "build checks that cannot run"),
+            count(self.configs, "configuration that does not build", "configurations that do not build"),
+            count(self.errors, "error of the check", "errors of the check"),
+            count(self.uncovered, "change with no fact (an internal error)", "changes with no fact (an internal error)"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
+/// Design 62: the open items of a report of a tag after the commit. A result with an open item
+/// is not complete: it accepts nothing.
+pub(crate) fn mark_after_commit(report: &mut Report, set: &ChangeSet) {
+    let open = OpenItems::of(report, set).texts();
+    if !open.is_empty() {
+        report.accepted = false;
+    }
+    report.after_commit = Some(open);
+}
+
 /// Adds a problem of the change set to a result. The result line and the problem agree (B1): no
 /// "accepted" line with a rejection below it.
 fn add_problem(result: &mut CheckResult, problem: String) {
@@ -530,6 +626,13 @@ impl App {
     pub fn workspace(&mut self, tree: &str) -> Result<Workspace> {
         if let Some(ws) = self.workspaces.get(tree) {
             return Ok(ws.clone());
+        }
+        // Design 62: the tree before a root commit is the empty tree. A tree with no entry is
+        // the empty workspace: it has no package and no file.
+        if crate::git::is_empty_tree(tree) {
+            let ws = Workspace::default();
+            self.workspaces.insert(tree.to_string(), ws.clone());
+            return Ok(ws);
         }
         let started = std::time::Instant::now();
         let dir = self.repo.materialize(tree)?;
@@ -743,6 +846,10 @@ impl App {
         // True: the lock file of the base tree is the problem. False: the lock file of the tree.
         let stale: std::cell::RefCell<Option<bool>> = std::cell::RefCell::new(None);
         let mut full = |dir: &std::path::Path| -> Result<crate::buildcode::HostInfo> {
+            // Design 62: the empty tree (the base of a root commit) has no package.
+            if names.get(dir).is_some_and(|name| crate::git::is_empty_tree(name)) {
+                return Ok(crate::buildcode::HostInfo::default());
+            }
             let cached = names.get(dir).map(|name| folder.join(format!("{name}-{key}.graph.json")));
             if let Some(host) = cached.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| serde_json::from_str(&text).ok()) {
                 return Ok(host);
@@ -983,7 +1090,7 @@ impl App {
         let tree = self.repo.write_tree()?;
         let (record, lines) = match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &tree) {
             crate::buildcheck::Outcome::Stored { record, lines } => (record, lines),
-            crate::buildcheck::Outcome::Fails { text } => bail!("rejected: the step is not stored, and it stays open\n{text}\ncorrect the code, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
+            crate::buildcheck::Outcome::Fails { text, .. } => bail!("rejected: the step is not stored, and it stays open\n{text}\ncorrect the code, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
             crate::buildcheck::Outcome::CannotRun { text } => bail!("not stored: the build check cannot run on this machine, and the step stays open\n{text}\ncorrect the environment, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
         };
         if let Some(open) = session.open.as_mut() {
@@ -1114,6 +1221,10 @@ impl App {
         // The build code of the base comes next to the base line (design 28.5).
         if let Some(notice) = self.base_build_code_notice(&set, commit.is_some().then_some(key.as_str())) {
             put_line(&mut text, &notice);
+        }
+        // Design 62: a change set of a tag after the commit says so.
+        for line in after_commit_lines(&set) {
+            put_line(&mut text, &line);
         }
         // Design 53: the stored result of the build check of each step.
         for line in semilla_core::claim::build_check_lines(&set.steps) {
@@ -1504,7 +1615,7 @@ impl App {
             // uses the separate folders (design 28).
             let head = self.repo.commit_tree("HEAD").or_else(|_| self.repo.git(&["hash-object", "-t", "tree", "/dev/null"]).map(|empty| empty.trim().to_string()))?;
             let code = self.build_code(&ChangeSet { base_tree: head, head_tree: tree.clone(), ..Default::default() })?;
-            let records = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: Default::default(), added: Default::default() }.records(&tree, "n0")?;
+            let records = NormalOracle { repo: self.repo.clone(), code, mode: self.mode, log: Default::default(), added: Default::default(), after_commit: false }.records(&tree, "n0")?;
             semilla_normal::body_hashes(&records)
         };
         let items: Vec<serde_json::Value> = ws
@@ -1593,6 +1704,17 @@ impl App {
     }
 
     /// Checks the change set. `only_step` limits the report to one step.
+    /// The check of one step of a change set: the check of `semilla step`, and of a tag after
+    /// the commit (design 62, R62.3-1). The build code state comes from the full change set.
+    pub(crate) fn check_step_of(&mut self, set: &ChangeSet, index: usize) -> Result<CheckResult> {
+        let code = match set.steps.get(index) {
+            Some(step) if !step.compiled => BuildCode { base: set.base_tree.clone(), ..Default::default() },
+            _ => self.build_code(set)?,
+        };
+        let one = one_step_set(set, index)?;
+        self.check_set_with(&one, false, &code)
+    }
+
     pub fn check(&mut self, only_step: Option<usize>, require_groups: bool) -> Result<CheckResult> {
         let mut set = self.current_changeset()?;
         let session = self.load_session()?;
@@ -1609,8 +1731,7 @@ impl App {
             _ => self.build_code(&set)?,
         };
         if let Some(index) = only_step {
-            let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
-            set = ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), ..Default::default() };
+            set = one_step_set(&set, index)?;
         }
         let mut result = self.check_set_with(&set, require_groups, &code)?;
         if let Some(problem) = base_problem {
@@ -1691,7 +1812,7 @@ impl App {
         // A change set with no compiled step has no phase 2 (design 50): its syntax result is
         // the full result.
         let tree_only = off.len() == set.steps.len();
-        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies || tree_only { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default() }) };
+        let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies || tree_only { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default(), after_commit: set.after_commit.is_some() }) };
         let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
         let exprs = SmtOracle::for_repo(&self.repo);
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
@@ -1702,7 +1823,7 @@ impl App {
         let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
         let started = std::time::Instant::now();
         // The key of a step result has each input of the step check that is not in the step.
-        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?}", self.mode, self.no_bodies) };
+        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {}", self.mode, self.no_bodies, set.after_commit.is_some()) };
         let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
         self.step_memo = memo.results;
         for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)).filter(|step| skip.contains(&step.step)) {
@@ -1767,6 +1888,13 @@ impl App {
         report.warnings.extend(self.tool_warnings());
         if !exprs.available() {
             report.warnings.push("Z3 is not available; condition effects are not computed (run scripts/fetch-z3.sh, or set SEMILLA_Z3)".into());
+        }
+        // Design 62: the open items of a tag after the commit.
+        if set.after_commit.is_some() {
+            for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)) {
+                step.after_commit = true;
+            }
+            mark_after_commit(&mut report, set);
         }
         let text = format!("{}{}", semilla_verify::views::text_report(&report.steps), summary_line(&report));
         let (base, head) = (self.workspace(&set.base_tree).unwrap_or_default(), self.workspace(&set.head_tree).unwrap_or_default());
@@ -2016,6 +2144,9 @@ impl App {
             put_line(&mut text, &line);
         }
         put_line(&mut text, &format!("loaded {steps} steps from {commit}"));
+        for line in after_commit_lines(&set) {
+            put_line(&mut text, &line);
+        }
         let result = summary_line(&report);
         if full || result_fails(&result, false) {
             text.push_str(result.lines().next().unwrap_or_default());
@@ -2031,7 +2162,7 @@ impl App {
         use semilla_core::view::{GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, Status};
         // The folder set of the tree. A command with `--no-build-code` reads no record of a
         // tree with changed build code.
-        let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default() }).root(tree) else { return };
+        let Ok((root, marked)) = (NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: Default::default(), added: Default::default(), after_commit: false }).root(tree) else { return };
         let settings = semilla_normal::cargo::settings_key(&root.join("build"), semilla_normal::cargo::find_driver().ok().as_deref());
         let cache = root.join("mir").join(tree).join(format!("n0-s{settings}"));
         if !cache.join(".complete").exists() || (!marked && cache.join(crate::oracle::BUILD_CODE_FILE).exists()) {
@@ -2108,6 +2239,8 @@ impl App {
     fn add_notices(&mut self, report: &mut Report, set: &ChangeSet, commit: Option<&str>) {
         // The build code line is the first line of each output of a reviewer (design 28).
         report.notices.extend(self.build_code_notice(report));
+        // Design 62: the review header of a tag after the commit.
+        report.notices.extend(after_commit_lines(set));
         report.notices.extend(self.base_notice(set, commit));
         report.notices.extend(self.base_build_code_notice(set, commit));
         // Design 53: the stored result of the build check of each step. A reviewer command
@@ -2307,7 +2440,12 @@ pub(crate) fn short_text(report: &Report) -> String {
             put_line(&mut text, &format!("  {line}"));
         }
         for fact in step.facts.iter().filter(|fact| fact.spotlight && fact.reason.is_none()) {
-            put_line(&mut text, &format!("  ✗ {} has a spotlight with no reason: {}", fact.id, fact.description));
+            // Design 62: in a tag after the commit, the spotlight is an open item.
+            if step.after_commit {
+                put_line(&mut text, &format!("  ! {} has a spotlight, {}: {}", fact.id, semilla_core::report::OPEN_SPOTLIGHT, fact.description));
+            } else {
+                put_line(&mut text, &format!("  ✗ {} has a spotlight with no reason: {}", fact.id, fact.description));
+            }
         }
         for uncovered in &step.uncovered {
             put_line(&mut text, &format!("  ✗ uncovered: {}", uncovered.description));
@@ -2402,7 +2540,13 @@ pub(crate) fn summary_line(report: &Report) -> String {
     let phase1_ok = report.phase == "syntax" && report.organization.is_empty() && !report.steps.iter().any(hard_problem);
     // A result that is not complete, with no other problem. A real problem gives `rejected`.
     let not_complete = report.not_complete() && report.organization.is_empty() && !report.steps.iter().any(|step| if skipped.contains(&step.step) || report.phase == "syntax" { hard_problem(step) } else { !step.accepted() });
-    let verdict = if not_complete {
+    // Design 62: in a tag after the commit, an open item is not a reject. Only a false fact
+    // of the agent, a claim, a tag, or a problem of the change set rejects.
+    let after_commit = report.after_commit.as_ref();
+    let open_only = after_commit.is_some_and(|open| !open.is_empty())
+        && report.organization.is_empty()
+        && report.steps.iter().all(|step| step.agent_facts.iter().all(|fact| fact.holds) && step.tags.iter().all(|tag| tag.error.is_none()) && step.claims.iter().all(|claim| claim.status.is_verified() || claim.status.is_pending() || matches!(claim.status, ClaimStatus::NotChecked { .. })));
+    let verdict = if not_complete || open_only {
         "not complete".to_string()
     } else if report.accepted && report.phase == "syntax" {
         // Phase 2 (the MIR checks) did not run: phase 1 is not the final result.
@@ -2466,6 +2610,12 @@ pub(crate) fn summary_line(report: &Report) -> String {
         Some(note) => format!("result: {verdict} · {steps} step{} · {facts} · {claims} · {}", if steps == 1 { "" } else { "s" }, note.tag_text()),
         None => format!("result: {verdict} · {steps} step{} · {facts} · {claims}", if steps == 1 { "" } else { "s" }),
     };
+    if let Some(open) = after_commit {
+        text = text.replacen(&format!("result: {verdict} · "), &format!("result: {verdict} · {} · ", semilla_core::report::AFTER_COMMIT), 1);
+        for item in open {
+            text.push_str(&format!(" · {item}"));
+        }
+    }
     if uncovered > 0 {
         text.push_str(&format!(" · {uncovered} uncovered (an internal error: a change with no fact)"));
     }

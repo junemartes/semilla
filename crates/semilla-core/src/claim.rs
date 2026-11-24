@@ -96,8 +96,9 @@ impl AgentFacts {
     }
 }
 
-/// The result of the build check of a stored step (design 53). A step that does not build is
-/// not stored, so the record has no result `fails`.
+/// The result of the build check of a stored step (design 53). A step of `semilla step` that
+/// does not build is not stored, so only a step of a tag after the commit (design 62) can have
+/// the results `fails` and `cannot_run`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum BuildCheck {
@@ -118,6 +119,23 @@ pub enum BuildCheck {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         not_checked: Vec<String>,
     },
+    /// Design 62: some targets build before the commit and do not build after it. The commit
+    /// is already there, so the note keeps the step with this result.
+    Fails {
+        /// The targets that the commit breaks, in the words of cargo.
+        #[serde(default)]
+        targets: Vec<String>,
+        /// The first errors of the compiler.
+        #[serde(default)]
+        errors: Vec<String>,
+    },
+    /// Design 62: the check cannot run on this machine (for example, a dependency is not in
+    /// the cache of cargo). This is not a result of the code.
+    CannotRun {
+        /// The cause, in one line.
+        #[serde(default)]
+        cause: String,
+    },
 }
 
 /// "the target A" or "the targets A, B", with the verb for one target or for many.
@@ -133,6 +151,8 @@ impl BuildCheck {
             BuildCheck::Passes => "passes",
             BuildCheck::NotRun => "not run",
             BuildCheck::BaseFails { .. } => "no new failure found",
+            BuildCheck::Fails { .. } => "fails",
+            BuildCheck::CannotRun { .. } => "cannot run",
         }
     }
 
@@ -157,7 +177,15 @@ impl BuildCheck {
                 }
                 lines
             }
+            BuildCheck::Fails { targets, .. } => vec![format!("{} after the commit (they build before it)", targets_text(targets, "does not build", "do not build"))],
+            BuildCheck::CannotRun { cause } => vec![format!("the check cannot run on the machine of the tag ({cause}), so Semilla did not check that this code builds")],
         }
+    }
+
+    /// True for a result that is an open item of a tag after the commit (design 62): the
+    /// code after the commit does not build, or the check cannot run.
+    pub fn is_open(&self) -> bool {
+        matches!(self, BuildCheck::Fails { .. } | BuildCheck::CannotRun { .. })
     }
 
     /// True for a result that a reviewer must see with a mark: Semilla did not see that each
@@ -299,6 +327,36 @@ pub struct ChangeSet {
     /// The pair warnings that the agent refused, with a reason.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pair_refusals: Vec<PairRefusal>,
+    /// Design 62: the change set of a tag after the commit. Semilla made its one step from the
+    /// tree of the first parent and the tree of the commit. `None`: the steps of the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_commit: Option<AfterCommit>,
+}
+
+/// The data of a tag after the commit (design 62).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AfterCommit {
+    /// True for a merge commit: the step compares the commit with its first parent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merge: bool,
+    /// Each configuration of the compiled check that does not build, with its side and its
+    /// first error (rule R62.5-3). Empty with no compiled check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_configs: Vec<FailedConfig>,
+    /// The error that stopped the compiled check (for example a lock file that does not agree
+    /// with the manifests). The step then has the facts of the syntax tree only, and the error
+    /// is an open item (rule R62.5-3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compiled_error: Option<String>,
+}
+
+/// A configuration of the compiled check that does not build in a tag after the commit.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedConfig {
+    /// The name of the configuration, for example `dev, all features`.
+    pub name: String,
+    /// The cause: the side (before, after, or both) and the first error.
+    pub cause: String,
 }
 
 /// The agent's refusal of a pair warning: the removed item and the added item are really two

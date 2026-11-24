@@ -14,6 +14,7 @@ macro_rules! eprintln {
     ($($arg:tt)*) => { std::eprintln!("{}", semilla_core::text::block(&format!($($arg)*))) };
 }
 
+mod aftertag;
 mod app;
 mod background;
 mod buildcheck;
@@ -138,12 +139,21 @@ enum Command {
     /// Add facts of the agent to a stored step: `semilla fact --same '…' --change '…'`.
     ///
     /// The step is the last stored step, or `--step N`. No build check runs again: the trees
-    /// of the step do not change. A false fact stores nothing.
+    /// of the step do not change. A false fact stores nothing. With `--commit`, the step is a
+    /// step of the note of a tagged commit (design 62), and `--reason` adds the reason for a
+    /// fact in the spotlight.
     #[command(display_order = 2)]
     Fact {
         /// The number of the stored step. The default is the last stored step.
         #[arg(long)]
         step: Option<usize>,
+        /// Add to the note of this tagged commit, not to the session.
+        #[arg(long)]
+        commit: Option<String>,
+        /// Only with `--commit`: the reason for a fact in the spotlight, `KEY=TEXT` (the keys
+        /// that `semilla tag` prints). A reason that belongs to no fact stores nothing.
+        #[arg(long = "reason")]
+        reasons: Vec<String>,
         /// `rename OLD NEW`, `move FROM TO`, or `rewrite FROM => TO` (see `semilla step --help`).
         #[arg(long = "same")]
         same: Vec<String>,
@@ -316,8 +326,28 @@ enum Command {
     Show,
     /// After `git commit`: the final check with the result and the git note (default HEAD). Only a
     /// step with the compiled check (`step --compiled`) gets a build and phase 2.
+    ///
+    /// A commit with no change set of the agent gets a tag after the commit (design 62): one step
+    /// from the tree of the first parent to the tree of the commit, with the facts of `semilla
+    /// step`. `A..B` tags each commit of the first-parent chain from A (not included) to B. The
+    /// command changes no file, not the index, not HEAD, and not the session: it writes only the
+    /// git note. An open item (a spotlight with no reason, a build that fails) does not stop the
+    /// tag; the exit code is then 1, and `semilla fact --commit` adds the reasons.
     #[command(display_order = 3)]
-    Tag { commit: Option<String> },
+    Tag {
+        /// A commit (default HEAD), or a range `A..B`.
+        commit: Option<String>,
+        /// A tag after the commit: also run the compiled check (as `semilla step --compiled`).
+        #[arg(long)]
+        compiled: bool,
+        /// A tag after the commit: do not run the build check (as `semilla step --no-check`).
+        #[arg(long = "no-check")]
+        no_check: bool,
+        /// A tag after the commit: make the note of a commit again. The facts, the tags, and the
+        /// reasons of the agent stay; the output names each one that does not hold.
+        #[arg(long)]
+        again: bool,
+    },
     /// Load the change set of a tagged commit for a review.
     Load { commit: String },
     /// Start the local review UI.
@@ -586,8 +616,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::from(1));
             }
         }
-        Command::Fact { step, same, change, tag } => {
-            let (text, stored) = app.add_facts(step, &same, &change, &tag)?;
+        Command::Fact { step, commit, reasons, same, change, tag } => {
+            let (text, stored) = match commit {
+                Some(commit) => app.add_to_commit(&commit, step, &same, &change, &tag, &reasons)?,
+                None if !reasons.is_empty() => anyhow::bail!("`--reason` needs `--commit`: it adds a reason to the note of a tagged commit. A step of the session gets its reasons from `semilla step \"<intent>\" --reason 'KEY=TEXT'`"),
+                None => app.add_facts(step, &same, &change, &tag)?,
+            };
             print!("{text}");
             if !stored {
                 return Ok(ExitCode::from(1));
@@ -778,7 +812,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Show => println!("{}", app.check(None, false)?.tree.render()),
-        Command::Tag { commit } => println!("{}", app.tag(commit.as_deref().unwrap_or("HEAD"))?),
+        Command::Tag { commit, compiled, no_check, again } => {
+            let options = aftertag::TagOptions { compiled, no_check, again };
+            let (text, complete) = app.tag_command(commit.as_deref(), &options)?;
+            println!("{}", text.trim_end_matches('\n'));
+            if !complete {
+                return Ok(ExitCode::from(1));
+            }
+        }
         Command::Load { commit } => {
             let text = app.load(&commit)?;
             println!("{text}");

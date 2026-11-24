@@ -1,8 +1,13 @@
 # semilla
 
-Semilla makes code review faster. An agent tags its work with **claims**: a list of semantic changes. Semilla **verifies** each claim against the code. A reviewer then reads verified changes in a local UI, with flow graphs and a change tree, instead of a line diff.
+Semilla gives a **semantic diff** of a Rust change, with as much information as possible and as complete as possible, so that a human reviews the code fast. Semilla derives the facts from the code: a rename, a moved item, a changed condition, a new field, a manifest key. **Each changed line of the diff is in a fact** (the cover rule), so the reviewer has all the information. A reviewer reads the facts in a local UI or a report, with flow graphs and a change tree, instead of a line diff.
 
-The design is in [`docs/design.md`](docs/design.md). The first language is Rust. Semilla is local: it does not push and does not use a remote service.
+- The agent can add information: an intent, its facts, tags, and the reasons for the facts in the spotlight. Semilla checks each fact of the agent against the edit.
+- A proof (`code equal`, `same graph`, `equivalent`, `expansion equal`) is always true: the reviewer relies on it.
+- Code of a crate (a build script, a proc macro) runs in a sandbox: such code is not trusted for the safety of the machine.
+- Two workflows give the same facts: **steps while the agent works** (`semilla step`, then `semilla tag`), or **a tag after the commit** (`semilla tag <rev>` or `semilla tag A..B`).
+
+The design is in [`docs/design.md`](docs/design.md) (the goal is in section 1). The first language is Rust. Semilla is local: it does not push and does not use a remote service.
 
 ## Build
 
@@ -18,7 +23,14 @@ The binaries are in `target/debug/`:
 
 Semilla finds the solver in this order: `SEMILLA_Z3`, a `z3` next to the Semilla binary or in the `tools` folder of the user cache, a `z3` on `PATH`, and the `.semilla/tools/z3` of this workspace. It does not use a `z3` in the repository that it checks.
 
-## The agent workflow
+## The workflows
+
+There are two workflows. They give the same facts for the same change.
+
+1. **Steps while the agent works:** after each small change, the agent runs `semilla step "<intent>"`, then it commits and runs `semilla tag`. Small steps with one intent are the easiest to read.
+2. **A tag after the commit:** the agent (or a person) commits as usual, then runs `semilla tag <rev>` for one commit or `semilla tag A..B` for each commit of the first-parent chain (design 62). Each commit gets one step from its first parent.
+
+### Steps while the agent works
 
 The agent keeps its own edit tools. After each small change, it runs one command with the intent (design 24):
 
@@ -46,14 +58,30 @@ semilla tag                               # the final check, the result line, an
 - The first step and the reports show the base of the change set. If commits before the change set have no Semilla check, a line names them (design 25.2).
 - After `semilla tag`, the change set is closed: the next `semilla step` starts a new change set at `HEAD`. If `HEAD` is not the tagged commit, `semilla status` says if `HEAD` has a Semilla check.
 - `semilla step --fast` runs phase 1 only. Each later step prints the phase 2 state of that step. If `tag` rejects an earlier step, it prints the exact commands of the fix.
+- In this workflow, do not commit between steps: the change set of the steps belongs to one commit.
+
+### A tag after the commit
+
+```sh
+git commit -am "fix the cart total"       # no step: commit as usual
+semilla tag                               # one step from the first parent to HEAD, with the facts of `semilla step`
+semilla tag main..feature                 # each commit of the first-parent chain, in order
+semilla fact --commit abc1234 --reason 'shop::host=only unix hosts run the shop'   # a reason later
+```
+
+- The step of a commit has the facts, the categories, the spotlights, the notes, the build check, and the compiled result that `semilla step` gives for the same two trees. A root commit compares with the empty tree. A merge commit compares with its first parent.
+- The command changes no file of the working tree, not the index, not `HEAD`, not the branch, and not the session: it makes the trees from the git objects, and it writes only the git note. A dirty working tree is valid.
+- An open item does not stop the tag: the note is always stored. A spotlight with no reason shows as "open: no reason given", and a build that fails stores the errors of the compiler. The result line names each open item: `result: tagged after the commit · 1 step · 14 facts · 2 open spotlights`. The last lines give the exact `semilla fact --commit … --reason '…'` commands.
+- With `--compiled`, a configuration that does not build does not stop the others: the output names it with its first error, and each other configuration gives its results.
+- A commit with a note keeps it; `--again` makes it again. A commit with the steps of the agent keeps the `tag` of the first workflow. `--compiled` and `--no-check` work as for `step`.
 
 The exit codes:
 
 | Exit code | Meaning |
 |---|---|
 | 0 | The result is accepted. For `status` with no commit, also: phase 2 runs in the background. |
-| 1 | The result is rejected or not complete (`step`, `verify`, `status`, `review --md`, `review --html`, `load`). For `status <commit>`, also: this machine has no full result (for example with `--no-wait`). `review` writes its report file in each case. |
-| 2 | An error: the command gives no result (for example a wrong argument). Also a `tag` that stores nothing: the final check rejects the change set, or the commit does not agree with the steps. |
+| 1 | The result is rejected or not complete (`step`, `verify`, `status`, `review --md`, `review --html`, `load`). For `status <commit>`, also: this machine has no full result (for example with `--no-wait`). `review` writes its report file in each case. A tag after the commit with an open item (the note is stored), and a `fact` that stores nothing. |
+| 2 | An error: the command gives no result (for example a wrong argument). Also a `tag` of the steps of the agent that stores nothing: the final check rejects the change set, or the commit does not agree with the steps. |
 
 The first argument of `semilla step` is always the intent: `step` has no subcommand. The commands of the old protocol (`old-step`, `claim`, `check`, `group`) are only for a replay by hand. `semilla --help` hides them. The replay:
 
@@ -76,7 +104,7 @@ Agents: read [`docs/agent-guide.md`](docs/agent-guide.md) first.
 claude mcp add semilla -- /path/to/semilla/target/debug/semilla mcp
 ```
 
-The tools are `step` (the same fields as the command, as a JSON object: `intent`, `group`, `claims`, `reasons` as an object from anchor to text, `tree`), `undo`, `tag`, `results` (the `status` command), `ops`, `verify`, `pair_refuse`, and the replay tools `replay_begin`, `replay_status`, `replay_plan`, `replay_apply`, `replay_end`, `replay_abort`. A rejected `step` is a tool error with the cause and the call to make again. The tools of the old protocol are not served.
+The tools are `step` (the same fields as the command, as a JSON object: `intent`, `group`, `claims`, `reasons` as an object from anchor to text, `tree`), `fact` (with `commit` and `reasons` for the note of a tagged commit), `undo`, `tag` (`commit` is a revision or a range `A..B`; `compiled`, `no_check`, `again`), `results` (the `status` command), `ops`, `verify`, `pair_refuse`, and the replay tools `replay_begin`, `replay_status`, `replay_plan`, `replay_apply`, `replay_end`, `replay_abort`. A rejected `step` is a tool error with the cause and the call to make again. The tools of the old protocol are not served.
 
 ### Feature sets
 
@@ -166,6 +194,17 @@ For each step, the verifier:
 `semilla index` writes the index of the working tree to `.semilla/index.json`: the workspace graph, the items, and the MIR content hash of each body.
 
 For the change set, it also checks the group and subgroup rules, and it checks that the git note agrees with the step refs. The result is accepted or rejected, with the counts of the facts for each compare result, and the count of the facts with a spotlight. It has no score.
+
+## Inspiration
+
+Semilla takes ideas from these projects (design 17):
+
+- **sem** (Ataraxy Labs): a Git companion on tree-sitter that diffs functions, classes, and methods as entities in 32 languages or more. It pairs the entities by ID, then by a structural hash, then by token overlap ("probable rename"). Its commands `impact`, `check`, and `certify` give the dependents of a change, the checks of the project on the affected code, and a static review report. It has Claude Code hooks and a GitHub Action, and the tools weave (an entity-level merge driver) and inspect (semantic code review).
+- **Research:** RefactoringMiner (a refactoring-aware AST diff), ARCTIC (intent and drift of AI diffs), and studies that show that engineers want refactorings and behavior changes apart.
+- **Tools:** SemanticDiff, GitClear, semantic-review.
+- **Rust analysis:** Charon, Flowistry. **Equivalence:** equality saturation (`egg`), SymDiff, Alive2. **Version control:** Jujutsu, Pijul, Unison.
+
+Semilla adds the cover rule (each changed line is in a fact), proofs from the compiled code (MIR), and a crate flow explorer.
 
 ## Crates
 

@@ -22,6 +22,15 @@ use semilla_syntax::load::FileEntry;
 
 use crate::store::Store;
 
+/// The hash of the empty tree in a repository with SHA-1 and with SHA-256 (design 62). A git
+/// tree is its content, so a tree with no entry has exactly one of these hashes.
+pub const EMPTY_TREES: [&str; 2] = ["4b825dc642cb6eb9a060e54bf8d69288fbee4904", "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"];
+
+/// True for the empty tree (the tree before a root commit).
+pub fn is_empty_tree(tree: &str) -> bool {
+    EMPTY_TREES.contains(&tree)
+}
+
 /// The configuration that each git command of Semilla gets with `-c`. It stops each hook and
 /// each program that the configuration of the repository can name.
 pub const SAFE_CONFIG: &[&str] = &[
@@ -179,6 +188,26 @@ impl Repo {
         let hash = self.git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
         let text = self.git(&["cat-file", "commit", &hash])?;
         Ok(text.lines().take_while(|line| !line.is_empty()).find_map(|line| line.strip_prefix("parent ")).map(str::to_string))
+    }
+
+    /// Each parent of a commit, in order, from the raw commit object (design 62). The first
+    /// one is the first parent. A root commit has none.
+    pub fn parents(&self, commit: &str) -> Result<Vec<String>> {
+        let hash = self.git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
+        let text = self.git(&["cat-file", "commit", &hash])?;
+        Ok(text.lines().take_while(|line| !line.is_empty()).filter_map(|line| line.strip_prefix("parent ")).map(str::to_string).collect())
+    }
+
+    /// The hash of the empty tree. Git knows this tree also when the object store does not
+    /// have it, so the call writes nothing. A tree with no entry is the empty tree: its hash is
+    /// one of [`EMPTY_TREES`].
+    pub fn empty_tree(&self) -> Result<String> {
+        self.git(&["hash-object", "-t", "tree", "/dev/null"])
+    }
+
+    /// The first line of the message of a commit.
+    pub fn subject(&self, commit: &str) -> Result<String> {
+        self.git(&["log", "-1", "--no-show-signature", "--format=%s", commit])
     }
 
     /// A path in the cache folder that only this process uses (for index files).

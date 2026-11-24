@@ -1002,16 +1002,17 @@ fn a_tagged_change_set_is_closed() {
     let status = run(repo, &["status"], 0);
     assert!(status.starts_with(&closed), "{status}");
 
-    // A new commit with no step on the tagged commit. The advice keeps the tagged commit.
+    // A new commit with no step on the tagged commit. Design 62: it gets a tag after the
+    // commit, and the session stays the closed change set of the first commit.
     write(repo, "crates/shop-core/src/cart.rs", CART_V1);
     let second = commit(&["-am", "rename the sum"]);
-    let out = semilla(repo, &["tag"]);
-    let text = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(!out.status.success(), "{text}");
-    assert!(text.contains(&format!("commit {second} has no step. Run `git reset --soft {first}`, then `semilla step \"<intent>\"`, then `git commit`, then `semilla tag`.")), "{text}");
-    assert!(!text.contains(&base) && !text.contains("result:"), "{text}");
+    let out = semilla_env(repo, &["tag"], &[("SEMILLA_COMPILED", "0")]);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.starts_with("result: tagged after the commit · 1 step · ") && text.contains(&format!("tagged {second} after the commit")), "{text}");
+    assert!(!text.contains(&base), "{text}");
     assert!(run(repo, &["status"], 0).starts_with(&closed));
-    // The commands of the advice give an accepted change set on the tagged commit.
+    // The steps of the agent for the same work: an accepted change set on the tagged commit.
     git(repo, &["reset", "-q", "--soft", &first]);
     let out = run(repo, &["step", "rename the sum"], 0);
     assert!(out.contains("tagged and closed") && out.contains("accepted"), "{out}");
@@ -1990,9 +1991,12 @@ fn a_commit_between_steps_gets_a_note_and_an_exact_route() {
     let session = std::fs::read_to_string(repo.join(".semilla/session.json")).unwrap();
     assert!(session.contains("an empty cart has the total 0"), "{session}");
     std::fs::remove_file(repo.join("Cargo.lock")).unwrap();
+    // Design 62: `tag` with no change set tags the commit after the commit (here the root
+    // commit, compared with the empty tree).
     let dir = setup();
-    let out = semilla(&dir.path().join("repo"), &["tag"]);
-    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("the change set has no step"), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = semilla_env(&dir.path().join("repo"), &["tag"], &[("SEMILLA_COMPILED", "0")]);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.starts_with("result: tagged after the commit · 1 step · ") && text.contains("from the empty tree (a root commit)"), "{text}{}", String::from_utf8_lossy(&out.stderr));
 }
 
 #[test]
@@ -5694,11 +5698,14 @@ fn tag_after_a_rejected_step_says_the_cause() {
     let out = run(repo, &["step", "only unix"], 1);
     assert!(out.contains("run again: semilla step 'only unix' --reason 'shop_core::charge=<why>'"), "{out}");
     commit_all(repo, "x");
+    // Design 62: the session has no stored step, so the commit gets a tag after the commit.
+    // The spotlight is open, and the last line gives the command that adds the reason.
     let tag = semilla(repo, &["tag"]);
-    let text = String::from_utf8_lossy(&tag.stderr).to_string();
+    let text = String::from_utf8_lossy(&tag.stdout).to_string();
+    assert_eq!(tag.status.code(), Some(1), "{text}");
+    assert!(text.starts_with("result: tagged after the commit · 1 step · ") && text.contains("1 open spotlight"), "{text}");
+    assert!(text.trim_end().ends_with("--reason 'shop_core::charge=<why>'"), "{text}");
     let fix = "The last `semilla step` (\"only unix\") was rejected, and Semilla stored nothing: 1 spotlight with no reason. Run it again with the missing parts: `semilla step 'only unix' --reason 'shop_core::charge=<why>'`, then `git commit --amend --no-edit`, then `semilla tag`.";
-    assert!(!tag.status.success() && text.contains("the change set has no step. ") && text.contains(fix), "{text}");
-    assert!(!text.contains("Run `semilla step \"<intent>\"`"), "{text}");
     // The same after a stored step: `tag` and `status` say it.
     git(repo, &["reset", "-q", "--soft", "HEAD^"]);
     write(repo, "crates/shop-core/src/lib.rs", &FEES.replace("amount * rate / 100\n}\n\npub fn scaled", "amount * rate / 10\n}\n\npub fn scaled"));

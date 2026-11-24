@@ -146,6 +146,10 @@ pub struct NoFactCause {
 pub struct StepReport {
     pub step: usize,
     pub intent: String,
+    /// Design 62: the step of a tag after the commit. A spotlight with no reason is an open
+    /// item, not a reject of a step.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub after_commit: bool,
     pub claims: Vec<ClaimResult>,
     pub uncovered: Vec<Uncovered>,
     /// Errors that stop the check of the step, for example a build failure.
@@ -1710,8 +1714,21 @@ pub struct Report {
     /// with no body check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configs: Option<ConfigNote>,
+    /// Design 62: the open items of a change set of a tag after the commit, one text for each
+    /// kind (`2 open spotlights`). `None`: the change set has the steps of the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_commit: Option<Vec<String>>,
     pub accepted: bool,
 }
+
+/// The first part of the result line of a tag after the commit (design 62).
+pub const AFTER_COMMIT: &str = "tagged after the commit";
+
+/// The line of a review of a commit that Semilla tagged after the commit (design 62).
+pub const AFTER_COMMIT_HEADER: &str = "tagged after the commit (no steps of the agent)";
+
+/// The text of a spotlight with no reason in a tag after the commit (design 62).
+pub const OPEN_SPOTLIGHT: &str = "open: no reason given";
 
 /// The build configurations of the body checks of a change set (design 8.12; batch 5s, B1).
 ///

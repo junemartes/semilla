@@ -785,7 +785,7 @@ impl App {
                     self.save_session(&session)?;
                     notes = lines;
                 }
-                crate::buildcheck::Outcome::Fails { text } => {
+                crate::buildcheck::Outcome::Fails { text, .. } => {
                     build_stops.0 += 1;
                     lines.push("✗ the code after the step does not build".to_string());
                     build_text = text;

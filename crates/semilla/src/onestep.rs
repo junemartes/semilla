@@ -69,7 +69,7 @@ struct ReasonSplit {
 }
 
 /// The keys of a fact that a reason can have.
-fn fact_keys(fact: &semilla_core::report::Fact) -> Vec<String> {
+pub(crate) fn fact_keys(fact: &semilla_core::report::Fact) -> Vec<String> {
     let mut keys = vec![fact.reason_place(), fact.part.clone()];
     keys.extend(fact.at.as_ref().map(|at| at.item.clone()));
     keys.extend(fact.reason_key.clone());
@@ -101,6 +101,38 @@ fn reason_splits(report: &semilla_core::report::StepReport, claim_anchors: &[Str
         again |= fits.len() > 1 || open(first_key, first_reason);
     }
     (chosen, again)
+}
+
+/// The reason entries (`KEY=<why>`) that the open spotlights of a step need, in the order of
+/// the facts: the key of each fact, one time for each key. Design 37.19: a kind with four open
+/// spotlights or more gets one kind reason. A kind with fewer gets the keys of its facts. Build
+/// code keeps one key for each file. `semilla step` and a tag after the commit (design 62)
+/// print these entries in their commands.
+pub(crate) fn missing_reasons(report: &semilla_core::report::StepReport) -> Vec<String> {
+    let mut missing = Vec::new();
+    let kind_of = |fact: &semilla_core::report::Fact| fact.kind().filter(|kind| *kind != semilla_core::report::BUILD_CODE_KIND);
+    let open_kinds: Vec<&str> = report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()).filter_map(kind_of).collect();
+    for fact in report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()) {
+        if let Some(kind) = kind_of(fact).filter(|kind| open_kinds.iter().filter(|open| *open == kind).count() >= semilla_core::report::KIND_REASON_MIN) {
+            let entry = format!("{}{kind}=<why>", semilla_core::report::KIND_KEY);
+            if !missing.contains(&entry) {
+                missing.push(entry);
+            }
+            continue;
+        }
+        let place = fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone());
+        // Part B of batch 5j: the body below shows the fact with "it needs a reason" and
+        // the exact anchor. The top summary does not repeat the reason line of the fact.
+        // Batch 5y, B3: two facts of one item have one key. The command gives it one time.
+        // Batch 7b, part 5.5: the path of the item is the key. A reason with this key
+        // covers each spotlight in the item, so the command gives it one time.
+        let place = fact.reason_item.clone().unwrap_or(place);
+        let entry = format!("{place}=<why>");
+        if !missing.contains(&entry) {
+            missing.push(entry);
+        }
+    }
+    missing
 }
 
 impl StepRequest {
@@ -482,7 +514,7 @@ impl App {
         } else {
             match self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree) {
                 crate::buildcheck::Outcome::Stored { record, lines } => (Some(record), lines, None),
-                crate::buildcheck::Outcome::Fails { text } => (None, Vec::new(), Some((true, text))),
+                crate::buildcheck::Outcome::Fails { text, .. } => (None, Vec::new(), Some((true, text))),
                 crate::buildcheck::Outcome::CannotRun { text } => (None, Vec::new(), Some((false, text))),
             }
         };
@@ -626,34 +658,10 @@ impl App {
             // claims. A cause that only a code change can fix omits it.
             let mut corrected = request.clone();
             corrected.reasons.retain(|reason| !unused.iter().any(|(text, _, _)| text == reason));
-            let mut missing = Vec::new();
+            let missing = missing_reasons(&report);
             let mut blocked = Vec::new();
             // The `calls-only` claims that the command changes: the claim, and the new entries.
             let mut widened: Vec<(String, Vec<String>)> = Vec::new();
-            // Design 37.19: a kind with four open spotlights or more gets one kind reason. A
-            // kind with fewer gets the keys of its facts. Build code keeps one key for each file.
-            let kind_of = |fact: &semilla_core::report::Fact| fact.kind().filter(|kind| *kind != semilla_core::report::BUILD_CODE_KIND);
-            let open_kinds: Vec<&str> = report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()).filter_map(kind_of).collect();
-            for fact in report.facts.iter().filter(|f| f.spotlight && f.reason.is_none()) {
-                if let Some(kind) = kind_of(fact).filter(|kind| open_kinds.iter().filter(|open| *open == kind).count() >= semilla_core::report::KIND_REASON_MIN) {
-                    let entry = format!("{}{kind}=<why>", semilla_core::report::KIND_KEY);
-                    if !missing.contains(&entry) {
-                        missing.push(entry);
-                    }
-                    continue;
-                }
-                let place = fact.at.as_ref().map(|a| a.to_string()).unwrap_or_else(|| fact.part.clone());
-                // Part B of batch 5j: the body below shows the fact with "it needs a reason" and
-                // the exact anchor. The top summary does not repeat the reason line of the fact.
-                // Batch 5y, B3: two facts of one item have one key. The command gives it one time.
-                // Batch 7b, part 5.5: the path of the item is the key. A reason with this key
-                // covers each spotlight in the item, so the command gives it one time.
-                let place = fact.reason_item.clone().unwrap_or(place);
-                let entry = format!("{place}=<why>");
-                if !missing.contains(&entry) {
-                    missing.push(entry);
-                }
-            }
             for claim in report.claims.iter().filter(|c| !c.status.is_verified()) {
                 let written = claim_texts.iter().find(|(id, _)| *id == claim.claim).map(|(_, text)| text.clone());
                 let label = written.as_ref().map(|w| format!(" (`{w}`)")).unwrap_or_default();

@@ -33,6 +33,9 @@ pub struct NormalOracle {
     pub log: ConfigLog,
     /// The configurations that Semilla adds for a proof (batch 5u, part C).
     pub added: std::sync::Mutex<Added>,
+    /// Design 62: the check of a tag after the commit. A configuration that does not build
+    /// after the step is a configuration with no check, not an error of the step.
+    pub after_commit: bool,
 }
 
 /// Batch 5x, part C (trial 7): the build does not find a module file (`E0583`), and the file is
@@ -285,6 +288,11 @@ fn one_side_cause(before: &[String], after: &[String]) -> Option<String> {
     Some(format!("only the code {side} the step has the {noun} {}. The code {other} the step has no such configuration: no compare", names.join(", ")))
 }
 
+/// The causes of a configuration with no check: the side that does not build (design 62).
+pub const BEFORE_SIDE: &str = "it does not build before the step";
+pub const AFTER_SIDE: &str = "it does not build after the step";
+pub const BOTH_SIDES: &str = "it does not build before the step and after it";
+
 /// The first error line of a build error text.
 fn first_error_line(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|line| line.starts_with("error")).or_else(|| text.lines().map(str::trim).find(|line| !line.is_empty())).unwrap_or("");
@@ -498,6 +506,11 @@ impl NormalOracle {
     /// Makes the records of a tree at a level and a configuration, and reads them with `read`.
     /// A caller that needs only the build reads nothing (batch 5x, part F): the result is empty.
     fn records_or_build(&self, tree: &str, level: &str, config: &Configuration, read: bool) -> Result<Vec<semilla_normal::BodyRecord>> {
+        // Design 62: the tree before a root commit is the empty tree. It has no body, so it has
+        // no record, and no build runs.
+        if crate::git::is_empty_tree(tree) {
+            return Ok(Vec::new());
+        }
         let read_cached = |cache: &std::path::Path| if read { read_cached(cache) } else { Ok(Vec::new()) };
         // The cache key: the tree, the level, the configuration, and the build settings that are
         // not in the tree (the outer cargo configuration and the driver binary).
@@ -595,10 +608,11 @@ impl NormalOracle {
     /// Builds the N0 records of the two trees of a step in each configuration of the list. The
     /// configurations build in parallel: each has its own build folder and target folder.
     ///
-    /// The result for each configuration is `None` (the two trees build), or the first error
-    /// line (the tree before the step does not build: Semilla does not check the configuration
-    /// in this step). A configuration that builds before the step and not after it is a compile
-    /// error of the step (batch 5s, A4).
+    /// The result for each configuration is `None` (the two trees build), or the cause with the
+    /// first error line (the tree before the step does not build: Semilla does not check the
+    /// configuration in this step). A configuration that builds before the step and not after
+    /// it is a compile error of the step (batch 5s, A4). In a tag after the commit (design 62),
+    /// it is a configuration with no check, and the cause names the side.
     fn build_all(&self, step: &Step, configs: &[Configuration]) -> Result<Vec<Option<String>>> {
         // The first error in the order of the list, so that the output is stable.
         self.build_each(step, configs).into_iter().collect()
@@ -613,10 +627,22 @@ impl NormalOracle {
                     scope.spawn(move || {
                         if let Err(error) = self.records_or_build(&step.tree_before, "n0", config, false) {
                             let text = format!("{error:#}");
-                            return if is_compile_error(&text) { Ok(Some(first_error_line(&text))) } else { Err(error) };
+                            if !is_compile_error(&text) {
+                                return Err(error);
+                            }
+                            // Design 62: a tag after the commit names each side that does not build.
+                            if self.after_commit {
+                                if let Err(after) = self.records_or_build(&step.tree_after, "n0", config, false) {
+                                    if is_compile_error(&format!("{after:#}")) {
+                                        return Ok(Some(format!("{BOTH_SIDES}: {}", first_error_line(&text))));
+                                    }
+                                }
+                            }
+                            return Ok(Some(format!("{BEFORE_SIDE}: {}", first_error_line(&text))));
                         }
                         match self.records_or_build(&step.tree_after, "n0", config, false) {
                             Ok(_) => Ok(None),
+                            Err(error) if self.after_commit && is_compile_error(&format!("{error:#}")) => Ok(Some(format!("{AFTER_SIDE}: {}", first_error_line(&format!("{error:#}"))))),
                             Err(error) if is_compile_error(&format!("{error:#}")) => {
                                 // A module file that the folder has and the tree does not have.
                                 let ignored = missing_module_note(&self.repo, &format!("{error:#}"), &step.tree_after).map(|note| format!(". {note} The output of the build")).unwrap_or_default();
@@ -1874,11 +1900,17 @@ impl NormalOracle {
                     }
                     checked.push(config);
                 }
-                Some(error) => log.not_checked.push((config.name(), format!("it does not build before the step: {error}"))),
+                Some(cause) => log.not_checked.push((config.name(), cause)),
             }
         }
         for (config, _) in &one_sided {
             log.not_checked.push((config.name(), one_side(config).unwrap_or_default()));
+        }
+        if checked.is_empty() && self.after_commit {
+            // Design 62: no configuration builds on the two sides of the step. Each cause is in
+            // the error of the step.
+            let causes: Vec<String> = log.not_checked.iter().map(|(name, cause)| format!("`{name}`: {cause}")).collect();
+            anyhow::bail!("no configuration of the default list builds before the step and after it ({})", causes.join("; "));
         }
         if checked.is_empty() {
             // No configuration builds before the step: the error of the first one is the result.

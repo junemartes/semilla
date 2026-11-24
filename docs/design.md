@@ -4,27 +4,35 @@ Status: draft, with an MVP implementation (section 18). Date: 2026-11-08.
 
 ## 1. Goal and scope
 
-Semilla makes code review faster. It replaces the line diff with verified semantic changes.
+The goal, in the words of the user (2026-11-23):
 
-1. An agent writes the code.
-2. The agent tags its work with **claims**: a list of semantic changes, organized in steps and groups.
-3. Semilla **verifies** the claims. It does not guess the changes.
-4. A reviewer reads the verified changes in a local UI, with flow graphs and a change tree.
+> "semilla's goal is not to assume that the agent is dishonest, but rather to provide a semantic diff with as much information as possible and as complete as possible so that a human can review the code as quickly as possible. The requirement that the facts should cover all the diff code matters in that case because we want to fully cover the diff so that the reviewer has all the information. Also semilla should also support tagging a commit a posteriori. Agents should not always be working on commits as they write it"
+
+Semilla gives a **semantic diff**: a list of facts about a change of the code, with as much information as possible and as complete as possible. A human then reviews the code fast: the facts say what changed, and the reviewer reads the facts instead of a line diff.
+
+1. Semilla derives the facts from the code before and after a change (sections 48, 49): a rename, a moved item, a changed condition, a new field, a manifest key. Each fact has a category, and a spotlight when the reviewer must read it with care.
+2. **The cover rule is the main requirement:** each changed line of the diff is in a fact (55, 56). The reason: the reviewer gets all the information. A changed line with no fact is information that the reviewer does not get, so it is a defect of Semilla.
+3. The agent can add information: the intent of a step, its facts (`same`, `change`), its tags, and the reasons for the facts in the spotlight. Semilla checks each fact of the agent against the edit, so the text that the reviewer reads first is true.
+4. **The proofs stay:** `code equal`, `same graph`, `equivalent`, and `expansion equal` (35, 60, 61). The reason: the reviewer relies on them and reads less, so they must be true.
+5. Two workflows give the same facts: the agent records **steps while it works** (`semilla step`, then `semilla tag`), or Semilla **tags a commit after the commit** (`semilla tag <rev>`, `semilla tag A..B`, section 62).
+6. A reviewer reads the facts in a local UI or a report, with flow graphs and a change tree.
 
 Scope:
 
-- The first language is Rust. Strong types and MIR make the verification possible.
+- The first language is Rust. Strong types and MIR make the proofs possible.
 - The scope is a full Cargo workspace, with all its member crates.
 - Semilla is local. It does not push to GitHub and does not use a remote service.
 
 ## 2. Principles
 
-1. **The agent declares, semilla verifies.** The agent makes claims. Semilla checks them. A mismatch fails the check.
-2. **Unclaimed means unchanged.** At every level of the tree, a node without a claim must be unchanged.
-3. **The residual comes from the verifier.** The agent cannot hide a change. It can only declare a change badly.
-4. **Proof over trust.** A proof (MIR equality, an SMT result, an exact diff shape) is better than an LLM judgment.
-5. **A small trusted core.** Only the verifier is trusted. All helpers are untrusted.
-6. **Refactor first, then change.** Neutral steps come first. The semantic changes after them are small.
+1. **Complete information.** Each changed line of the diff is in a fact (the cover rule). A fact text never says less than its change.
+2. **Semilla derives the facts.** The facts come from the code, not from the agent. The text of the agent (an intent, a fact, a reason, a tag) is more information for the reviewer, and Semilla checks each fact of the agent against the edit.
+3. **A proof must be true.** A result that says that the code did not change is a statement that the reviewer relies on. A proof (MIR equality, an SMT result, an exact diff shape) is better than an LLM judgment, and Semilla gives no proof that it did not compute.
+4. **Code of a crate runs in a sandbox.** A build script or a proc macro runs during the check. Such code is not trusted for the safety of the machine and for the correctness of a result, not because the agent is dishonest (27, 28).
+5. **A small trusted core.** Only the verifier computes a fact or a result. The helpers (the UI, the hints) do not change a result.
+6. **Small steps help the reviewer.** A step with one intent is easy to read: refactor first, then change. Steps are an option: a tag after the commit gives the facts of one step for each commit (62).
+
+History: before 2026-11-23, sections 1 and 2 said "the agent declares, semilla verifies", "unclaimed means unchanged", and "the agent cannot hide a change", and the trials assumed a hostile agent. Since batch 9a the facts come from Semilla (48, 49), and these principles are now principle 1 (the cover rule) and principle 2. The sections of the trials keep the old framing as history.
 
 ## 3. Architecture
 
@@ -783,6 +791,8 @@ result: rejected (2 uncovered)
 
 ### 8.16 What Semilla does not model must be loud
 
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
+
 Status: implemented in batch 5a (2026-11-11), after blind trial 2. Each accepted cheat of that trial used a part of the language or the build that Semilla did not model, and Semilla stayed silent. Four invariants make such a part loud.
 
 **I1. The MIR backstop.** Each body with a different normal form, and each body on one side only, has an owner in the report: a claim or a fact that lists the body in its `affected` list, or an uncovered entry. The owner of a fact or a claim must have a class that is not neutral (an unverified claim rejects the step anyway). A final assertion checks this on each step result. A failure gives the error "internal: a changed body has no owner" and rejects the step. The only exception is a derived body that a verified identity claim records (22.4, rule 3).
@@ -820,6 +830,8 @@ A claim lists its bodies in `affected` too (the text report: "changed bodies").
 - The property claims state their scope (21.4).
 
 ## 9. Incentives
+
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
 
 ### 9.1 Hard rules
 
@@ -1071,7 +1083,7 @@ The analyzer runs as a separate driver binary, like Clippy or Miri. The user's c
 | Agent tools | Tag tools. The agent keeps its own edit tools. |
 | Tree leaves | Expressions |
 | Free edits | Expression level only (expressions, patterns, types), block-free, with a tightness rule. Structured ops for everything above. |
-| Hierarchy | Stable IDs. Unclaimed means unchanged. |
+| Hierarchy | Stable IDs. Each change is in a fact (the cover rule, section 1). |
 | Normal forms in the MVP | N0 to N4 |
 | SMT | In the MVP |
 | Review hierarchy | Group (agent) → subgroup (engine suggests, agent edits) → component |
@@ -1162,8 +1174,9 @@ Not in the MVP: dependency expansion and upgrade diffs, Kani and fuzzing, the LL
 - **Rust analysis:** Charon, Flowistry, mirage-analyzer, cga, coviz.
 - **Equivalence:** Peggy and equality saturation, `egg`, Horwitz et al. (dependence graphs), SymDiff, Alive2.
 - **Version control:** Jujutsu, Darcs, Pijul, Unison.
+- **Entity diff tools:** sem (Ataraxy Labs, `github.com/Ataraxy-Labs/sem`, read at commit `1ab7cfb` of 2026-11-22) is **an inspiration source of Semilla** (the user, 2026-11-23). It is a Git companion on tree-sitter. It diffs functions, classes, and methods as entities in 32 languages or more. It pairs the entities by ID, then by a structural hash (no whitespace, no comments, no name), then by a token overlap of more than 80% ("probable rename"). Its commands include `impact` (the dependents of a change and the tests that reach it), `check` (the compiler, the linter, and the tests of the project on the affected code), and `certify` (a static review report: the changed entities, the signature changes, and the callers that they leave behind). It has Claude Code hooks that report after each edit, and a GitHub Action. Its product family: weave (an entity-level merge driver) and inspect (semantic code review).
 
-No known project combines verified semantic claims, MIR classes, and a crate flow explorer.
+sem has no compiled-code proofs, no MIR classes, and no crate flow explorer. No known project combines a semantic diff that covers each changed line, compiled-code proofs (MIR classes), and a crate flow explorer.
 
 ## 18. Implementation status (MVP)
 
@@ -1711,6 +1724,8 @@ result: accepted · 7 steps · 23 facts: 3 proved neutral, 20 to read (0 with a 
 
 ## 25. The scope of a property claim, and the base commit
 
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
+
 Status: decided by Claude in batch 5f, from the cheats C1 and C3 of the fourth trial. The user did not review the details yet.
 
 ### 25.1 The scope of a property claim
@@ -1839,6 +1854,8 @@ The command to run again has the claim with the complete list. The line before i
 - **The layout note has member paths.** The MIR text of a constant in memory has a note with the members of each local type in the order of the layout. The note had bare field names (`k::Pair (a, b)`), so the name map of a rename did not apply to it, and a field rename of a type with such a constant was not proved. The note now has the member paths (`k::Pair (k::Pair.a, k::Pair.b)`), as a field place has.
 
 ## 27. Batch 5h: the trust boundary
+
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
 
 Status: rules of the user (the brief of batch 5h). Claude decided the details that the text marks as "decision".
 
@@ -2259,6 +2276,8 @@ See section 8.8.1.
 
 ## 30. Batch 5w: the results of held-out trial 7
 
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
+
 Trial 7 was a held-out trial on `humantime` 2.3.0, a crate that the project did not use before. The agent of the trial had no knowledge of Semilla. The trial found the defects of this section. Each rule of this section is a decision of batch 5w. **Decided by Claude.**
 
 ### 30.1 An edit in code that no checked configuration compiles is never `neutral` (part A)
@@ -2325,6 +2344,8 @@ Trial 7 was a held-out trial on `humantime` 2.3.0, a crate that the project did 
 - The scope text of `no-panic` shows `std::hint::black_box` for the intrinsic `std::intrinsics::black_box`.
 
 ## 31. Batch 5x: the cost of the honest flow in trial 7
+
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
 
 Trial 7 on `humantime` (section 30) also showed the cost for an honest agent: a rename and a move got no proof, a message gave the wrong cause, and each step with a spotlight took two commands. Each rule of this section is a decision of batch 5x. **Decided by Claude.**
 
@@ -2462,6 +2483,8 @@ A pending identity claim (phase 1 of `--fast`) gets no fact: only a proved pair 
 
 ## 32. Batch 5y: the results of held-out trial 8
 
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
+
 Trial 8 on `data-encoding` (a `no_std` crate with the features `alloc` and `std`) showed three results that said "accepted" for data that Semilla did not compute for the commit, and it showed the cost of the honest flow in messages. Each rule of this section is a decision of batch 5y. **Decided by Claude.**
 
 ### 32.1 `verify` accepts only a session that agrees with git (part A1)
@@ -2539,6 +2562,8 @@ Each one: **Decided by Claude.**
 - **The hint of `status <commit>` (C4.5).** The hint is `semilla status <commit> --verbose`.
 
 ## 33. Batch 6a: the results of held-out trial 9
+
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
 
 Trial 9 on `heck` 0.5.0 (private modules, `pub use` lines in the crate root, tests from a `macro_rules!` macro) showed facts with the class `neutral (proved)` for changes that a different crate can see, facts with two equal sides, and the cost of an honest move and of a new test line. Each rule of this section is a decision of batch 6a. **Decided by Claude.**
 
@@ -2665,6 +2690,8 @@ Each one: **Decided by Claude.**
 4. The test of the net uses `default fn` in an impl: no fact kind knows this word.
 
 ## 34. Batch 6b: the results of the mutant run and of held-out trial 10
+
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
 
 Each rule of this section: **Decided by Claude.**
 
@@ -3145,6 +3172,8 @@ The tests found one defect in the diff, with this rule: a rename of a name appli
 **Limits.** The folder sets under `shared/` are not cleaned.
 
 ## 38. Batch 7d: the open defects of trial 11 and batch 7c, and the dead code
+
+History: the goal changed on 2026-11-23 (see [section 1](#1-goal-and-scope)): Semilla gives a complete semantic diff for a fast review, and it does not assume a dishonest agent. This section keeps the framing of the trials, where the agent was hostile. Its rules stay.
 
 Batch 7d. The model of 35.1 and the target of 37 stay. The rule above each rule: no change of the code is without a fact, and no fact text says less than the change. Each rule of this section: **Decided by Claude**.
 
@@ -6782,3 +6811,113 @@ The other places that joined the records of two targets, or that chose by the or
 **The measure.** The seven pull requests of the training set, `--compiled`, an empty cache, the release binaries of `bec1ec2`, 10b4, and 10b5 in turns, two rounds. The counts of the two phases are equal in the three versions on each pull request. The step takes 1.07 to 1.38 times the time of `bec1ec2`, and the time of 10b4 within 1 s. The output is the output of 10b4, except the lines of the time budget and 27 to 29 lines of `winnow` (each from the pair of the two builds of the library, the first place of a span, and the walk with the callee record of the same build).
 
 **Two folders.** The same binaries in two folders give the same output on the fixture. On `winnow`, 10b4 gives 18 different lines; 10b5 gives one: the list `reached through` of one group of reached bodies (and the seconds of the budget). A run again in one folder gives the same output, so a part of the walk still depends on the folders. Open question: its cause.
+
+## 62. Batch 10t: a tag after the commit
+
+The user (2026-11-23):
+
+> "semilla's goal is not to assume that the agent is dishonest, but rather to provide a semantic diff with as much information as possible and as complete as possible so that a human can review the code as quickly as possible. The requirement that the facts should cover all the diff code matters in that case because we want to fully cover the diff so that the reviewer has all the information. Also semilla should also support tagging a commit a posteriori. Agents should not always be working on commits as they write it"
+
+Before this batch, `semilla tag <rev>` rejected a commit with no change set ("commit … has no step"). Only `semilla replay begin --commit <rev>` read such a commit, and it needed a plan of steps from the agent. Now each commit gets the facts of Semilla after the commit: the agent does not have to work in steps. The user decided each rule with no mark. A rule with the mark "Decided by Claude" is a default that the user can change.
+
+### 62.1 One commit
+
+1. [R62.1-1] `semilla tag <rev>` on a commit with no change set makes one step. The tree before is the tree of the first parent. The tree after is the tree of the commit. The intent of the step is the first line of the commit message (Decided by Claude; an empty line gives `commit <short>`). Decided by Claude: a commit whose tree is the tree of its first parent gets no note ("changes no file … no note"): a step with no change has no fact.
+2. [R62.1-2] A root commit compares with the empty tree. Decided by Claude: the empty tree is the empty workspace, it has no package for the build code rule, and it has no record of the compiled check (no build runs for it). The general rule: a tree with no entry has no item and no body.
+3. [R62.1-3] A merge commit compares with its first parent. The output, `status`, and the review have the line "a merge commit: compared with the first parent". The note keeps `after_commit.merge`.
+
+### 62.2 A range
+
+1. [R62.2-1] `semilla tag A..B` tags each commit of the first-parent chain from `A` (not included) to `B`, in order. `A` must be on the first-parent chain of `B`; else the command stores nothing (exit code 2). An empty side is `HEAD`. A commit of the range with a note keeps it (R62.7-1). The result line has the count of the commits: `result: tagged after the commit · 3 commits · 3 steps · 40 facts · 2 open spotlights`.
+2. [R62.2-2; no negative case: a count of the trees has no negative form] The tree after a commit is the tree before the next commit, and each tree is made one time: a range of N commits makes N + 1 trees and N compares. The caches of Semilla are by tree (the syntax workspace in the process, the folder of a tree, the result of the build check, the records of the compiled check), so the rule needs no code of its own.
+
+### 62.3 The same facts as a step
+
+1. [R62.3-1; no negative case: the rule is an equality of two outputs] The step of a commit has the facts, the categories, the spotlights, the notes, the build check, and the compiled result that `semilla step` gives for the same two trees. One code path: `App::check_step_of` is the check of one step for `semilla step` (through `App::check`) and for the tag after the commit, and the build check is `App::build_check` for both. The text of the facts is the text report of `semilla step` (`views::text_report_with`). Only three texts differ:
+   - a spotlight with no reason: "! spotlight: …; open: no reason given", not "✗ spotlight: …; it needs a reason: --reason '…'";
+   - the command of the gap list: `semilla fact --commit <short> --change '…'`, not `semilla fact --step 0 …`;
+   - the head lines (the result line, the line of the commit, the commands at the end).
+
+   The case set has the property 12 (`after_commit`): each case makes its new tree a commit and runs `semilla tag`; the fact set must be the fact set of `semilla step` with no option, with the spotlight line of an open spotlight in the form of the tag. Each of the 541 cases of the set passes this property.
+
+### 62.4 No change to the work of the user
+
+1. [R62.4-1; no negative case: the rule forbids a write, and each test of it checks that no write happens] The working tree, the index, `HEAD`, the branch, and the session of the agent stay as they are. A dirty working tree is valid. The trees of the commits come from the git objects (`Repo::materialize` and `Repo::checkout_build` read the raw blobs into folders of the cache), not from a checkout. The only writes to the repository are the git notes: `refs/notes/semilla`, and with `--compiled` the stored report under `refs/notes/semilla-report` (the note that `tag` writes today). Decided by Claude: a tag after the commit writes no step ref (`refs/semilla/<commit>/…`): the commit keeps its trees reachable, and the binding check of a note (`check_binding`) needs no ref.
+
+### 62.5 Open items do not stop a tag
+
+1. [R62.5-1; no negative case: no state of a commit with a change stores nothing, and a commit with no change is R62.1-1] The commit is already there, so the note is always stored. A spotlight with no reason shows as "open: no reason given".
+2. [R62.5-2] A build that fails stores the errors of the compiler. The build check record has two new results for a step of a tag after the commit: `fails` (the targets that the commit breaks and the first five errors of the compiler) and `cannot_run` (the cause in one line). `semilla step` never stores them: a step that does not build is not stored.
+3. [R62.5-3] **A configuration that does not build does not stop the others.** In the compiled check of a tag after the commit, a configuration that does not build after the step is a configuration with no check, not an error of the step. The note (`after_commit.failed_configs`) and the output name each configuration that does not build with its side and its first error: "it does not build before the step", "it does not build after the step", or "it does not build before the step and after it". Each other configuration gives its compiled results (the compares, the graphs, the equivalence) as in a normal step. The oracle has the flag `after_commit`; `semilla step` keeps the rule of today (batch 5s, A4: a step that breaks a configuration is a compile error). Decided by Claude: if no configuration builds on the two sides, the step has the error "no configuration of the default list builds before the step and after it (…)", with each cause; this error is an open item. The general rule for each error that stops the compiled check (for example a lock file that does not agree with the manifests): the tag does not stop. The step gets the facts of the syntax tree, the note keeps the error (`after_commit.compiled_error`) and the step has no compiled check, and the output, `status`, and the review show "! the compiled check stops, so the step has the facts of the syntax tree only: …". The error is an open item.
+4. [R62.5-4] The result line names each open item: `result: tagged after the commit · 1 step · 14 facts · 2 open spotlights`. The kinds of open items (Decided by Claude): an open spotlight, a build check that fails, a build check that cannot run, a configuration that does not build after the commit (or on the two sides), an error of the check, and a change with no fact (an internal error). A configuration that does not build only before the commit is not an open item: the commit did not break it. The exit code is 0 with no open item, and 1 with an open item. `status <commit>` and the review give the result `not complete` for a note with an open item (the README table of the exit codes), and `accepted` with none. A false fact of the agent, a tag with no edit, or a problem of the change set gives `rejected`, as for a change set of the agent.
+5. [R62.5-5] The last lines give the exact commands that add the reasons: one `semilla fact --commit <short> --reason 'KEY=<why>' …` for each commit with an open spotlight. The keys are the keys of the command `run again:` of `semilla step` (one function, `onestep::missing_reasons`, with the kind reasons of 37.19).
+
+### 62.6 Add facts and reasons later
+
+1. [R62.6-1] `semilla fact --commit <rev> --reason 'KEY=TEXT' --same '…' --change '…' --tag '…'` adds to the note of a tagged commit, with the checks of `semilla fact` today. The note must belong to the commit (`check_binding`). A false fact, a tag with no edit, and a reason that belongs to no fact of the step are rejected and store nothing (exit code 1). The key of a reason text with two `=` or more is the longest key that a fact of the step uses (37.6). No build check runs again. Decided by Claude:
+   - `--reason` works only with `--commit`. A step of the session gets its reasons from `semilla step`. Open question: `--reason` for a stored step of the session.
+   - `fact --commit` also works on a note with the steps of the agent (`--step N`; the default is the last step).
+   - A stored report of the compiled check is made again for the new note. The exit code is 0 when the note is stored, also with open items: the line `tagged after the commit: …` names them.
+   - The MCP tool `fact` has the arguments `commit` and `reasons` (an object from the key to the text).
+
+### 62.7 A commit that has a note
+
+1. [R62.7-1] `tag` on a commit with a note gives a short line and keeps the note: "commit <short> has a note of a tag after the commit; the note stays. `semilla tag <short> --again` makes it again".
+2. [R62.7-2] `--again` makes the note again. The facts, the tags, and the reasons of the agent stay; the check shows each fact that does not hold (`✗`), and the note keeps it as the agent wrote it. Decided by Claude: `--again` makes only a note of a tag after the commit again. A note with the steps of the agent stays, and the command says so (exit code 2): the steps of the agent are information that a tag after the commit does not have.
+
+### 62.8 A commit with a change set
+
+1. [R62.8-1] A commit with a change set (the agent used `semilla step`) keeps the behavior of today. Decided by Claude, the general rule: the change set of the session belongs to the commit when (a) no commit is given and the session has stored steps that are not tagged, an open step of the old protocol, or a replay; or (b) the change set of the session starts at the tree of the first parent of the commit; or (c) the session is the tagged change set of the commit. Each other commit gets a tag after the commit. So `tag` with no commit and no step tags `HEAD` after the commit, and a new commit after a tagged change set gets a tag after the commit (before, both were errors). A tag after the commit never changes the session.
+
+### 62.9 The options
+
+1. [R62.9-1] `--compiled` and `--no-check` work as for `semilla step`, also the variables `SEMILLA_COMPILED` and `SEMILLA_NO_CHECK`. For a change set of the agent, the three options are an error: each step keeps its own mode.
+2. [R62.9-2; no negative case: the tool calls the function of the command] The MCP tool `tag` gets the arguments `commit` (a revision or a range), `compiled`, `no_check`, and `again`. An open item is not a tool error: the text names it.
+
+### 62.10 The other commands
+
+1. [R62.10-1] `status <rev>`, `review <rev>`, `load <rev>`, and the UI show a note of a tag after the commit. The header line is "tagged after the commit (no steps of the agent)", in the notices of the review (the Markdown and HTML reports, the UI) and after the base line of `status`. The short text of `status` marks an open spotlight with `!`: "! f3 has a spotlight, open: no reason given: …". The result line has ` · tagged after the commit` after the verdict and the open items at the end.
+
+### 62.11 Speed
+
+Rule index: no rule: the subsection has the data of a measure; the rule of the trees is R62.2-2.
+
+**The measure** (release binaries, an empty cache, a quiet machine, `RUSTUP_TOOLCHAIN=nightly-2026-10-25`, `--offline`): the 30 changed files of `winnow` #891 of the training set in 5 commits (6 files each, in the order of `git diff --name-only`), then `semilla tag old..HEAD`.
+
+| Mode | 1 commit (`tag new`) | 5 commits (`tag old..HEAD`) | Trees in the cache |
+|---|---|---|---|
+| default (with the build check) | 14.8 s | 28.7 s | 6 (N + 1) |
+| `--compiled` | 221.9 s | 367.7 s | 6 (N + 1) |
+
+- Each tree is made one time (R62.2-2): 6 folders of trees for 5 commits.
+- The working tree, `HEAD`, and `git status --porcelain` stay the same.
+- The cut by files makes trees that do not build: commit 1 breaks the library (E0119), and commit 5 repairs it. The tag continues: the result is `5 commits · 5 steps · 442 facts · 269 open spotlights · 1 build check that fails · 4 errors of the check` with `--compiled`. The 4 errors are "no configuration of the default list builds before the step and after it" (R62.5-3), and each note is stored.
+- A range of 3 commits of `uuid` #932 (a cut that gives a lock file that does not agree with the manifests): 13.5 s in the default mode, 80.5 s with `--compiled`. The compiled check stops at each commit; each step keeps the facts of the syntax tree, and the error is an open item.
+
+### 62.12 The results on the training set
+
+Rule index: no rule: the subsection has the data of a measure.
+
+**R62.3-1 on the 7 pull requests of the training set.** For each pull request: `semilla tag new` in one clone, and `semilla step "new"` in a second clone with `git reset --soft old` (the same two trees). The fact lines (each `◆` line, the cover line, and the hunks line) are equal in each pull request, in the default mode and with `--compiled`. The working tree of the tag stays the same in each run. Release binaries, an empty cache for each run.
+
+| Pull request | Fact lines (default) | Default: tag / step | Fact lines (`--compiled`) | `--compiled`: tag / step | Result line of the tag (default) |
+|---|---|---|---|---|---|
+| bitflags #465 | 10 = 10 | 6.2 s / 6.2 s | 28 = 28 | 18.8 s / 19.1 s | 8 facts · 2 open spotlights |
+| hashbrown #693 | 28 = 28 | 5.1 s / 5.2 s | 29 = 29 | 24.9 s / 26.2 s | 26 facts |
+| indexmap #424 | 167 = 167 | 5.3 s / 5.3 s | 201 = 201 | 48.8 s / 50.2 s | 167 facts |
+| itertools #1086 | 18 = 18 | 9.2 s / 9.4 s | 18 = 18 | 45.6 s / 47.1 s | 16 facts · 2 open spotlights |
+| num-traits #334 | 117 = 117 | 3.0 s / 3.0 s | 122 = 122 | 27.2 s / 28.2 s | 115 facts · 48 open spotlights |
+| uuid #932 | 78 = 78 | 12.5 s / 12.3 s | 91 = 91 | 59.9 s / 61.6 s | 76 facts · 3 open spotlights |
+| winnow #891 | 217 = 217 | 14.8 s / 15.4 s | 282 = 282 | 221.9 s / 223.7 s | 215 facts · 31 open spotlights |
+
+The open spotlights are the spotlights that `semilla step` rejects with "it needs a reason" (for example a changed `.stderr` file of `bitflags`, the `cfg` attributes of `num-traits`). The default runs are with the final binaries of this batch (a second run gave the same fact lines and times within 0.6 s). The compiled runs are with the binaries before the last fixes of this batch (the empty tree, the command of the gap list, the error of the compiled check); these fixes change no fact line of a step with a parent.
+
+### 62.13 Limits and open questions
+
+Rule index: no rule: the subsection has limits and open questions only.
+
+- The case format has two trees, not a commit. The runner makes the new tree a commit for the property 12, so each case of the set checks R62.3-1. No case has a merge commit, a root commit, or a range: the e2e tests of `crates/semilla/tests/aftertag.rs` have them.
+- A position anchor (`FILE:LINE`) in `fact --commit --reason` is not resolved: a position of the working tree is not a position of the commit. The key is a key that `tag` prints.
+- In the default mode, the syntax tree has no data about the configurations. A tag after the commit in the default mode gives only the build check of `cargo check` (one configuration).
+- Open question: an open item of a tag after the commit gives the exit code 1 for `tag`, `status <rev>`, and `review --md`. A script that tags each commit of a branch must read the result line, not the exit code alone.
+- Open question: the intent is the first line of the commit message. A commit message is text of the author, and Semilla does not check it, as for an intent of `semilla step`.

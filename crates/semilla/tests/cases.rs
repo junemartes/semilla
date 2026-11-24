@@ -17,7 +17,18 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit"];
+
+/// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
+/// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
+/// `! spotlight…: TEXT; open: no reason given`. Each other line stays.
+fn open_spotlight(line: &str) -> String {
+    let trimmed = line.trim_start();
+    match (trimmed.strip_prefix("✗ spotlight"), line.rfind("; it needs a reason: --reason ")) {
+        (Some(_), Some(at)) => format!("{}! spotlight{}; open: no reason given", &line[..line.len() - trimmed.len()], &line[line.len() - trimmed.len() + "✗ spotlight".len()..at]),
+        _ => line.to_string(),
+    }
+}
 
 /// The line diff command of design 55.8. The test has its own copy of the options: it does not
 /// read them from the product.
@@ -1177,6 +1188,27 @@ fn check(case: &Case) -> Result<Outcome, String> {
         }
     }
 
+    // Property 12 (design 62, R62.3-1): the new tree as a commit, and a tag after the commit.
+    // The tag gives the facts of the step with no option.
+    {
+        let folder = work.copy("t")?;
+        let repo = folder.join("repo");
+        git(&repo, &["add", "-A"])?;
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "the change"])?;
+        let tagged = work.semilla(&folder, &["tag".to_string()])?;
+        let base = plain.as_ref().unwrap_or(&step);
+        // The one text that differs on purpose (R62.3-1): a spotlight with no reason is an open
+        // item in the tag, not a cause to run the step again.
+        let open_set = |run: &Run| -> BTreeSet<(String, Vec<String>)> { fact_set(run).into_iter().map(|(text, subs)| (text, subs.iter().map(|sub| open_spotlight(sub)).collect())).collect() };
+        if base.code != 2 && tagged.code == 2 {
+            work.fail("after_commit", format!("the tag after the commit gives no result:\n{}", tagged.all()));
+        } else if base.code != 2 && open_set(&tagged) != open_set(base) {
+            let (with, without) = (open_set(&tagged), open_set(base));
+            let only = |a: &BTreeSet<(String, Vec<String>)>, b: &BTreeSet<(String, Vec<String>)>| a.difference(b).map(|(text, subs)| format!("\n      {text} {subs:?}")).collect::<String>();
+            work.fail("after_commit", format!("the facts of the tag after the commit are not the facts of the step;\n    only in the tag:{}\n    only in the step:{}", only(&with, &without), only(&without, &with)));
+        }
+    }
+
     // Property 7: each comment with the mark "no edit in this step" is in the old tree and in
     // the new tree (design 58.11).
     for problem in comment_problems(&output, &case.old, &case.new) {
@@ -1427,6 +1459,7 @@ fn load_cases() -> Vec<Case> {
 }
 
 /// The runner of the case set (design 57.3, 57.4).
+// rule+ R62.3-1
 // rule+ R44.1-1 R51.3-4 R55-1 R55.2-1 R55.3-4 R55.4-1 R55.4-3 R55.8-1 R57.4-1 R57.4-2 R57.4-3 R57.4-4 R60.4-6
 // rule- R57.4-2
 #[test]
@@ -1536,6 +1569,8 @@ fn the_helpers_of_the_properties_read_the_output() {
     assert_eq!(empty_change("◆ f1 derived: changed `a` → `a b` and `x` → `y` [semantics]"), None);
     assert_eq!(position_lines("a.rs:3-4, a.rs:-9, b c.rs:1").unwrap(), [("a.rs".to_string(), false, 3), ("a.rs".to_string(), false, 4), ("a.rs".to_string(), true, 9), ("b c.rs".to_string(), false, 1)]);
     assert!(position_lines("a.rs").is_err());
+    assert_eq!(open_spotlight("    ✗ spotlight of f1, f2: a cfg; it needs a reason: --reason 'a::b=…'"), "    ! spotlight of f1, f2: a cfg; open: no reason given");
+    assert_eq!(open_spotlight("    spotlight: a cfg; reason: \"x\""), "    spotlight: a cfg; reason: \"x\"");
     assert_eq!(shell_words("step 'the change' --reason 'a::b=it'\\''s <why>' x"), ["step", "the change", "--reason", "a::b=it's <why>", "x"]);
     assert_eq!(fact_text("◆ f12 stated: 2 site(s): changed `a` → `b` [semantics]"), "2 site(s): changed `a` → `b` [semantics]");
     let text = "  head:\n  ◆ f1 derived: one [docs]\n      in: a\n      lines: a.rs:1\n  ◆ f2 derived: two [docs]\n  not stated: 1 item(s)\n  ? 1 place\n      in: b\n";

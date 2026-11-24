@@ -37,8 +37,9 @@ pub(crate) enum Outcome {
     /// The command can store the step. `lines` are the lines of the step output.
     Stored { record: BuildCheck, lines: Vec<String> },
     /// A target that builds before the step does not build after it. `text` has the result
-    /// line and the errors of the compiler.
-    Fails { text: String },
+    /// line and the errors of the compiler. `record` is the record of a tag after the commit
+    /// (design 62): the targets and the first errors of the compiler.
+    Fails { text: String, record: BuildCheck },
     /// The check cannot run on this machine. This is not a result of the code. `text` has
     /// the result line and the cause.
     CannotRun { text: String },
@@ -66,11 +67,7 @@ fn fail_text(run: &BuildRun, added: &[String], excused: &[String], not_checked: 
     if !not_checked.is_empty() {
         text.push_str(&format!("    (not a cause of this result: {} after the step, and cargo did not check {} before the step)\n", targets_text(not_checked, "does not build", "do not build"), if not_checked.len() == 1 { "it" } else { "them" }));
     }
-    let own: Vec<&str> = run.errors.iter().filter(|error| added.iter().any(|unit| error.in_unit(unit))).map(|error| error.text.as_str()).collect();
-    // Cargo gives no error of the compiler for some failures (a manifest, a build script that
-    // stops). Then each error of the run shows, and the error lines of cargo.
-    let mut all: Vec<&str> = if own.is_empty() { run.errors.iter().map(|error| error.text.as_str()).collect() } else { own };
-    all.dedup();
+    let all = step_errors(run, added);
     // Each error is a block of four spaces, below the result line.
     let indented = |block: &str| format!("\n    {}\n", semilla_core::text::block_indent(block.trim_end(), "    "));
     for error in all.iter().take(ERROR_MAX) {
@@ -83,6 +80,26 @@ fn fail_text(run: &BuildRun, added: &[String], excused: &[String], not_checked: 
         text.push_str(&indented(&run.other));
     }
     text
+}
+
+/// The errors of the compiler that a step makes: the errors of the targets in `added`. Cargo
+/// gives no error of the compiler for some failures (a manifest, a build script that stops).
+/// Then each error of the run is in the list.
+fn step_errors<'a>(run: &'a BuildRun, added: &[String]) -> Vec<&'a str> {
+    let own: Vec<&str> = run.errors.iter().filter(|error| added.iter().any(|unit| error.in_unit(unit))).map(|error| error.text.as_str()).collect();
+    let mut all: Vec<&str> = if own.is_empty() { run.errors.iter().map(|error| error.text.as_str()).collect() } else { own };
+    all.dedup();
+    all
+}
+
+/// The first errors of the compiler that a step makes, for the record of a tag after the
+/// commit (design 62). A failure with no error of the compiler keeps the lines of cargo.
+fn first_errors(run: &BuildRun, added: &[String]) -> Vec<String> {
+    let mut errors: Vec<String> = step_errors(run, added).into_iter().take(ERROR_MAX).map(|error| error.trim_end().to_string()).collect();
+    if errors.is_empty() && !run.other.is_empty() {
+        errors.push(run.other.trim_end().to_string());
+    }
+    errors
 }
 
 /// What a tool chain file names: the key `channel` or the key `path` of the table `toolchain`.
@@ -228,7 +245,8 @@ impl App {
             text.push_str(&note);
             text.push('\n');
         }
-        Outcome::Fails { text }
+        let record = BuildCheck::Fails { errors: first_errors(&run, &added), targets: added };
+        Outcome::Fails { text, record }
     }
 }
 

@@ -211,6 +211,7 @@ pub fn demo_changeset() -> ChangeSet {
         groups,
         subgroups,
         pair_refusals: Vec::new(),
+        after_commit: None,
     }
 }
 

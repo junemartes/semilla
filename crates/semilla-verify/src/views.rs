@@ -745,6 +745,8 @@ struct Shared<'a> {
     /// The control flow graph diff of the step (design 60). With it, the `control flow:` lines
     /// replace the `branches:` line of each fact.
     flow: Option<&'a semilla_core::report::FlowReport>,
+    /// The step of a tag after the commit (design 62).
+    after_commit: bool,
 }
 
 impl<'a> Shared<'a> {
@@ -908,6 +910,8 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
         let why = shared.spotlight(fact, why);
         match &fact.reason {
             Some(reason) => put(&format!("      spotlight: {why}; {}: {}", fact.reason_label(), text::quoted(reason))),
+            // Design 62: in a tag after the commit, the spotlight is an open item.
+            None if shared.after_commit => put(&format!("      ! spotlight: {why}; {}", semilla_core::report::OPEN_SPOTLIGHT)),
             None => put(&format!("      ✗ spotlight: {why}; it needs a reason: --reason '{}=…'", fact.reason_place())),
         }
         // The full list of the causes (design 37.14), one time for each shared text.
@@ -945,7 +949,7 @@ pub const DOC_TEST_LINES: &str = "changed doc lines (a code block of the docs is
 
 /// True for the spotlight line of a fact.
 fn is_spotlight_line(line: &str) -> bool {
-    line.starts_with("      spotlight: ") || line.starts_with("      ✗ spotlight: ")
+    line.starts_with("      spotlight: ") || line.starts_with("      ✗ spotlight: ") || line.starts_with("      ! spotlight: ")
 }
 
 /// The runs of facts (in the order of the output) with an equal spotlight line (design 38.4):
@@ -1036,6 +1040,7 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<B
     let alone: Vec<&semilla_core::report::Fact> = order.iter().enumerate().filter(|(index, _)| runs[*index].is_none()).map(|(_, fact)| *fact).collect();
     let mut shared = Shared::new(&alone, names);
     shared.flow = step.flow.as_ref();
+    shared.after_commit = step.after_commit;
     // Design 28.3: the build code changes of the step come first, with the diff. The manifest
     // facts of the change are with the other manifest facts: one line names them here.
     if facts.iter().any(|fact| fact.build_code_change) {

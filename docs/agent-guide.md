@@ -1,6 +1,13 @@
 # Semilla: the agent guide
 
-Semilla shows what changed in each step of your work. You edit the code with your own tools. After each small change, you run one command with the intent. Semilla derives the facts from the syntax tree of the code before and after the step. Each fact gets a category. Semilla gives no verdict for a change: the reviewer reads the facts. After the facts, each step has a build check: Semilla runs `cargo check` on the code after the step (see "The build check"). The compiled check is an option (see "The compiled check").
+Semilla gives the reviewer a semantic diff of your work: a fact for each change, with as much information as possible, so that a human reviews the code fast. Each changed line of the diff is in a fact. You edit the code with your own tools. Semilla derives the facts from the syntax tree of the code before and after a change. Each fact gets a category. Semilla gives no verdict for a change: the reviewer reads the facts. Your intent, your facts, and your reasons are more information for the reviewer. Each step has a build check: Semilla runs `cargo check` on the code after the step (see "The build check"). The compiled check is an option (see "The compiled check").
+
+## The two workflows
+
+Choose one workflow for a commit. The two give the same facts for the same change.
+
+1. **Steps while you work** ("The loop" below): after each small change, run `semilla step "<intent>"`. At the end, commit and run `semilla tag`. Small steps with one intent are the easiest to review. Use this workflow when you can.
+2. **A tag after the commit** ("A tag after the commit" below): commit as usual, then run `semilla tag <rev>` (one commit) or `semilla tag A..B` (each commit of the first-parent chain). Each commit gets one step. Use this workflow when you did not work in steps, or for commits that are already there.
 
 ## The loop
 
@@ -14,7 +21,7 @@ git add -A && git commit -m "<message>"   # `-A` adds each new file of the steps
 semilla tag                          # the final check, the result line, the git note
 ```
 
-- "Before" is the end of the last step (or `HEAD` for the first step). "After" is the working tree. Do not commit between steps. If `HEAD` moves, `step` prints a note with the fix: `git reset --soft <base>`, then one commit. The first step prints the base of the change set, for example "base `436a109`: no Semilla check (no checked commit before it)". The line is for the reviewer: do nothing for it.
+- "Before" is the end of the last step (or `HEAD` for the first step). "After" is the working tree. In this workflow, do not commit between steps. If `HEAD` moves, `step` prints a note with the fix: `git reset --soft <base>`, then one commit. The first step prints the base of the change set, for example "base `436a109`: no Semilla check (no checked commit before it)". The line is for the reviewer: do nothing for it.
 - `semilla step` compares the two syntax trees and prints the final result of the step: each fact, the claims, the notes, and the pair warnings. This part takes less than one second. Then the build check runs. A tree that does not build is rejected with the errors of the compiler. The step numbers start at 0.
 - A step is stored only when its result is accepted. A rejected step stores nothing and has the exit code 1. The last line of a rejection is the exact command to run again.
 - `semilla undo` removes the last stored step. The working tree keeps the changes. The output gives the exact `git restore` command for the files. Do not use `git checkout .`: it goes back to `HEAD`, not to the last step.
@@ -22,8 +29,41 @@ semilla tag                          # the final check, the result line, the git
 - `semilla status` prints one line for each step, each problem that `semilla tag` rejects, and the result line. `--verbose` adds the facts. `semilla status COMMIT` shows a tagged commit. `semilla verify` checks the session and takes no commit.
 - `semilla review [COMMIT] --md FILE` writes the report for the reviewer (`--full` adds the change tree, the public API changes, all flow views, and all sources). Write the file outside the repository. The review of a change set with no compiled step starts no build. The review shows the stored result of the build check of each step. It does not run the build check again.
 - The options of `semilla step`: `--group "TITLE"` (steps with the same title make one group; Semilla derives the kind of a group from its facts: `rename`, `move`, or `change`), `--same 'KIND FROM TO'` and `--change 'ITEM=TEXT'` (the facts that you state, see below), `--claim 'OP ANCHOR key=value …'` (an optional property claim), `--reason 'ANCHOR=TEXT'` (the reason for a fact in the spotlight), `--tree` (also print the change tree), `--compiled` (also run the compiled check), `--no-check` (do not run the build check). An anchor is an item path (`ledger_core::fees::charge`, `ledger_core::Account.balance`) or a position `FILE:LINE[:COLUMN]`.
-- The MCP server (`semilla mcp`) has the same `step`, `fact`, `undo`, and `tag` tools. Each fact in its JSON has the fields `category` and `status` (`derived` or `stated`). The `step` tool has the arguments `same`, `change` (two lists of texts), `compiled`, and `no_check`. The `fact` tool has the arguments `same`, `change`, and `step`. The `step` tool and the `fact` tool also have the argument `tags` (a list of texts, see "The tags of a step"). A step of a replay plan has the same two keys `same` and `change`, and the key `tag`. The `replay_apply` tool has the argument `no_check`.
+- The MCP server (`semilla mcp`) has the same `step`, `fact`, `undo`, and `tag` tools (see also "A tag after the commit"). Each fact in its JSON has the fields `category` and `status` (`derived` or `stated`). The `step` tool has the arguments `same`, `change` (two lists of texts), `compiled`, and `no_check`. The `fact` tool has the arguments `same`, `change`, and `step`. The `step` tool and the `fact` tool also have the argument `tags` (a list of texts, see "The tags of a step"). A step of a replay plan has the same two keys `same` and `change`, and the key `tag`. The `replay_apply` tool has the argument `no_check`.
 - The replay (work first, steps later): run `semilla replay begin` (the work becomes the target; the working tree is `HEAD` again), `semilla replay plan` (it writes `.semilla/plan.json`), `semilla replay apply --full` (it runs all steps from the base, with the build check of each step; `--no-check` turns the build check off), and `semilla replay end`. A plan step needs an intent, its takes (`FILE`, `FILE:START-END`, `FILE:LINE`, or an item path) or edits, and optional `claims` and `reasons`. `semilla step` does not work inside a replay.
+
+## A tag after the commit
+
+`semilla tag <rev>` tags a commit that has no change set (you did not use `semilla step` for it). Semilla makes one step: the tree before is the tree of the first parent, and the tree after is the tree of the commit. The step has the facts, the spotlights, the build check, and (with `--compiled`) the compiled result that `semilla step` gives for the same two trees.
+
+```sh
+git commit -am "skip small items"
+semilla tag                          # HEAD; or `semilla tag <rev>`
+semilla tag main..HEAD               # each commit after `main` on the first-parent chain, in order
+```
+
+```text
+result: tagged after the commit · 1 step · 3 facts (1 with a spotlight) · 1 open spotlight
+tagged 059bf49… after the commit: one step from the first parent 01cdb83 to the commit "skip small items" · 3 facts (1 with a spotlight) · 1 open spotlight
+build check: passes (0.9 s)
+  …
+  ◆ f3 derived: added `shop::host` (the public API changes: a different crate can now use the item) [added]
+      ! spotlight: a new item with an attribute that can change the behavior: `cfg` on `shop::host`; open: no reason given
+  …
+to give the reason for each open spotlight, run:
+  semilla fact --commit 059bf49 --reason 'shop::host=<why>'
+```
+
+- The command changes no file of the working tree, not the index, not `HEAD`, not the branch, and not your session. It writes only the git note. A dirty working tree is valid.
+- A root commit compares with the empty tree. A merge commit compares with its first parent, and the output says "a merge commit: compared with the first parent".
+- **An open item does not stop the tag.** The commit is already there, so the note is always stored. The open items: a spotlight with no reason, a build check that fails (the note keeps the errors of the compiler), a build check that cannot run, a configuration that does not build (with `--compiled`), and an error of the check. The result line names each one, and the exit code is 1. With no open item, the exit code is 0.
+- **Add the reasons later.** Run the commands of the last lines: `semilla fact --commit <rev> --reason 'KEY=TEXT'`. The same command takes `--same`, `--change`, and `--tag`, with the checks of `semilla fact`. A false fact, a tag with no edit, or a reason that belongs to no fact stores nothing; the output then gives the keys of the open spotlights. No build check runs again.
+- With `--compiled`, a configuration that does not build does not stop the others. The output names it with its side and its first error ("it does not build after the step: error[E0425]: …"), and each other configuration gives its compare results.
+- A commit that has a note keeps it: "commit 059bf49 has a note of a tag after the commit; the note stays". `--again` makes the note again; your facts, tags, and reasons stay, and a fact that does not hold shows with `✗`.
+- A commit with the steps of your session (you used `semilla step`) gets the `tag` of the loop: nothing changes there.
+- `--compiled` and `--no-check` work as for `semilla step`.
+- `semilla status <rev>`, `semilla review <rev>`, and `semilla load <rev>` show the line "tagged after the commit (no steps of the agent)". The result is `not complete` while an item is open.
+- The MCP tool `tag` has the arguments `commit` (a revision or a range), `compiled`, `no_check`, and `again`. The tool `fact` has the arguments `commit` and `reasons` (an object from the key to the text).
 
 ## The build check
 
