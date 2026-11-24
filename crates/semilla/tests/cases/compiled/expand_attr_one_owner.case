@@ -1,0 +1,132 @@
+note: batch 10c2, item 3: an attribute macro of a different crate (it makes a macro with a hash in its name) on an impl block that the step changes in three methods; the expansion line goes under one fact and names the other owners
+rule+: R63.9-7
+must_match: \(also the change of f2, f3\)
+option: --compiled
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot_macros"]
+resolver = "2"
+=== both depot_macros/Cargo.toml
+[package]
+name = "depot_macros"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot_macros/src/lib.rs
+use proc_macro::TokenStream;
+
+#[proc_macro_attribute]
+pub fn helper(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    // The item again from its text: each token has the span of the call.
+    let text = format!("macro_rules! __helper_9f3a {{ () => {{ 0 }} }} {item}");
+    text.parse().unwrap()
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot_macros = { path = "../depot_macros" }
+=== old shop/src/lib.rs
+pub struct Cart {
+    pub sum: u32,
+}
+
+#[depot_macros::helper]
+impl Cart {
+    pub fn total(&self) -> u32 {
+        self.sum + 1
+    }
+
+    pub fn half(&self) -> u32 {
+        self.sum / 2
+    }
+
+    pub fn double(&self) -> u32 {
+        self.sum * 2
+    }
+}
+=== new shop/src/lib.rs
+pub struct Cart {
+    pub sum: u32,
+}
+
+#[depot_macros::helper]
+impl Cart {
+    pub fn total(&self) -> u32 {
+        self.sum + 2
+    }
+
+    pub fn half(&self) -> u32 {
+        self.sum / 3
+    }
+
+    pub fn double(&self) -> u32 {
+        self.sum * 4
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 3 item(s) with 3 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `4` (f1)
+      in: shop::Cart::double
+      lines: shop/src/lib.rs:16, shop/src/lib.rs:-16
+      to state it: --change 'shop::Cart::double=TEXT'
+  ? 1 place: changed literal `2` → `3` (f2)
+      in: shop::Cart::half
+      lines: shop/src/lib.rs:12, shop/src/lib.rs:-12
+      to state it: --change 'shop::Cart::half=TEXT'
+  ? 1 place: changed literal `1` → `2` (f3)
+      in: shop::Cart::total
+      lines: shop/src/lib.rs:8, shop/src/lib.rs:-8
+      to state it: --change 'shop::Cart::total=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::Cart::double=TEXT' --change 'shop::Cart::half=TEXT' --change 'shop::Cart::total=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics · code different]
+      affected bodies: shop::Cart::double
+      equivalence: different in dev: for self = &Cart { 52428800 }: before returns 104857600, after returns 209715200; different in release: for self = &Cart { 1074790399 }: before returns 2149580798, after returns 4194300
+      expansion: `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics] (also the change of f2, f3)
+  ◆ f2 derived: changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics · code different]
+      affected bodies: shop::Cart::half
+      equivalence: different: for self = &Cart { 3543347978 }: before returns 1771673989, after returns 1181115992
+  ◆ f3 derived: changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics · code different]
+      affected bodies: shop::Cart::total
+      equivalence: different in dev: for self = &Cart { 1610612735 }: before returns 1610612736, after returns 1610612737; different in release: for self = &Cart { 0 }: before returns 1, after returns 2
+  ◆ f4 derived: the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+      affected bodies: shop::Cart::double
+      note: lines 5
+  ◆ f5 derived: the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+      affected bodies: shop::Cart::half
+      note: lines 5
+  ◆ f6 derived: the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+      affected bodies: shop::Cart::total
+      note: lines 5
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 3 bodies
+    shop::Cart::double (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different in dev (for self = &Cart { 52428800 }: before returns 104857600, after returns 209715200); different in release (for self = &Cart { 1074790399 }: before returns 2149580798, after returns 4194300)
+    shop::Cart::half (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different (for self = &Cart { 3543347978 }: before returns 1771673989, after returns 1181115992)
+    shop::Cart::total (shop/src/lib.rs:5): same graph (the edit keeps the control flow); different in dev (for self = &Cart { 1610612735 }: before returns 1610612736, after returns 1610612737); different in release (for self = &Cart { 0 }: before returns 1, after returns 2)
+  expansions: 1 changed
+    `#[depot_macros::helper]` at `shop::impl Cart` (shop/src/lib.rs:5): expansion changed: `attribute macro depot_macros::helper` (depot_macros/src/lib.rs:4): changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics]; changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics]; changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics]; the input of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `2` → `4` at `shop::Cart::double/tail/rhs` [semantics · code different]
+    lines: shop/src/lib.rs:16, shop/src/lib.rs:-16
+◆ f2 derived: changed literal `2` → `3` at `shop::Cart::half/tail/rhs` [semantics · code different]
+    lines: shop/src/lib.rs:12, shop/src/lib.rs:-12
+◆ f3 derived: changed literal `1` → `2` at `shop::Cart::total/tail/rhs` [semantics · code different]
+    lines: shop/src/lib.rs:8, shop/src/lib.rs:-8
+◆ f4 derived: the compiled code of `shop::Cart::double` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+    no position
+◆ f5 derived: the compiled code of `shop::Cart::half` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+    no position
+◆ f6 derived: the compiled code of `shop::Cart::total` changes with no edit at its place: `#[depot_macros::helper]` [indirect · code different]
+    no position

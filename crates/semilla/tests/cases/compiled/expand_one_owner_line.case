@@ -1,0 +1,98 @@
+note: batch 10c2, item 3: a test helper macro whose code has the place of the call (`line!()`, `file!()`); the edit of the type `Meters` and of its `impl From` above the calls moves them and has the test bodies in its lists; the line of the moved calls is not under that fact, and it says that the place of the call changes
+rule+: R63.9-8
+rule-: R63.9-7
+must_not_match: \n      expansion: `check_here
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Meters(pub u32);
+
+impl From<u32> for Meters {
+    fn from(v: u32) -> Self { Meters(v) }
+}
+
+macro_rules! check_here {
+    ($e:expr) => {
+        if !$e { panic!(concat!("failed at ", file!(), ":", line!())) }
+    };
+}
+
+#[test]
+fn one() {
+    let m: Meters = 3.into();
+    check_here!(m.0 == 3);
+}
+
+#[test]
+fn two() {
+    let m = Meters::from(4);
+    check_here!(m.0 == 4);
+    check_here!(m.0 > 1);
+}
+=== new src/lib.rs
+pub struct Meters(pub u64);
+
+impl From<u64> for Meters {
+    fn from(v: u64) -> Self {
+        Meters(v)
+    }
+}
+
+macro_rules! check_here {
+    ($e:expr) => {
+        if !$e { panic!(concat!("failed at ", file!(), ":", line!())) }
+    };
+}
+
+#[test]
+fn one() {
+    let m: Meters = 3.into();
+    check_here!(m.0 == 3);
+}
+
+#[test]
+fn two() {
+    let m = Meters::from(4);
+    check_here!(m.0 == 4);
+    check_here!(m.0 > 1);
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type `u32` → `u64` in 2 places: parameter `v` of `shop::<Meters as From>::from`, `shop::Meters.0` (the public API can change: a different crate can use the item) [declaration · code different]
+      affected bodies: shop::<Meters as From>::from, shop::one, shop::two
+      control flow: − graph of `<shop::Meters as std::convert::From<u32>>::from`: 2 points, 1 arrow (semilla status --verbose)
+      control flow: + graph of `<shop::Meters as std::convert::From<u64>>::from`: 2 points, 1 arrow (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+  ◆ f2 derived: generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different]
+      affected bodies: shop::<Meters as From>::from, shop::one, shop::two
+      ! public API: the compare does not cover the code of a different crate
+  other facts, filled in by Semilla:
+  ◆ f3 derived: indirect change, cause not known: `shop::Meters` (the MIR changed, but the text did not) [indirect · code different]
+      affected bodies: shop::Meters
+      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::Meters=…'
+  cover: each of the 8 changed line(s) is in a fact
+  control flow: 2 bodies
+    <shop::Meters as std::convert::From<u32>>::from (src/lib.rs:4): graph removed: 2 points, 1 arrow; no edit in the body
+    <shop::Meters as std::convert::From<u64>>::from (src/lib.rs:4): graph added: 2 points, 1 arrow; no edit in the body
+  expansions: 3 changed
+    3 calls: expansion changed: `macro_rules! check_here` (src/lib.rs:9): only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`); the call moves: `shop::one/S1`, `shop::two/S1`, `shop::two/S2` (semilla status --verbose)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::Meters=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Meters=the reason of the test' --compiled
+◆ f1 derived: parameter of `shop::<Meters as From>::from` `v: u32` → `v: u64` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:4-6, src/lib.rs:-4
+◆ f2 derived: the tuple fields of `shop::Meters` changed: `(u32)` → `(u64)` (the public API can change: a different crate can use the item) [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1
+◆ f3 derived: generics of `shop::impl <Meters as From>`: `impl From<u32> for Meters { }` → `impl From<u64> for Meters { }` (the public API can change: a different crate can use the item); generic arguments go by position: 3 site(s) in 3 other item(s) [declaration · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f4 derived: indirect change, cause not known: `shop::Meters` (the MIR changed, but the text did not) [indirect · code different]
+    no position

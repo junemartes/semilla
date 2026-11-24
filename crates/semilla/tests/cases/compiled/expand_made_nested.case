@@ -1,0 +1,43 @@
+note: batch 10c2, item 4: a made item of a nested call: `mkfn!(made, add!(4; 5))` where only `add!` changes; the fact of `add` owns `depot::made` with no spotlight, and the line of the outer call names the changed inner call; `mkfn!(plain, 4 + 5)` does not use `add!`, so its expansion is equal and the fact does not own `depot::plain`
+rule+: R63.9-4 R63.9-5
+rule-: R63.9-4
+must_match: from `macro_rules! add` \(src/lib\.rs:1\) through the inner call `add!\(4; 5\)`
+must_not_match: code that Semilla does not see
+must_not_match: spotlight
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }
+macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }
+
+mkfn!(made, add!(4; 5));
+mkfn!(plain, 4 + 5);
+=== new src/lib.rs
+macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }
+macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }
+
+mkfn!(made, add!(4; 5));
+mkfn!(plain, 4 + 5);
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `add`: `macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }` → `macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }` [declaration · code different]
+      affected bodies: depot::made
+      expansion: `mkfn!(made, add!(4; 5))` at `depot::mkfn!#0` (src/lib.rs:4): expansion changed: changed operator `4 + 5` → `4 * 5` at `depot::made/tail` [semantics]
+      expansion: `add!(4; 5)` at `depot::mkfn!#0` (src/lib.rs:4): expansion changed: changed operator `4 + 5` → `4 * 5` at `expansion` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 2 changed, 1 equal
+    `mkfn!(made, add!(4; 5))` at `depot::mkfn!#0` (src/lib.rs:4): expansion changed: `macro_rules! mkfn` (src/lib.rs:2): changed operator `4 + 5` → `4 * 5` at `depot::made/tail` [semantics]; from `macro_rules! add` (src/lib.rs:1) through the inner call `add!(4; 5)`
+    `add!(4; 5)` at `depot::mkfn!#0` (src/lib.rs:4): expansion changed: `macro_rules! add` (src/lib.rs:1): changed operator `4 + 5` → `4 * 5` at `expansion` [semantics]; from `macro_rules! add` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `add`: `macro_rules! add { ($a:expr; $b:expr) => { $a + $b } }` → `macro_rules! add { ($a:expr; $b:expr) => { $a * $b } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

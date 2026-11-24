@@ -1,0 +1,94 @@
+note: batch 10c2, item 1: the step changes one source file; the item-level calls in `impl` blocks of a different, unchanged file are not added or removed; the test build of the library and the integration test `tests/shop.rs` have one crate name and one kind
+rule+: R63.9-1 R63.9-2
+rule-: R63.9-2
+must_not_match: \((src/store|tests/shop)\.rs:-?\d+\): expansion (added|removed)
+must_match: `fee!\(1\)` at `shop::price/tail` \(src/lib\.rs:6\): expansion changed
+must_match: `fee!\(5\)` at `shop::cost/tail` \(src/lib\.rs:-7\): expansion removed
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! fee { ($v:expr) => { $v + 1 } }
+
+mod store;
+pub use store::Store;
+
+pub fn price() -> u32 { fee!(1) }
+pub fn cost() -> u32 { fee!(5) }
+=== new src/lib.rs
+macro_rules! fee { ($v:expr) => { $v + 2 } }
+
+mod store;
+pub use store::Store;
+
+pub fn price() -> u32 { fee!(1) }
+pub fn cost() -> u32 { 5 }
+=== both src/store.rs
+pub trait Store {
+    fn get(&self) -> u32;
+}
+
+macro_rules! forward {
+    () => {
+        fn get(&self) -> u32 {
+            (**self).get()
+        }
+    };
+}
+
+impl<T: Store + ?Sized> Store for &mut T { forward!(); }
+impl<T: Store + ?Sized> Store for Box<T> { forward!(); }
+=== both tests/shop.rs
+use shop::Store;
+
+struct One;
+impl Store for One { fn get(&self) -> u32 { 1 } }
+
+macro_rules! check { ($e:expr) => { assert_eq!($e, 1) } }
+
+#[test]
+fn boxed() {
+    let b: Box<One> = Box::new(One);
+    check!(b.get());
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::cost
+      lines: src/lib.rs:7, src/lib.rs:-7
+      to state it: --change 'shop::cost=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::cost=TEXT'
+  declarations, filled in by Semilla:
+  ◆ f3 derived: changed macro `fee`: `macro_rules! fee { ($v:expr) => { $v + 1 } }` → `macro_rules! fee { ($v:expr) => { $v + 2 } }` [declaration · code different]
+      affected bodies: shop::price
+      expansion: `fee!(1)` at `shop::price/tail` (src/lib.rs:6): expansion changed: changed literal `1` → `2` at `expansion/rhs` [semantics]
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `fee!(5)` at `shop::cost/tail` [semantics · code different]
+      affected bodies: shop::cost (with 1 other edit of this body)
+      equivalence: different: for each input: before returns 6, after returns 5
+      expansion: `fee!(5)` at `shop::cost/tail` (src/lib.rs:-7): expansion removed: 1 line(s) of code
+  ◆ f2 derived: added statement `5` at `shop::cost/tail` [semantics · code different]
+      affected bodies: shop::cost (with 1 other edit of this body)
+      equivalence: different: for each input: before returns 6, after returns 5
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    shop::cost (src/lib.rs:7): same graph (the edit keeps the control flow); different (for each input: before returns 6, after returns 5)
+  expansions: 1 changed, 1 removed, 3 equal
+    `fee!(1)` at `shop::price/tail` (src/lib.rs:6): expansion changed: `macro_rules! fee` (src/lib.rs:1): changed literal `1` → `2` at `expansion/rhs` [semantics]; from `macro_rules! fee` (src/lib.rs:1)
+    `fee!(5)` at `shop::cost/tail` (src/lib.rs:-7): expansion removed: `macro_rules! fee` (src/lib.rs:1): 1 line(s) of code; the step removes the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f3 derived: changed macro `fee`: `macro_rules! fee { ($v:expr) => { $v + 1 } }` → `macro_rules! fee { ($v:expr) => { $v + 2 } }` [declaration · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1
+◆ f1 derived: deleted statement `fee!(5)` at `shop::cost/tail` [semantics · code different]
+    lines: src/lib.rs:-7
+◆ f2 derived: added statement `5` at `shop::cost/tail` [semantics · code different]
+    lines: src/lib.rs:7

@@ -61,6 +61,17 @@ pub struct Expansion {
     pub uses: Vec<[String; 2]>,
     #[serde(default)]
     pub module: String,
+    /// The source text of the call in a file that makes this call, for a call whose tokens
+    /// come from a macro with no record (R63.9-3).
+    #[serde(default)]
+    pub via: String,
+    /// The files that the code reads with `include_str!` or `include_bytes!` (R63.9-6).
+    #[serde(default)]
+    pub reads: Vec<String>,
+    /// The text with a mark for each literal from `line!()`, `column!()`, or `file!()`
+    /// (R63.9-8). Empty if the code has no such literal.
+    #[serde(default)]
+    pub placeless: String,
 }
 
 /// The expansions of one compiled target in one checked configuration.
@@ -72,6 +83,10 @@ pub struct ExpansionUnit {
     pub target: String,
     /// The package of the target.
     pub package: String,
+    /// The root file of the crate (R63.9-1).
+    pub root: String,
+    /// Each true `cfg` name and pair of the unit (the features).
+    pub cfg: Vec<String>,
     pub list: Vec<Expansion>,
 }
 
@@ -81,13 +96,54 @@ impl ExpansionUnit {
         self.target.split('.').next().unwrap_or("")
     }
 
-    /// True if two units are the same target in the same configuration: the package, the crate
-    /// name, and the kind. The hash of the target is not a part: a changed manifest (a new
-    /// version of a dependency) changes it.
-    pub fn same_target(&self, other: &ExpansionUnit) -> bool {
+    /// True if two units are of one crate name and kind of one package in one configuration.
+    /// The hash of the target is not a part: a changed manifest (a new version of a dependency)
+    /// changes it.
+    fn same_kind(&self, other: &ExpansionUnit) -> bool {
         let short = |target: &str| target.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
         self.config == other.config && self.package == other.package && short(&self.target) == short(&other.target)
     }
+
+    /// True if two units are the same target in the same configuration (R63.9-1): the package,
+    /// the crate name, the kind, and the root file. A test target and a bench target of one
+    /// package can have one name and one kind (`tests/load.rs` and `benches/load.rs`, or the
+    /// test builds of `src/lib.rs` and `src/main.rs`): only the root file tells them apart.
+    pub fn same_target(&self, other: &ExpansionUnit) -> bool {
+        self.same_kind(other) && self.root == other.root
+    }
+}
+
+/// The pairs of the units of the two trees (R63.9-1): each unit of the new tree gets at most one
+/// unit of the old tree, and each unit of the old tree is in at most one pair. A unit pairs with
+/// a unit of the same target. With two such units (a crate that the build compiles two times,
+/// for two sets of features), the unit with the same features, then the unit with the most
+/// calls at the same place with the same text, is the pair. A unit with no such unit pairs with
+/// the one unit of the same crate name and kind whose root file is not in the new tree (a moved
+/// root file).
+fn unit_pairs(old_units: &[ExpansionUnit], new_units: &[ExpansionUnit]) -> Vec<(Option<usize>, Option<usize>)> {
+    let mut used = vec![false; old_units.len()];
+    let mut pairs = Vec::new();
+    let place = |unit: &ExpansionUnit| -> BTreeSet<(String, usize, usize, String, String)> { unit.list.iter().filter(|e| e.outer.is_none()).map(|e| (e.file.clone(), e.line, e.col, e.name.clone(), e.text.clone())).collect() };
+    for (index, unit) in new_units.iter().enumerate() {
+        let candidates: Vec<usize> = (0..old_units.len()).filter(|at| !used[*at] && old_units[*at].same_target(unit)).collect();
+        let found = match candidates.as_slice() {
+            [] => {
+                let moved: Vec<usize> = (0..old_units.len()).filter(|at| !used[*at] && old_units[*at].same_kind(unit) && !new_units.iter().any(|new| new.same_target(&old_units[*at]))).collect();
+                (moved.len() == 1).then(|| moved[0])
+            }
+            [one] => Some(*one),
+            more => {
+                let mine = place(unit);
+                more.iter().copied().max_by_key(|at| (old_units[*at].cfg == unit.cfg, place(&old_units[*at]).intersection(&mine).count(), std::cmp::Reverse(*at)))
+            }
+        };
+        if let Some(at) = found {
+            used[at] = true;
+        }
+        pairs.push((found, Some(index)));
+    }
+    pairs.extend((0..old_units.len()).filter(|at| !used[*at]).map(|at| (Some(at), None)));
+    pairs
 }
 
 /// The most lines of the diff of an expansion in a stored step and in the views (R63.5-3).
@@ -224,7 +280,7 @@ fn definition_text(expansion: &Expansion) -> String {
 
 /// The changed definitions of the chain of a call (R63.3-2): the facts of a changed macro
 /// definition whose name is the macro of the call or a macro that its code uses, at each depth.
-fn chain_owners(outcome: &StepOutcome, sides: [Option<&Expansion>; 2]) -> (Vec<usize>, Vec<String>) {
+fn chain_owners(outcome: &StepOutcome, sides: [Option<&Expansion>; 2]) -> (Vec<usize>, Vec<(String, String)>) {
     let mut names: BTreeSet<(String, String)> = BTreeSet::new();
     for expansion in sides.into_iter().flatten() {
         names.insert((expansion.name.clone(), expansion.def.clone()));
@@ -246,12 +302,29 @@ fn chain_owners(outcome: &StepOutcome, sides: [Option<&Expansion>; 2]) -> (Vec<u
             continue;
         }
         facts.push(index);
-        let cause = format!("`macro_rules! {name}` ({def})");
+        let cause = (name.to_string(), format!("`macro_rules! {name}` ({def})"));
         if !causes.contains(&cause) {
             causes.push(cause);
         }
     }
     (facts, causes)
+}
+
+/// The facts with an edit in the input of a call on either side, in the order of the facts.
+fn input_facts(input: &StepInput, outcome: &StepOutcome, site: &Site) -> Vec<usize> {
+    let mut found = Vec::new();
+    for (side, expansion) in [site.old, site.new].iter().enumerate() {
+        let Some(expansion) = expansion else { continue };
+        let ws = if side == 0 { input.before } else { input.after };
+        let (file, start, end) = input_lines(ws, expansion, site.at[side].as_ref());
+        for (index, fact) in outcome.report.facts.iter().enumerate() {
+            if holds(&fact.positions, side == 0, &file, start, end) && !found.contains(&index) {
+                found.push(index);
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// The lines of the input of a call on one side: the lines of the call for a function-like
@@ -346,19 +419,39 @@ fn pair_sites<'a>(units: [&'a [ExpansionUnit]; 2], trees: [&Workspace; 2], map: 
             None => list.push(Site { old, new, at, crate_name: unit.crate_name().to_string(), configs: vec![unit.config.clone()] }),
         }
     };
-    for unit in new_units {
-        let old = old_units.iter().find(|old| old.same_target(unit));
-        let old_keys = old.map(|old| keys(&old.list, trees[0], map)).unwrap_or_default();
-        let new_keys = keys(&unit.list, trees[1], &same);
-        let mut pairs: Vec<(Option<usize>, Option<usize>)> = Vec::new();
+    // The files with the same text in the two trees (R63.9-2).
+    let unchanged: BTreeSet<&str> = trees[0].rust_files.iter().filter(|(path, text)| trees[1].rust_files.get(*path) == Some(*text)).map(|(path, _)| path.as_str()).collect();
+    for (a, b) in unit_pairs(old_units, new_units) {
+        let unit = b.map(|b| &new_units[b]).or(a.map(|a| &old_units[a])).expect("a pair has a unit");
+        let old_keys = a.map(|a| keys(&old_units[a].list, trees[0], map)).unwrap_or_default();
+        let new_keys = b.map(|b| keys(&new_units[b].list, trees[1], &same)).unwrap_or_default();
+        let mut found: Vec<Option<usize>> = vec![None; new_keys.len()];
         let mut used = vec![false; old_keys.len()];
-        for (index, (key, _, _)) in new_keys.iter().enumerate() {
-            let found = old_keys.iter().position(|(other, _, _)| other == key).filter(|at| !used[*at]);
-            if let Some(at) = found {
-                used[at] = true;
+        // R63.9-2: in a file that the step does not change, a call pairs with the call at the
+        // same place (the file, the line, and the column) of the same macro and kind. Only the
+        // call and its place make this key, so no edit in a different file can change it.
+        for (index, (_, new, _)) in new_keys.iter().enumerate() {
+            if new.file.is_empty() || !unchanged.contains(new.file.as_str()) {
+                continue;
             }
-            pairs.push((found, Some(index)));
+            let at = old_keys.iter().enumerate().position(|(at, (_, old, _))| !used[at] && old.file == new.file && old.line == new.line && old.col == new.col && old.name == new.name && old.kind == new.kind);
+            if let Some(at) = at {
+                used[at] = true;
+                found[index] = Some(at);
+            }
         }
+        // Else the key of R63.3-1: the item, the macro, the kind, and the number in the item.
+        for (index, (key, _, _)) in new_keys.iter().enumerate() {
+            if found[index].is_some() {
+                continue;
+            }
+            let at = old_keys.iter().enumerate().position(|(at, (other, _, _))| !used[at] && other == key);
+            if let Some(at) = at {
+                used[at] = true;
+                found[index] = Some(at);
+            }
+        }
+        let mut pairs: Vec<(Option<usize>, Option<usize>)> = found.into_iter().enumerate().map(|(index, at)| (at, Some(index))).collect();
         pairs.extend(used.iter().enumerate().filter(|(_, used)| !**used).map(|(at, _)| (Some(at), None)));
         for (a, b) in pairs {
             let old = a.map(|a| &old_keys[a]);
@@ -374,13 +467,48 @@ fn pair_sites<'a>(units: [&'a [ExpansionUnit]; 2], trees: [&Workspace; 2], map: 
             push(&mut sites, old, new, at, unit, true);
         }
     }
-    // A unit of the old tree with no unit in the new tree: each call is removed.
-    for unit in old_units.iter().filter(|old| !new_units.iter().any(|new| new.same_target(old))) {
-        for (_, expansion, at) in keys(&unit.list, trees[0], map) {
-            push(&mut sites, Some(expansion), None, [at, None], unit, true);
-        }
-    }
     (sites, equal)
+}
+
+/// A changed expansion for the owner pass (R63.9-5): the items that hold the call on each side,
+/// the macros of its chain, and the files that its code reads.
+#[derive(Clone, Debug, Default)]
+pub struct Link {
+    /// The item of the anchor of the call on each side (the old one with the rename map).
+    pub items: BTreeSet<String>,
+    /// The names of the macros of the chain on the two sides (the macro of the call and each
+    /// macro that its code uses).
+    pub chain: BTreeSet<String>,
+    /// The files that the code of the call reads on the two sides.
+    pub reads: BTreeSet<String>,
+}
+
+/// The changed expansions of a step (R63.9-5), for the owner pass: only a pair of two calls
+/// with two different texts. An added or a removed call is an edit of the call or of its item.
+pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle, renames: &BTreeMap<String, String>) -> Vec<Link> {
+    if !step.compiled {
+        return Vec::new();
+    }
+    let Some([old_units, new_units]) = bodies.expansions(step) else { return Vec::new() };
+    let map = |path: &str| renames.get(path).cloned().unwrap_or_else(|| path.to_string());
+    let (sites, _) = pair_sites([&old_units, &new_units], trees, &map, false);
+    let mut out = Vec::new();
+    for site in &sites {
+        let (Some(old), Some(new)) = (site.old, site.new) else { continue };
+        let mut link = Link::default();
+        for (side, at) in site.at.iter().enumerate() {
+            if let Some(at) = at {
+                link.items.insert(if side == 0 { map(&at.item) } else { at.item.clone() });
+            }
+        }
+        for expansion in [old, new] {
+            link.chain.insert(expansion.name.clone());
+            link.chain.extend(expansion.uses.iter().map(|[name, _]| name.clone()));
+            link.reads.extend(expansion.reads.iter().cloned());
+        }
+        out.push(link);
+    }
+    out
 }
 
 /// Adds the facts of the expanded code to a step of the compiled mode (R63.2-1 to R63.3-5).
@@ -400,15 +528,29 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
     let mut by_fact: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
     for site in &sites {
         let any = site.new.or(site.old).expect("a site has a side");
+        // R63.9-8: a call that only moves, on the evidence of the compiler: the texts with no
+        // place literal are equal, the call text is equal, no definition of the chain changes,
+        // and no fact has an edit in the input of the call.
+        let moved = match (site.old, site.new) {
+            (Some(old), Some(new)) if chain_owners(outcome, [site.old, site.new]).0.is_empty() && input_facts(input, outcome, site).is_empty() => moved_place(old, new),
+            _ => None,
+        };
         let (result, facts) = match (site.old, site.new) {
             (Some(old), Some(new)) => {
-                let found = cache.entry((old.text.clone(), new.text.clone())).or_insert_with(|| compare(old, new, &site.crate_name, exprs));
-                let facts: Vec<String> = match found {
-                    Ok(list) if list.is_empty() => vec!["no fact: the two texts differ only in the layout".to_string()],
-                    Ok(list) => list.iter().map(|(text, category)| format!("{text} [{}]", category.name())).collect(),
-                    Err(error) => vec![format!("not compared: {error}")],
-                };
-                ("expansion changed", facts)
+                if let Some(moved) = moved.clone() {
+                    ("expansion changed", vec![moved])
+                } else {
+                    let found = cache.entry((old.text.clone(), new.text.clone())).or_insert_with(|| compare(old, new, &site.crate_name, exprs));
+                    let facts: Vec<String> = match found {
+                        Ok(list) if list.is_empty() => vec!["no fact: the two texts differ only in the layout".to_string()],
+                        // R63.9-8: a fact of the whole virtual file (`src/lib.rs: changed`) names
+                        // a file that the author does not have: the line gives the changed text.
+                        Ok(list) if list.iter().all(|(text, _)| text.starts_with("src/lib.rs:")) => vec![changed_text(&old.text, &new.text)],
+                        Ok(list) => list.iter().map(|(text, category)| format!("{text} [{}]", category.name())).collect(),
+                        Err(error) => vec![format!("not compared: {error}"), changed_text(&old.text, &new.text)],
+                    };
+                    ("expansion changed", facts)
+                }
             }
             (None, Some(new)) => ("expansion added", vec![made_text("makes", new)]),
             (Some(old), None) => ("expansion removed", vec![made_text("made", old)]),
@@ -416,26 +558,22 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         };
         let side = if site.new.is_some() { 1 } else { 0 };
         let at = site.at[side].as_ref().map(|at| at.to_string()).unwrap_or_else(|| format!("{} (no item)", any.module));
-        let place = format!("{}:{}{}", any.file, if side == 0 { "-" } else { "" }, any.line);
+        // R63.9-3: a call with no place in a file of the workspace says so.
+        let place = if any.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}{}", any.file, if side == 0 { "-" } else { "" }, any.line) };
         // A changed definition owns a changed expansion; an added or a removed call belongs to
         // the edit of the call.
         let (mut owners, causes) = if site.old.is_some() && site.new.is_some() { chain_owners(outcome, [site.old, site.new]) } else { (Vec::new(), Vec::new()) };
-        // The facts with an edit in the input of the call.
-        let mut input_owner = false;
-        for (side, expansion) in [site.old, site.new].iter().enumerate() {
-            let Some(expansion) = expansion else { continue };
-            let ws = if side == 0 { input.before } else { input.after };
-            let (file, start, end) = input_lines(ws, expansion, site.at[side].as_ref());
-            for (index, fact) in outcome.report.facts.iter().enumerate() {
-                if holds(&fact.positions, side == 0, &file, start, end) && !owners.contains(&index) {
-                    owners.push(index);
-                    input_owner = true;
-                }
-            }
-        }
         owners.sort();
+        // R63.9-4: a changed definition of a call in the input of this call: the cause names
+        // that call (`mkfn!(made, add!(4; 5))` changes through `add!(4; 5)`).
+        let causes: Vec<String> = causes.into_iter().map(|(name, cause)| match inner_call(&sites, site, &name) {
+            Some(call) if name != any.name => format!("{cause} through the inner call `{call}`"),
+            _ => cause,
+        }).collect();
+        // The facts with an edit in the input of the call.
+        let input_owners: Vec<usize> = input_facts(input, outcome, site).into_iter().filter(|index| !owners.contains(index)).collect();
         let mut cause = causes.iter().map(|cause| format!("from {cause}")).collect::<Vec<_>>().join(", ");
-        if input_owner {
+        if !input_owners.is_empty() {
             let word = match result {
                 "expansion added" => "the step adds the call or its input",
                 "expansion removed" => "the step removes the call or its input",
@@ -443,24 +581,52 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
             };
             cause = if cause.is_empty() { word.to_string() } else { format!("{cause}; {word}") };
         }
-        // No changed definition and no changed input (a file that `include_bytes!` reads, a
-        // change of a dependency): the facts of the body that holds the call own it (R63.3-2).
+        owners.extend(input_owners);
+        // R63.9-6: a changed file that the code of the call reads (`include_bytes!`) is a cause:
+        // the fact of the file owns the expansion.
+        if owners.is_empty() {
+            let reads: BTreeSet<&String> = [site.old, site.new].iter().flatten().flat_map(|e| e.reads.iter()).collect();
+            for (index, fact) in outcome.report.facts.iter().enumerate() {
+                if fact.at.is_none() && fact.part != "indirect change" && fact.file.as_ref().is_some_and(|file| reads.contains(file)) {
+                    owners.push(index);
+                    let text = format!("the code of the call reads `{}`, which the step changes", fact.file.as_deref().unwrap_or(""));
+                    cause = if cause.is_empty() { text } else { format!("{cause}; {text}") };
+                }
+            }
+        }
+        // No changed definition, no changed input, and no changed file that the code reads (a
+        // change of a dependency, a call that moves): only an indirect fact of the body that
+        // holds the call owns it (R63.9-7). Each other fact of that body has a different cause.
         if owners.is_empty() {
             let holder = site.at[1].as_ref().or(site.at[0].as_ref()).map(|at| at.item.clone()).unwrap_or_default();
-            owners.extend(outcome.report.facts.iter().enumerate().filter(|(_, fact)| !holder.is_empty() && fact.affected.contains(&holder)).map(|(index, _)| index));
-            cause = "no changed definition and no changed input of the call".to_string();
+            owners.extend(outcome.report.facts.iter().enumerate().filter(|(_, fact)| !holder.is_empty() && fact.part == "indirect change" && fact.affected.contains(&holder)).map(|(index, _)| index));
+            cause = if moved.is_some() {
+                "the call moves".to_string()
+            } else {
+                "no changed definition, no changed input of the call, and no changed file that its code reads".to_string()
+            };
         }
         let configs = if site.configs.len() == all_configs.len() { Vec::new() } else { site.configs.clone() };
-        let shown_call = if any.kind == "derive" { format!("derive `{}`", any.name) } else { format!("`{}`", any.call) };
+        let shown_call = shown(any);
         let summary = facts.join("; ");
         let key = format!("{result}: {}: {summary}{}", definition_text(any), if cause.is_empty() { String::new() } else { format!("; {cause}") });
         let diff = cut_diff(&line_diff(site.old.map(|e| e.text.as_str()).unwrap_or(""), site.new.map(|e| e.text.as_str()).unwrap_or("")), DIFF_LIMIT, &format!("semilla expand {place}"));
         let owner_ids: Vec<String> = owners.iter().map(|index| outcome.report.facts[*index].id.clone()).collect();
-        for id in &owner_ids {
-            let prefix = if any.kind == "derive" { format!("derived `{}` of `{at}`", any.name) } else { format!("{shown_call} at `{at}` ({place})") };
-            let line = format!("{prefix}: {result}: {summary}");
-            let fold = format!("{}|{result}|{summary}", any.name);
-            by_fact.entry(id.clone()).or_default().push((fold, line, at.clone()));
+        // R63.9-7: the line goes under one fact, the first owner (a changed definition of the
+        // chain, else an edit of the input, else a changed file that the code reads). The line
+        // names the other owners; their own lines do not repeat it.
+        if let Some((first, others)) = owner_ids.split_first() {
+            let prefix = if any.kind == "derive" { format!("derived `{}` of `{at}`", any.name) } else if any.file.is_empty() { format!("{shown_call} ({place})") } else { format!("{shown_call} at `{at}` ({place})") };
+            let also = if others.is_empty() {
+                String::new()
+            } else {
+                let limit = semilla_core::report::REACH_FOLD_NAMES;
+                let more = if others.len() > limit { format!(", and {} more", others.len() - limit) } else { String::new() };
+                format!(" (also the change of {}{more})", others.iter().take(limit).cloned().collect::<Vec<_>>().join(", "))
+            };
+            let line = format!("{prefix}: {result}: {summary}{also}");
+            let fold = format!("{}|{result}|{summary}{also}", any.name);
+            by_fact.entry(first.clone()).or_default().push((fold, line, at.clone()));
         }
         // The compiled check of the expanded code (R63.3-9): the line of each body that holds
         // the call or that the expansion makes, from the control flow section (60, 61).
@@ -592,7 +758,7 @@ pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], f
             _ => "expansion removed",
         };
         let configs = if site.configs.len() == all_configs.len() { String::new() } else { format!(" (in {})", site.configs.join(", ")) };
-        let call = if any.kind == "derive" { format!("derive `{}`", any.name) } else { format!("`{}`", any.call) };
+        let call = shown(any);
         out.push_str(&format!("{call} at `{at}` ({}:{}{}): {result}{configs}\n", any.file, if side == 0 { "-" } else { "" }, any.line));
         let uses: Vec<String> = any.uses.iter().map(|[name, def]| format!("`{name}!` ({def})")).collect();
         out.push_str(&format!("  definition: {}{}\n", definition_text(any), if uses.is_empty() { String::new() } else { format!("; uses: {}", uses.join(", ")) }));
@@ -616,6 +782,73 @@ pub fn view(place: &str, units: [&[ExpansionUnit]; 2], trees: [&Workspace; 2], f
         }
     }
     Ok(out)
+}
+
+/// The place text of a call with no place in a file of the workspace (R63.9-3).
+pub const NO_PLACE: &str = "no place: the tokens of the call are not in a file of the workspace";
+
+/// A call inside the input of a different call (R63.9-4): a changed site of the macro `name`
+/// whose place is inside the place of the call of `site`.
+fn inner_call(sites: &[Site], site: &Site, name: &str) -> Option<String> {
+    let outer = site.new.or(site.old)?;
+    sites.iter().filter(|other| !std::ptr::eq(*other, site) && other.old.is_some() && other.new.is_some()).filter_map(|other| other.new).find(|inner| inner.name == name && !outer.file.is_empty() && inner.file == outer.file && outer.r[0] <= inner.r[0] && inner.r[1] <= outer.r[1] && inner.r != outer.r).map(|inner| inner.call.clone())
+}
+
+/// The text of a call that only moves (R63.9-8).
+pub const MOVED: &str = "only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`)";
+
+/// R63.9-8: the text of a call that only moves, on the evidence of the compiler. The driver
+/// gives each expansion a second text (`placeless`) in which each literal from an expansion of
+/// `line!()`, `column!()`, or `file!()` (also through `concat!`) is a mark. Two different texts
+/// with equal placeless texts differ only in such literals: the place of the call. The call
+/// text must be equal too. A number or a text that only looks like a line is not evidence: a
+/// record with no such literal has no placeless text, so it never gives this text. `None`
+/// for each other pair. The caller checks the definitions of the chain and the input.
+pub fn moved_place(old: &Expansion, new: &Expansion) -> Option<String> {
+    if old.text == new.text || old.call != new.call || (old.placeless.is_empty() && new.placeless.is_empty()) {
+        return None;
+    }
+    let placeless = |e: &Expansion| if e.placeless.is_empty() { e.text.clone() } else { e.placeless.clone() };
+    // The numbers are in the diff of the call: the text is the same for each moved call, so
+    // the moved calls of one macro fold into one line.
+    (placeless(old) == placeless(new)).then(|| MOVED.to_string())
+}
+
+/// R63.9-8: the changed part of two texts on one line: the text between the equal start and
+/// the equal end, at most 80 characters on each side: "changed code `39u32` → `41u32`".
+pub fn changed_text(old: &str, new: &str) -> String {
+    let a: Vec<char> = one_line(old).chars().collect();
+    let b: Vec<char> = one_line(new).chars().collect();
+    let start = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let end = a[start..].iter().rev().zip(b[start..].iter().rev()).take_while(|(x, y)| x == y).count();
+    // Start and end at a word boundary, so a token is not cut.
+    let word = |c: &char| c.is_alphanumeric() || *c == '_';
+    let mut from = start;
+    while from > 0 && (word(&a[from - 1]) || word(&b[from - 1])) {
+        from -= 1;
+    }
+    let (mut to_a, mut to_b) = (a.len() - end, b.len() - end);
+    while to_a < a.len() && to_b < b.len() && (word(&a[to_a]) || word(&b[to_b])) && a[to_a] == b[to_b] {
+        to_a += 1;
+        to_b += 1;
+    }
+    let cut = |chars: &[char]| -> String {
+        let text: String = chars.iter().collect::<String>().trim().to_string();
+        if text.chars().count() > 80 { text.chars().take(80).collect::<String>() + "…" } else { text }
+    };
+    format!("changed code `{}` → `{}`", cut(&a[from..to_a]), cut(&b[from..to_b]))
+}
+
+/// The text of a call for a line: `fee!(v)`, derive `PartialEq`, or the call and the call in a
+/// file that makes it (R63.9-3): `make!{@inner …}` from `sum!(1, 2)`.
+fn shown(expansion: &Expansion) -> String {
+    if expansion.kind == "derive" {
+        return format!("derive `{}`", expansion.name);
+    }
+    if expansion.via.is_empty() {
+        return format!("`{}`", expansion.call);
+    }
+    format!("`{}` from `{}`", expansion.call, expansion.via)
 }
 
 /// The text of the items of an added or a removed expansion.
@@ -685,6 +918,60 @@ mod tests {
         // fact.
         let layout = compare(&expansion("expr", "f(a,\n    b)"), &expansion("expr", "f(a, b)"), "shop", &NoOracle).unwrap();
         assert!(layout.is_empty(), "{layout:?}");
+    }
+
+    fn unit(target: &str, root: &str, calls: &[(&str, usize, &str)]) -> ExpansionUnit {
+        let list = calls.iter().map(|(file, line, text)| Expansion { file: file.to_string(), line: *line, ..expansion("expr", text) }).collect();
+        ExpansionUnit { config: "dev".into(), target: target.into(), package: "shop".into(), root: root.into(), cfg: Vec::new(), list }
+    }
+
+    // rule+ R63.9-1
+    // rule- R63.9-1
+    #[test]
+    fn a_unit_pairs_with_the_unit_of_its_root_file() {
+        // A test and a bench with one name and one kind: the order of the files changes, and a
+        // new bench comes. Each unit pairs with the unit of its root file.
+        let old = vec![unit("load.test.aaaa", "benches/load.rs", &[("benches/load.rs", 5, "1")]), unit("load.test.bbbb", "tests/load.rs", &[("tests/load.rs", 5, "2")])];
+        let new = vec![unit("load.test.cccc", "tests/load.rs", &[("tests/load.rs", 5, "2")]), unit("extra.test.dddd", "benches/extra.rs", &[]), unit("load.test.eeee", "benches/load.rs", &[("benches/load.rs", 5, "1")])];
+        assert_eq!(unit_pairs(&old, &new), vec![(Some(1), Some(0)), (None, Some(1)), (Some(0), Some(2))]);
+        // The negative case: a unit with a different root file is not the same target, and an
+        // old unit with no pair is in the list alone (its calls are removed).
+        assert!(!old[0].same_target(&new[0]));
+        assert_eq!(unit_pairs(&old, &new[..1]), vec![(Some(1), Some(0)), (Some(0), None)]);
+        // A moved root file: the one unit of the same crate name and kind whose root file is not
+        // in the new tree.
+        let moved = vec![unit("load.test.ffff", "tests/load/main.rs", &[])];
+        assert_eq!(unit_pairs(&old[1..], &moved), vec![(Some(0), Some(0))]);
+        // Two units of one target (a crate that the build compiles two times): the unit with the
+        // most calls with the same place and text.
+        let twice = vec![unit("load.lib.1", "src/lib.rs", &[("src/lib.rs", 1, "a")]), unit("load.lib.2", "src/lib.rs", &[("src/lib.rs", 1, "b")])];
+        let again = vec![unit("load.lib.3", "src/lib.rs", &[("src/lib.rs", 1, "b")]), unit("load.lib.4", "src/lib.rs", &[("src/lib.rs", 1, "a")])];
+        assert_eq!(unit_pairs(&twice, &again), vec![(Some(1), Some(0)), (Some(0), Some(1))]);
+    }
+
+    // rule+ R63.9-8
+    // rule- R63.9-8
+    #[test]
+    fn a_call_that_only_moves_has_one_text_and_a_file_fact_gives_the_changed_text() {
+        let at = |line: usize, text: &str, placeless: &str| Expansion { file: "src/lib.rs".into(), line, col: 4, call: "m!()".into(), placeless: placeless.into(), ..expansion("stmts", text) };
+        // The driver marks the literals of `line!()` and of `concat!(file!(), ":", line!())`.
+        let mark = "(1, \"\u{0}line\u{0}\")";
+        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &at(18, "(1, 18u32)", mark)).as_deref(), Some(MOVED));
+        let concat = "panic!(\"\u{0}concat!(\"at \", file!(), \":\", line!())\u{0}\")";
+        assert_eq!(moved_place(&at(16, "panic!(\"at src/lib.rs:16\")", concat), &at(18, "panic!(\"at src/lib.rs:18\")", concat)).as_deref(), Some(MOVED));
+        // The negative cases: a different change with the move, a changed literal that only
+        // looks like the line (`5u32` → `6u32`, `"src/lib.rs:5"` → `"src/lib.rs:6"`, no mark of
+        // the driver), a different call text, and a call that does not move.
+        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &at(18, "(2, 18u32)", "(2, \"\u{0}line\u{0}\")")), None);
+        assert_eq!(moved_place(&at(5, "5u32", ""), &at(6, "6u32", "")), None);
+        assert_eq!(moved_place(&at(5, "\"src/lib.rs:5\"", ""), &at(6, "\"src/lib.rs:6\"", "")), None);
+        let mut other = at(18, "(1, 18u32)", mark);
+        other.call = "m!(x)".into();
+        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &other), None);
+        assert_eq!(moved_place(&at(16, "(1, 16u32)", mark), &at(16, "(1, 16u32)", mark)), None);
+        // The changed text of two texts, at word bounds.
+        assert_eq!(changed_text("let a = f(39u32, x);", "let a = f(41u32, x);"), "changed code `39u32` → `41u32`");
+        assert_eq!(changed_text("value_one + 1", "value_two + 1"), "changed code `value_one` → `value_two`");
     }
 
     #[test]

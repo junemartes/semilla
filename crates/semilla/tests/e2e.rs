@@ -6281,9 +6281,11 @@ fn a_file_mode_change_has_no_affected_bodies() {
     let lines: Vec<&str> = out.lines().collect();
     let mode = lines.iter().position(|line| line.contains(&format!("{file}: changed (mode 100644 → 100755) [file · no code]"))).unwrap_or_else(|| panic!("the mode fact has the category `file`\n{out}"));
     assert!(!lines[mode + 1].contains("affected bodies"), "a mode changes no body\n{out}");
-    assert!(out.contains("a changed macro: the MIR of 2 bodies that the macro makes changed with no edit of the text of a call"), "{out}");
-    // The mode and the macro each need a reason.
-    assert!(out.contains(&format!("--reason '{file}:=<why>'")) && out.contains("--reason 'shop_core::made::make!=<why>'"), "{out}");
+    // R63.9-5 (batch 10c2): the changed expansions of the two calls show the change of the
+    // bodies that the macro makes, so the fact of the macro owns them with no spotlight. Only
+    // the mode needs a reason.
+    assert!(out.contains("affected bodies: shop_core::made::one, shop_core::made::two") && out.contains("expansion: `make!(one, 1)`") && !out.contains("a changed macro: the MIR of 2 bodies"), "{out}");
+    assert!(out.contains(&format!("--reason '{file}:=<why>'")) && !out.contains("--reason 'shop_core::made::make!=<why>'"), "{out}");
 }
 
 /// Batch 6b, part 2 (trial 10): the fact of a macro call lists the items that the call makes,

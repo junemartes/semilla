@@ -1902,7 +1902,7 @@ fn the_final_assertion_finds_a_changed_body_with_no_owner() {
     let index = checks::BodyIndex::new(&bodies, &ws, &ws);
     let none = BTreeSet::new();
     let maps = semilla_syntax::BodyMaps::default();
-    let input = owners::Input { maps: &maps, made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None, defs: &Default::default(), renames: &BTreeMap::new() };
+    let input = owners::Input { maps: &maps, made: None, made_listed: &BTreeSet::new(), tests: None, step: &step, edits: &[], owners: &[], fact_of: &[], bodies: &bodies, body_index: &index, before: &ws, after: &ws, identity_owned: &none, identity_derived: &none, rename_targets: &none, identity_claim: None, identity_pairs: &[], callees: None, defs: &Default::default(), renames: &BTreeMap::new(), expansions: &[] };
     let mut report = StepReport::default();
     assert_eq!(owners::check(&input, &report), ["demo::g"]);
     // A fact that does not list the body is not an owner.

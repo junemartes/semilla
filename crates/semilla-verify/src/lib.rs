@@ -1413,7 +1413,10 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     let made_outcome = made::apply(step, &edits, &fact_of, input.before, input.after, made.as_ref(), &mut report);
     // The definitions of the two sides, for the symbol links (design 44).
     let defs = if body_index.available { oracle.defs(step).unwrap_or_default() } else { Default::default() };
+    // The changed expansions of the compiled mode (R63.9-5).
+    let expansion_links = expand::links(step, [input.before, input.after], oracle, &renames.items);
     let owner_input = owners::Input {
+        expansions: &expansion_links,
         defs: &defs,
         renames: &renames.items,
         made: made.as_ref(),

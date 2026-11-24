@@ -1,0 +1,79 @@
+note: batch 10c2: a new comment line moves the calls of a macro whose code has the line of the call; no fact has a cause, so the indirect fact of each body keeps its spotlight and gets the line, and the line says that only the place of the call changes; the call with a changed input has the facts of its compare
+rule+: R63.9-7 R63.9-8
+rule-: R63.9-5 R63.9-8
+must_match: the compiled code of `shop::one` changes with no edit at its place
+must_match: `here!\(1\)` at `shop::one/tail` \(src/lib\.rs:8\): expansion changed: only the place of the call changes
+must_match: `here!\(3\)` at `shop::two/tail` \(src/lib\.rs:12\): expansion changed: changed literal
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! here {
+    ($v:expr) => { ($v, line!()) };
+}
+
+pub fn one() -> (u32, u32) {
+    here!(1)
+}
+
+pub fn two() -> (u32, u32) {
+    here!(2)
+}
+=== new src/lib.rs
+macro_rules! here {
+    ($v:expr) => { ($v, line!()) };
+}
+
+// The place of each call is in its value.
+
+pub fn one() -> (u32, u32) {
+    here!(1)
+}
+
+pub fn two() -> (u32, u32) {
+    here!(3)
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: replace macro input `here!(2)` → `here!(3)` (f1)
+      in: shop::two
+      lines: src/lib.rs:12, src/lib.rs:-10
+      to state it: --change 'shop::two=TEXT'
+  to state them, add these options to the command of the step: --change 'shop::two=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
+      affected bodies: shop::two
+      equivalence: different: for each input: before returns (2, 10), after returns (3, 12)
+      expansion: `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]
+  ◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
+      affected bodies: shop::one
+      expansion: `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`)
+      note: lines 8
+      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'shop::one=…'
+  ◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
+  ◆ f4 derived: comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    shop::two (src/lib.rs:11): same graph (the edit keeps the control flow); different (for each input: before returns (2, 10), after returns (3, 12))
+  expansions: 2 changed
+    `here!(1)` at `shop::one/tail` (src/lib.rs:8): expansion changed: `macro_rules! here` (src/lib.rs:1): only the place of the call changes: its code has the line, the column, or the file of the call (`line!()`, `column!()`, `file!()`); the call moves
+    `here!(3)` at `shop::two/tail` (src/lib.rs:12): expansion changed: `macro_rules! here` (src/lib.rs:1): changed literal `2` → `3` at `expansion/elems[0]` [semantics]; changed literal `10u32` → `12u32` at `expansion/elems[1]` [semantics]; the input of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::one=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::one=the reason of the test' --compiled --change 'shop::two=the text of the test'
+◆ f1 stated: replace macro input `here!(2)` → `here!(3)` at `shop::two/tail` [macro · code different]
+    lines: src/lib.rs:12, src/lib.rs:-10
+◆ f2 derived: the compiled code of `shop::one` changes with no edit at its place: `here!(1)` [indirect · code different]
+    no position
+◆ f3 derived: layout of `src/lib.rs`: 1 changed line with equal tokens [layout · no code]
+    lines: src/lib.rs:6
+◆ f4 derived: comment in `src/lib.rs`: added `// The place of each call is in its value.` [docs · no code]
+    lines: src/lib.rs:5

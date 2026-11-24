@@ -1,6 +1,6 @@
 note: defect 1 of batch 10c: a changed macro that only a different macro calls owns the change of each call site of that macro; its fact is `code different` with a line for the changed expansion
 rule+: R63.3-1 R63.3-3 R63.3-4
-rule-: R63.3-6
+rule-: R63.3-6 R63.9-3
 option: --compiled
 === both Cargo.toml
 [package]

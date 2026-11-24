@@ -1,0 +1,93 @@
+note: batch 10c2, item 1: a workspace with two packages; the step changes only `shop`; the item-level calls in `depot`, a package that the step does not change, are not added or removed; `depot` has a library and a binary with one name, so the two test builds have one crate name and one kind
+rule+: R63.9-1 R63.9-2
+rule-: R63.9-1
+must_not_match: \(depot/src/(lib|main)\.rs:-?\d+\): expansion (added|removed)
+must_match: `twice!\(<\(u8, u8, u8\)>::size\(\)\)` at `shop::price/tail` \(shop/src/lib\.rs:5\): expansion changed
+option: --compiled
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== both depot/src/lib.rs
+pub trait Size {
+    fn size() -> usize;
+}
+
+macro_rules! impl_tuple {
+    ($($t:ident),*) => {
+        impl<$($t: Size),*> Size for ($($t,)*) {
+            fn size() -> usize { 0 $(+ $t::size())* }
+        }
+    };
+}
+
+impl Size for u8 { fn size() -> usize { 1 } }
+
+impl_tuple!(A);
+impl_tuple!(A, B);
+impl_tuple!(A, B, C);
+impl_tuple!(A, B, C, D);
+=== both depot/src/main.rs
+use depot::Size;
+
+macro_rules! show {
+    ($t:ty) => { println!("{}", <$t>::size()) };
+}
+
+fn main() {
+    show!((u8,));
+    show!((u8, u8));
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== old shop/src/lib.rs
+use depot::Size;
+
+macro_rules! twice { ($e:expr) => { $e * 2 } }
+
+pub fn price() -> usize { twice!(<(u8, u8)>::size()) }
+=== new shop/src/lib.rs
+use depot::Size;
+
+macro_rules! twice { ($e:expr) => { $e * 2 } }
+
+pub fn price() -> usize { twice!(<(u8, u8, u8)>::size()) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: replace macro input, see f1 (f1)
+      in: shop::price
+      lines: shop/src/lib.rs:5, shop/src/lib.rs:-5
+      to state it: --change 'shop::price=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: replace macro input `twice!(<(u8, u8)>::size())` → `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` [macro · code different]
+      affected bodies: shop::price
+      control flow: ~ call `<(u8, u8) as Size>::size` → `<(u8, u8, u8) as Size>::size` (shop/src/lib.rs:-5, shop/src/lib.rs:5)
+      control flow: ~ check `overflow: <(u8, u8)>::size() * 2` → `overflow: <(u8, u8, u8)>::size() * 2` (shop/src/lib.rs:-5, shop/src/lib.rs:5)
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      expansion: `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` (shop/src/lib.rs:5): expansion changed: changed path `<(u8, u8)>::size` → `<(u8, u8, u8)>::size` at `expansion/lhs/callee` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (shop/src/lib.rs:5): same structure: 1 changed call target, 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
+  expansions: 1 changed, 6 equal
+    `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` (shop/src/lib.rs:5): expansion changed: `macro_rules! twice` (shop/src/lib.rs:3): changed path `<(u8, u8)>::size` → `<(u8, u8, u8)>::size` at `expansion/lhs/callee` [semantics]; the input of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: replace macro input `twice!(<(u8, u8)>::size())` → `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` [macro · code different]
+    lines: shop/src/lib.rs:5, shop/src/lib.rs:-5

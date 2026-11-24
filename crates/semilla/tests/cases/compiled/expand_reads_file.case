@@ -1,0 +1,51 @@
+note: batch 10c2, item 5: a macro of the workspace reads a data file with `include_bytes!`; the step changes that file and a file that no code reads; the fact of the read file owns the body and its expansion line, with no spotlight; the other file fact owns nothing
+rule+: R63.9-5 R63.9-6
+rule-: R63.9-6
+must_not_match: indirect change
+must_match: the code of the call reads `data/a\.txt`, which the step changes
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! table {
+    ($name:literal) => {{
+        const DATA: &[u8] = include_bytes!(concat!("../data/", $name, ".txt"));
+        DATA.len()
+    }};
+}
+
+pub fn size() -> usize {
+    table!("a")
+}
+=== old data/a.txt
+one
+=== new data/a.txt
+one
+two
+=== old data/b.txt
+x
+=== new data/b.txt
+y
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: data/a.txt: changed [file · code different]
+      affected bodies: shop::size, shop::size::DATA
+      expansion: `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]
+  ◆ f2 derived: data/b.txt: changed [file · no code]
+  cover: each of the 3 changed line(s) is in a fact
+  expansions: 1 changed
+    `table!("a")` at `shop::size/tail` (src/lib.rs:9): expansion changed: `macro_rules! table` (src/lib.rs:1): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; the code of the call reads `data/a.txt`, which the step changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: data/a.txt: changed [file · code different]
+    lines: data/a.txt:2
+◆ f2 derived: data/b.txt: changed [file · no code]
+    lines: data/b.txt:1, data/b.txt:-1

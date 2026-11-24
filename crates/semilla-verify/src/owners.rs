@@ -61,6 +61,8 @@ pub struct Input<'a> {
     pub defs: &'a [crate::DefMap; 2],
     /// The old path → the new path of each item that N1 maps.
     pub renames: &'a BTreeMap<String, String>,
+    /// The changed expansions of the macro calls (the compiled mode, R63.9-5).
+    pub expansions: &'a [crate::expand::Link],
 }
 
 /// The owner of one changed body.
@@ -1027,6 +1029,36 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
         // owns the change of `price`.
         if (words.contains(&short) && text_has_bang(text, short)) || attribute || chain.get_or_init(|| macro_chain(input, text)).contains(short) {
             return Some(owner_of_edit(input, index));
+        }
+    }
+
+    // 3b. The compiled mode (R63.9-5): a changed expansion of a call that the body holds, or of
+    //     the call that makes the body. Its cause is a changed `macro_rules!` macro of its
+    //     chain (the macro of the call, a macro that its code calls at each depth, also a call
+    //     in its input), or a changed file that its code reads (R63.9-6). The expansion line of
+    //     the fact shows the change of the code, so the body needs no reason of its own.
+    if !input.expansions.is_empty() {
+        let call = site_call(input, body, name).flatten().map(|call| call.path.clone());
+        // The body of the item that holds the call, or of an item or a closure inside it (a
+        // constant of the code of the call: `shop::size::DATA`).
+        let at_body = |link: &&crate::expand::Link| link.items.iter().any(|item| name == item || name.starts_with(&format!("{item}::"))) || call.as_ref().is_some_and(|call| link.items.contains(call));
+        for link in input.expansions.iter().filter(at_body) {
+            for (index, edit) in input.edits.iter().enumerate() {
+                let Some(macro_path) = edit.item() else { continue };
+                if matches!(edit.kind, EditKind::Docs | EditKind::Comment | EditKind::Visibility) {
+                    continue;
+                }
+                let is_macro = [input.after, input.before].iter().any(|ws| ws.items.get(macro_path).is_some_and(is_macro_definition));
+                let short = macro_path.rsplit("::").next().unwrap_or(macro_path).split('!').next().unwrap_or("");
+                if is_macro && link.chain.contains(short) {
+                    return Some(owner_of_edit(input, index));
+                }
+            }
+            for file in &link.reads {
+                if let Some(index) = report.facts.iter().position(|fact| fact.file.as_deref() == Some(file.as_str()) && fact.at.is_none() && fact.part != "indirect change" && !crate::files::is_mode_fact(input.before, input.after, fact)) {
+                    return Some(Owner::Fact(index));
+                }
+            }
         }
     }
 

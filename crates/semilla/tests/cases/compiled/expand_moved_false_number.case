@@ -1,0 +1,44 @@
+note: batch 10c2, R63.9-8 (a defect of the first fix): the definition changes `5u32` → `6u32`, and a doc line moves the call from line 5 to line 6; the code has no `line!()`, so the line is the normal compare, not "only the place of the call changes"
+rule-: R63.9-8
+must_match: `m!\(\)` at `depot::f/tail` \(src/lib\.rs:6\): expansion changed: changed literal `5u32` → `6u32`
+must_not_match: only the place of the call changes
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! m {
+    () => { 5u32 };
+}
+
+pub fn f() -> u32 { m!() }
+=== new src/lib.rs
+macro_rules! m {
+    () => { 6u32 };
+}
+
+/// Doc.
+pub fn f() -> u32 { m!() }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f2 derived: changed macro `m`: `macro_rules! m { () => { 5u32 }; }` → `macro_rules! m { () => { 6u32 }; }` [declaration · code different]
+      affected bodies: depot::f
+      expansion: `m!()` at `depot::f/tail` (src/lib.rs:6): expansion changed: changed literal `5u32` → `6u32` at `expansion` [semantics]
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added docs `/// Doc.` [docs · no code]
+  cover: each of the 3 changed line(s) is in a fact
+  expansions: 1 changed
+    `m!()` at `depot::f/tail` (src/lib.rs:6): expansion changed: `macro_rules! m` (src/lib.rs:1): changed literal `5u32` → `6u32` at `expansion` [semantics]; from `macro_rules! m` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f2 derived: changed macro `m`: `macro_rules! m { () => { 5u32 }; }` → `macro_rules! m { () => { 6u32 }; }` [declaration · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
+◆ f1 derived: added docs `/// Doc.` [docs · no code]
+    lines: src/lib.rs:5

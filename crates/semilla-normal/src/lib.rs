@@ -397,6 +397,11 @@ pub struct UnitExpansions {
     pub target: String,
     /// The package of the target (two packages can have a test target with one name).
     pub package: String,
+    /// The root file of the crate (batch 10c2, R63.9-1): a test target and a bench target of
+    /// one package can have one name and one kind.
+    pub root: String,
+    /// Each true `cfg` name and pair of the unit (the features).
+    pub cfg: Vec<String>,
     pub list: Vec<serde_json::Value>,
 }
 
@@ -406,6 +411,10 @@ struct ExpansionUnit {
     target: String,
     #[serde(default)]
     package: String,
+    #[serde(default)]
+    root: String,
+    #[serde(default)]
+    cfg: Vec<String>,
     expansions: Option<Vec<serde_json::Value>>,
 }
 
@@ -430,7 +439,7 @@ pub fn read_expansions(dir: &Path) -> Option<Vec<UnitExpansions>> {
             return None;
         }
         let unit = serde_json::from_str::<ExpansionLine>(&line).ok()?.unit;
-        out.push(UnitExpansions { target: unit.target, package: unit.package, list: unit.expansions? });
+        out.push(UnitExpansions { target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.expansions? });
     }
     Some(out)
 }

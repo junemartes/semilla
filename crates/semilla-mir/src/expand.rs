@@ -64,9 +64,24 @@ pub struct Expansion {
     /// The module of the call (`a::b`; empty for the crate root).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub module: String,
+    /// The source text of the call in a file that makes this call (R63.9-3), for a call whose
+    /// tokens come from a macro whose expansion has no record (`sum!(1, 2)` makes
+    /// `make!{@inner …}`): the place of the record is the place of that call.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub via: String,
+    /// The files that the code reads with `include_str!` or `include_bytes!` (R63.9-6),
+    /// relative to the workspace root.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<String>,
+    /// The text with a mark for each literal that the compiler makes for the place of the call:
+    /// an expansion of `line!()`, `column!()`, or `file!()`, or of a `concat!` whose input has
+    /// one (R63.9-8). Empty if the code has no such literal.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub placeless: String,
 }
 
 /// The node kinds of an expansion.
+#[derive(Clone)]
 enum Node {
     Item(rustc_ast::Item),
     Assoc(rustc_ast::AssocItem),
@@ -83,6 +98,10 @@ struct Open {
     module: String,
     container: String,
     self_ty: String,
+    /// The macros that the code uses, at each depth (R63.9-4): `[name, def]`.
+    uses: Vec<[String; 2]>,
+    /// The files that the code reads (R63.9-6).
+    reads: Vec<String>,
 }
 
 /// The texts of the expressions of the expanded code, by span (R63.1-5). The graph of a body
@@ -122,6 +141,13 @@ struct Walk<'tcx> {
     module: Vec<String>,
     container: String,
     self_ty: String,
+    /// The name and the definition of each expansion of a macro that is not of the standard
+    /// library.
+    names: HashMap<ExpnId, Option<[String; 2]>>,
+    /// The syntax contexts that `uses` has seen with the top of the stack.
+    seen: std::collections::HashSet<(SyntaxContext, usize)>,
+    /// The files of the workspace that are not Rust files, by the hash of their bytes.
+    data_files: Option<HashMap<u64, String>>,
 }
 
 impl<'tcx> Walk<'tcx> {
@@ -143,7 +169,7 @@ impl<'tcx> Walk<'tcx> {
             return None;
         }
         let index = *self.index.entry(expn).or_insert_with(|| {
-            self.open.push(Open { expn, nodes: Vec::new(), module: self.module.join("::"), container: self.container.clone(), self_ty: self.self_ty.clone() });
+            self.open.push(Open { expn, nodes: Vec::new(), module: self.module.join("::"), container: self.container.clone(), self_ty: self.self_ty.clone(), uses: Vec::new(), reads: Vec::new() });
             self.open.len() - 1
         });
         Some(index)
@@ -153,10 +179,97 @@ impl<'tcx> Walk<'tcx> {
         self.open[index].nodes.push(node);
         self.stack.push(index);
     }
+
+    /// A file that the code of each open record reads (R63.9-6).
+    fn read(&mut self, file: String) {
+        for at in self.stack.clone() {
+            if !self.open[at].reads.contains(&file) {
+                self.open[at].reads.push(file.clone());
+            }
+        }
+    }
+
+    /// The file that an expression of `include_str!` or `include_bytes!` reads. The literal of
+    /// `include_str!` has the span of the whole file. The literal of `include_bytes!` has the
+    /// span of the call, so the file is the file of the workspace with the same bytes: the
+    /// compiler adds each file that it reads to the source map.
+    fn included(&mut self, expr: &rustc_ast::Expr) -> Option<String> {
+        let ctxt = expr.span.ctxt();
+        if ctxt.is_root() {
+            return None;
+        }
+        let ExpnKind::Macro(_, name) = ctxt.outer_expn().expn_data().kind else { return None };
+        match (&expr.kind, name.as_str()) {
+            (rustc_ast::ExprKind::Lit(_), "include_str") => {
+                let mut files = Vec::new();
+                crate::spans::range(self.tcx, expr.span.with_ctxt(SyntaxContext::root()), &mut files)?;
+                files.pop()
+            }
+            (rustc_ast::ExprKind::IncludedBytes(bytes), "include_bytes") => {
+                let tcx = self.tcx;
+                let files = self.data_files.get_or_insert_with(|| {
+                    let mut out = HashMap::new();
+                    for file in tcx.sess.source_map().files().iter() {
+                        let rustc_span::FileName::Real(name) = &file.name else { continue };
+                        let Some(path) = name.local_path() else { continue };
+                        let relative = crate::workspace_path(path);
+                        if relative.is_empty() || std::path::Path::new(&relative).is_absolute() || relative.ends_with(".rs") {
+                            continue;
+                        }
+                        if let Ok(data) = std::fs::read(path) {
+                            out.insert(hash_bytes(&data), relative);
+                        }
+                    }
+                    out
+                });
+                files.get(&hash_bytes(bytes.as_byte_str())).cloned()
+            }
+            _ => None,
+        }
+    }
+
+    /// The chain (R63.9-4): each expansion that made a node inside the code of an open record
+    /// is a macro that the code of each open record uses. The walk goes up from the expansion of
+    /// the node through the call sites, to the expansion of an open record or to the root. So a
+    /// call in the input of a call (`mkfn!(made, add!(4; 5))`) and a macro whose code is only a
+    /// call of the standard library (`set!` gives `vec![…]`, so it has no record) are in the
+    /// chain.
+    fn uses(&mut self, span: Span) {
+        let ctxt = span.ctxt();
+        let Some(top) = self.stack.last().copied() else { return };
+        if ctxt.is_root() || !self.seen.insert((ctxt, top)) {
+            return;
+        }
+        let mut expn = ctxt.outer_expn();
+        for _ in 0..256 {
+            if expn == ExpnId::root() || self.index.get(&expn).is_some_and(|index| self.stack.contains(index)) {
+                break;
+            }
+            let data = expn.expn_data();
+            let tcx = self.tcx;
+            let entry = self
+                .names
+                .entry(expn)
+                .or_insert_with(|| match data.kind {
+                    ExpnKind::Macro(kind, name) if !standard(tcx, kind, data.macro_def_id) => Some([name.to_string(), definition(tcx, data.macro_def_id, data.def_site)]),
+                    _ => None,
+                })
+                .clone();
+            if let Some(entry) = entry {
+                for at in self.stack.clone() {
+                    if !self.open[at].uses.contains(&entry) {
+                        self.open[at].uses.push(entry.clone());
+                    }
+                }
+            }
+            expn = data.call_site.ctxt().outer_expn();
+        }
+    }
 }
 
 impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     fn visit_item(&mut self, item: &'a rustc_ast::Item) {
+        self.uses(item.span);
         let root = self.root(item.span);
         if let Some(index) = root {
             self.enter(index, Node::Item(item.clone()));
@@ -191,6 +304,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     }
 
     fn visit_assoc_item(&mut self, item: &'a rustc_ast::AssocItem, ctxt: AssocCtxt) {
+        self.uses(item.span);
         let root = self.root(item.span);
         if let Some(index) = root {
             self.enter(index, Node::Assoc(item.clone()));
@@ -202,6 +316,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     }
 
     fn visit_stmt(&mut self, stmt: &'a rustc_ast::Stmt) {
+        self.uses(stmt.span);
         let root = self.root(stmt.span);
         if let Some(index) = root {
             self.enter(index, Node::Stmt(stmt.clone()));
@@ -213,6 +328,12 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     }
 
     fn visit_expr(&mut self, expr: &'a rustc_ast::Expr) {
+        self.uses(expr.span);
+        if !self.stack.is_empty()
+            && let Some(file) = self.included(expr)
+        {
+            self.read(file);
+        }
         let root = self.root(expr.span);
         if let Some(index) = root {
             self.enter(index, Node::Expr(expr.clone()));
@@ -224,6 +345,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     }
 
     fn visit_pat(&mut self, pat: &'a rustc_ast::Pat) {
+        self.uses(pat.span);
         let root = self.root(pat.span);
         if let Some(index) = root {
             self.enter(index, Node::Pat(pat.clone()));
@@ -235,6 +357,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     }
 
     fn visit_ty(&mut self, ty: &'a rustc_ast::Ty) {
+        self.uses(ty.span);
         let root = self.root(ty.span);
         if let Some(index) = root {
             self.enter(index, Node::Ty(ty.clone()));
@@ -244,6 +367,13 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
             self.stack.pop();
         }
     }
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The header of an impl or of a trait: its text before the first `{`, with no attribute.
@@ -285,6 +415,83 @@ impl MutVisitor for Marks {
     }
 }
 
+/// Puts a mark in place of each literal of the place of the call (R63.9-8). The evidence is
+/// of the compiler: `line!()`, `column!()`, and `file!()` give their literal the span of the
+/// call in the source that starts the chain (`top`), and a literal of the author has the span
+/// of its own token. So a literal with the span of `top` is a line (an integer `N u32` equal to
+/// the line of `top`), a column (equal to its column), or a file (a text). A literal of a
+/// `concat!` of the standard library whose input calls one of them has a mark too. The mark is a
+/// text with the character NUL, which no literal of a source file has.
+struct Places<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    top: Span,
+    found: bool,
+}
+
+impl<'tcx> Places<'tcx> {
+    fn mark(&self, expr: &rustc_ast::Expr) -> Option<String> {
+        let rustc_ast::ExprKind::Lit(lit) = &expr.kind else { return None };
+        if !self.top.is_dummy() && expr.span.lo() == self.top.lo() && expr.span.hi() == self.top.hi() {
+            let at = self.tcx.sess.source_map().lookup_char_pos(self.top.lo());
+            return match lit.kind {
+                rustc_ast::token::LitKind::Integer if lit.suffix.is_some_and(|suffix| suffix.as_str() == "u32") => {
+                    let value = lit.symbol.as_str();
+                    if value == at.line.to_string() {
+                        Some("line".to_string())
+                    } else if value == (at.col_display + 1).to_string() {
+                        Some("column".to_string())
+                    } else {
+                        None
+                    }
+                }
+                // The text must be the name of the file of `top`, as `file!()` gives it.
+                rustc_ast::token::LitKind::Str => {
+                    let name = at.file.name.prefer_local_unconditionally().to_string();
+                    (lit.symbol.as_str() == name).then(|| "file".to_string())
+                }
+                _ => None,
+            };
+        }
+        self.concat(expr.span)
+    }
+
+    /// The input of a `concat!` of the standard library that made a span, if the input calls
+    /// `line!()`, `column!()`, or `file!()`.
+    fn concat(&self, span: Span) -> Option<String> {
+        let ctxt = span.ctxt();
+        if ctxt.is_root() {
+            return None;
+        }
+        let data = ctxt.outer_expn().expn_data();
+        let ExpnKind::Macro(kind, name) = data.kind else { return None };
+        if !standard(self.tcx, kind, data.macro_def_id) || name.as_str() != "concat" {
+            return None;
+        }
+        let input = self.tcx.sess.source_map().span_to_snippet(data.call_site).ok()?;
+        ["line!", "column!", "file!"].iter().any(|word| input.contains(word)).then(|| flat(&input))
+    }
+}
+
+impl<'tcx> MutVisitor for Places<'tcx> {
+    fn visit_expr(&mut self, expr: &mut rustc_ast::Expr) {
+        // A format string from `concat!` (`panic!(concat!("at ", file!(), ":", line!()))`): the
+        // format arguments keep the span of the `concat!` literal.
+        if let rustc_ast::ExprKind::FormatArgs(format) = &mut expr.kind
+            && !format.is_source_literal
+            && let Some(word) = self.concat(format.span)
+        {
+            self.found = true;
+            format.template = vec![rustc_ast::FormatArgsPiece::Literal(Symbol::intern(&format!("\u{0}{word}\u{0}")))];
+        }
+        if let Some(word) = self.mark(expr) {
+            self.found = true;
+            expr.kind = rustc_ast::ExprKind::Lit(rustc_ast::token::Lit { kind: rustc_ast::token::LitKind::Str, symbol: Symbol::intern(&format!("\u{0}{word}\u{0}")), suffix: None });
+            return;
+        }
+        mut_visit::walk_expr(self, expr);
+    }
+}
+
 /// Collects the texts of the expressions of the expanded code (R63.1-5).
 struct Texts<'m>(&'m mut HashMap<SpanKey, Option<String>>);
 
@@ -322,7 +529,7 @@ fn visit_node<'a, V: Visitor<'a>>(visitor: &mut V, node: &'a Node) {
     };
 }
 
-fn mark_node(marks: &mut Marks, node: &mut Node) {
+fn mark_node<V: MutVisitor>(marks: &mut V, node: &mut Node) {
     match node {
         Node::Item(item) => mut_visit::walk_item(marks, item),
         Node::Assoc(item) => mut_visit::walk_assoc_item(marks, item, AssocCtxt::Impl { of_trait: false }),
@@ -389,7 +596,7 @@ fn stable_paths(text: &str) -> String {
 pub fn collect(tcx: TyCtxt<'_>) -> Vec<Expansion> {
     let (_, krate) = tcx.resolver_for_lowering();
     let krate = krate.borrow();
-    let mut walk = Walk { tcx, open: Vec::new(), index: HashMap::new(), stack: Vec::new(), module: Vec::new(), container: String::new(), self_ty: String::new() };
+    let mut walk = Walk { tcx, open: Vec::new(), index: HashMap::new(), stack: Vec::new(), module: Vec::new(), container: String::new(), self_ty: String::new(), names: HashMap::new(), seen: Default::default(), data_files: None };
     visit::walk_crate(&mut walk, &krate);
     let crate_name = tcx.crate_name(rustc_span::def_id::LOCAL_CRATE).to_string();
     let mut texts: HashMap<SpanKey, Option<String>> = HashMap::new();
@@ -458,8 +665,21 @@ pub fn collect(tcx: TyCtxt<'_>) -> Vec<Expansion> {
         let separator = if form == "items" || form == "assoc" { "\n\n" } else { "\n" };
         let text: Vec<String> = open.nodes.iter().map(print_node).collect();
         let text = stable_paths(&text.join(separator).replace("$crate", "crate"));
+        // R63.9-8: the text with a mark for each literal of the place of the call.
+        let placeless = {
+            let mut places = Places { tcx, top: data.call_site.source_callsite(), found: false };
+            let mut copy = open.nodes.clone();
+            for node in &mut copy {
+                mark_node(&mut places, node);
+            }
+            if places.found {
+                let text: Vec<String> = copy.iter().map(print_node).collect();
+                stable_paths(&text.join(separator).replace("$crate", "crate"))
+            } else {
+                String::new()
+            }
+        };
         let call_site = data.call_site;
-        let (file, r, line, col, end_line, end_col) = place(tcx, if call_site.from_expansion() { call_site } else { call_site.source_callsite() });
         // The expansion that has this call in its code: the nearest one with a record.
         let mut outer = None;
         let mut current = call_site;
@@ -471,6 +691,25 @@ pub fn collect(tcx: TyCtxt<'_>) -> Vec<Expansion> {
             }
             current = parent.expn_data().call_site;
         }
+        // R63.9-3: a call whose tokens come from an expansion with no record (a macro that a
+        // macro defines: `sum!(1, 2)` makes `make!{@inner …}`) is an outer call. Its place is
+        // the place of the call in a file that makes it (the call site in the source), and
+        // `via` has the text of that call. A call inside an expansion with a record keeps the
+        // place of its tokens.
+        let mut via = String::new();
+        let at = if call_site.from_expansion() && outer.is_none() {
+            let source = call_site.source_callsite();
+            via = flat(&tcx.sess.source_map().span_to_snippet(source).unwrap_or_default());
+            if via.chars().count() > 200 {
+                via = via.chars().take(200).collect::<String>() + "…";
+            }
+            source
+        } else if call_site.from_expansion() {
+            call_site
+        } else {
+            call_site.source_callsite()
+        };
+        let (file, r, line, col, end_line, end_col) = place(tcx, at);
         let mut call = flat(&tcx.sess.source_map().span_to_snippet(call_site).unwrap_or_default());
         if call.chars().count() > 200 {
             call = call.chars().take(200).collect::<String>() + "…";
@@ -495,29 +734,12 @@ pub fn collect(tcx: TyCtxt<'_>) -> Vec<Expansion> {
             call,
             text,
             items,
-            uses: Vec::new(),
+            uses: std::mem::take(&mut open.uses),
             module: open.module.clone(),
+            via,
+            reads: std::mem::take(&mut open.reads),
+            placeless,
         });
-    }
-    // The chain (R63.1-2): each expansion uses the macros of the expansions inside it, at each
-    // depth. The index of a record is its index in `out` only if no expansion was dropped, so
-    // the chain follows the expansion ids.
-    let ids: Vec<ExpnId> = {
-        let mut ids: Vec<(usize, ExpnId)> = index.iter().map(|(expn, at)| (*at, *expn)).collect();
-        ids.sort_by_key(|(at, _)| *at);
-        ids.into_iter().map(|(_, expn)| expn).collect()
-    };
-    if ids.len() == out.len() {
-        for at in 0..out.len() {
-            let entry = [out[at].name.clone(), out[at].def.clone()];
-            let mut parent = out[at].outer;
-            while let Some(up) = parent {
-                if !out[up].uses.contains(&entry) {
-                    out[up].uses.push(entry.clone());
-                }
-                parent = out[up].outer;
-            }
-        }
     }
     if let Ok(mut shared) = TEXTS.get_or_init(|| Mutex::new(HashMap::new())).lock() {
         shared.extend(texts);

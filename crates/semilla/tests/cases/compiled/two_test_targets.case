@@ -1,5 +1,5 @@
-note: two packages, each with a test target `integration`; a macro of each target reads the file that the step changes: each source body has its own fact and its own check (design 61.14)
-rule+: R61.14-1
+note: two packages, each with a test target `integration`; a macro of each target reads the file that the step changes: each source body has its own check (design 61.14), and the fact of the file owns the two bodies and the two expansion lines (R63.9-6)
+rule+: R61.14-1 R63.9-5 R63.9-6
 option: --compiled
 === both Cargo.toml
 [package]
@@ -74,45 +74,20 @@ one
 one
 two
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
-  tests and benches, filled in by Semilla:
-  ◆ f2 derived: indirect change, cause not known: `lexer_core (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
-      affected bodies: lexer_core (test "integration")::suite
-      expansion: `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]
-      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'lexer_core (test "integration")::suite=…'
-  ◆ f3 derived: indirect change, cause not known: `lexer (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
-      affected bodies: lexer (test "integration")::suite
-      expansion: `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]
-  ◆ f4 derived: the compiled code of `lexer (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
-      affected bodies: lexer (test "integration")::suite
-      expansion: `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]
-      note: lines 10
-      ✗ spotlight of f3, f4: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'lexer (test "integration")::suite=…'
-  ◆ f5 derived: the compiled code of `lexer_core (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
-      affected bodies: lexer_core (test "integration")::suite
-      expansion: `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]
-      note: lines 10
-      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'lexer_core (test "integration")::suite=…'
   other facts, filled in by Semilla:
-  ◆ f1 derived: testdata/regression.txt: changed [file · no code]
+  ◆ f1 derived: testdata/regression.txt: changed [file · code different]
+      affected bodies: lexer (test "integration")::suite, lexer_core (test "integration")::suite
+      expansion: 2 calls of `load`: expansion changed: value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]: `lexer_core (test "integration")::suite/S3`, `lexer (test "integration")::suite/S3` (semilla status --verbose)
   cover: each of the 1 changed line(s) is in a fact
   expansions: 2 changed, 2 equal
-    `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: `macro_rules! load` (lexer-core/tests/lib.rs:3): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; no changed definition and no changed input of the call
-    `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: `macro_rules! load` (tests/lib.rs:3): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; no changed definition and no changed input of the call
+    `load!("regression")` at `lexer_core (test "integration")::suite/S3` (lexer-core/tests/lib.rs:10): expansion changed: `macro_rules! load` (lexer-core/tests/lib.rs:3): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; the code of the call reads `testdata/regression.txt`, which the step changes
+    `load!("regression")` at `lexer (test "integration")::suite/S3` (tests/lib.rs:10): expansion changed: `macro_rules! load` (tests/lib.rs:3): value of `DATA` (in `expansion`) changed: b"one\n" → b"one\ntwo\n" [semantics]; the code of the call reads `testdata/regression.txt`, which the step changes
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-run again: semilla step 'the change' --reason 'kind:indirect-change=<why>' --compiled
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'kind:indirect-change=the reason of the test' --compiled
-◆ f2 derived: indirect change, cause not known: `lexer_core (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
-    no position
-◆ f3 derived: indirect change, cause not known: `lexer (test "integration")::suite` (the MIR changed, but the text did not) [indirect · code different]
-    no position
-◆ f4 derived: the compiled code of `lexer (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
-    no position
-◆ f5 derived: the compiled code of `lexer_core (test "integration")::suite` changes with no edit at its place: `load!("regression")` [indirect · code different]
-    no position
-◆ f1 derived: testdata/regression.txt: changed [file · no code]
+◆ f1 derived: testdata/regression.txt: changed [file · code different]
     lines: testdata/regression.txt:2

@@ -1,0 +1,56 @@
+note: batch 10c2, item 2: a macro that defines a macro; the call `make!{@inner …}` that the made macro makes has the place of the call in the source that starts the chain
+rule+: R63.9-3 R63.9-5
+must_match: `make!\{@inner \$name \(\$d\) => \( \$d\(\$d x\),\* \) \}` from `sum!\(1, 2\)` at `depot::total/tail` \(src/lib\.rs:12\)
+must_not_match: no item
+must_not_match: indirect change
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! make {
+    ($name:ident, $d:tt) => {
+        macro_rules! $name {
+            ($d($d x:expr),*) => { make!{@inner $name ($d) => ( $d($d x),* ) } };
+        }
+    };
+    (@inner $name:ident ($d:tt) => ( $($e:expr),* )) => { 0 $(+ $e)* };
+}
+
+make!(sum, $);
+
+pub fn total() -> u32 { sum!(1, 2) }
+=== new src/lib.rs
+macro_rules! make {
+    ($name:ident, $d:tt) => {
+        macro_rules! $name {
+            ($d($d x:expr),*) => { make!{@inner $name ($d) => ( $d($d x),* ) } };
+        }
+    };
+    (@inner $name:ident ($d:tt) => ( $($e:expr),* )) => { 1 $(* $e)* };
+}
+
+make!(sum, $);
+
+pub fn total() -> u32 { sum!(1, 2) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `make`: [1] → [2] [declaration · code different]
+        [1] macro_rules! make { ($name:ident, $d:tt) => { macro_rules! $name { ($d($d x:expr),*) => { make!{@inner $name ($d) => ( $d($d x),* ) } }; } }; (@inner $name:ident ($d:tt) => ( $($e:expr),* )) => { 0 $(+ $e)* }; }
+        [2] macro_rules! make { ($name:ident, $d:tt) => { macro_rules! $name { ($d($d x:expr),*) => { make!{@inner $name ($d) => ( $d($d x),* ) } }; } }; (@inner $name:ident ($d:tt) => ( $($e:expr),* )) => { 1 $(* $e)* }; }
+      affected bodies: depot::total
+      expansion: `make!{@inner $name ($d) => ( $d($d x),* ) }` from `sum!(1, 2)` at `depot::total/tail` (src/lib.rs:12): expansion changed: changed expression `0 + 1 + 2` → `1 * 1 * 2` at `expansion` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed, 1 equal
+    `make!{@inner $name ($d) => ( $d($d x),* ) }` from `sum!(1, 2)` at `depot::total/tail` (src/lib.rs:12): expansion changed: `macro_rules! make` (src/lib.rs:1): changed expression `0 + 1 + 2` → `1 * 1 * 2` at `expansion` [semantics]; from `macro_rules! make` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `make`: [1] → [2] [declaration · code different]
+    lines: src/lib.rs:7, src/lib.rs:-7

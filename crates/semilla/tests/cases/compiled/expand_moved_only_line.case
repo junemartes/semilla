@@ -1,0 +1,42 @@
+note: batch 10c2, a limit of R63.9-8 (design 63.9): a macro of the workspace whose code is only `line!()`; a doc line moves the call; the literal of `line!()` has the span of the call and no syntax context of `here!`, so `here!` has no record and no expansion line, and the body keeps its indirect fact and its spotlight
+must_match: the compiled code of `depot::f` changes with no edit at its place: `here!\(\)`
+must_not_match: expansions:
+option: --compiled
+=== both Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! here {
+    () => { line!() };
+}
+
+pub fn f() -> u32 { here!() }
+=== new src/lib.rs
+macro_rules! here {
+    () => { line!() };
+}
+
+/// Doc.
+pub fn f() -> u32 { here!() }
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f2 derived: the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
+      affected bodies: depot::f
+      note: lines 6
+      ✗ spotlight: an indirect change that Semilla cannot explain: give the cause as the reason; it needs a reason: --reason 'depot::f=…'
+  ◆ f1 derived: added docs `/// Doc.` [docs · no code]
+  cover: each of the 1 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'depot::f=<why>' --compiled
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::f=the reason of the test' --compiled
+◆ f2 derived: the compiled code of `depot::f` changes with no edit at its place: `here!()` [indirect · code different]
+    no position
+◆ f1 derived: added docs `/// Doc.` [docs · no code]
+    lines: src/lib.rs:5
