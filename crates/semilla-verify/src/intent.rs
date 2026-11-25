@@ -39,6 +39,21 @@ pub struct Answer {
     pub errors: Vec<String>,
 }
 
+/// [R69.5-1] The result of a claim with no answer of the oracle. The oracle answered the other
+/// claims: no answer for this one is a defect of Semilla, never a result that comes later. No
+/// answer at all in a compiled step: phase 1, and phase 2 gives the result. The default mode:
+/// the check needs `--compiled`.
+pub fn no_answer(answered: bool, compiled: bool) -> (IntentResult, &'static str) {
+    match (answered, compiled) {
+        (true, _) => (IntentResult::Claimed, NO_ANSWER),
+        (false, true) => (IntentResult::Pending, "the compiled check of the step gives the result (phase 2)"),
+        (false, false) => (IntentResult::Claimed, NEEDS_COMPILED),
+    }
+}
+
+/// [R69.5-1] The cause of a claim with no answer of the compiled check of its step.
+pub const NO_ANSWER: &str = "the compiled check gave no result for this claim (a defect of Semilla)";
+
 /// The cause of a property claim in the default mode.
 pub const NEEDS_COMPILED: &str = "the check needs `--compiled` (the default mode has no compiler data)";
 
@@ -104,18 +119,41 @@ fn option_texts(claim: &semilla_intent::Claim) -> Vec<String> {
     list
 }
 
+/// [R69.5-1] The id of each item of the intent files that gets a line (`i1`, `i2`, …): an
+/// `intent!` text and each claim. A relation (a function with no attribute) gets no id. The
+/// step and `semilla intent check` use this one numbering, so an answer of the oracle is the
+/// answer of the claim with its id.
+pub fn item_ids(files: &[semilla_intent::File]) -> Vec<Vec<Option<String>>> {
+    let mut number = 0;
+    files
+        .iter()
+        .map(|file| {
+            file.items
+                .iter()
+                .map(|item| {
+                    if matches!(item, Item::Relation(_)) {
+                        return None;
+                    }
+                    number += 1;
+                    Some(format!("i{number}"))
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The claims of a step: the ids and the queries for the oracle.
 pub fn queries(files: &[semilla_intent::File], dry: bool) -> Vec<Query> {
     let mut out = Vec::new();
-    let mut number = 0;
-    for file in files {
+    let ids = item_ids(files);
+    for (file, ids) in files.iter().zip(&ids) {
         let shared = Arc::new(file.clone());
-        for item in &file.items {
-            number += 1;
+        for (item, id) in file.items.iter().zip(ids) {
+            let Some(id) = id else { continue };
             if let Item::Claim(claim) = item
                 && matches!(claim.kind, ClaimKind::Same | ClaimKind::Change | ClaimKind::Different)
             {
-                out.push(Query { id: format!("i{number}"), file: shared.clone(), claim: claim.clone(), dry });
+                out.push(Query { id: id.clone(), file: shared.clone(), claim: claim.clone(), dry });
             }
         }
     }
@@ -149,17 +187,16 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
         map
     });
     let mut claims = Vec::new();
-    let mut number = 0;
-    for file in &parsed {
-        for item in &file.items {
-            number += 1;
-            let id = format!("i{number}");
+    let ids = item_ids(&parsed);
+    for (file, ids) in parsed.iter().zip(&ids) {
+        for (item, id) in file.items.iter().zip(ids) {
+            let id = id.clone().unwrap_or_default();
             let mut line = |kind: &str, text: String, place: &semilla_intent::Place, result: IntentResult, detail: String, options: Vec<String>| {
                 claims.push(IntentClaim { id: id.clone(), kind: kind.into(), text, place: format!("{}:{}", place.file, place.line), result, detail, configs: Vec::new(), options, reads: Vec::new(), stale: String::new() });
             };
             match item {
                 Item::Intent(text, place) => line("intent", text.clone(), place, IntentResult::Shown, String::new(), Vec::new()),
-                Item::Relation(_) => number -= 1,
+                Item::Relation(_) => {}
                 Item::Claim(claim) => {
                     let options = option_texts(claim);
                     match claim.kind {
@@ -185,8 +222,10 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn BodyOracle, outcome: &mut St
                             let unknown: Vec<&String> = claim.options.except.iter().filter(|name| !semilla_intent::prelude::EXCEPT.contains(&name.as_str())).collect();
                             let (result, detail, configs, reads, errors) = match found {
                                 Some(answer) => (answer.result.unwrap_or(IntentResult::Claimed), answer.detail, answer.configs, answer.reads, answer.errors),
-                                None if input.step.compiled => (IntentResult::Pending, "the compiled check of the step gives the result (phase 2)".into(), Vec::new(), Vec::new(), Vec::new()),
-                                None => (IntentResult::Claimed, NEEDS_COMPILED.into(), Vec::new(), Vec::new(), Vec::new()),
+                                None => {
+                                    let (result, detail) = no_answer(answers.is_some(), input.step.compiled);
+                                    (result, detail.into(), Vec::new(), Vec::new(), Vec::new())
+                                }
                             };
                             // A cause with the place of a part in a body (design 61.10, C2).
                             let detail = crate::equiv::cause_text(&detail, input.before, input.after).0;
@@ -247,16 +286,74 @@ fn help_notes(input: &StepInput, renames: &BTreeMap<String, String>, outcome: &m
         if line.contains("not decided (the parameters change)") || line.contains("not decided (the return type changes)") {
             let (Some(old), Some(new)) = (signature(input.before, &reverse), signature(input.after, &body.name)) else { continue };
             let cause = if line.contains("the parameters change") { "the parameters change" } else { "the return type changes" };
-            let mut note = format!("intent help for `{}`: the equivalence check cannot compare the two versions ({cause}): `{old}` → `{new}`. A property claim relates them", body.name);
+            // [R69.5-3] The note names the part that changes. Two equal signature texts: a type
+            // of the signature (or the type of `self`) changes its definition.
+            let change = if old == new {
+                let types = changed_types(input, &reverse, &body.name, &new);
+                if types.is_empty() { format!("`{new}` (the same text; a type that it names changes)") } else { format!("`{new}`: {}", types.join("; ")) }
+            } else {
+                format!("`{old}` → `{new}`")
+            };
+            notes.push(format!("intent help for `{}`: the equivalence check cannot compare the two versions ({cause}): {change}. A property claim relates them", body.name));
+            // [R69.5-3] The result is "not decided", so the help is neutral: a template for each
+            // case, each on its own line.
             if let Some(template) = semilla_intent::parse::same_template(&body.name, &old, &new) {
-                note.push_str(&format!("; a template for the intent file: `{template}`"));
+                let change_form = template.replacen("#[same(", "#[change(", 1).replacen(")] fn", ", reason = \"…\")] fn", 1);
+                notes.push(format!("intent help for `{}`: if the behavior does not change: `{template}`", body.name));
+                notes.push(format!("intent help for `{}`: if it changes: `{change_form}` (a body with the new behavior)", body.name));
             }
-            notes.push(note);
         } else if line.contains("not decided (a loop") || line.contains("has no form") || line.contains("no form of this body") {
             notes.push(format!("intent help for `{}`: no claim of this batch can close this cause (a loop needs the loop relations of batch 10r2; a body with no MIR needs `#[assume]` of batch 10r3)", body.name));
         }
     }
     outcome.report.notes.extend(notes);
+}
+
+/// [R69.5-3] The types that a signature names (and the type of `self` of a method) whose
+/// definition changes in the step, with the fields that change: "the type of `self` changes:
+/// `shop::Pt`: `x: u32` → `x: u64`".
+fn changed_types(input: &StepInput, old_path: &str, new_path: &str, signature: &str) -> Vec<String> {
+    let words: std::collections::BTreeSet<&str> = signature.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|word| !word.is_empty()).collect();
+    let owner = new_path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
+    let old_owner = old_path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or("");
+    let mut out = Vec::new();
+    for (path, item) in &input.after.items {
+        if !matches!(item.kind, semilla_syntax::ItemKind::Struct | semilla_syntax::ItemKind::Enum | semilla_syntax::ItemKind::Type) {
+            continue;
+        }
+        let short = path.rsplit("::").next().unwrap_or(path);
+        let is_self = path == owner && signature.contains("self");
+        if !is_self && !words.contains(short) {
+            continue;
+        }
+        let before_path = if is_self { old_owner } else { path.as_str() };
+        let Some(before) = input.before.items.get(before_path) else { continue };
+        if before.text == item.text {
+            continue;
+        }
+        // The parts that change: each field with another declaration, each added field, and
+        // each removed field.
+        let field = |workspace: &semilla_syntax::Workspace, owner: &str, member: &str| workspace.items.get(&format!("{owner}.{member}")).map(|field| format!("{member}: {}", field.signature.split_whitespace().collect::<Vec<_>>().join(" ")));
+        let mut parts = Vec::new();
+        for member in &before.members {
+            match (field(input.before, before_path, member), item.members.contains(member).then(|| field(input.after, path, member)).flatten()) {
+                (Some(old), Some(new)) if old != new => parts.push(format!("`{old}` → `{new}`")),
+                (Some(old), None) => parts.push(format!("− `{old}`")),
+                _ => {}
+            }
+        }
+        for member in item.members.iter().filter(|member| !before.members.contains(member)) {
+            if let Some(new) = field(input.after, path, member) {
+                parts.push(format!("+ `{new}`"));
+            }
+        }
+        if parts.is_empty() {
+            parts.push(format!("`{}` → `{}`", before.signature.split_whitespace().collect::<Vec<_>>().join(" "), item.signature.split_whitespace().collect::<Vec<_>>().join(" ")));
+        }
+        let role = if is_self { "the type of `self`".to_string() } else { format!("the type `{short}`") };
+        out.push(format!("{role} changes: `{path}`: {}", parts.join(", ")));
+    }
+    out
 }
 
 /// The lines of the section "intent" of a step (design 67, part D).
@@ -283,5 +380,31 @@ fn help(claim: &IntentClaim) -> Option<String> {
         IntentResult::Error => Some("correct the claim, then run `semilla intent check FILE` (it checks the references and the types)".into()),
         IntentResult::False => Some("the input is an exact input of the two versions: correct the claim or the code".into()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE: &str = "use semilla_intent::prelude::*;\n\nintent!(\"a text\");\n\nfn relation(x: u32) -> bool { before::shop::f(x) == after::shop::f(x) }\n\n#[same(shop::f)]\nfn claim(x: u32) -> bool { relation(x) }\n";
+
+    // rule+ R69.5-1
+    #[test]
+    fn a_relation_gets_no_id_and_the_step_and_the_check_use_one_numbering() {
+        let file = semilla_intent::parse_file("step.rs", FILE).unwrap();
+        let ids = item_ids(std::slice::from_ref(&file));
+        assert_eq!(ids, vec![vec![Some("i1".to_string()), None, Some("i2".to_string())]]);
+        let asked = queries(std::slice::from_ref(&file), false);
+        assert_eq!(asked.iter().map(|query| query.id.as_str()).collect::<Vec<_>>(), ["i2"]);
+        // The oracle answered: a claim with no answer is never "pending".
+        assert_eq!(no_answer(true, true), (IntentResult::Claimed, NO_ANSWER));
+    }
+
+    // rule- R69.5-1
+    #[test]
+    fn phase_one_of_a_compiled_step_keeps_a_claim_pending() {
+        assert_eq!(no_answer(false, true).0, IntentResult::Pending);
+        assert_eq!(no_answer(false, false), (IntentResult::Claimed, NEEDS_COMPILED));
     }
 }

@@ -597,8 +597,15 @@ pub fn same_template(path: &str, old_signature: &str, new_signature: &str) -> Op
         let name = function.name()?.text().to_string();
         let list = function.param_list()?;
         let mut out = Vec::new();
+        // [R69.5-3] The receiver of a method is a value of the type of the `impl` block.
         if let Some(receiver) = list.self_param() {
-            out.push(("this".to_string(), receiver.syntax().text().to_string()));
+            let owner = path.rsplit_once("::").map(|(owner, _)| owner).unwrap_or(path);
+            let reference = match (receiver.amp_token().is_some(), receiver.mut_token().is_some()) {
+                (true, true) => "&mut ",
+                (true, false) => "&",
+                (false, _) => "",
+            };
+            out.push(("this".to_string(), format!("{reference}before::{owner}")));
         }
         for param in list.params() {
             out.push((param.pat()?.syntax().text().to_string(), param.ty()?.syntax().text().to_string()));

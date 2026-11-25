@@ -235,6 +235,12 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     }
 
     fn intent(&self, step: &Step, renames: &BTreeMap<String, String>, queries: &[semilla_verify::intent::Query]) -> Option<Vec<semilla_verify::intent::Answer>> {
+        // [R69.5-1] A compiled step that the command does not check (its build code does not
+        // run) gets no result later: each claim is "claimed" with the cause, never "pending".
+        if step.compiled && self.skip.contains(&step.index) {
+            let detail = "not checked: the command does not run the build code that the change set changes".to_string();
+            return Some(queries.iter().map(|_| semilla_verify::intent::Answer { result: Some(semilla_core::IntentResult::Claimed), detail: detail.clone(), ..Default::default() }).collect());
+        }
         if self.off(step) { None } else { self.inner.intent(step, renames, queries) }
     }
 }

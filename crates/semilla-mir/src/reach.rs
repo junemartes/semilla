@@ -319,17 +319,76 @@ fn note_layout<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, field: bool, out: &mut BTr
     }
 }
 
-/// The callees that keep a value of a generic argument whole (batch 5o): the inherent methods
-/// of `Option` and `Result`. Such a call stays a call node in each normal form (the inliner of
-/// rustc is off). The code of the callee can move and drop a value of the type. It cannot read
-/// a part of it, and it cannot ask for its layout. So the generic arguments of such a call are
-/// not a `touch` use. A call of a trait method (`From::from`, `Into::into`, the functions of the
-/// `?` operator) is whole by the rule `trait_of_assoc` below, so batch 10n removed these four
-/// entries from the list (design 65.3, R65.3-9). The old comment said that such a callee cannot
-/// read a part of the value; an `impl From` of the workspace can, but its code is a body of the
-/// workspace with its own record, and the rule here is only about the layout of the generic
-/// arguments of the call.
-const WHOLE_VALUE: [&str; 2] = ["core::result::Result::<T, E>::", "core::option::Option::<T>::"];
+/// [R69.2-1] True if a callee keeps the values of its generic arguments whole: its code can
+/// move, match, and drop such a value, but it cannot read a part of it or ask for its layout.
+/// The MIR decides, not a name (batch 5o had the list `WHOLE_VALUE`: the inherent methods of
+/// `Option` and `Result`). The compiler has the generic MIR of the callee, and this MIR has no
+/// transmute, no inline assembly, no constant that depends on a generic parameter (an associated
+/// constant such as `<T as SizedTypeProperties>::SIZE` reads the layout), and no call of an
+/// intrinsic or of a callee with no MIR with generic arguments; each callee with generic
+/// arguments has the same property, to the depth 3. A call of a trait method is whole by the
+/// rule `trait_of_assoc` (R65.3-9). A callee that the walk does not know is not whole (the safe
+/// side: a `touch` use).
+fn keeps_whole(tcx: TyCtxt<'_>, def: DefId, depth: usize) -> bool {
+    use rustc_middle::mir::visit::Visitor;
+    use rustc_middle::ty::TypeVisitableExt;
+    thread_local! {
+        static WHOLE: std::cell::RefCell<std::collections::HashMap<DefId, bool>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(found) = WHOLE.with(|memo| memo.borrow().get(&def).copied()) {
+        return found;
+    }
+    // A callee of the local crate keeps the old answer (a `touch` use): its MIR is a body of the
+    // workspace with its own record, and the driver does not ask the compiler to optimize it.
+    if depth > 3 || def.is_local() || tcx.intrinsic(def).is_some() || !matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) || !tcx.is_mir_available(def) {
+        return false;
+    }
+    // A cycle gives the safe answer.
+    WHOLE.with(|memo| memo.borrow_mut().insert(def, false));
+    struct Walk<'tcx> {
+        tcx: TyCtxt<'tcx>,
+        depth: usize,
+        whole: bool,
+    }
+    impl<'tcx> Visitor<'tcx> for Walk<'tcx> {
+        fn visit_const_operand(&mut self, constant: &rustc_middle::mir::ConstOperand<'tcx>, _location: rustc_middle::mir::Location) {
+            if let rustc_middle::mir::Const::Unevaluated(unevaluated, _) = constant.const_
+                && unevaluated.args.has_param()
+            {
+                self.whole = false;
+            }
+            if let rustc_middle::mir::Const::Ty(_, value) = constant.const_
+                && value.has_param()
+            {
+                self.whole = false;
+            }
+            if let ty::FnDef(callee, args) = constant.const_.ty().kind()
+                && args.has_param()
+                && self.tcx.trait_of_assoc(*callee).is_none()
+                && !keeps_whole(self.tcx, *callee, self.depth + 1)
+            {
+                self.whole = false;
+            }
+        }
+        fn visit_rvalue(&mut self, rvalue: &rustc_middle::mir::Rvalue<'tcx>, location: rustc_middle::mir::Location) {
+            if let rustc_middle::mir::Rvalue::Cast(rustc_middle::mir::CastKind::Transmute, ..) = rvalue {
+                self.whole = false;
+            }
+            self.super_rvalue(rvalue, location);
+        }
+        fn visit_terminator(&mut self, terminator: &rustc_middle::mir::Terminator<'tcx>, location: rustc_middle::mir::Location) {
+            if let rustc_middle::mir::TerminatorKind::InlineAsm { .. } = terminator.kind {
+                self.whole = false;
+            }
+            self.super_terminator(terminator, location);
+        }
+    }
+    let body = tcx.optimized_mir(def);
+    let mut walk = Walk { tcx, depth, whole: true };
+    walk.visit_body(body);
+    WHOLE.with(|memo| memo.borrow_mut().insert(def, walk.whole));
+    walk.whole
+}
 
 /// The types with a definition outside the standard library that the body uses (batch 5l): in
 /// the type of a local, of a constant, and in the generic arguments of a callee. The walk
@@ -337,8 +396,8 @@ const WHOLE_VALUE: [&str; 2] = ["core::result::Result::<T, E>::", "core::option:
 /// The standard library is free by this rule (an allow list of crates, see `is_std`): one
 /// toolchain and one target give one definition of each of its types.
 ///
-/// Batch 5o: an entry `touch PATH` for a type in the generic arguments of a callee that is
-/// not in `WHOLE_VALUE` (the callee can be an intrinsic that reads the layout). An entry
+/// Batch 5o: an entry `touch PATH` for a type in the generic arguments of a callee that does
+/// not keep its values whole (R69.2-1: the callee can be an intrinsic that reads the layout). An entry
 /// `cfg PATH` for a type of the local crate that a `#[cfg]` attribute selects.
 pub fn adts(body: &Body) -> Vec<String> {
     ty::tls::with(|tcx| {
@@ -354,10 +413,9 @@ pub fn adts(body: &Body) -> Vec<String> {
                 let ty = rustc_internal::internal(self.tcx, constant.ty());
                 match ty.kind() {
                     ty::FnDef(def_id, args) => {
-                        let path = real_path(self.tcx, *def_id);
                         // A method of a trait is not an intrinsic, and no normal form looks into
                         // a callee with generic arguments.
-                        let whole = self.tcx.trait_of_assoc(*def_id).is_some() || WHOLE_VALUE.iter().any(|entry| if entry.ends_with("::") { path.starts_with(entry) } else { path == *entry });
+                        let whole = self.tcx.trait_of_assoc(*def_id).is_some() || keeps_whole(self.tcx, *def_id, 0);
                         for inner in args.skip_binder().types() {
                             if whole {
                                 note_layout(self.tcx, inner, false, self.out, self.seen);
@@ -841,10 +899,12 @@ fn flat<'a, 'tcx>(tcx: TyCtxt<'tcx>, facts: &'a EndFacts, enders: impl Iterator<
     found.into_iter().collect()
 }
 
-/// True for a function of the standard library that is panic code. A call of it with no return
-/// is a panic, not an end of the process with success.
-fn panic_code(name: &str) -> bool {
-    name.contains("panic") || name.contains("unwind") || name.ends_with("_failed") || name.ends_with("_fail")
+/// [R69.2-2] True for a panic function: a function that never returns and has the place of its
+/// caller (`#[track_caller]`), the two marks of the compiler of the structural rule R65.4-1. A
+/// call of it with no return is a panic, not an end of the process with success. Before batch
+/// 11a, a part of the name decided (`panic`, `unwind`, `_failed`, `_fail`).
+fn panic_code(tcx: TyCtxt<'_>, def: DefId) -> bool {
+    tcx.codegen_fn_attrs(def).flags.contains(rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER)
 }
 
 /// The enders of the live blocks of a body, with the block index. The types of the constants
@@ -933,7 +993,7 @@ fn enders<'tcx>(tcx: TyCtxt<'tcx>, owner: DefId, body: &Body) -> Vec<(usize, End
                 // `exec` puts a different program in the process.
                 Some(Ender::End(name))
             } else if tcx.fn_sig(def).skip_binder().output().skip_binder().is_never() {
-                (!(library && panic_code(&name))).then(|| Ender::End(name))
+                (!(library && panic_code(tcx, def))).then(|| Ender::End(name))
             } else {
                 (!library).then(|| Ender::Extern(name))
             };
