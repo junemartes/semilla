@@ -1,0 +1,166 @@
+note: batch 11c, verification correction: the default mode with the build check: an expansion over 50 kB changes in one operator; the line gives the changed line with the words of the size rule and no compare result word (R50.1-1, property 13 of the case runner)
+rule+: R71.1-1
+build_check: on
+must_match: expansion: `x12!\(v\)` at `shop::mix/tail` \(src/lib.rs:[0-9]+\): expansion changed: the text is too large for the fact rules \(over 50 kB\): .* \(a large text: .*; the full text: semilla expand src/lib.rs:[0-9]+\)
+must_not_match: no compare
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! x0 {
+    ($e:expr) => {
+        $e.wrapping_add(1)
+    };
+}
+macro_rules! x1 {
+    ($e:expr) => {
+        x0!($e) ^ x0!($e)
+    };
+}
+macro_rules! x2 {
+    ($e:expr) => {
+        x1!($e) ^ x1!($e)
+    };
+}
+macro_rules! x3 {
+    ($e:expr) => {
+        x2!($e) ^ x2!($e)
+    };
+}
+macro_rules! x4 {
+    ($e:expr) => {
+        x3!($e) ^ x3!($e)
+    };
+}
+macro_rules! x5 {
+    ($e:expr) => {
+        x4!($e) ^ x4!($e)
+    };
+}
+macro_rules! x6 {
+    ($e:expr) => {
+        x5!($e) ^ x5!($e)
+    };
+}
+macro_rules! x7 {
+    ($e:expr) => {
+        x6!($e) ^ x6!($e)
+    };
+}
+macro_rules! x8 {
+    ($e:expr) => {
+        x7!($e) ^ x7!($e)
+    };
+}
+macro_rules! x9 {
+    ($e:expr) => {
+        x8!($e) ^ x8!($e)
+    };
+}
+macro_rules! x10 {
+    ($e:expr) => {
+        x9!($e) ^ x9!($e)
+    };
+}
+macro_rules! x11 {
+    ($e:expr) => {
+        x10!($e) ^ x10!($e)
+    };
+}
+macro_rules! x12 {
+    ($e:expr) => {
+        x11!($e) ^ x11!($e)
+    };
+}
+
+pub fn mix(v: u64) -> u64 {
+    x12!(v)
+}
+=== new src/lib.rs
+macro_rules! x0 {
+    ($e:expr) => {
+        $e.wrapping_add(1)
+    };
+}
+macro_rules! x1 {
+    ($e:expr) => {
+        x0!($e) ^ x0!($e)
+    };
+}
+macro_rules! x2 {
+    ($e:expr) => {
+        x1!($e) ^ x1!($e)
+    };
+}
+macro_rules! x3 {
+    ($e:expr) => {
+        x2!($e) ^ x2!($e)
+    };
+}
+macro_rules! x4 {
+    ($e:expr) => {
+        x3!($e) ^ x3!($e)
+    };
+}
+macro_rules! x5 {
+    ($e:expr) => {
+        x4!($e) ^ x4!($e)
+    };
+}
+macro_rules! x6 {
+    ($e:expr) => {
+        x5!($e) ^ x5!($e)
+    };
+}
+macro_rules! x7 {
+    ($e:expr) => {
+        x6!($e) ^ x6!($e)
+    };
+}
+macro_rules! x8 {
+    ($e:expr) => {
+        x7!($e) ^ x7!($e)
+    };
+}
+macro_rules! x9 {
+    ($e:expr) => {
+        x8!($e) ^ x8!($e)
+    };
+}
+macro_rules! x10 {
+    ($e:expr) => {
+        x9!($e) ^ x9!($e)
+    };
+}
+macro_rules! x11 {
+    ($e:expr) => {
+        x10!($e) ^ x10!($e)
+    };
+}
+macro_rules! x12 {
+    ($e:expr) => {
+        x11!($e) | x11!($e)
+    };
+}
+
+pub fn mix(v: u64) -> u64 {
+    x12!(v)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration]
+      expansion: `x12!(v)` at `shop::mix/tail` (src/lib.rs:68): expansion changed: the text is too large for the fact rules (over 50 kB): `^ (v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` → `| v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` (line 1026), `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1))))))))))))` → `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1)))))))))))` (line 2051) (a large text: 2052 → 2051 lines, 191.5 kB → 191.4 kB; 2 changed parts; the full text: semilla expand src/lib.rs:68)
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `x12!(v)` at `shop::mix/tail` (src/lib.rs:68): expansion changed: `macro_rules! x12` (src/lib.rs:61): the text is too large for the fact rules (over 50 kB): `^ (v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` → `| v.wrapping_add·2048(1) ^ v.wrapping_add·2049(1) ^` (line 1026), `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1))))))))))))` → `(v.wrapping_add·4094(1) ^ v.wrapping_add·4095(1)))))))))))` (line 2051) (a large text: 2052 → 2051 lines, 191.5 kB → 191.4 kB; 2 changed parts; the full text: semilla expand src/lib.rs:68); from `macro_rules! x12` (src/lib.rs:61)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `x12`: `macro_rules! x12 { ($e:expr) => { x11!($e) ^ x11!($e) }; }` → `macro_rules! x12 { ($e:expr) => { x11!($e) | x11!($e) }; }` [declaration]
+    lines: src/lib.rs:63, src/lib.rs:-63

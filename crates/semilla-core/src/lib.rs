@@ -8,6 +8,7 @@
 //! - [`view`]: the data that the UI shows (change tree, flow graphs, workspace graph).
 
 pub mod anchor;
+pub mod budget;
 pub mod claim;
 pub mod names;
 pub mod ops;

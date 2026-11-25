@@ -1,0 +1,171 @@
+note: batch 11c, verification correction: a deleted statement and an added statement of 26 lines each are over the budget of 20 lines; each is the change, so each shows in full (the budget is for the unchanged parts only)
+rule+: R71.1-1
+must_match: deleted statement \[1\] at `shop::table/S0`
+must_match: added statement \[1\] at `shop::other/S0`|added `let` \[1\] at `shop::other/S0`
+must_match: 23 \* x,
+must_not_match: the first 3 lines
+must_not_match: a large text
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn table(x: u32) -> u32 {
+    let rows = [
+        0 * x,
+        1 * x,
+        2 * x,
+        3 * x,
+        4 * x,
+        5 * x,
+        6 * x,
+        7 * x,
+        8 * x,
+        9 * x,
+        10 * x,
+        11 * x,
+        12 * x,
+        13 * x,
+        14 * x,
+        15 * x,
+        16 * x,
+        17 * x,
+        18 * x,
+        19 * x,
+        20 * x,
+        21 * x,
+        22 * x,
+        23 * x,
+    ];
+    rows[3]
+}
+
+pub fn other(x: u32) -> u32 {
+    x
+}
+=== new src/lib.rs
+pub fn table(x: u32) -> u32 {
+    x
+}
+
+pub fn other(x: u32) -> u32 {
+    let cells = [
+        0 * x,
+        1 * x,
+        2 * x,
+        3 * x,
+        4 * x,
+        5 * x,
+        6 * x,
+        7 * x,
+        8 * x,
+        9 * x,
+        10 * x,
+        11 * x,
+        12 * x,
+        13 * x,
+        14 * x,
+        15 * x,
+        16 * x,
+        17 * x,
+        18 * x,
+        19 * x,
+        20 * x,
+        21 * x,
+        22 * x,
+        23 * x,
+    ];
+    cells[5]
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 6 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f1, f2, f3)
+      in: shop::other
+      lines: src/lib.rs:4-6, src/lib.rs:32, src/lib.rs:-30-32
+      to state it: --change 'shop::other=TEXT'
+  ? 3 places: 3 different edits (f4, f5, f6)
+      in: shop::table
+      lines: src/lib.rs:2-3, src/lib.rs:-2, src/lib.rs:-28-29
+      to state it: --change 'shop::table=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::other=TEXT' --change 'shop::table=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added `let` [1] at `shop::other/S0` [semantics]
+        [1] let cells = [
+                0 * x,
+                1 * x,
+                2 * x,
+                3 * x,
+                4 * x,
+                5 * x,
+                6 * x,
+                7 * x,
+                8 * x,
+                9 * x,
+                10 * x,
+                11 * x,
+                12 * x,
+                13 * x,
+                14 * x,
+                15 * x,
+                16 * x,
+                17 * x,
+                18 * x,
+                19 * x,
+                20 * x,
+                21 * x,
+                22 * x,
+                23 * x,
+            ];
+  ◆ f2 derived: deleted statement `x` at `shop::other/tail` [semantics]
+  ◆ f3 derived: added statement `cells[5]` at `shop::other/tail` [semantics]
+  ◆ f4 derived: deleted statement [1] at `shop::table/S0` [semantics]
+        [1] let rows = [
+                0 * x,
+                1 * x,
+                2 * x,
+                3 * x,
+                4 * x,
+                5 * x,
+                6 * x,
+                7 * x,
+                8 * x,
+                9 * x,
+                10 * x,
+                11 * x,
+                12 * x,
+                13 * x,
+                14 * x,
+                15 * x,
+                16 * x,
+                17 * x,
+                18 * x,
+                19 * x,
+                20 * x,
+                21 * x,
+                22 * x,
+                23 * x,
+            ];
+  ◆ f5 derived: added statement `x` at `shop::table/tail` [semantics]
+  ◆ f6 derived: deleted statement `rows[3]` at `shop::table/tail` [semantics]
+  cover: each of the 12 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `let` [1] at `shop::other/S0` [semantics]
+    lines: src/lib.rs:4-6
+◆ f2 derived: deleted statement `x` at `shop::other/tail` [semantics]
+    lines: src/lib.rs:-30-32
+◆ f3 derived: added statement `cells[5]` at `shop::other/tail` [semantics]
+    lines: src/lib.rs:32
+◆ f4 derived: deleted statement [1] at `shop::table/S0` [semantics]
+    lines: src/lib.rs:-2
+◆ f5 derived: added statement `x` at `shop::table/tail` [semantics]
+    lines: src/lib.rs:2-3
+◆ f6 derived: deleted statement `rows[3]` at `shop::table/tail` [semantics]
+    lines: src/lib.rs:-28-29

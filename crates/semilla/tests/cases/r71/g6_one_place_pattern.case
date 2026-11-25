@@ -1,0 +1,39 @@
+note: batch 11c, G6: one place with an edit that the check does not decide (a float operation): the gap line keeps the neutral words and gives the concrete pattern of the edit for the form that keeps the behavior
+rule+: R71.3-1
+option: --compiled
+must_match: to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, --same 'rewrite \$a \* 3.0 => \$a \+ \$a \+ \$a'
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn scale(x: f64) -> f64 {
+    x * 3.0
+}
+=== new src/lib.rs
+pub fn scale(x: f64) -> f64 {
+    x + x + x
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `x * 3.0` → `x + x + x` (f1)
+      in: shop::scale
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, --same 'rewrite $a * 3.0 => $a + $a + $a'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `x * 3.0` → `x + x + x` at `shop::scale/tail` [semantics · code different]
+      affected bodies: shop::scale
+      equivalence: not decided: the operation `mul` on a value that the check does not model (a float, a pointer): x * 3.0 (src/lib.rs:-2)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::scale (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (the operation `mul` on a value that the check does not model (a float, a pointer): x * 3.0 (src/lib.rs:-2))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `x * 3.0` → `x + x + x` at `shop::scale/tail` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

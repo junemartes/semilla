@@ -1,0 +1,45 @@
+note: batch 11c, G4: a constant block of an associated constant is equivalent, and the constant is equivalent: no words of the nested bodies; a body with no point that moves has no words of a move
+rule-: R71.2-1
+option: --compiled
+must_not_match: with its nested bodies
+must_not_match: moved
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct T;
+impl T {
+    pub const C: u32 = const { if 3 > 2 { 4 } else { 5 } } + 1;
+}
+=== new src/lib.rs
+pub struct T;
+impl T {
+    pub const C: u32 = const { if 3 > 2 { 4 } else { 6 } } + 1;
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::T::C
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::T::C=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::T::C` changed: const { if 3 > 2 { 4 } else { 5 } } + 1 → const { if 3 > 2 { 4 } else { 6 } } + 1 (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::T::C
+      equivalence: `shop::T::C`: equivalent (proved by equal MIR)
+      equivalence: `shop::T::C::{constant#0} { if 3 > 2 { 4 } else { 6 } }`: equivalent (proved by SMT)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::T::C (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    shop::T::C::{constant#0} { if 3 > 2 { 4 } else { 6 } } (src/lib.rs:3): same graph (the edit keeps the control flow); equivalent (proved by SMT)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::T::C` changed: const { if 3 > 2 { 4 } else { 5 } } + 1 → const { if 3 > 2 { 4 } else { 6 } } + 1 (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3

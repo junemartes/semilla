@@ -494,6 +494,9 @@ struct Element {
     /// True if a fact holds the element only when it holds each place (an arrow between two
     /// points that pair): else one place is enough.
     all: bool,
+    /// The side and the index of the point of a point element (R71.2-1: a point that moves to a
+    /// different body of its item).
+    point: Option<(usize, usize)>,
 }
 
 /// The line of one arrow: `+ arrow branch `x > 3` (src/lib.rs:6) → return (src/lib.rs:9) (true)`.
@@ -514,7 +517,7 @@ fn point_element(sign: &str, graph: &FlowGraph, side: usize, point: usize, arrow
     let callees = if calls.is_empty() { String::new() } else { format!("; callees {}", calls.iter().map(|text| format!("`{text}`")).collect::<Vec<_>>().join(", ")) };
     let mut details = vec![format!("{sign} {}{callees}", named(lines, side, graph, point, false))];
     details.extend(arrows.iter().map(|index| arrow_line(sign, graph, side, *index, lines, false)));
-    Element { places: graph.points[point].place().cloned().map(|at| (side, at)).into_iter().collect(), text, arrows: arrows.into_iter().map(|index| (side, index)).collect(), details, all: false }
+    Element { places: graph.points[point].place().cloned().map(|at| (side, at)).into_iter().collect(), text, arrows: arrows.into_iter().map(|index| (side, index)).collect(), details, all: false, point: Some((side, point)) }
 }
 
 /// The elements of a diff: each changed point and each arrow that is not shared.
@@ -553,7 +556,7 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
         let text = changed(true);
         let detail = changed(false);
         let places = [place(old, a).map(|at| (0, at)), place(new, b).map(|at| (1, at))].into_iter().flatten().collect();
-        out.push(Element { places, details: vec![detail], text, arrows: Vec::new(), all: false });
+        out.push(Element { places, details: vec![detail], text, arrows: Vec::new(), all: false, point: None });
     }
     let shown: BTreeSet<(usize, usize)> = out.iter().flat_map(|element| element.arrows.iter().copied()).collect();
     for (side, list, sign) in [(1usize, &diff.added_arrows, "+"), (0usize, &diff.removed_arrows, "−")] {
@@ -572,7 +575,7 @@ fn elements(old: &FlowGraph, new: &FlowGraph, diff: &GraphDiff, lines: &mut Line
             let all = ends.is_empty();
             let ends = if all { vec![*from, *to] } else { ends };
             let places = ends.into_iter().filter_map(|end| place(graph, end)).map(|at| (side, at)).collect();
-            out.push(Element { places, details: vec![detail], text, arrows: vec![(side, index)], all });
+            out.push(Element { places, details: vec![detail], text, arrows: vec![(side, index)], all, point: None });
         }
     }
     out
@@ -620,7 +623,7 @@ impl Holder<'_> {
 
 /// True if the item has no body node on each side that has it: a `const`, a `static`, an
 /// associated constant, a type with a constant in its declaration. Its MIR bodies are parts of
-/// its declaration (R61.15-1).
+/// its declaration (R71.2-1: the unit is the whole item; R61.15-1 before batch 11c).
 fn no_body_node(item: &str, old_item: &str, sides: [&Workspace; 2]) -> bool {
     let found = [sides[0].items.get(old_item), sides[1].items.get(item)];
     found.iter().any(Option::is_some) && found.iter().flatten().all(|found| found.body.is_none())
@@ -630,7 +633,7 @@ fn no_body_node(item: &str, old_item: &str, sides: [&Workspace; 2]) -> bool {
 ///
 /// An item with no body node (a `const`, a `static`, an associated constant) has its MIR bodies
 /// in its declaration: each edit of the item, except a doc, a comment, an attribute, and the
-/// visibility, is an edit of each of its bodies (R61.15-1).
+/// visibility, is an edit of each of its bodies (R71.2-1; R61.15-1 before batch 11c).
 fn edit_in_body(edits: &[semilla_syntax::Edit], item: &str, old_item: &str, sides: [&Workspace; 2]) -> bool {
     use semilla_syntax::EditKind;
     edits.iter().any(|edit| {
@@ -644,7 +647,7 @@ fn edit_in_body(edits: &[semilla_syntax::Edit], item: &str, old_item: &str, side
                 return true;
             }
             let Some(found) = sides[side].items.get(path) else { return false };
-            // The declaration of an item with no body node holds its bodies (R61.15-1).
+            // The declaration of an item with no body node holds its bodies (R71.2-1).
             let Some(body) = &found.body else { return edit.kind != EditKind::Visibility };
             match semilla_syntax::resolve(sides[side], anchor) {
                 Some(semilla_syntax::Resolved::Node(_, node)) => body.start <= node.start && node.end <= body.end,
@@ -683,10 +686,45 @@ struct BodyResult {
     outcomes: Vec<Outcome>,
     /// The constants that the body reads with a changed value (design 64, part D).
     consts: Vec<(String, String, String)>,
-    /// R68.7-1: the count of the check points and of the panic points of the old and the new
-    /// graph of the first configuration with a graph: `[old checks, old panics, new checks,
-    /// new panics]`. A side with no body has no point.
-    panic_points: Option<[usize; 4]>,
+    /// R71.2-1: the graphs of the first result (its first configuration), for the moves of
+    /// the points between the bodies of one item.
+    first: Option<FirstGraphs>,
+}
+
+/// The graphs of the first result of a body (R71.2-1): two graphs and their diff, or the full
+/// graph of a body that one tree has (with its side).
+#[derive(Clone)]
+enum FirstGraphs {
+    Diff(FlowGraph, FlowGraph, GraphDiff),
+    Whole(FlowGraph, usize),
+}
+
+impl FirstGraphs {
+    /// The points with no pair: `(side, index)`. A whole graph has each point. The entry and the
+    /// return of a body are the borders of the body: they never move.
+    fn single(&self) -> Vec<(usize, usize)> {
+        let (list, graphs): (Vec<(usize, usize)>, [&FlowGraph; 2]) = match self {
+            FirstGraphs::Diff(old, new, diff) => (diff.added.iter().map(|index| (1, *index)).chain(diff.removed.iter().map(|index| (0, *index))).collect(), [old, new]),
+            FirstGraphs::Whole(graph, side) => ((0..graph.points.len()).map(|index| (*side, index)).collect(), [graph, graph]),
+        };
+        list.into_iter().filter(|(side, index)| !matches!(graphs[*side].points[*index].kind.as_str(), "entry" | "return")).collect()
+    }
+
+    fn point(&self, side: usize, index: usize) -> &FlowPoint {
+        match self {
+            FirstGraphs::Diff(old, new, _) => &[old, new][side].points[index],
+            FirstGraphs::Whole(graph, _) => &graph.points[index],
+        }
+    }
+}
+
+/// The key of a point that can move between two bodies of one item (R71.2-1): the kind, and
+/// the kind of a check or a panic (`check bounds`), else the text of the point.
+fn move_key(point: &FlowPoint) -> String {
+    match point.kind.as_str() {
+        "check" => format!("check {}", point.text.split(':').next().unwrap_or("")),
+        _ => format!("{} {}", point.kind, point.text),
+    }
 }
 
 /// The changed part of a diff for the flowchart (design 60, C4): the changed points, the ends
@@ -950,7 +988,7 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
         }
         // An item with no edit in its body and no node pair: the bodies pair in source order.
         // An item with no body node (a `const`, a `static`) has no node pair: its bodies also
-        // pair in source order, as before R61.15-1.
+        // pair in source order (R71.2-1).
         let no_node = match (&item, &old_item) {
             (Some(item), Some(old)) => no_body_node(item, old, sides),
             _ => false,
@@ -1138,6 +1176,8 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             files: [old_item.as_ref().and_then(|old| before.items.get(old)).map(|found| found.file.clone()), item.as_ref().and_then(|new| after.items.get(new)).map(|found| found.file.clone())],
         };
         let mut outcomes: Vec<Outcome> = Vec::new();
+        // R71.2-1: the graphs of each configuration, for the first result.
+        let mut firsts: BTreeMap<String, FirstGraphs> = BTreeMap::new();
         for pair in &body.graphs {
             let found = if pair.same {
                 Outcome { word: "same graph".into(), summary: String::new(), elements: Vec::new(), configs: Vec::new(), rank: FlowResult::Same, chart: None }
@@ -1168,8 +1208,9 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                         };
                         let chart = (rank == FlowResult::Changes).then(|| chart(old, new, &found, &mut lines)).flatten();
                         let mut elements = elements(old, new, &found, &mut lines);
+                        firsts.entry(pair.config.clone()).or_insert_with(|| FirstGraphs::Diff(old.clone(), new.clone(), found.clone()));
                         // The renamed texts are lines of `status --verbose` only: no fact holds them.
-                        elements.extend(renamed.into_iter().map(|text| Element { places: Vec::new(), details: vec![text.clone()], text, arrows: Vec::new(), all: true }));
+                        elements.extend(renamed.into_iter().map(|text| Element { places: Vec::new(), details: vec![text.clone()], text, arrows: Vec::new(), all: true, point: None }));
                         Outcome { word: word.into(), summary: summary(old, new, &found), elements, configs: Vec::new(), rank, chart }
                     }
                     (FlowSide::NoBody, FlowSide::Graph(graph)) | (FlowSide::Graph(graph), FlowSide::NoBody) => {
@@ -1178,6 +1219,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                         if graph.coroutine {
                             Outcome { word: format!("{word}; graph not shown: coroutine"), summary: String::new(), elements: Vec::new(), configs: Vec::new(), rank: FlowResult::Changes, chart: None }
                         } else {
+                            firsts.entry(pair.config.clone()).or_insert_with(|| FirstGraphs::Whole(graph.clone(), side));
                             Outcome { word: word.into(), summary: format!("{}, {}", count(graph.points.len(), "point"), count(graph.arrows.len(), "arrow")), elements: whole(graph, side, &mut lines), configs: Vec::new(), rank: FlowResult::Changes, chart: whole_chart(graph, side, &mut lines) }
                         }
                     }
@@ -1232,17 +1274,10 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             }
         }
         let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0") && consts.is_empty();
-        let panic_points = body.graphs.iter().find_map(|pair| {
-            let counts = |side: &FlowSide| match side {
-                FlowSide::Graph(graph) if !graph.coroutine => Some([graph.points.iter().filter(|point| point.kind == "check").count(), graph.points.iter().filter(|point| point.kind == "panic").count()]),
-                FlowSide::NoBody => Some([0, 0]),
-                _ => None,
-            };
-            let (old, new) = (counts(&pair.old)?, counts(&pair.new)?);
-            Some([old[0], old[1], new[0], new[1]])
-        });
-        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, panic_points });
+        let first = outcomes[0].configs.first().and_then(|config| firsts.get(config)).cloned();
+        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, first });
     }
+    unit_moves(&mut results);
     let mut report = FlowReport::default();
     let all_configs: BTreeSet<&String> = results.iter().flat_map(|result| result.outcomes.iter().flat_map(|known| known.configs.iter())).collect();
     // The bodies that do not keep their graph. A closure or a coroutine body `f::{closure#0}`
@@ -1263,9 +1298,6 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         if !result.edit && first.rank != FlowResult::Same {
             line.push_str("; no edit in the body");
         }
-        if let Some(text) = item_panic_points(result, &results) {
-            line.push_str(&text);
-        }
         if !result.edit && !result.consts.is_empty() {
             // [R66.11-4] Only two known values that differ are a changed constant. A value with a
             // part that the driver cannot compute (R66.10-1) is not known to change: the line
@@ -1281,7 +1313,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                 }
                 // One text for each constant: the values of each configuration have their own
                 // unique words, and one cause.
-                let (list, text) = if causes.is_empty() { (&mut changed, format!("`{path}` ({})", crate::facts::array_change(&shown(old), &shown(new)).unwrap_or_else(|| format!("{} → {}", shown(old), shown(new))))) } else { (&mut unknown, format!("`{path}` ({})", causes.join(", "))) };
+                let (list, text) = if causes.is_empty() { (&mut changed, format!("`{path}` ({})", semilla_core::budget::value_pair(&shown(old), &shown(new)))) } else { (&mut unknown, format!("`{path}` ({})", causes.join(", "))) };
                 if !list.contains(&text) {
                     list.push(text);
                 }
@@ -1380,35 +1412,124 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
     }
 }
 
-/// R68.7-1: the check points and the panic points of an item with its closures. A body whose
-/// own count of checks or panics changes, and whose closures (`f::{closure#0}`, in the list of
-/// the step) change their counts too, gets the counts of the item: "; with its closures: 1 → 1
-/// checks, 1 → 1 panics (the points move between the body and its closures)". The graph line
-/// of each body stays: the rule only adds the text of the item. `None` for a body with no
-/// closure in the list, and for a body whose own counts do not change.
-fn item_panic_points(result: &BodyResult, results: &[BodyResult]) -> Option<String> {
-    // A body of one tree only has its graph line ("graph added"): no move is possible.
-    let both = result.outcomes.first().is_some_and(|first| !first.word.starts_with("graph added") && !first.word.starts_with("graph removed"));
-    if result.name.contains("::{") || !both {
-        return None;
-    }
-    let own = result.panic_points?;
-    if own[0] == own[2] && own[1] == own[3] {
-        return None;
-    }
-    let prefix = format!("{}::{{", result.name);
-    let closures: Vec<[usize; 4]> = results.iter().filter(|other| other.name.starts_with(&prefix)).filter_map(|other| other.panic_points).collect();
-    if closures.iter().all(|counts| counts[0] == counts[2] && counts[1] == counts[3]) {
-        return None;
-    }
-    let mut total = own;
-    for counts in &closures {
-        for (sum, part) in total.iter_mut().zip(counts) {
-            *sum += part;
+/// R71.2-1: the unit is the whole item. The bodies of one item (the body of the item and each
+/// body nested in it: a closure, a constant block, a coroutine) are one unit. A point that one
+/// body adds and a different body of the unit removes, with one key (`move_key`: the kind, the
+/// kind of a check or a panic, else the text), is a move, not a new point: the counts of the
+/// graph line of each body leave it out, the line names the moves ("moved in from `NAME`: 1
+/// check, 1 panic"), and the line of the point below a fact says where it moves. Each point
+/// keeps its line: the rule only changes the counts and adds the words of the move. Before
+/// batch 11c, R68.7-1 gave only the counts of the checks and the panics of a body with its
+/// closures.
+fn unit_moves(results: &mut [BodyResult]) {
+    // The units: the results of one item.
+    let mut units: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, result) in results.iter().enumerate() {
+        if let (Some(item), Some(_)) = (&result.item, &result.first) {
+            units.entry(item.clone()).or_default().push(index);
         }
     }
-    let moved = if total[0] == total[2] && total[1] == total[3] { " (the points move between the body and its closures; the item has no new panic point)" } else { "" };
-    Some(format!("; with its closures: {} → {} checks, {} → {} panics{moved}", total[0], total[2], total[1], total[3]))
+    for members in units.values().filter(|members| members.len() > 1) {
+        // The points with no pair of each body: (body, side, point, key).
+        let mut open: Vec<(usize, usize, usize, String)> = Vec::new();
+        for &body in members {
+            let first = results[body].first.as_ref().expect("a member has graphs");
+            for (side, point) in first.single() {
+                open.push((body, side, point, move_key(first.point(side, point))));
+            }
+        }
+        // The pairs: an added point of one body and a removed point of a different body, with
+        // one key, in order.
+        let mut used = vec![false; open.len()];
+        let mut moves: Vec<(usize, usize)> = Vec::new();
+        for a in 0..open.len() {
+            if used[a] || open[a].1 != 1 {
+                continue;
+            }
+            if let Some(b) = (0..open.len()).find(|b| !used[*b] && open[*b].1 == 0 && open[*b].0 != open[a].0 && open[*b].3 == open[a].3) {
+                used[a] = true;
+                used[b] = true;
+                moves.push((a, b));
+            }
+        }
+        if moves.is_empty() {
+            continue;
+        }
+        // The words of each body: the kinds that move in or out, and the other body.
+        for &body in members {
+            let mut moved_in: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+            let mut moved_out: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+            let mut gone: Vec<(usize, usize)> = Vec::new();
+            for &(a, b) in &moves {
+                let (to, from) = (&open[a], &open[b]);
+                for (point, other, list) in [(to, from, &mut moved_in), (from, to, &mut moved_out)] {
+                    if point.0 != body {
+                        continue;
+                    }
+                    let kind = results[body].first.as_ref().expect("graphs").point(point.1, point.2).kind.clone();
+                    let entry = list.entry(kind).or_default();
+                    entry.0 += 1;
+                    let name = results[other.0].name.clone();
+                    if !entry.1.contains(&name) {
+                        entry.1.push(name);
+                    }
+                    gone.push((point.1, point.2));
+                }
+            }
+            if gone.is_empty() {
+                continue;
+            }
+            let words = |list: &BTreeMap<String, (usize, Vec<String>)>, word: &str, to: &str| -> Option<String> {
+                if list.is_empty() {
+                    return None;
+                }
+                let counts: Vec<String> = list.iter().map(|(kind, (count, _))| format!("{count} {}", kinds(kind, *count))).collect();
+                let mut names: Vec<String> = list.values().flat_map(|(_, names)| names.iter().map(|name| format!("`{name}`"))).collect();
+                names.dedup();
+                Some(format!("moved {word} {to} {}: {}", names.join(", "), counts.join(", ")))
+            };
+            let text = [words(&moved_in, "in", "from"), words(&moved_out, "out", "to")].into_iter().flatten().collect::<Vec<_>>().join("; ");
+            let result = &mut results[body];
+            let first = result.first.clone().expect("graphs");
+            let outcome = &mut result.outcomes[0];
+            // The counts with no moved point.
+            if let FirstGraphs::Diff(old, new, diff) = &first {
+                let mut kept = diff.clone();
+                kept.added.retain(|index| !gone.contains(&(1, *index)));
+                kept.removed.retain(|index| !gone.contains(&(0, *index)));
+                let rest = summary(old, new, &kept);
+                outcome.summary = if rest.is_empty() { text.clone() } else { format!("{rest}; {text}") };
+            } else {
+                outcome.summary = format!("{}; {text}", outcome.summary);
+            }
+        }
+        // The line of each moved point names the other body.
+        let names: Vec<String> = results.iter().map(|result| result.name.clone()).collect();
+        for &(a, b) in &moves {
+            for (here, there, word) in [(&open[a], &open[b], "from"), (&open[b], &open[a], "to")] {
+                let outcome = &mut results[here.0].outcomes[0];
+                // "moved check `bounds: v[k]` (src/lib.rs:2) from `shop::pick::{closure#0}`": the
+                // word `moved` is in place of the sign `+` or `−`.
+                let mark = format!(" {word} `{}`", names[there.0]);
+                let moved = |text: &str| -> String {
+                    let text = text.strip_prefix("+ ").or_else(|| text.strip_prefix("− ")).map(|rest| format!("moved {rest}")).unwrap_or_else(|| text.to_string());
+                    match text.split_once("): ") {
+                        Some((head, arrows)) => format!("{head}){mark}: {arrows}"),
+                        None => format!("{text}{mark}"),
+                    }
+                };
+                for element in outcome.elements.iter_mut().filter(|element| element.point == Some((here.1, here.2))) {
+                    if element.text.starts_with("moved ") {
+                        continue;
+                    }
+                    element.text = moved(&element.text);
+                    if let Some(detail) = element.details.first_mut() {
+                        *detail = moved(detail);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// True if each fact that holds a place of a point pair is a fact of the category `rename`,

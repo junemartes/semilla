@@ -1,0 +1,46 @@
+note: batch 11c, G7: a macro call with a short input shows the full text as before: no form of a large text
+rule-: R71.1-1
+must_match: changed macro call `table!\( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, \)` → `table!\( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, \)`
+must_not_match: a large text
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! table {
+    ($($x:expr),* $(,)?) => {
+        pub const TABLE: &[u32] = &[$($x),*];
+    };
+}
+
+table!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+);
+=== new src/lib.rs
+macro_rules! table {
+    ($($x:expr),* $(,)?) => {
+        pub const TABLE: &[u32] = &[$($x),*];
+    };
+}
+
+table!(
+    0, 1, 2, 3, 4, 9, 6, 7, 8, 9,
+);
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro call `table!( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, )` → `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` (makes items that Semilla cannot list) [declaration]
+      ✗ spotlight: the macro call `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` makes items that Semilla cannot list; it needs a reason: --reason 'shop::table!#0=…'
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::table!#0=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::table!#0=the reason of the test'
+◆ f1 derived: changed macro call `table!( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, )` → `table!( 0, 1, 2, 3, 4, 9, 6, 7, 8, 9, )` (makes items that Semilla cannot list) [declaration]
+    lines: src/lib.rs:8, src/lib.rs:-8

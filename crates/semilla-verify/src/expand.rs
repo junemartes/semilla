@@ -585,8 +585,15 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         // compiler: the texts with the marks of the context are equal, the call text is equal,
         // the identities of the definitions are equal, no definition of the workspace in the
         // chain changes, and no fact has an edit in the input of the call.
+        //
+        // R71.1-3: an edit in the input of the call does not stop the rule when each changed
+        // value of the context moves with the call (a line or a column of the call, or the name
+        // of its item after a rename): the edit has its own fact, and the expansion changes only
+        // by the place. Such a line goes under no fact: the step section has one line for the
+        // calls of the macro.
+        let names = [0, 1].map(|side| site.at[side].as_ref().map(|at| at.item.rsplit("::").next().unwrap_or(&at.item).to_string()).unwrap_or_default());
         let moved = match (site.old, site.new) {
-            (Some(old), Some(new)) if chain_owners(outcome, [site.old, site.new]).0.is_empty() && input_facts(input, outcome, site).is_empty() => context_only(old, new),
+            (Some(old), Some(new)) if chain_owners(outcome, [site.old, site.new]).0.is_empty() && (input_facts(input, outcome, site).is_empty() || moves_with_call(old, new, &names)) => context_only(old, new),
             _ => None,
         };
         let (result, facts) = match (site.old, site.new) {
@@ -605,8 +612,8 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
                 if let Some(moved) = moved.clone() {
                     ("expansion changed", vec![moved])
                 } else if old.text.len().max(new.text.len()) > LARGE_EXPANSION {
-                    // R65.10-3: a large text gets no compare: the line gives the size and the
-                    // command that prints the full text.
+                    // A large text gets no compare: the line gives the changed lines, the sizes,
+                    // and the command that prints the full text (R71.1-1).
                     ("expansion changed", vec![large_text(old, new)])
                 } else {
                     let found = cache.entry((old.text.clone(), new.text.clone())).or_insert_with(|| compare(old, new, &site.crate_name, exprs));
@@ -651,8 +658,9 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
             Some(call) if name != any.name => format!("{cause} through the inner call `{call}`"),
             _ => cause,
         }).collect();
-        // The facts with an edit in the input of the call.
-        let input_owners: Vec<usize> = input_facts(input, outcome, site).into_iter().filter(|index| !owners.contains(index)).collect();
+        // The facts with an edit in the input of the call. A call that only moves (R71.1-3) has
+        // no owner of its input.
+        let input_owners: Vec<usize> = if moved.is_some() { Vec::new() } else { input_facts(input, outcome, site).into_iter().filter(|index| !owners.contains(index)).collect() };
         let mut cause = causes.iter().map(|cause| format!("from {cause}")).collect::<Vec<_>>().join(", ");
         if !input_owners.is_empty() {
             let word = match result {
@@ -845,27 +853,19 @@ fn order_spotlights(input: &StepInput, outcome: &mut StepOutcome, sites: &[Site]
     }
 }
 
-/// R65.10-3: the size in bytes above which the text of an expansion gets no compare: the line
-/// gives the count of the lines, the size, and the command `semilla expand`. The user named the
-/// number (50 kB, 2026-11-25); the unit (1000 bytes of the text with the marks of hygiene) is
-/// Decided by Claude.
+/// The size in bytes above which the text of an expansion gets no compare (the user number,
+/// 2026-11-25: 50 kB; the unit, 1000 bytes of the text with the marks of hygiene, is Decided by
+/// Claude). The line of such an expansion has the form of each text over the budget (R71.1-1).
 pub const LARGE_EXPANSION: usize = 50_000;
 
-/// The line of a large changed expansion (R65.10-3): the lines and the size of each text, the
-/// count of the lines that only one side has, and the command that prints the full text.
+/// The line of a large changed expansion (R71.1-1; before batch 11c, R65.10-3 gave only the
+/// sizes and the count of the lines that differ): the fact rules do not run on the text, and
+/// the line gives each changed line with its line number in the text (a long run shows its
+/// changed tokens), the sizes, and the command that prints the full text. The words are not a
+/// compare result (R50.1-1: the line is in the default mode too).
 fn large_text(old: &Expansion, new: &Expansion) -> String {
-    let (a, b): (Vec<&str>, Vec<&str>) = (old.text.lines().collect(), new.text.lines().collect());
-    let mut counts: BTreeMap<&str, i64> = BTreeMap::new();
-    for line in &a {
-        *counts.entry(line).or_default() += 1;
-    }
-    for line in &b {
-        *counts.entry(line).or_default() -= 1;
-    }
-    let differ: i64 = counts.values().map(|count| count.abs()).sum();
-    let kb = |text: &str| format!("{:.1} kB", text.len() as f64 / 1000.0);
     let place = if new.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}", new.file, new.line) };
-    format!("a large expansion ({} → {} lines, {} → {}; {differ} lines differ): the text is too large for a compare; the full text: semilla expand {place}", a.len(), b.len(), kb(&old.text), kb(&new.text))
+    format!("the text is too large for the fact rules (over {} kB): {}", LARGE_EXPANSION / 1000, semilla_core::budget::inline_pair(&old.text, &new.text, Some(&format!("semilla expand {place}")), false))
 }
 
 /// R65.10-1: the identity of each package of `Cargo.lock` with a source (a registry or a
@@ -1079,8 +1079,39 @@ pub fn context_only(old: &Expansion, new: &Expansion) -> Option<String> {
     Some(format!("{CONTEXT}: {}{values}", sources.join(", ")))
 }
 
+/// R71.1-3: true if the two texts of a call differ only in values that move with the call: each
+/// pair of different tokens is an integer (with or without a type suffix) that changes by the
+/// line shift or by the column shift of the call, or a name (a word or a text) that changes only
+/// as the name of the item of the call changes (`names`: the last name of the item on each
+/// side). The texts must have the same tokens in each other place. Each other change is not a
+/// move: a value that the input gives can change with an edit of the input.
+fn moves_with_call(old: &Expansion, new: &Expansion, names: &[String; 2]) -> bool {
+    let (a, b) = (semilla_core::budget::token_texts(&old.text), semilla_core::budget::token_texts(&new.text));
+    if a.len() != b.len() {
+        return false;
+    }
+    let number = |text: &str| -> Option<i64> { text.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '_').parse().ok() };
+    let shifts = [new.line as i64 - old.line as i64, new.col as i64 - old.col as i64];
+    let mut any = false;
+    for (before, after) in a.iter().zip(&b) {
+        if before == after {
+            continue;
+        }
+        any = true;
+        let moved = match (number(before), number(after)) {
+            (Some(x), Some(y)) => y != x && shifts.contains(&(y - x)),
+            _ => !names[0].is_empty() && names[0] != names[1] && before.replace(names[0].as_str(), &names[1]) == *after,
+        };
+        if !moved {
+            return false;
+        }
+    }
+    any
+}
+
 /// R63.9-8: the changed part of two texts on one line: the text between the equal start and
-/// the equal end, at most 80 characters on each side: "changed code `39u32` → `41u32`".
+/// the equal end: "changed code `39u32` → `41u32`". A part over the budget shows its changed
+/// tokens (R71.1-1).
 pub fn changed_text(old: &str, new: &str) -> String {
     let a: Vec<char> = one_line(old).chars().collect();
     let b: Vec<char> = one_line(new).chars().collect();
@@ -1097,11 +1128,13 @@ pub fn changed_text(old: &str, new: &str) -> String {
         to_a += 1;
         to_b += 1;
     }
-    let cut = |chars: &[char]| -> String {
-        let text: String = chars.iter().collect::<String>().trim().to_string();
-        if text.chars().count() > 80 { text.chars().take(80).collect::<String>() + "…" } else { text }
-    };
-    format!("changed code `{}` → `{}`", cut(&a[from..to_a]), cut(&b[from..to_b]))
+    // R71.1-1: the changed part shows in full under the budget (before batch 11c: a cut at 80
+    // characters with no command); over the budget, its changed tokens.
+    let (old_part, new_part) = (a[from..to_a].iter().collect::<String>().trim().to_string(), b[from..to_b].iter().collect::<String>().trim().to_string());
+    match semilla_core::budget::pair(&old_part, &new_part, None, false) {
+        Some(semilla_core::budget::Form::Line(text)) => format!("changed code {text}"),
+        _ => format!("changed code `{old_part}` → `{new_part}`"),
+    }
 }
 
 /// The text of a call for a line: `fee!(v)`, derive `PartialEq`, or the call and the call in a
@@ -1135,6 +1168,36 @@ mod tests {
 
     fn expansion(form: &str, text: &str) -> Expansion {
         Expansion { name: "m".into(), kind: "bang".into(), def: "src/lib.rs:1".into(), form: form.into(), text: text.into(), ..Default::default() }
+    }
+
+    // R71.1-1, the part of the lines with the same origin: a call that moves one line down with
+    // an edit in its input (a test with a body edit) changes only by values that move with the
+    // call, so its line goes to the one line of the macro in the step section.
+    // rule+ R71.1-1
+    #[test]
+    fn a_value_that_moves_with_the_call_is_a_move_and_another_value_is_not() {
+        let at = |line: usize, text: &str| Expansion { line, col: 4, text: text.to_string(), ..expansion("items", "") };
+        let names = ["two".to_string(), "two".to_string()];
+        let old = at(12, "start_line: 13usize, start_col: 8usize, end_line: 13usize, name: \"tests::two\", ignore: false");
+        let new = at(13, "start_line: 14usize, start_col: 8usize, end_line: 14usize, name: \"tests::two\", ignore: false");
+        assert!(moves_with_call(&old, &new, &names));
+        // A rename of the item: the name in a text follows the rename.
+        let renamed = at(13, "start_line: 14usize, start_col: 8usize, end_line: 14usize, name: \"tests::three\", ignore: false");
+        assert!(moves_with_call(&old, &renamed, &["two".to_string(), "three".to_string()]));
+    }
+
+    // rule- R71.1-1
+    #[test]
+    fn a_value_that_the_input_gives_is_not_a_move() {
+        let at = |line: usize, text: &str| Expansion { line, col: 4, text: text.to_string(), ..expansion("items", "") };
+        let names = ["two".to_string(), "two".to_string()];
+        let old = at(12, "start_line: 13usize, ignore: false");
+        // `#[ignore]`: a value that does not move with the call.
+        assert!(!moves_with_call(&old, &at(12, "start_line: 13usize, ignore: true"), &names));
+        // A number that changes by a different count than the line of the call.
+        assert!(!moves_with_call(&old, &at(13, "start_line: 20usize, ignore: false"), &names));
+        // The same place and the same text: no change, so no move.
+        assert!(!moves_with_call(&old, &at(12, "start_line: 13usize, ignore: false"), &names));
     }
 
     #[test]
@@ -1395,8 +1458,8 @@ mod tests {
         assert!(facts.iter().flat_map(|(_, lines)| lines).all(|line| !line.contains("stay")), "{facts:?}");
     }
 
-    // rule+ R65.10-3
-    // rule- R65.10-3
+    // rule+ R71.1-1
+    // rule- R71.1-1
     #[test]
     fn a_large_expansion_gives_its_size_and_the_command_and_no_compare() {
         let big = |value: u32| (0..3000).map(|line| format!("let v{line} = {};", if line == 7 { value } else { line })).collect::<Vec<_>>().join("\n");
@@ -1404,7 +1467,9 @@ mod tests {
         assert!(old.len() > LARGE_EXPANSION, "{}", old.len());
         let (_, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", &old), ("1.0.0", "1", "depot::m!(1)", &new));
         let site = sites.iter().find(|site| site.result == "expansion changed").expect("a changed expansion");
-        assert_eq!(site.facts, vec![format!("a large expansion (3000 → 3000 lines, {:.1} kB → {:.1} kB; 2 lines differ): the text is too large for a compare; the full text: semilla expand src/lib.rs:2", old.len() as f64 / 1000.0, new.len() as f64 / 1000.0)]);
+        // R71.1-1 (before batch 11c, R65.10-3 gave only the count of the lines that differ):
+        // the changed line, its line number, the sizes, and the command.
+        assert_eq!(site.facts, vec![format!("the text is too large for the fact rules (over 50 kB): `let v7 = 1;` → `let v7 = 2;` (line 8) (a large text: 3000 → 3000 lines, {:.1} kB → {:.1} kB; 1 changed part; the full text: semilla expand src/lib.rs:2)", old.len() as f64 / 1000.0, new.len() as f64 / 1000.0)]);
         // The negative case: a small text has the facts of the compare.
         let (_, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "let v7 = 1;"), ("1.0.0", "1", "depot::m!(1)", "let v7 = 2;"));
         let site = sites.iter().find(|site| site.result == "expansion changed").expect("a changed expansion");

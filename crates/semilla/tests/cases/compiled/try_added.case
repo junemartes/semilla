@@ -25,7 +25,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed expression `a.unwrap_or(0)` → `a?` (f1)
       in: depot::add
       lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::add=TEXT'; if it does not change, --same 'rewrite $a.unwrap_or(0) => $a?'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `a.unwrap_or(0)` → `a?` at `depot::add/S0/init` [semantics · code different]
       affected bodies: depot::add

@@ -129,6 +129,20 @@ pub fn flat_text(text: &str) -> String {
 /// a full line; no line has a cut. An old block text and a new block text with more than one
 /// line each go in one block, a line diff (design 54.15).
 pub fn fact_layout(text: &str) -> (String, Vec<String>) {
+    fact_layout_with(text, None)
+}
+
+/// The budget of the texts of one layout (R71.1-1): the command that shows the full text, and
+/// `keep` for a text that shows each changed line (docs).
+#[derive(Clone, Copy, Debug)]
+pub struct Budget<'a> {
+    pub command: Option<&'a str>,
+    pub keep: bool,
+}
+
+/// The layout of a fact text with the size rule of R71.1-1: a text over the budget shows the
+/// changed part, the sizes, and the command. `None` gives the full texts (the layout of 54.7).
+pub fn fact_layout_with(text: &str, budget: Option<Budget>) -> (String, Vec<String>) {
     let parts = parts(text);
     let (mut head, mut blocks, mut number, mut index) = (String::new(), Vec::new(), 0, 0);
     let lines_of = |part: &str| part.matches(LINE_MARK).count() + 1;
@@ -145,6 +159,15 @@ pub fn fact_layout(text: &str) -> (String, Vec<String>) {
         // block, a line diff. Each line of the two texts is in the block.
         if let (Some(&(false, between)), Some(&(true, new))) = (parts.get(index), parts.get(index + 1)) {
             if between == CHANGE_ARROW && lines_of(part) > 1 && lines_of(new) > 1 {
+                // R71.1-1: two texts over the budget show the changed lines with their context.
+                if let Some(crate::budget::Form::Block(note, rows)) = budget.and_then(|budget| crate::budget::pair(part, new, budget.command, budget.keep)) {
+                    head.push_str(&format!("[{number}] {DIFF_NOTE} {note}"));
+                    for (row, line) in rows.iter().enumerate() {
+                        blocks.push(if row == 0 { format!("[{number}] {line}") } else { format!("{pad}{line}") });
+                    }
+                    index += 2;
+                    continue;
+                }
                 head.push_str(&format!("[{number}] {DIFF_NOTE}"));
                 for (row, (mark, line)) in line_diff(part, new).into_iter().enumerate() {
                     let line = format!("{mark} {line}");
@@ -154,10 +177,23 @@ pub fn fact_layout(text: &str) -> (String, Vec<String>) {
                 continue;
             }
         }
+        // R71.1-1: a block text with no other block (an added or a deleted text) is a change: it
+        // shows in full, and only over the limit of the user its first lines.
+        if let Some(crate::budget::Form::Block(note, rows)) = budget.filter(|budget| !budget.keep).and_then(|budget| crate::budget::changed_single(part, budget.command)) {
+            head.push_str(&format!("[{number}] {note}"));
+            for (row, line) in rows.iter().enumerate() {
+                blocks.push(if row == 0 { format!("[{number}] {line}") } else { format!("{pad}{line}") });
+            }
+            continue;
+        }
         head.push_str(&format!("[{number}]"));
         for (row, line) in part.split(LINE_MARK).enumerate() {
             blocks.push(if row == 0 { format!("[{number}] {line}") } else { format!("{pad}{line}") });
         }
+    }
+    // R71.1-1: a long text in the line (a macro input on one line) shows its changed tokens.
+    if let Some(budget) = budget {
+        head = crate::budget::line(&head, budget.command, budget.keep, false);
     }
     (head, blocks)
 }

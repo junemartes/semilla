@@ -642,7 +642,7 @@ impl TargetHidden {
     /// The line of the step output.
     pub fn text(&self, target: &str) -> String {
         let lines: Vec<String> = self.changed.iter().map(|line| format!("{}:{line}", self.file)).collect();
-        format!("! build check: not checked: the check did not build the changed code under `{}` at {}:{} (changed lines: {}): the target of the check ({target}) makes the condition false", self.attr, self.file, self.line, lines.join(", "))
+        format!("! build check: not built: the check did not build the changed code under `{}` at {}:{} (changed lines: {}): the target of the check ({target}) makes the condition false", self.attr, self.file, self.line, lines.join(", "))
     }
 }
 

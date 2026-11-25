@@ -37,12 +37,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `7` at `depot::talk/tail` [semantics · code different]
       affected bodies: depot::talk (with 1 other edit of this body)
-      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined) (the same line for f2)
   ◆ f2 derived: added statement `s.speak()` at `depot::talk/tail` [semantics · code different]
       affected bodies: depot::talk (with 1 other edit of this body)
       control flow: + call `s.speak` [dyn] (src/lib.rs:6): return → return
       control flow: + arrow entry (src/lib.rs:5) → call `s.speak` [dyn] (src/lib.rs:6)
-      equivalence: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      equivalence: the same line as f1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     depot::talk (src/lib.rs:5): graph changes: +1 call, +2 arrows, −1 arrow; not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))

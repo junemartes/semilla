@@ -36,19 +36,19 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f1, f2)
       in: shop::check
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::check=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::check=TEXT'; if it does not change, --same 'rewrite 2 => 3' --same 'rewrite 4 => 6'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `2` → `3` at `shop::check/S0/args[0]/args[0]` [semantics · code different]
       affected bodies: shop::check (with 1 other edit of this body)
       control flow: ~ branch `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
       control flow: ~ panic `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
-      equivalence: not decided alone: a deref of a value that is not a reference (a `Box`, a raw pointer); the body: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer)
+      equivalence: not decided alone: a deref of a value that is not a reference (a `Box`, a raw pointer); the body: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer) (the same line for f2)
       expansion: `assert_eq!(total(3), 6)` at `shop::check/S0` (src/lib.rs:6): expansion changed: changed literal `2` → `3` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; changed literal `4` → `6` at `expansion/S0/body/S0/scrutinee/elems[1]/operand` [semantics] (also the change of f2)
   ◆ f2 derived: changed literal `4` → `6` at `shop::check/S0/args[1]` [semantics · code different]
       affected bodies: shop::check (with 1 other edit of this body)
       control flow: ~ branch `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
       control flow: ~ panic `assert_eq!(total(2), 4)` → `assert_eq!(total(3), 6)` (src/lib.rs:-6, src/lib.rs:6)
-      equivalence: not decided alone: a deref of a value that is not a reference (a `Box`, a raw pointer); the body: not decided: a deref of a value that is not a reference (a `Box`, a raw pointer)
+      equivalence: the same line as f1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::check (src/lib.rs:5): same structure: 1 changed condition, 1 changed panic call; not decided (a deref of a value that is not a reference (a `Box`, a raw pointer))

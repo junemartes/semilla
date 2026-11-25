@@ -1,5 +1,5 @@
 note: an associated constant has its body in its declaration: an edit of its value gets its line and its equivalence result
-rule+: R61.15-1
+rule+: R71.2-1
 option: --compiled
 === both Cargo.toml
 [package]

@@ -172,9 +172,10 @@ impl Verdict {
     }
 }
 
-/// The two outcomes of a different result: "before returns 7, after returns 6". R68.6-3: two
-/// returned arrays of one length give their changed elements, not the full arrays: "before and
-/// after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ)".
+/// The two outcomes of a different result: "before returns 7, after returns 6". R71.1-1 (the
+/// element form; R68.6-3 before batch 11c): two returned arrays of one length give their
+/// changed elements, not the full arrays: "before and after return arrays that differ at [2]
+/// 3 → 9 (1 of 8 elements differ)".
 pub(crate) fn outcomes(before: &str, after: &str) -> String {
     if let (Some(old), Some(new)) = (before.strip_prefix("returns "), after.strip_prefix("returns "))
         && let Some(change) = crate::facts::array_change(old, new)
@@ -468,6 +469,28 @@ pub(crate) fn apply(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, ou
         }
     }
     flow.equivalence = fact_lines;
+    // R71.2-1: the result of an item adds up over the bodies of the item. The line of the body
+    // of the item names a worse result of a nested body (a closure, a constant block): "with its
+    // nested bodies: different in `shop::f::{closure#0}`". Each body keeps its own result.
+    let worst = |results: &[(String, Verdict, Option<Answer>)]| results.iter().map(|(_, verdict, _)| verdict.rank()).min();
+    for (index, check) in checks.iter().enumerate() {
+        let Some(own) = worst(&body_results[index]) else { continue };
+        let prefix = format!("{}::{{", check.name);
+        let nested: Vec<(u8, &str, &'static str)> = checks
+            .iter()
+            .enumerate()
+            .filter(|(other, found)| *other != index && found.item.is_some() && found.item == check.item && found.name.starts_with(&prefix))
+            .filter_map(|(other, found)| {
+                let rank = worst(&body_results[other])?;
+                let word = body_results[other].iter().find(|(_, verdict, _)| verdict.rank() == rank).map(|(_, verdict, _)| verdict.word())?;
+                Some((rank, found.name.as_str(), word))
+            })
+            .collect();
+        let Some(best) = nested.iter().map(|(rank, _, _)| *rank).min().filter(|rank| *rank < own) else { continue };
+        let names: Vec<String> = nested.iter().filter(|(rank, _, _)| *rank == best).map(|(_, name, _)| format!("`{name}`")).collect();
+        let word = nested.iter().find(|(rank, _, _)| *rank == best).map(|(_, _, word)| *word).unwrap_or_default();
+        flow.bodies[check.index].line.push_str(&format!("; with its nested bodies: {word} in {}", names.join(", ")));
+    }
     // One line for the step when the budget stopped a check (R61.14-6).
     let stopped = |verdict: &Verdict| matches!(verdict, Verdict::NotChecked(cause) if cause == BUDGET_CAUSE);
     let bodies = body_results.iter().filter(|results| results.iter().any(|(_, verdict, _)| stopped(verdict))).count();

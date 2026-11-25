@@ -946,25 +946,9 @@ pub(crate) fn const_parts(text: &Option<String>) -> Option<(String, String)> {
     Some((head.to_string(), value.trim_end_matches(';').trim().to_string()))
 }
 
-/// R68.6-3: the changed elements of two arrays of one length: "[2] 3 → 9, [5] 6 → 1 (2 of 8
-/// elements differ)". At most 8 elements have a text; the text names the count of the others.
-/// `None` if a value is not an array, the lengths differ, the arrays have fewer than two
-/// elements, or each element differs: then the full texts are the better output.
-pub(crate) fn array_change(old: &str, new: &str) -> Option<String> {
-    let (a, b) = (array_elements(old)?, array_elements(new)?);
-    if a.len() != b.len() || a.len() < 2 {
-        return None;
-    }
-    let changed: Vec<usize> = (0..a.len()).filter(|index| a[*index] != b[*index]).collect();
-    if changed.is_empty() || changed.len() == a.len() {
-        return None;
-    }
-    let mut parts: Vec<String> = changed.iter().take(8).map(|index| format!("[{index}] {} → {}", a[*index], b[*index])).collect();
-    if changed.len() > 8 {
-        parts.push(format!("and {} more", changed.len() - 8));
-    }
-    Some(format!("{} ({} of {} elements differ)", parts.join(", "), changed.len(), a.len()))
-}
+/// The changed elements of two arrays of one length: the element form of the size rule
+/// (R71.1-1; R68.6-3 before batch 11c). The rule is in `semilla_core::budget`.
+pub(crate) use semilla_core::budget::array_change;
 
 /// The text of a changed value that is long (batch 5y, C1): the two sides, cut to the changed
 /// part, and the index of each changed element if the value is an array. `None` for a short
@@ -994,47 +978,7 @@ pub(crate) fn long_value_description(item: &str, old: &str, new: &str) -> Option
     Some(format!("value of `{item}` changed{place}: `{old}` → `{new}`"))
 }
 
-/// The elements of an array value (`[a, b]` or `&[a, b]`), as texts with no spaces. `None` if
-/// the value is not an array, or if it is a repeat array (`[0; 4]`).
-fn array_elements(value: &str) -> Option<Vec<String>> {
-    let inner = value.trim().trim_start_matches('&').trim().strip_prefix('[')?.strip_suffix(']')?;
-    let mut elements = vec![String::new()];
-    let mut depth = 0usize;
-    let mut quote: Option<char> = None;
-    let mut escape = false;
-    for ch in inner.chars() {
-        if let Some(open) = quote {
-            elements.last_mut()?.push(ch);
-            if escape {
-                escape = false;
-            } else if ch == '\\' {
-                escape = true;
-            } else if ch == open {
-                quote = None;
-            }
-            continue;
-        }
-        match ch {
-            '"' => quote = Some(ch),
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth = depth.checked_sub(1)?,
-            ',' if depth == 0 => {
-                elements.push(String::new());
-                continue;
-            }
-            ';' if depth == 0 => return None,
-            _ => {}
-        }
-        if !ch.is_whitespace() {
-            elements.last_mut()?.push(ch);
-        }
-    }
-    // A comma after the last element adds no element.
-    if elements.last().is_some_and(String::is_empty) {
-        elements.pop();
-    }
-    Some(elements)
-}
+use semilla_core::budget::array_elements;
 
 /// True if an edit without a claim is (a part of) a fact. The hints and the claim suggestions skip
 /// these edits.

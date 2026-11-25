@@ -1375,7 +1375,10 @@ fn fact_items_where(model: &Model, steps: Option<&[usize]>, full: bool, code: Op
             let origin = if fact.status.is_empty() { "derived" } else { fact.status.as_str() };
             // Design 54.7: a long text and a text with more than one line are in a block
             // below the fact line.
-            let (line, blocks) = text::fact_layout(&fact.description);
+            // R71.1-1: a text over the budget shows the changed part, the sizes, and the command.
+            let command = semilla_core::budget::full_text_command(&fact.id, view.step);
+            let budget = text::Budget { command: Some(&command), keep: fact.category == semilla_core::Category::Docs };
+            let (line, blocks) = text::fact_layout_with(&fact.description, Some(budget));
             let mut text = format!("step {}: {} {origin}: {line} [{}]{}", view.step, fact.id, fact.label(), fact.mark());
             for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
                 let anchors = group.sites.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
@@ -1613,10 +1616,12 @@ fn md_facts(out: &mut String, model: &Model, steps: &[usize], full: bool) {
             let _ = writeln!(out, "{}. {}\n", md(&line), md(semilla_core::report::COMMENT_NOTE));
         }
         for (step, fact, comment) in comments {
-            let _ = writeln!(out, "- step {step}, with {}: {}", fact.id, md_with_code(&comment.head()));
-            if comment.shows_text() {
+            // R71.1-1: a comment text over the budget shows its first lines and the command.
+            let (head, body) = comment.head_and_text(Some(&semilla_core::budget::full_text_command(&fact.id, step)));
+            let _ = writeln!(out, "- step {step}, with {}: {}", fact.id, md_with_code(&head));
+            if comment.shows_text() && !body.is_empty() {
                 out.push('\n');
-                out.push_str(&fence("rust", &comment.text, "  "));
+                out.push_str(&fence("rust", &body, "  "));
             }
         }
         out.push('\n');
@@ -1701,9 +1706,10 @@ fn html_facts(out: &mut String, model: &Model, steps: &[usize]) {
     }
     out.push_str("<ul class=\"derived-facts\">\n");
     for (step, fact, comment) in comments {
-        let _ = write!(out, "<li>step {step}, with {}: {}", fact.id, esc(&comment.head()));
-        if comment.shows_text() {
-            let _ = write!(out, "<pre class=\"diff\">{}</pre>", esc_block(&comment.text));
+        let (head, body) = comment.head_and_text(Some(&semilla_core::budget::full_text_command(&fact.id, step)));
+        let _ = write!(out, "<li>step {step}, with {}: {}", fact.id, esc(&head));
+        if comment.shows_text() && !body.is_empty() {
+            let _ = write!(out, "<pre class=\"diff\">{}</pre>", esc_block(&body));
         }
         out.push_str("</li>\n");
     }

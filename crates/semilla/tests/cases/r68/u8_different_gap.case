@@ -1,5 +1,5 @@
 note: U8: a changed constant whose reader is different: the gap line keeps the plain `--change` suggestion and the one command; the default mode has no result, so it keeps the plain form too (case `r68/u2_cfg_twins_new_order`)
-rule-: R68.8-1
+rule-: R71.3-1
 option: --compiled
 must_match: to state it: --change 'shop::price=TEXT'
 must_match: to state them, add facts to the stored step

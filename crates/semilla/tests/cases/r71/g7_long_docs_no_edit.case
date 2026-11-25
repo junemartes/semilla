@@ -1,0 +1,123 @@
+note: batch 11c, G7: a changed function with 30 lines of docs and no edit of the docs: the comment line shows its first lines, the size, and the command; a short comment of a second function shows in full
+rule+: R71.1-1
+must_match: docs of `shop::price`, no edit in this step \(src/lib.rs:1-30\) \(a large text: 30 lines, [0-9.]+ kB; the first 3 lines, 27 more lines; the full text: semilla expand f1 --step 0\):
+must_match: \| /// Line 2 of the docs
+must_not_match: Line 3 of the docs
+must_match: docs of `shop::tax`, no edit in this step \(src/lib.rs:[0-9]+\): `/// The tax.`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+/// Line 0 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 1 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 2 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 3 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 4 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 5 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 6 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 7 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 8 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 9 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 10 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 11 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 12 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 13 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 14 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 15 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 16 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 17 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 18 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 19 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 20 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 21 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 22 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 23 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 24 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 25 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 26 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 27 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 28 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 29 of the docs of the price: the price of the cart with the tax of the shop.
+pub fn price(n: u32) -> u32 {
+    n * 2
+}
+
+/// The tax.
+pub fn tax(n: u32) -> u32 {
+    n + 1
+}
+=== new src/lib.rs
+/// Line 0 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 1 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 2 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 3 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 4 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 5 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 6 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 7 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 8 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 9 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 10 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 11 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 12 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 13 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 14 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 15 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 16 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 17 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 18 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 19 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 20 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 21 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 22 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 23 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 24 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 25 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 26 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 27 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 28 of the docs of the price: the price of the cart with the tax of the shop.
+/// Line 29 of the docs of the price: the price of the cart with the tax of the shop.
+pub fn price(n: u32) -> u32 {
+    n * 3
+}
+
+/// The tax.
+pub fn tax(n: u32) -> u32 {
+    n + 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `3` (f1)
+      in: shop::price
+      lines: src/lib.rs:32, src/lib.rs:-32
+      to state it: --change 'shop::price=TEXT'
+  ? 1 place: changed literal `1` → `2` (f2)
+      in: shop::tax
+      lines: src/lib.rs:37, src/lib.rs:-37
+      to state it: --change 'shop::tax=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT' --change 'shop::tax=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `2` → `3` at `shop::price/tail/rhs` [semantics]
+      docs of `shop::price`, no edit in this step (src/lib.rs:1-30) (a large text: 30 lines, 2.6 kB; the first 3 lines, 27 more lines; the full text: semilla expand f1 --step 0):
+          | /// Line 0 of the docs of the price: the price of the cart with the tax of the shop.
+          | /// Line 1 of the docs of the price: the price of the cart with the tax of the shop.
+          | /// Line 2 of the docs of the price: the price of the cart with the tax of the shop.
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  ◆ f2 derived: changed literal `1` → `2` at `shop::tax/tail/rhs` [semantics]
+      docs of `shop::tax`, no edit in this step (src/lib.rs:35): `/// The tax.`
+  cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 2 comment(s) of the changed items have no edit in this step
+
+=== positions
+◆ f1 derived: changed literal `2` → `3` at `shop::price/tail/rhs` [semantics]
+    lines: src/lib.rs:32, src/lib.rs:-32
+◆ f2 derived: changed literal `1` → `2` at `shop::tax/tail/rhs` [semantics]
+    lines: src/lib.rs:37, src/lib.rs:-37

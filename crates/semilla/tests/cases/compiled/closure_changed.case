@@ -24,7 +24,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f1, f2)
       in: shop::grow
       lines: src/lib.rs:2-3, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::grow=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::grow=TEXT'; if it does not change, --same 'rewrite $a.wrapping_add(1) => if *$a > k { 0 } else { $a.wrapping_add(k) }', and a `--same` fact (rename, move, or rewrite) that explains each other edit
   other facts, filled in by Semilla:
   ◆ f1 derived: added `let` `let k: u32 = v.iter().map(|x| x.wrapping_mul(3)).sum();` at `shop::grow/S0` [semantics · code different]
       affected bodies: shop::grow (with 1 other edit of this body)

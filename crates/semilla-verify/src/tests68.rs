@@ -25,7 +25,8 @@ fn a_constant_with_no_attribute_keeps_its_value_text() {
     assert_eq!(parts("const X: u8;"), None);
 }
 
-// rule+ R68.6-3
+// R71.1-1, the element form (R68.6-3 before batch 11c).
+// rule+ R71.1-1
 #[test]
 fn two_arrays_of_one_length_show_their_changed_elements() {
     use crate::facts::array_change;
@@ -34,11 +35,12 @@ fn two_arrays_of_one_length_show_their_changed_elements() {
     let new: Vec<String> = (0..20).map(|n| if n < 10 { (n + 100).to_string() } else { n.to_string() }).collect();
     let text = array_change(&format!("[{}]", old.join(", ")), &format!("[{}]", new.join(", "))).unwrap();
     assert!(text.starts_with("[0] 0 → 100, [1] 1 → 101,"), "{text}");
-    assert!(text.ends_with("and 2 more (10 of 20 elements differ)"), "{text}");
+    // R71.1-1: each changed element shows (before batch 11c: at most 8, then "and 2 more").
+    assert!(text.ends_with("[8] 8 → 108, [9] 9 → 109 (10 of 20 elements differ)"), "{text}");
     assert_eq!(crate::equiv::outcomes("returns [1, 2, 3]", "returns [1, 5, 3]"), "before and after return arrays that differ at [1] 2 → 5 (1 of 3 elements differ)");
 }
 
-// rule- R68.6-3
+// rule- R71.1-1
 #[test]
 fn other_values_keep_their_full_text() {
     use crate::facts::array_change;

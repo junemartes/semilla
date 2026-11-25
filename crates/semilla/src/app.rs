@@ -402,6 +402,12 @@ pub(crate) fn after_commit_lines(set: &ChangeSet) -> Vec<String> {
 }
 
 /// A change set of one step of `set`: the set that the check of one step uses.
+/// The number of a fact (`f12`) in the place of `semilla expand` (R71.1-1), or `None`.
+fn fact_number(place: &str) -> Option<String> {
+    let digits = place.strip_prefix('f')?;
+    (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| place.to_string())
+}
+
 fn one_step_set(set: &ChangeSet, index: usize) -> Result<ChangeSet> {
     let step = set.steps.get(index).cloned().with_context(|| format!("no step {index}"))?;
     Ok(ChangeSet { base_tree: step.tree_before.clone(), head_tree: step.tree_after.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), after_commit: set.after_commit.clone(), ..Default::default() })
@@ -1642,6 +1648,10 @@ impl App {
     /// from the cache of the compiled check; a build runs only if the cache has no record of a
     /// tree.
     pub fn expand(&mut self, place: &str, step: Option<usize>, full: bool, sides: semilla_verify::expand::Sides) -> Result<String> {
+        // R71.1-1: a fact number gives each text of the fact in full.
+        if let Some(id) = fact_number(place) {
+            return self.expand_fact(&id, step);
+        }
         let (before, after) = match step {
             Some(index) => {
                 let set = self.current_changeset()?;
@@ -1664,6 +1674,40 @@ impl App {
         let units = semilla_verify::BodyOracle::expansions(&oracle, &step).context("the compiled build of the two trees gives no expansion records")?;
         let trees = [self.workspace(&before)?, self.workspace(&after)?];
         semilla_verify::expand::view(place, [&units[0], &units[1]], [&trees[0], &trees[1]], full, sides).map_err(|error| anyhow::anyhow!(error))
+    }
+
+    /// The text of `semilla expand fN` (R71.1-1): the fact `fN` of a step with each text in
+    /// full. `step` is a stored step of the session; with no step, or with the number of the
+    /// next step, the step is the working tree against the end of the last stored step (the
+    /// step that the last `semilla step` printed and did not store), or the last stored step if
+    /// the working tree has no change since it. The facts come from the syntax tree and from
+    /// the records in the cache: the command starts no build.
+    fn expand_fact(&mut self, id: &str, step: Option<usize>) -> Result<String> {
+        let set = self.current_changeset()?;
+        let tree = self.repo.write_tree()?;
+        let next = || -> Result<ChangeSet> {
+            let before = if set.steps.is_empty() { self.repo.commit_tree("HEAD").context("the repository has no commit")? } else { set.head_tree.clone() };
+            if before == tree {
+                bail!("the working tree has no change since the last step, and the session has no step {}: give a stored step with `--step N`", set.steps.len());
+            }
+            let step = Step { index: set.steps.len(), intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: tree.clone(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+            Ok(ChangeSet { base_tree: before, head_tree: tree.clone(), steps: vec![step], pair_refusals: set.pair_refusals.clone(), ..Default::default() })
+        };
+        let one = match step {
+            Some(index) if index < set.steps.len() => one_step_set(&set, index)?,
+            Some(index) if index == set.steps.len() => next()?,
+            Some(index) => bail!("the session has no step {index}"),
+            None if set.steps.last().is_some_and(|last| last.tree_after == tree) => one_step_set(&set, set.steps.len() - 1)?,
+            None => next()?,
+        };
+        let code = BuildCode { base: one.base_tree.clone(), ..Default::default() };
+        let saved = self.no_bodies;
+        self.no_bodies = true;
+        let result = self.check_set_with(&one, false, &code);
+        self.no_bodies = saved;
+        let report = result?.report.steps.into_iter().next().context("the check gives no step")?;
+        let ids: Vec<&str> = report.facts.iter().map(|fact| fact.id.as_str()).collect();
+        semilla_verify::views::fact_full_text(&report, id).with_context(|| format!("step {} has no fact {id}; its facts: {}", report.step, ids.join(", ")))
     }
 
     pub fn index(&mut self) -> Result<String> {

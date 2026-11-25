@@ -38,7 +38,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed pattern `t` → `total` at `shop::quote/S0/pat` [semantics · code different]
       affected bodies: shop::quote (with 1 other edit of this body)
-      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = 10, p = 10: before returns 100, after returns 95
+      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = 10, p = 10: before returns 100, after returns 95 (the same line for f3)
   ◆ f2 derived: change condition `t > 100` → `total >= 100` at `shop::quote/S1/cond` [semantics · code different]
       affected bodies: shop::quote (with 1 other edit of this body)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
@@ -48,7 +48,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::quote (2)
       control flow: ~ branch `t > 100` → `total >= 100` (src/lib.rs:-3, src/lib.rs:3)
       control flow: ~ check `overflow: t - 5` → `overflow: total - 5` (src/lib.rs:-3, src/lib.rs:3)
-      equivalence: equivalent alone (proved by equal MIR); the body: different: for n = 10, p = 10: before returns 100, after returns 95
+      equivalence: the same line as f1
   cover: each of the 4 changed line(s) is in a fact
   control flow: 1 body
     shop::quote (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for n = 10, p = 10: before returns 100, after returns 95)

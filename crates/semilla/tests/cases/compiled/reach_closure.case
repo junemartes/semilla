@@ -33,7 +33,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed operator `*x > 9` → `*x >= 9` (f1)
       in: shop::big
       lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::big=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::big=TEXT'; if it does not change, --same 'rewrite $a > 9 => $a >= 9'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed operator `*x > 9` → `*x >= 9` at `shop::big/tail/args[0]/body` [semantics · code different]
       affected bodies: shop::big
@@ -42,7 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       reaches: 2 public functions: shop::big, shop::report (semilla status --verbose)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 2 bodies
-    shop::big (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a raw pointer)
+    shop::big (src/lib.rs:1): same graph (the edit keeps the control flow); not decided (a raw pointer); with its nested bodies: different in `shop::big::{closure#0}`
     shop::big::{closure#0} |x| *x >= 9 (src/lib.rs:2): same graph (the edit keeps the control flow); different (for captures = &a closure, x = &9: before returns false, after returns true)
     reached bodies: 2
       shop::big (src/lib.rs:1): reached through shop::big::{closure#0}, not decided (a raw pointer)

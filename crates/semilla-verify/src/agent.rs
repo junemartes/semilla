@@ -1218,6 +1218,9 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
             }
         }
         let quote = shell_quote;
+        // R71.3-1: the concrete pattern of the edit, also for one place: the form of a line that
+        // the check did not decide gives it ("if it does not change, --same 'rewrite …'").
+        gap.same = line.pattern.as_ref().map(|(from, to)| format!("--same {}", quote(&format!("rewrite {from} => {to}"))));
         match line.pattern.filter(|_| line.units.len() > 1) {
             // One pattern covers each place of the group: the option that explains the most.
             Some((from, to)) => {
@@ -1245,6 +1248,9 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
                 other.places.extend(gap.places);
                 other.facts.extend(gap.facts.into_iter().filter(|fact| !other.facts.contains(fact)).collect::<Vec<_>>());
                 other.text = format!("{} {DIFFERENT}", other.places.len());
+                // R71.3-1: the patterns of the edits of the line, each one time; an edit with
+                // no pattern adds the general words.
+                other.same = merge_patterns(other.same.take(), gap.same);
             }
             None => gaps.push(gap),
         }
@@ -1267,7 +1273,7 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
         fact.test = tests[index];
     }
     report.agent_facts = results.into_iter().map(|(result, _)| result).collect();
-    // R68.8-1: a line whose facts each have a result of the compiled check, and no result
+    // R71.3-1: a line whose facts each have a result of the compiled check, and no result
     // "different", is undecided: the check did not show a change of the behavior.
     for gap in &mut gaps {
         let decided_different = |line: &String| line.starts_with("different") || line.contains("; the body: different");
@@ -1276,13 +1282,77 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
         if gap.option.starts_with("--same ") {
             gap.same = Some(gap.option.clone());
         }
+        // A line that the check decided keeps its option: the pattern is only for the form
+        // that keeps the behavior.
+        if !gap.undecided && !gap.option.starts_with("--same ") {
+            gap.same = None;
+        }
     }
     report.gaps = gaps;
+}
+
+/// The words after the patterns of a gap line with an edit that has no pattern (R71.3-1).
+pub(crate) const MORE_EDITS: &str = ", and a `--same` fact (rename, move, or rewrite) that explains each other edit";
+
+/// The `--same` options of two gap lines that make one line (R71.3-1): each option one time,
+/// in order. A side with no pattern adds the words [`MORE_EDITS`]. `None` if no side has a
+/// pattern: the line has the general words.
+fn merge_patterns(a: Option<String>, b: Option<String>) -> Option<String> {
+    let mut options: Vec<String> = Vec::new();
+    let mut more = false;
+    for side in [a, b] {
+        let Some(text) = side else {
+            more = true;
+            continue;
+        };
+        let list = match text.split_once(MORE_EDITS) {
+            Some((list, _)) => {
+                more = true;
+                list.to_string()
+            }
+            None => text,
+        };
+        for (index, part) in list.split(" --same ").enumerate() {
+            let option = if index == 0 { part.to_string() } else { format!("--same {part}") };
+            if !options.contains(&option) {
+                options.push(option);
+            }
+        }
+    }
+    if options.is_empty() {
+        return None;
+    }
+    Some(format!("{}{}", options.join(" "), if more { MORE_EDITS } else { "" }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // R71.3-1: the patterns of the edits of one gap line, each one time; an edit with no pattern
+    // adds the general words. No pattern: the general words only.
+    // rule+ R71.3-1
+    #[test]
+    fn a_gap_line_keeps_each_concrete_pattern_of_its_edits() {
+        let a = Some("--same 'rewrite $a => $a + 1'".to_string());
+        let b = Some("--same 'rewrite 2 => 3'".to_string());
+        assert_eq!(merge_patterns(a.clone(), b.clone()).as_deref(), Some("--same 'rewrite $a => $a + 1' --same 'rewrite 2 => 3'"));
+        assert_eq!(merge_patterns(merge_patterns(a.clone(), b.clone()), a.clone()).as_deref(), Some("--same 'rewrite $a => $a + 1' --same 'rewrite 2 => 3'"));
+        assert_eq!(merge_patterns(a.clone(), None), Some(format!("--same 'rewrite $a => $a + 1'{MORE_EDITS}")));
+    }
+
+    // rule- R71.3-1
+    #[test]
+    fn a_gap_line_with_no_pattern_has_the_general_words() {
+        assert_eq!(merge_patterns(None, None), None);
+        let gap = semilla_core::report::Gap { items: vec!["shop::f".into()], option: "--change 'shop::f=TEXT'".into(), undecided: true, same: None, ..Default::default() };
+        assert!(gap.suggestion().ends_with("if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit"), "{}", gap.suggestion());
+        let gap = semilla_core::report::Gap { same: Some("--same 'rewrite 2 => 3'".into()), ..gap };
+        assert!(gap.suggestion().ends_with("if it does not change, --same 'rewrite 2 => 3'"), "{}", gap.suggestion());
+        // A line that the check decided keeps its option.
+        let decided = semilla_core::report::Gap { undecided: false, ..gap };
+        assert_eq!(decided.suggestion(), "--change 'shop::f=TEXT'");
+    }
 
     #[test]
     fn the_forms_of_a_same_claim() {
