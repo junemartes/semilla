@@ -29,7 +29,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed call: `if w > 10 { 15 } else { 5 }` → `ship(w)` (f1)
       in: shop::cost
       lines: src/lib.rs:6, src/lib.rs:-2
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::cost=TEXT'; if it does not change, --same 'rewrite if $a > 10 { 15 } else { 5 } => ship($a)'
   new and removed items, filled in by Semilla:
   ◆ f2 derived: added `shop::ship` [added · code different]
       affected bodies: shop::ship

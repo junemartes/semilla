@@ -117,17 +117,17 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `a.checked_add(b)` at `shop::chk/tail` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
-      control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+      control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18) (the same line for f2)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`) (the same line for f2, f3)
   ◆ f2 derived: added `let` `let (v, o) = a.overflowing_add(b);` at `shop::chk/S0` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
-      control flow: ~ call `num::<impl u32>::checked_add` → `num::<impl u32>::overflowing_add` (src/lib.rs:-18, src/lib.rs:18)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+      control flow: the same line as f1
+      equivalence: the same line as f1
   ◆ f3 derived: added `if` `if o { None } else { Some(v) }` at `shop::chk/S1` [semantics · code different]
       affected bodies: shop::chk (with 2 other edits of this body)
       control flow: + branch `o` (src/lib.rs:19): false → return, true → return
       control flow: + arrow call `num::<impl u32>::overflowing_add` (src/lib.rs:18) → branch `o` (src/lib.rs:19) (return)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::overflowing_add`)
+      equivalence: the same line as f1
   ◆ f4 derived: deleted statement `a.abs_diff(b)` at `shop::diff/tail` [semantics · code different]
       affected bodies: shop::diff (with 1 other edit of this body)
       control flow: − call `num::<impl u32>::abs_diff` (src/lib.rs:-26): return → return
@@ -187,14 +187,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: equivalent (proved by SMT after inlining `std::option::Option::<u32>::unwrap_or`)
   ◆ f15 derived: deleted statement `a.saturating_add(b)` at `shop::sat/tail` [semantics · code different]
       affected bodies: shop::sat (with 1 other edit of this body)
-      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
+      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10) (the same line for f16)
+      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`) (the same line for f16)
   ◆ f16 derived: added `match` `match a.checked_add(b) { Some(v) => v, None => u32::MAX }` at `shop::sat/S0` [semantics · code different]
       affected bodies: shop::sat (with 1 other edit of this body)
       control flow: + branch `a.checked_add(b)` (src/lib.rs:10): std::option::Option::None → return, std::option::Option::Some → return
-      control flow: ~ call `num::<impl u32>::saturating_add` → `num::<impl u32>::checked_add` (src/lib.rs:-10, src/lib.rs:10)
+      control flow: the same line as f15
       control flow: + arrow call `num::<impl u32>::checked_add` (src/lib.rs:10) → branch `a.checked_add(b)` (src/lib.rs:10) (return)
-      equivalence: equivalent (proved by SMT after inlining `core::num::<impl u32>::checked_add`, `core::num::<impl u32>::saturating_add`)
+      equivalence: the same line as f15
   ◆ f17 derived: deleted statement `a.saturating_sub(b)` at `shop::sat_sub/tail` [semantics · code different]
       affected bodies: shop::sat_sub (with 1 other edit of this body)
       control flow: − call `num::<impl u32>::saturating_sub` (src/lib.rs:-14): return → return

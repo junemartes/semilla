@@ -35,7 +35,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed path `Food` → `Fuel` (f2)
       in: shop::make
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::make=TEXT'; if it does not change, --same 'rewrite Food => Fuel'
   declarations, filled in by Semilla:
   ◆ f1 derived: return type of `shop::make` `-> Food` → `-> Fuel` (the public API can change: a different crate can use the item) [declaration · code different]
       affected bodies: shop::make, shop::total (with 1 other edit of this body)

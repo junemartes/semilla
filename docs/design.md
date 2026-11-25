@@ -5111,7 +5111,7 @@ Thus the option that explains the largest set of edits comes first, and an optio
 
 ### 54.7 The full text (D)
 
-**The rule.** [R54.7-1; no negative case: the rule forbids a cut text for each fact; it has no condition] No fact hides a part of a changed text. The description of a fact is the full text. The cut functions of batch 9a2 (`short pair`, the changed-part view, the token cut) are gone.
+**The rule.** [R54.7-1; no negative case: the rule forbids a cut text for each fact; it has no condition] No fact hides a part of a changed text. The description of a fact is the full text. The cut functions of batch 9a2 (`short pair`, the changed-part view, the token cut) are gone. Batch 11c: the description keeps the full text, and the views show a text over the budget in the form of R71.1-1 (the changed part, the sizes, and the command `semilla expand fN --step S` that shows the full text).
 
 **The model.** `semilla_syntax::tree::full` gives the text of a node:
 
@@ -6105,7 +6105,7 @@ The pass pairs the parts of the comments of the old item and of the new item (on
 
 ### 58.7 The full text
 
-1. [R58.7-1] A comment text has no cut (54.7). A text of one line of 80 characters or less is on the head line, between backticks. Each other text is a block: the head line ends with `:`, and each line of the comment is one line `| LINE` below it. An empty line of the comment is the line `|`.
+1. [R58.7-1] A comment text has no cut (54.7) under the budget of R71.1-1 (batch 11c): a comment with no edit over the budget shows its first lines, its size, and the command `semilla expand fN --step S`. A text of one line of 80 characters or less is on the head line, between backticks. Each other text is a block: the head line ends with `:`, and each line of the comment is one line `| LINE` below it. An empty line of the comment is the line `|`.
 
 ### 58.8 The count
 
@@ -6199,7 +6199,7 @@ Rule index: no rule: the subsection has limits and open questions.
 - Open question: the forced edit of a declaration fact at a site in a different item (a call with a new argument). The site does not make its item a changed item (R58.3-3). Is this correct for the user?
 - Open question: an `indirect` fact gives no comment. The item has no edit, but its behavior can change. Do its docs show?
 - Open question: a `move` fact gives no comment. The docs can name the old module.
-- Open question: the size. The docs of a public item can be long: the output of `socket2` has 78 percent more lines. An option that shows only the head lines is possible. It is not in this batch, because R58.7-1 gives the full text.
+- Open question: the size. The docs of a public item can be long: the output of `socket2` has 78 percent more lines. An option that shows only the head lines is possible. It is not in this batch, because R58.7-1 gives the full text. Batch 11c answers it with the general rule R71.1-1: a comment with no edit over the budget shows its first 3 lines, its size, and the command.
 - Open question: the local UI and the review show the comments as plain text. A link from the comment to the source lines is not in this batch.
 
 ## 59. Batch 9n: a module in a macro input, a line with equal tokens, and the pair of twins
@@ -6754,7 +6754,7 @@ Rule index: the identities are below.
 
 **The cause.** An item with no body node (a `const`, a `static`, an associated constant) has `body: None` in the syntax workspace: its value is a part of its declaration (the edit is a `Signature` edit of the item). The search of an edit in a body (`edit_in_body`, `flow.rs`) looked only in the body node, so each body of such an item had "no edit". Before 10b, the changed graph gave the line. From 10b, the folds of R61.2-1 and R61.2-2 give the same graph on each side (`ON` is a known value, and the check of `6 + 1` cannot fail), so the rule "no edit and the same graph: no line" (design 60, B6) dropped the body. In a function body, the edit is in the body node, so the line stayed.
 
-1. [R61.15-1] **The declaration of an item with no body node holds its bodies.** For a `const`, a `static`, an associated constant, and each other item with no body node, each edit of the item is an edit of each of its MIR bodies (also a nested body: a const block, a closure), except a doc, a comment, an attribute, and a visibility edit. So each such body with an edit gets its line in the step section and its equivalence result. The fold rules (R61.2-1, R61.2-2) stay. The nested bodies of such an item pair in source order, as before (the item has no node pair). Cases `compiled/const_block_static` and `compiled/const_assoc_value`; the negative case `compiled/const_block_static_vis` (a visibility edit and a doc edit: no line).
+1. (R61.15-1 before batch 11c; batch 11c makes it a part of the general rule R71.2-1: the unit is the whole item.) **The declaration of an item with no body node holds its bodies.** For a `const`, a `static`, an associated constant, and each other item with no body node, each edit of the item is an edit of each of its MIR bodies (also a nested body: a const block, a closure), except a doc, a comment, an attribute, and a visibility edit. So each such body with an edit gets its line in the step section and its equivalence result. The fold rules (R61.2-1, R61.2-2) stay. The nested bodies of such an item pair in source order, as before (the item has no node pair). Cases `compiled/const_block_static` and `compiled/const_assoc_value`; the negative case `compiled/const_block_static_vis` (a visibility edit and a doc edit: no line).
 
 **The result for the value of a constant item.** The check compares the MIR body of the value with no input: "equivalent (proved by SMT)" for `N as u32` → `(M + 1) as u32` (7 and 7), "different: for each input: before returns 7, after returns 6" for `N as u32` → `M as u32`. The body of `shop::T` is "equivalent (proved by equal MIR)": its MIR has the evaluated length `7` on each side. A trivial constant (`const C: i32 = N;`) has no MIR record (the compiler evaluates it with no MIR), so it has no pair and no equivalence line ("graph added" when the other side has a record), as at `bec1ec2`.
 
@@ -7392,7 +7392,7 @@ Rule index: the identities are below.
 
 1. [R65.10-1] **The identity of a dependency** is its entry in `Cargo.lock`: the set of the versions of the package with the source and the checksum, by the crate name (`-` gives `_`). A macro of a dependency is a macro whose record names a crate (`crate depot`) that is a package of `Cargo.lock` with a source (a registry or a repository). A package with no source (a package of the workspace, a path), a crate of the standard library (no entry), and a tree with no `Cargo.lock` are not a dependency of this rule: the rules of design 63 and 65 hold for them. The unit test `the_identity_of_a_dependency_is_its_entry_in_the_lock_file` (a new version, a new checksum; the negative cases: the same entry, a path package, the standard library, no lock file).
 2. [R65.10-2] **The owner and the count line.** When the identity of the package changes, the fact of the package in `Cargo.lock` owns each changed expansion of its macros as a changed definition of the chain (the first owner, R63.9-7), with the cause "from the package `depot` (1.0.0 → 1.0.1 in `Cargo.lock`)", and the equal calls of each of its macros are one line under the same fact: "1 expansion of `depot::n!` stays the same". With the same identity, an edit in the input of the call owns the line (R63.3-3), with the facts of the compare; a changed expansion with neither cause keeps its line in the step section with the cause "no changed definition, …" (R63.9-7). No changed expansion becomes a count. The unit test `a_dependency_expansion_is_a_full_fact_only_when_its_identity_or_its_input_changes` (positive: a new version; negative: the same identity; the same identity with a changed input keeps the full line).
-3. [R65.10-3] **A large expansion.** A changed expansion whose text (before or after) has more than `LARGE_EXPANSION` (50 000 bytes) gets no compare: its line is "a large expansion (3000 → 3000 lines, 61.2 kB → 61.2 kB; 2 lines differ): the text is too large for a compare; the full text: semilla expand FILE:LINE" ("lines differ": the lines that only one side has). The diff of the Markdown review keeps its cut of 40 lines (R63.4-2). The unit test `a_large_expansion_gives_its_size_and_the_command_and_no_compare` (the negative case: a small text has the facts of its compare).
+3. (R65.10-3 before batch 11c; batch 11c replaces it with the general rule R71.1-1.) **A large expansion.** A changed expansion whose text (before or after) has more than `LARGE_EXPANSION` (50 000 bytes) gets no compare. Before batch 11c, its line gave only the sizes and the count of the lines that differ. Now it has the form of each text over the budget (R71.1-1): "the text is too large for the fact rules (over 50 kB): `OLD LINE` → `NEW LINE` (line 451) (a large text: 883 → 883 lines, 67.0 kB → 67.0 kB; 1 changed part; the full text: semilla expand src/lib.rs:7)" (each changed line in full, up to 50 kB of changed text; the words are not a compare result, R50.1-1). The diff of the Markdown review keeps its cut of 40 lines (R63.4-2). The unit test `a_large_expansion_gives_its_size_and_the_command_and_no_compare` is now a test of R71.1-1.
 
 **Decided by Claude.**
 
@@ -7733,15 +7733,19 @@ What I tried (each one in the default mode and with `--compiled`): a module with
 
 1. [R68.6-1] **A read of a static with no interior mutability is a constant value of the record.** The driver adds each such static that a body reads (not `mut`, not foreign, not a thread local, a `Freeze` type; the predicate of the effects of 64) to the constant values `cv` of the record. Its value: the text of each element for an integer, a `bool`, a `char`, or an array of them (at most 1024 elements), else a short hash of the text of its allocation (the bytes and the targets of its pointers), or the digest of its definition (R66.3-2) if the compiler does not evaluate it. So a reader with the same text gets the line "reads a changed constant" (R64.5-1), its equal text is no proof (R64.5-2), and it is in the start set of the reverse walk (61.10): its public callers are reached bodies. A static of the standard library is not a part of a step. A static that can change stays an effect on the world (R64.2). Case `r68/u6_static_table_reader`: `look` gets "same graph; reads a changed constant: `shop::TABLE` ([2] 3 → 9 (1 of 8 elements differ))", `api` is reached through `look`; `fee` (a static with no change) and `count` (an atomic) get no constant line.
 2. [R68.6-2] **A body with no edit that reads a changed constant or static is an affected body of the value fact of the item, with the link "through".** The MIR text of a reader of a static names the static, not its value, so the compare of the texts does not list it. The rule only adds a body to the list of the fact.
-3. [R68.6-3] **Two arrays of one length show their changed elements, not the full arrays.** The line "reads a changed constant" and the outcomes of a "different" result give "[2] 3 → 9 (1 of 8 elements differ)" (at most 8 elements, then "and N more"). A scalar, two lengths, or arrays whose each element differs keep the full texts. Unit tests in `tests68.rs`.
+3. (R68.6-3 before batch 11c; batch 11c makes it the element form of the general rule R71.1-1.) **Two arrays of one length show their changed elements, not the full arrays.** The line "reads a changed constant" and the outcomes of a "different" result give "[2] 3 → 9 (1 of 8 elements differ)" (at most 8 elements, then "and N more"). A scalar, two lengths, or arrays whose each element differs keep the full texts. The function is `semilla_core::budget::array_change`; the unit tests in `tests68.rs` are tests of R71.1-1.
 
 ### 68.7 The panic points of an item with its closures (U7)
 
-1. [R68.7-1] **The line of a body of the two trees whose own count of checks or panics changes, and whose closures change their counts too, gives the counts of the item with its closures.** A body of one tree only keeps its line "graph added" or "graph removed". "graph changes: +1 check, +1 panic, …; with its closures: 1 → 1 checks, 1 → 1 panics (the points move between the body and its closures; the item has no new panic point)". With a different total, the text has the counts and no words of a move. The graph line of each body and the facts stay: the rule only adds the counts. Cases `r68/u7_check_moves_out_of_closure` (positive) and `r68/u7_new_check_beside_closure` (negative).
+Rule index: no rule: batch 11c replaces the rule of this subsection with the general rule R71.2-1.
+
+1. (R68.7-1 before batch 11c.) **The line of a body of the two trees whose own count of checks or panics changes, and whose closures change their counts too, gave the counts of the item with its closures.** "graph changes: +1 check, +1 panic, …; with its closures: 1 → 1 checks, 1 → 1 panics (the points move between the body and its closures; the item has no new panic point)". The rule had one line and two kinds of point. R71.2-1 makes each point that moves between two bodies of one item a move, for each kind of point and each line. The cases `r68/u7_check_moves_out_of_closure` and `r68/u7_new_check_beside_closure` are cases of R71.2-1.
 
 ### 68.8 A neutral suggestion for an undecided result (U8)
 
-1. [R68.8-1] **A gap line whose facts each have a result of the compiled check, and no result "different", offers the two forms in neutral words.** "to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit". A group whose option is `--same 'rewrite FROM => TO'` (one pattern covers each place) names that option for the form that keeps the behavior. A line of one place gets no pattern of its own edit: such a pattern is not evidence that the behavior stays. The one command of the step ("to state them, …") does not choose a form for such a line. A line with a "different" result, and each line of the default mode (no result), keeps the `--change` suggestion. Cases `r68/u8_not_decided_gap` (positive) and `r68/u8_different_gap` (negative).
+Rule index: no rule: batch 11c replaces the rule of this subsection with the general rule R71.3-1.
+
+1. (R68.8-1 before batch 11c.) **A gap line whose facts each have a result of the compiled check, and no result "different", offers the two forms in neutral words.** "to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit". A group whose option is `--same 'rewrite FROM => TO'` (one pattern covers each place) names that option for the form that keeps the behavior. A line of one place gets no pattern of its own edit: such a pattern is not evidence that the behavior stays. The one command of the step ("to state them, …") does not choose a form for such a line. A line with a "different" result, and each line of the default mode (no result), keeps the `--change` suggestion. Cases `r68/u8_not_decided_gap` (positive) and `r68/u8_different_gap` (negative). Batch 11c (R71.3-1) keeps the neutral words and gives the concrete pattern of the edit when Semilla has one, also for a line of one place.
 
 ### 68.9 An impl is identified by the definition of its trait (U9)
 
@@ -7759,7 +7763,7 @@ What I tried (each one in the default mode and with `--compiled`): a module with
 
 ### 68.12 The code that the target of the build check does not build (U12)
 
-1. [R68.12-1] **The build check names each changed code that a `cfg` on a property of the target hides from it.** The build check builds for the host target. For each `cfg` attribute of the new tree around changed code, Semilla evaluates the condition with the true atoms of the target (`rustc --print cfg` of the tool chain of the check, with the flags of `RUSTFLAGS`): the atoms `target_*`, `unix`, and `windows` are known, each other atom (a feature, `test`) is not. A condition that no value of the other atoms makes true gives the line "! build check: not checked: the check did not build the changed code under `#[cfg(not(any(target_feature = "sse2", target_feature = "avx2")))]` at src/lib.rs:11 (changed lines: src/lib.rs:13): the target of the check (`x86_64-unknown-linux-gnu`) makes the condition false". A tree with `.cargo/config.toml` or `.cargo/config` can set another target: the line then says that Semilla does not know if the check built the code. The input of a macro call is not a part of the rule. The line asks for no reason and rejects nothing. The compiled mode keeps its own rule (the spotlight "inactive code"). Unit tests in `tests68.rs`.
+1. [R68.12-1] **The build check names each changed code that a `cfg` on a property of the target hides from it.** The build check builds for the host target. For each `cfg` attribute of the new tree around changed code, Semilla evaluates the condition with the true atoms of the target (`rustc --print cfg` of the tool chain of the check, with the flags of `RUSTFLAGS`): the atoms `target_*`, `unix`, and `windows` are known, each other atom (a feature, `test`) is not. A condition that no value of the other atoms makes true gives the line "! build check: not built: the check did not build the changed code under `#[cfg(not(any(target_feature = "sse2", target_feature = "avx2")))]` at src/lib.rs:11 (changed lines: src/lib.rs:13): the target of the check (`x86_64-unknown-linux-gnu`) makes the condition false". A tree with `.cargo/config.toml` or `.cargo/config` can set another target: the line then says that Semilla does not know if the check built the code. The input of a macro call is not a part of the rule. The line asks for no reason and rejects nothing. Batch 11c changes the words "not checked" to "not built" (and "maybe not built" with a cargo configuration file): "not checked" is a compare result word, and R50.1-1 forbids it in the default mode. The compiled mode keeps its own rule (the spotlight "inactive code"). Unit tests in `tests68.rs`.
 
 **Decided by Claude.** The batch builds for no other target (the brief). The line is a line of the build check, not a spotlight: the step is not wrong, the check is not complete.
 
@@ -7792,3 +7796,157 @@ Rule index: no rule: the subsection has the limits and the open questions.
 - R68.7-1 counts the points of the first configuration with a graph.
 - R68.12-1 reads `RUSTFLAGS`, not the flags of a cargo configuration file of the tree (it says so), and not a cargo configuration outside the tree. It does not see the conditions in the input of a macro call. In the compiled mode the spotlight "inactive code" is the rule.
 - R68.13-1 uses the form of the compare text: a row of a table with a changed name (not a literal) is not a twin form.
+
+## 71. Batch 11c: one size rule for each text of a line, and the item as a unit
+
+The decision of the user (2026-11-25): "It seems that we have a lot of special casing here. Can we take a step back, list all the bugs and issues and try to come up with general rules to fix it". Then: "Yes let's follow your recommendations". Earlier batches made one rule for each defect: a size line only for an expansion (R65.10-3), a diff of the entries only for an array (R68.6-3), a count of panics with closures only for one line (R68.7-1). This batch has two general rules (71.1, 71.2) and the suggestion part of a third (71.3). The known defects are test cases of the rules. Each rule replaces the narrow rules that it covers (71.4). Other decisions of the user that apply: the goal is "a complete semantic diff with as much information as possible, for fast human review" (2026-11-23); the fact of a changed item includes its comments and docs (2026-11-22); an expansion text over 50 kB shows a count and its size, and `semilla expand` shows the full text (2026-11-25).
+
+The general rule of the batch: no rule hides an edit, a changed expansion, a graph change, or an outcome. A text over the budget always shows each changed part, or the count of its changed parts with the command when the changed part is also over the budget.
+
+### 71.1 One size rule for each text of a line (G7)
+
+Rule index: the identities are below.
+
+1. [R71.1-1] **Each text that a line shows has one budget for its unchanged parts: 2000 characters and 20 lines. A changed part always shows in full, up to the limit of the user (50 kB of changed text).** The texts: a macro input, an expansion, a constant value, an array, a type, docs, a comment, a statement (each code text between backquotes in a line, and each block text of a fact). A text under the budget shows as before. A text over the budget shows:
+   - **each changed part in full**, with a short context: each changed element of two arrays of one length ("[2] 3 → 9 (1 of 8 elements differ)", the form of R68.6-3 before this batch, now with each changed element); each changed line of two texts with lines, with 2 lines of context and a row "… N equal lines" in place of the other equal lines (two changed lines of one place over the budget show their changed tokens; a line of context over the budget shows its first 80 characters); else each changed run of tokens, with 4 tokens of context and the first 3 tokens of the text, which name it (`` `table!( … 212, 219, 226, 233, 240 …` → `table!( … 212, 219, 77777, 233, 240 …` ``);
+   - **the sizes**: "(a large text: 883 → 883 lines, 67.0 kB → 67.0 kB; 1 changed part; …)";
+   - **the command** that shows the full text: `semilla expand fN --step S` for each text of a fact (the description, the spotlight, the comments, each line below the fact), `semilla expand FILE:LINE` for an expansion.
+
+   **An added or a deleted text** (a statement, an item, a doc line, an arm) is a change: it shows in full. **Over the limit of the user** (more than 50 kB of changed text), the line shows the first changed parts (or the first 3 lines of an added or a deleted text), the count of the others, the sizes, and the command. Docs ask for no limit. **An unchanged text** (a comment with no edit) and **a text that repeats** a text of a fact (the name of a macro call in a spotlight: the fact line shows its changed part) show their first 3 lines (or the first 80 characters of a text of one line), the size, and the command. A text whose other side Semilla cannot find in the line (a backquote in the code) keeps its full text: the safe side.
+
+   **A line with a text in this form has no cut of design 38.5** (a list line of more than 500 characters): the rule bounds the unchanged parts, and the changed parts show in full. A value of a line of the compiled check (a constant that a body reads, an outcome) has the budget 0 for two arrays of one length: their elements are the changed part.
+
+   **The command.** `semilla expand fN --step S` prints the fact `fN` of step `S` with each text in full and no line shared (part b). With no `--step`, or with the number of the next step, the step is the working tree against the end of the last stored step: the step that the last `semilla step` printed and did not store (a rejected step). `semilla expand PLACE` keeps its forms (`FILE:LINE`, an item path, a macro name). The command starts no build: the facts come from the syntax tree and from the records in the cache.
+
+   **(b) A line that repeats.** A line below a fact (not a line of a block, not a spotlight line) of 120 characters or more that two fact lines or more of a step have shows one time, at the first fact line in the order of the output, with "(the same line for f2, f5 to f9)". Each other fact has the line "KIND: the same line as f1" (`equivalence: the same line as f1`). The shared texts of design 37.13 (a spotlight text, a list of bodies, the diff of a file) keep their own forms.
+
+   **(c) The lines with the same origin.** R65.1-4 ("only the context of the call changes") holds also when a fact has an edit in the input of the call, if each changed value of the two texts moves with the call: each pair of different tokens is an integer that changes by the line shift or the column shift of the call, or a name that changes only as the name of the item of the call changes. Then the edit of the input has its own fact, and the expansion changes only by its place: the line goes under no fact, and the step section has one line for the calls of the macro ("2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: …"). Each other value keeps the line of the compare under the fact of the input (`#[ignore]` gives `ignore: false` → `ignore: true`).
+
+   Tests: `semilla-core/src/budget.rs` (the forms), `tests71.rs` (the block of a fact, the lines that repeat), `tests68.rs` (the element form), `expand.rs` (a large expansion, the values that move with the call), the cases `r71/g7_long_macro_input`, `r71/g7_long_docs_no_edit`, `r71/g7_test_moves_with_body_edit`, `r71/g7_added_deleted_statement_in_full`, `r71/g7_large_expansion_default` (positive), `r71/g7_short_macro_input`, `r71/g7_test_ignore_added` (negative), and `r68/u6_static_table_reader`.
+
+### 71.2 The unit is the whole item (G4)
+
+Rule index: the identities are below.
+
+1. [R71.2-1] **An item includes each body nested in it: closures, constant blocks, `async` blocks and coroutines, promoted constants.** The bodies of one item are one unit:
+   - **An edit of the item is an edit of each body of the unit.** The declaration of an item with no body node (a `const`, a `static`, an associated constant) holds its bodies (R61.15-1 before this batch), and an edit in a nested body is an edit of its item: each body with an edit has its line in the step section, also with the same graph.
+   - **A point that moves between two bodies of the unit is a move, not a new point.** A point that one body adds and a different body of the unit removes, with one key (the kind; the kind of a check or of a panic, `check bounds`; else the text: a call, a branch), is a move. The counts of the graph line of each body leave it out, and the line names the move: "shop::pick (src/lib.rs:1): graph changes: −1 call, +3 arrows, −2 arrows; moved in from `shop::pick::{closure#0}`: 1 check, 1 panic" and "shop::pick::{closure#0} |k: usize| v[k] (src/lib.rs:-2): graph removed: 4 points, 3 arrows; moved out to `shop::pick`: 1 check, 1 panic". The line of the point below a fact has the word `moved` in place of the sign: "control flow: moved check `bounds: v[i]` (src/lib.rs:2) from `shop::pick::{closure#0}`: ok → …". The entry and the return of a body never move. The rule covers each kind of point and each line (R68.7-1 before this batch: the checks and the panics of one line).
+   - **The results add up over the unit.** The line of the body of the item names a worse result of a nested body: "shop::F (src/lib.rs:1): same graph; not decided (…); with its nested bodies: different in `shop::F::{closure#0}`". Each body keeps its own result and its own line.
+
+   Tests: the cases `r68/u7_check_moves_out_of_closure`, `r71/g4_call_moves_into_closure`, `r71/g4_unit_result`, `compiled/const_block_static`, `compiled/const_assoc_value` (positive), `r68/u7_new_check_beside_closure` (one check moves and one is new), `r71/g4_unit_result_same`, `compiled/const_block_static_vis` (negative). Property 9 of the case runner (R60.4-6) counts a moved point of a full graph and leaves it out of the counts of a diff.
+
+### 71.3 A suggestion keeps a concrete pattern (G6)
+
+Rule index: the identities are below.
+
+1. [R71.3-1] **A gap line whose facts each have a result of the compiled check, and no result "different", offers the two forms in neutral words, with the concrete pattern of the edit when Semilla has one.** "to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::scale=TEXT'; if it does not change, --same 'rewrite $a * 3.0 => $a + $a + $a'". The pattern is the pattern of the edit of each place (`generalize`), also for one place. A line with different edits of one item lists the pattern of each edit one time; an edit with no pattern adds "and a `--same` fact (rename, move, or rewrite) that explains each other edit". With no pattern, the general words of R68.8-1 stay: "a `--same` fact (rename, move, or rewrite) that explains the edit". A line with a result "different", and each line of the default mode, keep the `--change` option. The one command of the step ("to state them, …") does not choose a form for an undecided line. R68.8-1 before this batch gave no pattern for a line of one place.
+
+   Tests: `agent.rs` (`merge_patterns`, the suggestion), the cases `r68/u8_not_decided_gap`, `r71/g6_one_place_pattern` (positive), `r68/u8_different_gap`, `r71/g6_no_pattern` (negative).
+
+### 71.4 The narrow rules that the general rules replace
+
+Rule index: no rule: the subsection lists the rules that batch 11c replaces, and the tests that it keeps.
+
+| Narrow rule (before) | General rule | What stays |
+|---|---|---|
+| R65.10-3: a large expansion gives only its sizes and the count of the lines that differ | R71.1-1 | the compare limit of 50 kB; the unit test, now with the changed lines |
+| R68.6-3: the changed elements of two arrays | R71.1-1 (the element form) | `array_change`, now in `semilla_core::budget`; the unit tests |
+| R68.7-1: the counts of checks and panics of a body with its closures | R71.2-1 | the two cases `r68/u7_*` |
+| R61.15-1: the declaration of an item with no body node holds its bodies | R71.2-1 | the code (`edit_in_body`), the three cases `compiled/const_*` |
+| R68.8-1: the neutral words of an undecided gap line | R71.3-1 | the neutral words, the two cases `r68/u8_*` |
+| `changed_text` (R63.9-8): a cut at 80 characters with no command | R71.1-1 | the form "changed code `…` → `…`" |
+| design 54.7, R58.7-1: no cut of a fact text or a comment text | R71.1-1 | the full text under the budget, and in each record |
+
+### 71.5 The decisions of Claude
+
+Rule index: no rule: the subsection lists the decisions of the batch; each rule has its identity in 71.1 to 71.3.
+
+Each item is "Decided by Claude".
+
+- *The budget* is 2000 characters and 20 lines of the unchanged parts of each text (`semilla_core::budget`). The 50 kB of the user is the limit of the compare of an expansion (`LARGE_EXPANSION`) and of the changed part of a line (`CHANGED_MOST`). A line with a text in the form of R71.1-1 has no cut of 38.5. Docs have no limit.
+- *The place of the budget* is the views (the step output, `status`, `tag`, the Markdown and HTML review), not the record: the description of a fact and each record keep the full text (R54.7-1), so the JSON of the MCP tools, the UI, and the command have it.
+- *The command* is a form of `semilla expand` (`semilla expand fN --step S`), not a new command: "expand" shows the full text of a call and now of a fact. A fact number of the form `f12` names a fact; an item with such a name needs its module path (`shop::f12`). The command starts no build.
+- *The changed part* is a shortest edit script (Myers) of the tokens or of the lines, at most 2000 differences; past that, one part from the first difference to the last one (the safe side: no part is hidden, the part is long).
+- *A line that repeats* shows one time only from 120 characters (the number of 37.13): a short line costs less than a reference.
+- *A move key* has the kind of a check or a panic (not its text): a check `bounds: v[k]` in the body and a check `bounds: v[i]` in its closure are one move. A call and a branch keep their text: a different callee is not a move.
+- *The unit result* names a worse result of a nested body; it does not replace the result of the body of the item: the result of each body is a statement about that body.
+- *The pattern of one place* (R71.3-1) is a suggestion of the form, not evidence of the behavior: the words "if it does not change" stay, and the agent chooses.
+
+### 71.6 The test cases of the brief
+
+Rule index: no rule: the subsection tells which test case of the brief Semilla reproduced, and how.
+
+- *A macro call with a very long input* (G7): reproduced. A `table!` call with 9000 numbers and one changed number gave a fact line of 105 907 characters and a spotlight line of 53 028 characters (the base `7f93226`). Now: "changed macro call `table!( … 212, 219, 226, 233, 240 …` → `table!( … 212, 219, 77777, 233, 240 …` (a large text: 52.9 kB → 52.9 kB; 1 changed part; the full text: semilla expand f1 --step 0)", and a spotlight line of 292 characters; the output of the step has 2.1 kB (base: 160.4 kB). `semilla expand f1` prints the full lines.
+- *The size line of a large expansion and the changed entries of an array* (G7): two forms of R71.1-1 now. The large expansion shows its changed lines with their line number (better than the count of R65.10-3); the array keeps the form of R68.6-3.
+- *`#[test]`: "N calls: … only the context of the call changes"* (G7): what changes is the descriptor that `#[test]` makes with the span of the test function (`start_line`, `end_line`, the columns, the name): only the place of the test. A test with no edit had one folded line already (R65.1-4); a test with an edit in its body had a line of the compare ("changed code `13usize, …` → `14usize, …`") under the fact of the edit. Now the two fold into the one line of the macro (R71.1-1 c). A test whose descriptor changes in another value (`#[ignore]`, `#[should_panic]`) keeps its line, with the cause.
+- *One expansion line under many unrelated facts* (G7): the line of a `#[test]` call with an edit in its body named each fact of the body as an owner ("also the change of f11, f12, f13, and 11 more"); it is now the folded line of the macro. Each other line of 120 characters or more that many facts have shows one time (R71.1-1 b).
+- *Long docs* (G7): a comment with no edit over the budget shows its first 3 lines, its size, and the command. A changed doc line always shows (the docs fact keeps each changed line).
+- *`let g = |i: usize| v[i]; g(k)` → `v[k]`* (G4): reproduced; R68.7-1 gave the counts of one line. Now the check and the panic are moves in the line of each body and in the lines of the facts.
+- *A const block in a `static` or a `const` item with an edit has no line* (G4): not reproduced. Batch 10b4 corrected it (R61.15-1, now a part of R71.2-1). Tried with `--compiled`: a const block in a `static`, in a `const`, in an associated constant, in a constant of a trait impl, in a default constant of a trait, in an array of a `static`, in a block of a `static`, a local `static` in a function, a `static` with a closure, and a const block with a loop (a graph change): each body has its line and its result.
+- *An `async` body has no graph* (G4): reproduced, not corrected (71.8).
+- *A gap line for a group of items gives only the general words* (G6): reproduced in 33 cases of the case set and in the training set: a line of one place, or a line of different edits of one item, had no pattern. Now each pattern that Semilla has shows.
+
+### 71.7 The results
+
+Rule index: no rule: the subsection has the results of the batch.
+
+**The training set** (7 pull requests; a clone at `new` with `git reset --soft old`; `semilla step "the change"`, the build check on, and with `--compiled`; an empty cache; `RUSTUP_TOOLCHAIN=nightly-2026-10-25`; the release binaries of `7f93226` and of this batch). The facts and the exit codes do not change. The column "changed lines" gives each line of the diff of the two outputs with its rule (a script classifies each changed line by the words of the rule).
+
+| Pull request | Mode | Output lines | Changed lines by rule |
+|---|---|---|---|
+| bitflags #465 | default | 39 → 39 | none |
+| bitflags #465 | compiled | 263 → 263 | none |
+| hashbrown #693 | default | 851 → 337 | 527 the form of a large text (the context of docs facts of 27 to 355 lines) |
+| hashbrown #693 | compiled | 1053 → 539 | 527 the form of a large text, 28 a line shown one time |
+| indexmap #424 | default | 680 → 667 | 15 the form of a large text |
+| indexmap #424 | compiled | 1900 → 1887 | 15 the form of a large text, 423 a line shown one time, 1 a pattern (R71.3-1) |
+| itertools #1086 | default | 62 → 62 | 2 the form of a large text |
+| itertools #1086 | compiled | 245 → 245 | 1 the form of a large text, 3 a line shown one time |
+| num-traits #334 | default | 464 → 454 | 11 one line for each macro (`#[test]`) |
+| num-traits #334 | compiled | 1448 → 1438 | 168 a line shown one time, 11 one line for each macro |
+| uuid #932 | default | 260 → 240 | 21 the form of a large text, 2 a line shown one time |
+| uuid #932 | compiled | 968 → 942 | 21 the form of a large text, 288 a line shown one time, 7 one line for each macro, 2 a pattern, 1 noise (the count of the facts that the budget of the check stops) |
+| winnow #891 | default | 1456 → 1364 | 67 the form of a large text (comments with no edit), 29 one line for each macro |
+| winnow #891 | compiled | 3517 → 3425 | 68 the form of a large text, 257 a line shown one time, 29 one line for each macro, 2 a pattern |
+
+The table has the results after the corrections of 71.9 (the release binaries `2076e3d4…`). A script compares each changed row of each fact of the two outputs: each `-` and `+` row of a line diff and each row of an added or a deleted text of the base output is in the new output; the changed fact lines show each changed token.
+
+- No line of the set changes by R71.2-1: no point of the set moves between two bodies of one item.
+- The compiled mode gives the same equivalence results: the step sections of the two binaries have the same result words; the two other differences are the noise of 66.10 (the digest number of a constant in `indexmap`, the count of the facts that the budget stops in `uuid`).
+- The time. The machine had two other batches (a load of 10 to 80), so the times of the full runs have much noise (`winnow`, default: 22.4 s and 69.7 s). Two runs one after the other: `winnow` default, cold 24.5 s → 27.9 s, warm 4.5 s → 4.3 s; `num-traits` `--compiled`, cold 42.8 s → 41.3 s, warm 12.5 s → 11.4 s. The rule adds no measured cost.
+- The three numbers: the rules with an identity, 474 → 472 (−2: three new rules, five narrow rules removed); the rows of `docs/name-lists.md`, 100 → 100 (0); the code paths that decide by a name, 0 new and 0 removed (a move key reads the kind of a point of the graph, and the rule of a move reads the tokens of the two texts).
+- The mutation checks (each change breaks one part of a rule; a test fails for each; each change is undone): the form of a text over the budget, the element form, the first lines of a comment, the changed lines of a large expansion, a line shown one time, a call that moves with an edit of its input, a point that moves between two bodies, the result of the unit, the declaration of an item with no body node, the pattern of one place, the command of the full text: 11 of 11 are caught.
+- The tests: 12 new unit and e2e tests, 13 new cases in `tests/cases/r71/` (with the corrections of 71.9); 36 old case files changed: 31 expected texts, each by a rule of this section (in 25 cases a pattern of R71.3-1, in 8 a line shown one time, in 3 a move of R71.2-1, in 1 the result of the unit), and 5 cases only in their rule markers (the cases of R61.15-1, R68.6-3, and R68.8-1 are now cases of R71.x). No case of the default mode changed.
+
+### 71.8 The limits and the open questions
+
+Rule index: no rule: the subsection has the limits and the open questions.
+
+- *An `async` body has no graph* (G4): not corrected. The driver reads the MIR after the pass `StateTransform`, which the compiler runs inside the query `mir_drops_elaborated_and_const_checked` (`run_runtime_lowering_passes`). A graph of the source needs a copy of the MIR before that pass in the query override of the driver (`semilla-mir/src/config.rs`), and the public MIR form (`rustc_public`) has no `Yield` terminator. That is a change of the driver (the part of batch 11b), larger than this batch. The line stays "graph not shown: coroutine", and its result counts in the result of the unit.
+- The cut of a long line of a list (design 38.5, 500 characters) can still hide a part of a line with no text in the form of R71.1-1 (a list of the facts of an expansion compare); `status --verbose` shows the full line. A line with a text in the form of R71.1-1 has no such cut (71.9).
+- The command of a tag after the commit (`semilla tag`) names a step of the session: load the change set of the commit first (`semilla load REV`).
+- The local UI and the JSON of the MCP tools show the full texts (no budget).
+- An added or a deleted text over 50 kB of changed text shows its first 3 lines, the count of the other lines, the sizes, and the command (the limit of the user). Below 50 kB it shows in full (71.9).
+- A move key reads the kind of a check, not its operands: two checks of one kind in a body and in its closure with different operands are one move (the check of `v[i]` in the closure and of `v[k]` in the body). A call and a branch need equal texts.
+- R71.1-1 c reads the integer values and the names of the two texts: a value of the input that changes by the line shift of the call by chance is a move. The folded line in the step section names each call, and `semilla status --verbose` lists them.
+
+### 71.9 The corrections of the verification
+
+Rule index: no rule: the subsection has the defects that the verification of the batch found, and their corrections; the rule text of 71.1 has the corrected form.
+
+**Defect 1: R71.1-1 hid changed code.** The first form of the rule put the budget on each text, also on the changed part. The places where a changed token or line did not show:
+
+- an added or a deleted text over 20 lines showed its first 3 lines (`hashbrown`: "deleted statement [1] (a large text: 25 lines, 1.3 kB; the first 3 lines, 22 more lines; …)"; `uuid`: four added statements of 24 lines);
+- the rows of a line diff stopped after 40 rows, and a changed line over 2000 characters showed its first 80 characters (no case of the training set);
+- two arrays named at most 8 changed elements, then "and N more" (no case of the training set; the unit test of R68.6-3);
+- the changed parts of a large expansion stopped at 200 characters, and the cut of design 38.5 hid the middle of the step line of the large expansion (`winnow`: "`start_line: 36usize,` → `start_line: 38usize,` (line 86), … (5 items more; …) …").
+
+The correction: the budget applies only to the unchanged parts of a text (the context) and to a text that repeats (a spotlight names the macro call of its fact; a line of many facts). A changed part (each added, deleted, or changed token, line, or element) shows in full, up to the limit of the user: 50 kB of changed text (`CHANGED_MOST`). Over it, the line gives the first changed parts, the count of the others, the sizes, and the command. A line with a text in the form of the rule has no cut of 38.5. The name of a call in an expansion line keeps the text of the driver (the budget of 80 characters of the first form is gone). The case `r71/g7_added_deleted_statement_in_full` fails if an added or a deleted statement over the budget has a cut; unit test `an_added_or_a_deleted_text_over_the_budget_shows_in_full_up_to_the_limit_of_the_user`.
+
+**Defect 2: compare result words in the default mode (R50.1-1).** The line of a large expansion said "no compare (a text over 50 kB)" (10n2 had "the text is too large for a compare" for this reason), and the line of R68.12-1 (batch 10u) said "! build check: not checked: …". Both lines are in the default mode. The new words: "the text is too large for the fact rules (over 50 kB): …" and "! build check: not built: …" ("maybe not built" when a cargo configuration file of the tree can set the target). R50.1-1 is now property 13 of the case runner: each case of the default mode (no `--compiled`) is checked in the step output, the output of the tag after the commit, `status --verbose`, and the Markdown review: no line has `code equal`, `code different`, `no compare`, `no code`, `pending`, or `not checked` outside a code text and a text of the agent. Unit test `the_thirteenth_property_finds_a_compare_result_word_of_the_default_mode`; cases `r71/g7_large_expansion_default` and `r71/g7_target_hidden_default` (the build check on).
+
+**The tests after the corrections.** `cargo test --workspace --no-fail-fast`: 1043 passed, and 3 needle tests of `large.rs` failed only on their time limit of 240 s under a load of 95; a rerun of the three one at a time passed. 1046 tests in all.
+
+**The mutation checks of the corrections** (each undone): the old words of the large expansion line, the old words of the line of the build check (property 13 fails on the two cases), and a cut of an added or a deleted text at the budget (the case `r71/g7_added_deleted_statement_in_full` fails): 3 of 3 are caught.
+
+**The results after the corrections.** The output lines of the training set (default; compiled): bitflags 39; 263, hashbrown 337; 539, indexmap 667; 1887, itertools 62; 245, num-traits 454; 1438, uuid 240; 942, winnow 1364; 3425 (the table of 71.7). Before the corrections: hashbrown 315; 517, uuid 198; 900, and bitflags and itertools had 3 to 6 lines with a shorter name of a call. The script of 71.7 finds no changed row and no changed token that the output does not show. No default output of the set has a compare result word. The equivalence results are the same as the base.

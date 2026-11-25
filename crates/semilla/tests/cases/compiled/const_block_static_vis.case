@@ -1,5 +1,5 @@
 note: a visibility edit and a doc edit of a static item are not edits of its bodies: a body with the same graph gets no line
-rule-: R61.15-1
+rule-: R71.2-1
 option: --compiled
 === both Cargo.toml
 [package]

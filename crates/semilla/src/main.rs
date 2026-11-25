@@ -316,12 +316,15 @@ enum Command {
     /// Print the expansion of each macro call at a place, before and after the step, with a
     /// line diff (design 63): `semilla expand src/lib.rs:4`, `semilla expand shop::price`,
     /// `semilla expand base!` (each call of the macro, also through a different macro).
+    /// `semilla expand f3 --step 0` prints each text of the fact `f3` in full (R71.1-1): a
+    /// line over the size budget names this command.
     ///
-    /// The default step is the working tree against `HEAD`. The command builds the compiled
-    /// records only if the cache has no record of the two trees.
+    /// The default step is the working tree against `HEAD` (for a fact: the working tree
+    /// against the last stored step). The command builds the compiled records only if the
+    /// cache has no record of the two trees.
     Expand {
-        /// `FILE:LINE` (`FILE:-LINE` for a line of the old tree), an item path, or a macro name
-        /// with `!`.
+        /// `FILE:LINE` (`FILE:-LINE` for a line of the old tree), an item path, a macro name
+        /// with `!`, or a fact number (`f3`).
         place: String,
         /// A stored step of the session.
         #[arg(long)]

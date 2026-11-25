@@ -625,7 +625,7 @@ fn fact_id(outcome: &StepOutcome, index: usize) -> Option<String> {
 
 /// A text report of the steps, for the CLI and the agent tools (design section 8.15).
 pub fn text_report(steps: &[StepReport]) -> String {
-    text_report_lists(steps, false, true)
+    text_report_lists(steps, false, true, false)
 }
 
 /// The short cause of a claim that is not verified, for a claim list below the full text: the
@@ -677,8 +677,12 @@ pub fn body_list(items: &[String], names: bool) -> String {
     format!("{} bodies of {} (`semilla status --verbose` shows the names)", items.len(), semilla_core::report::list_scope(items))
 }
 
-/// The shortest spotlight text that the text report prints one time for many facts.
+/// The shortest spotlight text that the text report prints one time for many facts, and the
+/// shortest line below a fact that shows one time for many facts (R71.1-2).
 const SHARE_MIN: usize = 120;
+
+/// The words of a line below a fact that another fact shows (R71.1-2).
+pub const SAME_LINE_AS: &str = "the same line as ";
 
 /// The place of a fact in the list of a step (design 37.18). The fact numbers do not change.
 /// - 0: a build code change that is no manifest fact (design 28.3: read this change first);
@@ -747,6 +751,9 @@ struct Shared<'a> {
     flow: Option<&'a semilla_core::report::FlowReport>,
     /// The step of a tag after the commit (design 62).
     after_commit: bool,
+    /// The index of the step, for the command of a text over the budget (R71.1-1). `None`: the
+    /// output shows each text in full.
+    step: Option<usize>,
 }
 
 impl<'a> Shared<'a> {
@@ -813,10 +820,19 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     let origin = if fact.status.is_empty() { "derived" } else { fact.status.as_str() };
     // Design 54.7: a long text and a text with more than one line are in a block below the
     // fact line. No line of a block has a cut.
-    let (text, blocks) = semilla_core::text::fact_layout(&fact.description);
+    // R71.1-1: a text over the budget shows the changed part, the sizes, and the command that
+    // shows the full text. Docs show each changed line.
+    let command = shared.step.map(|step| full_text_command(&fact.id, step));
+    let budget = command.as_deref().map(|command| semilla_core::text::Budget { command: Some(command), keep: fact.category == semilla_core::Category::Docs });
+    let (text, blocks) = semilla_core::text::fact_layout_with(&fact.description, budget);
     let head = format!("{origin}: {text} [{}]{}", fact.label(), fact.mark());
     let mut lines: Vec<String> = blocks.iter().map(|line| format!("        {line}")).collect();
-    let mut put = |line: &str| lines.push(line.to_string());
+    let mut put = |line: &str| lines.push(match budget {
+        Some(budget) => semilla_core::budget::line(line, budget.command, budget.keep, is_spotlight_line(line)),
+        None => line.to_string(),
+    });
+    // A line of a list: the texts over the budget first (R71.1-1), then the cut of design 38.5.
+    let fit_list = |line: String| if names { line } else { fit_line(&line) };
     for group in fact.sites.iter().filter(|group| !fact.names_sites(group)) {
         if matches!(fact.part.as_str(), "edit" | "body") {
             // A fold of equal facts: the bodies, with the count of sites in each.
@@ -868,23 +884,19 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
         Some(flow) => {
             // Design 38.5: a long line has a cut; `status --verbose` shows the full line.
             for line in flow.facts.get(&fact.id).into_iter().flatten() {
-                let line = format!("      control flow: {line}");
-                put(&if names { line } else { fit_line(&line) });
+                put(&fit_list(format!("      control flow: {line}")));
             }
             // The equivalence of the body (design 61, E1).
             for line in flow.equivalence.get(&fact.id).into_iter().flatten() {
-                let line = format!("      equivalence: {line}");
-                put(&if names { line } else { fit_line(&line) });
+                put(&fit_list(format!("      equivalence: {line}")));
             }
             // The changed expansions that the fact owns (design 63, R63.3-3).
             for line in flow.expansion_lines.get(&fact.id).into_iter().flatten() {
-                let line = format!("      expansion: {line}");
-                put(&if names { line } else { fit_line(&line) });
+                put(&fit_list(format!("      expansion: {line}")));
             }
             // The callers that the change of the body reaches (design 61.10, A5).
             if let Some((line, _)) = flow.reaches.get(&fact.id) {
-                let line = format!("      reaches: {line}");
-                put(&if names { line } else { fit_line(&line) });
+                put(&fit_list(format!("      reaches: {line}")));
             }
         }
         None => {
@@ -949,6 +961,9 @@ fn fact_lines(fact: &semilla_core::report::Fact, shared: &Shared, names: bool) -
     (head, lines)
 }
 
+/// The command that shows each text of a fact in full (R71.1-1).
+pub use semilla_core::budget::full_text_command;
+
 /// The line above the changed doc lines of a doc test fact (design 55.5).
 pub const DOC_TEST_LINES: &str = "changed doc lines (a code block of the docs is the code of a doc test; `-` old, `+` new):";
 
@@ -997,7 +1012,9 @@ pub fn fit_line(line: &str) -> String {
     const HEAD: usize = 300;
     const TAIL: usize = 100;
     let count = |text: &str| text.chars().count();
-    if count(line) <= LINE_MAX {
+    // R71.1-1: a line with a text in the form of the size rule has no cut: the rule bounds its
+    // unchanged parts, and its changed parts show in full.
+    if count(line) <= LINE_MAX || line.contains(semilla_core::budget::LARGE_TEXT_MARK) {
         return line.to_string();
     }
     const FULL: &str = "`semilla status --verbose` shows the full line";
@@ -1170,7 +1187,7 @@ fn result_ranges(line: &str) -> Vec<(usize, usize)> {
 /// Returns the build code section (it comes before the claims) and the other facts. Each
 /// other entry has the place of its lines (design 54.5) and the lines: the index of the fact
 /// of the agent that the fact is below, or the group of a fact that Semilla filled in.
-fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<Block>) {
+fn fact_list(step: &StepReport, names: bool, noted: &mut bool, full: bool) -> (String, Vec<Block>) {
     use text::put_line as put;
     let facts = &step.facts;
     let mut first = String::new();
@@ -1192,6 +1209,7 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<B
     let mut shared = Shared::new(&alone, names);
     shared.flow = step.flow.as_ref();
     shared.after_commit = step.after_commit;
+    shared.step = (!full).then_some(step.step);
     // Design 28.3: the build code changes of the step come first, with the diff. The manifest
     // facts of the change are with the other manifest facts: one line names them here.
     if facts.iter().any(|fact| fact.build_code_change) {
@@ -1270,6 +1288,33 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<B
     };
     let mut output: Vec<usize> = (0..shown.len()).collect();
     output.sort_by_key(|index| output_key(&shown[*index]));
+    // R71.1-2: a line below a fact (not a line of a block, not a spotlight line, at least
+    // `SHARE_MIN` characters) that two fact lines or more have shows one time, at the first
+    // fact line in the order of the output, with the numbers of the other facts. Each other fact
+    // line names that fact. A full text (`semilla expand fN`) keeps each line.
+    if !full {
+        let shareable = |line: &str| line.starts_with("      ") && !line.starts_with("        ") && line.chars().count() >= SHARE_MIN && !is_spotlight_line(line) && !line.contains(SAME_LINE_AS);
+        let mut holders: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for index in &output {
+            for line in shown[*index].lines.iter().filter(|line| shareable(line)) {
+                let list = holders.entry(line.clone()).or_default();
+                if !list.contains(index) {
+                    list.push(*index);
+                }
+            }
+        }
+        holders.retain(|_, list| list.len() > 1);
+        for (text, list) in &holders {
+            let first = shown[list[0]].ids[0].to_string();
+            let others: Vec<&str> = list[1..].iter().flat_map(|index| shown[*index].ids.iter().copied()).collect();
+            let kind = text.trim_start().split(": ").next().unwrap_or("").to_string();
+            for (place, index) in list.iter().enumerate() {
+                for line in shown[*index].lines.iter_mut().filter(|line| *line == text) {
+                    *line = if place == 0 { format!("{text} (the same line for {})", id_list(&in_order(&others))) } else { format!("      {kind}: {SAME_LINE_AS}{first}") };
+                }
+            }
+        }
+    }
     let in_output: Vec<&semilla_core::report::Fact> = output.iter().flat_map(|index| shown[*index].ids.iter()).filter_map(|id| facts.iter().find(|fact| fact.id == *id)).collect();
     let mut of_fact = semilla_core::report::comments_shown(&in_output).into_iter();
     let mut comment_lines: Vec<Vec<String>> = vec![Vec::new(); shown.len()];
@@ -1277,7 +1322,9 @@ fn fact_list(step: &StepReport, names: bool, noted: &mut bool) -> (String, Vec<B
         let mut no_edit = false;
         for _ in &shown[*index].ids {
             for comment in of_fact.next().unwrap_or_default() {
-                comment_lines[*index].extend(comment.lines().into_iter().map(|line| format!("      {line}")));
+                // R71.1-1: a comment text over the budget with no edit shows its first lines.
+                let command = (!full).then(|| full_text_command(shown[*index].ids[0], step.step));
+                comment_lines[*index].extend(comment.lines_with(command.as_deref()).into_iter().map(|line| format!("      {line}")));
                 no_edit |= comment.state == semilla_core::report::CommentState::NoEdit;
             }
         }
@@ -1384,11 +1431,29 @@ pub fn agent_lines(step: &StepReport, limit: Option<usize>, below: &dyn Fn(usize
 /// The text report. With `short_failures`, a claim that is not verified shows only its status
 /// and a short cause: the caller prints the full text and the hint before the report.
 pub fn text_report_with(steps: &[StepReport], short_failures: bool) -> String {
-    text_report_lists(steps, short_failures, false)
+    text_report_lists(steps, short_failures, false, false)
+}
+
+/// The full text of one fact of a step (R71.1-1, the command `semilla expand fN`): the fact
+/// line, each line below it, and its comments, with each text in full (no budget). `None` if
+/// the step has no fact with the number.
+pub fn fact_full_text(step: &StepReport, id: &str) -> Option<String> {
+    let fact = step.facts.iter().find(|fact| fact.id == id)?;
+    let mut one = step.clone();
+    one.facts = vec![fact.clone()];
+    one.agent_facts.clear();
+    one.tags.clear();
+    let mut noted = true;
+    let (first, rest) = fact_list(&one, true, &mut noted, true);
+    let mut out = first;
+    for block in rest {
+        out.push_str(&block.text);
+    }
+    Some(out)
 }
 
 /// The text report. `names` shows each name of a long list of bodies (batch 5x, part E).
-fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) -> String {
+fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool, full: bool) -> String {
     // Each line of the report can hold text of the agent or of the repository: `put` shows
     // each hidden character of a line as an escape, so no text starts a new line (5k, A2).
     // Design 38.5: each line has at most `LINE_MAX` characters (`status --verbose`: each
@@ -1400,7 +1465,7 @@ fn text_report_lists(steps: &[StepReport], short_failures: bool, names: bool) ->
     for step in steps {
         let start = out.len();
         put(&mut out, &format!("step {}  {}", step.step, text::quoted(&step.intent)));
-        let (build_code, facts) = fact_list(step, names, &mut noted);
+        let (build_code, facts) = fact_list(step, names, &mut noted, full);
         out.push_str(&build_code);
         for claim in &step.claims {
             let mark = match &claim.status {

@@ -735,19 +735,22 @@ pub struct Gap {
     /// The option that states the line: `--same 'rewrite FROM => TO'` if one pattern covers
     /// each place, else `--change 'ITEMS=TEXT'`.
     pub option: String,
-    /// R68.8-1: the compiled check did not decide if the behavior of the places changes (each
-    /// fact of the line has a result, and no result is "different"). The suggestion offers the
-    /// two forms in neutral words, and the one command of the step does not have the option.
+    /// R71.3-1 (R68.8-1 before batch 11c): the compiled check did not decide if the behavior of
+    /// the places changes (each fact of the line has a result, and no result is "different").
+    /// The suggestion offers the two forms in neutral words, and the one command of the step
+    /// does not have the option.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub undecided: bool,
-    /// R68.8-1: the `--same` option for the form that keeps the behavior, if the option of the
-    /// line is a `--same` option (one pattern covers each place of a group).
+    /// R71.3-1: the `--same` options for the form that keeps the behavior: the option of the line
+    /// (one pattern covers each place of a group), or the concrete pattern of each edit of the
+    /// line, also of one place. `None`: Semilla has no pattern, and the line has the general
+    /// words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub same: Option<String>,
 }
 
 impl Gap {
-    /// The text after "to state it: " (R68.8-1).
+    /// The text after "to state it: " (R71.3-1).
     pub fn suggestion(&self) -> String {
         if !self.undecided {
             return self.option.clone();
@@ -1060,15 +1063,40 @@ impl RelatedComment {
     /// A text of one line that is not long is in the line. Each other text is a block: each
     /// line of the comment is one line with the mark [`COMMENT_BLOCK`]. No text has a cut.
     pub fn lines(&self) -> Vec<String> {
+        self.lines_with(None)
+    }
+
+    /// The head and the text of a comment for an output with the size rule of R71.1-1: a text
+    /// over the budget gives the head with the note (the size and `command`) and its first
+    /// lines. Else the head and the full text.
+    pub fn head_and_text(&self, command: Option<&str>) -> (String, String) {
+        match command.filter(|_| self.shows_text()).and_then(|command| crate::budget::single(&self.text, Some(command))) {
+            Some(crate::budget::Form::Block(note, rows)) => (format!("{} {note}", self.head()), rows.join("\n")),
+            Some(crate::budget::Form::Line(text)) => (format!("{}: {text}", self.head()), String::new()),
+            None => (self.head(), self.text.clone()),
+        }
+    }
+
+    /// The lines of the comment with the size rule of R71.1-1: a text over the budget shows its
+    /// first lines, the size, and `command` (the command that shows the full text). A comment
+    /// with no edit has no changed line, so the rule hides no edit. `None`: the full text.
+    pub fn lines_with(&self, command: Option<&str>) -> Vec<String> {
         if !self.shows_text() {
             return vec![self.head()];
         }
         if !self.text.contains('\n') && self.text.chars().count() <= crate::text::BLOCK_MIN {
             return vec![format!("{}: `{}`", self.head(), self.text)];
         }
+        let block = |line: &str| if line.is_empty() { format!("    {}", COMMENT_BLOCK.trim_end()) } else { format!("    {COMMENT_BLOCK}{line}") };
+        if let Some(form) = command.and_then(|command| crate::budget::single(&self.text, Some(command))) {
+            return match form {
+                crate::budget::Form::Block(note, rows) => std::iter::once(format!("{} {note}:", self.head())).chain(rows.iter().map(|line| block(line))).collect(),
+                crate::budget::Form::Line(text) => vec![format!("{}: {text}", self.head())],
+            };
+        }
         let mut lines = vec![format!("{}:", self.head())];
         // An empty line of the comment is the mark with no space after it.
-        lines.extend(self.text.split('\n').map(|line| if line.is_empty() { format!("    {}", COMMENT_BLOCK.trim_end()) } else { format!("    {COMMENT_BLOCK}{line}") }));
+        lines.extend(self.text.split('\n').map(block));
         lines
     }
 }
@@ -1748,7 +1776,7 @@ impl StepReport {
     pub fn gap_command(&self, limit: Option<usize>) -> Option<String> {
         let shown = limit.unwrap_or(self.gaps.len()).min(self.gaps.len());
         let mut options: Vec<&str> = Vec::new();
-        // R68.8-1: an undecided line has two forms, so the one command does not choose one.
+        // R71.3-1: an undecided line has two forms, so the one command does not choose one.
         for gap in self.gaps[..shown].iter().filter(|gap| !gap.undecided) {
             if !options.contains(&gap.option.as_str()) {
                 options.push(&gap.option);

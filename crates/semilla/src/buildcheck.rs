@@ -305,7 +305,7 @@ impl App {
         semilla_verify::target_hidden([&old, &new], &host)
             .iter()
             .map(|hidden| match config {
-                Some(file) => format!("  ! build check: not checked: the changed code under `{}` at {}:{} has a target condition, and the file `{file}` of the tree can set the target of the check: Semilla does not know if the check built it", hidden.attr, hidden.file, hidden.line),
+                Some(file) => format!("  ! build check: maybe not built: the changed code under `{}` at {}:{} has a target condition, and the file `{file}` of the tree can set the target of the check: Semilla does not know if the check built it", hidden.attr, hidden.file, hidden.line),
                 None => format!("  {}", hidden.text(&target)),
             })
             .collect()

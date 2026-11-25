@@ -1,0 +1,48 @@
+note: batch 11c, verification correction: the build check of the default mode does not build changed code under a target condition that the host makes false; the line says so with no compare result word (R50.1-1, property 13 of the case runner)
+rule+: R68.12-1
+build_check: on
+must_match: ! build check: not built: the check did not build the changed code under `#\[cfg\(target_os = "none_such_os"\)\]` at src/lib.rs:1
+must_not_match: not checked
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[cfg(target_os = "none_such_os")]
+pub fn only_there() -> u32 {
+    1
+}
+
+pub fn here() -> u32 {
+    2
+}
+=== new src/lib.rs
+#[cfg(target_os = "none_such_os")]
+pub fn only_there() -> u32 {
+    3
+}
+
+pub fn here() -> u32 {
+    2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+  ! build check: not built: the check did not build the changed code under `#[cfg(target_os = "none_such_os")]` at src/lib.rs:1 (changed lines: src/lib.rs:3): the target of the check (`x86_64-unknown-linux-gnu`) makes the condition false
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `3` (f1)
+      in: shop::only_there
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: --change 'shop::only_there=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::only_there=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `3` at `shop::only_there/tail` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `3` at `shop::only_there/tail` [semantics]
+    lines: src/lib.rs:3, src/lib.rs:-3

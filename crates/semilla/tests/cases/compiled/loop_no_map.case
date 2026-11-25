@@ -45,13 +45,13 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: change condition `i < n` → `left > 0` at `shop::steps/S2/cond` [semantics · code different]
       affected bodies: shop::steps (with 2 other edits of this body)
       control flow: ~ branch `i < n` → `left > 0` (src/lib.rs:-4, src/lib.rs:4)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input (the same line for f1, f4)
   ◆ f4 derived: changed expression `i += 1` → `left -= 1` at `shop::steps/S2/body/S1` [semantics · code different]
       affected bodies: shop::steps (with 2 other edits of this body)
       control flow: ~ check `overflow: i += 1` → `overflow: left -= 1` (src/lib.rs:-6, src/lib.rs:6)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+      equivalence: the same line as f3
   ◆ f1 derived: `shop::steps`: renamed local `i` → `left`, 1 edit(s) [rename · code equal]
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: not decided: the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input
+      equivalence: the same line as f3
   cover: each of the 6 changed line(s) is in a fact
   control flow: 1 body
     shop::steps (src/lib.rs:1): same structure: 1 changed condition, 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); not decided (the loop bodies differ for a state that Semilla cannot show is reachable; a bounded run of at most 4 loop iterations finds no input)

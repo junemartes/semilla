@@ -39,7 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed method_call: `talk(&Dog)` → `talk(&Dog).wrapping_add(talk(&Cat))` (f1)
       in: shop::all
       lines: src/lib.rs:11, src/lib.rs:-11
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::all=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::all=TEXT'; if it does not change, --same 'rewrite $a($b) => $a($b).wrapping_add($a(&Cat))'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed method_call: `talk(&Dog)` → `talk(&Dog).wrapping_add(talk(&Cat))` at `shop::all/tail` [semantics · code different]
       affected bodies: shop::all

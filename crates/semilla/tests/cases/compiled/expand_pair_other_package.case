@@ -72,7 +72,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: replace macro input, see f1 (f1)
       in: shop::price
       lines: shop/src/lib.rs:5, shop/src/lib.rs:-5
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite twice!(<(u8, u8)>::size()) => twice!(<(u8, u8, u8)>::size())'
   other facts, filled in by Semilla:
   ◆ f1 derived: replace macro input `twice!(<(u8, u8)>::size())` → `twice!(<(u8, u8, u8)>::size())` at `shop::price/tail` [macro · code different]
       affected bodies: shop::price

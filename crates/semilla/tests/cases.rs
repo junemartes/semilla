@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The names of the checks. A line `known_failure: NAME: CAUSE` of a case names one of them.
-const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit"];
+const CHECKS: &[&str] = &["expected", "exit", "must_match", "must_not_match", "same_facts", "cover", "empty_change", "same_result", "tags", "agent_facts", "reader", "comments", "equivalence", "after_commit", "default_mode"];
 
 /// A spotlight line of `semilla step` with no reason, in the form of a tag after the commit
 /// (design 62): `✗ spotlight…: TEXT; it needs a reason: --reason '…'` gives
@@ -740,6 +740,14 @@ fn comment_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTreeMa
     for fact in facts(output) {
         for comment in comment_subs(&fact.subs).1 {
             let Some((_, rest)) = comment.head.split_once(NO_EDIT) else { continue };
+            // R71.1-1: a comment over the budget shows its first lines, and the note after its
+            // position gives the count of the lines ("(a large text: 30 lines, 2.6 kB; the first
+            // 3 lines, 27 more lines; …)").
+            let (rest, cut) = match rest.split_once(") (a large text: ") {
+                Some((position, note)) => (format!("{position})"), Some(note.to_string())),
+                None => (rest.to_string(), None),
+            };
+            let rest = rest.as_str();
             if !seen.insert(comment.clone()) {
                 problems.push(format!("a comment shows two times: {}", comment.head));
                 continue;
@@ -764,6 +772,17 @@ fn comment_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTreeMa
             let parts: Vec<(usize, usize, String)> = new.get(file).map(|bytes| tree_comments(&String::from_utf8_lossy(bytes))).unwrap_or_default().into_iter().filter(|(start, end, _)| first <= *start && *end <= last).collect();
             let in_tree: Vec<String> = parts.iter().flat_map(|(_, _, part)| shown(part)).collect();
             let in_output: Vec<String> = text.iter().map(|line| line.trim_end().to_string()).collect();
+            // A cut text: its lines are the first lines of the comment, and the note gives the
+            // count of the lines of the comment.
+            let number = |words: &str, before: &str| words.split(before).next().and_then(|head| head.rsplit(' ').next()).and_then(|word| word.parse::<usize>().ok());
+            let in_tree = match &cut {
+                Some(note) if number(note, " lines,") == Some(in_tree.len()) => in_tree.into_iter().take(in_output.len()).collect(),
+                Some(note) => {
+                    problems.push(format!("the note of a cut comment does not give the count of its lines ({}): {}", in_tree.len(), note));
+                    continue;
+                }
+                None => in_tree,
+            };
             if parts.is_empty() || in_tree != in_output {
                 problems.push(format!("the comment tokens of the new tree at the position do not give the text of a comment with no edit: {}\n      the tree: {in_tree:?}\n      the output: {in_output:?}", comment.head));
                 continue;
@@ -882,6 +901,33 @@ fn equal_token_problems(output: &str, old: &BTreeMap<String, Vec<u8>>, new: &BTr
     problems
 }
 
+/// The words of a compare result (R50.1-1): no output of the default mode has one.
+const COMPARE_WORDS: &[&str] = &["code equal", "code different", "no compare", "no code", "pending", "not checked"];
+
+/// Property 13 (R50.1-1, batch 11c): the lines of an output of the default mode that have a
+/// compare result word. A word in a code text (between backquotes) or in a text in quote marks
+/// (the text of the agent) is not a result.
+fn default_mode_problems(text: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    for line in text.lines() {
+        let mut plain = String::new();
+        let (mut code, mut quote, mut escape) = (false, false, false);
+        for c in line.chars() {
+            match c {
+                '`' if !quote => code = !code,
+                '\\' if quote && !escape => escape = true,
+                '"' if !code && !escape => quote = !quote,
+                _ if code || quote => escape = false,
+                _ => plain.push(c),
+            }
+        }
+        if let Some(word) = COMPARE_WORDS.iter().find(|word| plain.contains(*word)) {
+            problems.push(format!("the default mode has the compare result word `{word}`: {}", line.trim()));
+        }
+    }
+    problems
+}
+
 /// The problems of the control flow section of `status --verbose` (design 60, R60.4-6): the
 /// count of the bodies, and for each result of a body, the counts of its summary and the lines
 /// of its points and arrows (`+ KIND …`, `− KIND …`, `~ KIND …`, `+ arrow …`, `− arrow …`).
@@ -894,7 +940,9 @@ fn flow_problems(text: &str) -> Vec<String> {
     let mut index = start + 1;
     // The counts of one result: points added, removed, changed, arrows added, removed.
     let check = |head: &str, elements: &[&str], problems: &mut Vec<String>| {
-        let summary = head.split_once(": ").map_or("", |(_, rest)| rest.split(" (in ").next().unwrap_or(""));
+        // R71.2-1: the counts end at the first `; ` (the words of the points that move between
+        // the bodies of one item follow).
+        let summary = head.split_once(": ").map_or("", |(_, rest)| rest.split(" (in ").next().unwrap_or("").split("; ").next().unwrap_or(""));
         let mut want = [0usize; 5];
         let word = head.split([':', '(']).next().unwrap_or("").trim();
         for part in summary.split(", ") {
@@ -917,7 +965,10 @@ fn flow_problems(text: &str) -> Vec<String> {
         }
         let mut have = [0usize; 5];
         for element in elements {
-            let slot = if element.starts_with("+ arrow ") { 3 } else if element.starts_with("− arrow ") { 4 } else if element.starts_with("+ ") { 0 } else if element.starts_with("− ") { 1 } else if element.starts_with("~ ") { 2 } else { continue };
+            // R71.2-1: a point that moves to a different body of its item is not in the counts
+            // of a diff; a full graph counts each of its points.
+            let moved = element.starts_with("moved ");
+            let slot = if element.starts_with("+ arrow ") { 3 } else if element.starts_with("− arrow ") { 4 } else if element.starts_with("+ ") || (moved && word == "graph added") { 0 } else if element.starts_with("− ") || (moved && word == "graph removed") { 1 } else if element.starts_with("~ ") { 2 } else { continue };
             have[slot] += 1;
         }
         if want != have {
@@ -1211,6 +1262,12 @@ fn check(case: &Case) -> Result<Outcome, String> {
         git(&repo, &["add", "-A"])?;
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "the change"])?;
         let tagged = work.semilla(&folder, &["tag".to_string()])?;
+        // Property 13 (R50.1-1) for the output of the tag of the default mode.
+        if !case.options.iter().any(|option| option == "--compiled") {
+            for problem in default_mode_problems(&tagged.all()) {
+                work.fail("default_mode", format!("the tag after the commit: {problem}"));
+            }
+        }
         let base = plain.as_ref().unwrap_or(&step);
         // The one text that differs on purpose (R62.3-1): a spotlight with no reason is an open
         // item in the tag, not a cause to run the step again.
@@ -1228,6 +1285,15 @@ fn check(case: &Case) -> Result<Outcome, String> {
     // the new tree (design 58.11).
     for problem in comment_problems(&output, &case.old, &case.new) {
         work.fail("comments", problem);
+    }
+
+    // Property 13 (R50.1-1): no output of the default mode has a compare result word. The
+    // reader outputs (`status --verbose`, the Markdown review) have the same check below.
+    let default_mode = !case.options.iter().any(|option| option == "--compiled");
+    if default_mode {
+        for problem in default_mode_problems(&output) {
+            work.fail("default_mode", problem);
+        }
     }
 
     // Property 5: a rejected step is not stored, and a false fact of the agent removes no fact
@@ -1409,6 +1475,13 @@ fn check(case: &Case) -> Result<Outcome, String> {
         let report = folder.join("review.md");
         let review = work.semilla(folder, &["review".to_string(), "--md".to_string(), report.to_string_lossy().to_string()])?;
         let markdown = no_escape(&std::fs::read_to_string(&report).unwrap_or_default());
+        if default_mode {
+            for (name, text) in [("`status --verbose`", &status.stdout), ("the Markdown review", &markdown)] {
+                for problem in default_mode_problems(text) {
+                    work.fail("default_mode", format!("{name}: {problem}"));
+                }
+            }
+        }
         let status_lines: BTreeSet<&str> = status.stdout.lines().map(str::trim).collect();
         for fact in facts(&run.all()) {
             if !status_lines.contains(fact.head.as_str()) {
@@ -1630,6 +1703,22 @@ fn the_eighth_property_finds_a_token_that_the_other_item_does_not_have() {
 // rule+ R58.11-1
 // rule- R58.11-1
 // rule- R60.4-6
+#[test]
+// Property 13: a compare result word in an output of the default mode is a problem; a word in a
+// code text or in a text of the agent is not.
+// rule+ R50.1-1
+// rule- R50.1-1
+#[test]
+fn the_thirteenth_property_finds_a_compare_result_word_of_the_default_mode() {
+    assert_eq!(default_mode_problems("  ◆ f1 derived: changed literal `1` → `2` [semantics]\n  expansion: the text is too large for the fact rules (over 50 kB): …").len(), 0);
+    assert_eq!(default_mode_problems("  ! build check: not checked: the check did not build the changed code").len(), 1);
+    assert_eq!(default_mode_problems("  expansion: no compare (a text over 50 kB): `a` → `b`").len(), 1);
+    assert_eq!(default_mode_problems("  ◆ f1 derived: changed literal `1` → `2` [semantics · code different]").len(), 1);
+    // A word in code or in the words of the agent is text.
+    assert_eq!(default_mode_problems("  ◆ f1 derived: changed literal `\"not checked\"` → `\"pending\"` at `shop::f/tail` [semantics]").len(), 0);
+    assert_eq!(default_mode_problems("step 0  \"keep the pending list\"").len(), 0);
+}
+
 #[test]
 fn the_ninth_property_finds_a_changed_point_with_no_line() {
     let good = "step 0\n  control flow: 1 body\n    demo::f (src/lib.rs:3): graph changes: +1 branch, +3 arrows, −1 arrow\n        graph changes: +1 branch, +3 arrows, −1 arrow\n          + branch `x > 3` (src/lib.rs:4)\n          + arrow entry (src/lib.rs:3) → branch `x > 3` (src/lib.rs:4)\n          + arrow branch `x > 3` (src/lib.rs:4) → return (src/lib.rs:6) (true)\n          + arrow branch `x > 3` (src/lib.rs:4) → call `demo::g` (src/lib.rs:5) (false)\n          − arrow entry (src/lib.rs:-3) → call `demo::g` (src/lib.rs:-4)\n";

@@ -1,5 +1,5 @@
 note: a const block in the value of a static item is a nested body: it gets its line in the step section
-rule+: R61.15-1
+rule+: R71.2-1
 option: --compiled
 === both Cargo.toml
 [package]

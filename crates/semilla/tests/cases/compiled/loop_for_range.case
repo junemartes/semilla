@@ -31,14 +31,14 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f1, f2)
       in: shop::sum_to
       lines: src/lib.rs:4, src/lib.rs:-4
-      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum_to=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::sum_to=TEXT'; if it does not change, --same 'rewrite sum => i' --same 'rewrite i => sum'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed path `sum` → `i` at `shop::sum_to/S1/body/S0/rhs/recv` [semantics · code different]
       affected bodies: shop::sum_to (with 1 other edit of this body)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by SMT after inlining `<std::ops::Range<u32> as std::iter::IntoIterator>::into_iter`, `<std::ops::Range<u32> as std::iter::range::RangeIteratorImpl>::spec_next`, `core::num::<impl u32>::wrapping_add`, `std::iter::range::<impl std::iter::Iterator for std::ops::Range<u32>>::next`, by induction over the loop)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by SMT after inlining `<std::ops::Range<u32> as std::iter::IntoIterator>::into_iter`, `<std::ops::Range<u32> as std::iter::range::RangeIteratorImpl>::spec_next`, `core::num::<impl u32>::wrapping_add`, `std::iter::range::<impl std::iter::Iterator for std::ops::Range<u32>>::next`, by induction over the loop) (the same line for f2)
   ◆ f2 derived: changed path `i` → `sum` at `shop::sum_to/S1/body/S0/rhs/args[0]` [semantics · code different]
       affected bodies: shop::sum_to (with 1 other edit of this body)
-      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by SMT after inlining `<std::ops::Range<u32> as std::iter::IntoIterator>::into_iter`, `<std::ops::Range<u32> as std::iter::range::RangeIteratorImpl>::spec_next`, `core::num::<impl u32>::wrapping_add`, `std::iter::range::<impl std::iter::Iterator for std::ops::Range<u32>>::next`, by induction over the loop)
+      equivalence: the same line as f1
   cover: each of the 2 changed line(s) is in a fact
   control flow: 1 body
     shop::sum_to (src/lib.rs:1): same graph (the edit keeps the control flow); equivalent (proved by SMT after inlining `<std::ops::Range<u32> as std::iter::IntoIterator>::into_iter`, `<std::ops::Range<u32> as std::iter::range::RangeIteratorImpl>::spec_next`, `core::num::<impl u32>::wrapping_add`, `std::iter::range::<impl std::iter::Iterator for std::ops::Range<u32>>::next`, by induction over the loop)

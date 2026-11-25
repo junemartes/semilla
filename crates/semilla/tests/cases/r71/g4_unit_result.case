@@ -1,0 +1,45 @@
+note: batch 11c, G4: the closure of a static is different and the static itself is not decided: the line of the item names the worse result of its nested body; each body keeps its own result
+rule+: R71.2-1
+option: --compiled
+must_match: shop::F \(src/lib.rs:1\): .*not decided .*; with its nested bodies: different in `shop::F::\{closure#0\}`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub static F: fn(u32) -> u32 = |x| if x > 3 { x } else { 0 };
+=== new src/lib.rs
+pub static F: fn(u32) -> u32 = |x| if x > 4 { x } else { 0 };
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::F
+      lines: src/lib.rs:1, src/lib.rs:-1
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::F=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::F` changed: |x| if x > 3 { x } else { 0 } → |x| if x > 4 { x } else { 0 } (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::F
+      control flow: + branch `x > 4` (src/lib.rs:1): false → return, true → return
+      control flow: − branch `x > 3` (src/lib.rs:-1): false → return, true → return
+      control flow: + arrow entry (src/lib.rs:1) → branch `x > 4` (src/lib.rs:1)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: `shop::F`: not decided: the difference depends on the result of a call or on a value that the check does not model (no callee inlined)
+      equivalence: `shop::F::{closure#0} |x| if x > 4 { x } else { 0 }`: different: for captures = &a closure, x = 4: before returns 4, after returns 0
+      reaches: 1 body, no public function: shop::F (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::F (src/lib.rs:1): same graph; not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined)); with its nested bodies: different in `shop::F::{closure#0}`
+    shop::F::{closure#0} |x| if x > 4 { x } else { 0 } (src/lib.rs:1): graph changes: +1 branch, −1 branch, +3 arrows, −3 arrows; different (for captures = &a closure, x = 4: before returns 4, after returns 0)
+    reached bodies: 1
+      shop::F (src/lib.rs:1): reached through shop::F::{closure#0}, not decided (the difference depends on the result of a call or on a value that the check does not model (no callee inlined))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::F` changed: |x| if x > 3 { x } else { 0 } → |x| if x > 4 { x } else { 0 } (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:1, src/lib.rs:-1

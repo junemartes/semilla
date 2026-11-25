@@ -1,7 +1,7 @@
 note: U6: a static table with a changed entry: its reader `look` gets the line "reads a changed constant" with the changed entry, it is an affected body of the value fact, and the public caller `api` is a reached body; `fee` reads a static with no change and gets no line; `count` reads a static with interior mutability (a different input: the world), so it gets no constant line
 rule+: R68.6-1
 rule+: R68.6-2
-rule+: R68.6-3
+rule+: R71.1-1
 rule-: R68.6-1
 rule-: R68.6-2
 option: --compiled

@@ -8775,3 +8775,37 @@ fn a_changed_expansion_has_its_facts_a_command_to_expand_it_and_a_section_of_the
     assert!(text.contains("```diff\n- (v + 10) * 2\n+ (v + 12) * 2\n```"), "{text}");
     assert!(text.contains("; expansion: `fee!(v)` at"), "{text}");
 }
+
+/// R71.1-1: a text over the budget names the command that prints the full text. `semilla expand
+/// fN` prints each text of the fact in full: for the step that `semilla step` printed and did not
+/// store (the working tree against the last stored step), and with `--step N` for a stored step.
+/// The negative case: a fact number that the step does not have is an error with the list of
+/// the facts.
+// rule+ R71.1-1
+// rule- R71.1-1
+#[test]
+fn a_text_over_the_budget_names_a_command_that_prints_the_full_text() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let table = |changed: &str| format!("pub mod cart;\nmacro_rules! table {{\n    ($($x:expr),* $(,)?) => {{\n        pub const TABLE: &[u32] = &[$($x),*];\n    }};\n}}\ntable!(\n{}\n);\n", (0..800).map(|n| if n == 400 { changed.to_string() } else { (n * 3).to_string() }).collect::<Vec<_>>().join(", "));
+    write(repo, "crates/shop-core/src/lib.rs", &table("1200"));
+    commit_all(repo, "table");
+    write(repo, "crates/shop-core/src/lib.rs", &table("77777"));
+    let out = run(repo, &["step", "a new value", "--no-check"], 0);
+    assert!(out.contains("1194, 1197, 1200, 1203, 1206 …` → `table!( … 1194, 1197, 77777, 1203, 1206 …` (a large text: "), "{out}");
+    assert!(out.contains("; 1 changed part; the full text: semilla expand f1 --step 0)"), "{out}");
+    assert!(!out.contains("2397"), "{out}");
+    // The stored step: with `--step`, and with no step when the working tree is the end of
+    // the last step.
+    for args in [&["expand", "f1", "--step", "0"][..], &["expand", "f1"][..]] {
+        let full = run(repo, args, 0);
+        assert!(full.contains("2394, 2397") && full.contains("77777") && !full.contains("a large text"), "{full}");
+    }
+    // A step that is not stored: the working tree against the end of the last step.
+    write(repo, "crates/shop-core/src/lib.rs", &table("88888"));
+    let next = run(repo, &["expand", "f1"], 0);
+    assert!(next.contains("77777") && next.contains("88888") && next.contains("2394, 2397"), "{next}");
+    let (code, missing) = run_env(repo, &["expand", "f9", "--step", "0"], &[]);
+    assert_ne!(code, 0, "{missing}");
+    assert!(missing.contains("step 0 has no fact f9; its facts: f1"), "{missing}");
+}

@@ -1,0 +1,68 @@
+note: batch 11c, G7: two tests move one line down, and one of them has an edit in its body: the expansion of `#[test]` changes only by the place of the item (each changed value moves with the call), so no line goes under the fact of the edit, and the step section has one line for the two calls of the macro
+rule+: R71.1-1
+build_check: on
+must_match: 2 calls: expansion changed: `attribute macro test` \(crate core\): only the context of the call changes
+must_not_match: expansion: `#\[test\]`
+must_not_match: changed code `13usize
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn add(a: u32) -> u32 {
+    a + 1
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn one() {
+        assert_eq!(super::add(1), 2);
+    }
+
+    #[test]
+    fn two() {
+        assert_eq!(super::add(2), 3);
+    }
+}
+=== new src/lib.rs
+pub fn add(a: u32) -> u32 {
+    // a comment
+    a + 1
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn one() {
+        assert_eq!(super::add(1), 2);
+    }
+
+    #[test]
+    fn two() {
+        let x = 2;
+        assert_eq!(super::add(x), 3);
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  tests and benches, filled in by Semilla:
+  ◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move]
+      expansion: `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]
+  other facts, filled in by Semilla:
+  ◆ f2 derived: added comment `// a comment` [docs]
+  cover: each of the 4 changed line(s) is in a fact
+  expansions: 3 changed, 1 equal
+    2 calls: expansion changed: `attribute macro test` (crate core): only the context of the call changes: a value that the macro makes at the call (`#[test]`); the context of the call changes: `shop::tests::one`, `shop::tests::two` (semilla status --verbose)
+    `assert_eq!(super::add(x), 3)` at `shop::tests::two/S1` (src/lib.rs:16): expansion changed: `macro assert_eq` (crate core): changed expression `2` → `x` at `expansion/S0/body/S0/scrutinee/elems[0]/operand/args[0]` [semantics]; the input of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: extracted variable `x` = `2` (1 use) at `shop::tests::two/S0` [move]
+    lines: src/lib.rs:15-16, src/lib.rs:-14
+◆ f2 derived: added comment `// a comment` [docs]
+    lines: src/lib.rs:2
