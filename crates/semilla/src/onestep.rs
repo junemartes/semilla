@@ -907,7 +907,7 @@ impl App {
     /// the step do not change, so the stored result of the build check stays, and no build
     /// check runs. Only the check of the facts runs again. A false fact stores nothing.
     /// Returns the text, and true if the facts are stored.
-    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String], tags: &[String]) -> Result<(String, bool)> {
+    pub fn add_facts(&mut self, step: Option<usize>, same: &[String], change: &[String], tags: &[String], reasons: &[String]) -> Result<(String, bool)> {
         let previous = self.load_session()?;
         if previous.open.is_some() || previous.replay.is_some() {
             bail!("a step of the old protocol or a replay is open; `semilla fact` adds facts to a stored step of `semilla step`");
@@ -921,9 +921,11 @@ impl App {
             bail!("no step {index}; the last stored step is step {last}");
         }
         let added = semilla_core::AgentFacts { same: same.to_vec(), change: change.to_vec() };
-        if added.is_empty() && tags.is_empty() {
-            bail!("give one fact or more: `semilla fact --same 'rewrite FROM => TO'` or `semilla fact --change 'ITEM=TEXT'`; or give a tag: `semilla fact --tag 'PLACE=NAME'`");
+        if added.is_empty() && tags.is_empty() && reasons.is_empty() {
+            bail!("give one fact or more: `semilla fact --same 'rewrite FROM => TO'` or `semilla fact --change 'ITEM=TEXT'`; or give a tag: `semilla fact --tag 'PLACE=NAME'`; or give a reason: `semilla fact --reason 'KEY=TEXT'`");
         }
+        // R68.11-1: a reason for a spotlight of a stored step, as `semilla step --reason`.
+        let splits = crate::aftertag::reason_splits(reasons)?;
         if let Err(message) = semilla_verify::agent::check_form(&added) {
             bail!("{message}");
         }
@@ -952,15 +954,56 @@ impl App {
                 tag_count += 1;
             }
         }
+        let base_reasons = stored.reasons.clone();
+        // A new text for a key replaces the old text, as a new `semilla step --reason` does.
+        for options in &splits {
+            for (key, reason) in options {
+                stored.reasons.insert(key.clone(), reason.clone());
+            }
+        }
         let (intent, compiled) = (stored.intent.clone(), stored.compiled);
         self.save_session(&session)?;
-        let result = match self.check(Some(index), false) {
+        let mut result = match self.check(Some(index), false) {
             Ok(result) => result,
             Err(error) => {
                 self.save_session(&previous)?;
                 return Err(error);
             }
         };
+        let mut reason_count = 0;
+        if !reasons.is_empty() {
+            let report = result.report.steps.first().cloned().unwrap_or_default();
+            match crate::aftertag::chosen_reasons(&report, &base_reasons, reasons, &splits) {
+                Ok((chosen, count)) => {
+                    reason_count = count;
+                    // The step keeps only the key of each text. The check runs again with them.
+                    if chosen != session.changeset.steps[index].reasons {
+                        session.changeset.steps[index].reasons = chosen;
+                        self.save_session(&session)?;
+                        result = match self.check(Some(index), false) {
+                            Ok(result) => result,
+                            Err(error) => {
+                                self.save_session(&previous)?;
+                                return Err(error);
+                            }
+                        };
+                    }
+                }
+                Err(unused) => {
+                    self.save_session(&previous)?;
+                    let mut text = String::new();
+                    put_line(&mut text, &format!("rejected: nothing is added to step {index} {}", semilla_core::text::quoted(&intent)));
+                    for reason in &unused {
+                        put_line(&mut text, &format!("  ✗ the reason `--reason '{reason}'` belongs to no fact of step {index}: its key is not the key of a spotlight"));
+                    }
+                    let open: Vec<String> = missing_reasons(&report);
+                    if !open.is_empty() {
+                        put_line(&mut text, &format!("the keys of the open spotlights: {}", open.iter().map(|entry| format!("`{}`", entry.trim_end_matches("=<why>"))).collect::<Vec<_>>().join(", ")));
+                    }
+                    return Ok((text, false));
+                }
+            }
+        }
         let report = result.report.steps.first().cloned().unwrap_or_default();
         let mut text = String::new();
         let mut lines = semilla_verify::views::agent_lines(&report, Some(semilla_core::report::GAP_LIMIT), &|_| Vec::new());
@@ -998,7 +1041,8 @@ impl App {
             self.queue_session(&session.changeset)?;
         }
         let new_tags = if tags.is_empty() { String::new() } else { format!(" and {tag_count} new tag(s)") };
-        put_line(&mut text, &format!("stored: {count} new fact(s) of the agent{new_tags} in step {index} {}; no build check runs again (the trees of the step are the same)", semilla_core::text::quoted(&intent)));
+        let new_reasons = if reasons.is_empty() { String::new() } else { format!(", {reason_count} new reason(s)") };
+        put_line(&mut text, &format!("stored: {count} new fact(s) of the agent{new_reasons}{new_tags} in step {index} {}; no build check runs again (the trees of the step are the same)", semilla_core::text::quoted(&intent)));
         for line in &lines {
             put_line(&mut text, line);
         }

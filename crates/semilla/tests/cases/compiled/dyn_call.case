@@ -33,8 +33,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f1, f2)
       in: depot::talk
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'depot::talk=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::talk=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::talk=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `7` at `depot::talk/tail` [semantics · code different]
       affected bodies: depot::talk (with 1 other edit of this body)

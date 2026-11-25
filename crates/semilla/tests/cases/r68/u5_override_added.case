@@ -1,0 +1,53 @@
+note: U5: a new method of an existing trait impl overrides the default method of the trait: one semantics fact that compares the new body with the old default body, no "added … the public API changes", and a gap line; the `change` fact of the agent holds
+rule+: R68.5-1
+option: --change
+option: shop::<Dog as Speak>::name=the dog has a name of its own
+must_match: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name\(&self\) -> u32 \{ 1 \}` → `fn name\(&self\) -> u32 \{ 2 \}`
+must_not_match: added `shop::<Dog as Speak>::name`
+must_match: holds: the behavior of existing code can change
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Speak {
+    fn name(&self) -> u32 {
+        1
+    }
+}
+
+pub struct Dog;
+
+impl Speak for Dog {}
+=== new src/lib.rs
+pub trait Speak {
+    fn name(&self) -> u32 {
+        1
+    }
+}
+
+pub struct Dog;
+
+impl Speak for Dog {
+    fn name(&self) -> u32 {
+        2
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  facts of the agent (Semilla checks each fact against the edit. It does not check the sentence of a `change`. It does not check the behavior after a `rewrite`):
+  ✓ a1 change: `shop::<Dog as Speak>::name` "the dog has a name of its own" (holds: the behavior of existing code can change in each item; covers 1 fact(s) in 1 item(s) with 6 changed line(s))
+      places: shop::<Dog as Speak>::name
+    ◆ f1 stated: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics]
+  not stated: 0 item(s)
+  cover: each of the 6 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 stated: `shop::<Dog as Speak>::name` now overrides the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 1 }` → `fn name(&self) -> u32 { 2 }` [semantics]
+    lines: src/lib.rs:9-13, src/lib.rs:-9

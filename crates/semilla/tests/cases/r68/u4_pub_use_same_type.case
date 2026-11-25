@@ -1,0 +1,70 @@
+note: U4: the `pub use` line names the changed type itself: the line "the public API can change" stays
+rule-: R68.4-1
+must_match: type of `shop::a::Block.x`: `u8` → `u16` \(the public API can change
+must_match: return type of `shop::make` `-> u8` → `-> u16` \(the public API can change: a different crate can use the item\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+mod a {
+    pub struct Block {
+        pub x: u8,
+    }
+
+    impl Block {
+        pub fn new() -> Block {
+            Block { x: 1 }
+        }
+    }
+}
+
+mod b {
+    pub struct Block(pub u16);
+}
+
+pub use a::Block;
+
+pub fn make() -> u8 {
+    a::Block::new().x
+}
+=== new src/lib.rs
+mod a {
+    pub struct Block {
+        pub x: u16,
+    }
+
+    impl Block {
+        pub fn new() -> Block {
+            Block { x: 1 }
+        }
+    }
+}
+
+mod b {
+    pub struct Block(pub u16);
+}
+
+pub use a::Block;
+
+pub fn make() -> u16 {
+    a::Block::new().x
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type of `shop::a::Block.x`: `u8` → `u16` (the public API can change: a `pub use` line names `Block`) [declaration]
+  ◆ f2 derived: return type of `shop::make` `-> u8` → `-> u16` (the public API can change: a different crate can use the item) [declaration]
+  cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: type of `shop::a::Block.x`: `u8` → `u16` (the public API can change: a `pub use` line names `Block`) [declaration]
+    lines: src/lib.rs:3, src/lib.rs:-3
+◆ f2 derived: return type of `shop::make` `-> u8` → `-> u16` (the public API can change: a different crate can use the item) [declaration]
+    lines: src/lib.rs:19, src/lib.rs:-19

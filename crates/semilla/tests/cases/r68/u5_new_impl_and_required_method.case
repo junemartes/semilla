@@ -1,0 +1,66 @@
+note: U5: a new impl with a method, and a new method of an existing impl for a trait method with no default body (a new trait method in the same step): each one stays an added item
+rule-: R68.5-1
+must_match: added `shop::impl <Cat as Speak>`|trait impl `<Cat as Speak>` added
+must_match: added `shop::<Dog as Speak>::id`
+must_not_match: overrides the default body
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Speak {
+    fn name(&self) -> u32 {
+        1
+    }
+}
+
+pub struct Dog;
+pub struct Cat;
+
+impl Speak for Dog {}
+=== new src/lib.rs
+pub trait Speak {
+    fn name(&self) -> u32 {
+        1
+    }
+    fn id(&self) -> u32;
+}
+
+pub struct Dog;
+pub struct Cat;
+
+impl Speak for Dog {
+    fn id(&self) -> u32 {
+        7
+    }
+}
+
+impl Speak for Cat {
+    fn name(&self) -> u32 {
+        3
+    }
+    fn id(&self) -> u32 {
+        8
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added]
+  ◆ f2 derived: added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added]
+  ◆ f3 derived: added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added]
+  cover: each of the 16 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: trait impl `<Cat as Speak>` added with: `fn name`, `fn id` (the public API can change: a different crate can use the item) [added]
+    lines: src/lib.rs:16-24
+◆ f2 derived: added `shop::<Dog as Speak>::id` (the public API changes: a different crate can now use the item) [added]
+    lines: src/lib.rs:11-15, src/lib.rs:-10
+◆ f3 derived: added `shop::Speak::id` (the public API changes: a different crate can now use the item) [added]
+    lines: src/lib.rs:5

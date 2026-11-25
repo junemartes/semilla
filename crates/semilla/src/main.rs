@@ -150,8 +150,9 @@ enum Command {
         /// Add to the note of this tagged commit, not to the session.
         #[arg(long)]
         commit: Option<String>,
-        /// Only with `--commit`: the reason for a fact in the spotlight, `KEY=TEXT` (the keys
-        /// that `semilla tag` prints). A reason that belongs to no fact stores nothing.
+        /// The reason for a fact in the spotlight, `KEY=TEXT` (the keys that `semilla step`,
+        /// `semilla status`, and `semilla tag` print), for a stored step or for the note of a
+        /// commit. A reason that belongs to no fact stores nothing.
         #[arg(long = "reason")]
         reasons: Vec<String>,
         /// `rename OLD NEW`, `move FROM TO`, or `rewrite FROM => TO` (see `semilla step --help`).
@@ -642,8 +643,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Fact { step, commit, reasons, same, change, tag } => {
             let (text, stored) = match commit {
                 Some(commit) => app.add_to_commit(&commit, step, &same, &change, &tag, &reasons)?,
-                None if !reasons.is_empty() => anyhow::bail!("`--reason` needs `--commit`: it adds a reason to the note of a tagged commit. A step of the session gets its reasons from `semilla step \"<intent>\" --reason 'KEY=TEXT'`"),
-                None => app.add_facts(step, &same, &change, &tag)?,
+                None => app.add_facts(step, &same, &change, &tag, &reasons)?,
             };
             print!("{text}");
             if !stored {

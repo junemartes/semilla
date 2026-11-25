@@ -37,7 +37,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   cover: each of the 2 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-  note: twins: `depot::a::table!#0` of the old tree and `depot::a::table!#1` of the new tree are one pair (equal tokens first, then the source order); the facts name the pair `depot::a::table!#1`
+  note: twins: `depot::a::table!#0` of the old tree and `depot::a::table!#1` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `depot::a::table!#1`
 
 === positions
 ◆ f1 derived: moved `depot::a::table!#1` (it can give a macro) past 1 item: `depot::a::table!#0`; a macro has a textual scope: a macro call in these items can have a new meaning [macro]

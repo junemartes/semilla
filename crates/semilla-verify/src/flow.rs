@@ -683,6 +683,10 @@ struct BodyResult {
     outcomes: Vec<Outcome>,
     /// The constants that the body reads with a changed value (design 64, part D).
     consts: Vec<(String, String, String)>,
+    /// R68.7-1: the count of the check points and of the panic points of the old and the new
+    /// graph of the first configuration with a graph: `[old checks, old panics, new checks,
+    /// new panics]`. A side with no body has no point.
+    panic_points: Option<[usize; 4]>,
 }
 
 /// The changed part of a diff for the flowchart (design 60, C4): the changed points, the ends
@@ -1228,7 +1232,16 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             }
         }
         let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0") && consts.is_empty();
-        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts });
+        let panic_points = body.graphs.iter().find_map(|pair| {
+            let counts = |side: &FlowSide| match side {
+                FlowSide::Graph(graph) if !graph.coroutine => Some([graph.points.iter().filter(|point| point.kind == "check").count(), graph.points.iter().filter(|point| point.kind == "panic").count()]),
+                FlowSide::NoBody => Some([0, 0]),
+                _ => None,
+            };
+            let (old, new) = (counts(&pair.old)?, counts(&pair.new)?);
+            Some([old[0], old[1], new[0], new[1]])
+        });
+        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, panic_points });
     }
     let mut report = FlowReport::default();
     let all_configs: BTreeSet<&String> = results.iter().flat_map(|result| result.outcomes.iter().flat_map(|known| known.configs.iter())).collect();
@@ -1250,6 +1263,9 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         if !result.edit && first.rank != FlowResult::Same {
             line.push_str("; no edit in the body");
         }
+        if let Some(text) = item_panic_points(result, &results) {
+            line.push_str(&text);
+        }
         if !result.edit && !result.consts.is_empty() {
             // [R66.11-4] Only two known values that differ are a changed constant. A value with a
             // part that the driver cannot compute (R66.10-1) is not known to change: the line
@@ -1265,7 +1281,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                 }
                 // One text for each constant: the values of each configuration have their own
                 // unique words, and one cause.
-                let (list, text) = if causes.is_empty() { (&mut changed, format!("`{path}` ({} → {})", shown(old), shown(new))) } else { (&mut unknown, format!("`{path}` ({})", causes.join(", "))) };
+                let (list, text) = if causes.is_empty() { (&mut changed, format!("`{path}` ({})", crate::facts::array_change(&shown(old), &shown(new)).unwrap_or_else(|| format!("{} → {}", shown(old), shown(new))))) } else { (&mut unknown, format!("`{path}` ({})", causes.join(", "))) };
                 if !list.contains(&text) {
                     list.push(text);
                 }
@@ -1332,6 +1348,25 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         }
         report.facts.insert(fact.id.clone(), found);
     }
+    // R68.6-2: a body with no edit that reads a changed constant or a changed static (its
+    // constant values, R64.5-1, R68.6-1) is an affected body of the value fact of that item, with
+    // the link "through". The MIR text of a reader of a static names the static, not its value,
+    // so the compare of the texts does not find it. The rule only adds a body to a list.
+    for result in results.iter().filter(|result| !result.edit) {
+        for (path, _, _) in &result.consts {
+            for fact in outcome.report.facts.iter_mut().filter(|fact| fact.part == "value" && fact.at.as_ref().is_some_and(|at| at.item == *path)) {
+                if !fact.affected.contains(&result.name) {
+                    fact.affected.push(result.name.clone());
+                    fact.affected.sort();
+                }
+                let list = fact.through.entry(path.clone()).or_default();
+                if !list.contains(&result.name) {
+                    list.push(result.name.clone());
+                    list.sort();
+                }
+            }
+        }
+    }
     outcome.report.flow = Some(report);
     // The equivalence of the two versions of each body (design 61).
     let checks: Vec<crate::equiv::BodyCheck> = results
@@ -1343,6 +1378,37 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
     if !checks.is_empty() {
         crate::equiv::apply(input, oracle, outcome, &checks);
     }
+}
+
+/// R68.7-1: the check points and the panic points of an item with its closures. A body whose
+/// own count of checks or panics changes, and whose closures (`f::{closure#0}`, in the list of
+/// the step) change their counts too, gets the counts of the item: "; with its closures: 1 → 1
+/// checks, 1 → 1 panics (the points move between the body and its closures)". The graph line
+/// of each body stays: the rule only adds the text of the item. `None` for a body with no
+/// closure in the list, and for a body whose own counts do not change.
+fn item_panic_points(result: &BodyResult, results: &[BodyResult]) -> Option<String> {
+    // A body of one tree only has its graph line ("graph added"): no move is possible.
+    let both = result.outcomes.first().is_some_and(|first| !first.word.starts_with("graph added") && !first.word.starts_with("graph removed"));
+    if result.name.contains("::{") || !both {
+        return None;
+    }
+    let own = result.panic_points?;
+    if own[0] == own[2] && own[1] == own[3] {
+        return None;
+    }
+    let prefix = format!("{}::{{", result.name);
+    let closures: Vec<[usize; 4]> = results.iter().filter(|other| other.name.starts_with(&prefix)).filter_map(|other| other.panic_points).collect();
+    if closures.iter().all(|counts| counts[0] == counts[2] && counts[1] == counts[3]) {
+        return None;
+    }
+    let mut total = own;
+    for counts in &closures {
+        for (sum, part) in total.iter_mut().zip(counts) {
+            *sum += part;
+        }
+    }
+    let moved = if total[0] == total[2] && total[1] == total[3] { " (the points move between the body and its closures; the item has no new panic point)" } else { "" };
+    Some(format!("; with its closures: {} → {} checks, {} → {} panics{moved}", total[0], total[2], total[1], total[3]))
 }
 
 /// True if each fact that holds a place of a point pair is a fact of the category `rename`,

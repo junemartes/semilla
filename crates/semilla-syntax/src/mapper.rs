@@ -549,10 +549,18 @@ impl Mapper<'_, '_> {
             return false;
         }
         self.budget -= pairs;
+        let (old_rows, new_rows) = (Self::rows(&self.old), Self::rows(&self.new));
         let mut candidates: Vec<(f64, bool, usize, usize, usize)> = Vec::new();
         for &o in &olds {
             for &n in &news {
                 if !crate::diff::same_kind(self.old[o].node, self.new[n].node) || word_score(&self.old[o].key, &self.new[n].key, variables) < MIN_WORDS {
+                    continue;
+                }
+                // R68.13-1: a row of a table (a statement whose form another statement of its
+                // block has) pairs with a different text only in the order of the equal pairs
+                // of its block. In a table, the place identifies a row: a row at a new place
+                // with other data is a removed row and an added row, not a move.
+                if (old_rows[o] || new_rows[n]) && self.crosses(o, n) {
                     continue;
                 }
                 let score = structural(self.old[o].node, self.new[n].node, self.old_text, variables);
@@ -572,6 +580,38 @@ impl Mapper<'_, '_> {
             }
         }
         true
+    }
+
+    /// R68.13-1: for each statement, true if it is a row of a table: another leaf statement of
+    /// the same block has the same form (the compare text with each literal as one mark).
+    fn rows(stmts: &[Stmt]) -> Vec<bool> {
+        fn form(text: &str) -> Vec<String> {
+            tokens(text).into_iter().map(|token| if token.starts_with(|c: char| c.is_ascii_digit() || c == '"' || c == '\'') { "#".to_string() } else { token.to_string() }).collect()
+        }
+        let keys: Vec<Option<(Option<usize>, String, Vec<String>)>> = (0..stmts.len()).map(|index| stmts[index].leaf.then(|| (stmts[index].parent, Self::parent_key(stmts, index), form(&stmts[index].key)))).collect();
+        let mut counts: HashMap<&(Option<usize>, String, Vec<String>), usize> = HashMap::new();
+        for key in keys.iter().flatten() {
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        keys.iter().map(|key| key.as_ref().is_some_and(|key| counts.get(key).copied().unwrap_or(0) > 1)).collect()
+    }
+
+    /// R68.13-1: true if a pair of two statements of corresponding blocks crosses a pair of the
+    /// same two blocks that an earlier round mapped: one statement is before its partner's
+    /// partner and the other is after.
+    fn crosses(&self, o: usize, n: usize) -> bool {
+        if !self.local(o, n) {
+            return false;
+        }
+        let (old_block, new_block) = (Self::parent_key(&self.old, o), Self::parent_key(&self.new, n));
+        (0..self.old.len()).any(|other| {
+            let Some(partner) = self.pair_old[other] else { return false };
+            other != o
+                && Self::parent_key(&self.old, other) == old_block
+                && Self::parent_key(&self.new, partner) == new_block
+                && self.old[other].parent == self.old[o].parent
+                && (self.old[other].index < self.old[o].index) != (self.new[partner].index < self.new[n].index)
+        })
     }
 
     /// True if the parents of two statements correspond: they map to each other, or they have

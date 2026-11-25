@@ -36,8 +36,8 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed literal `1` → `2` (f2)
       in: shop::rated
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'shop::rated=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Food as Tax>::rate=TEXT' --change 'shop::rated=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::rated=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Food as Tax>::rate=TEXT'
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `5` → `6` at `shop::<Food as Tax>::rate/tail` [semantics · code different]
       affected bodies: shop::<Food as Tax>::rate

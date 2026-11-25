@@ -25,6 +25,7 @@ pub mod hints;
 pub mod identity;
 mod inner;
 pub mod organize;
+mod overrides;
 pub mod owners;
 mod paths;
 pub mod scope;
@@ -38,6 +39,7 @@ pub mod sites;
 pub use opaque::{KnownTrait, KNOWN_TRAITS};
 mod srcconfig;
 mod uncompiled;
+pub use uncompiled::{TargetHidden, print_cfg_atoms, target_hidden};
 pub mod pattern;
 mod linediff;
 mod positions;
@@ -622,6 +624,13 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         Some((before, after, moved)) => (&StepInput { step: input.step, before, after }, moved.as_slice()),
         None => (input, &[][..]),
     };
+    // R68.9-1: an impl keeps its key when its trait path changes between `core`, `alloc`, and
+    // `std`.
+    let trait_pairs = identity::trait_path_pairs(input.before, input.after);
+    let input = match &trait_pairs {
+        Some((before, after)) => &StepInput { step: input.step, before, after },
+        None => input,
+    };
     // A reason with no text is not a reason (brief 5f, A4: an empty value proves nothing).
     let mut step = input.step.clone();
     step.reasons.retain(|_, reason| !reason.trim().is_empty());
@@ -722,7 +731,7 @@ fn twin_notes(moves: &[(String, String, String)], report: &mut StepReport) {
         if !report.facts.iter().any(|fact| fact.at.as_ref().is_some_and(|at| inside(&at.item))) {
             continue;
         }
-        report.notes.push(format!("twins: `{old}` of the old tree and `{new}` of the new tree are one pair (equal tokens first, then the source order); the facts name the pair `{key}`"));
+        report.notes.push(format!("twins: `{old}` of the old tree and `{new}` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `{key}`"));
     }
 }
 
@@ -2589,7 +2598,7 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         names.extend(leaves.into_iter().filter_map(|(target, alias, _)| alias.or_else(|| target.last().cloned())));
     }
     let same_crate = |other: &&semilla_syntax::Item| other.crate_name == item.crate_name;
-    let uses: Vec<(bool, Vec<(Vec<String>, Option<String>, bool)>)> = workspace
+    let uses: Vec<(bool, &str, Vec<(Vec<String>, Option<String>, bool)>)> = workspace
         .items
         .values()
         .filter(same_crate)
@@ -2598,12 +2607,16 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
             let parsed = semilla_syntax::rs::parse_use(&other.signature)?;
             let mut leaves = Vec::new();
             use_leaves(&parsed.tree, &[], &mut leaves);
-            Some((compact(&other.vis) == "pub", leaves))
+            Some((compact(&other.vis) == "pub", other.path.rsplit_once("::").map_or("", |(module, _)| module), leaves))
         })
         .collect();
+    // R68.4-1: the paths of the item and of each owner, with no twin suffix. A `pub use` line
+    // whose path resolves to a different item does not name this item.
+    let bare = |path: &str| path.split("::").map(|part| part.split('#').next().unwrap_or(part)).collect::<Vec<_>>().join("::");
+    let own_paths: BTreeSet<String> = owners.iter().map(|owner| bare(&owner.path)).chain([bare(path)]).collect();
     // An `as` name of a `use` line for a name of the path is a name of the path too.
     for _ in 0..4 {
-        for (_, leaves) in &uses {
+        for (_, _, leaves) in &uses {
             for (target, alias, glob) in leaves {
                 if let Some(alias) = alias.as_ref().filter(|_| !glob && target.last().is_some_and(|last| names.contains(last))) {
                     names.insert(alias.clone());
@@ -2612,10 +2625,16 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         }
     }
     let relative = |segment: &String| matches!(segment.as_str(), "crate" | "self" | "super");
-    for (_, leaves) in uses.iter().filter(|(public, _)| *public) {
+    for (_, module, leaves) in uses.iter().filter(|(public, _, _)| *public) {
         for (target, _, glob) in leaves {
             if *glob && target.iter().all(relative) {
                 return Reach::Maybe("a glob `pub use` line with a relative path".into());
+            }
+            match resolve_use(workspace, module, target) {
+                // The path of a different crate, or of a different item of this crate.
+                UsePath::Foreign => continue,
+                UsePath::Item(found) if !own_paths.contains(&bare(&found)) => continue,
+                UsePath::Item(_) | UsePath::Unknown => {}
             }
             let found = if *glob { target.iter().find(|segment| names.contains(*segment)) } else { target.last().filter(|last| names.contains(*last)) };
             if let Some(name) = found {
@@ -2643,6 +2662,70 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         }
     }
     Reach::No
+}
+
+/// The target of the path of a `use` line (R68.4-1).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UsePath {
+    /// An item of the workspace: its path.
+    Item(String),
+    /// A path of a different crate: its first name is not a name of the module, and no `use`
+    /// line of the module brings that name.
+    Foreign,
+    /// Semilla cannot resolve the path (a name that a `use` line or a glob brings, a name that
+    /// is not an item, a macro).
+    Unknown,
+}
+
+/// R68.4-1: resolves the path of a `use` line in `module` by the scope rules of Rust 2018:
+/// `crate`, `self`, and `super` are relative to the crate and the module; each other first
+/// name is a name of the module or a crate. Each next name is a child of the path. The result
+/// is an item only if the workspace has an item with that path (a twin suffix `#N` is not a part
+/// of the path).
+pub(crate) fn resolve_use(workspace: &Workspace, module: &str, target: &[String]) -> UsePath {
+    use semilla_syntax::ItemKind;
+    let root = module.split("::").next().unwrap_or(module).to_string();
+    let exists = |path: &str| workspace.items.contains_key(path) || workspace.items.contains_key(&format!("{path}#0"));
+    let mut segments = target.iter().filter(|segment| !segment.is_empty()).peekable();
+    let mut base = match segments.peek().map(|segment| segment.as_str()) {
+        None => return UsePath::Unknown,
+        Some("crate") | Some("$crate") => {
+            segments.next();
+            root
+        }
+        Some("self") => {
+            segments.next();
+            module.to_string()
+        }
+        Some("super") => module.to_string(),
+        Some(first) => {
+            let local = format!("{module}::{first}");
+            if !exists(&local) && !workspace.items.keys().any(|key| key.starts_with(&format!("{local}::")) || key.starts_with(&format!("{local}."))) {
+                // A name that a `use` line of the module brings, or a glob, can be a local item.
+                let module_uses = workspace.items.values().filter(|other| other.kind == ItemKind::Use && other.path.rsplit_once("::").is_some_and(|(owner, _)| owner == module));
+                let brought = module_uses.filter_map(|other| semilla_syntax::rs::parse_use(&other.signature)).any(|parsed| {
+                    let mut leaves = Vec::new();
+                    use_leaves(&parsed.tree, &[], &mut leaves);
+                    leaves.iter().any(|(path, alias, glob)| *glob || alias.as_deref().or(path.last().map(String::as_str)) == Some(first))
+                });
+                // A macro can make an item with the name: the module has a macro call.
+                let made = workspace.items.values().any(|other| other.kind == ItemKind::Macro && other.path.rsplit_once("::").is_some_and(|(owner, _)| owner == module));
+                return if brought || made { UsePath::Unknown } else { UsePath::Foreign };
+            }
+            module.to_string()
+        }
+    };
+    for segment in segments {
+        if segment == "super" {
+            match base.rsplit_once("::") {
+                Some((parent, _)) => base = parent.to_string(),
+                None => return UsePath::Unknown,
+            }
+        } else {
+            base = format!("{base}::{segment}");
+        }
+    }
+    if exists(&base) { UsePath::Item(workspace.items.get(&base).map_or_else(|| format!("{base}#0"), |item| item.path.clone())) } else { UsePath::Unknown }
 }
 
 /// The effect of a visibility edit on the public API (batch 5x, round 2): the words for the
@@ -3119,7 +3202,11 @@ pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<S
     for edit in edits {
         let place = edit.anchor().map(|a| a.to_string()).or_else(|| edit.file.clone()).unwrap_or_default();
         let texts = [edit.text_before.as_deref(), edit.text_after.as_deref()];
-        if texts.iter().flatten().any(|text| text.split(' ').any(|token| token == "unsafe")) || in_unsafe(edit, before, after) {
+        // R68.1-1: the tokens of the code decide, never the text of a comment or of a string. A
+        // text that does not parse as tokens uses the text match (the old rule): it can only add
+        // a line.
+        let unsafe_word = |text: &str| cfgcond::has_keyword(text, "unsafe").unwrap_or_else(|| text.split(' ').any(|token| token == "unsafe"));
+        if texts.iter().flatten().any(|text| unsafe_word(text)) || in_unsafe(edit, before, after) {
             found.insert(format!("unsafe code: {place}"));
         }
         // `#[cfg(test)]` only selects test code, so it is not in the spotlight.
@@ -3127,8 +3214,10 @@ pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<S
         // `cfg` is not an attribute). A use of `cfg!` in a body gets the "build configuration"
         // spotlight from the MIR records.
         let cfg = |text: &str| {
-            let text = text.replace(' ', "").replace("#[cfg(test)]", "");
-            ["#[cfg(", "#![cfg(", "#[cfg_attr(", "#![cfg_attr("].iter().any(|start| text.contains(start))
+            cfgcond::has_cfg_attribute(text).unwrap_or_else(|| {
+                let text = text.replace(' ', "").replace("#[cfg(test)]", "");
+                ["#[cfg(", "#![cfg(", "#[cfg_attr(", "#![cfg_attr("].iter().any(|start| text.contains(start))
+            })
         };
         if texts.iter().flatten().any(|text| cfg(text)) && matches!(edit.kind, semilla_syntax::EditKind::Attrs | semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
             found.insert(format!("cfg attribute: {place}"));
@@ -3372,3 +3461,5 @@ fn stopped_pair(note: &str, old: &str, new: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests68;

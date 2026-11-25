@@ -991,7 +991,7 @@ impl Printer {
     }
 
     /// Prints the bytes of an allocation and the targets of its pointers.
-    fn allocation(&mut self, alloc: &Allocation, depth: usize) -> String {
+    pub(crate) fn allocation(&mut self, alloc: &Allocation, depth: usize) -> String {
         let mut text = String::from("[");
         for byte in &alloc.bytes {
             match byte {

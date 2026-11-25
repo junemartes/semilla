@@ -14,6 +14,7 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 |---|---|---|---|
 | `crates/semilla-core/src/names.rs` | `const IMPLICIT_TRAITS` | language | the traits that the compiler calls with no call in the text (lang items `Drop`, `Deref`, `DerefMut`); the shared list (R65.4-1); the compiled mode: the MIR of the drop glue and of each call |
 | `crates/semilla-core/src/names.rs` | `const STD_CRATES` | language | the crates of the standard library (a fact of the tool chain); the shared list of the verifier; the driver asks the compiler for the crates of the sysroot (R65.3-1) |
+| `crates/semilla-core/src/names.rs` | `const STD_FACADE` | language | the crates of the standard library whose public modules `std` re-exports at the same path (`core`, `alloc`; a fact of the tool chain): an impl of `core::ops::Add` is an impl of `std::ops::Add` (R68.9-1); a path outside the list keeps its text (the safe side: a removed and an added item) |
 | `crates/semilla-core/src/ops.rs` | `const RETIRED` | tool | the names of the claim operations that Semilla does not accept any more (its own options) |
 | `crates/semilla-core/src/report.rs` | `const CAUSES` | tool | the names of the evidence rules of Semilla (its own data) |
 | `crates/semilla-core/src/report.rs` | `const FILLED_GROUPS` | tool | the names of the groups of the report (its own data) |

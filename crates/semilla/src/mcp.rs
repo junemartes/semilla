@@ -67,8 +67,8 @@ fn call(app: &mut App, name: &str, args: &Value) -> Result<String> {
             let reasons: Vec<String> = args.get("reasons").and_then(Value::as_object).map(|map| map.iter().map(|(key, value)| format!("{key}={}", value.as_str().unwrap_or_default())).collect()).unwrap_or_default();
             let (text, stored) = match text("commit") {
                 Some(commit) => app.add_to_commit(commit, step, &strings("same"), &strings("change"), &strings("tags"), &reasons)?,
-                None if !reasons.is_empty() => anyhow::bail!("`reasons` needs `commit`: it adds a reason to the note of a tagged commit"),
-                None => app.add_facts(step, &strings("same"), &strings("change"), &strings("tags"))?,
+                // R68.11-1: a reason for a stored step of the session too.
+                None => app.add_facts(step, &strings("same"), &strings("change"), &strings("tags"), &reasons)?,
             };
             if !stored {
                 anyhow::bail!("{text}");

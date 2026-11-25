@@ -42,8 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f1, f2)
       in: shop::count
       lines: src/lib.rs:4-7, src/lib.rs:-4
-      to state it: --change 'shop::count=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::count=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::count=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement [1] at `shop::count/S2` [semantics · code different]
         [1] while i < n {

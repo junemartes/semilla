@@ -20,25 +20,31 @@ impl T {
     pub fn a(&self) -> u32 { 2 }
 }
 === expected
-exit: 1
-rejected: step 0 "the change" is not stored
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `2` → `1` (f1)
+      in: depot::T::a#0
+      lines: src/lib.rs:4
+      to state it: --change 'depot::T::a#0=TEXT'
+  ? 1 place: changed literal `1` → `2` (f2)
+      in: depot::T::a#1
+      lines: src/lib.rs:5, src/lib.rs:-3-4
+      to state it: --change 'depot::T::a#1=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::T::a#0=TEXT' --change 'depot::T::a#1=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: attributes of `depot::T::a#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
-      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::T::a#0=…'
-  ◆ f2 derived: attributes of `depot::T::a#1`: changed `#[cfg(windows)]` → `#[cfg(unix)]` [attribute]
-      ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::T::a#1=…'
+  ◆ f1 derived: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics]
+  ◆ f2 derived: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics]
   cover: each of the 4 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-  ! spotlight: cfg attribute: depot::T::a#0
-  ! spotlight: cfg attribute: depot::T::a#1
-run again: semilla step 'the change' --reason 'depot::T::a#0=<why>' --reason 'depot::T::a#1=<why>'
+  note: twins: `depot::T::a#0` of the old tree and `depot::T::a#1` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `depot::T::a#1`
+  note: twins: `depot::T::a#1` of the old tree and `depot::T::a#0` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `depot::T::a#0`
+
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::T::a#0=the reason of the test' --reason 'depot::T::a#1=the reason of the test'
-◆ f1 derived: attributes of `depot::T::a#0`: changed `#[cfg(unix)]` → `#[cfg(windows)]` [attribute]
-    lines: src/lib.rs:4, src/lib.rs:-3-4
-◆ f2 derived: attributes of `depot::T::a#1`: changed `#[cfg(windows)]` → `#[cfg(unix)]` [attribute]
-    lines: src/lib.rs:5
+◆ f1 derived: changed literal `2` → `1` at `depot::T::a#0/tail` [semantics]
+    lines: src/lib.rs:4
+◆ f2 derived: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics]
+    lines: src/lib.rs:5, src/lib.rs:-3-4

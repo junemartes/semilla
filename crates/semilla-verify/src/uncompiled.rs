@@ -598,3 +598,93 @@ pub(crate) fn apply(dead: &[Dead], sides: [&Workspace; 2], step: &semilla_core::
         report.facts.push(fact);
     }
 }
+
+/// R68.12-1: true for an atom of a property of the target (`target_feature="sse2"`,
+/// `target_os="linux"`, `unix`, `windows`). The build check builds for one target, so the target
+/// decides these atoms. Each other atom (a feature, `test`, `debug_assertions`) is not known here.
+fn target_atom(atom: &str) -> bool {
+    let name = atom.split('=').next().unwrap_or(atom);
+    name.starts_with("target_") || name == "unix" || name == "windows"
+}
+
+/// R68.12-1: the value of a condition with the target atoms of `host` and each other atom
+/// unknown: `Some(false)` only if no value of the other atoms makes the condition true.
+fn target_value(pred: &Pred, host: &BTreeSet<String>) -> Option<bool> {
+    match pred {
+        Pred::Atom(atom) if target_atom(atom) => Some(host.contains(atom)),
+        Pred::Atom(_) | Pred::Other => None,
+        Pred::Not(inner) => target_value(inner, host).map(|value| !value),
+        Pred::All(list) => {
+            let values: Vec<Option<bool>> = list.iter().map(|pred| target_value(pred, host)).collect();
+            if values.contains(&Some(false)) { Some(false) } else if values.iter().all(|value| *value == Some(true)) { Some(true) } else { None }
+        }
+        Pred::Any(list) => {
+            let values: Vec<Option<bool>> = list.iter().map(|pred| target_value(pred, host)).collect();
+            if values.contains(&Some(true)) { Some(true) } else if values.iter().all(|value| *value == Some(false)) { Some(false) } else { None }
+        }
+    }
+}
+
+/// R68.12-1: one `cfg` attribute of the new tree whose condition the target of the build check
+/// makes false, around changed code: the check did not build that code.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TargetHidden {
+    pub file: String,
+    /// The line of the attribute.
+    pub line: usize,
+    /// The text of the attribute: `#[cfg(not(target_feature = "sse2"))]`.
+    pub attr: String,
+    /// The changed lines of the new tree in the range of the attribute.
+    pub changed: Vec<usize>,
+}
+
+impl TargetHidden {
+    /// The line of the step output.
+    pub fn text(&self, target: &str) -> String {
+        let lines: Vec<String> = self.changed.iter().map(|line| format!("{}:{line}", self.file)).collect();
+        format!("! build check: not checked: the check did not build the changed code under `{}` at {}:{} (changed lines: {}): the target of the check ({target}) makes the condition false", self.attr, self.file, self.line, lines.join(", "))
+    }
+}
+
+/// R68.12-1: each `cfg` attribute of the new tree that hides changed code from the build check:
+/// its condition is false for each value of the atoms that are not properties of the target
+/// (`host` has the true atoms of the target of the check, from `rustc --print cfg`). The input
+/// of a macro call is not a part of the rule: Semilla cannot see which code its condition
+/// selects. The rule only adds lines.
+pub fn target_hidden(sides: [&Workspace; 2], host: &BTreeSet<String>) -> Vec<TargetHidden> {
+    let mut found: Vec<TargetHidden> = Vec::new();
+    for (file, text) in &sides[1].rust_files {
+        let old = sides[0].rust_files.get(file);
+        if old == Some(text) || !text.contains("cfg") {
+            continue;
+        }
+        let Some(new) = tokens(text) else { continue };
+        let old = old.and_then(|old| tokens(old)).unwrap_or_default();
+        let (_, changed) = diff(&old, &new);
+        let regions: Vec<Region> = regions(text).into_iter().filter(|region| !region.macro_input && region.preds.len() == 1).collect();
+        for (token, _) in new.iter().zip(&changed).filter(|(_, flag)| **flag) {
+            let inside = |range: (At, At)| range.0 <= token.at && token.at < range.1;
+            for region in regions.iter().filter(|region| inside((region.start, region.end)) && !inside(region.attr)) {
+                if target_value(&region.preds[0], host) != Some(false) {
+                    continue;
+                }
+                let line = region.attr.0.0;
+                match found.iter_mut().find(|entry| entry.file == *file && entry.line == line) {
+                    Some(entry) => {
+                        if !entry.changed.contains(&token.at.0) {
+                            entry.changed.push(token.at.0);
+                        }
+                    }
+                    None => found.push(TargetHidden { file: file.clone(), line, attr: region.text.clone(), changed: vec![token.at.0] }),
+                }
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// R68.12-1: the true atoms of the output of `rustc --print cfg` (`target_os="linux"`, `unix`).
+pub fn print_cfg_atoms(text: &str) -> BTreeSet<String> {
+    text.lines().map(str::trim).filter(|line| !line.is_empty()).map(|line| line.split_whitespace().collect::<String>()).collect()
+}

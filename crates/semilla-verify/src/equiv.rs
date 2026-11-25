@@ -116,7 +116,7 @@ impl Reached {
         for (verdict, configs) in &groups {
             let configs = if one { String::new() } else { format!(" in {}", configs.join(", ")) };
             let (text, key) = match verdict {
-                Verdict::Different { input, before, after } => (format!("different through {through}{configs}: {}: before {before}, after {after}", for_input(input)), format!("different through {through}{configs}")),
+                Verdict::Different { input, before, after } => (format!("different through {through}{configs}: {}: {}", for_input(input), outcomes(before, after)), format!("different through {through}{configs}")),
                 // A proof with each changed callee inlined (the check never treats a changed
                 // callee as an effect).
                 Verdict::Equivalent(_) => (format!("equivalent{configs} (proved after inlining {through})"), format!("equivalent{configs} (proved after inlining {through})")),
@@ -162,14 +162,26 @@ impl Verdict {
     fn rest(&self, step: bool) -> String {
         match self {
             Verdict::Equivalent(method) => format!(" (proved by {method})"),
-            Verdict::Different { input, before, after } if step => format!(" ({}: before {before}, after {after})", for_input(input)),
-            Verdict::Different { input, before, after } => format!(": {}: before {before}, after {after}", for_input(input)),
+            Verdict::Different { input, before, after } if step => format!(" ({}: {})", for_input(input), outcomes(before, after)),
+            Verdict::Different { input, before, after } => format!(": {}: {}", for_input(input), outcomes(before, after)),
             Verdict::NotDecided(cause) if step => format!(" ({cause})"),
             Verdict::NotDecided(cause) => format!(": {cause}"),
             // A short text on each line: the step section has the line of the budget.
             Verdict::NotChecked(cause) => format!(" ({cause})"),
         }
     }
+}
+
+/// The two outcomes of a different result: "before returns 7, after returns 6". R68.6-3: two
+/// returned arrays of one length give their changed elements, not the full arrays: "before and
+/// after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ)".
+pub(crate) fn outcomes(before: &str, after: &str) -> String {
+    if let (Some(old), Some(new)) = (before.strip_prefix("returns "), after.strip_prefix("returns "))
+        && let Some(change) = crate::facts::array_change(old, new)
+    {
+        return format!("before and after return arrays that differ at {change}");
+    }
+    format!("before {before}, after {after}")
 }
 
 /// The words of an input: `for x = 4`, or `for each input` for a body with no parameter.

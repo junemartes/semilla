@@ -24,8 +24,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: added macro statement `assert!(q > 0, "no zero");` (f1)
       in: depot::half
       lines: src/lib.rs:2
-      to state it: --change 'depot::half=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::half=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::half=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: added macro statement `assert!(q > 0, "no zero");` at `depot::half/S0` [semantics · code different]
       affected bodies: depot::half

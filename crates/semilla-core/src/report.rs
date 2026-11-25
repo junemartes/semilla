@@ -735,6 +735,30 @@ pub struct Gap {
     /// The option that states the line: `--same 'rewrite FROM => TO'` if one pattern covers
     /// each place, else `--change 'ITEMS=TEXT'`.
     pub option: String,
+    /// R68.8-1: the compiled check did not decide if the behavior of the places changes (each
+    /// fact of the line has a result, and no result is "different"). The suggestion offers the
+    /// two forms in neutral words, and the one command of the step does not have the option.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undecided: bool,
+    /// R68.8-1: the `--same` option for the form that keeps the behavior, if the option of the
+    /// line is a `--same` option (one pattern covers each place of a group).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same: Option<String>,
+}
+
+impl Gap {
+    /// The text after "to state it: " (R68.8-1).
+    pub fn suggestion(&self) -> String {
+        if !self.undecided {
+            return self.option.clone();
+        }
+        let same = match &self.same {
+            Some(same) => same.clone(),
+            None => "a `--same` fact (rename, move, or rewrite) that explains the edit".to_string(),
+        };
+        let change = if self.option.starts_with("--change ") { self.option.clone() } else { format!("--change '{}=TEXT'", self.items.join(",")) };
+        format!("the check did not decide if the behavior changes: if it changes, {change}; if it does not change, {same}")
+    }
 }
 
 impl Gap {
@@ -1712,7 +1736,7 @@ impl StepReport {
             if let Some(tags) = self.tags_of(&gap.facts) {
                 lines.push(format!("      {tags}"));
             }
-            lines.push(format!("      to state it: {}", gap.option));
+            lines.push(format!("      to state it: {}", gap.suggestion()));
         }
         if shown < self.gaps.len() {
             lines.push(format!("  and {} more line(s) with {} place(s): `semilla status --verbose` shows each line", self.gaps.len() - shown, self.gaps[shown..].iter().map(|gap| gap.places.len()).sum::<usize>()));
@@ -1724,7 +1748,8 @@ impl StepReport {
     pub fn gap_command(&self, limit: Option<usize>) -> Option<String> {
         let shown = limit.unwrap_or(self.gaps.len()).min(self.gaps.len());
         let mut options: Vec<&str> = Vec::new();
-        for gap in &self.gaps[..shown] {
+        // R68.8-1: an undecided line has two forms, so the one command does not choose one.
+        for gap in self.gaps[..shown].iter().filter(|gap| !gap.undecided) {
             if !options.contains(&gap.option.as_str()) {
                 options.push(&gap.option);
             }

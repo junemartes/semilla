@@ -81,8 +81,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed expression, see f1 (f1)
       in: depot::here
       lines: depot/src/lib.rs:5, depot/src/lib.rs:-5
-      to state it: --change 'depot::here=TEXT'
-  to state them, add these options to the command of the step: --change 'depot::here=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::here=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f4 derived: layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
   ◆ f5 derived: comment in `shop/src/lib.rs`: added `// The line of the call is in its value.` [docs · no code]
@@ -94,12 +93,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'depot/src/lib.rs:=<why>' --compiled
 === positions
-the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot/src/lib.rs:=the reason of the test' --compiled --change 'depot::here=the text of the test'
-◆ f1 stated: changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different]
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot/src/lib.rs:=the reason of the test' --compiled
+◆ f1 derived: changed expression `Span::call_site().line() as u32` → `Span::call_site().line() as u32 + 1` at `depot::here/S0/init` [semantics · code different]
     lines: depot/src/lib.rs:5, depot/src/lib.rs:-5
-◆ f3 stated: the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
-    no position
 ◆ f2 derived: depot/src/lib.rs: changed [build code · no code]
+    no position
+◆ f3 derived: the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
     no position
 ◆ f4 derived: layout of `shop/src/lib.rs`: 1 changed line with equal tokens [layout · no code]
     lines: shop/src/lib.rs:2

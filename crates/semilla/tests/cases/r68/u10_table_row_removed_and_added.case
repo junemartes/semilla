@@ -1,0 +1,50 @@
+note: U10: a table of `push` rows; one row is removed in the middle and a new row is added at the end: a deleted statement and an added statement, not a move with two changed literals
+rule+: R68.13-1
+must_match: deleted statement `out.push\(\(3, "three"\)\)` at `shop::build/S2`
+must_match: added statement `out.push\(\(6, "six"\)\)` at `shop::build/S4`
+must_not_match: moved statement
+must_not_match: changed literal
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn build(out: &mut Vec<(u32, &'static str)>) {
+    out.push((1, "one"));
+    out.push((2, "two"));
+    out.push((3, "three"));
+    out.push((4, "four"));
+    out.push((5, "five"));
+}
+=== new src/lib.rs
+pub fn build(out: &mut Vec<(u32, &'static str)>) {
+    out.push((1, "one"));
+    out.push((2, "two"));
+    out.push((4, "four"));
+    out.push((5, "five"));
+    out.push((6, "six"));
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::build
+      lines: src/lib.rs:6, src/lib.rs:-4
+      to state it: --change 'shop::build=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::build=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `out.push((3, "three"))` at `shop::build/S2` [semantics]
+  ◆ f2 derived: added statement `out.push((6, "six"))` at `shop::build/S4` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: deleted statement `out.push((3, "three"))` at `shop::build/S2` [semantics]
+    lines: src/lib.rs:-4
+◆ f2 derived: added statement `out.push((6, "six"))` at `shop::build/S4` [semantics]
+    lines: src/lib.rs:6

@@ -31,8 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed expression `v.iter()` → `v.iter().rev()` (f1)
       in: depot::sum
       lines: src/lib.rs:3, src/lib.rs:-3
-      to state it: --change 'depot::sum=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::sum=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::sum=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `v.iter()` → `v.iter().rev()` at `depot::sum/S1/iter` [semantics · code different]
       affected bodies: depot::sum

@@ -41,8 +41,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: value of, see f1 (f1)
       in: shop::T
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: --change 'shop::T=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::T=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::T=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: value of `shop::T` changed: `{ let d = [0u8; if ON { N as usize } else { 1 }]; d.len() }` → `{ let d = [0u8; if ON { M as usize + 1 } else { 1 }]; d.len() }` (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::T

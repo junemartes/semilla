@@ -1,0 +1,96 @@
+note: U6: a static table with a changed entry: its reader `look` gets the line "reads a changed constant" with the changed entry, it is an affected body of the value fact, and the public caller `api` is a reached body; `fee` reads a static with no change and gets no line; `count` reads a static with interior mutability (a different input: the world), so it gets no constant line
+rule+: R68.6-1
+rule+: R68.6-2
+rule+: R68.6-3
+rule-: R68.6-1
+rule-: R68.6-2
+option: --compiled
+must_match: shop::look \(src/lib.rs:6\): same graph; reads a changed constant: `shop::TABLE` \(\[2\] 3 → 9 \(1 of 8 elements differ\)\)
+must_match: affected bodies: shop::TABLE, shop::look
+must_match: shop::api \(src/lib.rs:10\): reached through shop::look
+must_not_match: shop::fee \(
+must_not_match: shop::count \(src/lib.rs:[0-9]+\): same graph; reads a changed constant
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+use std::sync::atomic::{AtomicU32, Ordering};
+static TABLE: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+static FEES: [u8; 2] = [5, 6];
+static COUNT: AtomicU32 = AtomicU32::new(1);
+
+fn look(i: usize) -> u8 {
+    TABLE[i & 7]
+}
+
+pub fn api(i: usize) -> u8 {
+    look(i).wrapping_add(1)
+}
+
+pub fn fee(i: usize) -> u8 {
+    FEES[i & 1]
+}
+
+pub fn count() -> u32 {
+    COUNT.load(Ordering::Relaxed)
+}
+=== new src/lib.rs
+use std::sync::atomic::{AtomicU32, Ordering};
+static TABLE: [u8; 8] = [1, 2, 9, 4, 5, 6, 7, 8];
+static FEES: [u8; 2] = [5, 6];
+static COUNT: AtomicU32 = AtomicU32::new(2);
+
+fn look(i: usize) -> u8 {
+    TABLE[i & 7]
+}
+
+pub fn api(i: usize) -> u8 {
+    look(i).wrapping_add(1)
+}
+
+pub fn fee(i: usize) -> u8 {
+    FEES[i & 1]
+}
+
+pub fn count() -> u32 {
+    COUNT.load(Ordering::Relaxed)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) (f1)
+      in: shop::COUNT
+      lines: src/lib.rs:4, src/lib.rs:-4
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::COUNT=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  ? 1 place: value of, see f2 (f2)
+      in: shop::TABLE
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::TABLE=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::TABLE=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) [semantics · code different]
+      affected bodies: shop::COUNT
+      equivalence: not decided: a cast (Transmute)
+  ◆ f2 derived: value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different]
+      affected bodies: shop::TABLE, shop::look
+      through: `shop::TABLE` (1 body)
+      equivalence: different: for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ)
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 3 bodies
+    shop::COUNT (src/lib.rs:4): same graph (the edit keeps the control flow); not decided (a cast (Transmute))
+    shop::TABLE (src/lib.rs:2): same graph (the edit keeps the control flow); different (for each input: before and after return arrays that differ at [2] 3 → 9 (1 of 8 elements differ))
+    shop::look (src/lib.rs:6): same graph; reads a changed constant: `shop::TABLE` ([2] 3 → 9 (1 of 8 elements differ)); not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): TABLE[i & 7] (src/lib.rs:-7))
+    reached bodies: 1
+      shop::api (src/lib.rs:10): reached through shop::look, not decided (a deref of a value that is not a reference (a `Box`, a raw pointer): TABLE[i & 7] (src/lib.rs:-7))
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(1) → AtomicU32::new(2) [semantics · code different]
+    lines: src/lib.rs:4, src/lib.rs:-4
+◆ f2 derived: value of `shop::TABLE` changed: [1, 2, 3, 4, 5, 6, 7, 8] → [1, 2, 9, 4, 5, 6, 7, 8] [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2
