@@ -39,6 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
   ◆ f2 derived: changed literal `4` → `8` at `shop::price/S1/init/rhs` [semantics]
   cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

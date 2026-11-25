@@ -56,6 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: member order of `depot::Level`: `Low, High` → `High, Low`; the discriminant values of the variants with no explicit value change [declaration]
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`PartialEq`, `PartialOrd`): the code that it makes reads the members in order; it needs a reason: --reason 'depot::Level=…'
   cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'depot::Level=<why>'
 === positions

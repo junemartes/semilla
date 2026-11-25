@@ -47,6 +47,9 @@ struct Case {
     /// fact never gets "equivalent".
     different: Vec<String>,
     same_facts: bool,
+    /// `build_check: on` (batch 10n2): the runs of the case have the build check (and so the
+    /// expansion records of the default mode, R65.8-1). Else each run has `SEMILLA_NO_CHECK`.
+    build_check: bool,
     /// The known failures: the name of the check and the cause.
     known: Vec<(String, String)>,
     old: BTreeMap<String, Vec<u8>>,
@@ -81,7 +84,7 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
 
 impl Case {
     fn parse(id: &str, file: &Path, text: &str) -> Result<Case, String> {
-        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
+        let mut case = Case { id: id.to_string(), file: file.to_path_buf(), options: Vec::new(), exit: None, must_match: Vec::new(), must_not_match: Vec::new(), different: Vec::new(), same_facts: false, build_check: false, known: Vec::new(), old: BTreeMap::new(), new: BTreeMap::new(), head: String::new(), expected: None };
         const EXPECTED: &str = "=== expected\n";
         let (head, expected) = match text.find(&format!("\n{EXPECTED}")) {
             Some(at) => (&text[..at + 1], Some(text[at + 1 + EXPECTED.len()..].to_string())),
@@ -137,6 +140,7 @@ impl Case {
                     "must_not_match" => case.must_not_match.push(value.to_string()),
                     "different" => case.different.push(value.to_string()),
                     "same_facts_as_no_option" if value == "yes" => case.same_facts = true,
+                    "build_check" if value == "on" => case.build_check = true,
                     "known_failure" => {
                         let (check, cause) = value.split_once(": ").ok_or(format!("the known failure `{value}` has no cause"))?;
                         if !CHECKS.contains(&check) || cause.trim().is_empty() {
@@ -466,7 +470,15 @@ fn normal(text: &str, folder: &Path) -> String {
             at = stop;
         }
     }
-    out
+    // The time of a build check (a case with `build_check: on`) changes with each run.
+    out.lines()
+        .map(|line| match line.strip_prefix("build check: passes (").and_then(|rest| rest.strip_suffix(" s)")) {
+            Some(time) if time.parse::<f64>().is_ok() => "build check: passes (<TIME>)".to_string(),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if out.ends_with('\n') { "\n" } else { "" }
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -1003,6 +1015,8 @@ struct Work {
     /// The failed checks: the name and the message.
     failed: Vec<(&'static str, String)>,
     runs: usize,
+    /// True: the runs have the build check (`build_check: on`).
+    check: bool,
 }
 
 impl Work {
@@ -1020,9 +1034,10 @@ impl Work {
     fn semilla(&mut self, folder: &Path, args: &[String]) -> Result<Run, String> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_semilla"));
         command.current_dir(folder.join("repo")).args(args);
-        // The default mode (design 50): no compiled check. The build check is off.
+        // The default mode (design 50): no compiled check. The build check is off, unless the
+        // case asks for it (`build_check: on`).
         command.env_remove("SEMILLA_MIR_DRIVER").env_remove("SEMILLA_COMPILED").env_remove("SEMILLA_OWN_LINE_DIFF");
-        command.env("SEMILLA_CACHE_DIR", folder.join("cache")).env("SEMILLA_NO_CHECK", "1");
+        command.env("SEMILLA_CACHE_DIR", folder.join("cache")).env("SEMILLA_NO_CHECK", if self.check { "0" } else { "1" });
         git_env(&mut command);
         let output = command.output().map_err(|error| format!("semilla does not start: {error}"))?;
         self.runs += 1;
@@ -1098,7 +1113,7 @@ struct Outcome {
 
 fn check(case: &Case) -> Result<Outcome, String> {
     let temp = tempfile::Builder::new().prefix("semilla-case-").tempdir().map_err(|error| format!("no temporary folder: {error}"))?;
-    let mut work = Work { folder: temp.path().to_path_buf(), failed: Vec::new(), runs: 0 };
+    let mut work = Work { folder: temp.path().to_path_buf(), failed: Vec::new(), runs: 0, check: case.build_check };
     // The old tree is the commit. The new tree is the working tree.
     let template = work.folder.join("template");
     let put = |files: &BTreeMap<String, Vec<u8>>| -> Result<(), String> {

@@ -1,0 +1,32 @@
+note: batch 10n2, part B: the default mode with no build check has no expansion records; the step says so in one line, and each other line stays as before
+rule+: R65.8-2
+rule-: R65.8-1
+must_match: expansions: not read: the build check did not run, so no build made the expansion records
+must_not_match: expansion: |expansion changed
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! base { ($v:expr) => { $v + 10 } }
+
+pub fn price(v: u32) -> u32 { base!(v) }
+=== new src/lib.rs
+macro_rules! base { ($v:expr) => { $v + 12 } }
+
+pub fn price(v: u32) -> u32 { base!(v) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration]
+    lines: src/lib.rs:1, src/lib.rs:-1

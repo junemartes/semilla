@@ -463,8 +463,16 @@ pub trait BodyOracle {
     }
 
     /// The expansion of each macro call in each compiled target of each checked configuration
-    /// of the tree before the step and of the tree after it (design 63). `None`: no data.
+    /// of the tree before the step and of the tree after it (design 63). `None`: no data. A
+    /// step of the default mode has the records of its build check (R65.8-1).
     fn expansions(&self, _step: &Step) -> Option<[Vec<expand::ExpansionUnit>; 2]> {
+        None
+    }
+
+    /// Why a step of the default mode has no expansion records (R65.8-2): the build check did
+    /// not run, or it could not write the records. `None`: the step has the records, or it is a
+    /// step of the compiled mode.
+    fn expansion_gap(&self, _step: &Step) -> Option<String> {
         None
     }
 }

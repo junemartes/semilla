@@ -518,6 +518,8 @@ pub struct Link {
 /// The changed expansions of a step (R63.9-5), for the owner pass: only a pair of two calls
 /// with two different texts. An added or a removed call is an edit of the call or of its item.
 pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle, renames: &BTreeMap<String, String>) -> Vec<Link> {
+    // The evidence rule of a body (R63.9-5) is a rule of the compiled mode: the default mode has
+    // no body result to own (R65.8-1).
     if !step.compiled {
         return Vec::new();
     }
@@ -543,16 +545,35 @@ pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle
     out
 }
 
-/// Adds the facts of the expanded code to a step of the compiled mode (R63.2-1 to R63.3-5).
+/// Adds the facts of the expanded code to a step (R63.2-1 to R63.3-5). A step of the default
+/// mode has the records of its build check (R65.8-1), or one line with the cause why it has
+/// none (R65.8-2).
 pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &dyn ExprOracle, outcome: &mut StepOutcome) {
-    if !input.step.compiled {
+    let Some([old_units, new_units]) = bodies.expansions(input.step) else {
+        if !input.step.compiled {
+            outcome.report.expansion_gap = bodies.expansion_gap(input.step);
+        }
         return;
-    }
-    let Some([old_units, new_units]) = bodies.expansions(input.step) else { return };
+    };
     let map = |path: &str| outcome.renames.items.get(path).cloned().unwrap_or_else(|| path.to_string());
     let (sites, equal) = pair_sites([&old_units, &new_units], [input.before, input.after], &map, false);
+    order_spotlights(input, outcome, &sites, &equal);
     let all_configs: BTreeSet<&str> = new_units.iter().chain(&old_units).map(|unit| unit.config.as_str()).collect();
     let mut flow = outcome.report.flow.take().unwrap_or_default();
+    // R65.10-1: the identity of each package of a registry or of git in `Cargo.lock`.
+    let locks = [lock_identities(input.before), lock_identities(input.after)];
+    let dependency = |expansion: &Expansion| dependency_change(expansion, &locks);
+    let lock_facts = |facts: &[semilla_core::report::Fact], name: &str| -> Vec<usize> { facts.iter().enumerate().filter(|(_, fact)| lock_fact_names(fact, name)).map(|(index, _)| index).collect() };
+    // R65.10-2: the equal calls of each macro of a package whose identity changes: one count line
+    // under the fact of the package.
+    let mut stay: BTreeMap<(String, String), BTreeSet<(String, usize, usize)>> = BTreeMap::new();
+    for site in &equal {
+        if let Some(new) = site.new
+            && let Some((name, Some(_))) = dependency(new)
+        {
+            stay.entry((name, macro_text(new))).or_default().insert((new.file.clone(), new.line, new.col));
+        }
+    }
     // A call of a library and of its test build, in each configuration, is one call.
     let equal: BTreeSet<(String, usize, usize)> = equal.iter().filter_map(|site| site.new).map(|e| (e.file.clone(), e.line, e.col)).collect();
     flow.expansions_equal = equal.len();
@@ -583,6 +604,10 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
             (Some(old), Some(new)) => {
                 if let Some(moved) = moved.clone() {
                     ("expansion changed", vec![moved])
+                } else if old.text.len().max(new.text.len()) > LARGE_EXPANSION {
+                    // R65.10-3: a large text gets no compare: the line gives the size and the
+                    // command that prints the full text.
+                    ("expansion changed", vec![large_text(old, new)])
                 } else {
                     let found = cache.entry((old.text.clone(), new.text.clone())).or_insert_with(|| compare(old, new, &site.crate_name, exprs));
                     let facts: Vec<String> = match found {
@@ -606,8 +631,20 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         let place = if any.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}{}", any.file, if side == 0 { "-" } else { "" }, any.line) };
         // A changed definition owns a changed expansion; an added or a removed call belongs to
         // the edit of the call.
-        let (mut owners, causes) = if site.old.is_some() && site.new.is_some() { chain_owners(outcome, [site.old, site.new]) } else { (Vec::new(), Vec::new()) };
+        let (mut owners, mut causes) = if site.old.is_some() && site.new.is_some() { chain_owners(outcome, [site.old, site.new]) } else { (Vec::new(), Vec::new()) };
         owners.sort();
+        // R65.10-2: a changed expansion of a macro of a package whose identity changes in
+        // `Cargo.lock` (a new version, source, or checksum): the fact of the package owns it, as a
+        // changed definition of the chain.
+        if let (Some(_), Some(new)) = (site.old, site.new)
+            && let Some((name, Some(change))) = dependency(new)
+        {
+            let found: Vec<usize> = lock_facts(&outcome.report.facts, &name).into_iter().filter(|index| !owners.contains(index)).collect();
+            if !found.is_empty() {
+                owners.splice(0..0, found);
+                causes.insert(0, (name.clone(), format!("the package `{name}` ({change})")));
+            }
+        }
         // R63.9-4: a changed definition of a call in the input of this call: the cause names
         // that call (`mkfn!(made, add!(4; 5))` changes through `add!(4; 5)`).
         let causes: Vec<String> = causes.into_iter().map(|(name, cause)| match inner_call(&sites, site, &name) {
@@ -724,6 +761,14 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         }
         flow.expansion_lines.insert(id, out);
     }
+    // R65.10-2: the count of the equal calls of each macro of a package whose identity changes,
+    // under the fact of the package.
+    for ((name, shown), calls) in &stay {
+        let Some(&first) = lock_facts(&outcome.report.facts, name).first() else { continue };
+        let id = outcome.report.facts[first].id.clone();
+        let line = format!("{} expansion{} of {shown} stay{} the same", calls.len(), if calls.len() == 1 { "" } else { "s" }, if calls.len() == 1 { "s" } else { "" });
+        flow.expansion_lines.entry(id).or_default().push(line);
+    }
     // A changed definition whose calls all have an equal expansion (R63.3-6): the proof line.
     for fact in &outcome.report.facts {
         if flow.expansion_lines.contains_key(&fact.id) {
@@ -744,6 +789,137 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         }
     }
     outcome.report.flow = Some(flow);
+}
+
+/// R65.9-1: the spotlight of a member order change of a type with a derive or an attribute
+/// macro (R65.3-3) goes away when the expansion records show that the order changes no code that
+/// a macro makes: each derive and each attribute macro of the type (on the two sides) has a
+/// record at the type with the same text in the two trees, no call at the type has a changed,
+/// an added, a removed, or a not known expansion, the type has no `#[repr]` and no `cfg_attr`,
+/// no attribute macro moves across a derive (R65.9-2), and no implicit discriminant value of an
+/// enum changes (a derive reads it with no text that names it). The fact keeps its text and gets
+/// a note. Each other spotlight stays.
+fn order_spotlights(input: &StepInput, outcome: &mut StepOutcome, sites: &[Site], equal: &[Site]) {
+    let renames = outcome.renames.items.clone();
+    let map = |path: &str| renames.get(path).cloned().unwrap_or_else(|| path.to_string());
+    for fact in outcome.report.facts.iter_mut().filter(|fact| fact.part == "member order" && fact.spotlight) {
+        let Some(path) = fact.at.as_ref().map(|at| at.item.clone()) else { continue };
+        let old_path = renames.iter().find(|(_, to)| **to == path).map(|(from, _)| from.clone()).unwrap_or_else(|| path.clone());
+        let (Some(old_item), Some(new_item)) = (input.before.items.get(&old_path), input.after.items.get(&path)) else { continue };
+        let (old_attrs, new_attrs) = (old_item.attrs.join(" "), new_item.attrs.join(" "));
+        // Only the spotlight of R65.3-3 alone: a spotlight with an other cause stays.
+        let reader = crate::facts::order_reader(&new_attrs).or_else(|| crate::facts::order_reader(&old_attrs));
+        if reader.is_none() || fact.spotlight_why != reader {
+            continue;
+        }
+        if fact.description.contains("the discriminant values of the variants with no explicit value change") {
+            continue;
+        }
+        let (old_inputs, new_inputs) = (crate::facts::order_inputs(&old_attrs), crate::facts::order_inputs(&new_attrs));
+        if old_inputs.fixed || new_inputs.fixed || crate::facts::attribute_macro_moves(&old_attrs, &new_attrs).is_some() {
+            continue;
+        }
+        // The calls at the type: the item of the anchor of the call, the old one with the rename
+        // map, is the type or an item inside it.
+        let at_type = |site: &Site| {
+            let kind = site.new.or(site.old).map(|e| e.kind.as_str()).unwrap_or("");
+            let inside = |item: &str| item == path || item.starts_with(&format!("{path}::"));
+            matches!(kind, "derive" | "attr") && (site.at[1].as_ref().is_some_and(|at| inside(&at.item)) || site.at[0].as_ref().is_some_and(|at| inside(&map(&at.item))))
+        };
+        if sites.iter().any(at_type) {
+            continue;
+        }
+        let made: BTreeSet<String> = equal.iter().filter(|site| at_type(site)).filter_map(|site| site.new.map(|e| e.name.rsplit("::").next().unwrap_or(&e.name).to_string())).collect();
+        let makers: BTreeSet<&String> = old_inputs.makers.iter().chain(&new_inputs.makers).collect();
+        if makers.is_empty() || !makers.iter().all(|name| made.contains(*name)) {
+            continue;
+        }
+        let list = makers.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+        let note = format!("the member order needs no reason: each macro of the type ({list}) makes the same code in the two versions (the expansion records, R65.9-1)");
+        fact.spotlight = false;
+        fact.spotlight_why = None;
+        fact.note = Some(match fact.note.take() {
+            Some(old) => format!("{old}; {note}"),
+            None => note,
+        });
+    }
+}
+
+/// R65.10-3: the size in bytes above which the text of an expansion gets no compare: the line
+/// gives the count of the lines, the size, and the command `semilla expand`. The user named the
+/// number (50 kB, 2026-11-25); the unit (1000 bytes of the text with the marks of hygiene) is
+/// Decided by Claude.
+pub const LARGE_EXPANSION: usize = 50_000;
+
+/// The line of a large changed expansion (R65.10-3): the lines and the size of each text, the
+/// count of the lines that only one side has, and the command that prints the full text.
+fn large_text(old: &Expansion, new: &Expansion) -> String {
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.text.lines().collect(), new.text.lines().collect());
+    let mut counts: BTreeMap<&str, i64> = BTreeMap::new();
+    for line in &a {
+        *counts.entry(line).or_default() += 1;
+    }
+    for line in &b {
+        *counts.entry(line).or_default() -= 1;
+    }
+    let differ: i64 = counts.values().map(|count| count.abs()).sum();
+    let kb = |text: &str| format!("{:.1} kB", text.len() as f64 / 1000.0);
+    let place = if new.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}", new.file, new.line) };
+    format!("a large expansion ({} → {} lines, {} → {}; {differ} lines differ): the text is too large for a compare; the full text: semilla expand {place}", a.len(), b.len(), kb(&old.text), kb(&new.text))
+}
+
+/// R65.10-1: the identity of each package of `Cargo.lock` with a source (a registry or a
+/// repository), by its crate name (`-` gives `_`): the set of its versions with the source and
+/// the checksum. `None`: the tree has no readable `Cargo.lock`. A package with no source is a
+/// package of the workspace or a path: its code is in the tree, so its facts show its changes.
+fn lock_identities(ws: &Workspace) -> Option<BTreeMap<String, BTreeSet<String>>> {
+    let text = ws.other_files.get("Cargo.lock")?;
+    let table = text.parse::<toml::Table>().ok()?;
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for package in table.get("package").and_then(|value| value.as_array()).into_iter().flatten() {
+        let field = |name: &str| package.get(name).and_then(|value| value.as_str()).unwrap_or("").to_string();
+        if field("source").is_empty() {
+            continue;
+        }
+        out.entry(field("name").replace('-', "_")).or_default().insert(format!("{} {} {}", field("version"), field("source"), field("checksum")));
+    }
+    Some(out)
+}
+
+/// R65.10-1: the package of the definition of a macro of a dependency, with the text of its
+/// change if its identity changes (`None`: the same identity). `None` for a macro of the
+/// workspace, of the standard library, or of a path package, and for a tree with no
+/// `Cargo.lock`: the rules of design 63 and 65 hold for them.
+fn dependency_change(expansion: &Expansion, locks: &[Option<BTreeMap<String, BTreeSet<String>>>; 2]) -> Option<(String, Option<String>)> {
+    let name = expansion.def.strip_prefix("crate ")?;
+    let [Some(old), Some(new)] = locks else { return None };
+    let (a, b) = (old.get(name), new.get(name));
+    if a.is_none() && b.is_none() {
+        return None;
+    }
+    if a == b {
+        return Some((name.to_string(), None));
+    }
+    let versions = |set: Option<&BTreeSet<String>>| set.map(|set| set.iter().map(|entry| entry.split(' ').next().unwrap_or("").to_string()).collect::<Vec<_>>().join(", ")).filter(|text| !text.is_empty()).unwrap_or_else(|| "none".to_string());
+    let change = if versions(a) == versions(b) { format!("{}: a new source or checksum in `Cargo.lock`", versions(b)) } else { format!("{} → {} in `Cargo.lock`", versions(a), versions(b)) };
+    Some((name.to_string(), Some(change)))
+}
+
+/// True for a fact of `Cargo.lock` about the package with this crate name (R65.10-2).
+fn lock_fact_names(fact: &semilla_core::report::Fact, name: &str) -> bool {
+    fact.file.as_deref() == Some("Cargo.lock") && fact.part.strip_prefix("Cargo.lock:package ").is_some_and(|rest| rest.split(' ').next().is_some_and(|package| package.replace('-', "_") == name))
+}
+
+/// The text of a macro for a count line (R65.10-2): `` `derive depot::Rows` ``, ``
+/// `#[depot::tag]` ``, or `` `depot::here!` ``.
+fn macro_text(expansion: &Expansion) -> String {
+    let package = expansion.def.strip_prefix("crate ").unwrap_or("");
+    let path = if package.is_empty() || expansion.name.contains("::") { expansion.name.clone() } else { format!("{package}::{}", expansion.name) };
+    match expansion.kind.as_str() {
+        "derive" => format!("`derive {path}`"),
+        "attr" => format!("`#[{path}]`"),
+        _ => format!("`{path}!`"),
+    }
 }
 
 /// The sides that `semilla expand` prints (R63.5-1).
@@ -1116,5 +1292,122 @@ mod tests {
         let mut e = expansion("expr", "a + 1");
         e.module = "a::b".into();
         assert_eq!(virtual_file(&e), "mod a {\nmod b {\nfn expansion() {\na + 1\n}\n}\n}\n");
+    }
+
+    /// The oracle of a test: the expansion records of the two trees (batch 10n2).
+    struct Records([Vec<ExpansionUnit>; 2]);
+
+    impl crate::BodyOracle for Records {
+        fn compare(&self, _: &Step, _: &BTreeMap<String, String>, _: &[String]) -> anyhow::Result<Vec<crate::BodyComparison>> {
+            Ok(Vec::new())
+        }
+
+        fn expansions(&self, _: &Step) -> Option<[Vec<ExpansionUnit>; 2]> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// The lock file of a test with the package `depot` of a registry at `version`.
+    fn lock(version: &str) -> String {
+        format!("version = 4\n\n[[package]]\nname = \"depot\"\nversion = \"{version}\"\nsource = \"registry+https://example.org/index\"\nchecksum = \"{}\"\n\n[[package]]\nname = \"shop\"\nversion = \"0.1.0\"\ndependencies = [\"depot\"]\n", if version == "1.0.0" { "aa" } else { "bb" })
+    }
+
+    /// A tree of the crate `shop` with two calls of macros of the package `depot`: `m!` in
+    /// `shop::f` (line 2) and `n!` in `shop::g` (line 5).
+    fn dependency_tree(lock_text: &str, input: &str) -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ndepot = \"1\"\n").unwrap();
+        std::fs::write(dir.path().join("Cargo.lock"), lock_text).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), format!("pub fn f() -> u32 {{\n    depot::m!({input})\n}}\npub fn g() -> u32 {{\n    depot::n!(2)\n}}\n")).unwrap();
+        let ws = Workspace::load(dir.path()).unwrap();
+        (dir, ws)
+    }
+
+    /// The records of one tree: the call of `m!` with `text`, and the call of `n!` with `2`.
+    fn dependency_units(m_call: &str, text: &str) -> Vec<ExpansionUnit> {
+        let call = |line: usize, name: &str, call: &str, text: &str| Expansion { file: "src/lib.rs".into(), line, col: 5, end_line: line, name: name.into(), def: "crate depot".into(), call: call.into(), ..expansion("expr", text) };
+        vec![ExpansionUnit { config: "dev".into(), target: "shop.lib.aaaa".into(), package: "shop".into(), root: "src/lib.rs".into(), cfg: Vec::new(), list: vec![call(2, "m", m_call, text), call(5, "n", "depot::n!(2)", "2")] }]
+    }
+
+    /// The step outcome of a test of the dependency rules: each fact with its expansion lines.
+    fn dependency_outcome(old: (&str, &str, &str, &str), new: (&str, &str, &str, &str)) -> (Vec<(String, Vec<String>)>, Vec<ExpansionSite>) {
+        let (old_lock, old_input, old_call, old_text) = old;
+        let (new_lock, new_input, new_call, new_text) = new;
+        let ((_a, before), (_b, after)) = (dependency_tree(&lock(old_lock), old_input), dependency_tree(&lock(new_lock), new_input));
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let oracle = Records([dependency_units(old_call, old_text), dependency_units(new_call, new_text)]);
+        let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &oracle, &NoOracle, true);
+        let flow = outcome.report.flow.clone().unwrap_or_default();
+        let facts = outcome.report.facts.iter().map(|fact| (fact.part.clone(), flow.expansion_lines.get(&fact.id).cloned().unwrap_or_default())).collect();
+        (facts, flow.expansions)
+    }
+
+    // rule+ R65.10-1
+    // rule- R65.10-1
+    #[test]
+    fn the_identity_of_a_dependency_is_its_entry_in_the_lock_file() {
+        let tree = |text: &str| {
+            let (dir, ws) = dependency_tree(text, "1");
+            drop(dir);
+            lock_identities(&ws)
+        };
+        let (one, two) = (tree(&lock("1.0.0")), tree(&lock("1.0.1")));
+        let call = Expansion { def: "crate depot".into(), ..expansion("expr", "1") };
+        // A new version is a new identity, with the two versions in the text.
+        assert_eq!(dependency_change(&call, &[one.clone(), two.clone()]), Some(("depot".to_string(), Some("1.0.0 → 1.0.1 in `Cargo.lock`".to_string()))));
+        // The same version with a new checksum is a new identity too.
+        let other = tree(&lock("1.0.0").replace("checksum = \"aa\"", "checksum = \"cc\""));
+        assert_eq!(dependency_change(&call, &[one.clone(), other]).and_then(|(_, change)| change), Some("1.0.0: a new source or checksum in `Cargo.lock`".to_string()));
+        // The negative cases: the same entry is the same identity; a package with no source (the
+        // workspace, a path), a crate of the standard library, and a tree with no lock file are
+        // not a dependency of this rule.
+        assert_eq!(dependency_change(&call, &[one.clone(), one.clone()]), Some(("depot".to_string(), None)));
+        assert_eq!(dependency_change(&Expansion { def: "crate shop".into(), ..call.clone() }, &[one.clone(), two.clone()]), None);
+        assert_eq!(dependency_change(&Expansion { def: "crate core".into(), ..call.clone() }, &[one.clone(), two.clone()]), None);
+        assert_eq!(dependency_change(&Expansion { def: "src/lib.rs:1".into(), ..call.clone() }, &[one.clone(), two.clone()]), None);
+        assert_eq!(dependency_change(&call, &[None, two]), None);
+    }
+
+    // rule+ R65.10-2
+    // rule- R65.10-2
+    #[test]
+    fn a_dependency_expansion_is_a_full_fact_only_when_its_identity_or_its_input_changes() {
+        // A new version of the package: the fact of `Cargo.lock` owns the changed expansion of
+        // `m!`, and the equal call of `n!` is one count line under the same fact.
+        let (facts, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "1 + 100"), ("1.0.1", "1", "depot::m!(1)", "1 + 101"));
+        let lock_lines = facts.iter().find(|(part, _)| part.starts_with("Cargo.lock:package depot")).map(|(_, lines)| lines.clone()).expect("a fact of the lock file");
+        assert!(lock_lines.iter().any(|line| line.starts_with("`depot::m!(1)` at `shop::f") && line.contains("expansion changed: changed literal `100` → `101`")), "{lock_lines:?}");
+        assert!(lock_lines.contains(&"1 expansion of `depot::n!` stays the same".to_string()), "{lock_lines:?}");
+        assert!(sites.iter().any(|site| site.cause.starts_with("from the package `depot` (1.0.0 → 1.0.1 in `Cargo.lock`)")), "{sites:?}");
+        // The negative case: the same identity and the same input. The changed text is no fact of
+        // the lock file (it has no fact) and no count line; the step section keeps the call with
+        // the cause "no changed definition".
+        let (facts, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "1 + 100"), ("1.0.0", "1", "depot::m!(1)", "1 + 101"));
+        assert!(facts.iter().all(|(_, lines)| lines.is_empty()), "{facts:?}");
+        assert!(sites.iter().any(|site| site.result == "expansion changed" && site.cause.starts_with("no changed definition")), "{sites:?}");
+        // A changed input with the same identity: the fact of the edit of the call owns the full
+        // line (a count line would hide the change).
+        let (facts, _) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "1 + 100"), ("1.0.0", "3", "depot::m!(3)", "3 + 100"));
+        let owner = facts.iter().find(|(_, lines)| !lines.is_empty()).expect("an owner of the changed expansion");
+        assert!(!owner.0.starts_with("Cargo.lock"), "{facts:?}");
+        assert!(owner.1.iter().any(|line| line.contains("`depot::m!(3)`") && line.contains("expansion changed: changed literal `1` → `3`")), "{facts:?}");
+        assert!(facts.iter().flat_map(|(_, lines)| lines).all(|line| !line.contains("stay")), "{facts:?}");
+    }
+
+    // rule+ R65.10-3
+    // rule- R65.10-3
+    #[test]
+    fn a_large_expansion_gives_its_size_and_the_command_and_no_compare() {
+        let big = |value: u32| (0..3000).map(|line| format!("let v{line} = {};", if line == 7 { value } else { line })).collect::<Vec<_>>().join("\n");
+        let (old, new) = (big(1), big(2));
+        assert!(old.len() > LARGE_EXPANSION, "{}", old.len());
+        let (_, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", &old), ("1.0.0", "1", "depot::m!(1)", &new));
+        let site = sites.iter().find(|site| site.result == "expansion changed").expect("a changed expansion");
+        assert_eq!(site.facts, vec![format!("a large expansion (3000 → 3000 lines, {:.1} kB → {:.1} kB; 2 lines differ): the text is too large for a compare; the full text: semilla expand src/lib.rs:2", old.len() as f64 / 1000.0, new.len() as f64 / 1000.0)]);
+        // The negative case: a small text has the facts of the compare.
+        let (_, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "let v7 = 1;"), ("1.0.0", "1", "depot::m!(1)", "let v7 = 2;"));
+        let site = sites.iter().find(|site| site.result == "expansion changed").expect("a changed expansion");
+        assert!(site.facts.iter().any(|fact| fact.contains("changed literal `1` → `2`")), "{:?}", site.facts);
     }
 }

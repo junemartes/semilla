@@ -233,6 +233,10 @@ pub struct StepReport {
     /// driver that writes the graphs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<FlowReport>,
+    /// Why a step of the default mode has no expansion records (R65.8-2): one line of the step
+    /// section, `expansions: not read: CAUSE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion_gap: Option<String>,
 }
 
 /// The control flow graph diff of a step (design 60, part C).
@@ -1405,6 +1409,10 @@ impl StepReport {
     /// line for each call (equal changes fold into one line in the short form). `full` gives
     /// each call with its configurations and each fact of its compare.
     pub fn expansion_section(&self, full: bool) -> Vec<String> {
+        // R65.8-2: a step of the default mode with no expansion records says so in one line.
+        if let Some(gap) = &self.expansion_gap {
+            return vec![format!("expansions: not read: {gap}")];
+        }
         let Some(flow) = self.flow.as_ref().filter(|flow| !flow.expansions.is_empty()) else { return Vec::new() };
         let count = |word: &str| flow.expansions.iter().filter(|site| site.result == word).count();
         let mut parts = Vec::new();

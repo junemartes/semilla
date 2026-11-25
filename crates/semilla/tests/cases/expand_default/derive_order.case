@@ -1,0 +1,36 @@
+note: batch 10n2, part A (the decision of the user, 2026-11-25: the order of the derives does not change a derived impl): a new order of the derives of a type; each expansion of the type has the same text in the two trees, so the fact has no spotlight and no expansion line
+rule-: R65.9-2
+build_check: on
+must_match: attributes of `shop::Point`
+must_not_match: spotlight
+must_not_match: expansion changed|expansion added|expansion removed
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[derive(Debug, Clone, PartialEq)]
+pub struct Point {
+    pub x: u8,
+    pub y: u32,
+}
+=== new src/lib.rs
+#[derive(Clone, PartialEq, Debug)]
+pub struct Point {
+    pub x: u8,
+    pub y: u32,
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `shop::Point`: changed `#[derive(Debug, Clone, PartialEq)]` → `#[derive(Clone, PartialEq, Debug)]` [attribute]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: attributes of `shop::Point`: changed `#[derive(Debug, Clone, PartialEq)]` → `#[derive(Clone, PartialEq, Debug)]` [attribute]
+    lines: src/lib.rs:1, src/lib.rs:-1

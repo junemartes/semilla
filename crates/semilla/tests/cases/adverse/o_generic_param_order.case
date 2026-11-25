@@ -19,6 +19,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: generics of `depot::f` `<A: Default, B: Default>` → `<B: Default, A: Default>` (the public API can change: a different crate can use the item); generic arguments go by position: 0 site(s) in 0 other item(s) [declaration]
   cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

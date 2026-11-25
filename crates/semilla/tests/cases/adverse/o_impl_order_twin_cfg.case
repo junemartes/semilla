@@ -31,6 +31,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: attributes of `depot::T::a#1`: changed `#[cfg(windows)]` → `#[cfg(unix)]` [attribute]
       ✗ spotlight: a changed `cfg` attribute (`cfg`); it needs a reason: --reason 'depot::T::a#1=…'
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::T::a#0
   ! spotlight: cfg attribute: depot::T::a#1

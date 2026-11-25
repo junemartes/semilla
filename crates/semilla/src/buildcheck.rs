@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use semilla_core::BuildCheck;
-use semilla_normal::cargo::{BuildRun, CheckToolchain, NO_UNIT, TreeToolchain, UnitState};
+use semilla_normal::cargo::{BuildRun, CheckRecordFiles, CheckRecords, CheckToolchain, NO_UNIT, TreeToolchain, UnitState};
 
 use crate::app::App;
 
@@ -43,6 +43,41 @@ pub(crate) enum Outcome {
     /// The check cannot run on this machine. This is not a result of the code. `text` has
     /// the result line and the cause.
     CannotRun { text: String },
+}
+
+/// A short hash of a text, for a folder name.
+fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish() & 0xffff_ffff_ffff
+}
+
+/// Keeps the expansion records of a tree (R65.8-1): a copy of the record file of each unit of
+/// the build in the folder of the tree, or a file with the cause why the build has no records.
+/// A failed write only costs time: the next check of the tree builds again.
+fn store_records(setup: &std::result::Result<(CheckRecords, std::path::PathBuf), String>, files: Option<&CheckRecordFiles>, run: &BuildRun, out: &std::path::Path) {
+    let store = match setup {
+        Ok((_, store)) => store,
+        Err(_) => return,
+    };
+    let _ = std::fs::create_dir_all(store.parent().unwrap_or(store));
+    let cause = match files {
+        Some(CheckRecordFiles::Files(names)) => {
+            let temporary = store.with_extension(format!("tmp{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&temporary);
+            let copied = std::fs::create_dir_all(&temporary).is_ok() && names.iter().all(|name| std::fs::copy(out.join(name), temporary.join(name)).is_ok());
+            if copied && std::fs::rename(&temporary, store).is_ok() {
+                let _ = std::fs::remove_file(store.with_extension("none"));
+                return;
+            }
+            let _ = std::fs::remove_dir_all(&temporary);
+            return;
+        }
+        _ if !run.failed.is_empty() => targets_text(&run.failed, "does not build in this tree, so the tree has no full set of expansion records", "do not build in this tree, so the tree has no full set of expansion records"),
+        _ => "the build gave no expansion records".to_string(),
+    };
+    let _ = std::fs::write(store.with_extension("none"), cause);
 }
 
 /// The time of a check, for a result line.
@@ -149,20 +184,65 @@ impl App {
         semilla_normal::cargo::check_toolchain(None)
     }
 
+    /// The expansion records of the build check of a tree (R65.8-1): the driver of Semilla, the
+    /// records folder of the build folder, and the folder of the records of the tree. `Err`: the
+    /// cause why the build check of this tree cannot write the records.
+    fn records_setup(&self, toolchain: &CheckToolchain, key: &str, tree: &str) -> std::result::Result<(CheckRecords, std::path::PathBuf), String> {
+        if !semilla_normal::cargo::driver_toolchain(toolchain) {
+            return Err(format!(
+                "the build check uses the toolchain {}, and the driver of Semilla that writes the expansion records needs the toolchain `{}`; `--compiled` or `semilla expand` builds them",
+                toolchain.name,
+                semilla_normal::cargo::toolchain()
+            ));
+        }
+        let driver = semilla_normal::cargo::find_driver().map_err(|error| format!("{error:#}"))?;
+        let fingerprint = semilla_normal::cargo::driver_fingerprint(&driver).map_err(|error| format!("cannot read the driver of Semilla: {error:#}"))?;
+        let folder = self.check_folder();
+        let store = folder.join("expansions").join(format!("{tree}-{key}-{:012x}", text_hash(&fingerprint)));
+        Ok((CheckRecords { driver, out: folder.join("records") }, store))
+    }
+
+    /// The expansion records that the build check of a tree wrote (R65.8-1), with no build. `Err`
+    /// has the cause why the cache has no records of the tree.
+    pub(crate) fn check_expansions(&self, tree: &str) -> std::result::Result<Vec<semilla_verify::expand::ExpansionUnit>, String> {
+        let toolchain = self.check_toolchain(tree).map_err(|error| format!("{error:#}"))?;
+        let key = semilla_normal::cargo::check_settings_key(&self.check_folder(), &toolchain);
+        let (_, store) = self.records_setup(&toolchain, &key, tree)?;
+        if let Ok(cause) = std::fs::read_to_string(store.with_extension("none")) {
+            return Err(cause);
+        }
+        if !store.is_dir() {
+            return Err(format!("the cache has no expansion records of the tree `{}` (a build check of an earlier version of Semilla, or `semilla cache --clean`)", &tree[..tree.len().min(7)]));
+        }
+        let units = semilla_normal::read_expansions(&store).ok_or_else(|| format!("the expansion records of the tree `{}` cannot be read", &tree[..tree.len().min(7)]))?;
+        // The build check builds the configuration `dev` (design 53.2).
+        Ok(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: "dev".to_string(), target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect() }).collect())
+    }
+
     /// The build check of one tree. The result of a tree is in the cache, by the tree and the
     /// build settings. `reuse_failure` is false for the new tree of a step: a stored failure
     /// is not final, and the check runs again. The second value is true for a stored result.
-    fn tree_build(&self, tree: &str, reuse_failure: bool) -> Result<(BuildRun, bool)> {
+    /// With `records` (a step of the default mode, R65.8-1), the build also writes the
+    /// expansion records of the tree, and a stored result counts only with its records.
+    fn tree_build(&self, tree: &str, reuse_failure: bool, records: bool) -> Result<(BuildRun, bool)> {
         let folder = self.check_folder();
         let results = folder.join("results");
         std::fs::create_dir_all(&results).with_context(|| format!("cannot create the folder {}", results.display()))?;
         // The key of a result has the identity of the tool chain: a different tool chain runs
         // the check again.
         let toolchain = self.check_toolchain(tree)?;
-        let file = results.join(format!("{tree}-{}.json", semilla_normal::cargo::check_settings_key(&folder, &toolchain)));
+        let key = semilla_normal::cargo::check_settings_key(&folder, &toolchain);
+        let file = results.join(format!("{tree}-{key}.json"));
+        // R65.8-1: the records of the tree. A toolchain that is not the toolchain of the driver
+        // gives the cause in place of the records.
+        let setup = if records { Some(self.records_setup(&toolchain, &key, tree)) } else { None };
+        let has_records = || match &setup {
+            Some(Ok((_, store))) => store.is_dir() || store.with_extension("none").is_file(),
+            _ => true,
+        };
         let stored = || {
             let text = std::fs::read_to_string(&file).ok()?;
-            serde_json::from_str::<BuildRun>(&text).ok().filter(|run| reuse_failure || run.failed.is_empty())
+            serde_json::from_str::<BuildRun>(&text).ok().filter(|run| reuse_failure || run.failed.is_empty()).filter(|_| has_records())
         };
         if let Some(run) = stored() {
             return Ok((run, true));
@@ -176,8 +256,25 @@ impl App {
         let build = folder.join("build");
         self.repo.checkout_build(&build, tree).with_context(|| format!("cannot write the tree to the build folder {}", build.display()))?;
         let started = std::time::Instant::now();
-        let run = semilla_normal::cargo::build_check(&build, &folder.join("target"), &toolchain)?;
+        let target = folder.join("target");
+        let driver = match &setup {
+            Some(Ok((driver, _))) => Some(driver),
+            _ => None,
+        };
+        let (mut run, mut files) = semilla_normal::cargo::build_check_with(&build, &target, &toolchain, driver)?;
+        // A fresh unit with no record file: an earlier build of the folder did not write it.
+        // The target folder goes away, and one more build compiles each unit.
+        if files == Some(CheckRecordFiles::FreshWithout) {
+            match std::fs::remove_dir_all(&target) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
+            (run, files) = semilla_normal::cargo::build_check_with(&build, &target, &toolchain, driver)?;
+        }
         crate::timing("build check", started);
+        if let Some(setup) = &setup {
+            store_records(setup, files.as_ref(), &run, &folder.join("records"));
+        }
         // A failed write only costs time: the next check of this tree runs cargo again.
         let _ = std::fs::write(&file, serde_json::to_string(&run)?);
         Ok((run, false))
@@ -190,7 +287,11 @@ impl App {
     ///
     /// The compiled check of this command can be the build check: it builds each target of the
     /// new tree, and it rejects a tree that does not build. Then no second build runs.
-    pub(crate) fn build_check(&mut self, skip: Option<&str>, before: &str, after: &str) -> Outcome {
+    ///
+    /// - `records`: true for a step of the default mode (R65.8-1). The build also writes the
+    ///   expansion records of the two trees: the tree before the step builds first (a stored
+    ///   build of that tree is used), so the build of the tree after the step is a delta build.
+    pub(crate) fn build_check(&mut self, skip: Option<&str>, before: &str, after: &str, records: bool) -> Outcome {
         if let Some(cause) = skip {
             return Outcome::Stored { record: BuildCheck::NotRun, lines: vec![format!("build check: not run ({cause})")] };
         }
@@ -201,7 +302,12 @@ impl App {
         let cannot_run = |error: anyhow::Error| Outcome::CannotRun {
             text: format!("  ! build check: cannot run: {}\n", semilla_core::text::block(format!("{error:#}").trim_end()).replace('\n', "\n    ")),
         };
-        let (run, stored) = match self.tree_build(after, false) {
+        // R65.8-1: the records of the tree before the step. A build of that tree that cannot run
+        // gives no records; the build of the tree after the step then tells the cause.
+        if records {
+            let _ = self.tree_build(before, true, true);
+        }
+        let (run, stored) = match self.tree_build(after, false, records) {
             Ok(found) => found,
             Err(error) => return cannot_run(error),
         };
@@ -219,7 +325,7 @@ impl App {
         // Rule 8: only a build error that the step makes rejects the step. The check of the
         // tree before the step gives the state of each target without the step: it builds, it
         // does not build, or cargo did not check it (a target that it needs does not build).
-        let base = match self.tree_build(before, true) {
+        let base = match self.tree_build(before, true, records) {
             Ok((base, _)) => base,
             Err(error) => return cannot_run(error),
         };

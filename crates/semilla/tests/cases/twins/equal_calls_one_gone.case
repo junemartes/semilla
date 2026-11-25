@@ -32,6 +32,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: removed macro call `table!(A = 1,)` (made items that Semilla cannot list) [removed]
       ✗ spotlight: the macro call `table!(A = 1,)` makes items that Semilla cannot list; it needs a reason: --reason 'depot::a::table!#1=…'
   cover: each of the 1 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'depot::a::table!#1=<why>'
 === positions

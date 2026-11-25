@@ -776,7 +776,8 @@ impl App {
             // is a problem of the plan. A check that cannot run is a problem too, with its cause.
             let mut notes: Vec<String> = Vec::new();
             let mut build_text = String::new();
-            match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &after) {
+            let compiled_step = self.load_session()?.open.as_ref().is_some_and(|open| open.compiled);
+            match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &after, !compiled_step) {
                 crate::buildcheck::Outcome::Stored { record, lines } => {
                     let mut session = self.load_session()?;
                     if let Some(open) = session.open.as_mut() {

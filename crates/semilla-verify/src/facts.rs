@@ -2086,6 +2086,62 @@ pub(crate) fn order_reader(attrs: &str) -> Option<String> {
     Some(format!("an order change in a type with `#[repr]`, a derive, or an attribute macro ({list}): the code that it makes reads the members in order"))
 }
 
+/// True for an attribute that can be an attribute macro (R65.9-2): not a derive, not a `repr`,
+/// not a `cfg` or a `cfg_attr`, not a lint tool, and not a built-in attribute of the language.
+/// Such an attribute gets the item as its input and gives the item that the next attributes
+/// get. A name list of the language decides the built-in attributes (R65.4-1).
+fn attribute_macro(name: &str) -> bool {
+    !matches!(name, "derive" | "repr" | "cfg" | "cfg_attr") && !semilla_core::names::attribute_no_mir(name) && !semilla_core::names::attribute_no_cfg(name) && !is_lint_tool(name)
+}
+
+/// The inputs of the order rule of a type (R65.9-1): the derives and the attribute macros of its
+/// attribute text, each with its name (the last segment of the path), and `fixed`: the text has
+/// a `#[repr]` (the layout reads the order) or a `cfg_attr` (a different configuration can add
+/// a derive that no record of this build shows).
+pub(crate) struct OrderInputs {
+    pub fixed: bool,
+    pub makers: Vec<String>,
+}
+
+pub(crate) fn order_inputs(attrs: &str) -> OrderInputs {
+    let mut inputs = OrderInputs { fixed: false, makers: Vec::new() };
+    for attribute in split_attributes(attrs) {
+        let Some(name) = attribute_name(&attribute) else {
+            inputs.fixed = true;
+            continue;
+        };
+        match name.as_str() {
+            "repr" | "cfg_attr" => inputs.fixed = true,
+            other if attribute_macro(other) => inputs.makers.push(other.rsplit("::").next().unwrap_or(other).to_string()),
+            _ => {}
+        }
+    }
+    for (_, path) in derive_list(&[attrs.to_string()]) {
+        inputs.makers.push(path.rsplit("::").next().unwrap_or(&path).to_string());
+    }
+    inputs
+}
+
+/// R65.9-2: an attribute macro that moves across a derive in an attribute edit: the first such
+/// pair (the attribute macro, the derive attribute). Each one is on the two sides; the order of
+/// the two changes. The attribute macro gets the item before the derive or after it, so the
+/// input of the derive can change. `None`: no such pair (a new order of the derives only).
+pub(crate) fn attribute_macro_moves(old: &str, new: &str) -> Option<(String, String)> {
+    let (old, new) = (split_attributes(old), split_attributes(new));
+    let position = |list: &[String], text: &str| list.iter().position(|other| other == text);
+    let named = |list: &[String]| -> Vec<(String, String)> { list.iter().filter_map(|text| attribute_name(text).map(|name| (name, text.clone()))).collect() };
+    let olds = named(&old);
+    for (macro_name, macro_text) in olds.iter().filter(|(name, _)| attribute_macro(name)) {
+        for (_, derive_text) in olds.iter().filter(|(name, _)| name == "derive") {
+            let (Some(a), Some(b), Some(c), Some(d)) = (position(&old, macro_text), position(&old, derive_text), position(&new, macro_text), position(&new, derive_text)) else { continue };
+            if (a < b) != (c < d) {
+                return Some((macro_name.clone(), derive_text.clone()));
+            }
+        }
+    }
+    None
+}
+
 /// The text of a use of `include_str!`, `include_bytes!`, or `include!` for the spotlight:
 /// "`PATH` (`include_str!` in `ITEM`)". `None` for each other use. A path that is not one
 /// literal shows as its source text.
@@ -2140,6 +2196,17 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
         }
     }
     if part == "attribute" {
+        // R65.9-2: an attribute macro that moves across a derive changes the input of the
+        // derive. A new order of the derives only changes no derived impl (the decision of the
+        // user, 2026-11-25), so it has no spotlight.
+        // The text of the move goes before the text of each other changed attribute.
+        let moved = edits.iter().find_map(|edit| attribute_macro_moves(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""))).map(|(name, derive)| {
+            format!("an attribute macro moves across a derive (`#[{name}]`, `{derive}`): the macro gets the item before the derive or after it, so the input of the derive can change")
+        });
+        let with_move = |text: String| Some(match &moved {
+            Some(moved) => format!("{moved}; {text}"),
+            None => text,
+        });
         // An allow list (invariant I3): each attribute that is not known as harmless needs a
         // reason. A deny list misses the next attribute.
         let changed: Vec<String> = edits.iter().flat_map(|edit| changed_attributes(edit)).filter(|name| !no_spotlight_attribute(name) && !is_lint_tool(name)).collect();
@@ -2150,9 +2217,12 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
             let cfg = names.iter().any(|name| name == "cfg" || name == "cfg_attr");
             let text = names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
             if names.iter().any(|name| name == "doc(test)") {
-                return Some(if names.len() == 1 { DOC_TEST_SPOTLIGHT.to_string() } else { format!("{DOC_TEST_SPOTLIGHT}; more changed attributes: {text}") });
+                return with_move(if names.len() == 1 { DOC_TEST_SPOTLIGHT.to_string() } else { format!("{DOC_TEST_SPOTLIGHT}; more changed attributes: {text}") });
             }
-            return Some(if cfg { format!("a changed `cfg` attribute ({text})") } else { format!("a changed attribute that can change the behavior: {text}") });
+            return with_move(if cfg { format!("a changed `cfg` attribute ({text})") } else { format!("a changed attribute that can change the behavior: {text}") });
+        }
+        if moved.is_some() {
+            return moved;
         }
     }
     // A fact in a function that no checked configuration compiles.

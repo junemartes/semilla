@@ -1,0 +1,59 @@
+note: batch 10n2, part A: an attribute macro of the proc macro crate `depot` moves across a derive; the attribute macro gets the item before or after the derive, so the input of the derive can change: the fact has the spotlight (with no build check too)
+rule+: R65.9-2
+must_match: spotlight: an attribute macro moves across a derive \(`#\[depot::tag\]`, `#\[derive\(Debug\)\]`\)
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot/src/lib.rs
+use proc_macro::TokenStream;
+
+#[proc_macro_attribute]
+pub fn tag(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== old shop/src/lib.rs
+#[derive(Debug)]
+#[depot::tag]
+pub struct Item {
+    pub a: u8,
+}
+=== new shop/src/lib.rs
+#[depot::tag]
+#[derive(Debug)]
+pub struct Item {
+    pub a: u8,
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `shop::Item`: `#[derive(Debug)] #[depot::tag]` → `#[depot::tag] #[derive(Debug)]` [attribute]
+      ✗ spotlight: an attribute macro moves across a derive (`#[depot::tag]`, `#[derive(Debug)]`): the macro gets the item before the derive or after it, so the input of the derive can change; it needs a reason: --reason 'shop::Item=…'
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::Item=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test'
+◆ f1 derived: attributes of `shop::Item`: `#[derive(Debug)] #[depot::tag]` → `#[depot::tag] #[derive(Debug)]` [attribute]
+    lines: shop/src/lib.rs:2, shop/src/lib.rs:-1

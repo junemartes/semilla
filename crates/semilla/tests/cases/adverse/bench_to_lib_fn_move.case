@@ -88,6 +88,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: changed literal `40` → `41` at `depot::list::extra/S0/init/rhs` [semantics]
   ◆ f3 derived: public API: a different crate can now use `depot::list::extra` [move]
   cover: each of the 10 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

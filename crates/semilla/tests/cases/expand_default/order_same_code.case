@@ -1,0 +1,62 @@
+note: batch 10n2, part A: a field order change under a derive of the proc macro crate `depot` whose code does not read the fields; with the build check, the expansion records show the same code in the two trees, so the order change needs no reason (the fact has a note); with no build check, the case `names/order_third_party` keeps the spotlight
+rule+: R65.9-1
+build_check: on
+must_match: member order of `shop::Item`: `a, b` → `b, a`
+must_match: note: the member order needs no reason: each macro of the type \(`Marker`\) makes the same code in the two versions
+must_not_match: spotlight
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot/src/lib.rs
+use proc_macro::TokenStream;
+
+#[proc_macro_derive(Marker)]
+pub fn marker(input: TokenStream) -> TokenStream {
+    // Only the name of the type: the code does not read the fields.
+    let text = input.to_string();
+    let name = text.split_whitespace().skip_while(|word| *word != "struct").nth(1).unwrap_or("X").to_string();
+    format!("impl {name} {{ pub fn marked() -> bool {{ true }} }}").parse().unwrap()
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== old shop/src/lib.rs
+#[derive(depot::Marker)]
+pub struct Item {
+    pub a: u8,
+    pub b: u32,
+}
+=== new shop/src/lib.rs
+#[derive(depot::Marker)]
+pub struct Item {
+    pub b: u32,
+    pub a: u8,
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+      note: the member order needs no reason: each macro of the type (`Marker`) makes the same code in the two versions (the expansion records, R65.9-1)
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+    lines: shop/src/lib.rs:4, shop/src/lib.rs:-3

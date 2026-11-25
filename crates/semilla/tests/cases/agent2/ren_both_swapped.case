@@ -125,6 +125,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
     ◆ f3 stated: public API: `depot::Mode` is now `depot::State` (a different crate can no longer use the old path) [rename]
   not stated: 0 item(s)
   cover: each of the 6 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

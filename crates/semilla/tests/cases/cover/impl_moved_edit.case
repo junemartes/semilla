@@ -104,6 +104,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed expression `by` → `by + 1` at `depot::Tool::grow/S0/else/S0/rhs` [semantics]
   ◆ f2 derived: layout of `src/lib.rs`: 8 changed lines with equal tokens; 2 changed lines of 1 item with equal tokens at a new place [layout]
   cover: each of the 38 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
