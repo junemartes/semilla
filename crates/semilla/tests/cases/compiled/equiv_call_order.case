@@ -39,8 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: moved statement, see f1 (f1)
       in: shop::both
       lines: src/lib.rs:9, src/lib.rs:-8
-      to state it: --change 'shop::both=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::both=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::both=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: moved statement `log_a(x)` from `shop::both/S0/body/S0` to `shop::both/S0/body/S1` [semantics · code different]
       affected bodies: shop::both

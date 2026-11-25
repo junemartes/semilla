@@ -114,8 +114,12 @@ impl App {
         let started = std::time::Instant::now();
         let mut tags = Vec::new();
         for commit in &chain {
-            // The notes of the commits before stay: each one is a complete tag.
-            tags.push(self.tag_after(commit, options).with_context(|| format!("the tag after the commit of {commit} stops; the commits before it in the range have their notes"))?);
+            // R68.10-1: a tool error stops the tag of one commit, not the range. The commit gets
+            // a note with the error, and the range continues with the next commit.
+            match self.tag_after(commit, options) {
+                Ok(tag) => tags.push(tag),
+                Err(error) => tags.push(self.error_tag(commit, &format!("{error:#}"))),
+            }
         }
         crate::timing("tag a range after the commit", started);
         let mut open = OpenItems::default();
@@ -135,6 +139,28 @@ impl App {
         Ok((text, texts.is_empty()))
     }
 
+    /// R68.10-1: the tag of a commit of a range whose tag stops with a tool error. A commit with
+    /// no note gets a note with the error and no step (`semilla tag REV --again` makes it
+    /// again). A commit with a note keeps it: the error is only a line of the output. The error
+    /// is an open item, so the exit code is 1.
+    fn error_tag(&mut self, commit: &str, error: &str) -> CommitTag {
+        let short = self.repo.git(&["rev-parse", "--short", commit]).unwrap_or_else(|_| commit[..commit.len().min(12)].to_string());
+        let error = semilla_core::text::inline(error);
+        let stored = if self.repo.read_note(commit).is_ok() {
+            "the note of the commit stays".to_string()
+        } else {
+            let before = self.repo.parents(commit).ok().and_then(|parents| parents.first().cloned()).and_then(|parent| self.repo.commit_tree(&parent).ok()).or_else(|| self.repo.empty_tree().ok()).unwrap_or_default();
+            let after = self.repo.commit_tree(commit).unwrap_or_default();
+            let set = ChangeSet { base_tree: before, head_tree: after, after_commit: Some(AfterCommit { tool_error: Some(error.clone()), ..Default::default() }), ..Default::default() };
+            match serde_json::to_string_pretty(&set).map_err(anyhow::Error::from).and_then(|text| self.repo.write_note(commit, &text)) {
+                Ok(()) => format!("the note has the error; `semilla tag {short} --again` makes it again"),
+                Err(note_error) => format!("Semilla cannot store the note: {}", semilla_core::text::inline(&format!("{note_error:#}"))),
+            }
+        };
+        let text = format!("commit {short}: a tool error stops the tag of this commit; the range continues ({stored}): {error}\n");
+        CommitTag { short, text, steps: 0, facts: 0, facts_line: String::new(), open: OpenItems { errors: 1, ..Default::default() }, reasons: Vec::new() }
+    }
+
     /// The tag of one commit after the commit (rules R62.1-1 to R62.7-2).
     fn tag_after(&mut self, rev: &str, options: &TagOptions) -> Result<CommitTag> {
         let commit = self.repo.git(&["rev-parse", "--verify", &format!("{rev}^{{commit}}")]).with_context(|| format!("`{rev}` is not a commit"))?;
@@ -143,7 +169,10 @@ impl App {
         // Rule R62.7-1: a commit with a note keeps the note. `--again` makes it again.
         if let Ok(note) = self.repo.read_note(&commit) {
             let set = serde_json::from_str::<ChangeSet>(&note).ok();
+            // R68.10-1: a kept note with a tool error stays an open item.
+            let tool_error = set.as_ref().and_then(|set| set.after_commit.as_ref()).and_then(|after| after.tool_error.clone());
             let what = match &set {
+                Some(_) if tool_error.is_some() => format!("a note with a tool error ({})", tool_error.as_deref().unwrap_or_default()),
                 Some(set) if set.after_commit.is_some() => "a note of a tag after the commit".to_string(),
                 Some(set) => format!("a note with {} step(s) of the agent", set.steps.len()),
                 None => "a note that Semilla cannot read".to_string(),
@@ -151,7 +180,8 @@ impl App {
             match &set {
                 _ if !options.again => {
                     let text = format!("commit {short} has {what}; the note stays. `semilla tag {short} --again` makes it again; `semilla status {short}` shows its result\n");
-                    return Ok(CommitTag { short, text, steps: 0, facts: 0, facts_line: String::new(), open: OpenItems::default(), reasons: Vec::new() });
+                    let open = OpenItems { errors: usize::from(tool_error.is_some()), ..Default::default() };
+                    return Ok(CommitTag { short, text, steps: 0, facts: 0, facts_line: String::new(), open, reasons: Vec::new() });
                 }
                 Some(set) if set.after_commit.is_none() => {
                     bail!("commit {short} has {what}; `--again` makes only a note of a tag after the commit again, so the steps of the agent stay");
@@ -318,6 +348,38 @@ fn reason_commands(tags: &[CommitTag]) -> String {
     text
 }
 
+/// Each possible split of each reason text (design 37.6): the check runs with each key, and the
+/// longest key that a fact uses is the key of the text. Used by `semilla fact --commit` and by
+/// `semilla fact --step` (R68.11-1).
+pub(crate) fn reason_splits(reasons: &[String]) -> Result<Vec<Vec<(String, String)>>> {
+    let mut splits: Vec<Vec<(String, String)>> = Vec::new();
+    for text in reasons {
+        let options: Vec<(String, String)> = text.match_indices('=').map(|(at, _)| (text[..at].trim().to_string(), text[at + 1..].trim().to_string())).filter(|(key, reason)| !key.is_empty() && !reason.is_empty()).collect();
+        if options.is_empty() {
+            bail!("`--reason {text}` is not KEY=TEXT with a text. The reviewer reads the reason: say why the change is correct");
+        }
+        splits.push(options);
+    }
+    Ok(splits)
+}
+
+/// The key of each reason text: the longest key of its splits that a fact of the step uses with
+/// the text. Returns the new reasons of the step (from `base`) with the count of new or
+/// changed reasons, or the texts that belong to no fact.
+pub(crate) fn chosen_reasons(report: &semilla_core::report::StepReport, base: &std::collections::BTreeMap<String, String>, reasons: &[String], splits: &[Vec<(String, String)>]) -> std::result::Result<(std::collections::BTreeMap<String, String>, usize), Vec<String>> {
+    let used = |key: &str, reason: &str| report.facts.iter().any(|fact| fact.reason.as_deref() == Some(reason) && crate::onestep::fact_keys(fact).iter().any(|found| found == key));
+    let (mut chosen, mut count, mut unused) = (base.clone(), 0, Vec::new());
+    for (text, options) in reasons.iter().zip(splits) {
+        let mut fits: Vec<&(String, String)> = options.iter().filter(|(key, reason)| used(key, reason)).collect();
+        fits.sort_by_key(|(key, _)| std::cmp::Reverse(key.len()));
+        match fits.first() {
+            Some((key, reason)) => count += usize::from(chosen.insert(key.clone(), reason.clone()).as_ref() != Some(reason)),
+            None => unused.push(text.clone()),
+        }
+    }
+    if unused.is_empty() { Ok((chosen, count)) } else { Err(unused) }
+}
+
 impl App {
     /// `semilla fact --commit REV`: adds facts, tags, and reasons of the agent to a step of the
     /// note of a commit (rule R62.6-1). The checks are the checks of `semilla fact`, and a reason
@@ -344,16 +406,7 @@ impl App {
                 bail!("`--tag '{tag}'`: {message}");
             }
         }
-        // Each possible split of a reason text (design 37.6): the check runs with each key, and
-        // the longest key that a fact uses is the key of the text.
-        let mut splits: Vec<Vec<(String, String)>> = Vec::new();
-        for text in reasons {
-            let options: Vec<(String, String)> = text.match_indices('=').map(|(at, _)| (text[..at].trim().to_string(), text[at + 1..].trim().to_string())).filter(|(key, reason)| !key.is_empty() && !reason.is_empty()).collect();
-            if options.is_empty() {
-                bail!("`--reason {text}` is not KEY=TEXT with a text. The reviewer reads the reason: say why the change is correct");
-            }
-            splits.push(options);
-        }
+        let splits = reason_splits(reasons)?;
         let stored = &mut set.steps[index];
         let mut counts = [0usize; 3];
         for (list, texts) in [(&mut stored.agent.same, same), (&mut stored.agent.change, change)] {
@@ -383,19 +436,13 @@ impl App {
         if let Ok(found) = &result {
             // The key of each reason text: the longest key that a fact of the step uses.
             let report = found.report.steps.first().cloned().unwrap_or_default();
-            let used = |key: &str, reason: &str| report.facts.iter().any(|fact| fact.reason.as_deref() == Some(reason) && crate::onestep::fact_keys(fact).iter().any(|found| found == key));
-            let mut unused = Vec::new();
-            let mut chosen = base_reasons;
-            for (text, options) in reasons.iter().zip(&splits) {
-                let mut fits: Vec<&(String, String)> = options.iter().filter(|(key, reason)| used(key, reason)).collect();
-                fits.sort_by_key(|(key, _)| std::cmp::Reverse(key.len()));
-                match fits.first() {
-                    Some((key, reason)) => {
-                        counts[2] += usize::from(chosen.insert(key.clone(), reason.clone()).as_ref() != Some(reason));
-                    }
-                    None => unused.push(text.clone()),
+            let (chosen, unused) = match chosen_reasons(&report, &base_reasons, reasons, &splits) {
+                Ok((chosen, count)) => {
+                    counts[2] += count;
+                    (chosen, Vec::new())
                 }
-            }
+                Err(unused) => (base_reasons.clone(), unused),
+            };
             if !unused.is_empty() {
                 self.no_bodies = saved;
                 let mut text = String::new();

@@ -167,8 +167,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 7 places: changed literal `1` → `2` (f1)
       in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, shop::wrap
       lines: src/lib.rs:43, src/lib.rs:47, src/lib.rs:52, src/lib.rs:56, src/lib.rs:61, src/lib.rs:70, src/lib.rs:74, src/lib.rs:-43, src/lib.rs:-47, src/lib.rs:-52, src/lib.rs:-56, src/lib.rs:-61, src/lib.rs:-70, src/lib.rs:-74
-      to state it: --same 'rewrite 1 => 2'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --same 'rewrite 1 => 2'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::bits,shop::copy_one,shop::first,shop::later,shop::run_later,shop::talk,shop::wrap=TEXT'; if it does not change, --same 'rewrite 1 => 2'
   other facts, filled in by Semilla:
   ◆ f1 derived: 7 site(s): changed literal `1` → `2` [semantics · code different]
       in: shop::bits, shop::copy_one, shop::first, shop::later, shop::run_later, shop::talk, and 1 more

@@ -1,0 +1,42 @@
+note: U8: a changed constant whose reader is different: the gap line keeps the plain `--change` suggestion and the one command; the default mode has no result, so it keeps the plain form too (case `r68/u2_cfg_twins_new_order`)
+rule-: R68.8-1
+option: --compiled
+must_match: to state it: --change 'shop::price=TEXT'
+must_match: to state them, add facts to the stored step
+must_not_match: did not decide
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn price(n: u32) -> u32 {
+    n.wrapping_mul(7)
+}
+=== new src/lib.rs
+pub fn price(n: u32) -> u32 {
+    n.wrapping_mul(6)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `7` → `6` (f1)
+      in: shop::price
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::price=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::price=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `7` → `6` at `shop::price/tail/args[0]` [semantics · code different]
+      affected bodies: shop::price
+      equivalence: different: for n = 1: before returns 7, after returns 6
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::price (src/lib.rs:1): same graph (the edit keeps the control flow); different (for n = 1: before returns 7, after returns 6)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `7` → `6` at `shop::price/tail/args[0]` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-2

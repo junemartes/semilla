@@ -1050,6 +1050,14 @@ pub(crate) fn twin_keys(before: &Workspace, after: &Workspace) -> Option<(Worksp
 /// of each tree stay different. The items in a twin (the items of a twin module) get the new
 /// key of the twin. `None` if no key changes. The list has each pair with two different
 /// numbers: (the old path, the new path, the key of the pair in the compare).
+/// R68.2-1: the `cfg` attributes of an item itself (not of the items in it), in their compare
+/// text, sorted. A `cfg_attr` does not decide if the item exists, so it is not in the key.
+fn cfg_key(ws: &Workspace, path: &str) -> Vec<String> {
+    let mut key: Vec<String> = ws.items.get(path).map(|item| item.attrs.iter().filter(|text| crate::facts::attribute_name(text).as_deref() == Some("cfg")).map(|text| text.split_whitespace().collect::<String>()).collect()).unwrap_or_default();
+    key.sort();
+    key
+}
+
 pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace, Vec<(String, String, String)>)> {
     // The groups: the base path, the kind, and the flag of a macro definition.
     type Group = (String, &'static str, bool);
@@ -1101,6 +1109,23 @@ pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Works
                 taken[j] = true;
             }
         }
+        // R68.2-1, pass 1b: the `cfg` condition. A twin that remains pairs with the one twin
+        // that remains in the other tree with the same `cfg` attributes, if no other twin of the
+        // two trees has these attributes. Each `cfg` variant of an item exists in its own build,
+        // so its condition is its identity: the source order is not.
+        let old_cfgs: Vec<Vec<String>> = old_list.iter().map(|(_, path)| cfg_key(before, path)).collect();
+        let new_cfgs: Vec<Vec<String>> = new_list.iter().map(|(_, path)| cfg_key(after, path)).collect();
+        for i in 0..old_list.len() {
+            if partner[i].is_some() || old_cfgs[i].is_empty() {
+                continue;
+            }
+            let olds: Vec<usize> = (0..old_list.len()).filter(|&k| partner[k].is_none() && old_cfgs[k] == old_cfgs[i]).collect();
+            let news: Vec<usize> = (0..new_list.len()).filter(|&j| !taken[j] && new_cfgs[j] == old_cfgs[i]).collect();
+            if let ([_], [j]) = (olds.as_slice(), news.as_slice()) {
+                partner[i] = Some(*j);
+                taken[*j] = true;
+            }
+        }
         // Pass 2: the source order, in each gap between two pairs of pass 1 in their order.
         let mut start = (0, 0);
         for (end_i, end_j) in anchors.iter().copied().chain(std::iter::once((old_list.len(), new_list.len()))) {
@@ -1140,8 +1165,13 @@ pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Works
     if keys.iter().all(BTreeMap::is_empty) {
         return None;
     }
-    // A key with a new prefix: the twin, and each item in it.
-    let rekey = |key: &str, map: &BTreeMap<String, String>| -> String {
+    Some((rekeyed(before, &keys[0]), rekeyed(after, &keys[1]), moved))
+}
+
+/// A copy of a workspace with new keys: each key of the map, and each key in it (an item of a
+/// twin module, a method of an impl).
+fn rekeyed(ws: &Workspace, map: &BTreeMap<String, String>) -> Workspace {
+    let rekey = |key: &str| -> String {
         for (from, to) in map {
             if key == from {
                 return to.clone();
@@ -1152,26 +1182,57 @@ pub(crate) fn twin_pairs(before: &Workspace, after: &Workspace) -> Option<(Works
         }
         key.to_string()
     };
-    let apply = |ws: &Workspace, map: &BTreeMap<String, String>| -> Workspace {
-        let mut ws = ws.clone();
-        if map.is_empty() {
-            return ws;
+    let mut ws = ws.clone();
+    if map.is_empty() {
+        return ws;
+    }
+    ws.items = std::mem::take(&mut ws.items)
+        .into_values()
+        .map(|mut item| {
+            item.path = rekey(&item.path);
+            (item.path.clone(), item)
+        })
+        .collect();
+    ws.module_files = std::mem::take(&mut ws.module_files).into_iter().map(|(key, value)| (rekey(&key), value)).collect();
+    ws.inner_attrs = std::mem::take(&mut ws.inner_attrs).into_iter().map(|(key, value)| (rekey(&key), value)).collect();
+    ws.inner_attrs_display = std::mem::take(&mut ws.inner_attrs_display).into_iter().map(|(key, value)| (rekey(&key), value)).collect();
+    ws.macro_modules = std::mem::take(&mut ws.macro_modules).into_iter().map(|(key, value)| (rekey(&key), value)).collect();
+    ws.body_index = Default::default();
+    ws
+}
+
+/// R68.9-1: an impl is identified by the definition of its trait (and of its self type). A path
+/// of `core` or `alloc` names the item of the same path below `std`, so `impl core::ops::Add
+/// for X` and `impl std::ops::Add for X` are one impl. An impl of the old tree with no partner
+/// takes the key of the one impl of the new tree with no partner and the same `std` form. The
+/// header edit stays a signature fact of the impl: the rule hides no edit. `None` if no key
+/// changes.
+pub(crate) fn trait_path_pairs(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace)> {
+    use semilla_core::names::std_facade_form;
+    let lone = |ws: &Workspace, other: &Workspace| -> BTreeMap<String, Vec<String>> {
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (path, item) in &ws.items {
+            // An impl, and each item of an impl (`m::<X as core::ops::Add>::add`).
+            if (item.kind == ItemKind::Impl || path.contains("::<")) && !other.items.contains_key(path) {
+                let form = std_facade_form(path);
+                if form != *path || ws.items.keys().any(|key| *key != *path && std_facade_form(key) == form) || other.items.keys().any(|key| std_facade_form(key) == form) {
+                    out.entry(form).or_default().push(path.clone());
+                }
+            }
         }
-        ws.items = std::mem::take(&mut ws.items)
-            .into_values()
-            .map(|mut item| {
-                item.path = rekey(&item.path, map);
-                (item.path.clone(), item)
-            })
-            .collect();
-        ws.module_files = std::mem::take(&mut ws.module_files).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
-        ws.inner_attrs = std::mem::take(&mut ws.inner_attrs).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
-        ws.inner_attrs_display = std::mem::take(&mut ws.inner_attrs_display).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
-        ws.macro_modules = std::mem::take(&mut ws.macro_modules).into_iter().map(|(key, value)| (rekey(&key, map), value)).collect();
-        ws.body_index = Default::default();
-        ws
+        out
     };
-    Some((apply(before, &keys[0]), apply(after, &keys[1]), moved))
+    let (old, new) = (lone(before, after), lone(after, before));
+    let mut map = BTreeMap::new();
+    for (form, paths) in &old {
+        if let (Some([from]), Some([to])) = (Some(paths.as_slice()), new.get(form).map(Vec::as_slice))
+            && from != to
+            && !before.items.contains_key(to)
+        {
+            map.insert(from.clone(), to.clone());
+        }
+    }
+    (!map.is_empty()).then(|| (rekeyed(before, &map), after.clone()))
 }
 
 /// The text of a twin that a step adds or removes (design 38.3): "(a twin of `P` under

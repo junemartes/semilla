@@ -210,6 +210,49 @@ fn scan(stream: TokenStream, out: &mut Vec<TokenStream>) {
     }
 }
 
+/// R68.1-1: true if a token text has a `cfg` or a `cfg_attr` attribute other than
+/// `#[cfg(test)]`, at any depth (also in the input of a macro call). The scan reads the tokens of
+/// the code: the text of a comment or of a doc comment is a string literal of a `doc` attribute,
+/// so a doc test example (`/// # #[cfg(x)]`) is not an attribute. `None` if the text does not
+/// parse as tokens: the caller then uses the text.
+pub(crate) fn has_cfg_attribute(text: &str) -> Option<bool> {
+    fn walk(stream: TokenStream) -> bool {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        trees.iter().enumerate().any(|(index, tree)| {
+            let before = |back: usize| index.checked_sub(back).and_then(|at| trees.get(at));
+            let TokenTree::Group(group) = tree else { return false };
+            let attr = group.delimiter() == Delimiter::Bracket && (is_punct(before(1), '#') || (is_punct(before(1), '!') && is_punct(before(2), '#')));
+            if attr {
+                let content: Vec<TokenTree> = group.stream().into_iter().collect();
+                let name = match content.first() {
+                    Some(TokenTree::Ident(name)) => name.to_string(),
+                    _ => String::new(),
+                };
+                let only_test = is_punct(before(1), '#') && matches!(content.get(1), Some(TokenTree::Group(inner)) if content.len() == 2 && inner.stream().to_string() == "test");
+                if (name == "cfg" && !only_test) || name == "cfg_attr" {
+                    return true;
+                }
+            }
+            walk(group.stream())
+        })
+    }
+    let stream = text.parse::<TokenStream>().ok()?;
+    Some(walk(stream))
+}
+
+/// R68.1-1: true if a token text has the keyword `unsafe` as a token. A comment or a string
+/// with the word is not a token. `None` if the text does not parse as tokens.
+pub(crate) fn has_keyword(text: &str, word: &str) -> Option<bool> {
+    fn walk(stream: TokenStream, word: &str) -> bool {
+        stream.into_iter().any(|tree| match tree {
+            TokenTree::Ident(ident) => ident == word,
+            TokenTree::Group(group) => walk(group.stream(), word),
+            _ => false,
+        })
+    }
+    Some(walk(text.parse::<TokenStream>().ok()?, word))
+}
+
 /// Each condition in a token list (the tokens between the parentheses of `cfg(…)`).
 pub(crate) fn conditions(stream: TokenStream) -> Vec<TokenStream> {
     let mut out = Vec::new();
@@ -644,5 +687,29 @@ mod tests {
         // The value of a string, not its text.
         assert_eq!(parse(&"feature = \"a\\u{62}\"".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()), Pred::Atom("feature=\"ab\"".to_string()));
         assert_eq!(parse(&"version(\"1.0\")".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()), Pred::Other);
+    }
+
+    // rule+ R68.1-1
+    #[test]
+    fn a_cfg_attribute_of_the_code_is_found_at_each_depth() {
+        assert_eq!(has_cfg_attribute("#[cfg(feature = \"x\")] fn f() {}"), Some(true));
+        assert_eq!(has_cfg_attribute("fn f() { #[cfg(unix)] let a = 1; }"), Some(true));
+        assert_eq!(has_cfg_attribute("m! { #[cfg_attr(unix, inline)] fn f() {} }"), Some(true));
+        assert_eq!(has_cfg_attribute("mod m { #![cfg(unix)] }"), Some(true));
+        assert_eq!(has_cfg_attribute("mod m { #![cfg(test)] }"), Some(true));
+        assert_eq!(has_keyword("fn f() { unsafe { g() } }", "unsafe"), Some(true));
+        // A text that does not parse: the caller uses the text match.
+        assert_eq!(has_cfg_attribute("fn f() { #[cfg(unix)"), None);
+    }
+
+    // rule- R68.1-1
+    #[test]
+    fn the_text_of_a_comment_or_a_string_is_not_an_attribute() {
+        let docs = "/// An example:\n/// ```\n/// # #[cfg(feature = \"x\")]\n/// #[cfg(unix)]\n/// ```\nfn f() {\n    // #[cfg(unix)] here\n    /* #![cfg_attr(a, b)] */\n    g(\"#[cfg(unix)]\");\n}\n";
+        assert_eq!(has_cfg_attribute(docs), Some(false));
+        assert_eq!(has_cfg_attribute("#[cfg(test)] mod t {}"), Some(false));
+        // A function with the name `cfg` is not an attribute.
+        assert_eq!(has_cfg_attribute("fn f() { cfg(1); [cfg(2)]; }"), Some(false));
+        assert_eq!(has_keyword("/// It is not unsafe.\nfn f() { // unsafe\n g(\"unsafe\") }", "unsafe"), Some(false));
     }
 }

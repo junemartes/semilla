@@ -984,6 +984,23 @@ pub fn const_values(item: rustc_public::CrateItem) -> Vec<(String, String)> {
     let Some(body) = item.body() else { return Vec::new() };
     let mut found: Vec<(String, String)> = Vec::new();
     let mut add = |constant: &rustc_public::ty::MirConst| {
+        // R68.6-1: a read of a static that cannot change (a lookup table) reads a constant. The
+        // operand is a pointer to the static. A static of the standard library is not a part of
+        // a step.
+        if let ConstantKind::Allocated(alloc) = constant.kind() {
+            for (_, provenance) in &alloc.provenance.ptrs {
+                if let rustc_public::mir::alloc::GlobalAlloc::Static(def) = rustc_public::mir::alloc::GlobalAlloc::from(provenance.0)
+                    && crate::effects::plain_static(&def)
+                    && !crate::reach::is_std(&def.krate().name)
+                {
+                    let entry = (def.name(), crate::consts::static_value(&def));
+                    if !found.contains(&entry) {
+                        found.push(entry);
+                    }
+                }
+            }
+            return;
+        }
         let ConstantKind::Unevaluated(unevaluated) = constant.kind() else { return };
         if unevaluated.promoted.is_some() {
             return;

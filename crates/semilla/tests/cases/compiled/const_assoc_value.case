@@ -41,12 +41,12 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: value of, see f1 (f1)
       in: shop::S::A
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'shop::S::A=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::S::A=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   ? 1 place: value of, see f2 (f2)
       in: shop::S::B
       lines: src/lib.rs:7, src/lib.rs:-7
       to state it: --change 'shop::S::B=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::S::A=TEXT' --change 'shop::S::B=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::S::B=TEXT'
   other facts, filled in by Semilla:
   ◆ f1 derived: value of `shop::S::A` changed: N as u32 → (M + 1) as u32 (the public API can change: a different crate can use the item) [semantics · code different]
       affected bodies: shop::S::A, shop::get

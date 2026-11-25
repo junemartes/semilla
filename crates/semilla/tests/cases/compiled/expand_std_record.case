@@ -36,8 +36,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f1, f2)
       in: shop::check
       lines: src/lib.rs:6, src/lib.rs:-6
-      to state it: --change 'shop::check=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::check=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::check=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: changed literal `2` → `3` at `shop::check/S0/args[0]/args[0]` [semantics · code different]
       affected bodies: shop::check (with 1 other edit of this body)

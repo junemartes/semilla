@@ -913,9 +913,57 @@ pub fn signature_part(edit: &Edit) -> Option<&'static str> {
 }
 
 /// The head (`const X : T`) and the value of a const or static signature text.
-fn const_parts(text: &Option<String>) -> Option<(String, String)> {
-    let (head, value) = text.as_deref()?.split_once(" = ")?;
+pub(crate) fn const_parts(text: &Option<String>) -> Option<(String, String)> {
+    // R68.2-2: the ` = ` of the value is at the top level. The ` = ` of an attribute
+    // (`#[cfg(target_pointer_width = "32")]`) or of a string is in a group, so it is not the
+    // value.
+    let text = text.as_deref()?;
+    let (mut depth, mut quote, mut escape) = (0i32, false, false);
+    let mut at = None;
+    for (index, c) in text.char_indices() {
+        if quote {
+            match (escape, c) {
+                (true, _) => escape = false,
+                (false, '\\') => escape = true,
+                (false, '"') => quote = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => quote = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            '=' if depth == 0 && text[..index].ends_with(' ') && text[index + 1..].starts_with(' ') => {
+                at = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let at = at?;
+    let (head, value) = (&text[..at - 1], &text[at + 2..]);
     Some((head.to_string(), value.trim_end_matches(';').trim().to_string()))
+}
+
+/// R68.6-3: the changed elements of two arrays of one length: "[2] 3 → 9, [5] 6 → 1 (2 of 8
+/// elements differ)". At most 8 elements have a text; the text names the count of the others.
+/// `None` if a value is not an array, the lengths differ, the arrays have fewer than two
+/// elements, or each element differs: then the full texts are the better output.
+pub(crate) fn array_change(old: &str, new: &str) -> Option<String> {
+    let (a, b) = (array_elements(old)?, array_elements(new)?);
+    if a.len() != b.len() || a.len() < 2 {
+        return None;
+    }
+    let changed: Vec<usize> = (0..a.len()).filter(|index| a[*index] != b[*index]).collect();
+    if changed.is_empty() || changed.len() == a.len() {
+        return None;
+    }
+    let mut parts: Vec<String> = changed.iter().take(8).map(|index| format!("[{index}] {} → {}", a[*index], b[*index])).collect();
+    if changed.len() > 8 {
+        parts.push(format!("and {} more", changed.len() - 8));
+    }
+    Some(format!("{} ({} of {} elements differ)", parts.join(", "), changed.len(), a.len()))
 }
 
 /// The text of a changed value that is long (batch 5y, C1): the two sides, cut to the changed
@@ -1567,7 +1615,8 @@ pub fn generic_order_changed(edit: &Edit) -> bool {
                 ast::Item::TypeAlias(item) => Some(names(item.generic_param_list())),
                 _ => None,
             };
-            let text = |ty: Option<ast::Type>| ty.map(|ty| tokens(&ty));
+            // R68.9-1: a path of `core` or `alloc` names the item of `std` with the same path.
+            let text = |ty: Option<ast::Type>| ty.map(|ty| semilla_core::names::std_facade_form(&tokens(&ty).split_whitespace().collect::<String>()));
             match (semilla_syntax::rs::parse_item(old), semilla_syntax::rs::parse_item(new)) {
                 (Some(ast::Item::Impl(old)), Some(ast::Item::Impl(new))) => text(old.self_ty()) != text(new.self_ty()) || text(old.trait_()) != text(new.trait_()),
                 (Some(old_item), Some(new_item)) => match (generics(&old_item), generics(&new_item)) {

@@ -348,6 +348,11 @@ pub struct AfterCommit {
     /// is an open item (rule R62.5-3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compiled_error: Option<String>,
+    /// R68.10-1: the error of a tool that stopped the tag of the commit in a range (`semilla
+    /// tag A..B`). The note has no step; the range continues with the next commit, and the
+    /// error is an open item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_error: Option<String>,
 }
 
 /// A configuration of the compiled check that does not build in a tag after the commit.

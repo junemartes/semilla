@@ -345,7 +345,7 @@ thread_local! {
 }
 
 /// A short hash of a text.
-fn short_hash(text: &str) -> String {
+pub(crate) fn short_hash(text: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(text.as_bytes()).iter().take(8).map(|byte| format!("{byte:02x}")).collect()
 }
@@ -543,4 +543,71 @@ fn digest_of(tcx: rustc_middle::ty::TyCtxt<'_>, def: rustc_hir::def_id::DefId, p
     }
     found.sort();
     found
+}
+
+/// The most elements of a static value with a text of each element (R68.6-1). A larger value
+/// has the digest of its allocation.
+const MAX_STATIC_ELEMENTS: u64 = 1024;
+
+/// R68.6-1: the value text of a static that cannot change, for the constant values of a reader
+/// (`cv`). An integer, a `bool`, a `char`, or an array of them (also nested) has the text of its
+/// elements (`[1, 2, 9]`), so the line of a reader can name each changed element. Each other
+/// value has a short hash of the text of its allocation (the bytes and the targets of its
+/// pointers): two equal values have equal texts. A static that the compiler does not evaluate
+/// has the digest of its definition (R66.3-2).
+pub fn static_value(def: &rustc_public::mir::mono::StaticDef) -> String {
+    thread_local! {
+        /// The value of each static, for the run of the driver: many bodies read one table.
+        static VALUES: std::cell::RefCell<std::collections::HashMap<String, String>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = format!("{:?}", rustc_public::CrateDef::def_id(def));
+    if let Some(found) = VALUES.with(|memo| memo.borrow().get(&key).cloned()) {
+        return found;
+    }
+    let found = static_value_of(def);
+    VALUES.with(|memo| memo.borrow_mut().insert(key, found.clone()));
+    found
+}
+
+fn static_value_of(def: &rustc_public::mir::mono::StaticDef) -> String {
+    match def.eval_initializer() {
+        Ok(alloc) => match typed_value(def.ty(), &alloc, 0) {
+            Some((text, _)) => text,
+            None => format!("value #{}", short_hash(&crate::print::Printer::default().allocation(&alloc, 0))),
+        },
+        Err(_) => digest_text(&definition_digest(rustc_public::CrateDef::def_id(def), None)),
+    }
+}
+
+/// The text and the size in bytes of a value of an integer, a `bool`, a `char`, or an array of
+/// them at an offset of an allocation. `None` for each other type, and for a byte that is not
+/// initialized or that has a pointer.
+fn typed_value(ty: Ty, alloc: &rustc_public::ty::Allocation, offset: usize) -> Option<(String, usize)> {
+    if let Some((w, s)) = int_of(ty) {
+        let size = (w as usize).div_ceil(8);
+        if alloc.provenance.ptrs.iter().any(|(at, _)| *at < offset + size && offset < *at + 8) {
+            return None;
+        }
+        let v = alloc.read_partial_uint(offset..offset + size).ok()?;
+        let text = match ty.kind() {
+            TyKind::RigidTy(RigidTy::Bool) => (v != 0).to_string(),
+            TyKind::RigidTy(RigidTy::Char) => char::from_u32(v as u32).map(|c| format!("{c:?}")).unwrap_or_else(|| v.to_string()),
+            _ if s => signed(v & mask(w), w).to_string(),
+            _ => (v & mask(w)).to_string(),
+        };
+        return Some((text, size));
+    }
+    let TyKind::RigidTy(RigidTy::Array(elem, len)) = ty.kind() else { return None };
+    let count = len.eval_target_usize().ok()?;
+    if count > MAX_STATIC_ELEMENTS {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut at = offset;
+    for _ in 0..count {
+        let (text, size) = typed_value(elem, alloc, at)?;
+        parts.push(text);
+        at += size;
+    }
+    Some((format!("[{}]", parts.join(", ")), at - offset))
 }

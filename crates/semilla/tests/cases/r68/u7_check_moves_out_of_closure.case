@@ -1,0 +1,52 @@
+note: U7: an index check moves out of a closure into the body: the line of the body names the counts of the item with its closures (1 → 1), so the move is not a new panic point; the graph changes of each body stay
+rule+: R68.7-1
+option: --compiled
+must_match: shop::pick \(src/lib.rs:1\): graph changes: \+1 check, \+1 panic, .*; with its closures: 1 → 1 checks, 1 → 1 panics \(the points move between the body and its closures; the item has no new panic point\)
+must_match: graph removed
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn pick(v: &[u32], i: usize) -> u32 {
+    let get = |k: usize| v[k];
+    get(i).wrapping_add(1)
+}
+=== new src/lib.rs
+pub fn pick(v: &[u32], i: usize) -> u32 {
+    v[i].wrapping_add(1)
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::pick
+      lines: src/lib.rs:2, src/lib.rs:-2-3
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `get(i)` → `v[i]` at `shop::pick/tail/recv` [semantics · code different]
+      affected bodies: shop::pick (with 1 other edit of this body)
+      control flow: + check `bounds: v[i]` (src/lib.rs:2): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
+      control flow: + panic `bounds` (src/lib.rs:2)
+      control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
+      control flow: … 2 more (semilla status --verbose)
+      equivalence: not decided alone: a raw pointer: v[k] (src/lib.rs:-2); the body: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+  ◆ f2 derived: deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
+      affected bodies: shop::pick (with 1 other edit of this body)
+      control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla status --verbose)
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::pick (src/lib.rs:1): graph changes: +1 check, +1 panic, −1 call, +3 arrows, −2 arrows; with its closures: 1 → 1 checks, 1 → 1 panics (the points move between the body and its closures; the item has no new panic point); not decided (a raw pointer: v[k] (src/lib.rs:-2))
+    shop::pick::{closure#0} |k: usize| v[k] (src/lib.rs:-2): graph removed: 4 points, 3 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `get(i)` → `v[i]` at `shop::pick/tail/recv` [semantics · code different]
+    lines: src/lib.rs:2, src/lib.rs:-3
+◆ f2 derived: deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
+    lines: src/lib.rs:-2

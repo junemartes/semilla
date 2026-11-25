@@ -395,6 +395,9 @@ pub(crate) fn after_commit_lines(set: &ChangeSet) -> Vec<String> {
     if let Some(error) = &after.compiled_error {
         lines.push(format!("! the compiled check stops, so the step has the facts of the syntax tree only: {}", semilla_core::text::inline(error)));
     }
+    if let Some(error) = &after.tool_error {
+        lines.push(format!("! a tool error stops the tag of this commit, so the note has no step: {}", semilla_core::text::inline(error)));
+    }
     lines
 }
 
@@ -435,6 +438,7 @@ impl OpenItems {
             }
         }
         items.errors += set.after_commit.iter().filter(|after| after.compiled_error.is_some()).count();
+        items.errors += set.after_commit.iter().filter(|after| after.tool_error.is_some()).count();
         for step in &report.steps {
             items.spotlights += step.facts.iter().filter(|fact| fact.spotlight && fact.reason.is_none()).count();
             items.errors += step.errors.len();

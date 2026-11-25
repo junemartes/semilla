@@ -483,3 +483,69 @@ fn a_configuration_that_does_not_build_does_not_stop_the_others() {
     assert_ne!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("does not compile in the configuration"), "{text}");
 }
+
+// rule+ R68.10-1
+// rule- R68.10-1
+#[test]
+fn a_range_continues_after_a_tool_error_and_the_commit_gets_a_note_with_the_error() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    let start = git(repo, &["rev-parse", "HEAD"]);
+    write(repo, "src/lib.rs", &format!("pub mod cart;\n\n{TOTAL_V1}"));
+    let one = commit_all(repo, "filter the items");
+    // A manifest that does not parse: the tag of this commit stops with a tool error.
+    write(repo, "Cargo.toml", "[package\nname = \"shop\"\n");
+    let broken = commit_all(repo, "break the manifest");
+    write(repo, "Cargo.toml", "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nnightly = []\n");
+    let fixed = commit_all(repo, "fix the manifest");
+    write(repo, "src/lib.rs", &format!("pub mod cart;\n\n{TOTAL_V0}"));
+    let last = commit_all(repo, "keep each item");
+    // The exit code is 1: a note has an error.
+    let out = run(repo, &["tag", &format!("{start}..HEAD")], 1);
+    assert!(out.starts_with("result: tagged after the commit · 4 commits · "), "{out}");
+    assert!(out.contains("errors of the check"), "{out}");
+    for commit in [&broken, &fixed] {
+        let short = &commit[..7];
+        assert!(out.contains(&format!("commit {short}: a tool error stops the tag of this commit; the range continues (the note has the error;")), "{out}");
+        let stored = note(repo, commit);
+        assert!(stored["after_commit"]["tool_error"].as_str().is_some_and(|error| !error.is_empty()), "{stored}");
+        assert!(stored["steps"].as_array().is_none_or(|steps| steps.is_empty()), "{stored}");
+    }
+    // The commits before and after the error get their steps.
+    for commit in [&one, &last] {
+        assert!(out.contains(&format!("tagged {commit} after the commit")), "{out}");
+        let stored = note(repo, commit);
+        assert_eq!(stored["steps"].as_array().unwrap().len(), 1);
+        // The negative case: a commit with no tool error has no error in its note.
+        assert!(stored["after_commit"]["tool_error"].is_null(), "{stored}");
+    }
+    // Each commit keeps its note. A kept note with an error stays an open item: exit code 1.
+    let out = run(repo, &["tag", &format!("{start}..HEAD")], 1);
+    assert_eq!(out.matches("the note stays").count(), 4, "{out}");
+    assert_eq!(out.matches("has a note with a tool error").count(), 2, "{out}");
+    // `--again` makes the note of the first commit again; it has no error.
+    let out = run(repo, &["tag", &one, "--again"], 0);
+    assert!(out.contains(&format!("tagged {one} after the commit")), "{out}");
+}
+
+// rule+ R68.11-1
+// rule- R68.11-1
+#[test]
+fn a_reason_goes_to_a_stored_step_with_semilla_fact() {
+    let dir = setup();
+    let repo = &dir.path().join("repo");
+    write(repo, "src/lib.rs", &format!("pub mod cart;\n\n{TOTAL_V0}{HOST}"));
+    // The step needs the reason of the spotlight: the step stores it.
+    let out = run(repo, &["step", "add the host", "--reason", "shop::host=a first reason"], 0);
+    assert!(out.starts_with("accepted: step 0"), "{out}");
+    // A new text for the key of the spotlight replaces the reason of the stored step.
+    let out = run(repo, &["fact", "--step", "0", "--reason", "shop::host=only unix hosts run the shop"], 0);
+    assert!(out.contains("stored: 0 new fact(s) of the agent, 1 new reason(s) in step 0"), "{out}");
+    let status = run(repo, &["status", "--verbose"], 0);
+    assert!(status.contains("only unix hosts run the shop") && !status.contains("a first reason"), "{status}");
+    // The negative case: a reason that belongs to no fact stores nothing.
+    let out = run(repo, &["fact", "--step", "0", "--reason", "shop::nothing=a reason"], 1);
+    assert!(out.starts_with("rejected: nothing is added to step 0") && out.contains("belongs to no fact of step 0"), "{out}");
+    let status = run(repo, &["status", "--verbose"], 0);
+    assert!(status.contains("only unix hosts run the shop") && !status.contains("shop::nothing"), "{status}");
+}

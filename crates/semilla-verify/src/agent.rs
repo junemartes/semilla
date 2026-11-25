@@ -503,6 +503,11 @@ impl<'a> Check<'a> {
     fn existing(&self, unit: &Unit) -> bool {
         let old = |path: &str| self.before.items.contains_key(path) || self.renames.items.values().any(|new| new == path);
         let new = |path: &str| self.after.items.contains_key(path) || self.renames.items.contains_key(path);
+        // R68.5-1: an override of a default method is existing code: the impl had the method
+        // with the default body.
+        if self.facts.get(unit.fact).is_some_and(|fact| fact.part == crate::overrides::OVERRIDE_PART) {
+            return true;
+        }
         !unit.items.is_empty() && unit.items.iter().all(|item| old(item) && new(item))
     }
 
@@ -1262,6 +1267,16 @@ pub(crate) fn apply(input: &StepInput, outcome: &mut StepOutcome) {
         fact.test = tests[index];
     }
     report.agent_facts = results.into_iter().map(|(result, _)| result).collect();
+    // R68.8-1: a line whose facts each have a result of the compiled check, and no result
+    // "different", is undecided: the check did not show a change of the behavior.
+    for gap in &mut gaps {
+        let decided_different = |line: &String| line.starts_with("different") || line.contains("; the body: different");
+        gap.undecided = !gap.facts.is_empty()
+            && gap.facts.iter().all(|id| report.flow.as_ref().and_then(|flow| flow.equivalence.get(id)).is_some_and(|lines| !lines.is_empty() && !lines.iter().any(decided_different)));
+        if gap.option.starts_with("--same ") {
+            gap.same = Some(gap.option.clone());
+        }
+    }
     report.gaps = gaps;
 }
 

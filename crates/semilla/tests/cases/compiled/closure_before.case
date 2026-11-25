@@ -33,8 +33,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` (f1)
       in: shop::total
       lines: src/lib.rs:7, src/lib.rs:-7
-      to state it: --change 'shop::total=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::total=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::total=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `items.iter()` → `items.iter().filter(|x| x.cost() > 0)` at `shop::total/tail/recv/recv` [semantics · code different]
       affected bodies: shop::total

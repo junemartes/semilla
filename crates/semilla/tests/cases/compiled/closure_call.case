@@ -24,8 +24,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 3 places: 3 different edits (f1, f2, f3)
       in: depot::apply
       lines: src/lib.rs:2-3, src/lib.rs:-2
-      to state it: --change 'depot::apply=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'depot::apply=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'depot::apply=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: deleted statement `v ^ 1` at `depot::apply/tail` [semantics · code different]
       affected bodies: depot::apply (with 2 other edits of this body)

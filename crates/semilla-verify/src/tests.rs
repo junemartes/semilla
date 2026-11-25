@@ -28,7 +28,7 @@ impl ExprOracle for FakeExprs {
     }
 }
 
-fn load(src: &str) -> (tempfile::TempDir, Workspace) {
+pub(crate) fn load(src: &str) -> (tempfile::TempDir, Workspace) {
     load_with(MANIFEST, src)
 }
 

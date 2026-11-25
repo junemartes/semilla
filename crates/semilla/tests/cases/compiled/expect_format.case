@@ -21,12 +21,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 2 places: 2 different edits (f2, f3)
       in: shop::show
       lines: src/lib.rs:2, src/lib.rs:-2
-      to state it: --change 'shop::show=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::show=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   ? 1 place: changed method_call: `o.unwrap_or(0)` → `o.expect("none")` (f1)
       in: shop::first
       lines: src/lib.rs:1, src/lib.rs:-1
-      to state it: --change 'shop::first=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::show=TEXT' --change 'shop::first=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::first=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   other facts, filled in by Semilla:
   ◆ f1 derived: changed method_call: `o.unwrap_or(0)` → `o.expect("none")` at `shop::first/tail` [semantics · code different]
       affected bodies: shop::first

@@ -25,11 +25,11 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ? 1 place: added `if` `if x > 9 { panic!("too big"); }` (f1)
       in: shop::a
       lines: src/lib.rs:1, src/lib.rs:-1-4
-      to state it: --change 'shop::a=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::a=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   ? 1 place: added macro statement `assert_eq!(x, y);` (f2)
       in: shop::b
       lines: src/lib.rs:2
-      to state it: --change 'shop::b=TEXT'
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::b=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
   ? 1 place: added `if` `if x > 9 { unreachable!() }` (f3)
       in: shop::c
       lines: src/lib.rs:3
@@ -38,7 +38,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       in: shop::d
       lines: src/lib.rs:4
       to state it: --change 'shop::d=TEXT'
-  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::a=TEXT' --change 'shop::b=TEXT' --change 'shop::c=TEXT' --change 'shop::d=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::c=TEXT' --change 'shop::d=TEXT'
   other facts, filled in by Semilla:
   ◆ f1 derived: added `if` `if x > 9 { panic!("too big"); }` at `shop::a/S0` [semantics · code different]
       affected bodies: shop::a

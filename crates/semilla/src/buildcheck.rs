@@ -280,6 +280,37 @@ impl App {
         Ok((run, false))
     }
 
+    /// R68.12-1: a "not checked" line for each `cfg` attribute of the new tree whose condition
+    /// the target of the build check makes false around changed code. The true atoms of the
+    /// target come from `rustc --print cfg` of the tool chain of the check, with the flags of
+    /// `RUSTFLAGS`. A tree with a cargo configuration file can set a different target or other
+    /// flags: Semilla does not read it, so the line says that the code under a target
+    /// condition is not known to be built. No line has a reject: the rule only adds lines.
+    fn target_hidden_lines(&mut self, before: &str, after: &str) -> Vec<String> {
+        let Ok(toolchain) = self.check_toolchain(after) else { return Vec::new() };
+        let rustc = toolchain.root.join("bin/rustc");
+        let flags: Vec<String> = match std::env::var("CARGO_ENCODED_RUSTFLAGS") {
+            Ok(text) if !text.is_empty() => text.split('\u{1f}').map(str::to_string).collect(),
+            _ => std::env::var("RUSTFLAGS").map(|text| text.split_whitespace().map(str::to_string).collect()).unwrap_or_default(),
+        };
+        let run = |args: &[&str]| -> Option<String> {
+            let output = std::process::Command::new(&rustc).args(args).args(&flags).env_remove("RUSTUP_TOOLCHAIN").output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let Some(cfg) = run(&["--print", "cfg"]) else { return Vec::new() };
+        let host = semilla_verify::print_cfg_atoms(&cfg);
+        let target = run(&["-vV"]).and_then(|text| text.lines().find_map(|line| line.strip_prefix("host: ").map(|host| format!("`{}`", host.trim())))).unwrap_or_else(|| "the host".to_string());
+        let (Ok(old), Ok(new)) = (self.workspace(before), self.workspace(after)) else { return Vec::new() };
+        let config = [".cargo/config.toml", ".cargo/config"].into_iter().find(|file| self.repo.git(&["cat-file", "-e", &format!("{after}:{file}")]).is_ok());
+        semilla_verify::target_hidden([&old, &new], &host)
+            .iter()
+            .map(|hidden| match config {
+                Some(file) => format!("  ! build check: not checked: the changed code under `{}` at {}:{} has a target condition, and the file `{file}` of the tree can set the target of the check: Semilla does not know if the check built it", hidden.attr, hidden.file, hidden.line),
+                None => format!("  {}", hidden.text(&target)),
+            })
+            .collect()
+    }
+
     /// The build check of a step (design 53), for a command that records the step.
     ///
     /// - `skip`: the cause of a check that does not run (`--no-check`, `SEMILLA_NO_CHECK`).
@@ -313,6 +344,8 @@ impl App {
         };
         // A build with a limit of the sandbox missing (design 27): the result says so.
         let mut notes: Vec<String> = Vec::new();
+        // R68.12-1: the changed code that the target of the check does not build.
+        notes.extend(self.target_hidden_lines(before, after));
         if let Some(missing) = semilla_normal::sandbox::missing().filter(|_| !stored) {
             notes.push(format!("  ! build check: {}", missing.line()));
         }

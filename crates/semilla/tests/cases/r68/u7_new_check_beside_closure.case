@@ -1,0 +1,104 @@
+note: U7: the one index check of a closure (two calls) becomes two checks in the body (a new check point), and a body with a new check and an unchanged closure: the first line gives the counts of the item (1 → 2, no move text), the second body has no text of the item, and a new function with a closure has only its line "graph added"
+rule-: R68.7-1
+option: --compiled
+must_match: shop::pick \(src/lib.rs:1\): graph changes: .*; with its closures: 1 → 2 checks, 1 → 2 panics;
+must_not_match: shop::other \(src/lib.rs:[0-9]+\): .*with its closures
+must_not_match: no new panic point
+must_not_match: shop::fresh \(src/lib.rs:[0-9]+\): .*with its closures
+must_match: shop::fresh \(src/lib.rs:[0-9]+\): graph added
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn pick(v: &[u32], i: usize, j: usize) -> u32 {
+    let get = |k: usize| v[k];
+    get(i).wrapping_add(get(j))
+}
+
+pub fn other(v: &[u32], i: usize) -> u32 {
+    let get = |k: usize| v[k];
+    get(i)
+}
+=== new src/lib.rs
+pub fn pick(v: &[u32], i: usize, j: usize) -> u32 {
+    v[i].wrapping_add(v[j])
+}
+
+pub fn other(v: &[u32], i: usize) -> u32 {
+    let get = |k: usize| v[k];
+    get(i).wrapping_add(v[0])
+}
+
+pub fn fresh(v: &[u32]) -> u32 {
+    let get = |k: usize| v[k];
+    get(0).wrapping_add(v[1])
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 2 item(s) with 4 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 3 places: 3 different edits (f2, f3, f4)
+      in: shop::pick
+      lines: src/lib.rs:2, src/lib.rs:-2-3
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::pick=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  ? 1 place: changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` (f1)
+      in: shop::other
+      lines: src/lib.rs:7, src/lib.rs:-8
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::other=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  new and removed items, filled in by Semilla:
+  ◆ f5 derived: added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: shop::fresh
+      control flow: + graph of `shop::fresh`: 6 points, 5 arrows (semilla status --verbose)
+      control flow: + graph of `shop::fresh::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different]
+      affected bodies: shop::other
+      control flow: + check `bounds: v[0]` (src/lib.rs:7): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
+      control flow: + call `num::<impl u32>::wrapping_add` (src/lib.rs:7): return → return
+      control flow: + panic `bounds` (src/lib.rs:7)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: `shop::other`: not decided: a raw pointer: v[k] (src/lib.rs:-7)
+      equivalence: `shop::other::{closure#0} |k: usize| v[k]`: equivalent (proved by equal MIR)
+  ◆ f2 derived: deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
+      affected bodies: shop::pick (with 2 other edits of this body)
+      control flow: − graph of `shop::pick::{closure#0} |k: usize| v[k]`: 4 points, 3 arrows (semilla status --verbose)
+      equivalence: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+  ◆ f3 derived: added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
+      affected bodies: shop::pick (with 2 other edits of this body)
+      control flow: + check `bounds: v[i]` (src/lib.rs:2): ok → check `bounds: v[j]`, fail → panic `bounds`
+      control flow: + check `bounds: v[j]` (src/lib.rs:2): ok → call `num::<impl u32>::wrapping_add`, fail → panic `bounds`
+      control flow: + panic `bounds` (src/lib.rs:2)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+  ◆ f4 derived: deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different]
+      affected bodies: shop::pick (with 2 other edits of this body)
+      control flow: − call `get` [closure] (src/lib.rs:-3): return → call `get` [closure]
+      control flow: − call `get` [closure] (src/lib.rs:-3): return → call `num::<impl u32>::wrapping_add`
+      control flow: − arrow entry (src/lib.rs:-1) → call `get` [closure] (src/lib.rs:-3)
+      equivalence: not decided: a raw pointer: v[k] (src/lib.rs:-2)
+  cover: each of the 10 changed line(s) is in a fact
+  control flow: 6 bodies
+    shop::fresh (src/lib.rs:10): graph added: 6 points, 5 arrows
+    shop::fresh::{closure#0} |k: usize| v[k] (src/lib.rs:11): graph added: 4 points, 3 arrows
+    shop::other (src/lib.rs:5): graph changes: +1 call, +1 check, +1 panic, +4 arrows, −1 arrow; not decided (a raw pointer: v[k] (src/lib.rs:-7))
+    shop::other::{closure#0} |k: usize| v[k] (src/lib.rs:6): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    shop::pick (src/lib.rs:1): graph changes: +2 checks, +2 panics, −2 calls, +5 arrows, −3 arrows; with its closures: 1 → 2 checks, 1 → 2 panics; not decided (a raw pointer: v[k] (src/lib.rs:-2))
+    shop::pick::{closure#0} |k: usize| v[k] (src/lib.rs:-2): graph removed: 4 points, 3 arrows
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f5 derived: added `shop::fresh` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:8-12
+◆ f1 derived: changed method_call: `get(i)` → `get(i).wrapping_add(v[0])` at `shop::other/tail` [semantics · code different]
+    lines: src/lib.rs:7, src/lib.rs:-8
+◆ f2 derived: deleted statement `let get = |k: usize| v[k];` at `shop::pick/S0` [semantics · code different]
+    lines: src/lib.rs:-2
+◆ f3 derived: added statement `v[i].wrapping_add(v[j])` at `shop::pick/tail` [semantics · code different]
+    lines: src/lib.rs:2
+◆ f4 derived: deleted statement `get(i).wrapping_add(get(j))` at `shop::pick/tail` [semantics · code different]
+    lines: src/lib.rs:-3

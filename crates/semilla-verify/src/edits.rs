@@ -521,6 +521,23 @@ pub fn derive(context: &Context, owners: &[Option<usize>], fact_of: &mut [Option
             });
             continue;
         }
+        // R68.5-1: a new method of an existing trait impl that overrides a default method, or a
+        // removed override. The impl had the method before (or keeps it after) with the default
+        // body: the behavior of the impl changes, and the API does not.
+        if matches!(edit.kind, EditKind::ItemAdded | EditKind::ItemRemoved)
+            && let Some((description, _)) = crate::overrides::override_text(context.before, context.after, &item, edit.kind == EditKind::ItemAdded)
+        {
+            push(facts, fact_of, &[index], Fact {
+                at: Some(Anchor::item(&item)),
+                file: edit.file.clone(),
+                part: crate::overrides::OVERRIDE_PART.into(),
+                description,
+                category: Category::Semantics,
+                reason: context.step.reasons.get(&item).cloned(),
+                ..fact_base()
+            });
+            continue;
+        }
         // A plain `//` or `/* */` comment changed (Part B of batch 5j). A comment is not a doc:
         // the fact says "changed comment", category `docs`, and it needs no reason.
         if edit.kind == EditKind::Comment {

@@ -335,18 +335,23 @@ fn constant_parts(constant: &ConstOperand, found: &mut IrEff) {
     let ConstantKind::Allocated(alloc) = constant.const_.kind() else { return };
     for (_, provenance) in &alloc.provenance.ptrs {
         if let rustc_public::mir::alloc::GlobalAlloc::Static(def) = rustc_public::mir::alloc::GlobalAlloc::from(provenance.0) {
-            let plain = rustc_middle::ty::tls::with(|tcx| {
-                let id = rustc_public::rustc_internal::internal(tcx, def.def_id());
-                !tcx.is_mutable_static(id)
-                    && !tcx.is_foreign_item(id)
-                    && !tcx.is_thread_local_static(id)
-                    && tcx.type_of(id).instantiate_identity().skip_norm_wip().is_freeze(tcx, rustc_middle::ty::TypingEnv::fully_monomorphized())
-            });
-            if !plain {
+            if !plain_static(&def) {
                 found.join(&IrEff::world(format!("a static that can change (`{}`)", def.name())));
             }
         }
     }
+}
+
+/// True for a static that cannot change: not `mut`, not foreign, not a thread local, and of a
+/// type with no interior mutability (`Freeze`). Its value is a constant (R64.2, R68.6-1).
+pub fn plain_static(def: &rustc_public::mir::mono::StaticDef) -> bool {
+    rustc_middle::ty::tls::with(|tcx| {
+        let id = rustc_public::rustc_internal::internal(tcx, def.def_id());
+        !tcx.is_mutable_static(id)
+            && !tcx.is_foreign_item(id)
+            && !tcx.is_thread_local_static(id)
+            && tcx.type_of(id).instantiate_identity().skip_norm_wip().is_freeze(tcx, rustc_middle::ty::TypingEnv::fully_monomorphized())
+    })
 }
 
 /// A deref of a raw pointer in a place gives `w`.
