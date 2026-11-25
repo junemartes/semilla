@@ -240,6 +240,11 @@ pub struct StepReport {
     /// section, `expansions: not read: CAUSE`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expansion_gap: Option<String>,
+    /// Why the facts and the spotlights of a step take the names from the text (R70.1-1): the
+    /// step has no name record of the compiler. One line of the step section, `names from the
+    /// text: CAUSE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names_gap: Option<String>,
 }
 
 /// The control flow graph diff of a step (design 60, part C).
@@ -1554,6 +1559,14 @@ impl StepReport {
     /// line for each call (equal changes fold into one line in the short form). `full` gives
     /// each call with its configurations and each fact of its compare.
     pub fn expansion_section(&self, full: bool) -> Vec<String> {
+        let mut out = self.expansion_lines(full);
+        // R70.1-1: a step with no name record says so in one line.
+        out.extend(self.names_gap.iter().map(|gap| format!("names from the text: {gap}")));
+        out
+    }
+
+    /// The lines of [`StepReport::expansion_section`] without the line of the name record.
+    fn expansion_lines(&self, full: bool) -> Vec<String> {
         // R65.8-2: a step of the default mode with no expansion records says so in one line.
         if let Some(gap) = &self.expansion_gap {
             return vec![format!("expansions: not read: {gap}")];

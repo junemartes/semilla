@@ -1,7 +1,8 @@
 note: U4: a `pub use` line names `b::Block`; the field of the private type `a::Block` changes its type: no line "the public API can change"; the public function `make` keeps its line
-rule+: R68.4-1
+rule+: R70.2-1
 must_not_match: type of `shop::a::Block.x`: `u8` → `u16` \(the public API
 must_match: return type of `shop::make` `-> u8` → `-> u16` \(the public API can change: a different crate can use the item\)
+build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -54,13 +55,12 @@ pub fn make() -> u16 {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: type of `shop::a::Block.x`: `u8` → `u16` [declaration]
   ◆ f2 derived: return type of `shop::make` `-> u8` → `-> u16` (the public API can change: a different crate can use the item) [declaration]
   cover: each of the 4 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -53,6 +53,7 @@ mod inline;
 mod instances;
 mod ir;
 mod made;
+mod names;
 mod normalize;
 mod pretty;
 mod print;
@@ -592,6 +593,10 @@ impl rustc_driver::Callbacks for Callbacks {
         let mut unit = UnitLine { unit: unit_record(tcx, &target) };
         unit.unit.made = self.made.take().and_then(|items| guarded(|| made::finish(tcx, items)));
         unit.unit.expansions = self.expansions.take();
+        // R70.1-1: the name record, at the levels of the expansion records.
+        if matches!(level, Level::N0 | Level::Ex) {
+            unit.unit.names = guarded(|| names::collect(tcx));
+        }
         if level == Level::N0 {
             unit.unit.defs = rustc_middle::ty::print::with_resolve_crate_name!(rustc_middle::ty::print::with_no_trimmed_paths!(guarded(|| symbols::defs(tcx))));
         }
@@ -648,6 +653,10 @@ struct UnitRecord {
     /// The definitions of the crate and the symbols that each one names (design 44). At n0 only.
     #[serde(skip_serializing_if = "Option::is_none")]
     defs: Option<symbols::Defs>,
+    /// The name record of the crate (design 70, R70.1-1): each definition, each resolved name,
+    /// each `unsafe` block, and each evaluated `cfg`. At n0 and at the level `ex`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    names: Option<names::Names>,
 }
 
 /// The line of a unit record in the output.
@@ -711,6 +720,7 @@ fn unit_record(tcx: TyCtxt<'_>, target: &str) -> UnitRecord {
         made: None,
         expansions: None,
         defs: None,
+        names: None,
     }
 }
 

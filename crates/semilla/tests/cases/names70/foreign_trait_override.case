@@ -1,0 +1,59 @@
+note: batch 11b (R70.2-1): a new `size_hint` in an existing `impl Iterator`: the record says that it gives the method `size_hint` of the trait, which has a default, so it is a change of the impl, not a new item of the API (a trait of another crate, which R68.5-1 did not cover)
+rule+: R70.2-1
+build_check: on
+must_match: `shop::<Count as Iterator>::size_hint` now overrides the default body of `core::iter::traits::iterator::Iterator::size_hint` \(a trait of another crate: Semilla does not show its default body\)
+must_not_match: added `shop::<Count as Iterator>::size_hint`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct Count(pub u32);
+
+impl Iterator for Count {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.0 == 0 {
+            return None;
+        }
+        self.0 -= 1;
+        Some(self.0)
+    }
+}
+=== new src/lib.rs
+pub struct Count(pub u32);
+
+impl Iterator for Count {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.0 == 0 {
+            return None;
+        }
+        self.0 -= 1;
+        Some(self.0)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.0 as usize, Some(self.0 as usize))
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: edit, see f1 (f1)
+      in: shop::<Count as Iterator>::size_hint
+      lines: src/lib.rs:12-15
+      to state it: --change 'shop::<Count as Iterator>::size_hint=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Count as Iterator>::size_hint=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: `shop::<Count as Iterator>::size_hint` now overrides the default body of `core::iter::traits::iterator::Iterator::size_hint` (a trait of another crate: Semilla does not show its default body): `fn size_hint(&self) -> (usize, Option<usize>) { (self.0 as usize, Some(self.0 as usize)) }` [semantics]
+  cover: each of the 4 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: `shop::<Count as Iterator>::size_hint` now overrides the default body of `core::iter::traits::iterator::Iterator::size_hint` (a trait of another crate: Semilla does not show its default body): `fn size_hint(&self) -> (usize, Option<usize>) { (self.0 as usize, Some(self.0 as usize)) }` [semantics]
+    lines: src/lib.rs:12-15

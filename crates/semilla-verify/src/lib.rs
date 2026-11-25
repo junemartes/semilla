@@ -27,6 +27,7 @@ pub mod intent;
 mod inner;
 pub mod organize;
 mod overrides;
+mod records;
 pub mod owners;
 mod paths;
 pub mod scope;
@@ -484,6 +485,33 @@ pub trait BodyOracle {
     fn expansion_gap(&self, _step: &Step) -> Option<String> {
         None
     }
+
+    /// The name records of the two trees of the step (design 70, R70.1-1): the records of the
+    /// units of the expansion records. A step with no record gets the cause (R70.1-1); an oracle
+    /// with no data (a virtual crate of an expansion compare) gets neither.
+    fn names(&self, step: &Step) -> NameState {
+        let Some([old, new]) = self.expansions(step) else {
+            return match self.expansion_gap(step) {
+                Some(cause) => NameState::Gap(cause),
+                None => NameState::None,
+            };
+        };
+        if !old.iter().chain(&new).any(|unit| unit.names.is_some()) {
+            return NameState::Gap("the records of the compiler have no name record (a record of an earlier driver)".to_string());
+        }
+        let index = |units: &[expand::ExpansionUnit]| std::sync::Arc::new(semilla_core::namerec::NameIndex::new(units.iter().filter_map(|unit| unit.names.as_deref().map(|record| (unit.target.as_str(), record)))));
+        NameState::Records([index(&old), index(&new)])
+    }
+}
+
+/// The name records of a step (design 70).
+pub enum NameState {
+    /// The index of the records of each tree: before the step, after the step.
+    Records([std::sync::Arc<semilla_core::namerec::NameIndex>; 2]),
+    /// The step has no record: the cause. The facts take the names from the text (R70.1-1).
+    Gap(String),
+    /// No data and no cause (an oracle of a test, a virtual crate).
+    None,
 }
 
 /// A feature selection that Semilla adds for a proof (batch 5u, part C): a build with these
@@ -619,6 +647,29 @@ pub fn verify_step(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprO
 /// Checks one step. With `derive_edits` (design 24.2), each edit with no claim gets a derived fact,
 /// so no edit is uncovered, and a step with no identity claim can get a derived identity.
 pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool) -> StepOutcome {
+    // Design 70: the name records of the two trees. Each rule that needs a name, an identity,
+    // a visibility, a `cfg` state, or an `unsafe` state reads them from the workspace.
+    let names_gap = match bodies.names(input.step) {
+        NameState::Records([old, new]) => {
+            input.before.names.set(Some(old));
+            input.after.names.set(Some(new));
+            None
+        }
+        NameState::Gap(cause) => {
+            input.before.names.set(None);
+            input.after.names.set(None);
+            Some(cause)
+        }
+        // No data and no cause: the workspaces keep their state (a virtual crate has none).
+        NameState::None => None,
+    };
+    let mut outcome = verify_step_records(input, bodies, exprs, derive_edits);
+    outcome.report.names_gap = names_gap;
+    outcome
+}
+
+/// [`verify_step_with`] after the name records are in the two workspaces.
+fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn ExprOracle, derive_edits: bool) -> StepOutcome {
     // Design 38.3: an item that gets a twin keeps its key for the twin with its text.
     let twins = identity::twin_keys(input.before, input.after);
     let input = match &twins {
@@ -631,8 +682,8 @@ pub fn verify_step_with(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn 
         Some((before, after, moved)) => (&StepInput { step: input.step, before, after }, moved.as_slice()),
         None => (input, &[][..]),
     };
-    // R68.9-1: an impl keeps its key when its trait path changes between `core`, `alloc`, and
-    // `std`.
+    // R70.2-1 (d): an impl keeps its key when the text of its trait path changes and the compiler
+    // gives the same trait and self type.
     let trait_pairs = identity::trait_path_pairs(input.before, input.after);
     let input = match &trait_pairs {
         Some((before, after)) => &StepInput { step: input.step, before, after },
@@ -1497,7 +1548,13 @@ pub(crate) fn verify_core<'a>(input: &StepInput<'_, 'a>, bodies: &dyn BodyOracle
     // The order of generic parameters (brief 5h, B4). Generic arguments go by position, so a site
     // with explicit arguments keeps its text and its MIR text, and it changes its meaning. The
     // fact lists each item that names the changed item.
-    for (index, edit) in edits.iter().enumerate().filter(|(_, edit)| facts::generic_order_changed(edit)) {
+    // R70.2-1 (d): an impl header whose trait and self type are the same by the compiler keeps the
+    // meaning of each position.
+    let same_impl = |edit: &&Edit| match (edit.before.as_ref(), edit.after.as_ref()) {
+        (Some(old), Some(new)) => records::impl_trait_ref(input.before, &old.item).is_some_and(|key| records::impl_trait_ref(input.after, &new.item) == Some(key)),
+        _ => false,
+    };
+    for (index, edit) in edits.iter().enumerate().filter(|(_, edit)| facts::generic_order_changed(edit) && !same_impl(edit)) {
         let Some(anchor) = edit.anchor() else { continue };
         let sites = facts::positional_sites(&anchor.item, input.after, call_facts.as_ref());
         // D10 of batch 5k: the count of the items is the count of the list below (the changed
@@ -1854,7 +1911,15 @@ fn set_compare(report: &mut StepReport, body_index: &checks::BodyIndex, before: 
     };
     // A changed body with `unsafe` code (design 36.5): the body of the edit, and each body
     // with changed compiled code. An edit of the signature only is not an edit of the body.
-    let has_unsafe = |item: &str| [after, before].iter().any(|ws| ws.items.get(item).is_some_and(|item| item.kind == semilla_syntax::ItemKind::Fn && item.body.is_some() && hints::words(&item.text).contains(&"unsafe")));
+    // R70.2-1 (a): the record of the compiler decides; a tree with no record of the item reads the
+    // tokens of the item (a comment, a doc comment, and a string are no tokens).
+    let has_unsafe = |item: &str| {
+        [after, before].iter().any(|ws| {
+            ws.items.get(item).is_some_and(|found| {
+                found.kind == semilla_syntax::ItemKind::Fn && found.body.is_some() && records::item_unsafe(ws, item).unwrap_or_else(|| cfgcond::has_keyword(&found.text, "unsafe").unwrap_or_else(|| hints::words(&found.text).contains(&"unsafe")))
+            })
+        })
+    };
     for fact in report.facts.iter_mut() {
         let in_body = fact.at.as_ref().filter(|at| at.path.first().is_some_and(|first| first.to_string() != "sig")).is_some_and(|at| has_unsafe(&at.item));
         fact.unsafe_code = in_body || fact.affected.iter().any(|item| has_unsafe(item));
@@ -2598,6 +2663,18 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
     if item.test || compact(&item.vis) != "pub" || !in_library(workspace, item) {
         return Reach::No;
     }
+    // R70.2-1 (b): the effective visibility of the compiler decides. A false `cfg` that removes an
+    // item with a name of the path keeps the text rule below (the safe side): another
+    // configuration can have a `pub use` line or an owner with that name.
+    if let Some(public) = records::item_public(workspace, path) {
+        if public {
+            return Reach::Yes;
+        }
+        let path_names: Vec<String> = path.split([':', '.']).filter(|part| !part.is_empty()).map(|part| part.split('#').next().unwrap_or(part).to_string()).collect();
+        if records::removed_name(workspace, &path_names).is_none() {
+            return Reach::No;
+        }
+    }
     // The owners on the path, from the nearest one: `c::m::T.f` has `c::m::T` and `c::m`.
     let mut owners: Vec<&semilla_syntax::Item> = Vec::new();
     let mut current = path;
@@ -2618,7 +2695,7 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         names.extend(leaves.into_iter().filter_map(|(target, alias, _)| alias.or_else(|| target.last().cloned())));
     }
     let same_crate = |other: &&semilla_syntax::Item| other.crate_name == item.crate_name;
-    let uses: Vec<(bool, &str, Vec<(Vec<String>, Option<String>, bool)>)> = workspace
+    let uses: Vec<(bool, Vec<(Vec<String>, Option<String>, bool)>)> = workspace
         .items
         .values()
         .filter(same_crate)
@@ -2627,16 +2704,12 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
             let parsed = semilla_syntax::rs::parse_use(&other.signature)?;
             let mut leaves = Vec::new();
             use_leaves(&parsed.tree, &[], &mut leaves);
-            Some((compact(&other.vis) == "pub", other.path.rsplit_once("::").map_or("", |(module, _)| module), leaves))
+            Some((compact(&other.vis) == "pub", leaves))
         })
         .collect();
-    // R68.4-1: the paths of the item and of each owner, with no twin suffix. A `pub use` line
-    // whose path resolves to a different item does not name this item.
-    let bare = |path: &str| path.split("::").map(|part| part.split('#').next().unwrap_or(part)).collect::<Vec<_>>().join("::");
-    let own_paths: BTreeSet<String> = owners.iter().map(|owner| bare(&owner.path)).chain([bare(path)]).collect();
     // An `as` name of a `use` line for a name of the path is a name of the path too.
     for _ in 0..4 {
-        for (_, _, leaves) in &uses {
+        for (_, leaves) in &uses {
             for (target, alias, glob) in leaves {
                 if let Some(alias) = alias.as_ref().filter(|_| !glob && target.last().is_some_and(|last| names.contains(last))) {
                     names.insert(alias.clone());
@@ -2645,16 +2718,10 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         }
     }
     let relative = |segment: &String| matches!(segment.as_str(), "crate" | "self" | "super");
-    for (_, module, leaves) in uses.iter().filter(|(public, _, _)| *public) {
+    for (_, leaves) in uses.iter().filter(|(public, _)| *public) {
         for (target, _, glob) in leaves {
             if *glob && target.iter().all(relative) {
                 return Reach::Maybe("a glob `pub use` line with a relative path".into());
-            }
-            match resolve_use(workspace, module, target) {
-                // The path of a different crate, or of a different item of this crate.
-                UsePath::Foreign => continue,
-                UsePath::Item(found) if !own_paths.contains(&bare(&found)) => continue,
-                UsePath::Item(_) | UsePath::Unknown => {}
             }
             let found = if *glob { target.iter().find(|segment| names.contains(*segment)) } else { target.last().filter(|last| names.contains(*last)) };
             if let Some(name) = found {
@@ -2682,70 +2749,6 @@ pub(crate) fn api_reach(workspace: &Workspace, path: &str) -> Reach {
         }
     }
     Reach::No
-}
-
-/// The target of the path of a `use` line (R68.4-1).
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum UsePath {
-    /// An item of the workspace: its path.
-    Item(String),
-    /// A path of a different crate: its first name is not a name of the module, and no `use`
-    /// line of the module brings that name.
-    Foreign,
-    /// Semilla cannot resolve the path (a name that a `use` line or a glob brings, a name that
-    /// is not an item, a macro).
-    Unknown,
-}
-
-/// R68.4-1: resolves the path of a `use` line in `module` by the scope rules of Rust 2018:
-/// `crate`, `self`, and `super` are relative to the crate and the module; each other first
-/// name is a name of the module or a crate. Each next name is a child of the path. The result
-/// is an item only if the workspace has an item with that path (a twin suffix `#N` is not a part
-/// of the path).
-pub(crate) fn resolve_use(workspace: &Workspace, module: &str, target: &[String]) -> UsePath {
-    use semilla_syntax::ItemKind;
-    let root = module.split("::").next().unwrap_or(module).to_string();
-    let exists = |path: &str| workspace.items.contains_key(path) || workspace.items.contains_key(&format!("{path}#0"));
-    let mut segments = target.iter().filter(|segment| !segment.is_empty()).peekable();
-    let mut base = match segments.peek().map(|segment| segment.as_str()) {
-        None => return UsePath::Unknown,
-        Some("crate") | Some("$crate") => {
-            segments.next();
-            root
-        }
-        Some("self") => {
-            segments.next();
-            module.to_string()
-        }
-        Some("super") => module.to_string(),
-        Some(first) => {
-            let local = format!("{module}::{first}");
-            if !exists(&local) && !workspace.items.keys().any(|key| key.starts_with(&format!("{local}::")) || key.starts_with(&format!("{local}."))) {
-                // A name that a `use` line of the module brings, or a glob, can be a local item.
-                let module_uses = workspace.items.values().filter(|other| other.kind == ItemKind::Use && other.path.rsplit_once("::").is_some_and(|(owner, _)| owner == module));
-                let brought = module_uses.filter_map(|other| semilla_syntax::rs::parse_use(&other.signature)).any(|parsed| {
-                    let mut leaves = Vec::new();
-                    use_leaves(&parsed.tree, &[], &mut leaves);
-                    leaves.iter().any(|(path, alias, glob)| *glob || alias.as_deref().or(path.last().map(String::as_str)) == Some(first))
-                });
-                // A macro can make an item with the name: the module has a macro call.
-                let made = workspace.items.values().any(|other| other.kind == ItemKind::Macro && other.path.rsplit_once("::").is_some_and(|(owner, _)| owner == module));
-                return if brought || made { UsePath::Unknown } else { UsePath::Foreign };
-            }
-            module.to_string()
-        }
-    };
-    for segment in segments {
-        if segment == "super" {
-            match base.rsplit_once("::") {
-                Some((parent, _)) => base = parent.to_string(),
-                None => return UsePath::Unknown,
-            }
-        } else {
-            base = format!("{base}::{segment}");
-        }
-    }
-    if exists(&base) { UsePath::Item(workspace.items.get(&base).map_or_else(|| format!("{base}#0"), |item| item.path.clone())) } else { UsePath::Unknown }
 }
 
 /// The effect of a visibility edit on the public API (batch 5x, round 2): the words for the
@@ -3222,12 +3225,23 @@ pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<S
     for edit in edits {
         let place = edit.anchor().map(|a| a.to_string()).or_else(|| edit.file.clone()).unwrap_or_default();
         let texts = [edit.text_before.as_deref(), edit.text_after.as_deref()];
-        // R68.1-1: the tokens of the code decide, never the text of a comment or of a string. A
-        // text that does not parse as tokens uses the text match (the old rule): it can only add
-        // a line.
+        // The text rule of R70.1-1 (batch 10u): the tokens of the code decide, never the text of
+        // a comment or of a string. A text that does not parse as tokens uses the text match (the
+        // old rule): it can only add a line.
         let unsafe_word = |text: &str| cfgcond::has_keyword(text, "unsafe").unwrap_or_else(|| text.split(' ').any(|token| token == "unsafe"));
-        if texts.iter().flatten().any(|text| unsafe_word(text)) || in_unsafe(edit, before, after) {
-            found.insert(format!("unsafe code: {place}"));
+        // R70.2-1 (a): the record of the compiler decides at the place of the edit; the tokens decide
+        // only where the tree has no record. A token `unsafe` that the record of the built code
+        // does not have keeps the line (the safe side), with the cause.
+        let in_block = in_unsafe_sides(edit, before, after);
+        let text = [texts[0].is_some_and(unsafe_word) || in_block[0], texts[1].is_some_and(unsafe_word) || in_block[1]];
+        match records::spotlight(edit, [before, after], text, &records::unsafe_at) {
+            records::Decision::Yes => {
+                found.insert(format!("unsafe code: {place}"));
+            }
+            records::Decision::Text => {
+                found.insert(format!("unsafe code: {place} (the code has the keyword `unsafe`; the compiler did not build an `unsafe` block, `unsafe fn`, or `unsafe impl` there in the checked configuration)"));
+            }
+            records::Decision::No => {}
         }
         // `#[cfg(test)]` only selects test code, so it is not in the spotlight.
         // The text of an attribute, not each use of the word `cfg` (a function with the name
@@ -3239,8 +3253,17 @@ pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<S
                 ["#[cfg(", "#![cfg(", "#[cfg_attr(", "#![cfg_attr("].iter().any(|start| text.contains(start))
             })
         };
-        if texts.iter().flatten().any(|text| cfg(text)) && matches!(edit.kind, semilla_syntax::EditKind::Attrs | semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
-            found.insert(format!("cfg attribute: {place}"));
+        // R70.2-1 (a): the record of the compiler decides at the place of the edit, as for `unsafe`.
+        if matches!(edit.kind, semilla_syntax::EditKind::Attrs | semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
+            match records::spotlight(edit, [before, after], [texts[0].is_some_and(cfg), texts[1].is_some_and(cfg)], &records::cfg_at) {
+                records::Decision::Yes => {
+                    found.insert(format!("cfg attribute: {place}"));
+                }
+                records::Decision::Text => {
+                    found.insert(format!("cfg attribute: {place} (the code has a `cfg` attribute that the compiler did not evaluate in the checked configuration)"));
+                }
+                records::Decision::No => {}
+            }
         }
         // A new or removed impl of a trait that the compiler calls with no call in the text.
         if matches!(edit.kind, semilla_syntax::EditKind::ItemAdded | semilla_syntax::EditKind::ItemRemoved) {
@@ -3267,8 +3290,9 @@ pub fn spotlight(edits: &[Edit], before: &Workspace, after: &Workspace) -> Vec<S
     found.into_iter().collect()
 }
 
-/// True if the edit is inside an `unsafe` block of a function body.
-fn in_unsafe(edit: &Edit, before: &Workspace, after: &Workspace) -> bool {
+/// For each tree (before, after): true if the edit is inside an `unsafe` block of a function
+/// body, by the syntax tree.
+fn in_unsafe_sides(edit: &Edit, before: &Workspace, after: &Workspace) -> [bool; 2] {
     let check = |anchor: Option<&Anchor>, workspace: &Workspace| {
         let Some(anchor) = anchor else { return false };
         let mut current = anchor.clone();
@@ -3280,7 +3304,7 @@ fn in_unsafe(edit: &Edit, before: &Workspace, after: &Workspace) -> bool {
         }
         false
     };
-    check(edit.before.as_ref(), before) || check(edit.after.as_ref(), after)
+    [check(edit.before.as_ref(), before), check(edit.after.as_ref(), after)]
 }
 
 
@@ -3483,5 +3507,7 @@ fn stopped_pair(note: &str, old: &str, new: &str) -> Option<String> {
 mod tests;
 #[cfg(test)]
 mod tests68;
+#[cfg(test)]
+mod tests70;
 #[cfg(test)]
 mod tests71;

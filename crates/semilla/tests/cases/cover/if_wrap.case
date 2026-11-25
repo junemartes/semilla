@@ -56,6 +56,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: added `if` `if live { for x in v { n += x; } n += 1; }` (each inner statement is a moved statement of the body) at `depot::total/S1` [semantics]
   cover: each of the 8 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

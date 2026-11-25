@@ -1,0 +1,58 @@
+note: batch 11b (R70.2-1): the derive helper attribute `#[named(…)]` of the derive `depot::Named` moves across `#[derive(Debug)]`: the compiler keeps the helper on the item, so it is no attribute macro, and the fact has no spotlight (a limit of 10n2: the name list took it as an attribute macro)
+rule-: R70.2-1
+build_check: on
+must_not_match: an attribute macro moves across a derive
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot/src/lib.rs
+use proc_macro::TokenStream;
+
+#[proc_macro_derive(Named, attributes(named))]
+pub fn named(_item: TokenStream) -> TokenStream {
+    TokenStream::new()
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== old shop/src/lib.rs
+#[derive(depot::Named)]
+#[named(rename = "x")]
+#[derive(Debug)]
+pub struct Item {
+    pub a: u8,
+}
+=== new shop/src/lib.rs
+#[derive(depot::Named)]
+#[derive(Debug)]
+#[named(rename = "x")]
+pub struct Item {
+    pub a: u8,
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  other facts, filled in by Semilla:
+  ◆ f1 derived: attributes of `shop::Item`: `#[derive(depot::Named)] #[named(rename = "x")] #[derive(Debug)]` → `#[derive(depot::Named)] #[derive(Debug)] #[named(rename = "x")]` [attribute]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: attributes of `shop::Item`: `#[derive(depot::Named)] #[named(rename = "x")] #[derive(Debug)]` → `#[derive(depot::Named)] #[derive(Debug)] #[named(rename = "x")]` [attribute]
+    lines: shop/src/lib.rs:3, shop/src/lib.rs:-2

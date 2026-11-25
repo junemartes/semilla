@@ -1,0 +1,72 @@
+note: batch 11b (R70.2-1, part c, negative): a name of a module under `cfg` in the input of a macro call that the macro drops: the compiler resolves no use of `wide` there, so the note stays and says that the record does not resolve each use of the name
+rule-: R70.2-1
+option: --compiled
+must_match: this body uses `wide` \(under `#\[cfg\(not\(target_feature="avx512f"\)\)\]`; the record of the compiler does not resolve each use of the name\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[cfg(not(target_feature = "avx512f"))]
+mod wide {
+    pub fn make() -> usize {
+        8
+    }
+}
+
+macro_rules! skip {
+    ($($t:tt)*) => {
+        0
+    };
+}
+
+pub fn width(b: usize) -> usize {
+    b + 1
+}
+=== new src/lib.rs
+#[cfg(not(target_feature = "avx512f"))]
+mod wide {
+    pub fn make() -> usize {
+        8
+    }
+}
+
+macro_rules! skip {
+    ($($t:tt)*) => {
+        0
+    };
+}
+
+pub fn width(b: usize) -> usize {
+    b + skip!(wide::make()) + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: added operand `+ skip!(wide::make())` (f1)
+      in: shop::width
+      lines: src/lib.rs:15, src/lib.rs:-15
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::width=TEXT'; if it does not change, --same 'rewrite $a + 1 => $a + skip!(wide::make()) + 1'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added operand `+ skip!(wide::make())` at `shop::width/tail` [semantics · code different]
+      affected bodies: shop::width
+      control flow: + check `overflow: b + skip!(wide::make())` (src/lib.rs:15): ok → check `overflow: b + skip!(wide::make()) + 1`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:15)
+      control flow: ~ check `overflow: b + 1` → `overflow: b + skip!(wide::make()) + 1` (src/lib.rs:-15, src/lib.rs:15)
+      control flow: … 2 more (semilla status --verbose)
+      equivalence: equivalent (proved by SMT)
+      note: this body uses `wide` (under `#[cfg(not(target_feature="avx512f"))]`; the record of the compiler does not resolve each use of the name), which Semilla did not check (`shop::width`)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::width (src/lib.rs:14): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT)
+  expansions: 1 added
+    `skip!(wide::make())` at `shop::width/tail/lhs/rhs` (src/lib.rs:15): expansion added: `macro_rules! skip` (src/lib.rs:8): 1 line(s) of code; the step adds the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added operand `+ skip!(wide::make())` at `shop::width/tail` [semantics · code different]
+    lines: src/lib.rs:15, src/lib.rs:-15

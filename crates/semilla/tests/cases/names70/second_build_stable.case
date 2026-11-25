@@ -1,0 +1,70 @@
+note: batch 11b (R70.3-1): the tree names the toolchain `stable`, so the build check runs with it, and a second check build with the toolchain of the driver makes the records (positive); the second build passes, so the step has no line about it (negative): the step reads the expansions and the names (no line "expansions: not read"), and the private field gets no API line
+rule+: R70.3-1
+rule-: R70.3-1
+build_check: on
+must_not_match: expansions: not read
+must_not_match: names from the text
+must_not_match: the public API can change
+=== both rust-toolchain.toml
+[toolchain]
+channel = "stable"
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+mod a {
+    pub(crate) struct Block {
+        pub y: u8,
+    }
+
+    pub(crate) fn make() -> Block {
+        Block { y: 2 }
+    }
+}
+
+mod b {
+    pub struct Block(pub u16);
+}
+
+use b as c;
+pub use c::Block;
+
+pub fn make() -> u32 {
+    a::make().y as u32
+}
+=== new src/lib.rs
+mod a {
+    pub(crate) struct Block {
+        pub y: u16,
+    }
+
+    pub(crate) fn make() -> Block {
+        Block { y: 2 }
+    }
+}
+
+mod b {
+    pub struct Block(pub u16);
+}
+
+use b as c;
+pub use c::Block;
+
+pub fn make() -> u32 {
+    a::make().y as u32
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: type of `shop::a::Block.y`: `u8` → `u16` [declaration]
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: type of `shop::a::Block.y`: `u8` → `u16` [declaration]
+    lines: src/lib.rs:3, src/lib.rs:-3

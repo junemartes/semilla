@@ -210,8 +210,8 @@ fn scan(stream: TokenStream, out: &mut Vec<TokenStream>) {
     }
 }
 
-/// R68.1-1: true if a token text has a `cfg` or a `cfg_attr` attribute other than
-/// `#[cfg(test)]`, at any depth (also in the input of a macro call). The scan reads the tokens of
+/// R70.1-1 (the text rule of the fall-back; batch 10u, R68.1-1): true if a token text has a
+/// `cfg` or a `cfg_attr` attribute other than `#[cfg(test)]`, at any depth (also in the input of a macro call). The scan reads the tokens of
 /// the code: the text of a comment or of a doc comment is a string literal of a `doc` attribute,
 /// so a doc test example (`/// # #[cfg(x)]`) is not an attribute. `None` if the text does not
 /// parse as tokens: the caller then uses the text.
@@ -240,8 +240,8 @@ pub(crate) fn has_cfg_attribute(text: &str) -> Option<bool> {
     Some(walk(stream))
 }
 
-/// R68.1-1: true if a token text has the keyword `unsafe` as a token. A comment or a string
-/// with the word is not a token. `None` if the text does not parse as tokens.
+/// R70.1-1 (the text rule of the fall-back; batch 10u, R68.1-1): true if a token text has the
+/// keyword `unsafe` as a token. A comment or a string with the word is not a token. `None` if the text does not parse as tokens.
 pub(crate) fn has_keyword(text: &str, word: &str) -> Option<bool> {
     fn walk(stream: TokenStream, word: &str) -> bool {
         stream.into_iter().any(|tree| match tree {
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(parse(&"version(\"1.0\")".parse::<TokenStream>().unwrap().into_iter().collect::<Vec<_>>()), Pred::Other);
     }
 
-    // rule+ R68.1-1
+    // rule+ R70.1-1
     #[test]
     fn a_cfg_attribute_of_the_code_is_found_at_each_depth() {
         assert_eq!(has_cfg_attribute("#[cfg(feature = \"x\")] fn f() {}"), Some(true));
@@ -702,7 +702,7 @@ mod tests {
         assert_eq!(has_cfg_attribute("fn f() { #[cfg(unix)"), None);
     }
 
-    // rule- R68.1-1
+    // rule- R70.1-1
     #[test]
     fn the_text_of_a_comment_or_a_string_is_not_an_attribute() {
         let docs = "/// An example:\n/// ```\n/// # #[cfg(feature = \"x\")]\n/// #[cfg(unix)]\n/// ```\nfn f() {\n    // #[cfg(unix)] here\n    /* #![cfg_attr(a, b)] */\n    g(\"#[cfg(unix)]\");\n}\n";

@@ -39,6 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: changed literal `1` → `2` at `depot::T::a#1/tail` [semantics]
   cover: each of the 4 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   note: twins: `depot::T::a#0` of the old tree and `depot::T::a#1` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `depot::T::a#1`
   note: twins: `depot::T::a#1` of the old tree and `depot::T::a#0` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `depot::T::a#0`

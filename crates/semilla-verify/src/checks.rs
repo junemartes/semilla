@@ -115,8 +115,15 @@ impl BodyIndex {
             // cause in `stopped` is a body with a text edit: its uses go to the notes.
             let stopped = !body.stopped.is_empty();
             let uses_config = !body.config.is_empty() && (stopped || !matches!(body.status, BodyStatus::Equal { .. }));
+            // R70.2-1 (c): the uses of the note come from the name record of the tree of the
+            // body. A use that resolves to a definition that the configuration builds gives no
+            // note. The status of the body does not change (the stop of a proof stays).
+            let trees = if body.status == BodyStatus::BeforeOnly { [before, after] } else { [after, before] };
+            let filter = |list: &[String]| -> Vec<String> { list.iter().filter_map(|entry| match &item { Some(item) => crate::records::cfg_use(trees, item, entry), None => Some(entry.clone()) }).collect() };
+            let config = filter(&body.config);
+            let stopped_uses = filter(&body.stopped);
             if uses_config {
-                index.config.entry(body.name.clone()).or_default().extend(body.config.iter().cloned());
+                index.config.entry(body.name.clone()).or_default().extend(config.iter().cloned());
             }
             if !matches!(body.status, BodyStatus::Equal { .. }) {
                 // The intersection: a configuration has a proof only if each body has one.
@@ -133,7 +140,7 @@ impl BodyIndex {
             if stopped {
                 for key in std::iter::once(&body.name).chain(item.iter()) {
                     let list = index.stopped.entry(key.clone()).or_default();
-                    list.extend(body.stopped.iter().filter(|text| !list.contains(text)).cloned().collect::<Vec<_>>());
+                    list.extend(stopped_uses.iter().filter(|text| !list.contains(text)).cloned().collect::<Vec<_>>());
                 }
             }
             if !body.differs_in.is_empty() {
@@ -144,7 +151,7 @@ impl BodyIndex {
             }
             if let Some(item) = item {
                 if uses_config {
-                    index.config.entry(item.clone()).or_default().extend(body.config.iter().cloned());
+                    index.config.entry(item.clone()).or_default().extend(config.iter().cloned());
                 }
                 index.items.insert(body.name.clone(), item.clone());
                 index.places.insert((body.name.clone(), body.span.clone()), item.clone());

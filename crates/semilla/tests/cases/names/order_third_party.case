@@ -55,6 +55,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Rows`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
   cover: each of the 2 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'shop::Item=<why>'
 === positions

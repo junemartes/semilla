@@ -1559,8 +1559,9 @@ pub fn generic_order_changed(edit: &Edit) -> bool {
                 ast::Item::TypeAlias(item) => Some(names(item.generic_param_list())),
                 _ => None,
             };
-            // R68.9-1: a path of `core` or `alloc` names the item of `std` with the same path.
-            let text = |ty: Option<ast::Type>| ty.map(|ty| semilla_core::names::std_facade_form(&tokens(&ty).split_whitespace().collect::<String>()));
+            // R70.2-1 (d): the caller asks the name record if the trait and the self type of two
+            // headers are the same; the text compare is the safe side.
+            let text = |ty: Option<ast::Type>| ty.map(|ty| tokens(&ty).split_whitespace().collect::<String>());
             match (semilla_syntax::rs::parse_item(old), semilla_syntax::rs::parse_item(new)) {
                 (Some(ast::Item::Impl(old)), Some(ast::Item::Impl(new))) => text(old.self_ty()) != text(new.self_ty()) || text(old.trait_()) != text(new.trait_()),
                 (Some(old_item), Some(new_item)) => match (generics(&old_item), generics(&new_item)) {
@@ -2119,12 +2120,18 @@ pub(crate) fn order_inputs(attrs: &str) -> OrderInputs {
 /// pair (the attribute macro, the derive attribute). Each one is on the two sides; the order of
 /// the two changes. The attribute macro gets the item before the derive or after it, so the
 /// input of the derive can change. `None`: no such pair (a new order of the derives only).
-pub(crate) fn attribute_macro_moves(old: &str, new: &str) -> Option<(String, String)> {
+///
+/// R70.2-1 (f): `inert` has the last names of the attributes that the compiler keeps on the item with
+/// no meaning of its own (the name record): a derive helper attribute (`#[serde(…)]`) and a tool
+/// attribute are no macro call. With no record (`None`), only the name list of the built-in
+/// attributes decides (R65.4-1).
+pub(crate) fn attribute_macro_moves(old: &str, new: &str, inert: Option<&std::collections::BTreeSet<String>>) -> Option<(String, String)> {
     let (old, new) = (split_attributes(old), split_attributes(new));
     let position = |list: &[String], text: &str| list.iter().position(|other| other == text);
     let named = |list: &[String]| -> Vec<(String, String)> { list.iter().filter_map(|text| attribute_name(text).map(|name| (name, text.clone()))).collect() };
+    let is_macro = |name: &str| attribute_macro(name) && inert.is_none_or(|kept| !kept.contains(name.rsplit("::").next().unwrap_or(name).trim()));
     let olds = named(&old);
-    for (macro_name, macro_text) in olds.iter().filter(|(name, _)| attribute_macro(name)) {
+    for (macro_name, macro_text) in olds.iter().filter(|(name, _)| is_macro(name)) {
         for (_, derive_text) in olds.iter().filter(|(name, _)| name == "derive") {
             let (Some(a), Some(b), Some(c), Some(d)) = (position(&old, macro_text), position(&old, derive_text), position(&new, macro_text), position(&new, derive_text)) else { continue };
             if (a < b) != (c < d) {
@@ -2193,7 +2200,8 @@ fn spotlight(part: &str, anchor: &Anchor, edits: Vec<&Edit>, before: &Workspace,
         // derive. A new order of the derives only changes no derived impl (the decision of the
         // user, 2026-11-25), so it has no spotlight.
         // The text of the move goes before the text of each other changed attribute.
-        let moved = edits.iter().find_map(|edit| attribute_macro_moves(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""))).map(|(name, derive)| {
+        let called = crate::records::inert_attributes([before, after], [edits.first().and_then(|edit| edit.before.as_ref()), edits.first().and_then(|edit| edit.after.as_ref())]);
+        let moved = edits.iter().find_map(|edit| attribute_macro_moves(edit.text_before.as_deref().unwrap_or(""), edit.text_after.as_deref().unwrap_or(""), called.as_ref())).map(|(name, derive)| {
             format!("an attribute macro moves across a derive (`#[{name}]`, `{derive}`): the macro gets the item before the derive or after it, so the input of the derive can change")
         });
         let with_move = |text: String| Some(match &moved {

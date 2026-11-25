@@ -1,0 +1,65 @@
+note: batch 11b (R70.2-1): the root alias `Block` and a `struct Block` of a module that only `#[cfg(target_feature = "avx512f")]` turns on; a body that uses the root `Block` gets no note "this body uses `Block` (under `cfg`), which Semilla did not check": the compiler resolves each use to the alias of the module of the body
+rule+: R70.2-1
+option: --compiled
+must_not_match: this body uses `Block`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub type Block = usize;
+
+pub mod simd {
+    #[cfg(target_feature = "avx512f")]
+    pub struct Block(pub [u64; 8]);
+}
+
+pub fn width(b: Block) -> Block {
+    b + 1
+}
+=== new src/lib.rs
+pub type Block = usize;
+
+pub mod simd {
+    #[cfg(target_feature = "avx512f")]
+    pub struct Block(pub [u64; 8]);
+}
+
+pub fn width(b: Block) -> Block {
+    let n: Block = b * 2;
+    n + 1
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
+      in: shop::width
+      lines: src/lib.rs:9-10, src/lib.rs:-9
+      to state it: --change 'shop::width=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::width=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: added `let` `let n: Block = b * 2;` at `shop::width/S0` [semantics · code different]
+      affected bodies: shop::width (with 1 other edit of this body)
+      control flow: + check `overflow: b * 2` (src/lib.rs:9): ok → check `overflow: n + 1`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:9)
+      control flow: + arrow entry (src/lib.rs:8) → check `overflow: b * 2` (src/lib.rs:9)
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: different: for b = 1: before returns 2, after returns 3
+  ◆ f2 derived: changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different]
+      affected bodies: shop::width (with 1 other edit of this body)
+      control flow: ~ check `overflow: b + 1` → `overflow: n + 1` (src/lib.rs:-9, src/lib.rs:10)
+      control flow: − arrow entry (src/lib.rs:-8) → check `overflow: b + 1` (src/lib.rs:-9)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: different: for b = 1: before returns 2, after returns 3
+  cover: each of the 3 changed line(s) is in a fact
+  control flow: 1 body
+    shop::width (src/lib.rs:8): graph changes: +1 check, +1 panic, 1 changed check, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for b = 1: before returns 2, after returns 3)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `let` `let n: Block = b * 2;` at `shop::width/S0` [semantics · code different]
+    lines: src/lib.rs:9
+◆ f2 derived: changed path `b` → `n` at `shop::width/tail/lhs` [semantics · code different]
+    lines: src/lib.rs:10, src/lib.rs:-9

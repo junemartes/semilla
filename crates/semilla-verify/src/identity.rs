@@ -1201,38 +1201,48 @@ fn rekeyed(ws: &Workspace, map: &BTreeMap<String, String>) -> Workspace {
     ws
 }
 
-/// R68.9-1: an impl is identified by the definition of its trait (and of its self type). A path
-/// of `core` or `alloc` names the item of the same path below `std`, so `impl core::ops::Add
-/// for X` and `impl std::ops::Add for X` are one impl. An impl of the old tree with no partner
-/// takes the key of the one impl of the new tree with no partner and the same `std` form. The
-/// header edit stays a signature fact of the impl: the rule hides no edit. `None` if no key
-/// changes.
+/// R70.2-1 (d): an impl is identified by the definition of its trait and its self type, by the
+/// compiler (the trait reference `<X as core::ops::arith::Add>` of the name record), not by the
+/// text of the paths: `impl core::ops::Add for X` and `impl std::ops::Add for X` are one impl. An
+/// impl of the old tree with no partner takes the key of the one impl of the new tree with no
+/// partner and the same trait reference; each item of the impl takes the key too. The header
+/// edit stays a signature fact of the impl: the rule hides no edit. `None` if no key changes, or
+/// if a tree has no name record (the text keys stay: a removed and an added impl).
 pub(crate) fn trait_path_pairs(before: &Workspace, after: &Workspace) -> Option<(Workspace, Workspace)> {
-    use semilla_core::names::std_facade_form;
+    before.names.get()?;
+    after.names.get()?;
     let lone = |ws: &Workspace, other: &Workspace| -> BTreeMap<String, Vec<String>> {
         let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (path, item) in &ws.items {
-            // An impl, and each item of an impl (`m::<X as core::ops::Add>::add`).
-            if (item.kind == ItemKind::Impl || path.contains("::<")) && !other.items.contains_key(path) {
-                let form = std_facade_form(path);
-                if form != *path || ws.items.keys().any(|key| *key != *path && std_facade_form(key) == form) || other.items.keys().any(|key| std_facade_form(key) == form) {
-                    out.entry(form).or_default().push(path.clone());
-                }
+            if item.kind == ItemKind::Impl && !other.items.contains_key(path)
+                && let Some(key) = crate::records::impl_trait_ref(ws, path)
+            {
+                out.entry(key).or_default().push(path.clone());
             }
         }
         out
     };
     let (old, new) = (lone(before, after), lone(after, before));
     let mut map = BTreeMap::new();
-    for (form, paths) in &old {
-        if let (Some([from]), Some([to])) = (Some(paths.as_slice()), new.get(form).map(Vec::as_slice))
+    for (key, paths) in &old {
+        if let (Some([from]), Some([to])) = (Some(paths.as_slice()), new.get(key).map(Vec::as_slice))
             && from != to
             && !before.items.contains_key(to)
         {
             map.insert(from.clone(), to.clone());
+            // The items of an impl have the key `m::<X as T>::name`.
+            if let (Some(from_items), Some(to_items)) = (impl_items_key(from), impl_items_key(to)) {
+                map.insert(from_items, to_items);
+            }
         }
     }
     (!map.is_empty()).then(|| (rekeyed(before, &map), after.clone()))
+}
+
+/// The start of the keys of the items of an impl: `m::impl <X as T>` gives `m::<X as T>`.
+fn impl_items_key(path: &str) -> Option<String> {
+    let (module, header) = path.split_once("::impl <")?;
+    Some(format!("{module}::<{header}"))
 }
 
 /// The text of a twin that a step adds or removes (design 38.3): "(a twin of `P` under

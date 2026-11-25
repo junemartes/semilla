@@ -4073,8 +4073,10 @@ mod tests {
 #[test]
 fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     // Batch 5l, with the rule of design 35.5: a changed body that uses an item that the build
-    // configuration selects or fills gets a note. The note asks for no reason. The compare is at
-    // level N0 (design 35.4): Semilla folds no condition.
+    // configuration selects or fills gets no proof (the compare is at level N0, design 35.4:
+    // Semilla folds no condition). Batch 11b (R70.2-1, part c): the compiler resolves each such
+    // use to the item that this configuration builds, so the check of this configuration has
+    // it, and the fact gets no note "this body uses …, which Semilla did not check".
     let dir = setup();
     let repo = &dir.path().join("repo");
     let base = format!("{FEES}{CONFIG_ITEMS}");
@@ -4092,7 +4094,7 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     };
     // One probe: the statement goes first in `percent`, the item goes to the end of the file.
     let probe = |statement: &str, item: &str, expect: i32| -> String { step(&format!("{}{item}", base.replace(percent, &format!("{percent}    {statement}\n"))), expect) };
-    let uses = |out: &str, text: &str| out.contains("[semantics · code different]") && out.contains(CONFIG_NOTE) && out.contains(&format!("note: this body uses {text}"));
+    let uses = |out: &str, text: &str| out.contains("[semantics · code different]") && !out.contains(&format!("note: this body uses {text}")) && !out.contains(&format!(", {text}"));
 
     // Group 1: the item is in the base and has no change.
     let out = probe("if !strict() { return 0; }", "", 0);
@@ -4108,7 +4110,9 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     let out = probe("if WIDE != 64 { return 0; }", "\nstatic WIDE: u32 = usize::BITS;\n", 0);
     assert!(uses(&out, "static `WIDE` (`usize::BITS`)"), "{out}");
     let out = probe("if !is_quick() { return 0; }", "\nstatic QK: bool = cfg!(unix);\nfn is_quick() -> bool {\n    QK\n}\n", 0);
-    assert!(out.contains("added early exit `if !is_quick() { return 0; }`") && out.contains("note: this body uses static `QK` (`cfg!(unix)`), which Semilla did not check (`shop_core::is_quick`)"), "{out}");
+    // The `cfg!` of the new static stays a use of its own body; the read of `QK` in
+    // `is_quick` resolves to the static that this configuration builds (R70.2-1, part c).
+    assert!(out.contains("added early exit `if !is_quick() { return 0; }`") && out.contains("note: this body uses `cfg!(unix)`, which Semilla did not check (`shop_core::QK`)") && !out.contains("static `QK`"), "{out}");
     let out = probe("if !exact() { return 0; }", "\n#[cfg(unix)]\nfn exact() -> bool {\n    true\n}\n#[cfg(not(unix))]\nfn exact() -> bool {\n    false\n}\n", 1);
     assert!(uses(&out, "`exact` (2 definitions, one under `#[cfg("), "{out}");
     let out = probe("if W::MAX as u64 != u64::MAX { return 0; }", "\n#[cfg(unix)]\ntype W = u64;\n#[cfg(not(unix))]\ntype W = u32;\n", 1);
@@ -4126,7 +4130,10 @@ fn a_proof_does_not_look_through_an_item_of_the_build_configuration() {
     // configuration, so the result is `code equal`. The note names each type and its condition.
     let out = step(&base.replace("let _h = hold();", "let _ = hold();"), 0);
     // The pattern `_` is not a local: the fact is not a rename.
-    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::keep/S0/pat` [semantics · code equal]") && out.contains("note: this body uses `shop_core::Guard` (a type with an `impl` under `#[cfg(not(unix))]`), `shop_core::Hold` (a type; its declaration uses `Guard`), which Semilla did not check (`shop_core::keep`)") && !out.contains("renamed local"), "{out}");
+    // R70.2-1 (c): the `impl` of `Guard` under `#[cfg(not(unix))]` is code that this
+    // configuration does not build, so the use of `Guard` stays and says so; `Hold` has no such
+    // part of its own.
+    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::keep/S0/pat` [semantics · code equal]") && out.contains("note: this body uses `shop_core::Guard` (a type with an `impl` under `#[cfg(not(unix))]`; the configuration does not build a part of it), which Semilla did not check (`shop_core::keep`)") && !out.contains("renamed local"), "{out}");
 
     // A use in code with no change gets no note.
     let out = step(&base.replace("    helper();\n    1\n", "    helper();\n    if u64::MAX == 0 {\n        return 0;\n    }\n    1\n"), 0);
@@ -4238,7 +4245,10 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // A new macro call that gives a function with a second definition under `cfg`. The
     // release build calls a different function. The note names it (design 35.5).
     let out = step("    glob::lim()\n", "    call!()\n", 0);
-    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(unix))]`; the macro `call!` puts the name into the code), which Semilla did not check (`shop_core::by_call`)"), "{out}");
+    // R70.2-1 (c): the driver gives the name that the macro makes, and the record has the
+    // `lim` that this configuration builds (the one under `not(unix)` is in no build here): no
+    // note.
+    assert!(out.contains("[semantics · code equal]") && !out.contains("this body uses `lim`"), "{out}");
     // The edit removes a macro call that gives a constant under `cfg`.
     let out = step("    if x!() != 1 {\n        return 0;\n    }\n", "", 0);
     assert!(out.contains("deleted statement `if x!() != 1 { return 0; }`"), "{out}");
@@ -4248,7 +4258,9 @@ fn a_name_that_a_macro_puts_into_a_body_is_a_use_of_the_build_configuration() {
     // `write!` gives a method call `write_fmt`. An inherent method under `cfg` gets the call
     // in the release build.
     let out = step("    std::fmt::Write::write_fmt(w, format_args!(\"x\"))\n", "    write!(w, \"x\")\n", 0);
-    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `write_fmt` (an `impl` under `#[cfg(not(unix))]`; the macro `write!` puts the name into the code), which Semilla did not check (`shop_core::by_write`)"), "{out}");
+    // R70.2-1 (c): the compiler resolves `write_fmt` to the method that this configuration
+    // builds (the inherent method under `not(unix)` is in no build here): no note.
+    assert!(out.contains("[semantics · code equal]") && !out.contains("this body uses `write_fmt`"), "{out}");
     // The control: a rewrite in a body with a macro that gives no such name has no note. The
     // compare at level N0 sees the removed local.
     let out = step("    let v = two!() + a;\n    v\n", "    two!() + a\n", 0);
@@ -4382,9 +4394,10 @@ fn a_type_of_a_crate_outside_the_workspace_is_opaque() {
     let out = step(&base.replace(check, ""));
     assert!(out.contains("deleted statement `assert!(matches!(mode, shop_dep::Mode::Plain)"), "{out}");
     // The value has no drop code in this build. The feature `check` adds a `Drop` impl. The
-    // result is `code equal` for the checked configurations, and the note names the cause.
+    // result is `code equal` for the checked configurations. Batch 11b (R70.2-1, part c): the
+    // compiler resolves `Loud` to the type that this build has, so the fact has no note.
     let out = step(&base.replace(hold, "    let _ = shop_dep::loud();\n"));
-    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::hold/S0/pat` [semantics · code equal]") && out.contains("note: this body uses `shop_dep::Loud` (a type of a different crate, and a feature of that crate can change its parts), which Semilla did not check (`shop_core::hold`)") && !out.contains("renamed local"), "{out}");
+    assert!(out.contains("changed pattern `_h` → `_` at `shop_core::hold/S0/pat` [semantics · code equal]") && !out.contains("this body uses `shop_dep::Loud`") && !out.contains("renamed local"), "{out}");
     // A body with a call of that crate and with no type of it keeps its proof.
     let out = step(&base.replace(far, "    let v = shop_dep::next(n);\n    v + 1\n"));
     assert!(out.contains("code equal]") && !out.contains("code different]"), "{out}");
@@ -4873,11 +4886,13 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     run(repo, &["undo"], 0);
 
     // A file under `tests/`: `test` is true in each unit that reads the file. The item under
-    // `not(test)` is in no build, and the condition is not covered: the fact gets the note.
+    // `not(test)` is in no build, so it cannot be the target of the resolved name.
     write(repo, "crates/shop-core/src/lib.rs", &base);
     write(repo, "crates/shop-core/tests/it.rs", &test_base.replace("{ a / m::lim() }", "{ a / lim() }"));
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (under `#[cfg(not(test))]`), which Semilla did not check (`shop_core (test \"it\")::via`)"), "{out}");
+    // Batch 11b (R70.2-1, part c): the compiler resolves `lim` in the unit `it` to the function
+    // that the build of the library for it has (`test` is off there), so the fact has no note.
+    assert!(out.contains("[semantics · code equal]") && !out.contains("this body uses `lim`"), "{out}");
     run(repo, &["undo"], 0);
     write(repo, "crates/shop-core/tests/it.rs", &test_base);
 
@@ -4888,7 +4903,9 @@ fn the_compiler_gives_the_true_values_of_each_condition() {
     commit("the flags");
     write(repo, "crates/shop-core/src/lib.rs", &step);
     let out = run(repo, &["step", "probe"], 0);
-    assert!(out.contains("[semantics · code equal]") && out.contains("note: this body uses `lim` (2 definitions, one under `#[cfg(not(debug_assertions))]`), which Semilla did not check (`shop_core::via`)"), "{out}");
+    // Batch 11b (R70.2-1, part c): the compiler resolves `lim` to the definition that each
+    // build has (the assertions are on), so the fact has no note.
+    assert!(out.contains("[semantics · code equal]") && !out.contains("this body uses `lim`"), "{out}");
     run(repo, &["undo"], 0);
 
     // The header names the condition: the list does not cover it.
@@ -4989,8 +5006,10 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     write(repo, "crates/shop-core/src/lib.rs", &base);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"]);
     git(repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a name under cfg"]);
-    let note = "note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)";
-    let shown = |out: &str| out.contains(note) && out.contains("[semantics · code equal]") && !out.contains("spotlight:") && !out.contains("code different");
+    // Batch 11b (R70.2-1, part c): the compiler resolves `l0` to the function that this
+    // configuration builds, so the check of this configuration has it, and the fact has no note.
+    let note = "note: this body uses `l0`";
+    let shown = |out: &str| !out.contains(note) && out.contains("[semantics · code equal]") && !out.contains("spotlight:") && !out.contains("code different");
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("if a > b { l0() + a }", "if b < a { l0() + a }"));
     let out = run(repo, &["step", "probe"], 0);
     assert!(shown(&out) && out.contains("accepted"), "{out}");
@@ -4999,7 +5018,7 @@ fn a_removed_proof_with_no_spotlight_has_a_note_with_the_cause() {
     let md = repo.join(".semilla/review.md");
     run(repo, &["review", "--md", md.to_str().unwrap()], 0);
     let text = std::fs::read_to_string(&md).unwrap();
-    assert!(text.contains("\\[semantics · code equal\\]; note: this body uses `l0` (under `#[cfg(unix)]`), which Semilla did not check (`shop_core::use_h`)"), "{text}");
+    assert!(text.contains("\\[semantics · code equal\\]") && !text.contains("this body uses `l0`"), "{text}");
     run(repo, &["undo"], 0);
 
     // The same for a statement with a `cfg` attribute that the edit does not touch.
@@ -5062,7 +5081,9 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     write(repo, "crates/shop-core/src/lib.rs", &base.replace("{ a as TA as TB as u64 }", "{ let b = a as TA; b as TB as u64 }"));
     let out = run(repo, &["step", "probe"], 0);
     let gap = "; not checked together: `feature = \"fast\"` on with `feature = \"slow\"` off. Semilla added the configuration `dev, features fast` for this state. The configuration does not build before the step, or it does not give this state";
-    assert!(out.contains(CONFIG_NOTE) && out.contains(gap) && out.contains("[move · code equal]") && !out.contains("spotlight:"), "{out}");
+    // Batch 11b (R70.2-1, part c): the uses of the body resolve to code that the configuration
+    // builds, so the note has only the gap.
+    assert!(out.contains(&format!("note: `shop_core::cut`: {}", &gap[2..])) && out.contains("[move · code equal]") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
     assert!(out.contains("configurations `dev, features fast`, `release, features fast` are not checked: it does not build before the step"), "{out}");
 
@@ -5076,7 +5097,9 @@ fn an_added_configuration_is_a_check_and_not_a_proof() {
     write(repo, "crates/shop-core/src/lib.rs", &honest);
     let out = run(repo, &["step", "probe"], 0);
     let gap = "; not checked together: `feature = \"fa\"` on with `feature = \"fb\"` off with `feature = \"fc\"` on. Add `feature-sets = [[\"fa\", \"fc\"]]` to `[workspace.metadata.semilla]`";
-    assert!(out.contains(CONFIG_NOTE) && out.contains(gap) && out.contains("[move · code equal]") && !out.contains("spotlight:"), "{out}");
+    // Batch 11b (R70.2-1, part c): the uses of the body resolve to code that the configuration
+    // builds, so the note has only the gap.
+    assert!(out.contains(&format!("note: `shop_core::cut`: {}", &gap[2..])) && out.contains("[move · code equal]") && !out.contains("spotlight:"), "{out}");
     run(repo, &["undo"], 0);
     // The user lists the two states that are left: the four added selections give the others.
     write(repo, "crates/shop-core/src/lib.rs", &three);

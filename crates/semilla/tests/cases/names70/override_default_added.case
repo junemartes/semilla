@@ -1,0 +1,55 @@
+note: batch 11b (R70.2-1, part e): the step gives the trait method a default body and removes the method of the impl (as in `uuid` #932): the record of the new tree says that the trait item has a default, so the impl now uses it: one semantics fact, not a removed item of the API
+rule+: R70.2-1
+build_check: on
+must_match: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`
+must_not_match: removed `shop::<Dog as Speak>::name`
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub trait Speak {
+    fn name(&self) -> u32;
+}
+
+pub struct Dog;
+
+impl Speak for Dog {
+    fn name(&self) -> u32 {
+        2
+    }
+}
+=== new src/lib.rs
+pub trait Speak {
+    fn name(&self) -> u32 {
+        3
+    }
+}
+
+pub struct Dog;
+
+impl Speak for Dog {}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: edit, see f2 (f2)
+      in: shop::<Dog as Speak>::name
+      lines: src/lib.rs:9, src/lib.rs:-7-11
+      to state it: --change 'shop::<Dog as Speak>::name=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::<Dog as Speak>::name=TEXT'
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added]
+  other facts, filled in by Semilla:
+  ◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics]
+  cover: each of the 10 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: body added to `shop::Speak::name`: `{ 3 }` [added]
+    lines: src/lib.rs:2-4, src/lib.rs:-2
+◆ f2 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 3 }` [semantics]
+    lines: src/lib.rs:9, src/lib.rs:-7-11

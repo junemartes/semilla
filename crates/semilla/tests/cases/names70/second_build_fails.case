@@ -1,0 +1,50 @@
+note: batch 11b (R70.3-1): the tree names the toolchain `stable`; its build script stops on a nightly compiler, so the second build of the records fails where the build check passes: the step says so, and the names come from the text
+rule+: R70.3-1
+build_check: on
+must_match: expansions: not read: the tree before the step: the second build with the toolchain `nightly-2026-10-25` of the driver of Semilla, which makes the records: the target `shop` \(build script run\) does not build
+must_match: names from the text: the tree before the step: the second build with the toolchain
+=== both rust-toolchain.toml
+[toolchain]
+channel = "stable"
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both build.rs
+fn main() {
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let version = std::process::Command::new(rustc).arg("-V").output().map(|out| String::from_utf8_lossy(&out.stdout).to_string()).unwrap_or_default();
+    if version.contains("nightly") {
+        panic!("this crate does not build with a nightly compiler");
+    }
+}
+=== old src/lib.rs
+pub fn inc(n: u32) -> u32 {
+    n + 1
+}
+=== new src/lib.rs
+pub fn inc(n: u32) -> u32 {
+    n + 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed literal `1` → `2` (f1)
+      in: shop::inc
+      lines: src/lib.rs:2, src/lib.rs:-2
+      to state it: --change 'shop::inc=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::inc=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed literal `1` → `2` at `shop::inc/tail/rhs` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the tree before the step: the second build with the toolchain `nightly-2026-10-25` of the driver of Semilla, which makes the records: the target `shop` (build script run) does not build
+  names from the text: the tree before the step: the second build with the toolchain `nightly-2026-10-25` of the driver of Semilla, which makes the records: the target `shop` (build script run) does not build
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed literal `1` → `2` at `shop::inc/tail/rhs` [semantics]
+    lines: src/lib.rs:2, src/lib.rs:-2

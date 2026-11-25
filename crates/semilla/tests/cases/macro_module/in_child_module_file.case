@@ -38,6 +38,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `80` → `8080` at `depot::net::tcp::port/tail` [semantics]
   cover: each of the 2 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: module of a macro input: `depot::net::tcp` (`src/net/tcp.rs`) has its line `mod tcp;` in the input of the macro call `depot::net::pick!#0` (`src/net.rs:2`); Semilla does not expand the macro, so it does not know if the build has this module
 

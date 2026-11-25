@@ -8,13 +8,12 @@ The kinds of a reason:
 - `tool`: a fact of a tool (cargo, git, rustc, rustdoc, the model of the check, the own data and options of Semilla). An allow list whose missing name gives the safe result is here too.
 - `default mode`: an approximation of the default mode, which has no data of the compiler. The reason names the rule of the compiled mode.
 
-The decisions of batch 10n for each list of the audit are in design 65.3 and 65.4.
+The decisions of batch 10n for each list of the audit are in design 65.3 and 65.4. Batch 11b (design 70) removed `STD_FACADE`: the trait reference of the compiler identifies an impl (R70.2-1, part d).
 
 | File | List | Kind | Reason |
 |---|---|---|---|
 | `crates/semilla-core/src/names.rs` | `const IMPLICIT_TRAITS` | language | the traits that the compiler calls with no call in the text (lang items `Drop`, `Deref`, `DerefMut`); the shared list (R65.4-1); the compiled mode: the MIR of the drop glue and of each call |
 | `crates/semilla-core/src/names.rs` | `const STD_CRATES` | language | the crates of the standard library (a fact of the tool chain); the shared list of the verifier; the driver asks the compiler for the crates of the sysroot (R65.3-1) |
-| `crates/semilla-core/src/names.rs` | `const STD_FACADE` | language | the crates of the standard library whose public modules `std` re-exports at the same path (`core`, `alloc`; a fact of the tool chain): an impl of `core::ops::Add` is an impl of `std::ops::Add` (R68.9-1); a path outside the list keeps its text (the safe side: a removed and an added item) |
 | `crates/semilla-core/src/ops.rs` | `const RETIRED` | tool | the names of the claim operations that Semilla does not accept any more (its own options) |
 | `crates/semilla-core/src/report.rs` | `const CAUSES` | tool | the names of the evidence rules of Semilla (its own data) |
 | `crates/semilla-core/src/report.rs` | `const FILLED_GROUPS` | tool | the names of the groups of the report (its own data) |
@@ -66,7 +65,7 @@ The decisions of batch 10n for each list of the audit are in design 65.3 and 65.
 | `crates/semilla-verify/src/checks.rs` | `fn declares "fn"` | language | the item keywords of the Rust language |
 | `crates/semilla-verify/src/checks.rs` | `fn names_owner "crate"` | language | the path keywords of the Rust language (`crate`, `self`, `super`) |
 | `crates/semilla-verify/src/facts.rs` | `const DOC_PAGE_KEYS` | tool | the keys of `doc(…)` of rustdoc that change only the doc pages |
-| `crates/semilla-verify/src/facts.rs` | `fn attribute_macro "derive"` | language | the attributes of the language that read the item and are no attribute macro (`derive`, `repr`, `cfg`, `cfg_attr`); each other name that is not a built-in attribute of the shared list (R65.4-1) can be an attribute macro (R65.9-2) |
+| `crates/semilla-verify/src/facts.rs` | `fn attribute_macro "derive"` | language | the attributes of the language that read the item and are no attribute macro (`derive`, `repr`, `cfg`, `cfg_attr`); each other name that is not a built-in attribute of the shared list (R65.4-1) can be an attribute macro (R65.9-2); with the name record, an attribute that the compiler keeps on the item (a derive helper, a tool attribute) is no macro (R70.2-1, part f) |
 | `crates/semilla-verify/src/facts.rs` | `fn is_fact_edit "struct"` | tool | the kinds of the item nodes of the syntax tree of Semilla |
 | `crates/semilla-verify/src/facts.rs` | `fn marks_of "r"` | language | the prefixes of the raw and byte string literals of the Rust language |
 | `crates/semilla-verify/src/facts.rs` | `fn members_fact "struct"` | tool | the kinds of the item nodes of the syntax tree of Semilla |

@@ -1,7 +1,8 @@
 note: U9: `impl std::ops::Add for X` becomes `impl core::ops::Sub for X`: a different trait, so a removed impl and an added impl
-rule-: R68.9-1
+rule-: R70.2-1
 must_match: trait impl `<X as std::ops::Add>` removed
 must_match: trait impl `<X as core::ops::Sub>` added
+build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -28,13 +29,12 @@ impl core::ops::Sub for X {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: trait impl `<X as std::ops::Add>` removed with: `type Output`, `fn add` (the public API can change: a different crate can use the item) [removed]
   ◆ f2 derived: trait impl `<X as core::ops::Sub>` added with: `type Output`, `fn sub` (the public API can change: a different crate can use the item) [added]
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

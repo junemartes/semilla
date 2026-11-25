@@ -55,53 +55,70 @@ fn other_values_keep_their_full_text() {
 
 const U4_SOURCE: &str = "mod a {\n    pub(crate) struct Block {\n        pub x: u8,\n    }\n}\nmod b {\n    pub struct Block(pub u16);\n}\nmod c {\n    pub struct Cell(pub u8);\n}\nmod d {\n    pub use super::c::Cell as Other;\n}\npub use b::Block;\npub use std::fmt::Write;\npub use d::Other;\n";
 
-fn names(list: &[&str]) -> Vec<String> {
-    list.iter().map(|name| name.to_string()).collect()
-}
-
-// rule+ R68.4-1
+// rule+ R70.2-1
 #[test]
-fn a_pub_use_line_with_the_path_of_a_different_item_does_not_name_the_item() {
+fn the_effective_visibility_of_the_compiler_decides_the_public_api() {
+    use crate::records::testing::{TestDef, give};
+    // The field of the private type: the compiler says that no different crate can use it,
+    // though a `pub use` line names a different `Block` (R68.4-1 made this from the text).
     let (_dir, ws) = crate::tests::load(U4_SOURCE);
-    use crate::{UsePath, resolve_use};
-    assert_eq!(resolve_use(&ws, "demo", &names(&["b", "Block"])), UsePath::Item("demo::b::Block".into()));
-    assert_eq!(resolve_use(&ws, "demo::d", &names(&["super", "c", "Cell"])), UsePath::Item("demo::c::Cell".into()));
-    assert_eq!(resolve_use(&ws, "demo", &names(&["crate", "a", "Block"])), UsePath::Item("demo::a::Block".into()));
-    assert_eq!(resolve_use(&ws, "demo", &names(&["std", "fmt", "Write"])), UsePath::Foreign);
-    // The field of the private type: the `pub use` lines name `b::Block` and a type of `std`.
+    give(&ws, &[TestDef { item: "demo::a::Block", ..TestDef::default() }, TestDef { item: "demo::a::Block.x", ..TestDef::default() }, TestDef { item: "demo::b::Block", public: true, ..TestDef::default() }], &[]);
     assert_eq!(crate::api_reach(&ws, "demo::a::Block.x"), crate::Reach::No);
+    // The item that a different crate can use.
+    assert_eq!(crate::api_reach(&ws, "demo::b::Block"), crate::Reach::Yes);
+    // `d::Other` is a name that a `use` line brings: the compiler follows it.
+    give(&ws, &[TestDef { item: "demo::c::Cell.0", public: true, ..TestDef::default() }], &[]);
+    assert_eq!(crate::api_reach(&ws, "demo::c::Cell.0"), crate::Reach::Yes);
 }
 
-// rule- R68.4-1
+// rule- R70.2-1
 #[test]
-fn a_pub_use_line_of_the_item_or_with_a_path_that_semilla_cannot_resolve_keeps_the_line() {
+fn a_tree_with_no_record_or_a_removed_name_keeps_the_text_rule() {
+    use crate::records::testing::{TestDef, give};
+    // R70.1-1: no record: the name rule of the text (the safe side).
     let source = U4_SOURCE.replace("pub use b::Block;", "pub use a::Block;").replace("pub(crate) struct Block", "pub struct Block");
     let (_dir, ws) = crate::tests::load(&source);
     assert!(matches!(crate::api_reach(&ws, "demo::a::Block.x"), crate::Reach::Maybe(cause) if cause.contains("`Block`")));
-    // `d::Other` is a name that a `use` line brings: Semilla does not follow it, so the name
-    // rule stays (the `as` name of the path).
     let (_dir, ws) = crate::tests::load(U4_SOURCE);
-    assert_eq!(crate::resolve_use(&ws, "demo", &names(&["d", "Other"])), crate::UsePath::Unknown);
-    assert!(matches!(crate::api_reach(&ws, "demo::c::Cell.0"), crate::Reach::Maybe(_)));
+    assert!(matches!(crate::api_reach(&ws, "demo::a::Block.x"), crate::Reach::Maybe(_)));
+    // A false `cfg` removes an item with a name of the path: another configuration can export
+    // it, so the text rule stays.
+    give(&ws, &[TestDef { item: "demo::a::Block", ..TestDef::default() }, TestDef { item: "demo::a::Block.x", ..TestDef::default() }], &["Block"]);
+    assert!(matches!(crate::api_reach(&ws, "demo::a::Block.x"), crate::Reach::Maybe(_)));
 }
 
-// rule+ R68.9-1
+const U9_OLD: &str = "pub struct X;\nimpl std::ops::Add for X {\n    type Output = X;\n    fn add(self, _: X) -> X {\n        X\n    }\n}\n";
+
+// rule+ R70.2-1
 #[test]
-fn a_path_of_core_or_alloc_has_the_form_of_std() {
-    use semilla_core::names::std_facade_form;
-    assert_eq!(std_facade_form("shop::impl <X as core::ops::Add>"), "shop::impl <X as std::ops::Add>");
-    assert_eq!(std_facade_form("shop::<X as ::alloc::borrow::ToOwned>::to_owned"), "shop::<X as std::borrow::ToOwned>::to_owned");
-    assert_eq!(std_facade_form("core :: ops :: Add"), "std::ops :: Add");
-    assert_eq!(std_facade_form("shop::impl <core::num::Wrapping as Tr>"), "shop::impl <std::num::Wrapping as Tr>");
+fn an_impl_is_identified_by_the_trait_reference_of_the_compiler() {
+    use crate::records::testing::{TestDef, give};
+    let (_old_dir, old) = crate::tests::load(U9_OLD);
+    let (_new_dir, new) = crate::tests::load(&U9_OLD.replace("std::ops::Add", "core::ops::Add"));
+    let old_impl = old.items.keys().find(|key| key.contains("impl <")).unwrap().clone();
+    let new_impl = new.items.keys().find(|key| key.contains("impl <")).unwrap().clone();
+    assert_ne!(old_impl, new_impl);
+    give(&old, &[TestDef { item: &old_impl, trait_ref: Some("<demo::X as core::ops::arith::Add>"), ..TestDef::default() }], &[]);
+    give(&new, &[TestDef { item: &new_impl, trait_ref: Some("<demo::X as core::ops::arith::Add>"), ..TestDef::default() }], &[]);
+    let (rekeyed, _) = crate::identity::trait_path_pairs(&old, &new).expect("one pair");
+    assert!(rekeyed.items.contains_key(&new_impl));
+    // Each item of the impl takes the key too.
+    assert!(rekeyed.items.keys().any(|key| key.ends_with("::add") && key.contains("core::ops::Add")), "{:?}", rekeyed.items.keys().collect::<Vec<_>>());
 }
 
-// rule- R68.9-1
+// rule- R70.2-1
 #[test]
-fn a_path_of_a_module_with_the_name_core_keeps_its_text() {
-    use semilla_core::names::std_facade_form;
-    for text in ["shop::core::f", "shop::impl <X as my::core::Tr>", "shop::impl <X as corex::Tr>", "shop::impl <X as std::ops::Add>", "core"] {
-        assert_eq!(std_facade_form(text), text);
-    }
+fn an_impl_of_a_different_trait_or_with_no_record_keeps_its_key() {
+    use crate::records::testing::{TestDef, give};
+    let (_old_dir, old) = crate::tests::load(U9_OLD);
+    let (_new_dir, new) = crate::tests::load(&U9_OLD.replace("std::ops::Add", "core::ops::Add"));
+    // R70.1-1: no record: no pair (a removed and an added impl, the safe side).
+    assert!(crate::identity::trait_path_pairs(&old, &new).is_none());
+    let old_impl = old.items.keys().find(|key| key.contains("impl <")).unwrap().clone();
+    let new_impl = new.items.keys().find(|key| key.contains("impl <")).unwrap().clone();
+    give(&old, &[TestDef { item: &old_impl, trait_ref: Some("<demo::X as core::ops::arith::Add>"), ..TestDef::default() }], &[]);
+    give(&new, &[TestDef { item: &new_impl, trait_ref: Some("<demo::X as my::Add>"), ..TestDef::default() }], &[]);
+    assert!(crate::identity::trait_path_pairs(&old, &new).is_none());
 }
 
 const U12_OLD: &str = "#[cfg(target_feature = \"sse2\")]\npub fn width() -> u32 {\n    16\n}\n\n#[cfg(not(any(target_feature = \"sse2\", target_feature = \"avx2\")))]\npub fn width() -> u32 {\n    8\n}\n\n#[cfg(all(feature = \"simd\", target_os = \"windows\"))]\npub fn wide() -> u32 {\n    1\n}\n\n#[cfg(feature = \"simd\")]\npub fn simd() -> u32 {\n    2\n}\n\n#[cfg(unix)]\npub fn host() -> u32 {\n    3\n}\n\nmacro_rules! pick { ($($t:tt)*) => { $($t)* }; }\npick! {\n    #[cfg(target_os = \"windows\")]\n    pub fn made() -> u32 { 4 }\n}\n";

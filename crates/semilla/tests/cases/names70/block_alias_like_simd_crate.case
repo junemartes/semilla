@@ -1,0 +1,222 @@
+note: verification of batch 11b (R70.2-1, part c): the shape of a real crate: `src/block/mod.rs` selects one `Block` by `cfg` on the target; `lib.rs` has `use block::Block as SimdBlock;` and `pub type Block = usize;`. Each changed body uses the root `Block` (no `cfg`) and `SimdBlock` (the `sse2` block, which this configuration builds): no note "this body uses … which Semilla did not check"
+rule+: R70.2-1
+option: --compiled
+must_not_match: which Semilla did not check
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/block/mod.rs
+#[cfg(all(not(target_arch = "wasm32"), target_feature = "avx2"))]
+mod avx2;
+#[cfg(all(not(target_arch = "wasm32"), target_feature = "avx2"))]
+pub use self::avx2::*;
+
+#[cfg(all(not(target_arch = "wasm32"), target_feature = "sse2", not(target_feature = "avx2")))]
+mod sse2;
+#[cfg(all(not(target_arch = "wasm32"), target_feature = "sse2", not(target_feature = "avx2")))]
+pub use self::sse2::*;
+
+#[cfg(target_arch = "wasm32")]
+mod wasm32;
+#[cfg(target_arch = "wasm32")]
+pub use self::wasm32::*;
+
+#[cfg(not(any(target_arch = "wasm32", target_feature = "sse2", target_feature = "avx2")))]
+mod default;
+#[cfg(not(any(target_arch = "wasm32", target_feature = "sse2", target_feature = "avx2")))]
+pub use self::default::*;
+=== both src/block/avx2.rs
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Block([usize; 4]);
+
+impl Block {
+    pub const USIZE_COUNT: usize = 4;
+    pub const NONE: Self = Block([0; 4]);
+    pub const BITS: usize = core::mem::size_of::<Self>() * 8;
+
+    pub fn is_empty(self) -> bool {
+        self == Self::NONE
+    }
+}
+=== both src/block/sse2.rs
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Block([usize; 2]);
+
+impl Block {
+    pub const USIZE_COUNT: usize = 2;
+    pub const NONE: Self = Block([0; 2]);
+    pub const BITS: usize = core::mem::size_of::<Self>() * 8;
+
+    pub fn is_empty(self) -> bool {
+        self == Self::NONE
+    }
+}
+=== both src/block/wasm32.rs
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Block([usize; 2]);
+
+impl Block {
+    pub const USIZE_COUNT: usize = 2;
+    pub const NONE: Self = Block([0; 2]);
+    pub const BITS: usize = core::mem::size_of::<Self>() * 8;
+
+    pub fn is_empty(self) -> bool {
+        self == Self::NONE
+    }
+}
+=== both src/block/default.rs
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Block([usize; 1]);
+
+impl Block {
+    pub const USIZE_COUNT: usize = 1;
+    pub const NONE: Self = Block([0; 1]);
+    pub const BITS: usize = core::mem::size_of::<Self>() * 8;
+
+    pub fn is_empty(self) -> bool {
+        self == Self::NONE
+    }
+}
+=== old src/lib.rs
+mod block;
+
+use block::Block as SimdBlock;
+
+pub type Block = usize;
+
+pub(crate) const BITS: usize = core::mem::size_of::<Block>() * 8;
+
+pub struct Bits {
+    data: Vec<SimdBlock>,
+    length: usize,
+}
+
+impl Bits {
+    pub fn with_capacity_and_blocks<I: IntoIterator<Item = Block>>(bits: usize, blocks: I) -> Self {
+        let words = blocks.into_iter().count();
+        let length = bits.min(words * BITS);
+        Bits { data: vec![SimdBlock::NONE; length / SimdBlock::BITS + 1], length }
+    }
+
+    /// # Safety
+    /// `subblock` is in bounds.
+    pub unsafe fn get_unchecked(&self, subblock: usize) -> &Block {
+        &*self.data.as_ptr().cast::<Block>().add(subblock)
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn blocks(&self) -> usize {
+        self.data.len() * SimdBlock::USIZE_COUNT
+    }
+}
+=== new src/lib.rs
+mod block;
+
+use block::Block as SimdBlock;
+
+pub type Block = usize;
+
+pub(crate) const BITS: usize = core::mem::size_of::<Block>() * 8;
+
+pub struct Bits {
+    data: Vec<SimdBlock>,
+    length: usize,
+}
+
+impl Bits {
+    pub fn with_capacity_and_blocks<I: IntoIterator<Item = Block>>(bits: usize, blocks: I) -> Self {
+        let words = blocks.into_iter().count();
+        let first: Block = 0;
+        let length = bits.min(words * BITS + first);
+        Bits { data: vec![SimdBlock::NONE; length / SimdBlock::BITS + 1], length }
+    }
+
+    /// # Safety
+    /// `subblock` is in bounds.
+    pub unsafe fn get_unchecked(&self, index: usize) -> &Block {
+        &*self.data.as_ptr().cast::<Block>().add(index)
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn first_block(&self) -> Block {
+        if self.data.is_empty() || self.data[0] == SimdBlock::NONE {
+            return 0;
+        }
+        let words: &[Block] = unsafe { core::slice::from_raw_parts(self.data.as_ptr().cast::<Block>(), SimdBlock::USIZE_COUNT) };
+        words[0] | (SimdBlock::BITS as Block)
+    }
+
+    pub fn blocks(&self) -> usize {
+        let count = self.data.len();
+        count * SimdBlock::USIZE_COUNT
+    }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f4, f5)
+      in: shop::Bits::with_capacity_and_blocks
+      lines: src/lib.rs:17-18, src/lib.rs:-17
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::Bits::with_capacity_and_blocks=TEXT'; if it does not change, --same 'rewrite $a * $b => $a * $b + first', and a `--same` fact (rename, move, or rewrite) that explains each other edit
+  new and removed items, filled in by Semilla:
+  ◆ f6 derived: added `shop::Bits::first_block` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: shop::Bits::first_block
+      control flow: + graph of `shop::Bits::first_block`: 12 points, 13 arrows (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+      ! unsafe code: the changed body has an `unsafe` block
+  other facts, filled in by Semilla:
+  ◆ f4 derived: added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
+      affected bodies: shop::Bits::with_capacity_and_blocks (with 1 other edit of this body)
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for usize>::min`, `std::vec::from_elem::<shop::block::sse2::Block>`)
+  ◆ f5 derived: changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
+      affected bodies: shop::Bits::with_capacity_and_blocks (with 1 other edit of this body)
+      control flow: + check `overflow: words * BITS + first` (src/lib.rs:18): ok → call `impls::<impl Ord for usize>::min`, fail → panic `overflow`
+      control flow: + panic `overflow` (src/lib.rs:18)
+      control flow: + arrow check `overflow: words * BITS` (src/lib.rs:18) → check `overflow: words * BITS + first` (src/lib.rs:18) (ok)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: not decided alone: the variant with only this edit does not compile; the body: equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for usize>::min`, `std::vec::from_elem::<shop::block::sse2::Block>`)
+  ◆ f1 derived: parameter `subblock` of `shop::Bits::get_unchecked` renamed to `index`: `usize` [rename · code equal]
+      equivalence: not decided alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
+      docs of `shop::Bits::get_unchecked`, no edit in this step (src/lib.rs:22-23):
+          | /// # Safety
+          | /// `subblock` is in bounds.
+      note: Semilla does not check that a comment agrees with the code. A comment with no edit can be out of date.
+  ◆ f2 derived: extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
+      control flow: ~ check `overflow: self.data.len() * SimdBlock::USIZE_COUNT` → `overflow: count * SimdBlock::USIZE_COUNT` (src/lib.rs:-32, src/lib.rs:42)
+      equivalence: equivalent (proved by equal MIR)
+  ◆ f3 derived: `shop::Bits::get_unchecked`: renamed local `subblock` → `index`, 1 edit(s) [rename · code equal]
+      equivalence: not decided alone (the body has 2 edits); the body: equivalent (proved by equal MIR)
+  cover: each of the 18 changed line(s) is in a fact
+  control flow: 4 bodies
+    shop::Bits::blocks (src/lib.rs:40): same structure: 1 changed check (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by equal MIR)
+    shop::Bits::first_block (src/lib.rs:32): graph added: 12 points, 13 arrows
+    shop::Bits::get_unchecked (src/lib.rs:24): same graph (the edit keeps the control flow) (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by equal MIR)
+    shop::Bits::with_capacity_and_blocks (src/lib.rs:15): graph changes: +1 check, +1 panic, +3 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); equivalent (proved by SMT after inlining `std::cmp::impls::<impl std::cmp::Ord for usize>::min`, `std::vec::from_elem::<shop::block::sse2::Block>`)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  comments: 1 comment(s) of the changed items have no edit in this step
+  ! spotlight: unsafe code: shop::Bits::first_block
+
+=== positions
+◆ f6 derived: added `shop::Bits::first_block` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:32-39
+◆ f4 derived: added `let` `let first: Block = 0;` at `shop::Bits::with_capacity_and_blocks/S1` [semantics · code different]
+    lines: src/lib.rs:17
+◆ f5 derived: changed expression `words * BITS` → `words * BITS + first` at `shop::Bits::with_capacity_and_blocks/S1/init/args[0]` [semantics · code different]
+    lines: src/lib.rs:18, src/lib.rs:-17
+◆ f1 derived: parameter `subblock` of `shop::Bits::get_unchecked` renamed to `index`: `usize` [rename · code equal]
+    lines: src/lib.rs:24, src/lib.rs:-23
+◆ f2 derived: extracted variable `count` = `self.data.len()` (1 use) at `shop::Bits::blocks/S0` [move · code equal]
+    lines: src/lib.rs:41-42, src/lib.rs:-32
+◆ f3 derived: `shop::Bits::get_unchecked`: renamed local `subblock` → `index`, 1 edit(s) [rename · code equal]
+    lines: src/lib.rs:25, src/lib.rs:-24

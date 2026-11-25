@@ -1,0 +1,58 @@
+note: batch 11b, verification (R70.2-1, part c): a new call of `wide::make`, whose module is under a `cfg` that this configuration turns on: the compiler resolves the call to the function that the configuration builds, so the check of this configuration has it, and the fact has no note "this body uses …, which Semilla did not check"
+rule+: R70.2-1
+option: --compiled
+must_not_match: which Semilla did not check
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+#[cfg(not(target_feature = "avx512f"))]
+mod wide {
+    pub fn make() -> usize {
+        8
+    }
+}
+
+pub fn width(b: usize) -> usize {
+    b + 1
+}
+=== new src/lib.rs
+#[cfg(not(target_feature = "avx512f"))]
+mod wide {
+    pub fn make() -> usize {
+        8
+    }
+}
+
+pub fn width(b: usize) -> usize {
+    b + wide::make()
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `1` → `wide::make()` (f1)
+      in: shop::width
+      lines: src/lib.rs:9, src/lib.rs:-9
+      to state it: --change 'shop::width=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::width=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `1` → `wide::make()` at `shop::width/tail/rhs` [semantics · code different]
+      affected bodies: shop::width
+      control flow: + call `make` (src/lib.rs:9): return → check `overflow: b + wide::make()`
+      control flow: ~ check `overflow: b + 1` → `overflow: b + wide::make()` (src/lib.rs:-9, src/lib.rs:9)
+      control flow: + arrow entry (src/lib.rs:8) → call `make` (src/lib.rs:9)
+      control flow: … 1 more (semilla status --verbose)
+      equivalence: different: for b = 0: before returns 1, after returns 8
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 1 body
+    shop::width (src/lib.rs:8): graph changes: +1 call, 1 changed check, +2 arrows, −1 arrow (in dev; 1 more result(s) in other configurations: semilla status --verbose); different (for b = 0: before returns 1, after returns 8)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `1` → `wide::make()` at `shop::width/tail/rhs` [semantics · code different]
+    lines: src/lib.rs:9, src/lib.rs:-9
