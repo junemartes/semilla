@@ -1,0 +1,41 @@
+note: batch 11b (R70.2-1): a new function with an `unsafe` block, with `--compiled`: the record of the compiler has the block, so the fact has the line "unsafe code"
+rule+: R70.2-1
+option: --compiled
+must_match: ! unsafe code: the changed body has an `unsafe` block
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn inc(n: u32) -> u32 {
+    n + 1
+}
+=== new src/lib.rs
+pub fn inc(n: u32) -> u32 {
+    n + 1
+}
+
+pub fn first(p: *const u32) -> u32 {
+    unsafe { *p }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added `shop::first` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: shop::first
+      control flow: + graph of `shop::first`: 6 points, 5 arrows (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+      ! unsafe code: the changed body has an `unsafe` block
+  cover: each of the 4 changed line(s) is in a fact
+  control flow: 1 body
+    shop::first (src/lib.rs:5): graph added: 6 points, 5 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: unsafe code: shop::first
+
+=== positions
+◆ f1 derived: added `shop::first` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:4-7

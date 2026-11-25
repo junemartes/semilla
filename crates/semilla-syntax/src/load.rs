@@ -160,6 +160,39 @@ pub struct Workspace {
     /// file again with it (design 44, FIX 1).
     #[serde(skip)]
     pub editions: BTreeMap<String, Edition>,
+    /// The name record of the compiler for this tree (design 70), when the step has one. The
+    /// verifier sets it at the start of the check of a step.
+    #[serde(skip)]
+    pub names: NameCell,
+}
+
+/// The name record of a tree (design 70): the index of the records of the compiler, or none.
+#[derive(Default)]
+pub struct NameCell(std::sync::RwLock<Option<std::sync::Arc<semilla_core::namerec::NameIndex>>>);
+
+impl NameCell {
+    /// The index, or `None`: the step has no record of the compiler for this tree.
+    pub fn get(&self) -> Option<std::sync::Arc<semilla_core::namerec::NameIndex>> {
+        self.0.read().map(|cell| cell.clone()).unwrap_or(None)
+    }
+
+    pub fn set(&self, index: Option<std::sync::Arc<semilla_core::namerec::NameIndex>>) {
+        if let Ok(mut cell) = self.0.write() {
+            *cell = index;
+        }
+    }
+}
+
+impl Clone for NameCell {
+    fn clone(&self) -> Self {
+        NameCell(std::sync::RwLock::new(self.get()))
+    }
+}
+
+impl std::fmt::Debug for NameCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NameCell({})", if self.get().is_some() { "a record" } else { "no record" })
+    }
 }
 
 /// The source of a module whose `mod NAME;` line is in the input of a macro call (design 59).

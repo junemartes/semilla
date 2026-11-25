@@ -403,6 +403,9 @@ pub struct UnitExpansions {
     /// Each true `cfg` name and pair of the unit (the features).
     pub cfg: Vec<String>,
     pub list: Vec<serde_json::Value>,
+    /// The name record of the unit (design 70, R70.1-1), or `None` (a record of an earlier
+    /// driver).
+    pub names: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -416,6 +419,8 @@ struct ExpansionUnit {
     #[serde(default)]
     cfg: Vec<String>,
     expansions: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    names: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -438,7 +443,7 @@ pub fn read_expansions(dir: &Path) -> Option<Vec<UnitExpansions>> {
             return None;
         }
         let unit = serde_json::from_str::<ExpansionLine>(&line).ok()?.unit;
-        out.push(UnitExpansions { target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.expansions? });
+        out.push(UnitExpansions { target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.expansions?, names: unit.names });
     }
     Some(out)
 }

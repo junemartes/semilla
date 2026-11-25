@@ -1,9 +1,10 @@
 note: U9: `impl std::ops::Add for X` becomes `impl core::ops::Add for X`: one impl with a header fact, no removed impl and no added impl, no "generic arguments go by position"
-rule+: R68.9-1
+rule+: R70.2-1
 must_match: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add for X \{ \}` → `impl core::ops::Add for X \{ \}`
 must_not_match: removed
 must_not_match: added
 must_not_match: generic arguments go by position
+build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -30,12 +31,11 @@ impl core::ops::Add for X {
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   declarations, filled in by Semilla:
   ◆ f1 derived: generics of `shop::impl <X as core::ops::Add>`: `impl std::ops::Add for X { }` → `impl core::ops::Add for X { }` (the public API can change: a different crate can use the item) [declaration]
   cover: each of the 2 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

@@ -1563,7 +1563,10 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
     let threads = std::thread::available_parallelism().map_or(4, |count| count.get());
     std::thread::scope(|scope| {
         for _ in 0..threads {
-            scope.spawn(|| {
+            // The matcher of the patterns calls itself once for each character that a `.*`
+            // takes, so a pattern over a long output needs a large stack (batch 11b: one more
+            // line of the output was past the default size of 2 MB).
+            let worker = std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, || {
                 loop {
                     let index = next.fetch_add(1, Ordering::SeqCst);
                     let Some(case) = cases.get(index) else { break };
@@ -1571,6 +1574,7 @@ fn each_case_gives_its_expected_text_and_keeps_the_properties() {
                     results.lock().unwrap().push((index, result));
                 }
             });
+            worker.expect("a thread of the case runner starts");
         }
     });
     let mut results = results.into_inner().unwrap();
@@ -1703,7 +1707,6 @@ fn the_eighth_property_finds_a_token_that_the_other_item_does_not_have() {
 // rule+ R58.11-1
 // rule- R58.11-1
 // rule- R60.4-6
-#[test]
 // Property 13: a compare result word in an output of the default mode is a problem; a word in a
 // code text or in a text of the agent is not.
 // rule+ R50.1-1

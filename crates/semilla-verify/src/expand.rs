@@ -97,6 +97,8 @@ pub struct ExpansionUnit {
     /// Each true `cfg` name and pair of the unit (the features).
     pub cfg: Vec<String>,
     pub list: Vec<Expansion>,
+    /// The name record of the unit (design 70, R70.1-1), or `None`.
+    pub names: Option<std::sync::Arc<semilla_core::namerec::Record>>,
 }
 
 impl ExpansionUnit {
@@ -824,7 +826,7 @@ fn order_spotlights(input: &StepInput, outcome: &mut StepOutcome, sites: &[Site]
             continue;
         }
         let (old_inputs, new_inputs) = (crate::facts::order_inputs(&old_attrs), crate::facts::order_inputs(&new_attrs));
-        if old_inputs.fixed || new_inputs.fixed || crate::facts::attribute_macro_moves(&old_attrs, &new_attrs).is_some() {
+        if old_inputs.fixed || new_inputs.fixed || crate::facts::attribute_macro_moves(&old_attrs, &new_attrs, crate::records::inert_attributes([input.before, input.after], [Some(&semilla_core::Anchor::item(&old_path)), Some(&semilla_core::Anchor::item(&path))]).as_ref()).is_some() {
             continue;
         }
         // The calls at the type: the item of the anchor of the call, the old one with the rename
@@ -1250,7 +1252,7 @@ mod tests {
 
     fn unit(target: &str, root: &str, calls: &[(&str, usize, &str)]) -> ExpansionUnit {
         let list = calls.iter().map(|(file, line, text)| Expansion { file: file.to_string(), line: *line, ..expansion("expr", text) }).collect();
-        ExpansionUnit { config: "dev".into(), target: target.into(), package: "shop".into(), root: root.into(), cfg: Vec::new(), list }
+        ExpansionUnit { config: "dev".into(), target: target.into(), package: "shop".into(), root: root.into(), cfg: Vec::new(), list, names: None }
     }
 
     // rule+ R63.9-1
@@ -1390,7 +1392,7 @@ mod tests {
     /// The records of one tree: the call of `m!` with `text`, and the call of `n!` with `2`.
     fn dependency_units(m_call: &str, text: &str) -> Vec<ExpansionUnit> {
         let call = |line: usize, name: &str, call: &str, text: &str| Expansion { file: "src/lib.rs".into(), line, col: 5, end_line: line, name: name.into(), def: "crate depot".into(), call: call.into(), ..expansion("expr", text) };
-        vec![ExpansionUnit { config: "dev".into(), target: "shop.lib.aaaa".into(), package: "shop".into(), root: "src/lib.rs".into(), cfg: Vec::new(), list: vec![call(2, "m", m_call, text), call(5, "n", "depot::n!(2)", "2")] }]
+        vec![ExpansionUnit { config: "dev".into(), target: "shop.lib.aaaa".into(), package: "shop".into(), root: "src/lib.rs".into(), cfg: Vec::new(), list: vec![call(2, "m", m_call, text), call(5, "n", "depot::n!(2)", "2")] , names: None }]
     }
 
     /// The step outcome of a test of the dependency rules: each fact with its expansion lines.

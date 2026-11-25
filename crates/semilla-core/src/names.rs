@@ -21,38 +21,6 @@ pub const NAME_LIST: &str = "a name list of the language decided it";
 /// this list: it asks the compiler for the crates of the sysroot (R65.3-1).
 pub const STD_CRATES: &[&str] = &["core", "alloc", "std", "proc_macro", "test"];
 
-/// R68.9-1: the crates of the standard library whose public modules `std` re-exports at the
-/// same path (`std::ops` is `core::ops`, `std::vec` is `alloc::vec`). A path that starts with
-/// one of them names the item of the same path below `std`.
-pub const STD_FACADE: &[&str] = &["core", "alloc"];
-
-/// R68.9-1: a text with each path that starts with a crate of [`STD_FACADE`] (also `::core::`)
-/// in the form that starts with `std::`. A segment of a longer path (`my::core::x`) stays.
-pub fn std_facade_form(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    'outer: while !rest.is_empty() {
-        let before = out.chars().last();
-        // A path start: the text start, or a character that is not a part of a name or of `::`.
-        let start = before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == ':'));
-        if start {
-            // The token text has spaces around `::` (`core :: ops`).
-            let body = rest.strip_prefix("::").map(str::trim_start).unwrap_or(rest);
-            for name in STD_FACADE {
-                if let Some(tail) = body.strip_prefix(name).filter(|tail| !tail.starts_with(|c: char| c.is_alphanumeric() || c == '_')).map(str::trim_start).and_then(|tail| tail.strip_prefix("::")) {
-                    out.push_str("std::");
-                    rest = tail.trim_start();
-                    continue 'outer;
-                }
-            }
-        }
-        let c = rest.chars().next().unwrap_or_default();
-        out.push(c);
-        rest = &rest[c.len_utf8()..];
-    }
-    out
-}
-
 /// True for the name of a crate of the standard library.
 pub fn is_std_crate(name: &str) -> bool {
     STD_CRATES.contains(&name)

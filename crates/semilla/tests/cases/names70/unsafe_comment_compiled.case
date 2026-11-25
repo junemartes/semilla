@@ -1,0 +1,41 @@
+note: batch 11b (R70.2-1): a new function whose doc comment says "It is not unsafe" and whose body has the word in a string, with `--compiled`: the record of the compiler has no `unsafe` code, so the fact has no line "unsafe code" (before: the words of the item text gave it)
+rule-: R70.2-1
+option: --compiled
+must_not_match: unsafe code
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn inc(n: u32) -> u32 {
+    n + 1
+}
+=== new src/lib.rs
+pub fn inc(n: u32) -> u32 {
+    n + 1
+}
+
+/// Adds two. It is not unsafe.
+pub fn inc2(n: u32) -> u32 {
+    let _ = "unsafe";
+    n + 2
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  new and removed items, filled in by Semilla:
+  ◆ f1 derived: added `shop::inc2` (the public API changes: a different crate can now use the item) [added · code different]
+      affected bodies: shop::inc2
+      control flow: + graph of `shop::inc2`: 4 points, 3 arrows (semilla status --verbose)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 6 changed line(s) is in a fact
+  control flow: 1 body
+    shop::inc2 (src/lib.rs:6): graph added: 4 points, 3 arrows (in dev; 1 more result(s) in other configurations: semilla status --verbose)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: added `shop::inc2` (the public API changes: a different crate can now use the item) [added · code different]
+    lines: src/lib.rs:4-9

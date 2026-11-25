@@ -1,8 +1,9 @@
 note: U5: a removed override: the impl now uses the default body; one semantics fact in the gap list, no "removed … the public API changes"
-rule+: R68.5-1
+rule+: R70.2-1
 must_match: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name\(&self\) -> u32 \{ 2 \}` → `fn name\(&self\) -> u32 \{ 1 \}`
 must_match: to state it: --change 'shop::<Dog as Speak>::name=TEXT'
 must_not_match: removed `shop::<Dog as Speak>::name`
+build_check: on
 === both Cargo.toml
 [package]
 name = "shop"
@@ -35,7 +36,7 @@ impl Speak for Dog {}
 === expected
 exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
-build check: not run (`SEMILLA_NO_CHECK`)
+build check: passes (<TIME>)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: edit, see f1 (f1)
@@ -46,7 +47,6 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: `shop::<Dog as Speak>::name` is removed: the impl now uses the default body of `shop::Speak::name`: `fn name(&self) -> u32 { 2 }` → `fn name(&self) -> u32 { 1 }` [semantics]
   cover: each of the 6 changed line(s) is in a fact
-  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

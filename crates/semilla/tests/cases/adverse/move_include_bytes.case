@@ -68,6 +68,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       ✗ spotlight: a file that is not on the allow list of files that no tool reads to build or to test (docs, license texts, images); it needs a reason: --reason 'src/list/raw.bin:=…'
   cover: each of the 31 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 run again: semilla step 'the change' --reason 'src/list/raw.bin:=<why>'

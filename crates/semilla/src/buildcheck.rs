@@ -53,14 +53,21 @@ fn text_hash(text: &str) -> u64 {
     hasher.finish() & 0xffff_ffff_ffff
 }
 
+/// How the build check of a tree gets the records of the compiler (R65.8-1, R70.3-1): the driver
+/// and its records folder, the folder of the records of the tree, and the toolchain of the
+/// driver when the build check has a different toolchain: then a second check build with that
+/// toolchain makes the records.
+struct RecordsPlan {
+    records: CheckRecords,
+    store: std::path::PathBuf,
+    second: Option<CheckToolchain>,
+}
+
 /// Keeps the expansion records of a tree (R65.8-1): a copy of the record file of each unit of
 /// the build in the folder of the tree, or a file with the cause why the build has no records.
-/// A failed write only costs time: the next check of the tree builds again.
-fn store_records(setup: &std::result::Result<(CheckRecords, std::path::PathBuf), String>, files: Option<&CheckRecordFiles>, run: &BuildRun, out: &std::path::Path) {
-    let store = match setup {
-        Ok((_, store)) => store,
-        Err(_) => return,
-    };
+/// A failed write only costs time: the next check of the tree builds again. `second`: the
+/// toolchain of the second build of the records (R70.3-1), for the cause of a failure.
+fn store_records(store: &std::path::Path, files: Option<&CheckRecordFiles>, run: &BuildRun, out: &std::path::Path, second: Option<&CheckToolchain>) {
     let _ = std::fs::create_dir_all(store.parent().unwrap_or(store));
     let cause = match files {
         Some(CheckRecordFiles::Files(names)) => {
@@ -74,7 +81,11 @@ fn store_records(setup: &std::result::Result<(CheckRecords, std::path::PathBuf),
             let _ = std::fs::remove_dir_all(&temporary);
             return;
         }
-        _ if !run.failed.is_empty() => targets_text(&run.failed, "does not build in this tree, so the tree has no full set of expansion records", "do not build in this tree, so the tree has no full set of expansion records"),
+        _ if !run.failed.is_empty() => match second {
+            // R70.3-1: the build check passes, and the second build of the records fails.
+            Some(own) => format!("the second build with the toolchain {} of the driver of Semilla, which makes the records: {}", own.name, targets_text(&run.failed, "does not build", "do not build")),
+            None => targets_text(&run.failed, "does not build in this tree, so the tree has no full set of expansion records", "do not build in this tree, so the tree has no full set of expansion records"),
+        },
         _ => "the build gave no expansion records".to_string(),
     };
     let _ = std::fs::write(store.with_extension("none"), cause);
@@ -187,19 +198,21 @@ impl App {
     /// The expansion records of the build check of a tree (R65.8-1): the driver of Semilla, the
     /// records folder of the build folder, and the folder of the records of the tree. `Err`: the
     /// cause why the build check of this tree cannot write the records.
-    fn records_setup(&self, toolchain: &CheckToolchain, key: &str, tree: &str) -> std::result::Result<(CheckRecords, std::path::PathBuf), String> {
-        if !semilla_normal::cargo::driver_toolchain(toolchain) {
-            return Err(format!(
-                "the build check uses the toolchain {}, and the driver of Semilla that writes the expansion records needs the toolchain `{}`; `--compiled` or `semilla expand` builds them",
-                toolchain.name,
-                semilla_normal::cargo::toolchain()
-            ));
-        }
+    ///
+    /// R70.3-1: when the toolchain of the build check is not the toolchain of the driver, a
+    /// second check build of the tree with the toolchain of the driver makes the records, in its
+    /// own target folder and records folder of the cache. The build check stays the result.
+    fn records_setup(&self, toolchain: &CheckToolchain, key: &str, tree: &str) -> std::result::Result<RecordsPlan, String> {
         let driver = semilla_normal::cargo::find_driver().map_err(|error| format!("{error:#}"))?;
         let fingerprint = semilla_normal::cargo::driver_fingerprint(&driver).map_err(|error| format!("cannot read the driver of Semilla: {error:#}"))?;
         let folder = self.check_folder();
         let store = folder.join("expansions").join(format!("{tree}-{key}-{:012x}", text_hash(&fingerprint)));
-        Ok((CheckRecords { driver, out: folder.join("records") }, store))
+        if semilla_normal::cargo::driver_toolchain(toolchain) {
+            return Ok(RecordsPlan { records: CheckRecords { driver, out: folder.join("records") }, store, second: None });
+        }
+        let root = semilla_normal::cargo::toolchain_root().map_err(|error| format!("the build check uses the toolchain {}, and the toolchain of the driver of Semilla for the second build of the records is not on this machine: {error:#}", toolchain.name))?;
+        let own = CheckToolchain { root, name: format!("`{}`", semilla_normal::cargo::toolchain()) };
+        Ok(RecordsPlan { records: CheckRecords { driver, out: folder.join("records-own") }, store, second: Some(own) })
     }
 
     /// The expansion records that the build check of a tree wrote (R65.8-1), with no build. `Err`
@@ -207,7 +220,7 @@ impl App {
     pub(crate) fn check_expansions(&self, tree: &str) -> std::result::Result<Vec<semilla_verify::expand::ExpansionUnit>, String> {
         let toolchain = self.check_toolchain(tree).map_err(|error| format!("{error:#}"))?;
         let key = semilla_normal::cargo::check_settings_key(&self.check_folder(), &toolchain);
-        let (_, store) = self.records_setup(&toolchain, &key, tree)?;
+        let store = self.records_setup(&toolchain, &key, tree)?.store;
         if let Ok(cause) = std::fs::read_to_string(store.with_extension("none")) {
             return Err(cause);
         }
@@ -216,7 +229,7 @@ impl App {
         }
         let units = semilla_normal::read_expansions(&store).ok_or_else(|| format!("the expansion records of the tree `{}` cannot be read", &tree[..tree.len().min(7)]))?;
         // The build check builds the configuration `dev` (design 53.2).
-        Ok(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: "dev".to_string(), target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect() }).collect())
+        Ok(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: "dev".to_string(), target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect(), names: unit.names.and_then(|value| serde_json::from_value(value).ok()).map(std::sync::Arc::new) }).collect())
     }
 
     /// The build check of one tree. The result of a tree is in the cache, by the tree and the
@@ -237,7 +250,7 @@ impl App {
         // gives the cause in place of the records.
         let setup = if records { Some(self.records_setup(&toolchain, &key, tree)) } else { None };
         let has_records = || match &setup {
-            Some(Ok((_, store))) => store.is_dir() || store.with_extension("none").is_file(),
+            Some(Ok(plan)) => plan.store.is_dir() || plan.store.with_extension("none").is_file(),
             _ => true,
         };
         let stored = || {
@@ -257,8 +270,9 @@ impl App {
         self.repo.checkout_build(&build, tree).with_context(|| format!("cannot write the tree to the build folder {}", build.display()))?;
         let started = std::time::Instant::now();
         let target = folder.join("target");
+        // The driver is the wrapper of the build check only with the toolchain of the driver.
         let driver = match &setup {
-            Some(Ok((driver, _))) => Some(driver),
+            Some(Ok(plan)) if plan.second.is_none() => Some(&plan.records),
             _ => None,
         };
         let (mut run, mut files) = semilla_normal::cargo::build_check_with(&build, &target, &toolchain, driver)?;
@@ -272,12 +286,37 @@ impl App {
             (run, files) = semilla_normal::cargo::build_check_with(&build, &target, &toolchain, driver)?;
         }
         crate::timing("build check", started);
-        if let Some(setup) = &setup {
-            store_records(setup, files.as_ref(), &run, &folder.join("records"));
+        match &setup {
+            Some(Ok(plan)) if plan.second.is_some() => self.second_build(plan, &build, &folder),
+            Some(Ok(plan)) => store_records(&plan.store, files.as_ref(), &run, &plan.records.out, None),
+            _ => {}
         }
         // A failed write only costs time: the next check of this tree runs cargo again.
         let _ = std::fs::write(&file, serde_json::to_string(&run)?);
         Ok((run, false))
+    }
+
+    /// R70.3-1: the second check build of a tree with the toolchain of the driver, only for the
+    /// records of the compiler: its own target folder and records folder in the cache. Its
+    /// result is not the result of the build check. A build that does not pass, or that cannot
+    /// run, stores the cause (R70.3-1).
+    fn second_build(&self, plan: &RecordsPlan, build: &std::path::Path, folder: &std::path::Path) {
+        let Some(own) = &plan.second else { return };
+        let started = std::time::Instant::now();
+        let target = folder.join("target-own");
+        let mut result = semilla_normal::cargo::build_check_with(build, &target, own, Some(&plan.records));
+        if matches!(&result, Ok((_, Some(CheckRecordFiles::FreshWithout)))) && std::fs::remove_dir_all(&target).is_ok() {
+            result = semilla_normal::cargo::build_check_with(build, &target, own, Some(&plan.records));
+        }
+        crate::timing("second build of the records", started);
+        match result {
+            Ok((run, files)) => store_records(&plan.store, files.as_ref(), &run, &plan.records.out, Some(own)),
+            Err(error) => {
+                let _ = std::fs::create_dir_all(plan.store.parent().unwrap_or(&plan.store));
+                let cause = format!("the second build with the toolchain {} of the driver of Semilla, which makes the records, cannot run: {}", own.name, format!("{error:#}").lines().next().unwrap_or(""));
+                let _ = std::fs::write(plan.store.with_extension("none"), cause);
+            }
+        }
     }
 
     /// R68.12-1: a "not checked" line for each `cfg` attribute of the new tree whose condition

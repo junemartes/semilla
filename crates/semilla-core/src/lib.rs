@@ -10,6 +10,7 @@
 pub mod anchor;
 pub mod budget;
 pub mod claim;
+pub mod namerec;
 pub mod names;
 pub mod ops;
 pub mod report;

@@ -1,5 +1,5 @@
 note: U1: a new item whose doc test has `#[cfg(…)]` lines and whose body has the text in a comment and in a string: no "cfg attribute" spotlight and no "unsafe code" spotlight
-rule-: R68.1-1
+rule-: R70.1-1
 must_not_match: spotlight: cfg attribute
 must_not_match: unsafe code
 === both Cargo.toml
@@ -36,6 +36,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: added `shop::inc2` (the public API changes: a different crate can now use the item) [added]
   cover: each of the 12 changed line(s) is in a fact
   expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

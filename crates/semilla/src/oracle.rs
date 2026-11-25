@@ -1950,7 +1950,7 @@ impl BodyOracle for NormalOracle {
             self.records_or_build(tree, "n0", config, false).ok()?;
             let (_, cache, _, _) = self.cache_folder(tree, "n0", config).ok()?;
             let units = semilla_normal::read_expansions(&cache)?;
-            Some(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: config.name(), target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect() }).collect())
+            Some(units.into_iter().map(|unit| semilla_verify::expand::ExpansionUnit { config: config.name(), target: unit.target, package: unit.package, root: unit.root, cfg: unit.cfg, list: unit.list.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect(), names: unit.names.and_then(|value| serde_json::from_value(value).ok()).map(std::sync::Arc::new) }).collect())
         };
         let results: Vec<Option<Vec<semilla_verify::expand::ExpansionUnit>>> = std::thread::scope(|scope| {
             let handles: Vec<_> = folders.iter().map(|(config, tree)| scope.spawn(|| read(config, tree))).collect();
