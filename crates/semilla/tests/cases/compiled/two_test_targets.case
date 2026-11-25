@@ -1,5 +1,5 @@
 note: two packages, each with a test target `integration`; a macro of each target reads the file that the step changes: each source body has its own check (design 61.14), and the fact of the file owns the two bodies and the two expansion lines (R63.9-6)
-rule+: R61.14-1 R63.9-5 R63.9-6
+rule+: R61.14-1 R73.2-1 R73.1-1
 option: --compiled
 === both Cargo.toml
 [package]

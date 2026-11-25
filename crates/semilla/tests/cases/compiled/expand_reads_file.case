@@ -1,6 +1,6 @@
 note: batch 10c2, item 5: a macro of the workspace reads a data file with `include_bytes!`; the step changes that file and a file that no code reads; the fact of the read file owns the body and its expansion line, with no spotlight; the other file fact owns nothing
-rule+: R63.9-5 R63.9-6
-rule-: R63.9-6
+rule+: R73.2-1 R73.1-1
+rule-: R73.1-1
 must_not_match: indirect change
 must_match: the code of the call reads `data/a\.txt`, which the step changes
 option: --compiled

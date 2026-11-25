@@ -2106,13 +2106,45 @@ fn a_body_from_a_file_that_semilla_does_not_parse_is_in_the_spotlight() {
     assert!(report.errors.is_empty(), "{:?}", report.errors);
 }
 
+/// A body oracle with the expansion records of the two trees (R73.2-1: the chain of a call and the
+/// place of each definition are compiler data).
+struct WithRecords<'a>(&'a dyn BodyOracle, [Vec<crate::expand::ExpansionUnit>; 2]);
+
+impl BodyOracle for WithRecords<'_> {
+    fn compare(&self, step: &Step, renames: &BTreeMap<String, String>, added: &[String]) -> anyhow::Result<Vec<BodyComparison>> {
+        self.0.compare(step, renames, added)
+    }
+    fn facts(&self, step: &Step) -> anyhow::Result<Option<Vec<BodyFacts>>> {
+        self.0.facts(step)
+    }
+    fn expansions(&self, _: &Step) -> Option<[Vec<crate::expand::ExpansionUnit>; 2]> {
+        Some(self.1.clone())
+    }
+}
+
+/// The records of one call in `src/lib.rs` of the crate `demo` on each side: the line, the
+/// column, the macro, its definition, the identity of each side, and the text of each side.
+fn call_records(line: usize, col: usize, name: &str, def: &str, ids: [&str; 2], texts: [&str; 2]) -> [Vec<crate::expand::ExpansionUnit>; 2] {
+    [0, 1].map(|side| {
+        let call = crate::expand::Expansion { file: "src/lib.rs".into(), line, col, end_line: line, name: name.into(), kind: "bang".into(), def: def.into(), form: "expr".into(), call: format!("{name}!()"), text: texts[side].into(), ids: if ids[side].is_empty() { Vec::new() } else { vec![ids[side].to_string()] }, ..Default::default() };
+        vec![crate::expand::ExpansionUnit { config: "dev".into(), target: "demo.lib.aaaa".into(), package: "demo".into(), root: "src/lib.rs".into(), list: vec![call], ..Default::default() }]
+    })
+}
+
+// Since batch 11e the owner comes from the records (R73.2-1): the call of `fee!` in `f` has a
+// changed expansion, and the item at the place of its definition has the claim.
 #[test]
 fn a_changed_macro_owns_the_bodies_that_expand_it() {
     let before = "macro_rules! fee {\n    () => { 1 };\n}\npub fn f() -> u32 {\n    fee!()\n}\npub fn g() -> u32 {\n    2\n}\n";
     let after = before.replace("{ 1 }", "{ 5 }");
     let claims = vec![claim("c1", "change-signature", Some("demo::fee!"), serde_json::json!({}))];
     let bodies = vec![body("demo::f", "src/lib.rs", 4, different(false)), body("demo::g", "src/lib.rs", 7, different(false))];
-    let report = run_spans(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)], &[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)], claims, bodies, &[]);
+    let (_d1, old) = load_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", before)]);
+    let (_d2, new) = load_files(&[("Cargo.toml", MANIFEST), ("src/lib.rs", &after)]);
+    let step = step(claims);
+    let spans = SpanBodies(bodies);
+    let oracle = WithRecords(&spans, call_records(5, 4, "fee", "src/lib.rs:1", ["", ""], ["1", "5"]));
+    let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report;
     assert_eq!(report.claims[0].affected, ["demo::f"], "{:#?}", report);
     // `g` does not expand the macro: no known cause.
     assert_eq!(unknown_causes(&report), ["demo::g"]);
@@ -2148,9 +2180,16 @@ fn a_new_callee_and_a_changed_proc_macro_own_the_changed_bodies() {
     assert!(report.claims.iter().any(|c| c.affected.contains(&"demo::user".to_string())), "{:#?}", report.claims);
     assert!(report.errors.is_empty() && report.accepted(), "{report:#?}");
     // Probe 3: a changed proc macro (a function with `#[proc_macro]`) that the body expands.
+    // Since batch 11e the owner comes from the records (R73.2-1): the item at the place of the
+    // definition of the proc macro has the claim.
     let pm = |n: &str| format!("#[proc_macro]\npub fn rate(_input: TokenStream) -> TokenStream {{\n    \"{n}\".parse().unwrap()\n}}\npub fn user() -> u32 {{\n    rate!()\n}}\n");
     let claims = vec![claim("c1", "change-literal", Some("demo::rate/tail/recv/recv"), serde_json::json!({}))];
-    let report = run(&pm("1"), &pm("5"), claims, &[("demo::user", different(false))], None);
+    let (_d1, old) = load(&pm("1"));
+    let (_d2, new) = load(&pm("5"));
+    let step = self::step(claims);
+    let fake = FakeBodies([("demo::user".to_string(), different(false))].into_iter().collect());
+    let oracle = WithRecords(&fake, call_records(6, 4, "rate", "src/lib.rs:2", ["rate: proc macro of crate demo aaaa", "rate: proc macro of crate demo bbbb"], ["1", "5"]));
+    let report = verify_step(&StepInput { step: &step, before: &old, after: &new }, &oracle, &NoOracle).report;
     assert!(unknown_causes(&report).is_empty(), "{:#?}", report.facts);
     assert_eq!(report.claims[0].affected, ["demo::user"], "{:#?}", report.claims);
 }
@@ -7150,7 +7189,8 @@ fn each_edit_gets_the_compare_result_of_its_own_mir_elements() {
     assert_eq!(report.mir_map.doubt, 1);
     let node = fact("the compiled code of `demo::f` changes with no edit at its place: `n`");
     assert!(node.category == Category::Indirect && !node.spotlight && node.compare == Compare::CodeDifferent, "{node:#?}");
-    assert_eq!(node.note.as_deref(), Some("lines 3"));
+    // R73.2-1: the step changes no other input of the body, so the fact names its edits.
+    assert_eq!(node.note.as_deref(), Some("lines 3; the cause: the edits of this body at src/lib.rs:2, src/lib.rs:3 (the step changes no other input of the body)"));
 
     // Fix round 2: a jump with no value (a `goto`, a `return`) at a place with no edit needs no
     // owner. Its target follows a change with its own elements.
@@ -7205,7 +7245,8 @@ fn a_body_gets_one_fact_with_its_outermost_nodes() {
     assert_eq!(facts.len(), 1, "{report:#?}");
     assert!(report.facts.iter().any(|fact| fact.description.contains("`g` → `h`")), "{report:#?}");
     assert_eq!(facts[0].description, "the compiled code of `demo::f` changes with no edit at its place: `a * 2`, `b * 3`, `x + y`, and 1 more");
-    assert_eq!(facts[0].note.as_deref(), Some("lines 2, 3, 4, 5"));
+    // R73.2-1: the step changes no other input of the body, so the fact names its edit.
+    assert_eq!(facts[0].note.as_deref(), Some("lines 2, 3, 4, 5; the cause: the edit of this body at src/lib.rs:6 (the step changes no other input of the body)"));
 }
 
 #[test]

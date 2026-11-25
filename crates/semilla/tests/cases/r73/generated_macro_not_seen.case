@@ -1,0 +1,50 @@
+note: batch 11e, R73.3-1: the build script writes a macro into `OUT_DIR`, and the crate reads it with `include!`; the step changes the build script, so the expansion of `rate!()` changes; the definition is in a file outside the tree and its record has no hash of it, so Semilla does not see this input: the line says "the cause is not known" and names it; before, the line said "no changed definition, no changed input of the call, and no changed file that its code reads"
+rule+: R73.3-1 R73.1-1
+build_check: on
+must_match: the cause is not known: Semilla does not see the definition of `rate` \(crate shop\): the record has no hash of it
+must_not_match: no changed definition
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+=== old build.rs
+fn main() {
+    let out = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 10 } }\n").unwrap();
+}
+=== new build.rs
+fn main() {
+    let out = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 12 } }\n").unwrap();
+}
+=== both src/lib.rs
+include!(concat!(env!("OUT_DIR"), "/mac.rs"));
+
+pub fn price() -> u32 {
+    rate!()
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  ! build code changed in this step; read this change first
+  ◆ f1 derived: build.rs: changed [build code]
+      ✗ spotlight: build script: this file is code of the build script of `shop`. Cargo runs it before each build of the package, and it can change the code and the result of the build; it needs a reason: --reason 'build.rs:=…'
+      diff:
+        @@ line 3 @@
+        -     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 10 } }\n").unwrap();
+        +     std::fs::write(format!("{out}/mac.rs"), "macro_rules! rate { () => { 12 } }\n").unwrap();
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `rate!()` at `shop::price/tail` (src/lib.rs:4): expansion changed: `macro rate` (crate shop): changed literal `10` → `12` at `expansion` [semantics]; the cause is not known: Semilla does not see the definition of `rate` (crate shop): the record has no hash of it
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  ! spotlight: build script: build.rs
+run again: semilla step 'the change' --reason 'build.rs:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'build.rs:=the reason of the test'
+◆ f1 derived: build.rs: changed [build code]
+    lines: build.rs:3, build.rs:-3

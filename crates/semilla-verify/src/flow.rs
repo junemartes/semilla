@@ -191,6 +191,10 @@ pub struct GraphPair {
     /// Each constant item that the two records read with a different value: the path, the old
     /// value, and the new value (design 64, part D).
     pub consts: Vec<(String, String, String)>,
+    /// R73.2-1: each static with interior mutability that the two records read with a different
+    /// initial value: the path, the old value, and the new value. The check reads such a static
+    /// from the world (R64.2), so the list gives a line and an affected body, not a result.
+    pub statics: Vec<(String, String, String)>,
 }
 
 /// The result of a body (design 60, B4).
@@ -686,6 +690,9 @@ struct BodyResult {
     outcomes: Vec<Outcome>,
     /// The constants that the body reads with a changed value (design 64, part D).
     consts: Vec<(String, String, String)>,
+    /// The statics with interior mutability that the body reads with a changed initial value
+    /// (R73.2-1).
+    statics: Vec<(String, String, String)>,
     /// R71.2-1: the graphs of the first result (its first configuration), for the moves of
     /// the points between the bodies of one item.
     first: Option<FirstGraphs>,
@@ -1049,7 +1056,7 @@ fn works(outcome: &crate::StepOutcome, index: &crate::checks::BodyIndex, map: &m
                 for at in 0..x.len().max(y.len()) {
                     let old = x.get(at).map_or(FlowSide::NoBody, |side| (*side).clone());
                     let new = y.get(at).map_or(FlowSide::NoBody, |side| (*side).clone());
-                    found.push(GraphPair { config: config.clone(), same: false, old, new, consts: Vec::new() });
+                    found.push(GraphPair { config: config.clone(), same: false, old, new, consts: Vec::new(), statics: Vec::new() });
                 }
             }
             found
@@ -1255,16 +1262,30 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
                 }
             }
         }
+        // R73.2-1: the statics with interior mutability that the body reads with a changed
+        // initial value.
+        let mut statics: Vec<(String, String, String)> = Vec::new();
+        for pair in &body.graphs {
+            for found in &pair.statics {
+                if !statics.contains(found) {
+                    statics.push(found.clone());
+                }
+            }
+        }
         // A body with no edit and the same graph needs no line (design 60, B6), except a body
-        // that reads a changed constant: its result can change (R64.5-1).
-        if !edit && consts.is_empty() && outcomes.iter().all(|known| known.rank == FlowResult::Same) {
+        // that reads a changed constant: its result can change (R64.5-1), or a static whose
+        // initial value changes (R73.2-1).
+        let only_statics = !edit && consts.is_empty() && outcomes.iter().all(|known| known.rank == FlowResult::Same);
+        if only_statics && statics.is_empty() {
             continue;
         }
         outcomes.sort_by(|a, b| b.rank.cmp(&a.rank).then(b.configs.len().cmp(&a.configs.len())));
         // The pairs for the equivalence check (design 61): two records with a graph that is not
         // a coroutine graph.
         let mut pairs = Vec::new();
-        for pair in &body.graphs {
+        // A body whose only change is the initial value of a static that the check reads from
+        // the world gets no check: the line names the static (R73.2-1).
+        for pair in body.graphs.iter().filter(|_| !only_statics) {
             if let (FlowSide::Graph(old), FlowSide::Graph(new)) = (&pair.old, &pair.new)
                 && !old.coroutine
                 && !new.coroutine
@@ -1275,7 +1296,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         }
         let equal = matches!(&body.status, crate::BodyStatus::Equal { level, .. } if level == "n0") && consts.is_empty();
         let first = outcomes[0].configs.first().and_then(|config| firsts.get(config)).cloned();
-        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, first });
+        results.push(BodyResult { item: item.clone(), old_item: old_item.clone(), pairs, equal, name: body.name.clone(), shown: body.shown.clone(), place: body.place.clone(), edit, outcomes, consts, statics, first });
     }
     unit_moves(&mut results);
     let mut report = FlowReport::default();
@@ -1324,6 +1345,11 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
             if !unknown.is_empty() {
                 line.push_str(&format!("; {CANNOT_COMPARE}: {}", unknown.join(", ")));
             }
+        }
+        if !result.statics.is_empty() {
+            let shown = semilla_core::text::without_unique;
+            let list: Vec<String> = result.statics.iter().map(|(path, old, new)| format!("`{path}` ({})", semilla_core::budget::value_pair(&shown(old), &shown(new)))).collect();
+            line.push_str(&format!("; {STATIC_READ}: {} (the check reads the static from the world)", list.join(", ")));
         }
         let mut details = Vec::new();
         for known in &result.outcomes {
@@ -1385,7 +1411,7 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
     // the link "through". The MIR text of a reader of a static names the static, not its value,
     // so the compare of the texts does not find it. The rule only adds a body to a list.
     for result in results.iter().filter(|result| !result.edit) {
-        for (path, _, _) in &result.consts {
+        for (path, _, _) in result.consts.iter().chain(&result.statics) {
             for fact in outcome.report.facts.iter_mut().filter(|fact| fact.part == "value" && fact.at.as_ref().is_some_and(|at| at.item == *path)) {
                 if !fact.affected.contains(&result.name) {
                     fact.affected.push(result.name.clone());
@@ -1411,6 +1437,10 @@ fn apply_graphs(input: &crate::StepInput, oracle: &dyn crate::BodyOracle, outcom
         crate::equiv::apply(input, oracle, outcome, &checks);
     }
 }
+
+/// The words of the line of a body that reads a static with interior mutability whose initial
+/// value changes (R73.2-1).
+pub const STATIC_READ: &str = "reads a static whose initial value changes";
 
 /// R71.2-1: the unit is the whole item. The bodies of one item (the body of the item and each
 /// body nested in it: a closure, a constant block, a coroutine) are one unit. A point that one

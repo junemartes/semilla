@@ -1,0 +1,71 @@
+note: batch 11e, test case 3: the initial value of a static with interior mutability (an atomic) changes; the check reads such a static from the world (R64.2), so its value is no constant of the record, but the reader `get` is on the edge of the read: it gets the line "reads a static whose initial value changes" and it is an affected body of the value fact; the reader of the static `TABLE` with no change and the body `other` get no line
+rule+: R73.2-1
+rule-: R73.2-1
+option: --compiled
+must_match: shop::get \(src/lib\.rs:6\): same graph; reads a static whose initial value changes: `shop::COUNT`
+must_match: affected bodies: shop::COUNT, shop::get
+must_not_match: shop::first \(|shop::other \(
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+use std::sync::atomic::{AtomicU32, Ordering};
+
+pub static COUNT: AtomicU32 = AtomicU32::new(5);
+pub static TABLE: [u32; 3] = [1, 2, 3];
+
+pub fn get() -> u32 {
+    COUNT.load(Ordering::Relaxed)
+}
+
+pub fn first() -> u32 {
+    TABLE[0]
+}
+
+pub fn other() -> u32 {
+    3
+}
+=== new src/lib.rs
+use std::sync::atomic::{AtomicU32, Ordering};
+
+pub static COUNT: AtomicU32 = AtomicU32::new(7);
+pub static TABLE: [u32; 3] = [1, 2, 3];
+
+pub fn get() -> u32 {
+    COUNT.load(Ordering::Relaxed)
+}
+
+pub fn first() -> u32 {
+    TABLE[0]
+}
+
+pub fn other() -> u32 {
+    3
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: value of, see f1 (f1)
+      in: shop::COUNT
+      lines: src/lib.rs:3, src/lib.rs:-3
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::COUNT=TEXT'; if it does not change, a `--same` fact (rename, move, or rewrite) that explains the edit
+  other facts, filled in by Semilla:
+  ◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different]
+      affected bodies: shop::COUNT, shop::get
+      through: `shop::COUNT` (1 body)
+      equivalence: not decided: a cast (Transmute)
+      ! public API: the compare does not cover the code of a different crate
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 2 bodies
+    shop::COUNT (src/lib.rs:3): same graph (the edit keeps the control flow); not decided (a cast (Transmute))
+    shop::get (src/lib.rs:6): same graph; reads a static whose initial value changes: `shop::COUNT` (value #563f4d6f415690de → value #d571420d51f3e1ba) (the check reads the static from the world)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: value of `shop::COUNT` changed: AtomicU32::new(5) → AtomicU32::new(7) (the public API can change: a different crate can use the item) [semantics · code different]
+    lines: src/lib.rs:3, src/lib.rs:-3

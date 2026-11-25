@@ -42,7 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: not decided: a coroutine value: { n + 1 } (src/lib.rs:-1)
   ◆ f2 derived: the compiled code of `depot::fetch` changes with no edit at its place: `{ n + 1 }` (before the step) [indirect · code different]
       affected bodies: depot::fetch
-      note: lines before the step 1
+      note: lines before the step 1; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   cover: each of the 3 changed line(s) is in a fact
   control flow: 2 bodies
     depot::fetch (src/lib.rs:1): same graph; not decided (a coroutine value: { n + 1 } (src/lib.rs:-1))

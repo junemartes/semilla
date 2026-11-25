@@ -17,10 +17,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use semilla_core::report::{ExpansionSite, Position};
+use semilla_core::report::ExpansionSite;
 use semilla_core::{Category, Step};
 use semilla_syntax::Workspace;
 
+use crate::inputs::{self, State};
 use crate::{ExprOracle, NoOracle, StepInput, StepOutcome};
 
 /// One macro call and its expanded code, in the form of the driver (R63.1-1).
@@ -292,56 +293,115 @@ fn definition_text(expansion: &Expansion) -> String {
     format!("`{word} {}` ({})", expansion.name, expansion.def)
 }
 
-/// The changed definitions of the chain of a call (R63.3-2): the facts of a changed macro
-/// definition whose name is the macro of the call or a macro that its code uses, at each depth.
-fn chain_owners(outcome: &StepOutcome, sides: [Option<&Expansion>; 2]) -> (Vec<usize>, Vec<(String, String)>) {
-    let mut names: BTreeSet<(String, String)> = BTreeSet::new();
-    for expansion in sides.into_iter().flatten() {
-        names.insert((expansion.name.clone(), expansion.def.clone()));
-        for [name, def] in &expansion.uses {
-            names.insert((name.clone(), def.clone()));
-        }
-    }
-    // R65.1-3: a proc macro of the workspace (an identity with the word `proc macro`) is a
-    // function of its crate: the fact of that function in the file of the definition owns the
-    // call.
-    let procs: BTreeSet<(String, String)> = sides
-        .into_iter()
-        .flatten()
-        .flat_map(|expansion| {
-            let mut all = vec![[expansion.name.clone(), expansion.def.clone()]];
-            all.extend(expansion.uses.iter().cloned());
-            all.into_iter().filter(|[name, def]| !def.starts_with("crate ") && expansion.ids.iter().any(|id| id.starts_with(&format!("{name}: proc macro ")))).map(|[name, def]| (name, def)).collect::<Vec<_>>()
-        })
-        .collect();
-    let mut facts = Vec::new();
-    let mut causes = Vec::new();
-    for (index, fact) in outcome.report.facts.iter().enumerate() {
-        let Some(item) = fact.at.as_ref().map(|at| at.item.as_str()) else { continue };
-        let short = item.rsplit("::").next().unwrap_or(item);
-        if let Some((name, def)) = procs.iter().find(|(name, def)| name.rsplit("::").next() == Some(short) && fact.file.as_deref().is_some_and(|file| def.starts_with(&format!("{file}:")))) {
-            facts.push(index);
-            let cause = (name.clone(), format!("`proc macro {name}` ({def})"));
-            if !causes.contains(&cause) {
-                causes.push(cause);
+/// The inputs of the chain of a changed call (R73.1-1, R73.2-1): the macro of the call and each
+/// macro that its code uses, at each depth (R63.9-4), on each side.
+#[derive(Default)]
+struct Chain {
+    /// The facts of the changed definitions, nearest first.
+    owners: Vec<usize>,
+    /// The macro and the text of each changed definition with an owner fact.
+    causes: Vec<(String, String)>,
+    /// The texts of the changed definitions that no fact of the step shows (a definition outside
+    /// the tree with a new identity).
+    known: Vec<String>,
+    /// The texts of the definitions that Semilla does not see (R73.3-1).
+    not_seen: Vec<String>,
+}
+
+/// R73.2-1: the definitions of the chain of a call as inputs. A definition in a file of the tree
+/// changes if the content hash of its file changes; its owner facts are the facts of the item at
+/// its place, else the facts of its file (a file that Semilla does not parse: a path dependency
+/// that is not a member). A proc macro is a function of its crate: with no fact at its place, the
+/// facts of each changed file of its package. A definition outside the tree has the identity of
+/// its record (R65.1-3): a package of a registry is the rule of R65.10-2; a path package outside
+/// the tree or a macro of the tool chain with a new identity is a known change with no fact (the
+/// tool chain: the facts of its configuration files); a definition with no identity is not seen.
+fn chain_inputs(input: &StepInput, outcome: &StepOutcome, sides: [Option<&Expansion>; 2], locks: &[Option<BTreeMap<String, BTreeSet<String>>>; 2]) -> Chain {
+    let trees = [input.before, input.after];
+    let facts = &outcome.report.facts;
+    let mut chain = Chain::default();
+    let identity = |expansion: Option<&Expansion>, name: &str| expansion.and_then(|e| e.ids.iter().find(|id| id.starts_with(&format!("{name}: "))).cloned());
+    let mut seen: BTreeSet<(usize, String, String)> = BTreeSet::new();
+    for (side, expansion) in sides.iter().enumerate() {
+        let Some(expansion) = expansion else { continue };
+        let mut all = vec![[expansion.name.clone(), expansion.def.clone()]];
+        all.extend(expansion.uses.iter().cloned());
+        for [name, def] in all {
+            if !seen.insert((side, name.clone(), def.clone())) {
+                continue;
             }
-            continue;
-        }
-        let Some(name) = short.strip_suffix('!') else { continue };
-        let Some((_, def)) = names.iter().find(|(known, def)| known == name && !def.starts_with("crate ")) else { continue };
-        // The fact must be the fact of a definition (a call has `!#N`), in the file of the
-        // definition.
-        let file = def.rsplit_once(':').map(|(file, _)| file).unwrap_or(def);
-        if fact.file.as_deref().is_some_and(|known| known != file) {
-            continue;
-        }
-        facts.push(index);
-        let cause = (name.to_string(), format!("`macro_rules! {name}` ({def})"));
-        if !causes.contains(&cause) {
-            causes.push(cause);
+            let proc = identity(Some(expansion), &name).is_some_and(|id| id.starts_with(&format!("{name}: proc macro ")));
+            if let Some((file, line)) = inputs::place_of(&def) {
+                match inputs::file_state(trees, file) {
+                    State::Same => continue,
+                    State::NotSeen(text) => {
+                        chain.not_seen.push(text);
+                        continue;
+                    }
+                    State::Changed => {}
+                }
+                let mut found = inputs::place_facts(facts, trees[side], side == 0, file, line);
+                if found.is_empty() && proc {
+                    for changed in inputs::changed_files(trees, &inputs::package_dir(trees, file).unwrap_or_default()) {
+                        inputs::extend(&mut found, inputs::file_facts(facts, &changed));
+                    }
+                }
+                if found.is_empty() {
+                    continue;
+                }
+                inputs::extend(&mut chain.owners, found);
+                let word = if proc { "proc macro" } else { "macro_rules!" };
+                let cause = (name.clone(), format!("`{word} {name}` ({def})"));
+                if !chain.causes.contains(&cause) {
+                    chain.causes.push(cause);
+                }
+                continue;
+            }
+            let Some(krate) = def.strip_prefix("crate ") else {
+                chain.not_seen.push(format!("the definition of `{name}` ({def})"));
+                continue;
+            };
+            let kind = inputs::outside_kind(locks, krate);
+            if kind == Some(inputs::Outside::Registry) {
+                // R65.10-2: the entry of the package in `Cargo.lock` is the identity.
+                continue;
+            }
+            // R73.1-1: an identity is a hash of the definition or of its crate (`macro of crate X
+            // (definition H)`, `proc macro of crate X H`). A text with no hash (a macro of this
+            // crate in a file that the build makes) is no identity.
+            let hashed = |id: Option<String>| id.filter(|id| id.contains(" of crate "));
+            let (old, new) = (hashed(identity(sides[0], &name)), hashed(identity(sides[1], &name)));
+            match (old, new) {
+                (Some(a), Some(b)) if a == b => {}
+                (Some(_), Some(_)) => {
+                    let tool = if kind == Some(inputs::Outside::ToolChain) { inputs::tool_facts(facts) } else { Vec::new() };
+                    if tool.is_empty() {
+                        let place = if kind == Some(inputs::Outside::Path) { "a path package outside the tree" } else { "outside the tree" };
+                        let text = format!("the definition of `{name}` ({def}, {place}) has a new identity");
+                        if !chain.known.contains(&text) {
+                            chain.known.push(text);
+                        }
+                    } else {
+                        inputs::extend(&mut chain.owners, tool);
+                        let cause = (name.clone(), format!("the tool chain (`{name}`, {def})"));
+                        if !chain.causes.contains(&cause) {
+                            chain.causes.push(cause);
+                        }
+                    }
+                }
+                // A macro of the chain of one side only: the other inputs of the call explain
+                // the new chain.
+                (Some(_), None) | (None, Some(_)) => {}
+                (None, None) => {
+                    let text = format!("the definition of `{name}` ({def}): the record has no hash of it");
+                    if !chain.not_seen.contains(&text) {
+                        chain.not_seen.push(text);
+                    }
+                }
+            }
         }
     }
-    (facts, causes)
+    chain
 }
 
 /// The facts with an edit in the input of a call on either side, in the order of the facts.
@@ -352,7 +412,7 @@ fn input_facts(input: &StepInput, outcome: &StepOutcome, site: &Site) -> Vec<usi
         let ws = if side == 0 { input.before } else { input.after };
         let (file, start, end) = input_lines(ws, expansion, site.at[side].as_ref());
         for (index, fact) in outcome.report.facts.iter().enumerate() {
-            if holds(&fact.positions, side == 0, &file, start, end) && !found.contains(&index) {
+            if inputs::holds(&fact.positions, side == 0, &file, start, end) && !found.contains(&index) {
                 found.push(index);
             }
         }
@@ -370,10 +430,6 @@ fn input_lines(ws: &Workspace, expansion: &Expansion, at: Option<&semilla_core::
         return (item.file.clone(), item.line_start, item.line_end);
     }
     (expansion.file.clone(), expansion.line, expansion.end_line.max(expansion.line))
-}
-
-fn holds(positions: &[Position], old: bool, file: &str, start: usize, end: usize) -> bool {
-    positions.iter().any(|position| position.file == file && position.old == old && position.start <= end && start <= position.end)
 }
 
 /// A small line diff of two texts (R63.5-1): `  ` for an equal line, `- ` for a line of the
@@ -508,13 +564,18 @@ fn pair_sites<'a>(units: [&'a [ExpansionUnit]; 2], trees: [&Workspace; 2], map: 
 /// the macros of its chain, and the files that its code reads.
 #[derive(Clone, Debug, Default)]
 pub struct Link {
-    /// The item of the anchor of the call on each side (the old one with the rename map).
+    /// The item of the anchor of the call on each side and the items that its code makes (the
+    /// old ones with the rename map).
     pub items: BTreeSet<String>,
-    /// The names of the macros of the chain on the two sides (the macro of the call and each
-    /// macro that its code uses).
-    pub chain: BTreeSet<String>,
+    /// The definition places of the macros of the chain in the tree, on each side (the macro of
+    /// the call and each macro that its code uses): the side (0 for the old tree), the file, the
+    /// line, and true for a proc macro (R73.2-1).
+    pub defs: BTreeSet<(usize, String, usize, bool)>,
     /// The files that the code of the call reads on the two sides.
     pub reads: BTreeSet<String>,
+    /// The lines of the item that holds the call on each side: the side, the file, the first
+    /// and the last line (R73.2-1: a body inside them has the expansion as an input).
+    pub ranges: BTreeSet<(usize, String, usize, usize)>,
 }
 
 /// The changed expansions of a step (R63.9-5), for the owner pass: only a pair of two calls
@@ -535,11 +596,23 @@ pub fn links(step: &Step, trees: [&Workspace; 2], bodies: &dyn crate::BodyOracle
         for (side, at) in site.at.iter().enumerate() {
             if let Some(at) = at {
                 link.items.insert(if side == 0 { map(&at.item) } else { at.item.clone() });
+                if let Some(item) = trees[side].items.get(&at.item) {
+                    link.ranges.insert((side, item.file.clone(), item.line_start, item.line_end));
+                }
             }
         }
-        for expansion in [old, new] {
-            link.chain.insert(expansion.name.clone());
-            link.chain.extend(expansion.uses.iter().map(|[name, _]| name.clone()));
+        for (side, expansion) in [old, new].into_iter().enumerate() {
+            // R73.2-1: the items that the code of the call makes are on the edge of the call too
+            // (a body that a call makes, also when the step has no list of the made sites).
+            link.items.extend(expansion.items.iter().map(|item| if side == 0 { map(item) } else { item.clone() }));
+            let mut all = vec![[expansion.name.clone(), expansion.def.clone()]];
+            all.extend(expansion.uses.iter().cloned());
+            for [name, def] in all {
+                if let Some((file, line)) = inputs::place_of(&def) {
+                    let proc = expansion.ids.iter().any(|id| id.starts_with(&format!("{name}: proc macro ")));
+                    link.defs.insert((side, file.to_string(), line, proc));
+                }
+            }
             link.reads.extend(expansion.reads.iter().cloned());
         }
         out.push(link);
@@ -564,6 +637,9 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
     let mut flow = outcome.report.flow.take().unwrap_or_default();
     // R65.10-1: the identity of each package of a registry or of git in `Cargo.lock`.
     let locks = [lock_identities(input.before), lock_identities(input.after)];
+    // R73.1-1: each entry of `Cargo.lock`, also a path package, for the kind of a crate outside
+    // the tree.
+    let entries = [inputs::lock_entries(input.before), inputs::lock_entries(input.after)];
     let dependency = |expansion: &Expansion| dependency_change(expansion, &locks);
     let lock_facts = |facts: &[semilla_core::report::Fact], name: &str| -> Vec<usize> { facts.iter().enumerate().filter(|(_, fact)| lock_fact_names(fact, name)).map(|(index, _)| index).collect() };
     // R65.10-2: the equal calls of each macro of a package whose identity changes: one count line
@@ -594,8 +670,10 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         // by the place. Such a line goes under no fact: the step section has one line for the
         // calls of the macro.
         let names = [0, 1].map(|side| site.at[side].as_ref().map(|at| at.item.rsplit("::").next().unwrap_or(&at.item).to_string()).unwrap_or_default());
+        // R73.2-1: the definitions of the chain as inputs, for a changed call.
+        let chain = if site.old.is_some() && site.new.is_some() { chain_inputs(input, outcome, [site.old, site.new], &entries) } else { Chain::default() };
         let moved = match (site.old, site.new) {
-            (Some(old), Some(new)) if chain_owners(outcome, [site.old, site.new]).0.is_empty() && (input_facts(input, outcome, site).is_empty() || moves_with_call(old, new, &names)) => context_only(old, new),
+            (Some(old), Some(new)) if chain.owners.is_empty() && chain.known.is_empty() && (input_facts(input, outcome, site).is_empty() || moves_with_call(old, new, &names)) => context_only(old, new),
             _ => None,
         };
         let (result, facts) = match (site.old, site.new) {
@@ -638,13 +716,15 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         let at = site.at[side].as_ref().map(|at| at.to_string()).unwrap_or_else(|| format!("{} (no item)", any.module));
         // R63.9-3: a call with no place in a file of the workspace says so.
         let place = if any.file.is_empty() { NO_PLACE.to_string() } else { format!("{}:{}{}", any.file, if side == 0 { "-" } else { "" }, any.line) };
-        // A changed definition owns a changed expansion; an added or a removed call belongs to
-        // the edit of the call.
-        let (mut owners, mut causes) = if site.old.is_some() && site.new.is_some() { chain_owners(outcome, [site.old, site.new]) } else { (Vec::new(), Vec::new()) };
-        owners.sort();
+        // R73.2-1: the owner of the line is the set of the changed inputs that reach it, with the
+        // nearest facts of each one: the definitions of the chain (a changed definition owns a
+        // changed expansion; an added or a removed call belongs to the edit of the call), the
+        // input of the call, and the files that its code reads.
+        let Chain { mut owners, causes, known, mut not_seen } = chain;
         // R65.10-2: a changed expansion of a macro of a package whose identity changes in
         // `Cargo.lock` (a new version, source, or checksum): the fact of the package owns it, as a
         // changed definition of the chain.
+        let mut causes = causes;
         if let (Some(_), Some(new)) = (site.old, site.new)
             && let Some((name, Some(change))) = dependency(new)
         {
@@ -656,14 +736,18 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
         }
         // R63.9-4: a changed definition of a call in the input of this call: the cause names
         // that call (`mkfn!(made, add!(4; 5))` changes through `add!(4; 5)`).
-        let causes: Vec<String> = causes.into_iter().map(|(name, cause)| match inner_call(&sites, site, &name) {
+        let mut causes: Vec<String> = causes.into_iter().map(|(name, cause)| match inner_call(&sites, site, &name) {
             Some(call) if name != any.name => format!("{cause} through the inner call `{call}`"),
             _ => cause,
         }).collect();
+        causes.extend(known);
         // The facts with an edit in the input of the call. A call that only moves (R71.1-3) has
-        // no owner of its input.
+        // no owner of its input. A call with no place has an input that Semilla does not see.
         let input_owners: Vec<usize> = if moved.is_some() { Vec::new() } else { input_facts(input, outcome, site).into_iter().filter(|index| !owners.contains(index)).collect() };
-        let mut cause = causes.iter().map(|cause| format!("from {cause}")).collect::<Vec<_>>().join(", ");
+        if any.file.is_empty() {
+            not_seen.push(format!("the input of the call (its tokens come from a macro with no record: `{}`)", any.via));
+        }
+        let mut cause = causes.iter().map(|cause| if cause.starts_with("the definition of ") { cause.clone() } else { format!("from {cause}") }).collect::<Vec<_>>().join(", ");
         if !input_owners.is_empty() {
             let word = match result {
                 "expansion added" => "the step adds the call or its input",
@@ -673,29 +757,46 @@ pub(crate) fn apply(input: &StepInput, bodies: &dyn crate::BodyOracle, exprs: &d
             cause = if cause.is_empty() { word.to_string() } else { format!("{cause}; {word}") };
         }
         owners.extend(input_owners);
-        // R63.9-6: a changed file that the code of the call reads (`include_bytes!`) is a cause:
-        // the fact of the file owns the expansion.
-        if owners.is_empty() {
+        // R63.9-6, R73.1-1: a file that the code of the call reads (`include_str!`,
+        // `include_bytes!`, `include!`) is an input: a changed file owns the expansion with the
+        // facts of the file. A file outside the tree is an input that Semilla does not see.
+        {
             let reads: BTreeSet<&String> = [site.old, site.new].iter().flatten().flat_map(|e| e.reads.iter()).collect();
-            for (index, fact) in outcome.report.facts.iter().enumerate() {
-                if fact.at.is_none() && fact.part != "indirect change" && fact.file.as_ref().is_some_and(|file| reads.contains(file)) {
-                    owners.push(index);
-                    let text = format!("the code of the call reads `{}`, which the step changes", fact.file.as_deref().unwrap_or(""));
-                    cause = if cause.is_empty() { text } else { format!("{cause}; {text}") };
+            for file in reads {
+                match inputs::file_state([input.before, input.after], file) {
+                    State::Changed => {
+                        let found: Vec<usize> = inputs::file_facts(&outcome.report.facts, file).into_iter().filter(|index| !owners.contains(index)).collect();
+                        if !found.is_empty() {
+                            inputs::extend(&mut owners, found);
+                            let text = format!("the code of the call reads `{file}`, which the step changes");
+                            cause = if cause.is_empty() { text } else { format!("{cause}; {text}") };
+                        }
+                    }
+                    State::NotSeen(text) => not_seen.push(text),
+                    State::Same => {}
                 }
             }
         }
-        // No changed definition, no changed input, and no changed file that the code reads (a
-        // change of a dependency, a call that moves): only an indirect fact of the body that
-        // holds the call owns it (R63.9-7). Each other fact of that body has a different cause.
+        // No owner fact (a definition outside the tree with a new identity, a call that moves,
+        // or no changed input): only an indirect fact of the body that holds the call owns the
+        // line (R63.9-7). Each other fact of that body has a different cause. R73.3-1: the
+        // negative sentence shows only with full data; else the cause is not known.
         if owners.is_empty() {
             let holder = site.at[1].as_ref().or(site.at[0].as_ref()).map(|at| at.item.clone()).unwrap_or_default();
             owners.extend(outcome.report.facts.iter().enumerate().filter(|(_, fact)| !holder.is_empty() && fact.part == "indirect change" && fact.affected.contains(&holder)).map(|(index, _)| index));
-            cause = if moved.is_some() {
-                "the context of the call changes".to_string()
-            } else {
-                "no changed definition, no changed input of the call, and no changed file that its code reads".to_string()
-            };
+            if moved.is_some() {
+                cause = "the context of the call changes".to_string();
+            } else if cause.is_empty() {
+                // R73.3-1: the text of the call is an input too. A call of one side only, or two
+                // call texts that differ, is a changed input with no fact at its place (a pair of
+                // two different calls): never the negative sentence.
+                cause = match (site.old, site.new) {
+                    (None, Some(_)) => "the call is only in the tree after the step, and no fact has its place".to_string(),
+                    (Some(_), None) => "the call is only in the tree before the step, and no fact has its place".to_string(),
+                    (Some(old), Some(new)) if old.call != new.call => format!("the text of the call changes ({}), and no fact has its place", changed_text(&old.call, &new.call)),
+                    _ => inputs::no_owner_cause(&not_seen, NO_CHANGED_INPUT),
+                };
+            }
         }
         let configs = if site.configs.len() == all_configs.len() { Vec::new() } else { site.configs.clone() };
         let shown_call = shown(any);
@@ -875,16 +976,11 @@ fn large_text(old: &Expansion, new: &Expansion) -> String {
 /// the checksum. `None`: the tree has no readable `Cargo.lock`. A package with no source is a
 /// package of the workspace or a path: its code is in the tree, so its facts show its changes.
 fn lock_identities(ws: &Workspace) -> Option<BTreeMap<String, BTreeSet<String>>> {
-    let text = ws.other_files.get("Cargo.lock")?;
-    let table = text.parse::<toml::Table>().ok()?;
-    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for package in table.get("package").and_then(|value| value.as_array()).into_iter().flatten() {
-        let field = |name: &str| package.get(name).and_then(|value| value.as_str()).unwrap_or("").to_string();
-        if field("source").is_empty() {
-            continue;
-        }
-        out.entry(field("name").replace('-', "_")).or_default().insert(format!("{} {} {}", field("version"), field("source"), field("checksum")));
+    let mut out = inputs::lock_entries(ws)?;
+    for entries in out.values_mut() {
+        entries.retain(|entry| !entry.starts_with("path "));
     }
+    out.retain(|_, entries| !entries.is_empty());
     Some(out)
 }
 
@@ -1023,6 +1119,10 @@ pub const NOT_KNOWN_RESULT: &str = "expansion not known";
 fn not_known(expansion: &Expansion) -> Vec<String> {
     semilla_core::text::unknown_causes(&expansion.text)
 }
+
+/// The negative sentence of a changed expansion with full data and no changed input (R63.9-7,
+/// R73.3-1).
+pub const NO_CHANGED_INPUT: &str = "no changed definition, no changed input of the call, and no changed file that its code reads";
 
 /// The place text of a call with no place in a file of the workspace (R63.9-3).
 pub const NO_PLACE: &str = "no place: the tokens of the call are not in a file of the workspace";
@@ -1458,6 +1558,50 @@ mod tests {
         assert!(!owner.0.starts_with("Cargo.lock"), "{facts:?}");
         assert!(owner.1.iter().any(|line| line.contains("`depot::m!(3)`") && line.contains("expansion changed: changed literal `1` → `3`")), "{facts:?}");
         assert!(facts.iter().flat_map(|(_, lines)| lines).all(|line| !line.contains("stay")), "{facts:?}");
+    }
+
+    /// The step section of a changed call of `m!` whose definition is `def`, with the identity
+    /// `ids` on each side (R73.1-1, R73.3-1). The lock file and the input do not change.
+    fn identity_sites(def: &str, ids: [&[&str]; 2]) -> Vec<ExpansionSite> {
+        let ((_a, before), (_b, after)) = (dependency_tree(&lock("1.0.0"), "1"), dependency_tree(&lock("1.0.0"), "1"));
+        let step = Step { index: 0, intent: "code".into(), claims: Vec::new(), tree_before: "a".into(), tree_after: "b".into(), reasons: Default::default(), compiled: false, build_check: None, agent: Default::default(), tags: Vec::new() };
+        let units = |text: &str, ids: &[&str]| {
+            let mut units = dependency_units("depot::m!(1)", text);
+            units[0].list[0].def = def.to_string();
+            units[0].list[0].ids = ids.iter().map(|id| id.to_string()).collect();
+            units
+        };
+        let oracle = Records([units("1 + 100", ids[0]), units("1 + 101", ids[1])]);
+        let outcome = crate::verify_step_with(&StepInput { step: &step, before: &before, after: &after }, &oracle, &NoOracle, true);
+        outcome.report.flow.unwrap_or_default().expansions
+    }
+
+    // R73.3-1, R73.1-1: the negative sentence shows only when Semilla has the hash of each input
+    // of the call. A path package outside the tree (`shop` has no source in `Cargo.lock`) with an
+    // equal hashed identity is seen; with no identity, or with an identity that is not a hash, the
+    // cause is not known; a new hash is a known change with no fact.
+    // rule- R73.3-1
+    // rule- R73.1-1
+    #[test]
+    fn a_negative_sentence_needs_the_hash_of_each_input() {
+        let cause = |def: &str, ids: [&[&str]; 2]| identity_sites(def, ids).into_iter().find(|site| site.result == "expansion changed").map(|site| site.cause).unwrap_or_default();
+        let hash = "m: macro of crate shop (definition 00000000000000ab)";
+        assert_eq!(cause("crate shop", [&[hash], &[hash]]), NO_CHANGED_INPUT);
+        // A registry package with the same entry in `Cargo.lock`: the entry is the identity.
+        assert_eq!(cause("crate depot", [&[], &[]]), NO_CHANGED_INPUT);
+        let not_known = cause("crate shop", [&[], &[]]);
+        assert!(not_known.starts_with("the cause is not known: Semilla does not see the definition of `m` (crate shop)"), "{not_known}");
+        let no_hash = "m: a macro of this crate that is not `macro_rules!`";
+        assert!(cause("crate shop", [&[no_hash], &[no_hash]]).starts_with(inputs::NOT_KNOWN));
+        let new = cause("crate shop", [&[hash], &["m: macro of crate shop (definition 00000000000000cd)"]]);
+        assert!(new.contains("the definition of `m` (crate shop, a path package outside the tree) has a new identity"), "{new}");
+        // The text of the call is an input too: two call texts that differ with no fact at the
+        // place of the call (a pair of two different calls) are a changed input.
+        let (_, sites) = dependency_outcome(("1.0.0", "1", "depot::m!(1)", "1 + 100"), ("1.0.0", "1", "depot::m!(2)", "2 + 100"));
+        let changed = sites.iter().find(|site| site.result == "expansion changed").map(|site| site.cause.clone()).unwrap_or_default();
+        assert!(changed.starts_with("the text of the call changes (") && changed.ends_with("), and no fact has its place"), "{changed}");
+        // A definition in a file that no tree of the step has is not seen either.
+        assert!(cause("gen/mac.rs:1", [&[], &[]]).starts_with("the cause is not known: Semilla does not see the file `gen/mac.rs`, which no tree of the step has"));
     }
 
     // rule+ R71.1-1

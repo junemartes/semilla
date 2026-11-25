@@ -1,6 +1,6 @@
 note: batch 10c2: a new comment line moves the calls of a macro whose code has the line of the call; no fact has a cause, so the indirect fact of each body keeps its spotlight and gets the line, and the line says that only the place of the call changes; the call with a changed input has the facts of its compare
 rule+: R63.9-7 R63.9-8
-rule-: R63.9-5 R63.9-8
+rule-: R73.2-1 R63.9-8
 must_match: the compiled code of `shop::one` changes with no edit at its place
 must_match: `here!\(1\)` at `shop::one/tail` \(src/lib\.rs:8\): expansion changed: only the context of the call changes: the line of the call
 must_match: `here!\(3\)` at `shop::two/tail` \(src/lib\.rs:12\): expansion changed: changed literal

@@ -354,6 +354,16 @@ pub fn plain_static(def: &rustc_public::mir::mono::StaticDef) -> bool {
     })
 }
 
+/// R73.2-1: a static with interior mutability (a `Sync` cell, an atomic): not `mut`, not foreign,
+/// not a thread local, and not `Freeze`. Its initial value is an input of each body that reads it,
+/// and the check reads its value from the world (R64.2).
+pub fn shared_static(def: &rustc_public::mir::mono::StaticDef) -> bool {
+    rustc_middle::ty::tls::with(|tcx| {
+        let id = rustc_public::rustc_internal::internal(tcx, def.def_id());
+        !tcx.is_mutable_static(id) && !tcx.is_foreign_item(id) && !tcx.is_thread_local_static(id) && !tcx.type_of(id).instantiate_identity().skip_norm_wip().is_freeze(tcx, rustc_middle::ty::TypingEnv::fully_monomorphized())
+    })
+}
+
 /// A deref of a raw pointer in a place gives `w`.
 fn place_parts(body: &Body, place: &Place, found: &mut IrEff) {
     let Some(decl) = body.locals().get(place.local) else {

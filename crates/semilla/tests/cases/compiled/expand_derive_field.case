@@ -1,5 +1,5 @@
 note: defect 3 of batch 10c: an added field changes the derived bodies; the field fact has a line for each changed derive; the unchanged type has none
-rule+: R63.3-8 R63.3-3
+rule+: R63.3-8 R73.2-1
 rule-: R63.3-8
 option: --compiled
 === both Cargo.toml

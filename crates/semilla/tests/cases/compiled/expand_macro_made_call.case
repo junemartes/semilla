@@ -1,5 +1,5 @@
 note: batch 10c2, item 2: a macro that defines a macro; the call `make!{@inner …}` that the made macro makes has the place of the call in the source that starts the chain
-rule+: R63.9-3 R63.9-5
+rule+: R63.9-3 R73.2-1
 must_match: `make!\{@inner \$name \(\$d\) => \( \$d\(\$d x\),\* \) \}` from `sum!\(1, 2\)` at `depot::total/tail` \(src/lib\.rs:12\)
 must_not_match: no item
 must_not_match: indirect change

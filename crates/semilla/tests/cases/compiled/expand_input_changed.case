@@ -1,6 +1,6 @@
 note: a changed macro input owns the change of its own expansion; a changed macro that the call does not use owns nothing
-rule+: R63.3-3
-rule-: R63.3-4 R63.3-3
+rule+: R73.2-1
+rule-: R73.2-1
 option: --compiled
 === both Cargo.toml
 [package]
