@@ -173,6 +173,10 @@ pub struct BodyRecord {
     /// 61, A2; only at N0).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cv: Vec<(String, String)>,
+    /// The initial value of each static with interior mutability that the body reads: the path
+    /// and the value (R73.2-1; only at N0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sv: Vec<(String, String)>,
     /// The instances of the generic bodies that this body makes (design 61, part B; only at N0).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inst: Vec<InstanceUse>,

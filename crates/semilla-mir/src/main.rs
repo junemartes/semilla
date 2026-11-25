@@ -259,6 +259,10 @@ struct BodyRecord {
     /// The values of the constant items that the body reads (design 61, A2). At n0 only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     cv: Vec<(String, String)>,
+    /// The initial value of each static with interior mutability that the body reads (R73.2-1).
+    /// At n0 only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sv: Vec<(String, String)>,
     /// The instances of the generic bodies that this body makes (design 61, part B). At n0
     /// only, for a body with no generic parameter.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -917,6 +921,7 @@ fn add_forms(found: &mut BodyRecord, item: CrateItem, body: &Body) {
     }
     found.q = serde_json::to_string(&form).ok();
     found.cv = guarded(|| ir::const_values(item)).unwrap_or_default();
+    found.sv = guarded(|| ir::static_initials(item)).unwrap_or_default();
     if !item.requires_monomorphization() {
         found.inst = guarded(|| instances::of(body)).unwrap_or_default();
     }
@@ -1036,6 +1041,7 @@ fn failed_record(name: String, level: Level, target: &str) -> BodyRecord {
         q: None,
         qx: None,
         cv: Vec::new(),
+        sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
     }
@@ -1192,6 +1198,7 @@ fn record(
         q: None,
         qx: None,
         cv: Vec::new(),
+        sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
     }

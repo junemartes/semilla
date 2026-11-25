@@ -67,7 +67,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: different: for x = 10: before returns 14, after panics (`core::panicking::todo_default_msg`)
   ◆ f5 derived: the compiled code of `shop::b` changes with no edit at its place: `x ^ y` [indirect · code different]
       affected bodies: shop::b
-      note: lines 2
+      note: lines 2; the cause: the edit of this body at src/lib.rs:2 (the step changes no other input of the body)
   cover: each of the 8 changed line(s) is in a fact
   control flow: 4 bodies
     shop::a (src/lib.rs:1): graph changes: +1 branch, +1 panic, +3 arrows, −1 arrow; different (for x = 10: before returns 11, after panics (`std::rt::panic_fmt` with the message "too big"))

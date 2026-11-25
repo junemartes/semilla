@@ -1092,6 +1092,59 @@ pub fn std_callees(ir: &Ir, body: &Body) -> BTreeMap<String, Ir> {
     found
 }
 
+/// R73.2-1: the initial value of each static with interior mutability that a body reads (an
+/// atomic, a cell): the path and the value of its initializer. The check reads such a static from
+/// the world (R64.2), so the value is not a constant value of the record (`cv`): it only gives the
+/// line of the reader. A static of the standard library is not a part of a step.
+pub fn static_initials(item: rustc_public::CrateItem) -> Vec<(String, String)> {
+    let Some(body) = item.body() else { return Vec::new() };
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut add = |constant: &rustc_public::ty::MirConst| {
+        let ConstantKind::Allocated(alloc) = constant.kind() else { return };
+        for (_, provenance) in &alloc.provenance.ptrs {
+            if let rustc_public::mir::alloc::GlobalAlloc::Static(def) = rustc_public::mir::alloc::GlobalAlloc::from(provenance.0)
+                && crate::effects::shared_static(&def)
+                && !crate::reach::is_std(&def.krate().name)
+            {
+                let entry = (def.name(), crate::consts::static_value(&def));
+                if !found.contains(&entry) {
+                    found.push(entry);
+                }
+            }
+        }
+    };
+    for block in &body.blocks {
+        for statement in &block.statements {
+            if let StatementKind::Assign(_, value) = &statement.kind {
+                let operands: Vec<&Operand> = match value {
+                    Rvalue::Use(operand, _) | Rvalue::UnaryOp(_, operand) | Rvalue::Cast(_, operand, _) => vec![operand],
+                    Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => vec![a, b],
+                    Rvalue::Aggregate(_, list) => list.iter().collect(),
+                    _ => Vec::new(),
+                };
+                for operand in operands {
+                    if let Operand::Constant(constant) = operand {
+                        add(&constant.const_);
+                    }
+                }
+            }
+        }
+        let operands: Vec<&Operand> = match &block.terminator.kind {
+            TerminatorKind::SwitchInt { discr, .. } => vec![discr],
+            TerminatorKind::Call { args, .. } => args.iter().collect(),
+            TerminatorKind::Assert { cond, .. } => vec![cond],
+            _ => Vec::new(),
+        };
+        for operand in operands {
+            if let Operand::Constant(constant) = operand {
+                add(&constant.const_);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// The values of the constant items and the associated constants that a body reads (design 61,
 /// A2): the path and the value, from the body with its generic parameters (an instance body has
 /// the values in place of the paths).

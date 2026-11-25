@@ -1,0 +1,39 @@
+note: batch 11e, test case 7: the code that `include!` reads in the input of a macro call; the compiler gives the included tokens the span of the included file and no mark of the expansion, so the driver adds the file to the read files of the record; its file fact owns the changed expansion; before, the line said "no changed definition, no changed input of the call, and no changed file that its code reads"
+rule+: R73.1-1
+build_check: on
+must_match: ◆ f1 derived: src/rate\.in: changed \[file\]\n      expansion: `mkfn!\(rate, include!\("rate\.in"\)\)`
+must_match: the code of the call reads `src/rate\.in`, which the step changes
+must_not_match: no changed definition
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! mkfn { ($n:ident, $v:expr) => { pub fn $n() -> u32 { $v } } }
+
+mkfn!(rate, include!("rate.in"));
+mkfn!(plain, 4 + 5);
+=== old src/rate.in
+10
+=== new src/rate.in
+12
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: src/rate.in: changed [file]
+      expansion: `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: changed literal `10` → `12` at `shop::rate/tail` [semantics]
+      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/rate.in:=…'
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed, 1 equal
+    `mkfn!(rate, include!("rate.in"))` at `shop::mkfn!#0` (src/lib.rs:3): expansion changed: `macro_rules! mkfn` (src/lib.rs:1): changed literal `10` → `12` at `shop::rate/tail` [semantics]; the code of the call reads `src/rate.in`, which the step changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'src/rate.in:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/rate.in:=the reason of the test'
+◆ f1 derived: src/rate.in: changed [file]
+    lines: src/rate.in:1, src/rate.in:-1

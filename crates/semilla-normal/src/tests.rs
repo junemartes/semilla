@@ -34,6 +34,7 @@ fn record(name: &str, level: &str, text: &str, callees: &[&str]) -> BodyRecord {
         q: None,
         qx: None,
         cv: Vec::new(),
+        sv: Vec::new(),
         inst: Vec::new(),
         dyn_casts: Vec::new(),
         unit: String::new(),

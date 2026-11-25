@@ -963,7 +963,7 @@ fn mir_diff(diff: semilla_normal::elements::ElementDiff) -> semilla_verify::MirD
 /// The graphs of a body in one configuration, in the form of the verifier (design 60). The
 /// sides keep their data also for two graphs with the same shape: the verifier pairs the nested
 /// bodies through the tree compare, not by their names (R60.3-9).
-fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair, consts: Vec<(String, String, String)>) -> semilla_verify::flow::GraphPair {
+fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair, consts: Vec<(String, String, String)>, statics: Vec<(String, String, String)>) -> semilla_verify::flow::GraphPair {
     use semilla_verify::flow::{FlowSide, GraphPair};
     let side = |exists: bool, graph: &Option<std::sync::Arc<semilla_normal::graph::RecordGraph>>, key: &Option<(String, String)>| match (exists, graph) {
         (false, _) => FlowSide::NoBody,
@@ -972,7 +972,7 @@ fn graph_pair(config: &str, pair: &semilla_normal::graph::GraphPair, consts: Vec
         (true, Some(graph)) => FlowSide::Graph(semilla_verify::flow::FlowGraph { key: key.clone(), ..flow_graph(graph) }),
     };
     let same = matches!((&pair.old, &pair.new), (Some(old), Some(new)) if old.same_shape(new));
-    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old, &pair.old_key), new: side(pair.new_body, &pair.new, &pair.new_key), consts }
+    GraphPair { config: config.to_string(), same, old: side(pair.old_body, &pair.old, &pair.old_key), new: side(pair.new_body, &pair.new, &pair.new_key), consts, statics }
 }
 
 /// The constant items that two records read with a different value (design 64, part D): the
@@ -1099,6 +1099,11 @@ fn merge_prepared(prepared: Vec<(SetState, BTreeMap<String, (String, usize)>)>, 
             // Only the constant values: the rest of a record is large.
             Some(levels.get("n0")?.get(index)?.cv.clone())
         };
+        // R73.2-1: the initial values of the statics with interior mutability.
+        let statics_of = |levels: &'_ BTreeMap<String, Vec<semilla_normal::BodyRecord>>, keys: &std::collections::HashMap<(String, String), usize>, key: &Option<(String, String)>| -> Option<Vec<(String, String)>> {
+            let index = *keys.get(key.as_ref()?)?;
+            Some(levels.get("n0")?.get(index)?.sv.clone())
+        };
         for comparison in &state.comparisons {
             let key = key_of(comparison);
             if key.1.is_none() && two_files.contains(&key.0) {
@@ -1107,7 +1112,8 @@ fn merge_prepared(prepared: Vec<(SetState, BTreeMap<String, (String, usize)>)>, 
             if !comparison.graphs.is_empty() {
                 graphs.entry(key.clone()).or_default().extend(comparison.graphs.iter().map(|pair| {
                     let consts = changed_consts(record_of(&state.sides.before, &before_keys, &pair.old_key).as_ref(), record_of(&state.sides.after, &after_keys, &pair.new_key).as_ref());
-                    graph_pair(&name, pair, consts)
+                    let statics = changed_consts(statics_of(&state.sides.before, &before_keys, &pair.old_key).as_ref(), statics_of(&state.sides.after, &after_keys, &pair.new_key).as_ref());
+                    graph_pair(&name, pair, consts, statics)
                 }));
             }
             if !comparison.config.is_empty() {

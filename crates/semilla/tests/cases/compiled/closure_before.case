@@ -45,7 +45,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       equivalence: `shop::total::{closure#1} |x| x.cost()`: equivalent (proved by SMT)
   ◆ f2 derived: the compiled code of `shop::total` changes with no edit at its place: `x` (before the step) [indirect · code different]
       affected bodies: shop::total
-      note: lines before the step 7
+      note: lines before the step 7; the cause: the edit of this body at src/lib.rs:7 (the step changes no other input of the body)
   cover: each of the 2 changed line(s) is in a fact
   control flow: 3 bodies
     shop::total (src/lib.rs:6): graph changes: +1 call, 2 changed call targets, +2 arrows, −1 arrow; not decided (the difference depends on the result of a call or on a value that the check does not model (only the changed callees and the small helpers of the standard library inlined))

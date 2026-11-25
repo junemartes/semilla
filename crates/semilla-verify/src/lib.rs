@@ -20,6 +20,7 @@ pub mod equiv;
 pub mod expand;
 pub mod facts;
 pub mod files;
+pub mod inputs;
 pub mod flow;
 pub mod hints;
 pub mod identity;

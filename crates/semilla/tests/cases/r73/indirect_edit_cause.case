@@ -1,0 +1,64 @@
+note: batch 11e, test case 9: in `price`, the edited `let k = n` gives `k` a new type, and the later call `scale(k)` resolves to a new instance; the element of the call has no exact cause, so it keeps its indirect fact at its own line, and the fact names the place of its owner: the step changes no other input of the body, so the edit of the body is the cause
+rule+: R73.2-1
+option: --compiled
+must_match: the compiled code of `shop::price` changes with no edit at its place: `scale\(k\)`
+must_match: the cause: the edit of this body at src/lib\.rs:6 \(the step changes no other input of the body\)
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn scale<T: Into<u64>>(k: T) -> u64 {
+    k.into() * 3
+}
+
+pub fn price(n: u32) -> u64 {
+    let k = n as u16;
+    let base = 7;
+    let s = scale(k);
+    let t = (0..base).map(|i| i + s).sum::<u64>();
+    s + t
+}
+=== new src/lib.rs
+pub fn scale<T: Into<u64>>(k: T) -> u64 {
+    k.into() * 3
+}
+
+pub fn price(n: u32) -> u64 {
+    let k = n;
+    let base = 7;
+    let s = scale(k);
+    let t = (0..base).map(|i| i + s).sum::<u64>();
+    s + t
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `n as u16` → `n` (f1)
+      in: shop::price
+      lines: src/lib.rs:6, src/lib.rs:-6
+      to state it: the check did not decide if the behavior changes: if it changes, --change 'shop::price=TEXT'; if it does not change, --same 'rewrite $a as u16 => n'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `n as u16` → `n` at `shop::price/S0/init` [semantics · code different]
+      affected bodies: shop::price
+      equivalence: `shop::price`: not decided: a value of a type that the check does not model
+      equivalence: `shop::price::{closure#0} |i| i + s`: equivalent (proved by equal MIR)
+  ◆ f2 derived: the compiled code of `shop::price` changes with no edit at its place: `scale(k)` [indirect · code different]
+      affected bodies: shop::price
+      note: lines 8; the cause: the edit of this body at src/lib.rs:6 (the step changes no other input of the body)
+  cover: each of the 2 changed line(s) is in a fact
+  control flow: 3 bodies
+    shop::price (src/lib.rs:5): same structure: 1 changed call target; not decided (a value of a type that the check does not model)
+    shop::price::{closure#0} |i| i + s (src/lib.rs:9): same graph (the edit keeps the control flow); equivalent (proved by equal MIR)
+    shop::scale (no place): instance scale::<u32>: call `<T as std::convert::Into<u64>>::into` resolves to `<u32 as std::convert::Into<u64>>::into` (before: the instance scale::<u16>)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed expression `n as u16` → `n` at `shop::price/S0/init` [semantics · code different]
+    lines: src/lib.rs:6, src/lib.rs:-6
+◆ f2 derived: the compiled code of `shop::price` changes with no edit at its place: `scale(k)` [indirect · code different]
+    no position

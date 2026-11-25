@@ -1,0 +1,49 @@
+note: batch 11e, R73.1-1: the code of `load!()` loads the module file `src/float.rs` (no mark of the expansion on its tokens), so the file is a read file of the record of `load!()`; the call of `here!()` inside that file has its own source call in the file, so the file is not a read file of its record: the call only moves, and its line keeps the cause "the context of the call changes"
+rule+: R73.1-1
+rule-: R73.1-1
+build_check: on
+must_match: the code of the call reads `src/float\.rs`, which the step changes
+must_match: `here!\(\)` at `float \(no item\)` \(src/float\.rs:6\): expansion changed: `macro_rules! here` \(src/lib\.rs:1\): only the context of the call changes: the line of the call; the context of the call changes
+must_not_match: `here!\(\)` at [^\n]*the code of the call reads
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== both src/lib.rs
+macro_rules! here { () => { line!() + 0 } }
+macro_rules! load { () => { pub mod float; } }
+
+load!();
+=== old src/float.rs
+pub fn at() -> u32 {
+    here!()
+}
+=== new src/float.rs
+pub fn first() -> u32 {
+    1
+}
+
+pub fn at() -> u32 {
+    here!()
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: src/float.rs: changed [file]
+      expansion: `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]
+      ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/float.rs:=…'
+  cover: each of the 4 changed line(s) is in a fact
+  expansions: 2 changed
+    `here!()` at `float (no item)` (src/float.rs:6): expansion changed: `macro_rules! here` (src/lib.rs:1): only the context of the call changes: the line of the call; the context of the call changes
+    `load!()` at `shop::load!#0` (src/lib.rs:4): expansion changed: `macro_rules! load` (src/lib.rs:2): changed literal `2u32` → `6u32` at `shop::float::at/tail/lhs` [semantics]; added `shop::float::first` (the public API changes: a different crate can now use the item) [added]; the code of the call reads `src/float.rs`, which the step changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'src/float.rs:=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'src/float.rs:=the reason of the test'
+◆ f1 derived: src/float.rs: changed [file]
+    lines: src/float.rs:1-4

@@ -61,7 +61,7 @@ pub struct Input<'a> {
     pub defs: &'a [crate::DefMap; 2],
     /// The old path → the new path of each item that N1 maps.
     pub renames: &'a BTreeMap<String, String>,
-    /// The changed expansions of the macro calls (the compiled mode, R63.9-5).
+    /// The changed expansions of the macro calls (the compiled mode, R73.2-1).
     pub expansions: &'a [crate::expand::Link],
 }
 
@@ -452,8 +452,42 @@ pub fn assign(input: &Input, report: &mut StepReport) {
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
     // Design 40.3: the elements with no owner in a body with an edit. The edits keep the doubt
     // rule, so the fact has no spotlight: it names the places of the change.
-    for (name, (nodes, _)) in &unowned_of {
+    // R73.2-1: the owner of such an element is the set of the changed inputs of the body that
+    // reach it. With no changed input outside the text of the body (no symbol link of the body to
+    // a changed definition, no changed expansion at the body, and no build input), the only
+    // changed input is the text of the body: the fact names the places of its edits. Else the
+    // fact keeps its text: the cause is not known.
+    let outside = !build_inputs(input, report).is_empty();
+    for (name, (nodes, edits)) in &unowned_of {
         body_fact(input, report, name, nodes, false);
+        let linked = through_of.values().any(|symbols| symbols.values().any(|bodies| bodies.contains(name)));
+        // A changed expansion at the body: a call in the item, in an item around it, or a call
+        // that makes it.
+        let inside = |link: &crate::expand::Link| {
+            [input.before, input.after].iter().enumerate().any(|(side, ws)| ws.items.get(name.split("::{").next().unwrap_or(name)).is_some_and(|item| link.ranges.iter().any(|(at, file, start, end)| *at == side && *file == item.file && *start <= item.line_start && item.line_end <= *end)))
+        };
+        let expanded = input.expansions.iter().any(|link| inside(link) || link.items.iter().any(|item| name == item || name.starts_with(&format!("{item}::"))));
+        if outside || linked || expanded {
+            continue;
+        }
+        let mut places: Vec<String> = Vec::new();
+        for edit in edits.iter().map(|index| &input.edits[*index]) {
+            let Some(file) = edit.file.as_deref() else { continue };
+            let place = format!("{file}:{}{}", if edit.after.is_none() { "-" } else { "" }, edit.line);
+            if !places.contains(&place) {
+                places.push(place);
+            }
+        }
+        if places.is_empty() {
+            continue;
+        }
+        let text = format!("the cause: the edit{} of this body at {} (the step changes no other input of the body)", if places.len() == 1 { "" } else { "s" }, places.join(", "));
+        if let Some(fact) = report.facts.last_mut() {
+            fact.note = Some(match fact.note.take() {
+                Some(note) => format!("{note}; {text}"),
+                None => text,
+            });
+        }
     }
     // The bodies with no edit and with nodes: one fact for each body, at most `CRATE_BODIES`
     // in a crate; else one fact for the crate (design 40.3).
@@ -1011,47 +1045,46 @@ fn evidence(input: &Input, report: &StepReport, body: &BodyComparison, name: &st
         }
     }
 
-    // 3. A changed `macro_rules!` macro or a changed proc macro (a function of a proc-macro
-    //    crate) that the body expands: `name!(…)`, or an attribute `#[name]` of the item.
-    let attrs: Vec<&str> = item.map(|item| item.attrs.iter().flat_map(|attr| crate::hints::words(attr)).collect()).unwrap_or_default();
-    let chain = std::cell::OnceCell::new();
-    for (index, edit) in input.edits.iter().enumerate() {
-        let Some(macro_path) = edit.item() else { continue };
-        let found = [input.after, input.before].iter().find_map(|ws| ws.items.get(macro_path).filter(|it| it.kind == ItemKind::Macro || (it.kind == ItemKind::Fn && it.attrs.iter().any(|attr| attr.contains("proc_macro")))));
-        let Some(macro_item) = found else { continue };
-        if matches!(edit.kind, EditKind::Docs | EditKind::Comment | EditKind::Visibility) {
-            continue;
-        }
-        let short = macro_path.rsplit("::").next().unwrap_or(macro_path).trim_end_matches('!');
-        let attribute = macro_item.kind == ItemKind::Fn && attrs.contains(&short);
-        // A macro reaches each call site of each macro whose expansion calls it (R63.3-1):
-        // `price` calls `fee!`, the definition of `fee!` calls `base!`, so a changed `base!`
-        // owns the change of `price`.
-        if (words.contains(&short) && text_has_bang(text, short)) || attribute || chain.get_or_init(|| macro_chain(input, text)).contains(short) {
-            return Some(owner_of_edit(input, index));
-        }
-    }
-
-    // 3b. The compiled mode (R63.9-5): a changed expansion of a call that the body holds, or of
-    //     the call that makes the body. Its cause is a changed `macro_rules!` macro of its
-    //     chain (the macro of the call, a macro that its code calls at each depth, also a call
-    //     in its input), or a changed file that its code reads (R63.9-6). The expansion line of
-    //     the fact shows the change of the code, so the body needs no reason of its own.
+    // 3. R73.2-1 (before batch 11e: R63.3-4 read the names of the macros in the text of the
+    //    body and of the definitions; R63.9-5 matched the names of the chain): a changed
+    //    expansion of a call that the body holds, or of the call that makes the body. Its owner is a changed input of the call: a
+    //     definition of its chain (the macro of the call, a macro that its code calls at each
+    //     depth, also a call in its input) by its place in the tree, or a changed file that its
+    //     code reads (R63.9-6). The expansion line of the fact shows the change of the code, so
+    //     the body needs no reason of its own.
     if !input.expansions.is_empty() {
         let call = site_call(input, body, name).flatten().map(|call| call.path.clone());
         // The body of the item that holds the call, or of an item or a closure inside it (a
         // constant of the code of the call: `shop::size::DATA`).
         let at_body = |link: &&crate::expand::Link| link.items.iter().any(|item| name == item || name.starts_with(&format!("{item}::"))) || call.as_ref().is_some_and(|call| link.items.contains(call));
+        let trees = [input.before, input.after];
         for link in input.expansions.iter().filter(at_body) {
-            for (index, edit) in input.edits.iter().enumerate() {
-                let Some(macro_path) = edit.item() else { continue };
-                if matches!(edit.kind, EditKind::Docs | EditKind::Comment | EditKind::Visibility) {
+            for (side, file, line, proc) in &link.defs {
+                if crate::inputs::file_state(trees, file) != crate::inputs::State::Changed {
                     continue;
                 }
-                let is_macro = [input.after, input.before].iter().any(|ws| ws.items.get(macro_path).is_some_and(is_macro_definition));
-                let short = macro_path.rsplit("::").next().unwrap_or(macro_path).split('!').next().unwrap_or("");
-                if is_macro && link.chain.contains(short) {
-                    return Some(owner_of_edit(input, index));
+                // The edit of the item at the place of the definition.
+                if let Some(item) = crate::inputs::item_at(trees[*side], file, *line) {
+                    let at_item = |anchor: &Option<Anchor>| anchor.as_ref().is_some_and(|anchor| anchor.item == item.path);
+                    let found = input.edits.iter().position(|edit| !matches!(edit.kind, EditKind::Docs | EditKind::Comment | EditKind::Visibility) && if *side == 0 { at_item(&edit.before) } else { at_item(&edit.after) });
+                    if let Some(index) = found {
+                        return Some(owner_of_edit(input, index));
+                    }
+                    if !proc {
+                        continue;
+                    }
+                }
+                // A file that Semilla does not parse (a path dependency that is not a member), or
+                // a proc macro: the fact of the file, else the fact of a changed file of its
+                // package.
+                let files = if *proc { crate::inputs::changed_files(trees, &crate::inputs::package_dir(trees, file).unwrap_or_default()) } else { vec![file.clone()] };
+                for changed in files {
+                    if let Some(index) = report.facts.iter().position(|fact| fact.file.as_deref() == Some(changed.as_str()) && fact.at.is_none() && fact.part != "indirect change" && !crate::files::is_mode_fact(input.before, input.after, fact)) {
+                        return Some(Owner::Fact(index));
+                    }
+                    if let Some(index) = input.edits.iter().position(|edit| edit.file.as_deref() == Some(changed.as_str())) {
+                        return Some(owner_of_edit(input, index));
+                    }
                 }
             }
             for file in &link.reads {
@@ -1201,40 +1234,6 @@ fn build_inputs(input: &Input, report: &StepReport) -> Vec<(usize, Option<BTreeS
         }
     }
     out
-}
-
-/// The names of the `macro_rules!` macros of the workspace that a text calls, also through the
-/// definitions of the macros that it calls, at each depth (R63.3-1). The definitions of the two
-/// trees count: a call that only one version of a definition has is a call of the step.
-pub(crate) fn macro_chain(input: &Input, text: &str) -> BTreeSet<String> {
-    let definitions: Vec<(String, &str)> = [input.before, input.after]
-        .iter()
-        .flat_map(|ws| ws.items.values())
-        .filter(|item| is_macro_definition(item))
-        .filter_map(|item| Some((item.path.rsplit("::").next()?.split('!').next()?.to_string(), item.text.as_str())))
-        .collect();
-    let mut found: BTreeSet<String> = definitions.iter().filter(|(name, _)| text_has_bang(text, name)).map(|(name, _)| name.clone()).collect();
-    let mut queue: Vec<String> = found.iter().cloned().collect();
-    while let Some(name) = queue.pop() {
-        for (_, body) in definitions.iter().filter(|(other, _)| *other == name) {
-            for (inner, _) in &definitions {
-                if !found.contains(inner) && text_has_bang(body, inner) {
-                    found.insert(inner.clone());
-                    queue.push(inner.clone());
-                }
-            }
-        }
-    }
-    found
-}
-
-/// True if the name is followed by `!` in the text (a macro call).
-fn text_has_bang(text: &str, name: &str) -> bool {
-    text.match_indices(name).any(|(start, _)| {
-        let before = text[..start].chars().next_back();
-        let boundary = before.is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
-        boundary && text[start + name.len()..].trim_start().starts_with('!')
-    })
 }
 
 /// The owner of one edit.

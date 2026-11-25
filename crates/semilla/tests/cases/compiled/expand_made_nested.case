@@ -1,5 +1,5 @@
 note: batch 10c2, item 4: a made item of a nested call: `mkfn!(made, add!(4; 5))` where only `add!` changes; the fact of `add` owns `depot::made` with no spotlight, and the line of the outer call names the changed inner call; `mkfn!(plain, 4 + 5)` does not use `add!`, so its expansion is equal and the fact does not own `depot::plain`
-rule+: R63.9-4 R63.9-5
+rule+: R63.9-4 R73.2-1
 rule-: R63.9-4
 must_match: from `macro_rules! add` \(src/lib\.rs:1\) through the inner call `add!\(4; 5\)`
 must_not_match: code that Semilla does not see

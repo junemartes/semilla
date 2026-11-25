@@ -259,6 +259,35 @@ impl<'tcx> Walk<'tcx> {
         }
     }
 
+    /// R73.1-1: a node with no syntax context inside an open record whose file is not the file
+    /// of the source call of that record is code that `include!` reads (or a module file that the
+    /// code of the call loads): the parser gives each token the span of its file and no mark of
+    /// the expansion. The file is a read file of each such record. A record whose source call is
+    /// in the file of the node (a call inside the included code) does not read it. A file outside
+    /// the workspace keeps its absolute path (an input that Semilla does not see).
+    fn included_code(&mut self, span: Span) {
+        if self.stack.is_empty() || span.is_dummy() || !span.ctxt().is_root() {
+            return;
+        }
+        let map = self.tcx.sess.source_map();
+        let file = map.lookup_source_file(span.lo());
+        let rustc_span::FileName::Real(name) = &file.name else { return };
+        let Some(local) = name.local_path() else { return };
+        let path = crate::workspace_path(local);
+        if path.is_empty() {
+            return;
+        }
+        for at in self.stack.clone() {
+            let call = self.open[at].expn.expn_data().call_site.source_callsite();
+            if call.is_dummy() || map.lookup_source_file(call.lo()).name == file.name {
+                continue;
+            }
+            if !self.open[at].reads.contains(&path) {
+                self.open[at].reads.push(path.clone());
+            }
+        }
+    }
+
     /// The file that an expression of `include_str!` or `include_bytes!` reads. The literal of
     /// `include_str!` has the span of the whole file. The literal of `include_bytes!` has the
     /// span of the call, so the file is the file of the workspace with the same bytes: the
@@ -349,6 +378,7 @@ impl<'tcx> Walk<'tcx> {
 impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
     fn visit_item(&mut self, item: &'a rustc_ast::Item) {
         self.uses(item.span);
+        self.included_code(item.span);
         let root = self.root(item.span);
         if let Some(index) = root {
             self.enter(index, Node::Item(item.clone()));
@@ -384,6 +414,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
 
     fn visit_assoc_item(&mut self, item: &'a rustc_ast::AssocItem, ctxt: AssocCtxt) {
         self.uses(item.span);
+        self.included_code(item.span);
         let root = self.root(item.span);
         if let Some(index) = root {
             self.enter(index, Node::Assoc(item.clone()));
@@ -396,6 +427,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
 
     fn visit_stmt(&mut self, stmt: &'a rustc_ast::Stmt) {
         self.uses(stmt.span);
+        self.included_code(stmt.span);
         let root = self.root(stmt.span);
         if let Some(index) = root {
             self.enter(index, Node::Stmt(stmt.clone()));
@@ -408,6 +440,7 @@ impl<'a, 'tcx> Visitor<'a> for Walk<'tcx> {
 
     fn visit_expr(&mut self, expr: &'a rustc_ast::Expr) {
         self.uses(expr.span);
+        self.included_code(expr.span);
         let root = self.root(expr.span);
         if let Some(index) = root {
             self.enter(index, Node::Expr(expr.clone()));

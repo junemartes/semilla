@@ -67,7 +67,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       control flow: + panic `overflow` (depot/src/lib.rs:5)
       control flow: + arrow call `Span::line` (depot/src/lib.rs:5) → check `overflow: Span::call_site().line() as u32 + 1` (depot/src/lib.rs:5) (return)
       equivalence: not decided: a cleanup path with a call: Span::call_site() (depot/src/lib.rs:-5)
-      expansion: `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics] (also the change of f3)
+      expansion: `depot::here!(1)` at `shop::one/tail` (shop/src/lib.rs:4): expansion changed: changed literal `2u32` → `5u32` at `expansion/elems[1]` [semantics]
   ◆ f2 derived: depot/src/lib.rs: changed [build code · no code]
       ✗ spotlight: build code: this file is a file of a host package (a proc macro crate, or a crate that a proc macro crate or a build script uses). The compiler runs this code during each build, and it can change the code and the result of the build; it needs a reason: --reason 'depot/src/lib.rs:=…'
       diff:
@@ -76,7 +76,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
         +     let line = Span::call_site().line() as u32 + 1;
   ◆ f3 derived: the compiled code of `depot::here` changes with no edit at its place: `Literal::u32_suffixed(line)` [indirect · code different]
       affected bodies: depot::here
-      note: lines 7 (with the build code of step 0)
+      note: lines 7; the cause: the edit of this body at depot/src/lib.rs:5 (the step changes no other input of the body) (with the build code of step 0)
   not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
   ? 1 place: changed expression, see f1 (f1)
       in: depot::here
