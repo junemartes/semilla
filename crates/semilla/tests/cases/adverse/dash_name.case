@@ -43,6 +43,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: src/--help.rs: changed [file]
       ✗ spotlight: Rust code that Semilla does not parse (a `.rs` file that no target of a member package names, or a file that `include!` reads); it needs a reason: --reason 'src/--help.rs:=…'
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 run again: semilla step 'the change' --reason 'src/--help.rs:=<why>'
 === positions

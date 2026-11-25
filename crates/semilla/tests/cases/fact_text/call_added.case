@@ -40,6 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: added macro call `table!( #[cfg(unix)] B = 2, )` (makes items that Semilla cannot list) [added]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::table!#1`; the macro call `table!( #[cfg(unix)] B = 2, )` makes items that Semilla cannot list; it needs a reason: --reason 'depot::table!#1=…'
   cover: each of the 7 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::table!#1
 run again: semilla step 'the change' --reason 'depot::table!#1=<why>'

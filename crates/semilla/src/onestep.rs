@@ -441,7 +441,15 @@ impl App {
         let index = session.changeset.steps.len();
         let claim_count = claims.len();
         let claim_anchors: Vec<String> = claims.iter().filter_map(|claim| claim.at.as_ref().map(|at| at.to_string())).collect();
-        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: None, agent, tags: request.tags.clone() });
+        // R65.8-1: a step of the default mode runs the build check before the syntax phase. The
+        // build writes the expansion records of the two trees, and the syntax phase reads them
+        // (the expansion section and the lines of design 63). The output order does not change.
+        let early_build = if compiled { None } else { Some(self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree, true)) };
+        let early_record = match &early_build {
+            Some(crate::buildcheck::Outcome::Stored { record, .. }) => Some(record.clone()),
+            _ => None,
+        };
+        session.open = Some(OpenStep { intent: request.intent.clone(), tree_before: before.clone(), claims, reasons, compiled, build_check: early_record, agent, tags: request.tags.clone() });
         // The session to restore when the step is not stored: the counter of the stored claims.
         let mut saved = session.clone();
         saved.last_claim = highest;
@@ -509,14 +517,16 @@ impl App {
         // result of a tree that builds is in the cache: the next command does not build again.
         // Rule 9: a compiled check of this command that does not accept the step built the new
         // tree, or it has a different cause for the reject. No second build runs.
-        let (build_record, build_lines, build_stop) = if compiled && !request.fast && !accepted {
-            (None, Vec::new(), None)
-        } else {
-            match self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree) {
-                crate::buildcheck::Outcome::Stored { record, lines } => (Some(record), lines, None),
-                crate::buildcheck::Outcome::Fails { text, .. } => (None, Vec::new(), Some((true, text))),
-                crate::buildcheck::Outcome::CannotRun { text } => (None, Vec::new(), Some((false, text))),
-            }
+        let build = match early_build {
+            Some(outcome) => Some(outcome),
+            None if compiled && !request.fast && !accepted => None,
+            None => Some(self.build_check(crate::buildcheck::skip_cause(request.no_check), &before, &tree, false)),
+        };
+        let (build_record, build_lines, build_stop) = match build {
+            None => (None, Vec::new(), None),
+            Some(crate::buildcheck::Outcome::Stored { record, lines }) => (Some(record), lines, None),
+            Some(crate::buildcheck::Outcome::Fails { text, .. }) => (None, Vec::new(), Some((true, text))),
+            Some(crate::buildcheck::Outcome::CannotRun { text }) => (None, Vec::new(), Some((false, text))),
         };
         // A rejected step prints the full text of each failed claim in its first lines. The claim
         // list then has only the status and a short cause (brief 5g, item 4).

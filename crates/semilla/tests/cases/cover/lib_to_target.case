@@ -72,6 +72,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: removed `use` line: `use crate::list::first;` in `depot::checks` [import]
   ◆ f2 derived: added `use` line: `use depot::list::first;` in `depot (test "checks")` [import]
   cover: each of the 28 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
   ! pair: `depot::checks::one` (removed) and `depot (test "checks")::one` (added) are 100% similar: they can be one item with a new place and a second change. Semilla does not derive one item: no name map of the step has this pair

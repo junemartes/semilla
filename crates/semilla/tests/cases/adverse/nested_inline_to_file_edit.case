@@ -40,6 +40,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed literal `1` → `2` at `depot::outer::inner::deep/tail/rhs` [semantics]
   ◆ f2 derived: source place of `depot::outer::inner`: a block in `src/outer.rs` → file `src/outer/inner.rs`; 0 of 1 item and 6 old lines and 4 new lines keep their tokens [move]
   cover: each of the 13 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

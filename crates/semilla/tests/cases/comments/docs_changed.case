@@ -37,6 +37,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       docs of `shop::price`, changed in this step: see f1
   ◆ f1 derived: changed docs `/// Gives the price with a tax of 10 percent.` → `/// Gives the price with a tax of 20 percent.` [docs]
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

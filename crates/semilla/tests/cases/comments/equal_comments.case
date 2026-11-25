@@ -38,6 +38,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       comment above line 4, moved in this step: see f1
   ◆ f1 derived: changed comment `// Log the value.` → `// Log the value. // Log the value.` [docs]
   cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

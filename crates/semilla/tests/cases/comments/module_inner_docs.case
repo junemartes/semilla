@@ -57,6 +57,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: changed expression `x` → `x + 1` at `shop::rules::base/tail` [semantics]
       docs of `shop::rules::base`, no edit in this step (src/rules.rs:3): `/// Gives the base price.`
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 3 comment(s) of the changed items have no edit in this step
 

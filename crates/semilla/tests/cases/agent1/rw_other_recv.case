@@ -70,6 +70,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   other facts, filled in by Semilla:
   ◆ f1 derived: changed expression `c.total` → `d.total()` at `depot::both/tail/lhs/args[0]/lhs` [semantics]
   cover: each of the 2 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 correct each false fact and run the step again. Or run the step with no false fact: Semilla then shows the edits of its items as facts, and the gap list names the items that can change the behavior.
 run again (without the false fact): semilla step 'the change'

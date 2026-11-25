@@ -49,6 +49,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f2 derived: source place of `depot::list`: file `src/list.rs` → file `src/list/mod.rs`; 1 of 2 items and 14 lines keep their tokens [move]
   ◆ f1 derived: added comment `// Take the larger one.` [docs]
   cover: each of the 29 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

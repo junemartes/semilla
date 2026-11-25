@@ -52,6 +52,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
       comment at the end of line 3, no edit in this step (src/lib.rs:3): `// the first line`
       comment at the end of line 6, no edit in this step (src/lib.rs:6): `// the last line`
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 3 comment(s) of the changed items have no edit in this step
 

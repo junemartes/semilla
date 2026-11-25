@@ -182,6 +182,12 @@ impl App {
         let after_commit = AfterCommit { merge: parents.len() > 1, ..Default::default() };
         let mut set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step], after_commit: Some(after_commit), ..Default::default() };
         // The check of `semilla step` for the same two trees (rule R62.3-1).
+        // R65.8-1: a step of the default mode runs the build check first, so the syntax phase
+        // reads the expansion records of the two trees.
+        let early_build = if compiled { None } else { Some(self.build_check(crate::buildcheck::skip_cause(options.no_check), &before, &after, true)) };
+        if let Some(crate::buildcheck::Outcome::Stored { record, .. }) = &early_build {
+            set.steps[0].build_check = Some(record.clone());
+        }
         let saved = self.no_bodies;
         self.no_bodies = saved || !compiled;
         let mut result = self.check_step_of(&set, 0);
@@ -198,7 +204,11 @@ impl App {
         let compiled = set.steps[0].compiled;
         let mut report = result.report;
         // The build check of `semilla step` (design 53). A failure is an open item (R62.5-2).
-        let (record, build_text) = match self.build_check(crate::buildcheck::skip_cause(options.no_check), &before, &after) {
+        let build = match early_build {
+            Some(outcome) => outcome,
+            None => self.build_check(crate::buildcheck::skip_cause(options.no_check), &before, &after, false),
+        };
+        let (record, build_text) = match build {
             crate::buildcheck::Outcome::Stored { record, lines } => (record, lines.iter().map(|line| format!("{line}\n")).collect::<String>()),
             crate::buildcheck::Outcome::Fails { text, record } => (record, text),
             crate::buildcheck::Outcome::CannotRun { text } => {

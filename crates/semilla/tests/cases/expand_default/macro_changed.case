@@ -1,0 +1,37 @@
+note: batch 10n2, part B: the default mode with the build check has the expansion records of the two trees (the driver at the level `ex` in the build of the build check); the changed `macro_rules!` macro owns the changed expansion of its call, as in the compiled mode
+rule+: R65.8-1
+rule-: R65.8-2
+build_check: on
+must_match: expansion: `base!\(v\)` at `shop::price/tail` \(src/lib\.rs:3\): expansion changed: changed literal `10` → `12`
+must_match: expansions: 1 changed
+must_not_match: expansions: not read
+must_not_match: code equal|code different|no compare|affected bodies:|control flow:
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+macro_rules! base { ($v:expr) => { $v + 10 } }
+
+pub fn price(v: u32) -> u32 { base!(v) }
+=== new src/lib.rs
+macro_rules! base { ($v:expr) => { $v + 12 } }
+
+pub fn price(v: u32) -> u32 { base!(v) }
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  declarations, filled in by Semilla:
+  ◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration]
+      expansion: `base!(v)` at `shop::price/tail` (src/lib.rs:3): expansion changed: changed literal `10` → `12` at `expansion/rhs` [semantics]
+  cover: each of the 2 changed line(s) is in a fact
+  expansions: 1 changed
+    `base!(v)` at `shop::price/tail` (src/lib.rs:3): expansion changed: `macro_rules! base` (src/lib.rs:1): changed literal `10` → `12` at `expansion/rhs` [semantics]; from `macro_rules! base` (src/lib.rs:1)
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: changed macro `base`: `macro_rules! base { ($v:expr) => { $v + 10 } }` → `macro_rules! base { ($v:expr) => { $v + 12 } }` [declaration]
+    lines: src/lib.rs:1, src/lib.rs:-1

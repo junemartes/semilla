@@ -39,6 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: added `depot::Shape::SIDES` (the public API changes: a different crate can now use the item) [added]
       ✗ spotlight: a new item with an attribute that can change the behavior: `cfg` on `depot::Shape::SIDES`; it needs a reason: --reason 'depot::Shape::SIDES=…'
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::Shape::SIDES
 run again: semilla step 'the change' --reason 'depot::Shape::SIDES=<why>'

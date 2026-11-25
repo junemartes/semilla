@@ -4721,7 +4721,7 @@ Batch 9a4b (the same date) corrected five items of the check: the three states o
   2. the variable `RUSTUP_TOOLCHAIN`;
   3. the default tool chain of rustup (`default_toolchain` in the file `settings.toml` of the rustup home);
   4. the `cargo` of `PATH`, if it is not a program of rustup.
-- **No download.** Semilla finds the folder of the tool chain in `toolchains/` of the rustup home (`RUSTUP_HOME`, or `.rustup` in the home folder). It starts `bin/cargo` of this folder by its full path. It starts no program of rustup, so no tool chain is downloaded. A tool chain that is not on the machine gives "cannot run" with the cause and the command that installs it (53.3). The clean environment, the sandbox of a phase 2 build, and `--offline` stay. The check does not use the MIR driver. The pinned tool chain of Semilla is only for the compiled check (53.5).
+- **No download.** Semilla finds the folder of the tool chain in `toolchains/` of the rustup home (`RUSTUP_HOME`, or `.rustup` in the home folder). It starts `bin/cargo` of this folder by its full path. It starts no program of rustup, so no tool chain is downloaded. A tool chain that is not on the machine gives "cannot run" with the cause and the command that installs it (53.3). The clean environment, the sandbox of a phase 2 build, and `--offline` stay. The check does not use the MIR driver. Batch 10n2 changes this for a step of the default mode: the driver at the level `ex` writes the expansion records in the same build (R65.8-1). The pinned tool chain of Semilla is only for the compiled check (53.5).
 - **Decided by Claude (the tool chain):**
   - The file of the tree comes before the variable. This is the order of the brief. Rustup itself reads the variable first. A cargo process that starts Semilla sets the variable to its own tool chain, so the file of the tree is the better source.
   - Semilla reads only the file at the root of the tree. It does not read a `rustup override` of a folder, and it does not read a file in a folder above the repository. If the tree has the two files, `rust-toolchain` comes first, as in rustup.
@@ -6957,7 +6957,7 @@ The pass is `semilla-verify/src/expand.rs` (after the graph pass, in the compile
 4. [R63.3-4] **A macro reaches each call of each macro whose expansion calls it** (defect 1). The evidence rule 3 of a body with no edit of its text (`owners.rs`) takes a changed `macro_rules!` macro if the body calls it, or if the definition of a macro that the body calls calls it, at each depth, in the definitions of the two trees. Before, `price` (which calls `fee!`, which calls `base!`) had the fact "indirect change, cause not known", and the fact of `base!` said `code equal` (a false proof). Now the fact of `base!` owns `price`: `[declaration · code different]`. A changed macro that no macro of the chain calls owns nothing.
 5. [R63.3-5] **The lines of a fact.** Each owner fact gets the line `expansion: …` for each changed, added, or removed expansion that it owns: "expansion: `fee!(v)` at `shop::price/tail` (src/lib.rs:4): expansion changed: changed literal `10` → `12` at `expansion/lhs/rhs` [semantics]", for a derive "expansion: derived `PartialEq` of `shop::Point`: expansion changed: added operand `&& self.z == other.z` at `shop::<Point as ::core::cmp::PartialEq>::eq/tail` [semantics]". The lines of one macro with equal facts fold: "expansion: 4 calls of `bump`: expansion changed: …: `shop::a/tail`, `shop::b/tail`, `shop::c/tail`, and 1 more (semilla status --verbose)". A fact has at most three lines, then "… N more (semilla status --verbose)". A line asks for no reason.
 6. [R63.3-6] **The proof line.** A fact of a changed macro definition whose calls (each outer call whose macro or chain has the macro) all have an equal expansion gets the line "expansion: each of the N calls that use `add!` has an equal expansion" ("the call that uses `add!` has an equal expansion" for one call). A definition with a changed expansion has no such line.
-7. [R63.3-7] **The step section.** `expansions: 3 changed, 1 added, 12 equal`, and one line for each call; in the short form, the calls with an equal key (the result, the definition, the facts, the cause) fold into one line with the first three places. `semilla status --verbose` has each call, its configurations (if not each one), each fact of its compare, and its cause. The default mode has no expansion line and no section.
+7. [R63.3-7] **The step section.** `expansions: 3 changed, 1 added, 12 equal`, and one line for each call; in the short form, the calls with an equal key (the result, the definition, the facts, the cause) fold into one line with the first three places. `semilla status --verbose` has each call, its configurations (if not each one), each fact of its compare, and its cause. The default mode has no expansion line and no section. Batch 10n2 changes this: the build check gives the default mode the records (R65.8-1), and a step with no records has one line (R65.8-2).
 8. [R63.3-8] **A derive** (defect 3). The input of a derive is its item, so an added field owns the changed derived impls: the field fact gets a line for each changed derive. A type whose fields do not change keeps an equal expansion and gets no line.
 9. [R63.3-9; no negative case: the rule adds the lines of the bodies that the step section has already] **The compiled check of the expanded code.** The graph (60) and the equivalence check (61) run on the MIR, after the expansion: each body that holds a changed call, and each body that an expansion makes, has its line in the step section with its result. `semilla status --verbose` gives these lines again under the call (`body: shop::price (src/lib.rs:4): same structure: 2 changed checks …; different (for v = 0: before returns 20, after returns 24)`). A body line of the step section with "no edit in the body" at a call with a changed expansion names it: "…; no edit in the body; …; the expansion of `fee!(v)` changes (semilla expand src/lib.rs:4)". An equal expansion is a proof of equal code for its call (R63.3-1); it is not a proof for the body, whose other code can change.
 
@@ -7287,7 +7287,7 @@ Rule index: the identities are below.
 
 Rule index: no rule: the subsection has a decision that the batch did not do, and the data of a measure.
 
-Part D is not in this batch (stopped: see the report of batch 10n). The default mode runs no program of the Rust tool chain (design 50: no cargo, no build code, no sandbox). To run the driver for a step that changes a macro, the default mode must load the trees with `cargo metadata`, get the build code state (design 28), run the N0 build of the targets that use the macro, and pass the expansion records to the pass of 63.3. The cost is the N0 build of each tree of the step: the time of the compiled mode less the time of the equivalence check.
+Part D is not in this batch (stopped: see the report of batch 10n). Batch 10n2 does it with the build of the build check (65.8). The default mode runs no program of the Rust tool chain (design 50: no cargo, no build code, no sandbox). To run the driver for a step that changes a macro, the default mode must load the trees with `cargo metadata`, get the build code state (design 28), run the N0 build of the targets that use the macro, and pass the expansion records to the pass of 63.3. The cost is the N0 build of each tree of the step: the time of the compiled mode less the time of the equivalence check.
 
 **The data of part E** (`--compiled`, the records of the two trees of each pull request, each call of a macro of a crate outside the workspace and outside the sysroot once by its place and its text; no output change):
 
@@ -7333,6 +7333,126 @@ Rule index: no rule: the subsection has the results and the limits.
 - A changed `#[test]` (or another attribute) whose item has an edit gets the facts of the normal compare ("changed code `87usize, …` → `90usize, …`"): its input changes, so R65.1-4 does not apply, though only the place of its descriptor changes.
 - In the compiled mode, the fact of a package key that the code reads owns each body that the evidence rule gives (both keys of `compiled/expand_context_env` own both bodies); the expansion line names the variable, but it does not go under the key fact.
 - A field reorder of a type with a derive now needs a reason also for `Clone` or `Copy`, whose code does not depend on the order: the default mode does not see the code of a derive.
+
+### 65.8 Batch 10n2: the expansion records in the default mode (part B)
+
+Rule index: the identities are below.
+
+**The decision of the user** (2026-11-24: "the default mode expands macros: yes"; 2026-11-25: "now", not in the speed phase). Section 65.6 stopped part D for its size: the default mode ran no driver. This batch gets the records from the build that the default mode already does: the build check of design 53.
+
+1. [R65.8-1] **The build check writes the expansion records.** In a step of the default mode, the driver of Semilla is the wrapper of the compiler (`RUSTC_WORKSPACE_WRAPPER`) of `cargo check` of the build check, at the new level `ex`: the driver writes only the unit record with the expansion of each macro call (R63.2-1, R65.1-1 to R65.2-1), it adds no flag of the compiler, it changes no query (no MIR pass of design 61), and it sets the option of the compiler that gives the short paths in the messages (the plain `rustc` sets it in its own callbacks), so the result and the errors of the build check are the result and the errors of a plain `cargo check`. The build check builds the tree before the step first (a stored build of the tree is used), then the tree after the step in the same build folder (a delta build). The records of each tree go to `check/expansions/` of the cache, by the tree, the key of the build settings (53.2), and the driver. The syntax phase of the step reads them: the expansion section, the `expansion:` lines under the owner facts, the proof line, and the owner rules of design 63 and 65 show in the default mode as in the compiled mode. The evidence rule of a body (R63.9-5) stays a rule of the compiled mode: the default mode has no body result. `semilla status`, `review`, and `verify` read the records from the cache and start no build. Cases: `expand_default/macro_changed` (positive), `expand_default/no_check` (negative: no record, no line).
+2. [R65.8-2] **A step of the default mode with no records says so in one line** of the step section: "expansions: not read: CAUSE". The causes: "the build check did not run, so no build made the expansion records" (`--no-check`, `SEMILLA_NO_CHECK`); "the tree after the step: the targets … do not build in this tree, so the tree has no full set of expansion records"; "the build check uses the toolchain `stable` (…), and the driver of Semilla that writes the expansion records needs the toolchain `nightly-2026-10-25`; `--compiled` or `semilla expand` builds them"; "the cache has no expansion records of the tree `abc1234` (…)". A step of the compiled mode has its own records and no such line. Cases: `expand_default/no_check` (positive; each case with no build check has the line now), `expand_default/macro_changed` (negative).
+
+**Decided by Claude.**
+
+- The records come from the build of the build check (option 1 below), only when the toolchain of the build check is the toolchain of the driver (the driver links to the compiler crates of `nightly-2026-10-25`). Another toolchain gives the line of R65.8-2. Cause: the build of the author is the build that the check must run (design 53.2); a second build with the toolchain of Semilla costs a full build of each tree (option 2).
+- The default mode builds the tree before the step too. Cause: the compare needs the two trees. The tree before the step is in most steps the tree after the step before, so its build and its records are in the cache. The first step of a change set builds it once.
+- A stored result of the build check counts only with the records of its tree: a result of an earlier version of Semilla builds again once.
+- The units of a tree with a target that does not build have no full set of records: the tree gets the cause of R65.8-2, not a partial set. Cause: a missing unit would show each call of the unit as added or removed.
+- `semilla expand` reads the records of the build check first, then the compiled records (R63.4-1).
+- The case runner has the header `build_check: on` (the case runs with the build check), and the time of the build check in a case is `<TIME>`.
+
+**The options and their cost** (the training set, the release binaries; the times of the full `semilla step` command; see 65.11 for the table):
+
+| Option | What it builds | The extra cost |
+|---|---|---|
+| 1. The driver in the build of the build check (done) | the build check of the tree after the step, and of the tree before it (once) | the build of the tree before the step (a cold cache) and the work of the driver at the level `ex` |
+| 2. A second build with the toolchain of Semilla, only for the records | two more check builds of each tree in a second target folder | about the time of the build check again, for each tree |
+| 3. The N0 build of the compiled mode (the plan of 65.6) | the N0 records with the MIR of each body | the compiled mode less the equivalence check: 2 to 10 times the build check (65.7) |
+
+### 65.9 Batch 10n2: the order of the derives (part A)
+
+Rule index: the identities are below.
+
+**The decision of the user** (2026-11-25): "Does the order of derives change anything? I don't think so". The order of the derives does not change a derived impl. Only an attribute macro before a derive (it changes the input of the derive), or a derive with a side effect, can make the order matter. When each expansion of the item stays the same, the order change gets no spotlight; when an expansion changes, its line shows the change.
+
+The audit of the rules that give a spotlight or a fact for an order change at a type:
+
+| Rule | Before | Now |
+|---|---|---|
+| a new order of the derives (`#[derive(Debug, Clone)]` → `#[derive(Clone, Debug)]`, or two `derive` attributes) | the fact "attributes of …" [attribute], no spotlight (`changed_attributes` compares the set) | the same; with the records, a changed expansion has its line (input: the item) |
+| an attribute macro that moves across a derive | the fact "attributes of …", no spotlight (a missing spotlight) | a spotlight (R65.9-2) |
+| a member order change of a type with a derive or an attribute macro (R65.3-3) | a spotlight | with the records: no spotlight when each macro of the type makes the same code (R65.9-1) |
+
+1. [R65.9-1] **A member order change needs no reason when each macro of the type makes the same code.** The spotlight of R65.3-3 goes away when the step has the expansion records (the compiled mode, or the default mode with the build check), and: each derive and each attribute macro of the type (in its attribute text on the two sides) has a record at the type with the same text in the two trees; no call at the type has a changed, an added, a removed, or a not known expansion (R66.11-1); the type has no `#[repr]` and no `cfg_attr` (the layout reads the order; another configuration can add a derive that no record shows); no attribute macro moves across a derive (R65.9-2); and the fact does not say that an implicit discriminant value of an enum changes (a derive such as `PartialOrd` reads the discriminant with no text that names it, so its text stays and its meaning changes). Each other spotlight stays. The fact keeps its text and gets the note "the member order needs no reason: each macro of the type (`Marker`) makes the same code in the two versions (the expansion records, R65.9-1)". With no records (`--no-check`, a build check that does not build), the rule of R65.3-3 stays (the safe side). Cases: `expand_default/order_same_code` (positive: a derive of the proc macro crate `depot` that reads only the name of the type), `expand_default/order_changed_code` (negative: `Debug` changes its expansion, and its line shows under the fact; `#[repr(C)]` keeps the spotlight), `names/order_third_party` (no records: the spotlight stays).
+2. [R65.9-2] **An attribute macro that moves across a derive needs a reason**: "an attribute macro moves across a derive (`#[depot::tag]`, `#[derive(Debug)]`): the macro gets the item before the derive or after it, so the input of the derive can change". An attribute macro is an attribute that is not `derive`, `repr`, `cfg`, `cfg_attr`, a lint tool, or a built-in attribute of the shared list (R65.4-1). A new order of the derives only has no spotlight, with the records or with none. Cases: `expand_default/attr_macro_moves` (positive), `expand_default/derive_order` (negative, with the build check: no spotlight and no expansion line).
+
+**Decided by Claude.**
+
+- R65.9-1 is a rule of the member order fact of a type of a module. The member order of a type in a function body (design 38) keeps its spotlight: its records are at the function, not at the type.
+- R65.9-1 compares the macro names of the attribute text (the last segment of a path) with the names of the equal records at the type. A derive with no record (a derive under a `cfg` that this build does not select) keeps the spotlight.
+- R65.9-2 needs no records: it is a fact of the order of the text. The user named the attribute macro before a derive as the one case where the order matters.
+- A derive with a side effect (a proc macro that writes a file or a registry) is not visible in a record; the user decided that the equal expansion decides (decision 1).
+
+### 65.10 Batch 10n2: the expansions of dependencies and the large expansions (part C)
+
+Rule index: the identities are below.
+
+**The decision of the user** (2026-11-25, on the proposal of 65.6): an expansion in a dependency crate is a full fact only when its identity changes (the version of the dependency or its source); an expansion text over 50 kB shows a count and its size, and `semilla expand` shows the full text.
+
+1. [R65.10-1] **The identity of a dependency** is its entry in `Cargo.lock`: the set of the versions of the package with the source and the checksum, by the crate name (`-` gives `_`). A macro of a dependency is a macro whose record names a crate (`crate depot`) that is a package of `Cargo.lock` with a source (a registry or a repository). A package with no source (a package of the workspace, a path), a crate of the standard library (no entry), and a tree with no `Cargo.lock` are not a dependency of this rule: the rules of design 63 and 65 hold for them. The unit test `the_identity_of_a_dependency_is_its_entry_in_the_lock_file` (a new version, a new checksum; the negative cases: the same entry, a path package, the standard library, no lock file).
+2. [R65.10-2] **The owner and the count line.** When the identity of the package changes, the fact of the package in `Cargo.lock` owns each changed expansion of its macros as a changed definition of the chain (the first owner, R63.9-7), with the cause "from the package `depot` (1.0.0 → 1.0.1 in `Cargo.lock`)", and the equal calls of each of its macros are one line under the same fact: "1 expansion of `depot::n!` stays the same". With the same identity, an edit in the input of the call owns the line (R63.3-3), with the facts of the compare; a changed expansion with neither cause keeps its line in the step section with the cause "no changed definition, …" (R63.9-7). No changed expansion becomes a count. The unit test `a_dependency_expansion_is_a_full_fact_only_when_its_identity_or_its_input_changes` (positive: a new version; negative: the same identity; the same identity with a changed input keeps the full line).
+3. [R65.10-3] **A large expansion.** A changed expansion whose text (before or after) has more than `LARGE_EXPANSION` (50 000 bytes) gets no compare: its line is "a large expansion (3000 → 3000 lines, 61.2 kB → 61.2 kB; 2 lines differ): the text is too large for a compare; the full text: semilla expand FILE:LINE" ("lines differ": the lines that only one side has). The diff of the Markdown review keeps its cut of 40 lines (R63.4-2). The unit test `a_large_expansion_gives_its_size_and_the_command_and_no_compare` (the negative case: a small text has the facts of its compare).
+
+**Decided by Claude.**
+
+- The limit is 50 000 bytes of the text of the record (the text with the marks of hygiene): "50 kB" is the number of the user, the unit is mine. The constant `LARGE_EXPANSION` is in `semilla-verify/src/expand.rs`.
+- The identity is the entry in `Cargo.lock` of each tree, not the identity of R65.1-3: the hash of a proc macro crate changes with a changed feature of a crate below it (65.1), and the user named the version and the source.
+- The count line is only under the fact of a package whose identity changes. With the same identity, an equal call is a count of the section, as before (R65.2-2).
+- A tree with no `Cargo.lock` (a library that does not keep it) has no identity: each changed expansion keeps the rules of design 63 (the safe side).
+
+### 65.11 Batch 10n2: the results and the limits
+
+Rule index: no rule: the subsection has the results and the limits.
+
+**The training set** (7 pull requests; a copy at `old` with the tree of `new`; `semilla step "the change"`; an empty cache; the build check on; the release binaries of `0621f1b` and of this batch; `RUSTUP_TOOLCHAIN=nightly-2026-10-25`, so the build check has the toolchain of the driver). "Warm": the next step in the same cache after one more comment line in `src/lib.rs` (all steps are rejected for their spotlights, so the warm step has the same tree before the step). The times are the smallest of two or three runs of the full command; the machine had a second batch with builds (a load of 15 to 80), so the times have much noise (`uuid`: base 17.0 and 41.4 s for one command). The compiled times are one run; for `winnow`, one run of each binary after the other, under a load of 40 to 80.
+
+| Pull request | Default, cold (s) | Default, warm (s) | Facts | Spotlights | Fact lines `expansion:` | Section (this batch) | Compiled (s) |
+|---|---|---|---|---|---|---|---|
+| bitflags #465 | 6.4 → 7.7 | 0.5 → 0.8 | 8 | 2 | 0 → 1 | 41 added, 342 equal | 19.9 → 21.8 |
+| hashbrown #693 | 5.3 → 6.0 | 1.8 → 1.9 | 26 | 0 | 0 → 0 | 6 changed, 861 equal | 27.3 → 28.1 |
+| indexmap #424 | 5.9 → 6.9 | 1.4 → 1.5 | 165 | 0 | 0 → 0 | 1 changed, 7 added, 4 removed, 1088 equal | 57.8 → 52.0 |
+| itertools #1086 | 11.4 → 21.1 | 1.9 → 1.9 | 16 | 2 | 0 → 10 | 1 changed, 75 added, 1402 equal | 69.4 → 71.9 |
+| num-traits #334 | 3.1 → 6.9 | 1.4 → 3.7 | 115 | 48 | 0 → 88 | 71 changed, 146 added, 688 equal | 60.2 → 47.9 |
+| uuid #932 | 17.0 → 13.5 | 1.1 → 1.2 | 76 | 3 | 0 → 5 | 6 changed, 1 removed, 642 equal | 65.9 → 68.8 |
+| winnow #891 | 15.3 → 25.4 | 3.9 → 5.5 | 215 | 31 | 0 → 43 | 563 changed, 32 added, 26 removed, 2459 equal | 434.9 → 347.0 |
+
+- **The default mode.** The facts, the categories, the spotlights, and each other line are the same for each pull request (a diff with no expansion line, no section, and no time of the build check is empty, cold and warm). The new lines are the lines of design 63 and 65 from the records of the build check: the same fact lines as the compiled mode for `itertools` (10), `num-traits` (88); fewer for `uuid` (5 of 16: the default mode has one configuration) and `winnow` (43 of 46). No member order change with a derive and no attribute macro that moves is in the set, so part A changes no line.
+- **The compiled mode.** The facts, the spotlights, the sections, and the results of the equivalence check are the same. One change: `winnow`, the changed expansion of `automod::dir!("tests/testsuite")` (258.1 kB) is "a large expansion (5302 → 5302 lines, 258.1 kB → 258.1 kB; 258 lines differ): the text is too large for a compare; the full text: semilla expand tests/testsuite/main.rs:11" (R65.10-3; two configurations), not the facts of its compare ("value of `testsuite::float::float_test` changed: …"). The other differences are the noise of the runs: the single-edit checks of `indexmap` and `uuid` ("not checked alone (the budget of the step)" in other configurations, known from 66.10) and the digest numbers of `indexmap` ("definition #87fe… → #e48d…": the metadata hash of cargo changes with the driver binary).
+
+**The cost of part B.** The extra time of the default mode has three causes:
+
+1. The first step of a change set builds the tree before the step (a full check build) and then the tree after the step (a delta build), where the base built only the tree after the step: cold `itertools` +9.7 s, `winnow` +10.1 s, `num-traits` +3.8 s, the others +0.7 to +1.3 s (`uuid` is faster: noise). A later step reads the tree before the step from the cache.
+2. The driver writes the records of each unit that cargo compiles. A start of the driver as a pass-through wrapper costs about 0.02 s for each unit; the records cost more for a crate with many macro calls: `num-traits`, a warm `cargo check` of the same build folder by hand, 1.3 s with no wrapper and 2.4 s at the level `ex` (the test target `cast` has 5.3 MB of records); `itertools` (about 40 units): the cold build of one tree 15.9 s with no driver, 19.6 s with it.
+3. The expansion pass of the syntax phase: `num-traits` 0.13 → 0.9 s (71 changed expansions, each with a compare of two virtual crates).
+
+The warm cost is small against the build check for five pull requests (+0.0 to +0.3 s), and large for `num-traits` (+2.3 s on a check of 1.0 s) and `winnow` (+1.6 s). The options to make it smaller (not done): write a hash in place of the text of an expansion in a file that the step does not change (the pair by place needs no text there; the driver does not know the changed files, so Semilla must give it the list); build the tree before the step while the syntax phase runs; the incremental cache of the speed phase (the records of a unit that cargo does not compile again are already reused).
+
+**The data of part E/C** (the records of the build check of the trees of the two steps of each pull request, one configuration; each call of a macro of a crate outside the workspace and the standard library once by its place and its text; before: the compiled data of 65.6, each configuration):
+
+| Pull request | Calls (65.6 → default mode) | Text | The largest | Over 50 kB | Lines "a large expansion" |
+|---|---|---|---|---|---|
+| bitflags #465 | 11 → 4 | 20 → 13.6 kB | 10.3 kB (`zerocopy::FromBytes`) | 0 | 0 |
+| hashbrown #693 | 46 → 0 | 22 → 0 kB | – | 0 | 0 |
+| indexmap #424 | 2 → 2 | 1.4 → 1.4 kB | 0.7 kB (`serde::Deserialize`) | 0 | 0 |
+| itertools #1086 | 21 → 22 | 32 → 34.6 kB | 13.6 kB (`quickcheck!`) | 0 | 0 |
+| num-traits #334 | 0 → 0 | 0 | – | 0 | 0 |
+| uuid #932 | 102 → 31 | 928 → 593 kB | 27.8 kB (`#[library_benchmark]`) | 0 | 0 |
+| winnow #891 | 1391 → 1389 | 2.5 → 2.0 MB | 250.7 kB (`automod::dir!`) | 2 | 1 (default), 2 (compiled) |
+
+No pull request of the set changes `Cargo.lock`, so R65.10-2 owns no line in the set.
+
+**Limits.**
+
+- The records of the default mode need the toolchain of the driver (`nightly-2026-10-25`) as the toolchain of the build check. A tree with another toolchain (a `rust-toolchain.toml`, the default of rustup) has no expansion lines in the default mode (R65.8-2).
+- The default mode has the records of one configuration (`dev`, the default features), as the build check. A call that only another configuration compiles has no record; the compiled mode checks more configurations.
+- The first step of a change set builds the tree before the step once more than before (the cold cost in the table).
+- R65.9-1 does not see a side effect of a proc macro (a file, a registry): an equal expansion decides (the decision of the user).
+- R65.10-1 needs `Cargo.lock` in the tree. A new version of a dependency with no lock file in the tree keeps the old rules: the line shows with the cause "no changed definition".
+- R65.9-2 counts a helper attribute of a derive (`#[serde(rename_all = "…")]`) as an attribute macro: a move of it across its derive gets the spotlight (the safe side).
+- A target that one tree has and the next tree does not have, and that comes back in a later tree, is fresh for cargo with no record file: the build folder of the check is built again once (as the delta build of design 37.11).
+- The records of a tree take 1 to 23 MB in `check/expansions/` of the cache (`hashbrown` about 1 MB, `num-traits` 14 MB, `winnow` 23 MB); `semilla cache --clean` removes them with the folder `check/`.
+- The extra time of the driver grows with the count of the macro calls of the units that cargo compiles (the warm step of `num-traits`: +2.3 s on a check of 1.0 s). The open question of the report of batch 10n2 has the options.
 
 ## 66. Batch 10q: closures, constants that the compiler does not evaluate here, and small helpers of the standard library in the equivalence check
 

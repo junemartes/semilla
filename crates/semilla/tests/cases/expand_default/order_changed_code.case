@@ -1,0 +1,86 @@
+note: batch 10n2, part A: the negative cases of the order rule with the expansion records: `Debug` prints the fields in order, so its expansion changes and the spotlight stays with the expansion line; `#[repr(C)]` on a second type keeps its spotlight though its derive makes the same code
+rule-: R65.9-1
+build_check: on
+must_match: expansion: derived `Debug` of `shop::Item`: expansion changed
+must_match: spotlight: an order change in a type with `#\[repr\]`, a derive, or an attribute macro \(`depot::Marker`, `Debug`\)
+must_match: spotlight: an order change in a type with `#\[repr\]`, a derive, or an attribute macro \(`depot::Marker`\)
+must_not_match: the member order needs no reason
+=== both Cargo.toml
+[workspace]
+members = ["shop", "depot"]
+resolver = "2"
+=== both depot/Cargo.toml
+[package]
+name = "depot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+=== both depot/src/lib.rs
+use proc_macro::TokenStream;
+
+#[proc_macro_derive(Marker)]
+pub fn marker(input: TokenStream) -> TokenStream {
+    // Only the name of the type: the code does not read the fields.
+    let text = input.to_string();
+    let name = text.split_whitespace().skip_while(|word| *word != "struct").nth(1).unwrap_or("X").to_string();
+    format!("impl {name} {{ pub fn marked() -> bool {{ true }} }}").parse().unwrap()
+}
+=== both shop/Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+depot = { path = "../depot" }
+=== old shop/src/lib.rs
+#[derive(depot::Marker, Debug)]
+pub struct Item {
+    pub a: u8,
+    pub b: u32,
+}
+
+#[derive(depot::Marker)]
+#[repr(C)]
+pub struct Packed {
+    pub a: u8,
+    pub b: u32,
+}
+=== new shop/src/lib.rs
+#[derive(depot::Marker, Debug)]
+pub struct Item {
+    pub b: u32,
+    pub a: u8,
+}
+
+#[derive(depot::Marker)]
+#[repr(C)]
+pub struct Packed {
+    pub b: u32,
+    pub a: u8,
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  declarations, filled in by Semilla:
+  ◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+      expansion: derived `Debug` of `shop::Item`: expansion changed: changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]/operand` [semantics]; changed lite… (113 characters more; `semilla status --verbose` shows the full line) ….b` → `self.a` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]
+      ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`, `Debug`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Item=…'
+  ◆ f2 derived: member order of `shop::Packed`: `a, b` → `b, a` [declaration]
+      ✗ spotlight: an order change in a type with `#[repr]`, a derive, or an attribute macro (`depot::Marker`): the code that it makes reads the members in order; it needs a reason: --reason 'shop::Packed=…'
+  cover: each of the 4 changed line(s) is in a fact
+  expansions: 1 changed, 3 equal
+    derive `Debug` at `shop::Item` (shop/src/lib.rs:1): expansion changed: `derive Debug` (crate core): changed literal `"a"` → `"b"` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[2]` [semantics]; changed expression `self.a` → `self.b` at `shop::<Item as ::core::fmt::Debug>::fmt/tail/args[3]… (179 characters more; `semilla status --verbose` shows the full line) …as ::core::fmt::Debug>::fmt/tail/args[5]/operand/operand` [semantics]; the input of the call changes
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'shop::Item=<why>' --reason 'shop::Packed=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'shop::Item=the reason of the test' --reason 'shop::Packed=the reason of the test'
+◆ f1 derived: member order of `shop::Item`: `a, b` → `b, a` [declaration]
+    lines: shop/src/lib.rs:4, shop/src/lib.rs:-3
+◆ f2 derived: member order of `shop::Packed`: `a, b` → `b, a` [declaration]
+    lines: shop/src/lib.rs:11, shop/src/lib.rs:-10

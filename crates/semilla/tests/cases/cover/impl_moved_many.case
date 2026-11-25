@@ -116,6 +116,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f3 derived: changed operator `*x > best` → `*x >= best` at `depot::beta/S1/body/S0/cond` [semantics]
   ◆ f4 derived: layout of `src/lib.rs`: 2 changed lines of 1 item with equal tokens at a new place [layout]
   cover: each of the 40 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   comments: 1 comment(s) of the changed items have no edit in this step
 

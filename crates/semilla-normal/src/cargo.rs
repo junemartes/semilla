@@ -587,9 +587,7 @@ pub fn run_cargo_check_delta_config(
     config: &Configuration,
 ) -> Result<Built> {
     let driver = find_driver()?;
-    let meta = std::fs::metadata(&driver)?;
-    let modified = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-    let fingerprint = format!("driver-{}-{modified}", meta.len());
+    let fingerprint = driver_fingerprint(&driver)?;
     let mut known = read_known(out);
     let save = |known: &std::collections::BTreeSet<String>| std::fs::write(known_file(out), known.iter().map(|name| format!("{name}\n")).collect::<String>());
     let check = |known: &mut std::collections::BTreeSet<String>| match run_check_command(workspace, level, out, target_dir, &fingerprint, Mode::Json, config, false) {
@@ -1141,6 +1139,53 @@ fn build_errors(stdout: &str) -> Vec<BuildError> {
 /// check that cannot run: no sandbox, a dependency that is not in the cargo cache, or a disk
 /// with no space.
 pub fn build_check(workspace: &Path, target_dir: &Path, toolchain: &CheckToolchain) -> Result<BuildRun> {
+    build_check_with(workspace, target_dir, toolchain, None).map(|(run, _)| run)
+}
+
+/// The expansion records of a build check (R65.8-1): the driver of Semilla is the wrapper of the
+/// compiler of the build, at the level `ex`. It writes the unit record of each crate of the
+/// workspace with the expansion of each macro call, and it changes no flag and no query of the
+/// compiler. So the build is the build of a plain `cargo check`.
+pub struct CheckRecords {
+    /// The driver binary.
+    pub driver: PathBuf,
+    /// The records folder of the build folder: it keeps the record file of each fresh unit, so
+    /// it changes only by the units that cargo compiles again (a delta build).
+    pub out: PathBuf,
+}
+
+/// The record files of a build check with [`CheckRecords`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CheckRecordFiles {
+    /// The record file of each unit of the workspace that the build has (the file names in the
+    /// records folder).
+    Files(Vec<String>),
+    /// A fresh unit of the workspace has no record file: an earlier build of the folder did not
+    /// write it. The caller removes the target folder and builds again.
+    FreshWithout,
+    /// The build has a unit that does not build: its record is missing.
+    #[default]
+    Failed,
+}
+
+/// True if the driver of Semilla can be the wrapper of the build check of a toolchain: it is the
+/// toolchain of the driver (the driver links to the compiler crates of that toolchain).
+pub fn driver_toolchain(toolchain: &CheckToolchain) -> bool {
+    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    toolchain_root().is_ok_and(|root| canonical(&root) == canonical(&toolchain.root))
+}
+
+/// The fingerprint of the driver binary (its size and its time): the value of
+/// `SEMILLA_MIR_RUN`, so a new driver compiles each crate of the workspace again.
+pub fn driver_fingerprint(driver: &Path) -> Result<String> {
+    let meta = std::fs::metadata(driver)?;
+    let modified = meta.modified()?.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    Ok(format!("driver-{}-{modified}", meta.len()))
+}
+
+/// [`build_check`] that can also write the expansion records (`records`, R65.8-1). The second
+/// value is `None` with no `records`.
+pub fn build_check_with(workspace: &Path, target_dir: &Path, toolchain: &CheckToolchain, records: Option<&CheckRecords>) -> Result<(BuildRun, Option<CheckRecordFiles>)> {
     let root = toolchain.root.clone();
     std::fs::create_dir_all(target_dir).with_context(|| format!("cannot create {}", target_dir.display()))?;
     let target_dir = std::fs::canonicalize(target_dir)?;
@@ -1150,9 +1195,21 @@ pub fn build_check(workspace: &Path, target_dir: &Path, toolchain: &CheckToolcha
     command.args(["check", "--workspace", "--quiet", "--offline", "--all-targets", "--keep-going", "--message-format=json"]);
     command.arg("--target-dir").arg(&target_dir).current_dir(workspace);
     build_environment(&mut command, &root, Some(&temporary));
-    // The sandbox of a check build (design 27): the build writes only its target folder.
+    // The sandbox of a check build (design 27): the build writes only its target folder (and the
+    // records folder of the driver).
     let workspace_real = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
     let mut sandbox = crate::sandbox::Sandbox { folders: vec![target_dir.clone()], files: Vec::new(), read: read_list(&workspace_real, &root) };
+    let records_out = match records {
+        Some(records) => {
+            std::fs::create_dir_all(&records.out).with_context(|| format!("cannot create {}", records.out.display()))?;
+            let out = std::fs::canonicalize(&records.out)?;
+            command.env("RUSTC_WORKSPACE_WRAPPER", &records.driver).env("SEMILLA_MIR_LEVEL", "ex").env("SEMILLA_MIR_OUT", &out).env("SEMILLA_MIR_RUN", driver_fingerprint(&records.driver)?);
+            sandbox.folders.push(out.clone());
+            sandbox.read.push(records.driver.clone());
+            Some(out)
+        }
+        None => None,
+    };
     // A tree with no lock file: cargo must write one, as in a check build of phase 2.
     let lock = workspace.join("Cargo.lock");
     if !lock.exists() && std::fs::write(&lock, "").is_ok() {
@@ -1160,10 +1217,14 @@ pub fn build_check(workspace: &Path, target_dir: &Path, toolchain: &CheckToolcha
     }
     sandbox.apply(&mut command).map_err(|cause| anyhow::anyhow!("cannot start the sandbox for the build check: {cause}"))?;
     let output = crate::sandbox::run_and_stop(&mut command).with_context(|| format!("cannot run {}", root.join("bin/cargo").display()))?;
-    if output.status.success() {
-        return Ok(BuildRun::default());
-    }
     let stdout = String::from_utf8_lossy(&output.stdout);
+    if output.status.success() {
+        let files = match &records_out {
+            Some(out) => Some(record_files(&stdout, &workspace_real, out)?),
+            None => None,
+        };
+        return Ok((BuildRun::default(), files));
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let errors = build_errors(&stdout);
     let all = format!("{stderr}\n{}", errors.iter().map(|error| error.text.as_str()).collect::<Vec<_>>().join("\n"));
@@ -1195,7 +1256,37 @@ pub fn build_check(workspace: &Path, target_dir: &Path, toolchain: &CheckToolcha
     // target list of the tree. `cargo metadata --no-deps` starts no compiler and runs no code.
     let (names, targets) = metadata_command_with(&root, workspace, Graph::NoDeps, &crate::sandbox::Sandbox::default()).map(|metadata| target_units(&metadata)).unwrap_or_default();
     let built = built_units(&stdout, &names);
-    Ok(BuildRun { failed, errors, other, built, targets })
+    let files = records_out.map(|_| CheckRecordFiles::Failed);
+    Ok((BuildRun { failed, errors, other, built, targets }, files))
+}
+
+/// The record files of the units of a build check that passes (R65.8-1). A file of the records
+/// folder that is not a file of a unit of this build is removed: the folder keeps only the
+/// records of the state of the build folder.
+fn record_files(stdout: &str, workspace: &Path, out: &Path) -> Result<CheckRecordFiles> {
+    if fresh_without_records(stdout, workspace, out) {
+        return Ok(CheckRecordFiles::FreshWithout);
+    }
+    let units = unit_files(stdout);
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(out)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if units.contains(&name) && entry.file_type()?.is_file() {
+            found.push(name);
+        } else if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    // One unit gives one file; a second file of one unit is not a file of the driver.
+    let (mut found, double) = one_file_each(found);
+    for name in double {
+        std::fs::remove_file(out.join(&name))?;
+    }
+    found.sort();
+    Ok(CheckRecordFiles::Files(found))
 }
 
 /// The output mode of the cargo command of a check build.

@@ -26,6 +26,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   new and removed items, filled in by Semilla:
   ◆ f1 derived: body added to `depot::Price::gross`: `{ let tax = 2; self.net() + tax }` [added]
   cover: each of the 5 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions

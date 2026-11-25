@@ -42,6 +42,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   ◆ f1 derived: changed macro call `pick! { mod unix; }` → `pick! { mod unix; mod extra; }` (makes items that Semilla cannot list) [declaration]
       ✗ spotlight: the macro call `pick! { mod unix; mod extra; }` makes items that Semilla cannot list; it needs a reason: --reason 'depot::pick!#0=…'
   cover: each of the 4 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: module of a macro input: `depot::extra` (`src/extra.rs`) has its line `mod extra;` in the input of the macro call `depot::pick!#0` (`src/lib.rs:7`); Semilla does not expand the macro, so it does not know if the build has this module
 run again: semilla step 'the change' --reason 'depot::pick!#0=<why>'

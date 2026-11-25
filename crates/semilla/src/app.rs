@@ -130,6 +130,9 @@ pub struct App {
     pub(crate) trusted_bases: std::cell::RefCell<BTreeSet<String>>,
 }
 
+/// The cause of a step of the default mode with no build check (R65.8-2).
+pub(crate) const NO_CHECK_RECORDS: &str = "the build check did not run, so no build made the expansion records";
+
 /// True if a step of the change set has the compiled check (design 50).
 pub fn compiled_set(set: &ChangeSet) -> bool {
     set.steps.iter().any(|step| step.compiled)
@@ -142,7 +145,14 @@ struct Guard<'a> {
     inner: &'a dyn semilla_verify::BodyOracle,
     skip: &'a BTreeSet<usize>,
     code: &'a BuildCode,
+    /// The expansion records of each step of the default mode (R65.8-1), from the cache of
+    /// the build check, by the index of the step. `Err`: the cause why the step has none.
+    default_records: &'a BTreeMap<usize, DefaultRecords>,
 }
+
+/// The expansion records of the two trees of a step of the default mode (R65.8-1), or the cause
+/// why the step has none (R65.8-2).
+type DefaultRecords = std::result::Result<[Vec<semilla_verify::expand::ExpansionUnit>; 2], String>;
 
 impl Guard<'_> {
     /// True if the step gets no body data.
@@ -198,7 +208,22 @@ impl semilla_verify::BodyOracle for Guard<'_> {
     }
 
     fn expansions(&self, step: &Step) -> Option<[Vec<semilla_verify::expand::ExpansionUnit>; 2]> {
+        // R65.8-1: a step of the default mode has the records of its build check.
+        if !step.compiled {
+            return self.default_records.get(&step.index).and_then(|records| records.as_ref().ok()).cloned();
+        }
         if self.off(step) { None } else { self.inner.expansions(step) }
+    }
+
+    fn expansion_gap(&self, step: &Step) -> Option<String> {
+        if step.compiled {
+            return None;
+        }
+        match self.default_records.get(&step.index) {
+            Some(Ok(_)) => None,
+            Some(Err(cause)) => Some(cause.clone()),
+            None => Some("the step has no expansion records".to_string()),
+        }
     }
 
     fn equivalence_budget(&self, step: &Step) -> Option<u64> {
@@ -1091,8 +1116,9 @@ impl App {
     pub fn step_end(&mut self, no_check: bool) -> Result<String> {
         let mut session = self.load_session()?;
         let before = session.open.as_ref().context("no step is open")?.tree_before.clone();
+        let compiled = session.open.as_ref().is_some_and(|open| open.compiled);
         let tree = self.repo.write_tree()?;
-        let (record, lines) = match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &tree) {
+        let (record, lines) = match self.build_check(crate::buildcheck::skip_cause(no_check), &before, &tree, !compiled) {
             crate::buildcheck::Outcome::Stored { record, lines } => (record, lines),
             crate::buildcheck::Outcome::Fails { text, .. } => bail!("rejected: the step is not stored, and it stays open\n{text}\ncorrect the code, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
             crate::buildcheck::Outcome::CannotRun { text } => bail!("not stored: the build check cannot run on this machine, and the step stays open\n{text}\ncorrect the environment, then run `semilla old-step end` again; or run `semilla old-step end --no-check` to store the step with no build check"),
@@ -1608,8 +1634,9 @@ impl App {
     /// hash of each body. Writes `.semilla/index.json` and returns a summary.
     /// The text of `semilla expand` (design 63, R63.5-1): the expansion of each macro call at a
     /// place, before and after a step. The default step is the working tree against `HEAD`. The
-    /// records come from the cache of the compiled check; a build runs only if the cache has no
-    /// record of a tree.
+    /// records come from the cache of the build check (a step of the default mode, R65.8-1), else
+    /// from the cache of the compiled check; a build runs only if the cache has no record of a
+    /// tree.
     pub fn expand(&mut self, place: &str, step: Option<usize>, full: bool, sides: semilla_verify::expand::Sides) -> Result<String> {
         let (before, after) = match step {
             Some(index) => {
@@ -1619,6 +1646,12 @@ impl App {
             }
             None => (self.repo.commit_tree("HEAD")?, self.repo.write_tree()?),
         };
+        // R65.8-1: the records of the build check of the two trees (a step of the default mode)
+        // are in the cache: no build runs.
+        if let (Ok(old), Ok(new)) = (self.check_expansions(&before), self.check_expansions(&after)) {
+            let trees = [self.workspace(&before)?, self.workspace(&after)?];
+            return semilla_verify::expand::view(place, [&old, &new], [&trees[0], &trees[1]], full, sides).map_err(|error| anyhow::anyhow!(error));
+        }
         let step = Step { index: 0, intent: "expand".into(), claims: Vec::new(), tree_before: before.clone(), tree_after: after.clone(), reasons: Default::default(), compiled: true, build_check: None, agent: Default::default(), tags: Vec::new() };
         let set = ChangeSet { base_tree: before.clone(), head_tree: after.clone(), steps: vec![step.clone()], ..Default::default() };
         let code = self.build_code(&set)?;
@@ -1826,6 +1859,30 @@ impl App {
         self.check_set_with(set, require_groups, &code)
     }
 
+    /// The expansion records of each step of the default mode (R65.8-1): the records that the
+    /// build check of the two trees wrote in the cache. The command starts no build. A step
+    /// whose build check did not run has the cause (R65.8-2).
+    fn default_records(&self, set: &ChangeSet) -> BTreeMap<usize, DefaultRecords> {
+        let mut trees: BTreeMap<String, std::result::Result<Vec<semilla_verify::expand::ExpansionUnit>, String>> = BTreeMap::new();
+        let mut out = BTreeMap::new();
+        for step in set.steps.iter().filter(|step| !step.compiled) {
+            let records = match &step.build_check {
+                Some(semilla_core::BuildCheck::NotRun) => Err(NO_CHECK_RECORDS.to_string()),
+                Some(semilla_core::BuildCheck::CannotRun { .. }) => Err("the build check could not run, so no build made the expansion records".to_string()),
+                _ => {
+                    let mut read = |tree: &str| trees.entry(tree.to_string()).or_insert_with(|| self.check_expansions(tree)).clone();
+                    match (read(&step.tree_before), read(&step.tree_after)) {
+                        (Ok(old), Ok(new)) => Ok([old, new]),
+                        (Err(cause), _) => Err(format!("the tree before the step: {cause}")),
+                        (_, Err(cause)) => Err(format!("the tree after the step: {cause}")),
+                    }
+                }
+            };
+            out.insert(step.index, records);
+        }
+        out
+    }
+
     /// Checks a change set, or one step of it, with the build code state of the full change set.
     fn check_set_with(&mut self, set: &ChangeSet, require_groups: bool, code: &BuildCode) -> Result<CheckResult> {
         // A command with `--no-build-code` does not check a step that uses a tree with changed
@@ -1840,7 +1897,8 @@ impl App {
         // the full result.
         let tree_only = off.len() == set.steps.len();
         let inner: Box<dyn semilla_verify::BodyOracle> = if self.no_bodies || tree_only { Box::new(semilla_verify::NoOracle) } else { Box::new(NormalOracle { repo: self.repo.clone(), code: code.clone(), mode: self.mode, log: log.clone(), added: Default::default(), after_commit: set.after_commit.is_some() }) };
-        let bodies = Guard { inner: inner.as_ref(), skip: &skip, code };
+        let default_records = self.default_records(set);
+        let bodies = Guard { inner: inner.as_ref(), skip: &skip, code, default_records: &default_records };
         let exprs = SmtOracle::for_repo(&self.repo);
         let trees: BTreeSet<String> = set.steps.iter().flat_map(|s| [s.tree_before.clone(), s.tree_after.clone()]).collect();
         for tree in &trees {
@@ -1850,7 +1908,9 @@ impl App {
         let mut load = |tree: &str| cache.get(tree).cloned().with_context(|| format!("no workspace for tree {tree}"));
         let started = std::time::Instant::now();
         // The key of a step result has each input of the step check that is not in the step.
-        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {}", self.mode, self.no_bodies, set.after_commit.is_some()) };
+        // R65.8-1: the expansion records of the default steps are an input of the step check.
+        let records_key: Vec<(usize, std::result::Result<usize, &String>)> = default_records.iter().map(|(index, records)| (*index, records.as_ref().map(|[old, new]| old.iter().chain(new).map(|unit| unit.list.len()).sum::<usize>()))).collect();
+        let mut memo = StepMemo { results: std::mem::take(&mut self.step_memo), inputs: format!("{:?} {} {skip:?} {code:?} {} {records_key:?}", self.mode, self.no_bodies, set.after_commit.is_some()) };
         let (mut report, mut outcomes) = semilla_verify::verify_changeset_cached(set, &mut load, &bodies, &exprs, Options { require_groups, derive_edits: true }, &mut memo);
         self.step_memo = memo.results;
         for step in report.steps.iter_mut().chain(outcomes.iter_mut().map(|outcome| &mut outcome.report)).filter(|step| skip.contains(&step.step)) {
