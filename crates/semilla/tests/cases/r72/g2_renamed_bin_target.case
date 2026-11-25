@@ -1,0 +1,53 @@
+note: G2: a binary target gets a new name; its files do not change: the units of the two trees pair by the similarity of their root file and calls, so the calls of the unchanged file pair by their place: no added and no removed expansion
+rule+: R72.1-1
+build_check: on
+must_not_match: expansion added
+must_not_match: expansion removed
+=== old Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tool"
+path = "src/main.rs"
+=== new Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "toolbox"
+path = "src/main.rs"
+=== both src/lib.rs
+pub fn total(v: &[u32]) -> u32 {
+    assert!(!v.is_empty());
+    v.iter().sum()
+}
+=== both src/main.rs
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{}", shop::total(&v));
+    assert_eq!(shop::total(&v), 6);
+}
+=== expected
+exit: 1
+rejected: step 0 "the change" is not stored
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+
+  other facts, filled in by Semilla:
+  ◆ f1 derived: moved `shop (bin "tool")::main` → `shop (bin "toolbox")::main` [move]
+  ◆ f2 derived: Cargo.toml: bin [{ name = "tool", path = "src/main.rs" }] → [{ name = "toolbox", path = "src/main.rs" }] [manifest]
+      ✗ spotlight: a build setting (profile, patch, features, lints, or a target table); it needs a reason: --reason 'Cargo.toml:bin=…'
+  cover: each of the 2 changed line(s) is in a fact
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+run again: semilla step 'the change' --reason 'Cargo.toml:bin=<why>'
+=== positions
+the step is not accepted; the positions are from: semilla step 'the change' --reason 'Cargo.toml:bin=the reason of the test'
+◆ f1 derived: moved `shop (bin "tool")::main` → `shop (bin "toolbox")::main` [move]
+    no position
+◆ f2 derived: Cargo.toml: bin [{ name = "tool", path = "src/main.rs" }] → [{ name = "toolbox", path = "src/main.rs" }] [manifest]
+    lines: Cargo.toml:7, Cargo.toml:-7

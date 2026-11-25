@@ -523,11 +523,18 @@ fn node_scope(item: &Item, node: &Node, edit: &Edit, side: usize, diffs: &BTreeM
     };
     // The statements that a move passes over, and the region of an extract or an inline.
     match &edit.refactor {
+        // R72.1-1 (part d): an arm edit has the lines of the whole arm.
         Some(Refactor::Moved { jumped: regions }) | Some(Refactor::Extract { region: regions, .. }) | Some(Refactor::Inline { region: regions, .. }) => {
             for (from, to) in &regions[side] {
                 if from.0 > 0 {
                     lines.extend(from.0..=to.0);
                 }
+            }
+        }
+        // The point where an arm comes in (a place of no length) has no line.
+        Some(Refactor::Arm { region, passed }) => {
+            for (from, to) in region[side].iter().chain(&passed[side]).filter(|(from, to)| from.0 > 0 && from != to) {
+                lines.extend(from.0..=to.0);
             }
         }
         None => {}
@@ -1908,28 +1915,30 @@ mod tests {
     /// The tree compare keeps a pair of each arm of a replaced `match` for the control flow
     /// graph (design 60, R60.3-10): the arms with equal parts, then the arms with an equal
     /// pattern. The positions of the facts do not read these pairs.
-    // rule+ R60.3-10
-    // rule- R60.3-10
+    // rule+ R72.1-1
+    // rule- R72.1-1
     #[test]
-    fn the_arms_of_a_replaced_match_pair_only_for_the_graph() {
+    fn the_arms_of_a_match_pair_by_their_pattern_and_compare_their_parts() {
         let old_text = "pub enum S { A, B, C }\npub fn f(s: S) -> u32 {\n    match s {\n        S::A => g(1),\n        S::B => g(2),\n    }\n}\nfn g(a: u32) -> u32 { a }\n";
         let new_text = "pub enum S { A, B, C }\npub fn f(s: S) -> u32 {\n    match s {\n        S::C => g(9),\n        S::A => g(1),\n        S::B => g(3),\n    }\n}\nfn g(a: u32) -> u32 { a }\n";
         let ((_old_dir, old), (_new_dir, new)) = (tree(old_text), tree(new_text));
-        let (_, maps) = semilla_syntax::diff_maps(&old, &new, &semilla_syntax::Renames::default());
-        let arms: Vec<&semilla_syntax::NodePair> = maps.pairs["depot::f"].iter().filter(|pair| pair.graph_only).collect();
-        let lines = |pair: &semilla_syntax::NodePair| (pair.ranges[OLD].0.0, pair.ranges[NEW].0.0, pair.equal);
-        let found: Vec<(usize, usize, bool)> = arms.iter().map(|pair| lines(pair)).collect();
-        // The scrutinee; the arm `S::A` (equal parts); the arm `S::B` (an equal pattern, a new
-        // body `g(2)` → `g(3)`).
+        let (edits, maps) = semilla_syntax::diff_maps(&old, &new, &semilla_syntax::Renames::default());
+        let found: Vec<(usize, usize, bool)> = maps.pairs["depot::f"].iter().map(|pair| (pair.ranges[OLD].0.0, pair.ranges[NEW].0.0, pair.equal)).collect();
+        // R72.1-1 (part d): the scrutinee; the arm `S::A` (equal parts); the arm `S::B` (an equal
+        // pattern, a new body `g(2)` → `g(3)`). The pairs are pairs of the compare, not only of
+        // the graph.
         assert!(found.contains(&(3, 3, true)) && found.contains(&(4, 5, true)) && found.contains(&(5, 6, true)) && found.contains(&(5, 6, false)), "{found:?}");
-        // The negative cases: the new arm `S::C` has no pair, and a token of an equal arm is
-        // not an equal token for the positions of the facts.
+        assert!(maps.pairs["depot::f"].iter().all(|pair| !pair.graph_only), "{found:?}");
+        // The negative case: the new arm `S::C` has no pair; it is an added arm.
         assert!(!found.iter().any(|(_, line, _)| *line == 4), "{found:?}");
+        assert!(edits.iter().any(|edit| edit.kind == semilla_syntax::EditKind::Inserted && edit.node_after == Some("arm") && edit.text_after.as_deref() == Some("S :: C => g (9)")), "{edits:#?}");
+        // A token of the equal arm is an equal token for the positions of the facts: the arm
+        // is a pair of the compare.
         let indexes = [ItemIndex::new(&old), ItemIndex::new(&new)];
         let partner = |side: usize, item: &Item| -> Option<&Item> { [&new, &old][side].items.get(&item.path) };
         let shape = cover::shape(old_text, semilla_syntax::rs::Edition::Edition2021);
         let token = shape.tokens.iter().find(|token| token.start.0 == 4 && token.text == "1").unwrap();
-        assert!(!equal_token(OLD, "src/lib.rs", token, &indexes, &maps.pairs, &partner));
+        assert!(equal_token(OLD, "src/lib.rs", token, &indexes, &maps.pairs, &partner));
     }
 
     fn pairs(a: &str, b: &str) -> Vec<(usize, usize)> {

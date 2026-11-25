@@ -1,5 +1,5 @@
 note: the arms of a replaced `match` (a new arm) pair through the tree compare: the call of the arm `Line` pairs with the call of its own arm, and the call of the new arm `Box` is the new point
-rule+: R60.3-10
+rule+: R72.1-1
 option: --compiled
 === both Cargo.toml
 [package]
@@ -36,29 +36,28 @@ exit: 0
 accepted: step 0 "the change" stored in group G1 "the change"
 build check: not run (`SEMILLA_NO_CHECK`)
 base `<COMMIT>`: no Semilla check (no checked commit before it)
-  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
-  ? 1 place: changed match, see f1 (f1)
+  not stated: 1 item(s) with 2 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 2 places: 2 different edits (f1, f2)
       in: shop::cost
       lines: src/lib.rs:7, src/lib.rs:9, src/lib.rs:-8
       to state it: --change 'shop::cost=TEXT'
   to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::cost=TEXT'
   other facts, filled in by Semilla:
-  ◆ f1 derived: changed match: `match s { Shape::Dot => cost_of(1), Shape::Line => cost_of(2), _ => 0, }` → [1] at `shop::cost/S0` [semantics · code different]
-        [1] match s {
-                Shape::Box => cost_of(9),
-                Shape::Dot => cost_of(1),
-                Shape::Line => cost_of(3),
-                _ => 0,
-            }
-      affected bodies: shop::cost
+  ◆ f1 derived: added match arm `Shape::Box => cost_of(9)` at `shop::cost/S0/arm[0].pat` [semantics · code different]
+      affected bodies: shop::cost (with 1 other edit of this body)
       control flow: + call `cost_of` (src/lib.rs:7): return → return
       control flow: + arrow branch `s` (src/lib.rs:6) → call `cost_of` (src/lib.rs:7) (shop::Shape::Box)
-      equivalence: different: for s = Box: before returns 0, after returns 14
+      equivalence: not decided alone (the body has 2 edits; an edit of the fact adds or removes a node); the body: different: for s = Box: before returns 0, after returns 14
+  ◆ f2 derived: changed literal `2` → `3` at `shop::cost/S0/arm[1].body/args[0]` [semantics · code different]
+      affected bodies: shop::cost (with 1 other edit of this body)
+      equivalence: different alone: for s = Line: before returns 5, after returns 4; the body: different: for s = Box: before returns 0, after returns 14
   cover: each of the 3 changed line(s) is in a fact
   control flow: 1 body
     shop::cost (src/lib.rs:5): graph changes: +1 call, +3 arrows, −1 arrow; different (for s = Box: before returns 0, after returns 14)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
 
 === positions
-◆ f1 derived: changed match: `match s { Shape::Dot => cost_of(1), Shape::Line => cost_of(2), _ => 0, }` → [1] at `shop::cost/S0` [semantics · code different]
-    lines: src/lib.rs:7, src/lib.rs:9, src/lib.rs:-8
+◆ f1 derived: added match arm `Shape::Box => cost_of(9)` at `shop::cost/S0/arm[0].pat` [semantics · code different]
+    lines: src/lib.rs:7
+◆ f2 derived: changed literal `2` → `3` at `shop::cost/S0/arm[1].body/args[0]` [semantics · code different]
+    lines: src/lib.rs:9, src/lib.rs:-8

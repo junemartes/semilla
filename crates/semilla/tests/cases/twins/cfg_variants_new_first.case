@@ -1,5 +1,5 @@
 note: three `cfg` variants of one function with a new variant at the start: one added variant
-rule+: R59.3-1
+rule+: R72.1-1
 === both Cargo.toml
 [package]
 name = "depot"

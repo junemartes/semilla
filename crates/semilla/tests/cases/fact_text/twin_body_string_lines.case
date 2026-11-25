@@ -50,6 +50,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
   ! spotlight: cfg attribute: depot::Slab::name
   ! spotlight: cfg attribute: depot::Slab::name#1
+  note: twins: `depot::Slab::name` of the old tree and `depot::Slab::name#0` of the new tree are one pair (a pair by equal tokens); the facts name the pair `depot::Slab::name`
 run again: semilla step 'the change' --reason 'depot::Slab::name=<why>' --reason 'depot::Slab::name#1=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::Slab::name=the reason of the test' --reason 'depot::Slab::name#1=the reason of the test'

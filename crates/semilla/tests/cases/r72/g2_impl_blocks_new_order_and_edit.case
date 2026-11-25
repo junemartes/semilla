@@ -1,0 +1,49 @@
+note: G2: two `impl` blocks of one type with a method of one name change their order, and one method changes: the blocks pair by their header (the identity), so one fact of the edit, no false fact of a return type or of the generics
+rule+: R72.1-1
+rule-: R72.1-3
+must_match: changed expression `self.0` → `self.0 \+ 1`
+must_not_match: return type of
+must_not_match: generics of
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub struct W<T>(pub T);
+impl W<u8> {
+    pub fn get(&self) -> u8 { self.0 }
+}
+impl W<u16> {
+    pub fn get(&self) -> u16 { self.0 }
+}
+=== new src/lib.rs
+pub struct W<T>(pub T);
+impl W<u16> {
+    pub fn get(&self) -> u16 { self.0 }
+}
+impl W<u8> {
+    pub fn get(&self) -> u8 { self.0 + 1 }
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: not run (`SEMILLA_NO_CHECK`)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: changed expression `self.0` → `self.0 + 1` (f1)
+      in: shop::W::get#1
+      lines: src/lib.rs:5-7, src/lib.rs:-2-4
+      to state it: --change 'shop::W::get#1=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::W::get#1=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics]
+  cover: each of the 6 changed line(s) is in a fact
+  expansions: not read: the build check did not run, so no build made the expansion records
+  names from the text: the build check did not run, so no build made the expansion records
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+  note: twins: `shop::W::get#0` of the old tree and `shop::W::get#1` of the new tree are one pair (a pair by its identity); the facts name the pair `shop::W::get#1`
+
+=== positions
+◆ f1 derived: changed expression `self.0` → `self.0 + 1` at `shop::W::get#1/tail` [semantics]
+    lines: src/lib.rs:5-7, src/lib.rs:-2-4

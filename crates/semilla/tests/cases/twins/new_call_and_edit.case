@@ -1,5 +1,5 @@
 note: a new call and an edit of a different call: one added call and one changed call; the note names the pair with two numbers
-rule+: R59.3-1
+rule+: R72.1-1
 rule+: R59.3-4
 === both Cargo.toml
 [package]
@@ -39,7 +39,7 @@ base `<COMMIT>`: no Semilla check (no checked commit before it)
   expansions: not read: the build check did not run, so no build made the expansion records
   names from the text: the build check did not run, so no build made the expansion records
   hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
-  note: twins: `depot::a::table!#1` of the old tree and `depot::a::table!#2` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `depot::a::table!#2`
+  note: twins: `depot::a::table!#1` of the old tree and `depot::a::table!#2` of the new tree are one pair (a pair by similarity (0.86)); the facts name the pair `depot::a::table!#2`
 run again: semilla step 'the change' --reason 'depot::a::table!#2=<why>' --reason 'depot::a::table!#0=<why>'
 === positions
 the step is not accepted; the positions are from: semilla step 'the change' --reason 'depot::a::table!#2=the reason of the test' --reason 'depot::a::table!#0=the reason of the test'

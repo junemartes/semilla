@@ -236,6 +236,18 @@ impl<'a> MirMap<'a> {
             let region: [Vec<(Pos, Pos)>; 2] = match &edit.refactor {
                 Some(semilla_syntax::Refactor::Moved { jumped }) => jumped.clone(),
                 Some(semilla_syntax::Refactor::Extract { region, .. } | semilla_syntax::Refactor::Inline { region, .. }) => region.clone(),
+                // R72.1-1 (part d): the place of an arm (or the point where it comes in or goes
+                // out) owns the elements in it, as the node of an edit; the arms that a move
+                // passes over are as the statements that a move passes over.
+                Some(semilla_syntax::Refactor::Arm { region, passed }) => {
+                    for (side, anchor) in [&edit.before, &edit.after].into_iter().enumerate() {
+                        let Some(file) = anchor.as_ref().or(edit.before.as_ref()).or(edit.after.as_ref()).and_then(|anchor| sides[side].items.get(&anchor.item)).map(|item| item.file.clone()) else { continue };
+                        for &(start, end) in &region[side] {
+                            places[side].entry(file.clone()).or_default().push(EditPlace { edit: index, start, end, wide: false, jump: false });
+                        }
+                    }
+                    passed.clone()
+                }
                 _ => continue,
             };
             for (side, anchor) in [&edit.before, &edit.after].into_iter().enumerate() {

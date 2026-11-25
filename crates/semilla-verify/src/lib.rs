@@ -674,14 +674,18 @@ fn verify_step_records(input: &StepInput, bodies: &dyn BodyOracle, exprs: &dyn E
     // Design 38.3: an item that gets a twin keeps its key for the twin with its text.
     let twins = identity::twin_keys(input.before, input.after);
     let input = match &twins {
-        Some((before, after)) => &StepInput { step: input.step, before, after },
+        Some((before, after, _)) => &StepInput { step: input.step, before, after },
         None => input,
     };
-    // Design 59, part C: the twins of one path pair by their tokens, then in source order.
-    let twin_pairs = identity::twin_pairs(input.before, input.after);
-    let (input, twin_moves) = match &twin_pairs {
-        Some((before, after, moved)) => (&StepInput { step: input.step, before, after }, moved.as_slice()),
-        None => (input, &[][..]),
+    // Design 59, part C, and R72.1-1 (part a): the twins of one path pair by the one matcher.
+    let (twin_trees, mut twin_moves) = identity::twin_pairs(input.before, input.after);
+    if let Some((_, _, listed)) = &twins {
+        twin_moves.extend(listed.iter().cloned());
+    }
+    let twin_moves = twin_moves.as_slice();
+    let input = match &twin_trees {
+        Some((before, after)) => &StepInput { step: input.step, before, after },
+        None => input,
     };
     // R70.2-1 (d): an impl keeps its key when the text of its trait path changes and the compiler
     // gives the same trait and self type.
@@ -794,16 +798,25 @@ fn macro_module_spotlight(input: &StepInput, report: &mut StepReport) {
     }
 }
 
-/// Design 59, C-e: a pair of twins with two different numbers has one key in the facts (the
-/// number of the tree with more twins of the path). Each such pair with a fact gets one note
-/// with the two paths, so the reader finds each twin in its own tree.
-fn twin_notes(moves: &[(String, String, String)], report: &mut StepReport) {
-    for (old, new, key) in moves {
+/// Design 59, C-e, and R72.1-3: a pair of twins with two different numbers has one key in the
+/// facts (the number of the tree with more twins of the path). Each such pair with a fact gets
+/// one note with the two paths and the key of the ladder that made the pair (a weak key says
+/// so), so the reader finds each twin in its own tree.
+fn twin_notes(moves: &[identity::TwinPair], report: &mut StepReport) {
+    for (old, new, key, made) in moves {
         let inside = |path: &str| path == key || path.strip_prefix(key.as_str()).is_some_and(|rest| rest.starts_with("::") || rest.starts_with('.'));
         if !report.facts.iter().any(|fact| fact.at.as_ref().is_some_and(|at| inside(&at.item))) {
             continue;
         }
-        report.notes.push(format!("twins: `{old}` of the old tree and `{new}` of the new tree are one pair (equal tokens first, then the `cfg` condition, then the source order); the facts name the pair `{key}`"));
+        let line = match made {
+            Some(made) => format!("twins: `{old}` of the old tree and `{new}` of the new tree are one pair ({}); the facts name the pair `{key}`", made.words()),
+            // R72.1-1: a twin with no pair, whose number the other tree has: a free number.
+            None => {
+                let (path, tree) = if old.is_empty() { (new, "new") } else { (old, "old") };
+                format!("twins: `{path}` of the {tree} tree has no pair (no identity, no equal tokens, and no similarity over the threshold); the facts name it `{key}`")
+            }
+        };
+        report.notes.push(line);
     }
 }
 

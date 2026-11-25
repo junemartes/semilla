@@ -1,5 +1,5 @@
 note: two impl blocks of one type with a new block before them: one added impl block
-rule+: R59.3-1
+rule+: R72.1-1
 === both Cargo.toml
 [package]
 name = "depot"

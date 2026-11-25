@@ -1,0 +1,46 @@
+note: G2: three calls of one macro in one function, the call in the middle is removed: the calls pair by their equal texts in the class of one identity (the item and the macro), so one removed expansion, not a changed one and a removed one
+rule+: R72.1-1
+build_check: on
+must_match: expansion removed
+must_not_match: expansion changed
+=== both Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2021"
+=== old src/lib.rs
+pub fn report(a: u32, b: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(format!("first {}", a));
+    out.push(format!("middle {} {}", a, b));
+    out.push(format!("last {}", b));
+    out
+}
+=== new src/lib.rs
+pub fn report(a: u32, b: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(format!("first {}", a));
+    out.push(format!("last {}", b));
+    out
+}
+=== expected
+exit: 0
+accepted: step 0 "the change" stored in group G1 "the change"
+build check: passes (<TIME>)
+base `<COMMIT>`: no Semilla check (no checked commit before it)
+  not stated: 1 item(s) with 1 place(s) that can change the behavior of existing code and that no fact of the agent states
+  ? 1 place: deleted statement `out.push(format!("middle {} {}", a, b))` (f1)
+      in: shop::report
+      lines: src/lib.rs:-4
+      to state it: --change 'shop::report=TEXT'
+  to state them, add facts to the stored step (no build check runs again): semilla fact --step 0 --change 'shop::report=TEXT'
+  other facts, filled in by Semilla:
+  ◆ f1 derived: deleted statement `out.push(format!("middle {} {}", a, b))` at `shop::report/S2` [semantics]
+  cover: each of the 1 changed line(s) is in a fact
+  expansions: 1 removed, 2 equal
+    `format!("middle {} {}", a, b)` at `shop::report/S2/args[0]` (src/lib.rs:-4): expansion removed: `macro format` (crate alloc): 3 line(s) of code; the step removes the call or its input
+  hunks: `git diff -U0 --inter-hunk-context=0 --diff-algorithm=myers --indent-heuristic --no-renames --no-ext-diff --no-textconv --no-relative --text --no-color <TREE> <TREE>`
+
+=== positions
+◆ f1 derived: deleted statement `out.push(format!("middle {} {}", a, b))` at `shop::report/S2` [semantics]
+    lines: src/lib.rs:-4

@@ -704,7 +704,7 @@ impl NormalOracle {
         if let Some(entry) = self.added.lock().unwrap_or_else(|error| error.into_inner()).moved.iter().find(fits) {
             return entry.3.clone();
         }
-        let made = with_moved_closures(renames, added, &sides.before, &sides.after);
+        let made = with_nested_pairs(&with_moved_closures(renames, added, &sides.before, &sides.after), &sides.before, &sides.after);
         self.added.lock().unwrap_or_else(|error| error.into_inner()).moved.push((key, renames.clone(), added.to_vec(), made.clone()));
         made
     }
@@ -925,6 +925,72 @@ fn with_moved_closures(
     }
     renames
 }
+
+/// R72.1-1 (part f): the nested bodies of one body (closures, coroutines, constant blocks) pair by
+/// the one matcher, not by their numbers (`{closure#0}` is the source order): equal MIR texts at
+/// N0 (the old text through the rename map, the own name as one mark), then the best similarity of
+/// the texts over [`NESTED_THRESHOLD`], then the source order for a tie. A pair with two numbers
+/// goes into the rename map of the compare. A group where an old body with no pair has the name
+/// that a pair gives keeps the names (a limit: design 72.6).
+fn with_nested_pairs(renames: &BTreeMap<String, String>, before: &semilla_normal::Levels, after: &semilla_normal::Levels) -> BTreeMap<String, String> {
+    use semilla_core::matcher::{Ladder, Thing};
+    let mut out = renames.clone();
+    let (Some(old), Some(new)) = (before.get("n0"), after.get("n0")) else { return out };
+    let nested = |name: &str| -> Option<(String, String)> {
+        let (parent, last) = name.rsplit_once("::")?;
+        last.starts_with('{').then(|| (parent.to_string(), last.chars().filter(|c| !c.is_ascii_digit()).collect()))
+    };
+    let number = |name: &str| -> usize { name.rsplit_once('#').and_then(|(_, rest)| rest.trim_end_matches('}').parse().ok()).unwrap_or(0) };
+    let list: Vec<(String, String)> = renames.iter().map(|(from, to)| (from.clone(), to.clone())).collect();
+    type Groups<'r> = BTreeMap<(String, String), [Vec<&'r semilla_normal::BodyRecord>; 2]>;
+    let mut groups: Groups = BTreeMap::new();
+    let mut seen: [std::collections::BTreeSet<&str>; 2] = Default::default();
+    for (side, records) in [old, new].into_iter().enumerate() {
+        for record in records {
+            if !seen[side].insert(record.name.as_str()) || (side == 0 && renames.contains_key(&record.name)) {
+                continue;
+            }
+            let Some((parent, kind)) = nested(&record.name) else { continue };
+            let parent = if side == 0 { semilla_normal::paths::rename(&parent, &list) } else { parent };
+            groups.entry((parent, kind)).or_default()[side].push(record);
+        }
+    }
+    for [olds, news] in groups.values_mut() {
+        if olds.is_empty() || news.is_empty() {
+            continue;
+        }
+        olds.sort_by_key(|record| number(&record.name));
+        news.sort_by_key(|record| number(&record.name));
+        let text = |record: &semilla_normal::BodyRecord, old: bool| -> String {
+            let own = [(record.name.clone(), "{self}".to_string())];
+            let text = semilla_normal::paths::rename(&record.text, &own);
+            if old { semilla_normal::paths::rename(&text, &list) } else { text }
+        };
+        let (old_texts, new_texts): (Vec<String>, Vec<String>) = (olds.iter().map(|record| text(record, true)).collect(), news.iter().map(|record| text(record, false)).collect());
+        let thing = |text: &String| Thing { group: String::new(), identity: None, content: Some(text.clone()) };
+        let (old_things, new_things): (Vec<Thing>, Vec<Thing>) = (old_texts.iter().map(thing).collect(), new_texts.iter().map(thing).collect());
+        let words = |text: &String| text.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        let (old_words, new_words): (Vec<Vec<String>>, Vec<Vec<String>>) = (old_texts.iter().map(words).collect(), new_texts.iter().map(words).collect());
+        let similarity = |a: usize, b: usize| semilla_core::matcher::token_similarity(&old_words[a], &new_words[b]);
+        let ladder = Ladder { similarity: &similarity, threshold: NESTED_THRESHOLD, in_order: None };
+        let pairs = semilla_core::matcher::pair(&old_things, &new_things, &ladder);
+        let map: BTreeMap<String, String> = pairs.iter().filter(|pair| olds[pair.old].name != news[pair.new].name).map(|pair| (olds[pair.old].name.clone(), news[pair.new].name.clone())).collect();
+        if map.is_empty() {
+            continue;
+        }
+        // An old body with no pair keeps its name: no pair may give that name to a different body.
+        let paired: std::collections::BTreeSet<usize> = pairs.iter().map(|pair| pair.old).collect();
+        let collision = olds.iter().enumerate().any(|(at, record)| !paired.contains(&at) && map.values().any(|to| *to == record.name));
+        if !collision {
+            out.extend(map);
+        }
+    }
+    out
+}
+
+/// The smallest similarity of a pair of two nested bodies by similarity (Decided by Claude,
+/// design 72.4).
+const NESTED_THRESHOLD: f64 = 0.5;
 
 /// Combines the status of one body over two configurations that compile it (batch 5s, A5).
 ///

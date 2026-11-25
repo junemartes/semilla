@@ -1,5 +1,5 @@
 note: U10: a table of `push` rows; one row is removed in the middle and a new row is added at the end: a deleted statement and an added statement, not a move with two changed literals
-rule+: R68.13-1
+rule+: R72.1-2
 must_match: deleted statement `out.push\(\(3, "three"\)\)` at `shop::build/S2`
 must_match: added statement `out.push\(\(6, "six"\)\)` at `shop::build/S4`
 must_not_match: moved statement

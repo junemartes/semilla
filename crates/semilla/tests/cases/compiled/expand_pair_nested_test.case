@@ -1,6 +1,6 @@
 note: batch 10c2, item 1: test files with nested calls (`one_of!(x, [set![0, 1], set![1, 2]])`) that the step does not change; no call of them is added or removed; the example `sets` and the bench `sets` (no harness) have one crate name and one kind
-rule+: R63.9-1 R63.9-2
-rule-: R63.9-2
+rule+: R72.1-1
+rule-: R72.1-1
 must_not_match: \((tests|examples|benches)/sets\.rs:-?\d+\): expansion (added|removed)
 must_match: `bump!\(v\)` at `shop::keep/tail` \(src/lib\.rs:4\): expansion added
 must_match: `bump!\(v\)` at `shop::pick/tail` \(src/lib\.rs:-3\): expansion removed

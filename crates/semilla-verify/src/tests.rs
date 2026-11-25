@@ -6541,31 +6541,32 @@ fn two_impl_blocks_that_differ_only_in_lifetimes_are_one_impl() {
     assert_eq!(headers.len(), 2, "{lines:#?}");
     assert!(headers[0].starts_with("generics of `demo::impl <&mutNode as Parse>`: `impl<'a> Parse<Attrs> for &'a mut Node { }` → `impl Parse<Attrs> for &mut Node { }`"), "{lines:#?}");
     assert!(headers[1].starts_with("generics of `demo::impl dynShape`: `impl<'a> dyn Shape + 'a { }` → `impl dyn Shape { }`"), "{lines:#?}");
-    // Each edit in a member is a fact with its text.
+    // Each edit in a member is a fact with its text. The two arms change places: one fact of the
+    // `match` (R72.1-1, part d), not a false fact for each part at each place.
     for text in [
-        "changed pattern `0` → `1` at `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` [semantics]",
-        "changed literal `10` → `20` at `demo::<&mutNode as Parse>::parse/S0/arm[0].body` [semantics]",
-        "changed pattern `1` → `0` at `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [semantics]",
-        "changed literal `20` → `10` at `demo::<&mutNode as Parse>::parse/S0/arm[1].body` [semantics]",
+        "moved match arm `0 => 10` from `demo::<&mutNode as Parse>::parse/S0/arm[0].pat` to `demo::<&mutNode as Parse>::parse/S0/arm[1].pat` [semantics]",
         "changed literal `1` → `2` at `demo::dynShape::area/tail` [semantics]",
     ] {
         assert!(lines.contains(&text.to_string()), "{text}\n{lines:#?}");
     }
     // No impl shows as removed or added.
-    assert_eq!(lines.len(), 7, "{lines:#?}");
+    assert_eq!(lines.len(), 4, "{lines:#?}");
     assert!(report.uncovered.is_empty(), "{report:#?}");
 
     // A reason key with the lifetime of the old header finds the item (design 37.2).
     let (_dir, new) = load(&after);
     assert_eq!(crate::impl_name_matches("demo::<&'a mut Node as Parse<Attrs>>::parse", &new), ["demo::<&mutNode as Parse>::parse"]);
 
-    // Two blocks of the new tree fit the old block: no pair.
+    // Two blocks of the new tree fit the old block: the one matcher (R72.1-1, part a) pairs the
+    // old block with the more similar block, and the note names the weak key (R72.1-3). The
+    // other block is added. Before batch 11d: no pair (a removed block and two added blocks).
     let two = format!("{after}\nimpl Parse<Attrs> for &'static mut Node {{\n    fn parse(self, _attrs: Attrs) -> u32 {{\n        0\n    }}\n}}\n");
     let report = run_derived(before, &two, &bodies);
     let lines = fact_lines(&report);
-    assert!(lines.iter().any(|line| line.starts_with("trait impl `<&'a mut Node as Parse<Attrs>>` removed with: `fn parse`")), "{lines:#?}");
-    assert_eq!(lines.iter().filter(|line| line.starts_with("trait impl `<&") && line.contains(" added with: `fn parse`")).count(), 2, "{lines:#?}");
-    assert!(!lines.iter().any(|line| line.contains("demo::impl <&mutNode as Parse>")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.contains(" removed with: `fn parse`")), "{lines:#?}");
+    assert_eq!(lines.iter().filter(|line| line.starts_with("trait impl `<&'static mut Node as Parse<Attrs>>#1` added with: `fn parse`")).count(), 1, "{lines:#?}");
+    assert!(lines.iter().any(|line| line.starts_with("moved match arm")), "{lines:#?}");
+    assert!(report.notes.iter().any(|note| note.starts_with("twins: `demo::impl <&mutNode as Parse>#0` of the new tree") || note.contains("a pair by similarity")), "{:#?}", report.notes);
 }
 
 /// Runs a step with claims, and derives the facts of the edits.
@@ -7429,7 +7430,8 @@ fn an_edit_inside_a_moved_statement_names_its_new_place() {
     let after = "pub fn jaro(a: u32, mut transpositions: u32) -> u32 {\n    let m = a + 1;\n    if a == 0 {\n        transpositions = 0;\n    } else {\n        transpositions /= 3;\n    }\n    m + transpositions\n}\n";
     let texts = descriptions(&run_derived(before, after, &[]));
     assert!(texts.contains(&"changed literal `2` → `3` at `demo::jaro/S1/else/S0/rhs`".to_string()), "{texts:?}");
-    assert!(texts.contains(&"moved statement `transpositions /= 2` from `demo::jaro/S1` to `demo::jaro/S1/else/S0`".to_string()), "{texts:?}");
+    // R72.1-3: the move comes from a pair by similarity, and the fact says so.
+    assert!(texts.contains(&"moved statement `transpositions /= 2` from `demo::jaro/S1` to `demo::jaro/S1/else/S0` (a pair by similarity (0.75))".to_string()), "{texts:?}");
     let before = refactor_body("    let mut s = a;\n    if a > 1 {\n        s += 2;\n        s *= b;\n    }\n    s += b;\n    v.push(s);\n    s\n");
     let after = refactor_body("    let mut s = a;\n    s += b;\n    v.push(s);\n    if a > 1 {\n        s += 3;\n        s *= b;\n    }\n    s\n");
     let texts = descriptions(&run_derived(&before, &after, &[]));

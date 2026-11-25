@@ -9,6 +9,7 @@
 
 pub mod anchor;
 pub mod budget;
+pub mod matcher;
 pub mod claim;
 pub mod namerec;
 pub mod names;
